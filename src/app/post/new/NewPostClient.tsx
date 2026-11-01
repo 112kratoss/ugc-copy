@@ -81,6 +81,8 @@ import {
 } from '@/lib/post-resource-commerce';
 import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
 import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
+import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
+import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import {
   resolveSignedUploadUrl,
   uploadFileToSignedUrl,
@@ -217,6 +219,40 @@ function isSameComposerSnapshot(a: ComposerSnapshot, b: ComposerSnapshot): boole
     && JSON.stringify(a.madeWith) === JSON.stringify(b.madeWith)
     // By content, not identity: saving a card unchanged still copies it.
     && (a.resourceCards === b.resourceCards || JSON.stringify(a.resourceCards) === JSON.stringify(b.resourceCards));
+}
+
+// Made With rows as the snapshot holds them: what each names, in the one key
+// order the comparison above serializes.
+function snapshotMadeWith(rows: MadeWithRow[]): ComposerSnapshot['madeWith'] {
+  return rows
+    .filter((row) => row.toolLabel.trim() || row.modelLabel.trim())
+    .map(({ toolLabel, toolSlug, modelLabel, modelSlug, createTool, createModel }) => ({
+      toolLabel,
+      toolSlug,
+      modelLabel,
+      modelSlug,
+      createTool,
+      createModel,
+    }));
+}
+
+/**
+ * A new post's Made with for a creation: the row publishing stores for it
+ * (`buildGenerationPostSourceTools`, no stored tool being the app's), so the
+ * creation's model by the name its post prints, or none where that name is
+ * missing, as a template result's `template-workflow` is.
+ */
+function creationMadeWithRow(shownModel: string): MadeWithRow {
+  const [stored] = buildGenerationPostSourceTools({ source_tool: null, source_tool_slug: null }, shownModel);
+  return {
+    id: 'mw-0',
+    toolLabel: stored.toolLabel,
+    toolSlug: stored.toolSlug ?? '',
+    modelLabel: stored.modelLabel ?? '',
+    modelSlug: stored.modelSlug ?? '',
+    createTool: false,
+    createModel: false,
+  };
 }
 
 interface ComposerError {
@@ -978,6 +1014,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     mediaCardLeftsRef.current = nextLefts;
   }, [mediaPreviewItems]);
   const hasGeneratedProof = Boolean(prefilledGeneration);
+  // The creation's model by the name its post prints, as its Made with row
+  // names it; none where that name is missing (a template result's model is
+  // its author's, and an edit's seed knows only the app).
+  const generatedModelName = getPostModelDisplayName(prefilledGeneration?.model);
   const [generationLoadAttempt, setGenerationLoadAttempt] = useState(0);
   const [linkedPostRedirectId, setLinkedPostRedirectId] = useState<string | null>(null);
   // "From this creation", as the app offers it: only once the creation itself
@@ -1020,16 +1060,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     visibility,
     isNsfw,
     mediaIds: mediaItems.map((item) => item.id),
-    madeWith: madeWithRows
-      .filter((row) => row.toolLabel.trim() || row.modelLabel.trim())
-      .map(({ toolLabel, toolSlug, modelLabel, modelSlug, createTool, createModel }) => ({
-        toolLabel,
-        toolSlug,
-        modelLabel,
-        modelSlug,
-        createTool,
-        createModel,
-      })),
+    madeWith: snapshotMadeWith(madeWithRows),
     resourceAccessMode,
     resourceCards,
     // A preview that is the suggestion follows from the cards: a prefill that
@@ -1414,9 +1445,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             recipeKeepsPromptPrivate(isTemplateResult ? 'none' : resourceAccessModeRef.current),
           )?.title ?? '';
         setTitle((current) => current || prefillTitle);
+        // A new post's Made with is the creation's row from here on (it is
+        // locked), and like the prefilled title it is where the post starts.
+        const creationRow = isEditMode ? null : creationMadeWithRow(nextGeneration.model);
+        if (creationRow) setMadeWithRows([creationRow]);
         setSavedSnapshot((saved) => ({
           ...saved,
           title: saved.title || prefillTitle,
+          ...(creationRow ? { madeWith: snapshotMadeWith([creationRow]) } : {}),
         }));
       } catch (loadError) {
         if (!cancelled) {
@@ -1472,21 +1508,6 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    if (prefilledGeneration && madeWithRows.length === 1 && !madeWithRows[0].toolLabel) {
-      // A generation-backed post is authored by this product unless the user overrides it.
-      setMadeWithRows([{
-        id: 'mw-0',
-        toolLabel: 'magicbooklet',
-        toolSlug: 'magicbooklet',
-        modelLabel: prefilledGeneration.model || '',
-        modelSlug: prefilledGeneration.model || '',
-        createTool: false,
-        createModel: false,
-      }]);
-    }
-  }, [prefilledGeneration, madeWithRows]);
 
   const inferredCategory = useMemo((): PostMediaCategory | null => {
     if (proofMode === 'text') return null;
@@ -3087,7 +3108,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                               {prefilledGeneration?.title || 'magicbooklet creation'}
                             </div>
                             <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-300">
-                              Created in magicbooklet with {prefilledGeneration?.model || 'your latest model'}.
+                              Created in magicbooklet{generatedModelName ? ` with ${generatedModelName}` : ''}.
                             </p>
                           </div>
                           <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-50">

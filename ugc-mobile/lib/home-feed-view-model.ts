@@ -1,7 +1,7 @@
 import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from './media-creation-view-model';
+import { MODEL_DISPLAY_NAMES } from './model-display-names';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
@@ -258,16 +258,14 @@ function formatFeedActionLabel(count: number | null | undefined, verb: string) {
 }
 
 /**
- * Mirrors the web's `getPostModelDisplayName`: model ids are internal slugs
- * (`gpt-image-2`), and `magicbooklet`, `manual`, an outside tool's id or an
+ * Mirrors the web's `getPostModelDisplayName`, from the same names
+ * (`MODEL_DISPLAY_NAMES`): model ids are internal slugs (`gpt-image-2`), and
+ * `magicbooklet`, `manual`, `template-workflow`, an outside tool's id or an
  * unknown slug answer null so the line omits the model rather than leak it.
  */
 export function homeModelLabel(model: string | null | undefined): string | null {
-  if (!model) return null;
-  const entry = (IMAGE_MODELS as Record<string, { displayName: string }>)[model]
-    ?? (VIDEO_MODELS as Record<string, { displayName: string }>)[model]
-    ?? (MOTION_MODELS as Record<string, { displayName: string }>)[model];
-  return entry?.displayName ?? null;
+  if (!model || !Object.hasOwn(MODEL_DISPLAY_NAMES, model)) return null;
+  return MODEL_DISPLAY_NAMES[model];
 }
 
 function homeCardBodyLines(previewKind: HomeFeedCard['previewKind']) {

@@ -8,7 +8,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(20);
+select plan(25);
 
 -- People (each id has its own first octet: handle_new_user builds a fallback
 -- username from the first eight characters, and usernames are unique): the owner, a guest profile merged into the owner, a creator the
@@ -76,7 +76,19 @@ values
   -- not counted: someone else's
   ('c0400000-0000-4000-8000-000000000013'::uuid, 'c0100007-0000-4000-8000-000000000007'::uuid, 'succeeded', 'image', 'generated_images/counts/13.png', null, null, null, true),
   -- the friend's creation behind their public post, for the legacy saves below
-  ('c0400000-0000-4000-8000-000000000014'::uuid, 'c0100005-0000-4000-8000-000000000005'::uuid, 'succeeded', 'image', 'generated_images/counts/14.png', null, null, null, true);
+  ('c0400000-0000-4000-8000-000000000014'::uuid, 'c0100005-0000-4000-8000-000000000005'::uuid, 'succeeded', 'image', 'generated_images/counts/14.png', null, null, null, true),
+  -- The Failed and Archived scopes. Row 6 above is a failed run and row 5 an
+  -- archived creation; these are the cases either side of them.
+  -- failed: made as the merged guest
+  ('c0400000-0000-4000-8000-000000000015'::uuid, 'c0100002-0000-4000-8000-000000000002'::uuid, 'failed', 'video', null, null, null, null, true),
+  -- neither: a failed run that was archived
+  ('c0400000-0000-4000-8000-000000000016'::uuid, 'c0100001-0000-4000-8000-000000000001'::uuid, 'failed', 'image', null, timezone('utc'::text, now()), null, null, true),
+  -- neither: a failed template-run step, which the Studio never lists
+  ('c0400000-0000-4000-8000-000000000017'::uuid, 'c0100001-0000-4000-8000-000000000001'::uuid, 'failed', 'image', null, null, null, 'c0300000-0000-4000-8000-000000000001'::uuid, true),
+  -- neither: an archived finished run with nothing to draw
+  ('c0400000-0000-4000-8000-000000000018'::uuid, 'c0100001-0000-4000-8000-000000000001'::uuid, 'succeeded', 'image', null, timezone('utc'::text, now()), null, null, true),
+  -- archived: its source is gone, and the plate is still a tile there too
+  ('c0400000-0000-4000-8000-000000000019'::uuid, 'c0100001-0000-4000-8000-000000000001'::uuid, 'succeeded', 'image', null, timezone('utc'::text, now()), timezone('utc'::text, now()), null, true);
 
 -- Posts. The owner's four: every visibility and review status counts for its
 -- owner; only archiving moves one to the other scope.
@@ -132,6 +144,16 @@ select is(
   'creations: finished with an output, source-gone, studio-visible step, plain run, and the merged guest''s'
 );
 select is(
+  (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'failedCreations')::int,
+  2,
+  'failed creations: the owner''s and the merged guest''s; never archived, a template step, pending or processing'
+);
+select is(
+  (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'archivedCreations')::int,
+  2,
+  'archived creations: the library rule with archived_at set; never a failed run or one with nothing to draw'
+);
+select is(
   (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'posts')::int,
   3,
   'posts: public, private and hidden all count for their owner'
@@ -153,17 +175,17 @@ select is(
 );
 select is(
   public.owner_profile_counts('c0100006-0000-4000-8000-000000000006'::uuid) - 'saved',
-  '{"creations": 0, "posts": 0, "archivedPosts": 0}'::jsonb,
+  '{"creations": 0, "failedCreations": 0, "archivedCreations": 0, "posts": 0, "archivedPosts": 0}'::jsonb,
   'a person with nothing else has zeros, not nulls'
 );
 select is(
   public.owner_profile_counts('c0100007-0000-4000-8000-000000000007'::uuid),
-  '{"creations": 1, "posts": 0, "archivedPosts": 0, "saved": 0}'::jsonb,
+  '{"creations": 1, "failedCreations": 0, "archivedCreations": 0, "posts": 0, "archivedPosts": 0, "saved": 0}'::jsonb,
   'a stranger sees only their own creation'
 );
 select is(
   public.owner_profile_counts('c0900000-0000-4000-8000-000000000000'::uuid),
-  '{"creations": 0, "posts": 0, "archivedPosts": 0, "saved": 0}'::jsonb,
+  '{"creations": 0, "failedCreations": 0, "archivedCreations": 0, "posts": 0, "archivedPosts": 0, "saved": 0}'::jsonb,
   'an unknown id is all zeros'
 );
 
@@ -198,6 +220,23 @@ select is(
   (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'creations')::int,
   4,
   'archiving the merged guest''s creation takes it out of the owner''s count'
+);
+select is(
+  (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'archivedCreations')::int,
+  3,
+  'and adds it to the archived creations'
+);
+update public.generations set archived_at = timezone('utc'::text, now())
+where id = 'c0400000-0000-4000-8000-000000000006'::uuid;
+select is(
+  (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'failedCreations')::int,
+  1,
+  'archiving a failed run takes it out of the failed count'
+);
+select is(
+  (public.owner_profile_counts('c0100001-0000-4000-8000-000000000001'::uuid) ->> 'archivedCreations')::int,
+  3,
+  'without counting it as an archived creation'
 );
 
 -- Only the server may ask.

@@ -2,8 +2,13 @@ import { QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ImmersiveSourceData } from '../lib/immersive-preview-source-data';
+import { profileFailedGenerationsQueryKey, selectFailedCreations } from '../lib/profile-media-query';
 import type { GenerationListItem, GenerationListResponse } from '../lib/types';
-import { applyGenerationArchiveToCaches, removeGenerationFromCaches } from '../lib/viewer-media-cache';
+import {
+  applyGenerationArchiveToCaches,
+  refreshViewerMediaCaches,
+  removeGenerationFromCaches,
+} from '../lib/viewer-media-cache';
 
 const USER = 'owner-1';
 const LIBRARY = ['profile-generations', USER];
@@ -167,5 +172,71 @@ describe('a deleted creation', () => {
 
     expect(libraryIds()).toEqual([['new-1', 'new-2'], ['old-1', 'card-40']]);
     expect(queryClient.getQueryState(LIBRARY)?.dataUpdatedAt).toBe(PAGE_UPDATED_AT);
+  });
+});
+
+describe("the Failed scope's pages", () => {
+  const FAILED = profileFailedGenerationsQueryKey(USER);
+  const failure = (id: string, createdAt: string) => creation(id, createdAt, { status: 'failed', output_url: null });
+  const failedPages = (): InfiniteData<GenerationListResponse, string | null> => ({
+    pages: [
+      { generations: [failure('failed-1', '2026-10-14T05:00:00.000Z')], pagination: { limit: 24, hasMore: true, nextCursor: '24' } },
+      { generations: [failure('failed-25', '2026-09-01T05:00:00.000Z')], pagination: { limit: 24, hasMore: false, nextCursor: null } },
+    ],
+    pageParams: [null, '24'],
+  });
+  const failedIds = () => selectFailedCreations(
+    queryClient.getQueryData<InfiniteData<GenerationListResponse>>(FAILED)?.pages.flatMap((page) => page.generations) ?? [],
+  ).map((item) => item.id);
+
+  beforeEach(() => {
+    api.listGenerations.mockImplementation(async (_includeArchived?: boolean, options?: { status?: string }) => (
+      options?.status === 'failed' ? failedPages().pages[0] : firstPage()
+    ));
+    queryClient.setQueryData(FAILED, failedPages(), { updatedAt: PAGE_UPDATED_AT });
+  });
+
+  afterEach(() => {
+    api.listGenerations.mockImplementation(async () => firstPage());
+  });
+
+  it('lose a failure archived from them, the pages around it staying put', async () => {
+    await applyGenerationArchiveToCaches({
+      api, queryClient, userId: USER, generationId: 'failed-25', archivedAt: '2026-10-14T09:00:00.000Z',
+    });
+
+    expect(failedIds()).toEqual(['failed-1']);
+    expect(queryClient.getQueryData<InfiniteData<GenerationListResponse>>(FAILED)?.pages).toHaveLength(2);
+  });
+
+  it('read their first page again after an archive or a restore, which can bring a failure back', async () => {
+    await applyGenerationArchiveToCaches({ api, queryClient, userId: USER, generationId: 'failed-25', archivedAt: null });
+
+    expect(api.listGenerations.mock.calls).toEqual([[true, { limit: 24 }], [false, { limit: 24, status: 'failed' }]]);
+  });
+
+  it('are not read for a reader who never opened the scope', async () => {
+    queryClient.removeQueries({ queryKey: FAILED });
+
+    await applyGenerationArchiveToCaches({
+      api, queryClient, userId: USER, generationId: 'card-40', archivedAt: '2026-10-14T09:00:00.000Z',
+    });
+
+    expect(api.listGenerations.mock.calls).toEqual([[true, { limit: 24 }]]);
+    expect(queryClient.getQueryState(FAILED)).toBeUndefined();
+  });
+
+  it('lose a deleted failure', () => {
+    removeGenerationFromCaches(queryClient, USER, 'failed-25');
+
+    expect(failedIds()).toEqual(['failed-1']);
+    expect(api.listGenerations).not.toHaveBeenCalled();
+  });
+
+  it('collapse to their first page and are read again with every profile library', async () => {
+    await refreshViewerMediaCaches(queryClient, USER);
+
+    expect(queryClient.getQueryData<InfiniteData<GenerationListResponse>>(FAILED)?.pages).toHaveLength(1);
+    expect(queryClient.getQueryState(FAILED)?.isInvalidated).toBe(true);
   });
 });

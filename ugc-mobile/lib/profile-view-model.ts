@@ -242,29 +242,47 @@ export function getProfileStats({
 export type ProfilePostsScope = 'active' | 'archived';
 /** Creations have a third scope: the runs that failed. */
 export type ProfileCreationsScope = ProfilePostsScope | 'failed';
-export type ProfileScopeCounts = Record<ProfilePostsScope, number> & { failed?: number };
+
+/** A chip over a library, typed by that library's own scopes: Posts' chips cannot name Failed. */
+export interface ProfileScopeOption<Scope extends string> {
+  value: Scope;
+  label: string;
+}
+
+function scopeOptionLabel(name: string, count: number | undefined) {
+  return count === undefined ? name : `${name} (${count})`;
+}
 
 /**
- * The scope chips over a library, in order. Failed runs have a chip of their
+ * The scope chips over Creations, in order. Failed runs have a chip of their
  * own beside Active: as a strip above the Active grid, an account with a run of
  * failures saw rows of them before its first creation. The chip shows while a
- * run on the loaded pages failed, and stays while it is the one chosen, so
- * clearing the last failure from it leaves its empty state in place rather than
- * moving the page under the reader.
+ * run failed (the server's total, `getOwnerCreationScopeCounts`), and stays
+ * while it is the one chosen, so clearing the last failure from it leaves its
+ * empty state in place rather than moving the page under the reader.
  */
-export function getProfileScopeOptions(
+export function getProfileCreationsScopeOptions(
   value: ProfileCreationsScope,
-  counts?: ProfileScopeCounts,
-): Array<{ value: ProfileCreationsScope; label: string }> {
-  const named = (name: string, count: number | undefined) => (count === undefined ? name : `${name} (${count})`);
-  const options: Array<{ value: ProfileCreationsScope; label: string }> = [
-    { value: 'active', label: named('Active', counts?.active) },
+  counts?: Record<ProfileCreationsScope, number>,
+): ProfileScopeOption<ProfileCreationsScope>[] {
+  const options: ProfileScopeOption<ProfileCreationsScope>[] = [
+    { value: 'active', label: scopeOptionLabel('Active', counts?.active) },
   ];
   if ((counts?.failed ?? 0) > 0 || value === 'failed') {
-    options.push({ value: 'failed', label: named('Failed', counts?.failed) });
+    options.push({ value: 'failed', label: scopeOptionLabel('Failed', counts?.failed) });
   }
-  options.push({ value: 'archived', label: named('Archived', counts?.archived) });
+  options.push({ value: 'archived', label: scopeOptionLabel('Archived', counts?.archived) });
   return options;
+}
+
+/** The scope chips over Posts, Active and Archived: a post is never a failed run. */
+export function getProfilePostsScopeOptions(
+  counts?: Record<ProfilePostsScope, number>,
+): ProfileScopeOption<ProfilePostsScope>[] {
+  return [
+    { value: 'active', label: scopeOptionLabel('Active', counts?.active) },
+    { value: 'archived', label: scopeOptionLabel('Archived', counts?.archived) },
+  ];
 }
 
 /**
@@ -283,6 +301,29 @@ export function getOwnerPostScopeCounts(
   return {
     active: typeof posts === 'number' && Number.isFinite(posts) ? posts : loaded.active,
     archived: typeof archivedPosts === 'number' && Number.isFinite(archivedPosts) ? archivedPosts : loaded.archived,
+  };
+}
+
+/**
+ * The Active, Failed and Archived counts on the Creations scope control: the
+ * server's totals, counted by the rules the lists apply (`owner_profile_counts`),
+ * as the Posts chips and the header's Creations figure read theirs. The loaded
+ * runs used to be counted instead, so failures past the first page went
+ * unnamed until the reader scrolled to them. A total the server does not send
+ * falls back to the loaded count, and archiving moves the totals locally
+ * (`creationStatsDelta`).
+ */
+export function getOwnerCreationScopeCounts(
+  totals: Pick<ProfileStatsResponse, 'creations' | 'failedCreations' | 'archivedCreations'> | null | undefined,
+  loaded: Record<ProfileCreationsScope, number>,
+): Record<ProfileCreationsScope, number> {
+  const total = (value: number | undefined, fallback: number) => (
+    typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  );
+  return {
+    active: total(totals?.creations, loaded.active),
+    failed: total(totals?.failedCreations, loaded.failed),
+    archived: total(totals?.archivedCreations, loaded.archived),
   };
 }
 
@@ -336,7 +377,17 @@ export function ownProfileShareUrl(siteUrl: string, username: string) {
   return `${siteUrl.replace(/\/$/, '')}/creators/${encodeURIComponent(username)}?s=${OWN_PROFILE_SHARE_SOURCE}`;
 }
 
-export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, scope: ProfileCreationsScope = 'active') {
+/**
+ * A library tab with the scope its chips have chosen, which only that tab's own
+ * scopes can be: Posts are never asked about Failed. Saved has no chips, and a
+ * scope left out is Active.
+ */
+export type ProfileMediaTabScope =
+  | [tab: 'Creations', scope?: ProfileCreationsScope]
+  | [tab: 'Posts', scope?: ProfilePostsScope]
+  | [tab: 'Saved'];
+
+export function getProfileMediaEmptyTitle(...[tab, scope]: ProfileMediaTabScope) {
   if (tab === 'Saved') return 'No saved media yet';
   if (tab === 'Creations') {
     if (scope === 'archived') return 'No archived creations';
@@ -348,7 +399,7 @@ export function getProfileMediaEmptyTitle(tab: ProfileMediaTab, scope: ProfileCr
 export const PROFILE_MEDIA_EMPTY_BODY = 'This section will fill as you save media, create generations, or publish posts.';
 
 /** Under the empty title. An empty Failed scope is the good case, so it never promises to fill. */
-export function getProfileMediaEmptyBody(tab: ProfileMediaTab, scope: ProfileCreationsScope = 'active') {
+export function getProfileMediaEmptyBody(...[tab, scope]: ProfileMediaTabScope) {
   if (tab === 'Creations' && scope === 'failed') return 'A run that fails shows here. Open it to see what went wrong.';
   return PROFILE_MEDIA_EMPTY_BODY;
 }

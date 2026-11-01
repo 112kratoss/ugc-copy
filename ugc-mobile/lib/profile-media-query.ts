@@ -48,6 +48,34 @@ export function profileGenerationsQueryOptions(
   };
 }
 
+/**
+ * The Creations Failed scope's own pages: unarchived failed runs only
+ * (`status=failed`). The scope used to keep the failures of the library pages
+ * above, so with few of them in a large library it read page after page of
+ * successes to find them. The library still carries failed runs, as the reel
+ * and the Rendering strip read it; the scope no longer takes them from there.
+ */
+export function profileFailedGenerationsQueryOptions(
+  api: Pick<MagicbookletApiClient, 'listGenerations'>,
+  userId: string | undefined
+) {
+  return {
+    queryKey: profileFailedGenerationsQueryKey(userId),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }) => api.listGenerations(false, {
+      cursor: pageParam ?? undefined,
+      limit: PROFILE_MEDIA_PAGE_SIZE,
+      status: 'failed',
+    }),
+    getNextPageParam: getNextProfileGenerationsCursor,
+    ...PROFILE_LIBRARY_QUERY_BEHAVIOUR,
+  };
+}
+
+export function profileFailedGenerationsQueryKey(userId: string | null | undefined) {
+  return ['profile-failed-generations', userId] as const;
+}
+
 export function profileOwnerPostsQueryOptions(
   api: Pick<MagicbookletApiClient, 'listOwnerPosts'>,
   userId: string | undefined
@@ -168,13 +196,17 @@ export function truncateInfiniteDataToFirstPage<T>(
  * in the last minute stayed as it was. Stale only, nothing fetched now: Profile
  * reads its first page again the next time it is focused and merges it into
  * the pages the reader loaded, where a refetch would request every one of them.
+ * The Failed scope's pages go stale with it, since a finished run may have failed.
  */
-export function invalidateProfileCreations(
+export async function invalidateProfileCreations(
   queryClient: Pick<QueryClient, 'invalidateQueries'>,
   userId: string | null | undefined,
 ): Promise<void> {
-  if (!userId) return Promise.resolve();
-  return queryClient.invalidateQueries({ queryKey: ['profile-generations', userId], refetchType: 'none' });
+  if (!userId) return;
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['profile-generations', userId], refetchType: 'none' }),
+    queryClient.invalidateQueries({ queryKey: profileFailedGenerationsQueryKey(userId), refetchType: 'none' }),
+  ]);
 }
 
 /** How often Profile reads its first page again while a run on it is rendering. */

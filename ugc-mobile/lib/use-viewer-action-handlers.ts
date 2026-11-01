@@ -23,7 +23,7 @@ import {
 } from '@/lib/post-lifecycle';
 import type { OwnerPostsResponse } from '@/lib/types';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
-import { adjustProfileStats, invalidateProfileStats } from '@/lib/profile-stats';
+import { adjustProfileStats, creationStatsDelta, invalidateProfileStats } from '@/lib/profile-stats';
 import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
 import { getDeleteCreationConfirmation, getViewerSafetyActions, isViewerOwnGeneration } from '@/lib/viewer-actions';
 import {
@@ -87,11 +87,6 @@ const POST_REPORT_REASONS: Array<{ label: string; value: PostReportReason; about
   { label: 'Something else', value: 'other' },
 ];
 
-/** Whether a creation is one the profile's Creations total counts (the library rule). */
-function countsAsCreation(item: Pick<ImmersivePreviewItem, 'archivedAt' | 'availability'>) {
-  return !item.archivedAt && (item.availability === 'available' || item.availability === 'source-unavailable');
-}
-
 /**
  * Archive or restore one creation: asked first, then the server, then the row
  * changed in the pages already loaded (`applyGenerationArchiveToCaches`). The
@@ -109,7 +104,7 @@ export async function changeGenerationArchive({
   api: Pick<MagicbookletApiClient, 'archiveGeneration' | 'restoreGeneration' | 'listGenerations' | 'listOwnerPosts' | 'getSavedMedia'>;
   queryClient: QueryClient;
   userId: string | undefined;
-  item: Pick<ImmersivePreviewItem, 'id' | 'archivedAt' | 'availability'>;
+  item: Pick<ImmersivePreviewItem, 'id' | 'archivedAt' | 'availability' | 'runStatus'>;
   archive: boolean;
 }): Promise<'done' | 'cancelled' | 'failed'> {
   const confirmed = await showConfirmDialog(archive
@@ -123,15 +118,17 @@ export async function changeGenerationArchive({
     showErrorDialog(archive ? 'Could not archive creation' : 'Could not restore creation', error);
     return 'failed';
   }
-  // Only a library member moves the total: a failed run never counted.
-  const counted = countsAsCreation(archive ? item : { ...item, archivedAt: null });
-  if (counted) adjustProfileStats(queryClient, userId, { creations: archive ? -1 : 1 });
+  const archivedAt = archive ? new Date().toISOString() : null;
+  // A library member moves between Active and Archived; a failed run leaves
+  // Failed when archived and returns when restored, and is counted in no
+  // Archived total.
+  adjustProfileStats(queryClient, userId, creationStatsDelta(item, { ...item, archivedAt }));
   await applyGenerationArchiveToCaches({
     api,
     queryClient,
     userId,
     generationId: item.id,
-    archivedAt: archive ? new Date().toISOString() : null,
+    archivedAt,
   });
   return 'done';
 }
@@ -262,7 +259,7 @@ export function useViewerActionHandlers({
     haptic.success();
     onDeleted?.(item.id);
     removeGenerationFromCaches(queryClient, viewerId, item.id);
-    if (countsAsCreation(item)) adjustProfileStats(queryClient, viewerId, { creations: -1 });
+    adjustProfileStats(queryClient, viewerId, creationStatsDelta(item, null));
     await invalidateProfileStats(queryClient, viewerId);
   };
 

@@ -55,14 +55,16 @@ import {
   PROFILE_MEDIA_EMPTY_BODY,
   PROFILE_MEDIA_TABS,
   generationToProfileMediaCard,
+  getOwnerCreationScopeCounts,
   getOwnerPostScopeCounts,
+  getProfileCreationsScopeOptions,
   getProfileMediaEmptyBody,
   getProfileMediaEmptyTitle,
   getProfileMediaSwipeTarget,
   getProfileHandle,
   getProfileInitials,
   getProfileName,
-  getProfileScopeOptions,
+  getProfilePostsScopeOptions,
   getProfileStats,
   getWalletCardContent,
   ownProfileShareUrl,
@@ -72,10 +74,12 @@ import {
   type ProfileMediaCard,
   type ProfileMediaSwipeDirection,
   type ProfileMediaTab,
+  type ProfileMediaTabScope,
   type ProfilePostsScope,
-  type ProfileScopeCounts,
+  type ProfileScopeOption,
 } from '@/lib/profile-view-model';
-import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
+import { refreshProfileFailedCreationsHead, refreshProfileLibraryHead } from '@/lib/profile-library-head';
+import { invalidateProfileStats } from '@/lib/profile-stats';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
   PROFILE_MEDIA_MIN_FILL_COUNT,
@@ -83,6 +87,8 @@ import {
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
   formatRenderingStartedLabel,
+  profileFailedGenerationsQueryKey,
+  profileFailedGenerationsQueryOptions,
   profileGenerationsQueryOptions,
   profileOwnerPostsQueryOptions,
   profileSavedMediaQueryOptions,
@@ -152,6 +158,11 @@ export function ProfileDashboard({
   // dialog promises they can be restored from the profile, so they have to be
   // reachable here.
   const [creationsScope, setCreationsScope] = useState<ProfileCreationsScope>('active');
+  // The library whose Failed scope has been opened: its query stays on from
+  // then, since an infinite query that goes from off to on while stale requests
+  // every page it holds again. Kept as the owner, not a flag, so the render in
+  // which another library takes over never turns that library's query on.
+  const [failedScopeOwner, setFailedScopeOwner] = useState<string | undefined>(undefined);
   const [postsScope, setPostsScope] = useState<ProfilePostsScope>('active');
   const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
   const queryClient = useQueryClient();
@@ -181,6 +192,13 @@ export function ProfileDashboard({
     ...profileGenerationsQueryOptions(api, creationsUserId),
     enabled: Boolean(creationsUserId && (activeTab === 'Creations' || backgroundMediaReady)),
   });
+  // The Failed scope pages failed runs alone, from the first time it is opened;
+  // the Creations tab then pages, refreshes and waits on it while it is shown.
+  const failedGenerationsQuery = useInfiniteQuery({
+    ...profileFailedGenerationsQueryOptions(api, creationsUserId),
+    enabled: Boolean(creationsUserId && failedScopeOwner === creationsUserId),
+  });
+  const creationsQuery = creationsScope === 'failed' ? failedGenerationsQuery : generationsQuery;
 
   const postsQuery = useInfiniteQuery({
     ...profileOwnerPostsQueryOptions(api, user?.id),
@@ -195,7 +213,7 @@ export function ProfileDashboard({
   const activeMediaQuery = activeTab === 'Saved'
     ? savedQuery
     : activeTab === 'Creations'
-      ? generationsQuery
+      ? creationsQuery
       : postsQuery;
   const {
     data: activeMediaData,
@@ -213,11 +231,12 @@ export function ProfileDashboard({
     setCreationsScope('active');
   }, [creationsUserId]);
 
+  // The Failed scope pages a query of its own, whose page count the last request's says nothing about.
   useEffect(() => {
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
-  }, [activeTab, creationsUserId]);
+  }, [activeTab, creationsScope, creationsUserId]);
 
   useEffect(() => {
     if (user?.id && activeMediaIsFetched) {
@@ -230,22 +249,38 @@ export function ProfileDashboard({
   // settled, so a failing refresh looped, and each refetch re-requested every
   // page the reader had loaded (audit C7).
   const refreshMediaHead = useCallback(
-    (library: string) => refreshProfileLibraryHead({
-      api,
-      queryClient,
-      userId: creationsUserId,
-      library: library as ProfileMediaTab,
-    }),
+    (library: string) => (library === 'Failed'
+      // The library's first page as well as the scope's own: the Rendering
+      // strip over Failed reads the library, so a run tried again from a
+      // failure shows there, and its refresh brings it here if it fails again.
+      ? Promise.all([
+        refreshProfileLibraryHead({ api, queryClient, userId: creationsUserId, library: 'Creations' }),
+        refreshProfileFailedCreationsHead({ api, queryClient, userId: creationsUserId }),
+      ])
+      : refreshProfileLibraryHead({
+        api,
+        queryClient,
+        userId: creationsUserId,
+        library: library as ProfileMediaTab,
+      })),
     [api, queryClient, creationsUserId]
   );
+  // The events that read the runs again read the Creations scope totals with
+  // them: a run that failed while the reader was in a creator never passed
+  // through the Rendering strip, which reads them as a run leaves it.
+  const revalidateMediaHead = useCallback((library: string) => {
+    if (library === 'Creations' || library === 'Failed') void invalidateProfileStats(queryClient, user?.id);
+    return refreshMediaHead(library);
+  }, [queryClient, refreshMediaHead, user?.id]);
   useProfileMediaRevalidation({
     // A guest has only its Creations to keep fresh.
     enabled: isFocused && (Boolean(user) || (guestCreations && activeTab === 'Creations')),
-    scope: activeTab,
+    // The Failed scope's pages are a library of their own, with their own schedule.
+    scope: activeTab === 'Creations' && creationsScope === 'failed' ? 'Failed' : activeTab,
     hasData: Boolean(activeMediaData),
     isFetching: activeMediaIsFetching,
     isStale: activeMediaIsStale,
-    refresh: refreshMediaHead,
+    refresh: revalidateMediaHead,
   });
 
   const savedCards = useMemo(
@@ -264,9 +299,12 @@ export function ProfileDashboard({
     () => selectRenderingCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
     [generationsQuery.data]
   );
+  // The Failed scope's runs: its own pages once they have come, and until then
+  // the failures the library has loaded, so opening it draws what is known.
+  // Filtered either way: a server from before `status=failed` sends every run.
   const failedCreations = useMemo(
-    () => selectFailedCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
-    [generationsQuery.data]
+    () => selectFailedCreations(flattenProfileGenerationPages((failedGenerationsQuery.data ?? generationsQuery.data)?.pages)),
+    [failedGenerationsQuery.data, generationsQuery.data]
   );
   // The Failed scope's rows: the list pages, windows and recycles them as it does tiles.
   const failedCreationCards = useMemo(() => failedCreations.map(generationToProfileMediaCard), [failedCreations]);
@@ -299,6 +337,18 @@ export function ProfileDashboard({
     }, PROFILE_RENDERING_REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [appForeground, isFocused, refreshMediaHead, showRenderingStrip, watchingRun]);
+  // A run leaving the strip has finished or failed: the totals the header and
+  // the scope chips read have moved, and a failure belongs on the Failed
+  // scope's first page, read again here once that scope has been opened.
+  const renderingIdsRef = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    const ids = new Set(renderingCreations.map((item) => item.id));
+    const left = [...renderingIdsRef.current].some((id) => !ids.has(id));
+    renderingIdsRef.current = ids;
+    if (!left) return;
+    void invalidateProfileStats(queryClient, user?.id);
+    void refreshProfileFailedCreationsHead({ api, queryClient, userId: creationsUserId }).catch(() => undefined);
+  }, [api, creationsUserId, queryClient, renderingCreations, user?.id]);
   const ownerPosts = useMemo(
     () => flattenProfileOwnerPostPages(postsQuery.data?.pages),
     [postsQuery.data]
@@ -345,12 +395,13 @@ export function ProfileDashboard({
   ));
   const isMediaLoading =
     (activeTab === 'Saved' && savedQuery.isLoading)
-    || (activeTab === 'Creations' && generationsQuery.isLoading)
+    // The Failed scope waits on its first page only with nothing to draw meanwhile.
+    || (activeTab === 'Creations' && creationsQuery.isLoading && creationCards.length === 0)
     || (activeTab === 'Posts' && postsQuery.isLoading);
   const activeTabPaging = activeTab === 'Saved'
     ? savedQuery
     : activeTab === 'Creations'
-      ? generationsQuery
+      ? creationsQuery
       : postsQuery;
   const activeHasNextPage = activeTabPaging.hasNextPage;
   const activeIsFetchingNextPage = activeTabPaging.isFetchingNextPage;
@@ -380,7 +431,7 @@ export function ProfileDashboard({
       return;
     }
     if (activeTab === 'Creations') {
-      void generationsQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
+      void creationsQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
       return;
     }
     void postsQuery.fetchNextPage().finally(() => { loadingMoreRef.current = false; });
@@ -390,7 +441,7 @@ export function ProfileDashboard({
     activeMediaIsFetching,
     activePageCount,
     activeTab,
-    generationsQuery,
+    creationsQuery,
     postsQuery,
     savedQuery,
   ]);
@@ -411,11 +462,11 @@ export function ProfileDashboard({
   const handleMediaTabChange = useCallback((tab: ProfileMediaTab) => {
     setActiveTab(tab);
   }, []);
-  // Posts have no Failed scope; its chip shows only over Creations.
-  const handleScopeChange = useCallback((scope: ProfileCreationsScope) => {
-    if (activeTab === 'Creations') setCreationsScope(scope);
-    else if (scope !== 'failed') setPostsScope(scope);
-  }, [activeTab]);
+  // Choosing Failed turns its query on for this library from then on.
+  const changeCreationsScope = useCallback((scope: ProfileCreationsScope) => {
+    setCreationsScope(scope);
+    if (scope === 'failed') setFailedScopeOwner(creationsUserId);
+  }, [creationsUserId]);
   const handleMediaSwipe = useCallback((direction: ProfileMediaSwipeDirection) => {
     setActiveTab((currentTab) => getProfileMediaSwipeTarget(currentTab, direction));
   }, []);
@@ -443,10 +494,14 @@ export function ProfileDashboard({
     }
     if (activeTab === 'Creations') {
       queryClient.setQueryData<InfiniteData<GenerationListResponse>>(
-        ['profile-generations', creationsUserId],
+        creationsScope === 'failed' ? profileFailedGenerationsQueryKey(creationsUserId) : ['profile-generations', creationsUserId],
         truncateInfiniteDataToFirstPage
       );
-      void generationsQuery.refetch().finally(() => setPullRefreshing(false));
+      // The scope chips' totals ride on the profile: a pull reads them again with the runs.
+      void invalidateProfileStats(queryClient, user?.id);
+      // Over Failed the library's first page is merged too, for the Rendering strip.
+      if (creationsScope === 'failed') void refreshMediaHead('Creations').catch(() => undefined);
+      void creationsQuery.refetch().finally(() => setPullRefreshing(false));
       return;
     }
     queryClient.setQueryData<InfiniteData<OwnerPostsResponse>>(
@@ -491,22 +546,46 @@ export function ProfileDashboard({
   // Said once the guest has something to keep, so it never names an empty grid;
   // failed runs wait under their own chip.
   const guestHasCreations = allCreationCards.length > 0 || renderingCreations.length > 0;
-  const scope = activeTab === 'Creations' ? creationsScope : postsScope;
+  // Each tab's chips and empty state read only that tab's scopes, and its chips
+  // set only its own: Posts can never be handed Failed. Saved has no chips. The
+  // empty state names the tab shown, narrowed rather than retyped, so it cannot
+  // describe another one, and a tab added later must be given its own case.
+  const tabScope: ProfileMediaTabScope = activeTab === 'Creations'
+    ? [activeTab, creationsScope]
+    : activeTab === 'Posts' ? [activeTab, postsScope] : [activeTab];
+  const scopeControl = activeTab === 'Creations' ? (
+    <ProfileMediaScopeControl
+      label="Filter creations"
+      value={creationsScope}
+      options={getProfileCreationsScopeOptions(creationsScope, getOwnerCreationScopeCounts(profile?.stats, {
+        active: activeCreationCards.length,
+        failed: failedCreations.length,
+        archived: archivedCreationCards.length,
+      }))}
+      onChange={changeCreationsScope}
+    />
+  ) : activeTab === 'Posts' ? (
+    <ProfileMediaScopeControl
+      label="Filter posts"
+      value={postsScope}
+      options={getProfilePostsScopeOptions(getOwnerPostScopeCounts(profile?.stats, {
+        active: activePostCards.length,
+        archived: archivedPostCards.length,
+      }))}
+      onChange={setPostsScope}
+    />
+  ) : null;
 
   return (
     <ProfileMediaList
       activeTab={activeTab}
       cards={tabCards}
       contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
-      emptyTitle={getProfileMediaEmptyTitle(activeTab, scope)}
-      emptyBody={getProfileMediaEmptyBody(activeTab, scope)}
+      emptyTitle={getProfileMediaEmptyTitle(...tabScope)}
+      emptyBody={getProfileMediaEmptyBody(...tabScope)}
       fallbackAvatarInitials={initials}
       fallbackAvatarUrl={profile?.avatarUrl}
-      scope={scope}
-      scopeCounts={activeTab === 'Creations'
-        ? { active: activeCreationCards.length, failed: failedCreations.length, archived: archivedCreationCards.length }
-        : getOwnerPostScopeCounts(profile?.stats, { active: activePostCards.length, archived: archivedPostCards.length })}
-      onScopeChange={handleScopeChange}
+      scopeControl={scopeControl}
       renderingCreations={showRenderingStrip ? renderingCreations : undefined}
       // Times on the strip are as of the page they were read from, which the
       // 15 s refresh renews; a clock read during render would be kept by memo.
@@ -606,9 +685,7 @@ function ProfileMediaList({
   onRetryNextPage,
   onSwipeTab,
   onTabChange,
-  scope = 'active',
-  scopeCounts,
-  onScopeChange,
+  scopeControl,
   renderingAsOf = 0,
   renderingCreations,
   onRenderingRunOpen,
@@ -636,9 +713,8 @@ function ProfileMediaList({
   onRetryNextPage?: () => void;
   onSwipeTab: (direction: ProfileMediaSwipeDirection) => void;
   onTabChange: (tab: ProfileMediaTab) => void;
-  scope?: ProfileCreationsScope;
-  scopeCounts?: ProfileScopeCounts;
-  onScopeChange?: (scope: ProfileCreationsScope) => void;
+  /** The chips under the tabs, which the dashboard builds from the shown tab's own scopes. */
+  scopeControl?: React.ReactNode;
   renderingAsOf?: number;
   renderingCreations?: GenerationListItem[];
   /** A Rendering tile opened its run's status page. */
@@ -722,14 +798,7 @@ function ProfileMediaList({
               onRefresh={onRefresh}
               onTabChange={onTabChange}
             />
-            {activeTab !== 'Saved' && onScopeChange ? (
-              <ProfileMediaScopeControl
-                label={`Filter ${activeTab.toLowerCase()}`}
-                value={scope}
-                counts={scopeCounts}
-                onChange={onScopeChange}
-              />
-            ) : null}
+            {scopeControl}
             {headerExtrasReady && notice ? notice : null}
             {headerExtrasReady && renderingCreations?.length ? (
               <ProfileRenderingStrip
@@ -1528,19 +1597,19 @@ function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange:
   );
 }
 
-function ProfileMediaScopeControl({
+function ProfileMediaScopeControl<Scope extends string>({
   label,
   value,
-  counts,
+  options,
   onChange,
 }: {
   label: string;
-  value: ProfileCreationsScope;
-  counts?: ProfileScopeCounts;
-  onChange: (scope: ProfileCreationsScope) => void;
+  value: Scope;
+  /** One library's chips, in order: `onChange` is only ever handed that library's scopes. */
+  options: readonly ProfileScopeOption<Scope>[];
+  onChange: (scope: Scope) => void;
 }) {
   const theme = useAppTheme();
-  const options = getProfileScopeOptions(value, counts);
   return (
     // Three chips with counts outgrow a narrow row at larger text sizes; the row wraps.
     <View accessibilityRole="radiogroup" accessibilityLabel={label} style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
