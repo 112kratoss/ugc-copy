@@ -11,8 +11,14 @@ skill only adds how an agent runs it.
 ## Before you start
 
 - Work on a new branch in a git worktree, not in the primary checkout, which other sessions
-  share. Copy the gitignored root `.env.local` into the worktree if you will run the id probe or
-  the catalog CLI there.
+  share. Never copy `.env.local` into the worktree: the owner ruled out `.env*` files in a
+  checkout on 2026-10-23, and `.claude/hooks/guard-bash.py` refuses the copy. When the id probe
+  or the catalog CLI needs the env there, load the primary checkout's into the process (the
+  CLI's `--env-file-if-exists` then leaves those values alone):
+
+  ```bash
+  node -e "require('@next/env').loadEnvConfig(process.argv[1], true); process.exit(require('child_process').spawnSync(process.argv[2], process.argv.slice(3), { stdio: 'inherit', env: process.env }).status ?? 1)" -- "$(git worktree list --porcelain | sed -n '1s/^worktree //p')" npm run ops:generation-model-catalog -- validate
+  ```
 - Pin down the Kie market slug for each model. If the request names a product rather than a
   slug, list the slugs with `node scripts/ops/kie-evidence.mjs slugs`.
 
