@@ -377,6 +377,18 @@ export default function AppShellAccount({
     router.push('/login');
   };
 
+  /**
+   * The access tokens of the sessions a sign-out here ends: the one auth-js
+   * holds, which the call ends, and the one this menu shows, which can trail it
+   * while a newer session is still being checked. The browser's other tabs read
+   * the ending of either as a sign-out, not a lapse, and an open creator page
+   * there clears (owner, 2026-11-01; `markBrowserSignOut`).
+   */
+  const sessionsEnding = async () => {
+    const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+    return [data.session?.access_token, session?.access_token];
+  };
+
   const handleSignOut = async () => {
     if (isSigningOut || isSigningOutEverywhere) return;
     setIsSigningOut(true);
@@ -384,9 +396,7 @@ export default function AppShellAccount({
     if (userId) {
       await clearCreatorDataForSignOut(userId);
     }
-    // The browser's other tabs take the ending for a sign-out, not a lapse, and
-    // an open creator page there clears (owner, 2026-11-01).
-    markBrowserSignOut(session?.access_token);
+    markBrowserSignOut(...await sessionsEnding());
     // This browser only. The default (global) also ends the account's session
     // on the person's phone, which then has every request refused. The logout
     // call gives up after 10 s (src/lib/supabase.ts).
@@ -447,12 +457,13 @@ export default function AppShellAccount({
     setIsSigningOutEverywhere(true);
     const userId = session?.user?.id;
     await retireAccountPushTokens();
-    markBrowserSignOut(session?.access_token);
+    const ending = await sessionsEnding();
+    markBrowserSignOut(...ending);
     const { error } = await supabase.auth.signOut({ scope: 'global' })
       .catch((thrown: unknown) => ({ error: thrown }));
     if (error) {
       // The session stays: a later lapse of it is a lapse.
-      forgetBrowserSignOut();
+      forgetBrowserSignOut(...ending);
       setIsSigningOutEverywhere(false);
       pushToast({
         tone: 'error',

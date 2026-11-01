@@ -1,10 +1,15 @@
 'use client';
 
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 
 import { isSessionRefusal } from '@/lib/auth-error-copy';
-import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
+import {
+    accessTokenSessionId,
+    browserSignOutSnapshot,
+    subscribeToBrowserSignOuts,
+    wasSessionSignedOutInBrowser,
+} from '@/lib/browser-sign-out';
 import type { SaverNoticeRecord } from '@/components/saver-notice';
 import {
     getClientE2EAuthState,
@@ -186,9 +191,13 @@ export function AuthProvider({
             : null
     ));
     const [readSaverNoticeRecord, setReadSaverNoticeRecord] = useState<SaverNoticeRecord | null>(null);
-    // The session this tab held last, which its ending is read against (`signedOut`).
-    const [heldSession, setHeldSession] = useState<Session | null>(session);
-    if (session && session !== heldSession) setHeldSession(session);
+    // The session this tab held last, by its id (no token outlives the session here), which its
+    // ending is read against (`signedOut`), and the browser's sign-out marks, followed as other
+    // tabs write them: a mark that lands after this tab's session has ended still counts.
+    const sessionId = session ? accessTokenSessionId(session.access_token) : null;
+    const [heldSessionId, setHeldSessionId] = useState(sessionId);
+    if (sessionId && sessionId !== heldSessionId) setHeldSessionId(sessionId);
+    const signOutMarks = useSyncExternalStore(subscribeToBrowserSignOuts, browserSignOutSnapshot, () => null);
     const witnessedAuthCookieRef = useRef(hasAuthCookieHint);
     const authEpochRef = useRef(0);
     const tokenEpochRef = useRef(0);
@@ -544,7 +553,7 @@ export function AuthProvider({
                 // Only ever the account signed in now's, the latest read first.
                 saverNoticeRecord: [readSaverNoticeRecord, pageSaverNoticeRecord]
                     .find((record) => record !== null && record.userId === session?.user?.id) ?? null,
-                signedOut: !session && wasSignedOutInBrowser(heldSession?.access_token),
+                signedOut: !session && wasSessionSignedOutInBrowser(heldSessionId, signOutMarks),
                 isLoading: resolvedIsLoading,
                 updateCredits,
                 refreshSessionState,

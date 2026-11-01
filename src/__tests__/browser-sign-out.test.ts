@@ -2,8 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   accessTokenSessionId,
+  BROWSER_SIGN_OUT_KEY,
+  browserSignOutSnapshot,
   forgetBrowserSignOut,
   markBrowserSignOut,
+  subscribeToBrowserSignOuts,
+  wasSessionSignedOutInBrowser,
   wasSignedOutInBrowser,
 } from '@/lib/browser-sign-out';
 import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
@@ -33,22 +37,66 @@ describe('a sign-out made in this browser', () => {
     expect(wasSignedOutInBrowser(tokenOf('user-2', 'session-2'))).toBe(false);
     expect(wasSignedOutInBrowser('opaque-token')).toBe(false);
     expect(wasSignedOutInBrowser(undefined)).toBe(false);
+    expect(wasSessionSignedOutInBrowser('session-1')).toBe(true);
+    expect(wasSessionSignedOutInBrowser(null)).toBe(false);
   });
 
   it('marks nothing for a token that names no session', () => {
-    markBrowserSignOut(tokenOf('user-1', 'session-1'));
-    markBrowserSignOut('opaque-token');
-    markBrowserSignOut(undefined);
+    markBrowserSignOut('opaque-token', undefined, null);
 
-    // The earlier mark stands: nothing took its place.
-    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(true);
+    expect(browserSignOutSnapshot()).toBeNull();
   });
 
-  it('is taken back by a sign-out that failed', () => {
+  // A tab that hears of its session's end late, after other sign-outs, still finds its own.
+  it('keeps the marks of earlier sign-outs, up to the last ten', () => {
     markBrowserSignOut(tokenOf('user-1', 'session-1'));
-    forgetBrowserSignOut();
+    markBrowserSignOut(tokenOf('user-2', 'session-2'), tokenOf('user-2', 'session-3'));
 
+    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(true);
+    expect(wasSignedOutInBrowser(tokenOf('user-2', 'session-2'))).toBe(true);
+    expect(wasSignedOutInBrowser(tokenOf('user-2', 'session-3'))).toBe(true);
+
+    for (let index = 4; index <= 12; index += 1) markBrowserSignOut(tokenOf('user-3', `session-${index}`));
     expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(false);
+    expect(wasSignedOutInBrowser(tokenOf('user-2', 'session-2'))).toBe(false);
+    expect(wasSignedOutInBrowser(tokenOf('user-2', 'session-3'))).toBe(true);
+    expect(wasSignedOutInBrowser(tokenOf('user-3', 'session-12'))).toBe(true);
+  });
+
+  it('takes back only the marks of a sign-out that failed', () => {
+    markBrowserSignOut(tokenOf('user-1', 'session-1'));
+    markBrowserSignOut(tokenOf('user-2', 'session-2'));
+    forgetBrowserSignOut(tokenOf('user-2', 'session-2'), undefined);
+
+    expect(wasSignedOutInBrowser(tokenOf('user-2', 'session-2'))).toBe(false);
+    expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(true);
+
+    forgetBrowserSignOut(tokenOf('user-1', 'session-1'));
+    expect(browserSignOutSnapshot()).toBeNull();
+  });
+
+  it('reads the marks of a snapshot given, the stored ones otherwise', () => {
+    markBrowserSignOut(tokenOf('user-1', 'session-1'));
+    const snapshot = browserSignOutSnapshot();
+    window.localStorage.clear();
+
+    expect(wasSessionSignedOutInBrowser('session-1', snapshot)).toBe(true);
+    expect(wasSessionSignedOutInBrowser('session-1')).toBe(false);
+    expect(wasSessionSignedOutInBrowser('session-1', 'not json')).toBe(false);
+  });
+
+  it('calls back when another tab writes the marks, and for nothing else', () => {
+    const onChange = vi.fn();
+    const unsubscribe = subscribeToBrowserSignOuts(onChange);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: BROWSER_SIGN_OUT_KEY }));
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'another-key' }));
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    unsubscribe();
+    window.dispatchEvent(new StorageEvent('storage', { key: BROWSER_SIGN_OUT_KEY }));
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
   it('reads as no sign-out where the browser refuses its storage', () => {
@@ -58,5 +106,6 @@ describe('a sign-out made in this browser', () => {
     });
 
     expect(wasSignedOutInBrowser(tokenOf('user-1', 'session-1'))).toBe(false);
+    expect(() => markBrowserSignOut(tokenOf('user-1', 'session-2'))).not.toThrow();
   });
 });

@@ -58,6 +58,8 @@ const authState = vi.hoisted(() => ({
     access_token: 'test-token',
     user: { id: 'user-1' },
   } as { access_token: string; user: { id: string } } | null,
+  // Whether a sign-out made in this browser ended the session (AuthProvider's `signedOut`).
+  signedOut: false,
   updateCredits: vi.fn(),
 }));
 // The browser's auth client: signed in or out, and as whom. It has another account's session before
@@ -374,6 +376,7 @@ beforeEach(() => {
   routerMock.push.mockClear();
   authState.credits = 10_000;
   authState.session = { access_token: 'test-token', user: { id: 'user-1' } };
+  authState.signedOut = false;
   authState.updateCredits.mockClear();
   sessionState.signedIn = true;
   sessionState.session = { access_token: 'test-token', user: { id: 'user-1' } };
@@ -1625,6 +1628,43 @@ describe('CreateMotionClient drafts and media', () => {
       expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
       expect(box()).toHaveValue('A slow spin with both arms wide');
     });
+
+    // Owner, 2026-11-01, "Yes, clear it": a sign-out made in this browser clears the page, and the
+    // page is the visitor's after it; a session that lapses keeps it.
+    it('clears the page when its account signs out in this browser, and leaves it the visitor’s', async () => {
+      keepFiles('user-1', { image: characterImage(), clip: motionClip() });
+      const view = render(<CreateMotionClient prefill={{}} />);
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      fireEvent.change(box(), { target: { value: 'A slow spin with both arms wide' } });
+
+      authState.session = null;
+      authState.signedOut = true;
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      await readFilesOf('visitor');
+
+      expect(imageShown()).toBe(false);
+      expect(screen.queryByText('Reference length: 7.3s')).toBeNull();
+      expect(box()).not.toHaveValue('A slow spin with both arms wide');
+      expect(screen.getByRole('button', { name: 'Sign up to generate' })).toBeInTheDocument();
+    });
+
+    it('keeps the page through a session that lapses', async () => {
+      keepFiles('user-1', { image: characterImage(), clip: motionClip() });
+      const view = render(<CreateMotionClient prefill={{}} />);
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      fireEvent.change(box(), { target: { value: 'A slow spin with both arms wide' } });
+
+      authState.session = null;
+      view.rerender(<CreateMotionClient prefill={{}} />);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(imageShown()).toBe(true);
+      expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(box()).toHaveValue('A slow spin with both arms wide');
+      expect(screen.queryByRole('button', { name: 'Sign up to generate' })).toBeNull();
+    });
   });
 
   // The run follows the form: when another account takes the page (from another tab, or after a
@@ -1647,7 +1687,7 @@ describe('CreateMotionClient drafts and media', () => {
       sessionState.signedIn = true;
       sessionState.session = sessionOf(userId);
     }
-    /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+    /** The session ends with no mark of a sign-out (a lapse): a page that opened signed in keeps its form, owned by no one. */
     function signOutHere(redraw: () => void) {
       sessionState.signedIn = false;
       authState.session = null;
@@ -1759,7 +1799,7 @@ describe('CreateMotionClient drafts and media', () => {
       const view = render(page());
       await attachBothInputs(view.container);
 
-      // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+      // Asha's session ends with no mark of a sign-out (a lapse): the page keeps her form, owned by no one. Ben then signs in
       // there, and the browser has his session before the page does.
       signOutHere(() => view.rerender(page()));
       authClientSignsInAs('user-2');

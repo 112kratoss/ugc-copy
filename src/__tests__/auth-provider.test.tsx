@@ -4,7 +4,7 @@ import { Activity } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
-import { markBrowserSignOut } from '@/lib/browser-sign-out';
+import { BROWSER_SIGN_OUT_KEY, markBrowserSignOut } from '@/lib/browser-sign-out';
 import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 
 const authProviderMocks = vi.hoisted(() => ({
@@ -272,6 +272,23 @@ describe('AuthProvider', () => {
 
       await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-in'));
       expect(screen.getByTestId('signed-out')).toHaveTextContent('false');
+    });
+
+    // A session refused before another tab of this browser signs it out (its menu still showing
+    // the account): the mark lands once this tab's session has already ended.
+    it('reads a mark another tab writes after the session has ended', async () => {
+      const held = sessionWith('session-1');
+      await signedInWith(held);
+      act(() => authStateCallback?.('SIGNED_OUT', null));
+      await waitFor(() => expect(screen.getByTestId('session')).toHaveTextContent('signed-out'));
+      expect(screen.getByTestId('signed-out')).toHaveTextContent('false');
+
+      markBrowserSignOut(held.access_token);
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: BROWSER_SIGN_OUT_KEY }));
+      });
+
+      expect(screen.getByTestId('signed-out')).toHaveTextContent('true');
     });
   });
 

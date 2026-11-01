@@ -85,7 +85,7 @@ const useDeploymentRefreshMock = vi.hoisted(() => vi.fn((enabled: boolean) => {
   void enabled;
   return { newBuildAvailable: deploymentRefreshState.newBuildAvailable };
 }));
-const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
+const routerMock = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 const authState = vi.hoisted(() => ({
   credits: 10_000 as number | null,
   session: { access_token: 'test-token', user: { id: 'user-1' } } as { access_token: string; user: { id: string } } | null,
@@ -248,6 +248,7 @@ beforeEach(() => {
   deploymentRefreshState.newBuildAvailable = false;
   useDeploymentRefreshMock.mockClear();
   routerMock.push.mockClear();
+  routerMock.replace.mockClear();
   authState.credits = 10_000;
   authState.session = { access_token: 'test-token', user: { id: 'user-1' } };
   authState.signedOut = false;
@@ -645,6 +646,29 @@ describe('CreateImageClient element handles', () => {
 
       await waitFor(() => expect(cardHandles(view.container)).toHaveLength(10));
       expect(await screen.findByText(/takes up to 10 reference images, so 10 of this run's 12 came back\./)).toBeInTheDocument();
+    });
+
+    // A remix takes an account (`RequireAuth`): once a sign-out made in this browser ends its
+    // session, the page goes to sign in, back to the remix after, as its link does. It never becomes
+    // a visitor's page, where the remix could not load.
+    it('sends the remix to sign in again when its account signs out in this browser, its remix kept meanwhile', async () => {
+      window.history.replaceState({}, '', '/create-image?remix=gen-1');
+      try {
+        const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+        await waitFor(() => expect(cardHandles(view.container)).toEqual(['@lead', '@prop']));
+
+        authState.session = null;
+        authState.signedOut = true;
+        view.rerender(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+
+        await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(
+          `/login?returnUrl=${encodeURIComponent('/create-image?remix=gen-1')}`,
+        ));
+        expect(cardHandles(view.container)).toEqual(['@lead', '@prop']);
+        expect(screen.queryByRole('button', { name: 'Sign up to generate' })).toBeNull();
+      } finally {
+        window.history.replaceState({}, '', '/');
+      }
     });
 
     it('does not hand a restored handle to another element that is renamed to match it', async () => {
@@ -1828,7 +1852,7 @@ describe('CreateImageClient generation pipeline', () => {
     function authClientSignsInAs(userId: string) {
       getSessionMock.mockResolvedValue({ data: { session: sessionOf(userId) } });
     }
-    /** The account signs out in another tab: a page that opened signed in keeps its form, owned by no one. */
+    /** The session ends with no mark of a sign-out (a lapse): a page that opened signed in keeps its form, owned by no one. */
     function signOutHere(redraw: () => void) {
       getSessionMock.mockResolvedValue({ data: { session: null } });
       authState.session = null;
@@ -2039,7 +2063,7 @@ describe('CreateImageClient generation pipeline', () => {
       expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
       typePrompt('Asha’s harbour at dusk');
 
-      // Asha signs out in another tab: the page keeps her form, owned by no one. Ben then signs in
+      // Asha's session ends with no mark of a sign-out (a lapse): the page keeps her form, owned by no one. Ben then signs in
       // there, and the browser has his session before the page does.
       signOutHere(() => view.rerender(page()));
       authClientSignsInAs('user-2');

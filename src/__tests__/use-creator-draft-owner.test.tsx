@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   adoptVisitorDraft: vi.fn<(tool: string, userId: string, nonce: string | null) => Promise<boolean>>(),
   hasVisitorDraftHandover: vi.fn<(tool: string, nonce: string | null) => boolean>(),
+  router: { replace: vi.fn<(href: string) => void>() },
 }));
+
+vi.mock('next/navigation', () => ({ useRouter: () => mocks.router }));
 
 vi.mock('@/lib/creator-visitor-draft', () => ({
   VISITOR_DRAFT_OWNER: 'visitor',
@@ -231,6 +234,9 @@ describe('the form a creator holds', () => {
     ['an account signing in on a visitor’s page without the sign-up sheet', [owned('visitor'), owned('user-1')], [0, 1]],
     ['a hand-over that carried the visitor’s draft', [owned('visitor'), owned(null), owned('user-1')], [0, 0, 1]],
     ['the visitor, and then another account, after the hand-over’s account left', [owned('visitor'), owned('user-1', true), owned('visitor'), owned('user-2')], [0, 0, 1, 2]],
+    // Owner, 2026-11-01, "Yes, clear it": a sign-out made in this browser gives the page to the visitor.
+    ['the visitor after a sign-out, and the same account back after it', [owned('user-1'), owned('visitor'), owned('user-1')], [0, 1, 2]],
+    ['the visitor after a sign-out while a hand-over is on its way', [owned(null), owned('visitor')], [0, 1]],
   ])('is a new form for %s', async (_case, drafts, keys) => {
     const { nextCreatorFormHolder } = await import('@/lib/use-creator-draft-owner');
     let holder = { owner: drafts[0].owner, key: 0 };
@@ -282,6 +288,8 @@ describe('the form a creator holds', () => {
     ['a sign-up return whose hand-over is on its way', [owned(null), owned('user-1'), owned('user-2')], [true, true, false]],
     ['a sign-up return the page first drew for the visitor', [owned('visitor'), owned(null), owned('user-1'), owned('user-2')], [true, true, true, false]],
     ['the first account, back after another', [owned('user-1'), owned('user-2'), owned('user-1')], [true, false, false]],
+    ['a page that opened signed in, given to the visitor by a sign-out', [owned('user-1'), owned('visitor')], [true, false]],
+    ['a sign-up return signed out while its hand-over is on its way', [owned(null), owned('visitor')], [true, false]],
   ])('holds what the server drew for the page for its viewer’s form: %s', async (_case, drafts, viewers) => {
     const { useCreatorForm } = await import('@/lib/use-creator-draft-owner');
     const { result, rerender } = renderHook(({ draft }) => useCreatorForm(draft), { initialProps: { draft: drafts[0] } });
@@ -290,5 +298,40 @@ describe('the form a creator holds', () => {
       return result.current.pageViewer;
     });
     expect(seen).toEqual(viewers);
+  });
+});
+
+// Owner, 2026-11-01, "Yes, clear it": how a creator page takes a sign-out made in this browser.
+describe('a sign-out on a creator page', () => {
+  beforeEach(() => {
+    mocks.router.replace.mockReset();
+    window.history.replaceState(null, '', '/create-image?remix=gen-1&remixPost=post-1');
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('gives a creator’s form to the visitor', async () => {
+    const { useCreatorSignOut } = await import('@/lib/use-creator-draft-owner');
+    const { result } = renderHook(() => useCreatorSignOut(false, true));
+    expect(result.current).toBe(true);
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+  });
+
+  // A remix takes an account, so its page is never the visitor's: it goes to sign in, as its link does.
+  it('sends a remix to sign in again, back to the remix after, and never gives its form to the visitor', async () => {
+    const { useCreatorSignOut } = await import('@/lib/use-creator-draft-owner');
+    const { result, rerender } = renderHook(({ signedOut }) => useCreatorSignOut(true, signedOut), {
+      initialProps: { signedOut: false },
+    });
+    expect(result.current).toBe(false);
+    expect(mocks.router.replace).not.toHaveBeenCalled();
+
+    rerender({ signedOut: true });
+    expect(result.current).toBe(false);
+    expect(mocks.router.replace).toHaveBeenCalledWith(
+      `/login?returnUrl=${encodeURIComponent('/create-image?remix=gen-1&remixPost=post-1')}`,
+    );
   });
 });

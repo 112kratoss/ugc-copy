@@ -528,6 +528,24 @@ describe('AppShellAccount', () => {
       expect(markedAsItEnded).toBe(true);
     });
 
+    // The menu can still show the session before the one auth-js holds, while it checks the newer:
+    // the one the call ends is marked too.
+    it('marks the session auth-js is ending as well as the one the menu shows', async () => {
+      const heldByAuth = unsignedJwt({ sub: 'user-1', session_id: 'session-2' });
+      let marked: boolean[] = [];
+      mocks.signOut.mockImplementation(async () => {
+        marked = [wasSignedOutInBrowser(heldByAuth), wasSignedOutInBrowser(authenticatedSession.access_token)];
+        return { error: null };
+      });
+      await openAccountMenu();
+      mocks.getSession.mockResolvedValue({ data: { session: { ...authenticatedSession, access_token: heldByAuth } } });
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      expect(marked).toEqual([true, true]);
+    });
+
     it('still signs out when the browser storage refuses', async () => {
       mocks.clearPersistedCreatorData.mockRejectedValue(new Error('IndexedDB unavailable'));
       await openAccountMenu();
