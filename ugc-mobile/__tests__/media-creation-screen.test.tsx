@@ -7939,7 +7939,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         onMotionModel(model, motion, shape);
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
-        // The draft keeps its model: Kling 3.0's slots and words are now Kling 2.6's.
+        // The draft keeps its model: on production Kling 3.0's slots and words are Kling 2.6's.
         expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel)
           .toContain(model === 'kling-3.0' ? 'Kling 3.0' : 'Kling 2.6');
         expect(blocker(tree)).toBe(hint);

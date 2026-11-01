@@ -254,8 +254,11 @@ describe('kling-3-motion-inputs release', () => {
         app: named(clip),
         // The unified start's own quote of the run it charges, on a schema-2 catalog.
         start: buildUnifiedGenerationQuoteInput(started),
-        // The unified start on a schema-1 catalog: kind totals and the clip's length.
-        startSchema1: buildUnifiedGenerationQuoteInputForCatalog(
+        // A schema-1 quote: kind totals and the clip's length, the shape a schema-1 catalog gives the
+        // start's run. The quote route reads a request that names no schema version as schema 1, and
+        // the store validates a schema-1 quote against the full descriptor (quoteWithSnapshotLoader),
+        // as this does.
+        schema1Quote: buildUnifiedGenerationQuoteInputForCatalog(
           started,
           { catalog: { schemaVersion: 1 } } as Parameters<typeof buildUnifiedGenerationQuoteInputForCatalog>[1],
         ),
