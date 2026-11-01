@@ -2297,6 +2297,11 @@ describe('ProfileDashboard media tiles routing', () => {
 
       const signedIn = authState.user;
       try {
+        // A token refresh: a new session, so a new user object, with the same id.
+        authState.user = { ...signedIn! };
+        renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+        expect(failedTiles(tree)).toHaveLength(2);
+
         authState.user = { id: 'user-456', email: 'other@example.com' };
         renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
 
@@ -2307,7 +2312,7 @@ describe('ProfileDashboard media tiles routing', () => {
       }
     });
 
-    it('opens another account’s Posts on Active, though Archived was chosen', () => {
+    it('keeps Archived through a token refresh, and opens another account’s Posts on Active', () => {
       queryState.ownerPosts = [
         {
           id: 'ready-post', title: 'Ready media post', createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
@@ -2329,6 +2334,11 @@ describe('ProfileDashboard media tiles routing', () => {
 
       const signedIn = authState.user;
       try {
+        // A token refresh: a new session, so a new user object, with the same id.
+        authState.user = { ...signedIn! };
+        renderer.act(() => { tree.update(<ProfileDashboard initialTab="Posts" />); });
+        expect(selectedChips(tree)).toEqual(['Archived (1)']);
+
         authState.user = { id: 'user-456', email: 'other@example.com' };
         renderer.act(() => { tree.update(<ProfileDashboard initialTab="Posts" />); });
 
