@@ -10,7 +10,7 @@ import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from 
 import { buildGenerationModelCatalog, type CatalogInputMode } from '@/lib/generation-model-catalog';
 import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
+import { PRODUCTION_KLING_3_MOTION_MODES, ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting, costShown } from './fixtures/creator-column-bar';
@@ -877,13 +877,18 @@ function publishMotionModes(modelId: 'kling-3.0' | 'kling-2.6', inputModes: Cata
 /**
  * A motion run sends its picture and its clip in the slots its model declares: the start quotes
  * the run with each input in its slot and refuses a slot the model does not have. The page sent
- * `characterImage` and `referenceVideo` to every model, and production's Kling 3.0 refused every
- * web run ("Kling 3.0 does not support the characterImage input."), as the app's went through.
+ * `characterImage` and `referenceVideo` to every model, and production's Kling 3.0, then in the
+ * compatibility release's plain reference slots, refused every web run ("Kling 3.0 does not support
+ * the characterImage input."), as the app's went through. Production publishes the motion-inputs
+ * slots for it since release kling-3-motion-inputs-20261101, and the plain ones again on a rollback.
  * `creator-run-inputs.test.ts` holds the server's own verdict on these slots.
  */
 describe('CreateMotionClient slots the model declares', () => {
-  it('sends Kling 3.0’s inputs in the slots production publishes', async () => {
-    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+  it.each([
+    ['production publishes', PRODUCTION_KLING_3_MOTION_MODES, ['characterImage', 'referenceVideo']],
+    ['production serves on a rollback', ROLLBACK_KLING_3_MOTION_MODES, ['imageReferences', 'videoReferences']],
+  ] as const)('sends Kling 3.0’s inputs in the slots %s', async (_shape, modes, [imageSlot, videoSlot]) => {
+    publishMotionModes('kling-3.0', modes);
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);
     await waitFor(() => expect(costShown()).toBe('20 credits'));
@@ -895,14 +900,15 @@ describe('CreateMotionClient slots the model declares', () => {
     const inputs = startBodies()[0].inputs as Array<Record<string, unknown>>;
     expect(startBodies()[0].modelId).toBe('kling-3.0');
     expect(inputs.map((input) => [input.slot, input.kind, input.storagePath])).toEqual([
-      ['imageReferences', 'image', 'uploads/user-1/hero.png'],
-      ['videoReferences', 'video', 'uploads/user-1/dance.mp4'],
+      [imageSlot, 'image', 'uploads/user-1/hero.png'],
+      [videoSlot, 'video', 'uploads/user-1/dance.mp4'],
     ]);
     expect(shown).toBe(startQuote(0));
   });
 
   it('plans the slots again when the creator switches model', async () => {
-    publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+    // Two models with different slots: Kling 3.0 as a rollback serves it, and Kling 2.6.
+    publishMotionModes('kling-3.0', ROLLBACK_KLING_3_MOTION_MODES);
     modelCatalogState.summaries = motionModelSummaries;
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);
@@ -974,9 +980,23 @@ describe('CreateMotionClient a clip shorter than its slot takes', () => {
     await waitFor(() => expect(startPosts()).toHaveLength(1));
   });
 
-  it('leaves a short clip to the start where the model publishes no minimum', async () => {
-    // Production's Kling 3.0 motion keeps the plain reference slots of the compatibility release.
+  it('holds a short Kling 3.0 clip in the start’s words, on the slots production publishes', async () => {
+    const shortClip = 'Kling 3.0 reference video must be at least 3 seconds long. The reference video runs 2.1 seconds.';
     publishMotionModes('kling-3.0', PRODUCTION_KLING_3_MOTION_MODES);
+    const view = render(<CreateMotionClient prefill={{ model: 'kling-3.0' }} />);
+    await attachClipOf(view.container, 2.16);
+
+    expect(await screen.findByText(shortClip)).toBeInTheDocument();
+    expect(screen.getByText('Reference length: 2.1s, under the 3s minimum')).toBeInTheDocument();
+    expect(generateButton()).toBeDisabled();
+    expect(startPosts()).toHaveLength(0);
+    expect(referenceMediaLengthViolation('kling-3.0', [{ role: 'motion', durationSeconds: 2.16 }])).toBe(shortClip);
+  });
+
+  it('leaves a short clip to the start where the model publishes no minimum', async () => {
+    // Kling 3.0 motion as production serves it on a rollback: the compatibility release's plain
+    // reference slots, which publish no minimum.
+    publishMotionModes('kling-3.0', ROLLBACK_KLING_3_MOTION_MODES);
     const view = render(<CreateMotionClient prefill={{ model: 'kling-3.0' }} />);
     await attachClipOf(view.container, 2.16);
 

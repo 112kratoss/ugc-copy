@@ -191,10 +191,10 @@ function idOnlyAsset(id: string, kind: 'character' | 'prepared-voice'): CatalogD
  * The slots a motion run on this model sends its picture and its clip in, chosen by kind as the
  * web's motion page chooses them (`catalogMotionInputSlots`): a slot the run must fill first, and
  * never one that takes nothing. Production publishes Kling 2.6 with the motion-inputs slots
- * (`characterImage`, `referenceVideo`) and Kling 3.0 with plain reference slots
- * (`imageReferences`, `videoReferences`); the composer looked its slots up by the motion-inputs
- * names, so on Kling 3.0 it drew neither and refused a clip (2026-10-20). Before the model's
- * descriptor is in, the motion-inputs names.
+ * (`characterImage`, `referenceVideo`), and Kling 3.0 too since release kling-3-motion-inputs-20261101;
+ * before it (and again on a rollback of it) Kling 3.0 had plain reference slots (`imageReferences`,
+ * `videoReferences`), and the composer, which looked its slots up by the motion-inputs names, drew
+ * neither and refused a clip (2026-10-20). Before the model's descriptor is in, the motion-inputs names.
  */
 export function catalogMotionDraftSlotKeys(
   draft: MotionCreationDraft,
@@ -210,9 +210,9 @@ export const MOTION_INPUT_LABELS = { image: 'Character image', video: 'Reference
  * What the composer calls a motion run's picture and clip: the labels of the slots it draws them in
  * (`catalogMotionDraftSlotKeys`), or the motion-inputs names where the descriptor has no such slot or
  * is not in. The lines under the slots, the creator bar's hint and the draft's checks all name an
- * input by this, as the slot itself does: production publishes Kling 3.0's slots as "Reference
- * images" and "Reference videos", under which the lines asked for a "Character image" and a
- * "Reference video" (2026-10-21).
+ * input by this, as the slot itself does: production published Kling 3.0's slots as "Reference
+ * images" and "Reference videos" until release kling-3-motion-inputs-20261101, under which the lines
+ * asked for a "Character image" and a "Reference video" (2026-10-21).
  */
 export function catalogMotionDraftSlotLabels(
   draft: MotionCreationDraft,

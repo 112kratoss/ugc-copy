@@ -7853,20 +7853,30 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     // The motion models production publishes to the app (contracts/production-motion-descriptors-v1.json,
-    // at release slot-min-durations-20261031): Kling 2.6 in the motion-inputs slots (characterImage,
-    // referenceVideo, which takes clips of 3 seconds and up), and Kling 3.0 in one default mode of plain
+    // at release kling-3-motion-inputs-20261101): Kling 2.6 and Kling 3.0 both in the motion-inputs slots
+    // (characterImage, referenceVideo, which takes clips of 3 seconds and up). Until that release, and
+    // again on a rollback of it (the contract's `rollback`), Kling 3.0 had one default mode of plain
     // reference slots (imageReferences, videoReferences, min 0, max 1). The composer looked its two slots
-    // up by the motion-inputs names, so on Kling 3.0 it drew neither, and refused a clip picked from Inputs.
+    // up by the motion-inputs names, so on that Kling 3.0 it drew neither, and refused a clip picked from
+    // Inputs.
     describe('motion on the models production publishes', () => {
-      const productionMotionCatalog = (): GenerationModelCatalog => ({
+      const motionCatalogOf = (shape: 'production' | 'rollback'): GenerationModelCatalog => ({
         schemaVersion: 3,
-        revision: productionMotion.revision,
+        revision: shape === 'production' ? productionMotion.revision : productionMotion.rollback.revision,
         defaults: { image: null, video: null, motion: 'kling-2.6' },
-        models: productionMotion.models.map((model) => parseModelCatalogDetail(model)),
+        models: productionMotion.models.map((model) => parseModelCatalogDetail(shape === 'rollback'
+          ? productionMotion.rollback.models.find((entry) => entry.id === model.id) ?? model
+          : model)),
       });
-      const onMotionModel = (model: 'kling-2.6' | 'kling-3.0', motion: Record<string, unknown> = {}) => {
-        catalogState.catalog = productionMotionCatalog();
-        memory.set(ordinaryKey, savedDrafts({ motion: { model, catalogRevision: productionMotion.revision, ...motion } }));
+      const productionMotionCatalog = () => motionCatalogOf('production');
+      const onMotionModel = (
+        model: 'kling-2.6' | 'kling-3.0',
+        motion: Record<string, unknown> = {},
+        shape: 'production' | 'rollback' = 'production',
+      ) => {
+        const catalog = motionCatalogOf(shape);
+        catalogState.catalog = catalog;
+        memory.set(ordinaryKey, savedDrafts({ motion: { model, catalogRevision: catalog.revision, ...motion } }));
       };
       const slotText = (tree: renderer.ReactTestRenderer, testID: string) => collectText(tree.root.findByProps({ testID }));
       const pickedClip = { uri: 'file:///moves.mp4', fileName: 'moves.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 6000 };
@@ -7879,9 +7889,20 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
       // That both inputs are required is said by the panel's title and by the bar: a slot carries no
       // badge, and an empty slot no line of its own (owner's call on A2, 2026-10-21; #510 drew both).
-      it('draw Kling 3.0’s picture and clip slots named as its descriptor names them, under one "Required inputs"', async () => {
+      it('draw Kling 3.0’s picture and clip slots as the motion-inputs pair, as Kling 2.6’s', async () => {
         // Words of the creator's own make Kling 3.0 their model: an empty draft follows the default, Kling 2.6.
         onMotionModel('kling-3.0', { prompt: 'Dance like the clip' });
+        const tree = await open(<MediaCreationScreen initialTool="motion" />);
+
+        expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');
+        expect(slotText(tree, 'motion-character-slot')).toEqual(['Character image', 'Who should move?']);
+        expect(slotText(tree, 'motion-video-slot')).toEqual(['Reference video', 'How should they move?']);
+        expect(text(tree)).toContain('Required inputs');
+        expect(blocker(tree)).toBe('Add a character image and a motion clip.');
+      });
+
+      it('draw Kling 3.0’s picture and clip slots named as a rollback’s descriptor names them, under one "Required inputs"', async () => {
+        onMotionModel('kling-3.0', { prompt: 'Dance like the clip' }, 'rollback');
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         expect(findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel).toContain('Kling 3.0');
@@ -7910,11 +7931,12 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       // An empty slot has no line of its own, so the bar names what is still missing, not both
       // inputs again (A2, 2026-10-21).
       it.each([
-        ['kling-2.6', 'the clip', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, 'Add a motion clip.'],
-        ['kling-2.6', 'the picture', { referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }), duration: 6 }, 'Add a character image.'],
-        ['kling-3.0', 'the clip', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, 'Add reference videos.'],
-      ] as const)('ask on %s for %s alone when only it is missing', async (model, _missing, motion, hint) => {
-        onMotionModel(model, motion);
+        ['kling-2.6', 'the clip', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, 'Add a motion clip.', 'production'],
+        ['kling-2.6', 'the picture', { referenceVideo: stagedMedia('moves', 'video', { displayName: 'Moves', durationSeconds: 6 }), duration: 6 }, 'Add a character image.', 'production'],
+        ['kling-3.0', 'the clip', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, 'Add a motion clip.', 'production'],
+        ['kling-3.0', 'the clip, on a rollback', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, 'Add reference videos.', 'rollback'],
+      ] as const)('ask on %s for %s alone when only it is missing', async (model, _missing, motion, hint, shape) => {
+        onMotionModel(model, motion, shape);
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
         expect(blocker(tree)).toBe(hint);
@@ -7922,13 +7944,16 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(slotText(tree, 'motion-required-inputs').filter((line) => /required|requires/i.test(line))).toEqual(['Required inputs']);
       });
 
-      it('take a clip on Kling 3.0 beside its picture, and send the picture and the clip in its slots', async () => {
-        onMotionModel('kling-3.0', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) });
+      it.each([
+        ['production', 'Add reference video', ['characterImage', 'referenceVideo']],
+        ['rollback', 'Add reference videos', ['imageReferences', 'videoReferences']],
+      ] as const)('take a clip on Kling 3.0 (%s) beside its picture, and send the picture and the clip in its slots', async (shape, addLabel, [imageSlot, videoSlot]) => {
+        onMotionModel('kling-3.0', { characterImage: stagedMedia('dancer', 'image', { displayName: 'Dancer' }) }, shape);
         vi.mocked(pickMedia).mockResolvedValue(pickedClip as never);
         vi.mocked(uploadPickedMedia).mockResolvedValue(uploadedClip());
         const tree = await open(<MediaCreationScreen initialTool="motion" />);
 
-        await renderer.act(async () => { await labelled(tree.root, 'Add reference videos').props.onPress(); });
+        await renderer.act(async () => { await labelled(tree.root, addLabel).props.onPress(); });
         await settle();
         expect(text(tree)).not.toContain('This model does not support reference videos.');
         expect(pickMedia).toHaveBeenCalledWith('video');
@@ -7937,8 +7962,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
         await pressGenerate(tree);
         expect(sentInputs()).toEqual([
-          expect.objectContaining({ slot: 'imageReferences', kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
-          expect.objectContaining({ slot: 'videoReferences', kind: 'video', url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 }),
+          expect.objectContaining({ slot: imageSlot, kind: 'image', url: 'https://cdn.example.com/dancer.png' }),
+          expect.objectContaining({ slot: videoSlot, kind: 'video', url: 'https://cdn.example.com/moves.mp4', durationSeconds: 6 }),
         ]);
       });
 
@@ -8021,7 +8046,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
 
       it('name each slot as the mode the run opens does, where a closed mode gives its key another label', async () => {
-        const model = parseModelCatalogDetail(productionMotion.models.find((entry) => entry.id === 'kling-3.0'));
+        // Kling 3.0 as a rollback serves it, whose labels differ from the motion-inputs pair's.
+        const model = parseModelCatalogDetail(productionMotion.rollback.models.find((entry) => entry.id === 'kling-3.0'));
         const openMode = model.inputModes![0];
         model.inputModes = [
           {

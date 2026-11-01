@@ -29,7 +29,7 @@ import {
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import { GenerationServiceError } from '@/lib/generation-service-core';
 import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
-import { PRODUCTION_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
+import { PRODUCTION_KLING_3_MOTION_MODES, ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
 // The runner reads generations service-role (authenticated has no SELECT on
 // the table), so the service client must serve the same state-backed
@@ -1133,8 +1133,14 @@ describe('workflow-runner recovery', () => {
         expect(planned).toEqual(['characterImage', 'referenceVideo']);
       });
 
-      it('sends production Kling 3.0’s reference slots, as the web motion page does', async () => {
+      it('sends production Kling 3.0’s motion-inputs slots, as the web motion page does', async () => {
         const { sent, planned } = await slotsSent(PRODUCTION_KLING_3_MOTION_MODES);
+        expect(sent).toEqual(['characterImage:image:https://cdn.example.com/character.png', 'referenceVideo:video:https://cdn.example.com/reference.mp4']);
+        expect(planned).toEqual(['characterImage', 'referenceVideo']);
+      });
+
+      it('sends the reference slots Kling 3.0 has on a rollback, as the web motion page does', async () => {
+        const { sent, planned } = await slotsSent(ROLLBACK_KLING_3_MOTION_MODES);
         expect(sent).toEqual(['imageReferences:image:https://cdn.example.com/character.png', 'videoReferences:video:https://cdn.example.com/reference.mp4']);
         expect(planned).toEqual(['imageReferences', 'videoReferences']);
       });

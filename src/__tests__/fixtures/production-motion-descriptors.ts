@@ -4,9 +4,16 @@ import productionMotion from '../../../contracts/production-motion-descriptors-v
 /**
  * Kling 3.0 motion's input modes as production publishes them, from the contract the app's suite
  * reads too (`contracts/production-motion-descriptors-v1.json`, which says when and from which
- * release it was read): one default mode with plain reference slots, the shape the compatibility
- * release gave a model no later release re-emitted. The code catalog, and Kling 2.6 in production,
- * give motion its `motion-inputs` slots instead (`characterImage`, `referenceVideo`).
+ * release it was read): since release kling-3-motion-inputs-20261101, the code build's
+ * `motion-inputs` slots (`characterImage`, `referenceVideo`), as Kling 2.6's.
  */
 export const PRODUCTION_KLING_3_MOTION_MODES = productionMotion.models
+  .find((model) => model.id === 'kling-3.0')?.inputModes as CatalogInputMode[];
+
+/**
+ * Kling 3.0 motion's input modes as production served them until that release, and serves them
+ * again if it is rolled back (the contract's `rollback`): one default mode with plain reference
+ * slots (`imageReferences`, `videoReferences`), the shape the compatibility release gave it.
+ */
+export const ROLLBACK_KLING_3_MOTION_MODES = productionMotion.rollback.models
   .find((model) => model.id === 'kling-3.0')?.inputModes as CatalogInputMode[];

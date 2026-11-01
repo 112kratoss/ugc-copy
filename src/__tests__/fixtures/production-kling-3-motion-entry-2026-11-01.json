@@ -1,0 +1,153 @@
+{
+ "source": "Production catalog release slot-min-durations-20261031, the stored kling-3.0 row, read with the release CLI's loadActiveCatalog (read-only) on 2026-11-01. The compatibility release wrote it and no release re-emitted it before kling-3-motion-inputs-20261101.",
+ "revision": "slot-min-durations-20261031",
+ "entry": {
+  "modelId": "kling-3.0",
+  "kind": "motion",
+  "webEnabled": true,
+  "mobileEnabled": true,
+  "adapterKey": "motion-v1",
+  "adapterConfig": {},
+  "providerModelMap": {
+   "default": "kling-3.0/motion-control"
+  },
+  "pricingStrategy": "motion-v1",
+  "pricingConfig": {
+   "id": "kling-3.0",
+   "badge": "New",
+   "pricing": {
+    "720p": 20,
+    "1080p": 27
+   },
+   "apiModelId": "kling-3.0/motion-control",
+   "badgeColor": "from-[#ff7a59] to-orange-500",
+   "description": "Latest model — enhanced fidelity and motion accuracy",
+   "displayName": "Kling 3.0",
+   "maxDuration": 30,
+   "resolutions": [
+    "720p",
+    "1080p"
+   ],
+   "characterOrientations": [
+    "video",
+    "image"
+   ]
+  },
+  "validationStrategy": "motion-v1",
+  "validationConfig": {},
+  "verificationConfig": {
+   "mode": "manual",
+   "provider": "kie"
+  },
+  "publicDescriptor": {
+   "id": "kling-3.0",
+   "kind": "motion",
+   "badge": "New",
+   "inputs": {
+    "endFrame": false,
+    "startFrame": false,
+    "audioReferences": null,
+    "imageReferences": {
+     "max": 1,
+     "supportsNaming": false
+    },
+    "videoReferences": {
+     "max": 1
+    },
+    "characterReferences": null,
+    "preparedAudioReferences": null,
+    "combineFramesWithReferences": false
+   },
+   "controls": [
+    {
+     "key": "resolution",
+     "type": "choice",
+     "label": "Resolution",
+     "options": [
+      {
+       "label": "720p",
+       "value": "720p"
+      },
+      {
+       "label": "1080p",
+       "value": "1080p"
+      }
+     ],
+     "defaultValue": "720p",
+     "presentation": "chips"
+    },
+    {
+     "key": "characterOrientation",
+     "type": "choice",
+     "label": "Character orientation",
+     "options": [
+      {
+       "label": "video",
+       "value": "video"
+      },
+      {
+       "label": "image",
+       "value": "image"
+      }
+     ],
+     "defaultValue": "video",
+     "presentation": "chips"
+    },
+    {
+     "key": "duration",
+     "max": 30,
+     "min": 1,
+     "step": 1,
+     "type": "integer",
+     "unit": "seconds",
+     "label": "Duration",
+     "defaultValue": 10,
+     "presentation": "stepper"
+    }
+   ],
+   "sortOrder": 10,
+   "inputModes": [
+    {
+     "key": "default",
+     "label": "Default",
+     "slots": [
+      {
+       "key": "imageReferences",
+       "max": 1,
+       "min": 0,
+       "kind": "image",
+       "role": "reference",
+       "label": "Reference images"
+      },
+      {
+       "key": "videoReferences",
+       "max": 1,
+       "min": 0,
+       "kind": "video",
+       "role": "reference",
+       "label": "Reference videos"
+      }
+     ],
+     "default": true
+    }
+   ],
+   "description": "Latest model — enhanced fidelity and motion accuracy",
+   "displayName": "Kling 3.0",
+   "recommended": false,
+   "availability": {
+    "web": true,
+    "mobile": true
+   },
+   "capabilities": {
+    "sound": false,
+    "fixedLens": false,
+    "multiShot": false,
+    "googleSearch": false,
+    "outputFormat": false
+   },
+   "schemaVersion": 2,
+   "inputConstraints": [],
+   "minClientSchemaVersion": 1
+  }
+ }
+}

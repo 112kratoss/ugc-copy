@@ -3,8 +3,8 @@ import type { GenerationModelDescriptor } from '@/lib/generation-model-catalog';
 /**
  * The slots release 2026-10-31-slot-min-durations (slot-min-durations-manifest.test.ts) gives the
  * shortest clip or track the start takes (`minDurationSeconds`, the start's own minimums), by model.
- * Kling 3.0 motion's code build publishes one too, but production keeps that model's compatibility
- * descriptor and no release carries the code build's yet.
+ * Kling 3.0 motion's code build publishes one too, but that release left the model's compatibility
+ * descriptor in place; release kling-3-motion-inputs-20261101 carries the code build's.
  */
 export const SLOT_MIN_DURATION_SLOTS: Readonly<Record<string, readonly string[]>> = {
   'seedance-2': ['videoReferences', 'audioReferences'],
