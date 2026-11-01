@@ -155,7 +155,7 @@ describe('what this React build does to text typed before hydration', () => {
   it('is still React’s own: Next’s bundled build has no replay of a change made before hydration', () => {
     // React's fix (enableHydrationChangeEvent) queues a change event per changed field as hydration
     // commits; once Next's stable build carries it, the hook and the root layout's capture repeat it
-    // and can go.
+    // and can go, as can /login's `useFieldValueBeforeHydration`.
     const next = path.dirname(createRequire(path.join(process.cwd(), 'package.json')).resolve('next/package.json'));
     for (const build of ['production', 'development']) {
       const source = readFileSync(path.join(next, 'dist/compiled/react-dom/cjs', `react-dom-client.${build}.js`), 'utf8');

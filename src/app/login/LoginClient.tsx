@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { describeAuthError } from '@/lib/auth-error-copy';
 import { siteConfig } from '@/lib/seo';
 import { supabase } from '@/lib/supabase';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, Info, WandSparkles } from 'lucide-react';
 import { buildAuthContinuePath } from '@/lib/auth-onboarding';
 import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
@@ -41,6 +42,13 @@ export default function LoginClient({
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const emailRef = useRef<HTMLInputElement>(null);
+    const passwordRef = useRef<HTMLInputElement>(null);
+    // What the fields hold before this script runs, typed or filled in by the browser, is
+    // taken in as the page mounts. Else the sign-in sends empty values, and its render writes
+    // them over the fields.
+    useFieldValueBeforeHydration(emailRef, { drawn: email, onValue: setEmail });
+    useFieldValueBeforeHydration(passwordRef, { drawn: password, onValue: setPassword });
 
     useEffect(() => {
         let isActive = true;
@@ -200,6 +208,7 @@ export default function LoginClient({
                                             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
                                             <input
                                                 id="login-email"
+                                                ref={emailRef}
                                                 name="email"
                                                 type="email"
                                                 value={email}
@@ -220,6 +229,7 @@ export default function LoginClient({
                                             <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
                                             <input
                                                 id="login-password"
+                                                ref={passwordRef}
                                                 name="password"
                                                 type={showPassword ? 'text' : 'password'}
                                                 value={password}
