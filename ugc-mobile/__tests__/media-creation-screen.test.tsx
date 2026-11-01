@@ -3146,18 +3146,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
   // greyed out a reference the prompt already named and the insert refused it, the details
   // sheet's "Insert @…" included (owner, 2026-11-02: "we cant add the same ref").
   it('inserts a reference the prompt already names again, from the @ list and from its details', async () => {
-    vi.mocked(pickMediaList).mockResolvedValue([
-      { uri: 'file:///flowers.png', fileName: 'flowers.png', mimeType: 'image/png', fileSize: 2048 } as never,
-    ]);
-    vi.mocked(uploadPickedMedia).mockResolvedValue({
-      signedUrl: 'https://cdn.example.com/flowers.png',
-      storagePath: 'uploads/user/flowers.png',
-      mimeType: 'image/png',
-      fileName: 'flowers.png',
-      kind: 'image',
-      durationSeconds: null,
-      sizeBytes: 2048,
-    });
+    vi.mocked(pickMediaList).mockResolvedValue([pickedImage('flowers.png')] as never);
+    vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('flowers.png'));
 
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -3166,29 +3156,48 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     await renderer.act(async () => {
       await findPressableByLabelPrefix(tree!.root, 'Add reference images').props.onPress();
     });
+    const prompt = () => tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+    const typeAtEnd = (value: string) => {
+      renderer.act(() => prompt().props.onChangeText(value));
+      renderer.act(() => prompt().props.onSelectionChange({ nativeEvent: { selection: { start: value.length, end: value.length } } }));
+    };
+    renderer.act(() => prompt().props.onFocus());
 
-    const typed = 'Use @flowers for color, then @';
-    let promptInput = tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
-    renderer.act(() => promptInput.props.onFocus());
-    renderer.act(() => promptInput.props.onChangeText(typed));
-    promptInput = tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' });
-    renderer.act(() => promptInput.props.onSelectionChange({ nativeEvent: { selection: { start: typed.length, end: typed.length } } }));
+    // The handle being typed is not a mention of its own: typed out in full, it is still new.
+    typeAtEnd('Use @flowers');
+    expect(findPressableByLabelPrefix(tree!.root, 'Insert @flowers').props.accessibilityLabel).toBe('Insert @flowers, flowers');
+    expect(collectText(tree!.root)).not.toContain('In prompt');
 
-    const [suggestion] = tree!.root.findByProps({ testID: 'reference-mention-suggestions' })
-      .findAll((node) => String(node.type) === 'pressable');
+    // A mention after the caret counts as much as one before it.
+    renderer.act(() => prompt().props.onChangeText('Walk to @ then @flowers waves'));
+    renderer.act(() => prompt().props.onSelectionChange({ nativeEvent: { selection: { start: 9, end: 9 } } }));
+    expect(findPressableByLabelPrefix(tree!.root, 'Insert @flowers').props.accessibilityLabel).toBe('Insert @flowers, flowers, already in the prompt');
+
+    typeAtEnd('Use @flowers for color, then @');
+    const suggestion = findPressableByLabelPrefix(tree!.root, 'Insert @flowers, flowers, already in the prompt');
     expect(suggestion.props.disabled).toBeFalsy();
-    expect(suggestion.props.accessibilityLabel).toBe('Insert @flowers, flowers, already in the prompt');
+    expect(collectText(tree!.root)).toContain('In prompt');
     renderer.act(() => suggestion.props.onPress());
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Use @flowers for color, then @flowers');
+    expect(prompt().props.value).toBe('Use @flowers for color, then @flowers');
+    expect(tree!.root.findAllByProps({ testID: 'reference-mention-suggestions' })).toHaveLength(0);
 
-    renderer.act(() => tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onBlur());
+    renderer.act(() => prompt().props.onBlur());
     renderer.act(() => {
       tree!.root.findByProps({ accessibilityLabel: 'Open details for flowers' }).props.onPress();
     });
     renderer.act(() => {
       findPressableByText(tree!.root, 'Insert @flowers').props.onPress();
     });
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Use @flowers for color, then @flowers @flowers');
+    expect(prompt().props.value).toBe('Use @flowers for color, then @flowers @flowers');
+
+    // Renamed, the reference takes every one of its mentions along.
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Open details for flowers' }).props.onPress();
+    });
+    renderer.act(() => {
+      tree!.root.findByProps({ accessibilityLabel: 'Reference name for flowers' }).props.onChangeText('Roses');
+    });
+    expect(prompt().props.value).toBe('Use @roses for color, then @roses @roses');
   });
 
   it('keeps a cleared reference name blank and removes its old prompt handle', async () => {
@@ -7045,6 +7054,12 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
             images: [stagedMedia('hero-front', 'image', { handle: '@hero' }), stagedMedia('hero-side', 'image', { handle: '@hero', ...side })],
           }],
         } });
+        const typeAtEnd = (tree: renderer.ReactTestRenderer, value: string) => {
+          let prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+          renderer.act(() => prompt.props.onChangeText(value));
+          prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+          renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: value.length, end: value.length } } }));
+        };
 
         it('are asked about on resume, and one swept holds the run with the subject’s name', async () => {
           catalogState.catalog = parityCatalog([parityKlingO3()]);
@@ -7065,43 +7080,38 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           catalogState.catalog = parityCatalog([parityKlingO3()]);
           memory.set(ordinaryKey, heroDraft({}));
           const tree = await open(<MediaCreationScreen initialTool="video" />);
-          const typeAtEnd = (value: string) => {
-            let prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
-            renderer.act(() => prompt.props.onChangeText(value));
-            prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
-            renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: value.length, end: value.length } } }));
-          };
           renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onFocus());
 
-          typeAtEnd('Walks in beside @');
+          typeAtEnd(tree, 'Walks in beside @');
           expect(labelled(tree.root, 'Insert @hero, Hero')).toBeTruthy();
 
-          typeAtEnd('Walks in beside @He');
+          typeAtEnd(tree, 'Walks in beside @He');
           expect(labelled(tree.root, 'Insert @hero, Hero')).toBeTruthy();
 
-          typeAtEnd('Walks in beside @zz');
+          typeAtEnd(tree, 'Walks in beside @zz');
           expect(text(tree)).toContain('No named references match “@zz”.');
         });
 
         // The video creator's list and insert held the same refusal as the image creator's: a name
-        // the prompt already held was greyed out and pressing it inserted nothing.
-        it('are inserted again where the prompt already names them', async () => {
+        // the prompt already held was greyed out, and neither the list nor the subject's sheet
+        // inserted it.
+        it('are inserted again where the prompt already names them, from the list and the sheet', async () => {
           catalogState.catalog = parityCatalog([parityKlingO3()]);
           memory.set(ordinaryKey, heroDraft({}));
           const tree = await open(<MediaCreationScreen initialTool="video" />);
-          const typed = '@hero walks in, then @';
-          renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onFocus());
-          let prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
-          renderer.act(() => prompt.props.onChangeText(typed));
-          prompt = tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
-          renderer.act(() => prompt.props.onSelectionChange({ nativeEvent: { selection: { start: typed.length, end: typed.length } } }));
+          const prompt = () => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+          renderer.act(() => prompt().props.onFocus());
+          typeAtEnd(tree, '@hero walks in, then @');
 
-          const [suggestion] = tree.root.findByProps({ testID: 'reference-mention-suggestions' })
-            .findAll((node) => String(node.type) === 'pressable');
+          const suggestion = labelled(tree.root, 'Insert @hero, Hero, already in the prompt');
           expect(suggestion.props.disabled).toBeFalsy();
-          expect(suggestion.props.accessibilityLabel).toBe('Insert @hero, Hero, already in the prompt');
           renderer.act(() => suggestion.props.onPress());
-          expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('@hero walks in, then @hero');
+          expect(prompt().props.value).toBe('@hero walks in, then @hero');
+
+          renderer.act(() => prompt().props.onBlur());
+          renderer.act(() => labelled(tree.root, 'Open details for Hero, @hero').props.onPress());
+          renderer.act(() => findPressableByText(tree.root, 'Insert @hero').props.onPress());
+          expect(prompt().props.value).toBe('@hero walks in, then @hero @hero');
         });
 
         it('have a link that ran out renewed in the draft', async () => {

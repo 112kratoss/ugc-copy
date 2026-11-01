@@ -151,6 +151,7 @@ import {
   findActiveReferenceMention,
   insertHandleAtSelection,
   normalizeTextSelection,
+  type ActiveReferenceMention,
   type TextSelection,
 } from '@/lib/reference-mentions';
 import { formatCreditAmount } from '@/lib/pricing';
@@ -3971,7 +3972,7 @@ function ImagePromptComposer({
           <ReferenceMentionSuggestions
             references={mentionReferences}
             prompt={draft.prompt}
-            query={activeMention.query}
+            mention={activeMention}
             onSelect={(handle) => insertReferenceHandle(handle, activeMention)}
           />
         ) : null}
@@ -4808,7 +4809,7 @@ function VideoCreatorComposer({
       )}
 
       {activeMention ? (
-        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} query={activeMention.query} onSelect={(handle) => insertReferenceHandle(handle, activeMention)} />
+        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} mention={activeMention} onSelect={(handle) => insertReferenceHandle(handle, activeMention)} />
       ) : null}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
@@ -5312,15 +5313,19 @@ function MotionCreatorComposer({
 function ReferenceMentionSuggestions({
   references,
   prompt,
-  query,
+  mention,
   onSelect,
 }: {
   references: MediaDraft[];
   prompt: string;
-  query: string;
+  mention: ActiveReferenceMention;
   onSelect: (handle: string) => void;
 }) {
   const theme = useAppTheme();
+  const { query } = mention;
+  // The prompt without the mention being typed: a handle typed out in full is that mention,
+  // not one the prompt already holds.
+  const promptBesideMention = prompt.slice(0, mention.start) + prompt.slice(mention.end);
   const matchLabel = references.length === 1 ? '1 reference' : `${references.length} references`;
   return (
     <View
@@ -5348,7 +5353,7 @@ function ReferenceMentionSuggestions({
             if (!handle) return null;
             // A prompt can name a reference more than once ("@ali walks in, then @ali waves"), so a
             // name it already holds stays a button and inserts again; "In prompt" only says so.
-            const used = promptContainsHandle(prompt, handle);
+            const used = promptContainsHandle(promptBesideMention, handle);
             return (
               <Pressable
                 key={media.id}
