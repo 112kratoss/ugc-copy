@@ -21,11 +21,16 @@ vi.mock('@/lib/post-media-rendition', () => ({
 
 import { regenerateVideoPosters } from '@/lib/media-preview-repair';
 
-type Fixtures = { generations: Record<string, unknown>[]; post_media: Record<string, unknown>[] };
+type Fixtures = {
+  generations: Record<string, unknown>[];
+  post_media: Record<string, unknown>[];
+  posts?: Record<string, unknown>[];
+};
 
-function createClient(fixtures: Fixtures, options: { failDownload?: string } = {}) {
+function createClient(fixtures: Fixtures, options: { failDownload?: string; goneRows?: string[] } = {}) {
   const updates: Array<{ table: string; payload: Record<string, unknown>; id: unknown }> = [];
   const downloads: string[] = [];
+  const queued: unknown[] = [];
   const selectChain = (rows: unknown[]) => {
     const chain = {
       eq: () => chain,
@@ -37,15 +42,23 @@ function createClient(fixtures: Fixtures, options: { failDownload?: string } = {
     return chain;
   };
   const client = {
-    from: (table: keyof Fixtures | 'posts') => ({
-      select: () => selectChain(table === 'posts' ? [] : fixtures[table]),
+    from: (table: keyof Fixtures) => ({
+      select: () => selectChain(fixtures[table] ?? []),
       update: (payload: Record<string, unknown>) => ({
-        eq: async (_column: string, id: unknown) => {
+        eq: (_column: string, id: unknown) => {
           updates.push({ table, payload, id });
-          return { error: null };
+          return {
+            // The rows the update matched, as `.select()` answers them.
+            select: async () => ({ data: options.goneRows?.includes(String(id)) ? [] : [{ id }], error: null }),
+            then: (resolve: (value: { error: null }) => unknown) => Promise.resolve({ error: null }).then(resolve),
+          };
         },
       }),
     }),
+    rpc: async (name: string, args: unknown) => {
+      if (name === 'queue_unrecorded_showcase_media') queued.push(args);
+      return { data: 1, error: null };
+    },
     storage: {
       from: (bucket: string) => ({
         download: async (path: string) => {
@@ -57,7 +70,7 @@ function createClient(fixtures: Fixtures, options: { failDownload?: string } = {
       }),
     },
   };
-  return { client: client as never, updates, downloads };
+  return { client: client as never, updates, downloads, queued };
 }
 
 const videoGeneration = {
@@ -178,6 +191,35 @@ describe('regenerateVideoPosters', () => {
 
     expect(summary.posts).toEqual({ candidates: 1, regenerated: 0, unchanged: 1, failed: 0 });
     expect(updates).toEqual([]);
+    expect(mocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  it("queues a new poster in a creation's folder whose row went before it was recorded", async () => {
+    const creationVideo = {
+      ...postVideo,
+      storage_path: 'showcase/gen-1/clip.mp4',
+      preview_storage_path: 'showcase/gen-1/clip.preview.oldhash.webp',
+    };
+    mocks.createPostMediaPreview.mockImplementation(async (params: { onUploaded?: (path: string) => void }) => {
+      params.onUploaded?.('showcase/gen-1/clip.preview.newhash.webp');
+      return {
+        previewStoragePath: 'showcase/gen-1/clip.preview.newhash.webp',
+        previewThumbhash: 'post-thumbhash',
+        previewStatus: 'ready',
+        width: null,
+        height: null,
+        displayStoragePath: null,
+      };
+    });
+    const { client, queued } = createClient(
+      { generations: [], post_media: [creationVideo], posts: [{ id: 'post-1', generation_id: 'gen-1' }] },
+      { goneRows: ['media-video'] },
+    );
+
+    const summary = await regenerateVideoPosters(client);
+
+    expect(summary.posts).toEqual({ candidates: 1, regenerated: 0, unchanged: 0, failed: 1 });
+    expect(queued).toEqual([{ p_paths: ['showcase/gen-1/clip.preview.newhash.webp'] }]);
     expect(mocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 

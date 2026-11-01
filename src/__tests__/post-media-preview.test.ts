@@ -27,6 +27,54 @@ describe('post media image previews', () => {
     }).webp().toBuffer());
   });
 
+  it('tells the caller every object it writes', async () => {
+    // Wide enough that the display rendition earns its own object.
+    const input = await sharp({ create: { width: 3000, height: 2000, channels: 3, background: '#7c3aed' } }).jpeg().toBuffer();
+    const stored = new Map<string, Blob>();
+    const upload = vi.fn(async (path: string, body: Blob) => {
+      stored.set(path, body);
+      return { error: null };
+    });
+    const supabase = {
+      storage: { from: () => ({ upload, download: async (path: string) => ({ error: null, data: stored.get(path) }) }) },
+    };
+    const reported: string[] = [];
+
+    const result = await createPostMediaImagePreview({
+      body: new Blob([Uint8Array.from(input)], { type: 'image/jpeg' }),
+      contentType: 'image/jpeg',
+      storagePath: 'showcase/gen-1/wide.jpg',
+      supabase: supabase as never,
+      onUploaded: (path) => { reported.push(path); },
+    });
+
+    expect(result?.displayStoragePath).toEqual(expect.any(String));
+    expect(reported).toEqual([result?.previewStoragePath, result?.displayStoragePath]);
+  });
+
+  it('has told the caller of an upload whose stored copy then fails its check', async () => {
+    const input = await sharp({ create: { width: 1200, height: 800, channels: 3, background: '#7c3aed' } }).jpeg().toBuffer();
+    const supabase = {
+      storage: {
+        from: () => ({
+          upload: async () => ({ error: null }),
+          download: async () => ({ error: null, data: new Blob(['mangled in transit']) }),
+        }),
+      },
+    };
+    const reported: string[] = [];
+
+    await expect(createPostMediaImagePreview({
+      body: new Blob([Uint8Array.from(input)], { type: 'image/jpeg' }),
+      contentType: 'image/jpeg',
+      storagePath: 'showcase/gen-1/photo.jpg',
+      supabase: supabase as never,
+      onUploaded: (path) => { reported.push(path); },
+    })).rejects.toThrow();
+
+    expect(reported).toEqual([expect.stringMatching(/^showcase\/gen-1\/photo\.preview\.[a-f0-9]{16}\.webp$/)]);
+  });
+
   it('uses a deterministic sibling WebP path', () => {
     expect(buildPostMediaPreviewPath('posts/post-1/0/portrait.png', 'abc123')).toBe(
       'posts/post-1/0/portrait.preview.abc123.webp'

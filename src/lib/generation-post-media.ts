@@ -1,5 +1,10 @@
 import 'server-only';
-import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media-storage';
+import {
+  POST_MEDIA_PATH_COLUMNS,
+  postMediaStorageBucket,
+  removePostMediaObjects,
+  type PostMediaPathColumn,
+} from '@/lib/post-media-storage';
 import { logBackendWarning } from '@/lib/backend-logger';
 
 import path from 'node:path';
@@ -15,6 +20,7 @@ import {
   getUserOwnedStoredMediaLocation,
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
+import { queueUnrecordedShowcaseMedia } from '@/lib/unrecorded-showcase-media';
 
 /**
  * The public media copy of a generation-backed post.
@@ -512,10 +518,21 @@ export async function removeGenerationShowcaseDerivative({
   }
 
   if (legacyMediaIds.length > 0) {
-    const { error: deleteError } = await adminSupabase.from('post_media').delete().in('id', legacyMediaIds);
+    // A sweep that recorded a derivative on one of these rows after they were
+    // read above named it only on a row that goes now. The delete answers what
+    // each row names at that moment, and whatever was not removed above goes
+    // to the revocation queue.
+    const { data: deletedRows, error: deleteError } = await adminSupabase
+      .from('post_media')
+      .delete()
+      .in('id', legacyMediaIds)
+      .select(POST_MEDIA_PATH_COLUMNS.join(', '));
     if (deleteError) {
       return { removed: false, removedPaths: paths, removedMediaRows: 0, error: deleteError };
     }
+    await queueUnrecordedShowcaseMedia(adminSupabase, ((deletedRows ?? []) as unknown as Array<Record<PostMediaPathColumn, string | null>>)
+      .flatMap((row) => POST_MEDIA_PATH_COLUMNS.map((column) => getCanonicalGenerationShowcaseAssetPath(row[column], generationId)))
+      .filter((candidate) => candidate !== null && !removablePaths.has(candidate)));
     removedMediaRows = legacyMediaIds.length;
   }
   return {

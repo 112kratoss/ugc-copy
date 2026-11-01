@@ -23,6 +23,7 @@ import {
 } from '@/lib/storage-ownership';
 import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import { summarizeMediaToolError, truncateMediaToolMessage } from '@/lib/media-tool-error';
+import { queueUnrecordedShowcaseMedia } from '@/lib/unrecorded-showcase-media';
 
 const MAX_PREVIEW_ATTEMPTS = 3;
 // Older motion/image generations can have no category despite a durable visual
@@ -212,6 +213,27 @@ function previewFailure(error: unknown, reservedAttempt: number) {
     preview_attempt_count: Math.min(MAX_PREVIEW_ATTEMPTS, mediaRepairAttemptAfterFailure(error, reservedAttempt)),
     preview_error: summarizeMediaToolError(error, 'Preview generation failed.'),
   };
+}
+
+/**
+ * Records a sweep's update and hands what no update named to the revocation
+ * queue. A sweep uploads before its update names the object, so when the
+ * update matches no row (the row is gone with its post, or removed when the
+ * post went private, or another worker holds it now) nothing else will ever
+ * name what this run wrote. Throws the update's error, leaving the uploads to
+ * the caller's failure path.
+ */
+async function recordOrQueue(
+  supabase: SupabaseClient,
+  update: PromiseLike<{ data: unknown; error: unknown }>,
+  uploaded: string[],
+  recorded: Array<string | null | undefined>,
+): Promise<boolean> {
+  const { data, error } = await update;
+  if (error) throw error;
+  const matched = hasRows(data);
+  await queueUnrecordedShowcaseMedia(supabase, uploaded.filter((path) => !matched || !recorded.includes(path)));
+  return matched;
 }
 
 /**
@@ -462,6 +484,9 @@ async function repairPostMedia(
   leaseOwner?: string,
 ): Promise<boolean> {
   const { reservedAttempt } = reserveAttempt(row.preview_attempt_count, Boolean(leaseOwner));
+  // Every object this run writes. The ready update records them all; any
+  // other exit leaves them named by nothing.
+  const uploaded: string[] = [];
   try {
     if (!leaseOwner) {
       await supabase.from('post_media').update({
@@ -481,6 +506,7 @@ async function repairPostMedia(
       contentType: row.content_type || body.type,
       storagePath,
       supabase,
+      onUploaded: (path) => { uploaded.push(path); },
     });
     if (!preview) throw new Error('Media type does not support a visual preview.');
 
@@ -500,9 +526,12 @@ async function repairPostMedia(
       preview_locked_by: null,
     }).eq('id', row.id);
     if (leaseOwner) resultQuery = resultQuery.eq('preview_locked_by', leaseOwner);
-    const result = await resultQuery;
-    if (result.error) throw result.error;
-    return true;
+    return await recordOrQueue(
+      supabase,
+      resultQuery.select('id'),
+      uploaded,
+      [preview.previewStoragePath, preview.displayStoragePath],
+    );
   } catch (error) {
     const failure = supabase.from('post_media').update({
       ...previewFailure(error, reservedAttempt),
@@ -511,6 +540,9 @@ async function repairPostMedia(
     }).eq('id', row.id);
     if (leaseOwner) failure.eq('preview_locked_by', leaseOwner);
     await failure;
+    // A failed attempt records no preview. A retry that builds the same name
+    // uploads it again under its own lease, which the queue's job waits out.
+    await queueUnrecordedShowcaseMedia(supabase, uploaded);
     return false;
   }
 }
@@ -542,6 +574,10 @@ async function repairPostMediaRendition(
       ? { teaser_error: truncateMediaToolMessage(teaserOutcome.error) }
       : {}),
   });
+  // Every object this run writes, and the teaser any update below records with
+  // the rest of midFlightSpread.
+  const uploaded: string[] = [];
+  const landedTeaser = () => (teaserOutcome?.status === 'ready' ? teaserOutcome.teaserStoragePath : null);
   try {
     if (!leaseOwner) {
       await supabase.from('post_media').update({
@@ -571,6 +607,7 @@ async function repairPostMediaRendition(
       ...(teaserColumnsPresent
         ? { onTeaserOutcome: (outcome: PostMediaTeaserOutcome) => { teaserOutcome = outcome; } }
         : {}),
+      onUploaded: (path) => { uploaded.push(path); },
     });
 
     // 'skipped' is a correct terminal answer, not a failure — record it so the
@@ -588,9 +625,7 @@ async function repairPostMediaRendition(
         rendition_locked_by: null,
       }).eq('id', row.id);
       if (leaseOwner) skipQuery = skipQuery.eq('rendition_locked_by', leaseOwner);
-      const skipResult = await skipQuery;
-      if (skipResult.error) throw skipResult.error;
-      return true;
+      return await recordOrQueue(supabase, skipQuery.select('id'), uploaded, [landedTeaser()]);
     }
 
     let resultQuery = supabase.from('post_media').update({
@@ -610,9 +645,12 @@ async function repairPostMediaRendition(
       rendition_locked_by: null,
     }).eq('id', row.id);
     if (leaseOwner) resultQuery = resultQuery.eq('rendition_locked_by', leaseOwner);
-    const result = await resultQuery;
-    if (result.error) throw result.error;
-    return true;
+    return await recordOrQueue(
+      supabase,
+      resultQuery.select('id'),
+      uploaded,
+      [rendition.renditionStoragePath, landedTeaser()],
+    );
   } catch (error) {
     const failure = supabase.from('post_media').update({
       rendition_status: 'failed',
@@ -625,7 +663,11 @@ async function repairPostMediaRendition(
       rendition_locked_by: null,
     }).eq('id', row.id);
     if (leaseOwner) failure.eq('rendition_locked_by', leaseOwner);
-    await failure;
+    // The failure records a teaser that landed, never a rendition; matching no
+    // row, it records nothing.
+    const failed = await failure.select('id');
+    const recorded = !failed.error && hasRows(failed.data) ? landedTeaser() : null;
+    await queueUnrecordedShowcaseMedia(supabase, uploaded.filter((path) => path !== recorded));
     return false;
   }
 }
@@ -1181,6 +1223,7 @@ export async function regenerateVideoPosters(
       log(`post_media ${row.id}: would re-extract poster (currently ${row.preview_storage_path})`);
       continue;
     }
+    const uploaded: string[] = [];
     try {
       const storagePath = await resolvePostMediaRepairPath(supabase, row);
       const download = await supabase.storage.from(postMediaStorageBucket(storagePath)).download(storagePath);
@@ -1193,6 +1236,7 @@ export async function regenerateVideoPosters(
         contentType: row.content_type || body.type,
         storagePath,
         supabase,
+        onUploaded: (path) => { uploaded.push(path); },
       });
       if (!preview) throw new Error('Media type does not support a visual preview.');
       if (preview.previewStoragePath === row.preview_storage_path) {
@@ -1202,15 +1246,21 @@ export async function regenerateVideoPosters(
       }
       // Only the poster fields. A video row's width/height describe the clip,
       // and a poster result carries none.
-      const update = await supabase.from('post_media').update({
+      const update = supabase.from('post_media').update({
         preview_storage_path: preview.previewStoragePath,
         preview_thumbhash: preview.previewThumbhash,
         preview_generated_at: new Date().toISOString(),
       }).eq('id', row.id);
-      if (update.error) throw update.error;
+      if (!await recordOrQueue(supabase, update.select('id'), uploaded, [preview.previewStoragePath])) {
+        posts.failed += 1;
+        log(`post_media ${row.id}: gone before its new poster was recorded`);
+        continue;
+      }
       posts.regenerated += 1;
       log(`post_media ${row.id}: ${row.preview_storage_path} -> ${preview.previewStoragePath}`);
     } catch (error) {
+      // The row may still name its old poster; the new one it never recorded.
+      await queueUnrecordedShowcaseMedia(supabase, uploaded.filter((path) => path !== row.preview_storage_path));
       posts.failed += 1;
       log(`post_media ${row.id}: failed: ${summarizeMediaToolError(error, 'Poster regeneration failed.')}`);
     }
