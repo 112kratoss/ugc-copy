@@ -15,6 +15,7 @@ const routeState = vi.hoisted(() => ({
   /**
    * What expo-router 55's `useLocalSearchParams` (build/hooks.js) returns for these
    * params: each one through `decodeURIComponent` again, one it cannot decode as it is.
+   * A screen that went back to reading its return through it fails here as on a phone.
    */
   localSearchParams(params: Record<string, string | string[]>) {
     const decode = (value: string) => {
@@ -147,17 +148,7 @@ describe('the sign-in return', () => {
     expect(router.dismissTo).toHaveBeenCalledWith(returnTo);
   });
 
-  it('gives the creator its prompt back whole', () => {
-    const [, creatorReturn] = RETURNS[0];
-    expect(parseQueryParams(creatorReturn, { name: 'create/[tool]' })).toEqual({
-      remix: 'gen-9',
-      remixPost: 'post-9',
-      prompt: PROMPT,
-      guided: '1',
-    });
-  });
-
-  // The screen reads its return from the route because of this second decode. Should a later
+  // The screen reads its params from the route because of this second decode. Should a later
   // expo-router stop making it, `useLocalSearchParams` is safe for the return again.
   it('is read past the decode expo-router’s useLocalSearchParams still adds', () => {
     const hooks = readFileSync('node_modules/expo-router/build/hooks.js', 'utf8');

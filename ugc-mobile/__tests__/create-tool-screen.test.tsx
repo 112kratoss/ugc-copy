@@ -112,6 +112,30 @@ describe('create tool route', () => {
     });
   });
 
+  // Sign-in goes back to the creator by giving this route the creator's return as its params
+  // (`router.dismissTo`), the source row's words with them: a remix with no post has no other.
+  it('passes the source row a link or a return brings into the native create screen', () => {
+    routeState.params = {
+      tool: 'video',
+      remix: 'gen-1',
+      sourceTitle: 'Night run & co',
+      sourceCreator: '@ana',
+      sourceThumbnail: 'https://cdn.example.com/t.jpg?x=1&y=2',
+    };
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
+    expect(mediaCreationState.props?.remixSource).toEqual({
+      generationId: 'gen-1',
+      postId: null,
+      title: 'Night run & co',
+      creatorLabel: '@ana',
+      thumbnailUrl: 'https://cdn.example.com/t.jpg?x=1&y=2',
+    });
+  });
+
   it('passes prompt-only create route params into the native create screen', () => {
     routeState.params = {
       tool: 'image',

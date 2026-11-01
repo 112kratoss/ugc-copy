@@ -303,6 +303,7 @@ import type { ModelCatalogKind, ModelCatalogSummary } from '../lib/model-catalog
 import { PrimaryButton, SecondaryButton } from '../components/ui';
 import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
 import { ApiError } from '../lib/api-client';
+import { normalizeAuthReturnTo } from '../lib/auth-navigation';
 import { appTheme } from '../lib/theme';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
@@ -9013,6 +9014,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
         const returnTo = pushedReturnTo();
         expect(returnTo.split('?')[0]).toBe('/create/video');
+        // The sign-in screen goes back to it as it is: its guard leaves it whole.
+        expect(normalizeAuthReturnTo(returnTo)).toBe(returnTo);
         expect(paramsAfterReturn(returnTo)).toEqual({
           remix: 'gen-9',
           remixPost: 'post-9',
