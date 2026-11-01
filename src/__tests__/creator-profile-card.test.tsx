@@ -271,6 +271,17 @@ describe('CreatorProfileCard', () => {
     // for history manipulation: its own Back button then skipped every entry of the page, out
     // of the site, past the question (archive/web-history-follow-ups-2026-10-23).
     const guardEntryAgain = () => waitFor(() => expect(window.history.state).toHaveProperty('profileLeaveGuard'));
+    // The question's Leave, once that Forward has landed. jsdom picks the entry a traversal
+    // goes to in one task and moves in a later one, so two traversals in flight together
+    // count from the same entry. Leave pressed before the Forward moved: its arrival was
+    // taken for the Back Leave sent, the Back that followed counted from the same entry as
+    // Leave's, and one Back was lost. The page never went, and the test waited out its 5 s
+    // (main, 2026-10-31; use-leave-guard.test.tsx on 10-28; archive/leave-guard-forward-race-2026-11-01).
+    const leaveFromQuestion = async () => {
+      const question = await screen.findByRole('alertdialog', { name: 'Leave without saving?' });
+      await guardEntryAgain();
+      fireEvent.click(within(question).getByRole('button', { name: 'Leave without saving' }));
+    };
 
     it('asks before Back leaves typed changes, and keeps them when the person stays', async () => {
       const pushState = vi.spyOn(window.history, 'pushState');
@@ -307,7 +318,7 @@ describe('CreatorProfileCard', () => {
       expect(screen.getByPlaceholderText('Your creator name')).toHaveValue('New Name');
 
       await pressBack();
-      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
+      await leaveFromQuestion();
 
       // Leaving: off the guard entry, then the Back that was asked for.
       await waitFor(() => expect(back).toHaveBeenCalledTimes(2));
@@ -407,7 +418,7 @@ describe('CreatorProfileCard', () => {
       const left = render(<CreatorProfileCard initialProfile={profile} loadError={null} />);
       typeName('New Name');
       await pressBack();
-      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
+      await leaveFromQuestion();
       // Off the guard entry, then the Back that was asked for: the page goes.
       await waitFor(() => expect(window.location.pathname).toBe('/profile'));
       expect(back).toHaveBeenCalledTimes(2);
@@ -424,7 +435,7 @@ describe('CreatorProfileCard', () => {
       expect(window.history.length).toBe(entries);
 
       await pressBack();
-      fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave without saving' }));
+      await leaveFromQuestion();
 
       // Back took the guard entry off, and Leave goes to the page before the editor.
       await waitFor(() => expect(window.location.pathname).toBe('/profile'));
