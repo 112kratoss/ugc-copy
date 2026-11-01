@@ -2,6 +2,7 @@ import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
 import { MODEL_DISPLAY_NAMES } from './model-display-names';
+import { isPlaceholderTitle } from './placeholder-title';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
@@ -345,10 +346,6 @@ function homeCardBody(item: ShowcaseFeedItem, previewKind: HomeFeedCard['preview
   }
 
   return '';
-}
-
-function isPlaceholderTitle(value: string) {
-  return /^(untitled(?: creation| note)?|community post)$/i.test(value.trim());
 }
 
 function homeCategoryLabel(item: ShowcaseFeedItem) {

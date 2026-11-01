@@ -2,6 +2,7 @@ import { hexWithAlpha } from './eased-fade';
 import { canHideFeedCreator, isOwnFeedPost } from './feed-feedback-menu';
 import { hideCreatorLabelFromCardLabel } from './hide-creator-label';
 import type { ImmersivePreviewItem, PreviewViewerSource } from './immersive-preview-view-model';
+import { isPlaceholderTitle } from './placeholder-title';
 import { appTheme, type ThemeColors } from './theme';
 import type { CreatorToolId, GenerationShareSourceSurface } from './types';
 
@@ -445,11 +446,26 @@ export function getDeleteCreationConfirmation(item: Pick<ImmersivePreviewItem, '
 
 /**
  * The picture a remix's creator shows of its source, 40pt across: the media's
- * poster, never the full-size original, and never a video file.
+ * poster, or none. Never the full-size original, which a picture without a
+ * poster once sent (1.2 MB on average, up to about 8 MB), and never a video file.
  */
-export function getRemixSourceThumbnailUrl(item: Pick<ImmersivePreviewItem, 'mediaItems' | 'mediaKind' | 'mediaUrl'>) {
-  const cover = item.mediaItems?.[0];
-  return cover?.previewUrl ?? (item.mediaKind === 'image' ? item.mediaUrl : null);
+export function getRemixSourceThumbnailUrl(item: Pick<ImmersivePreviewItem, 'mediaItems'>) {
+  return item.mediaItems?.[0]?.previewUrl ?? null;
+}
+
+/**
+ * The row's title, as a Home card names its post (`homeCardTitle`): the post's
+ * own title, its prompt in place of a name nobody gave it ("Untitled
+ * Creation"), or the kind of creation when it has no words of its own.
+ */
+function getRemixSourceTitle(item: Pick<ImmersivePreviewItem, 'title' | 'recreatePrompt' | 'recreateTool' | 'previewKind'>) {
+  for (const candidate of [item.title, item.recreatePrompt]) {
+    const words = candidate?.trim();
+    if (words && !isPlaceholderTitle(words)) return words;
+  }
+  if (item.previewKind === 'text') return 'Creator note';
+  if (item.recreateTool === 'motion') return 'Motion creation';
+  return item.recreateTool === 'video' ? 'Video creation' : 'Image creation';
 }
 
 /**
@@ -459,11 +475,11 @@ export function getRemixSourceThumbnailUrl(item: Pick<ImmersivePreviewItem, 'med
  * whichever Remix opened it.
  */
 export function getRemixSourceContext(
-  item: Pick<ImmersivePreviewItem, 'showcasePostId' | 'title' | 'creatorLabel' | 'mediaItems' | 'mediaKind' | 'mediaUrl'>,
+  item: Pick<ImmersivePreviewItem, 'showcasePostId' | 'title' | 'recreatePrompt' | 'recreateTool' | 'previewKind' | 'creatorLabel' | 'mediaItems'>,
 ): RemixSourceContext {
   return {
     postId: item.showcasePostId,
-    title: item.title,
+    title: getRemixSourceTitle(item),
     creatorLabel: item.creatorLabel,
     thumbnailUrl: getRemixSourceThumbnailUrl(item),
   };

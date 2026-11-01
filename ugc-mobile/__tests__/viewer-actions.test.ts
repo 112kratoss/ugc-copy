@@ -16,6 +16,7 @@ import {
   getThemedSaveHeartIconProps,
   getDeleteCreationConfirmation,
   getProfileFeedCardSlots,
+  getRemixSourceContext,
   getRemixSourceThumbnailUrl,
   getViewerActionGroupLabel,
   getViewerActionLabel,
@@ -641,5 +642,37 @@ describe("a remix source's thumbnail", () => {
       mediaUrl: 'https://cdn.test/original.mp4',
       mediaItems: [cover('video', null)],
     }))).toBeNull();
+  });
+
+  // A picture without a poster drew its original instead: 1.2 MB on average, up to
+  // about 8 MB, for 40pt (2026-11-01 review). The row has no picture until a poster exists.
+  it('is no picture for an image that has no poster, never its full-size original', () => {
+    expect(getRemixSourceThumbnailUrl(railItem({ mediaUrl: 'https://cdn.test/original.png', mediaItems: [cover('image', null)] })))
+      .toBeNull();
+    expect(getRemixSourceThumbnailUrl(railItem({ mediaUrl: 'https://cdn.test/original.png', mediaItems: [] }))).toBeNull();
+  });
+});
+
+describe("a remix source's title", () => {
+  const titleOf = (overrides: Partial<ImmersivePreviewItem>) => getRemixSourceContext(railItem(overrides)).title;
+
+  it("is the post's own title", () => {
+    expect(titleOf({ title: 'Kung fu cats', recreatePrompt: 'Two cats sparring on a rooftop' })).toBe('Kung fu cats');
+  });
+
+  // The server names a post nobody named "Untitled Creation" (src/lib/showcase-feed.ts),
+  // and the row said so where the post's Home card shows its prompt.
+  it.each(['Untitled Creation', 'Untitled Note', 'Untitled post', 'Community post'])(
+    'is the prompt in place of "%s", as the Home card reads it',
+    (title) => {
+      expect(titleOf({ title, recreatePrompt: 'Two cats sparring on a rooftop' })).toBe('Two cats sparring on a rooftop');
+    },
+  );
+
+  it('names the kind of creation when the post has no words of its own', () => {
+    expect(titleOf({ title: 'Untitled Creation', recreatePrompt: 'Untitled Creation', recreateTool: 'image' })).toBe('Image creation');
+    expect(titleOf({ title: 'Untitled Creation', recreatePrompt: '', recreateTool: 'video' })).toBe('Video creation');
+    expect(titleOf({ title: '', recreatePrompt: '  ', recreateTool: 'motion' })).toBe('Motion creation');
+    expect(titleOf({ title: 'Untitled Note', recreatePrompt: '', previewKind: 'text' })).toBe('Creator note');
   });
 });

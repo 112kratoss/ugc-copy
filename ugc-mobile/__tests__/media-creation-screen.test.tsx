@@ -50,6 +50,8 @@ const authState = vi.hoisted(() => ({
     getMotionGeneration: vi.fn(),
     quoteGenerationModel: vi.fn(),
     getRemixSourceBundle: vi.fn(),
+    // The remix source row's post, read when a link names it by id alone.
+    getShowcasePost: vi.fn(),
     createMediaReadUrl: vi.fn(),
     createSeedanceAsset: vi.fn(),
     getSeedanceAsset: vi.fn(),
@@ -281,6 +283,7 @@ import * as Haptics from 'expo-haptics';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
 import { normalizeCreationDraftForCatalog } from '../lib/generation-model-draft';
 import { MediaCreationScreen } from '../components/media-creation-screen';
+import { SkeletonBone } from '../components/skeleton';
 import { PUSH_OFFER_STORAGE_KEY, resetPushOffersForTests } from '../lib/push-prompt';
 import { readCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import { pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '../lib/media';
@@ -572,6 +575,10 @@ beforeEach(() => {
     .mockResolvedValue({ status: 'registered', expoPushToken: 'ExponentPushToken[test]' });
   resetPushOffersForTests();
   testQueryClient.removeQueries({ queryKey: ['mobile-push-registration'] });
+  // A remix whose link names its post by id alone reads it for its row. Unless a
+  // case says otherwise the post cannot be read, so the row stays the plain one.
+  testQueryClient.removeQueries({ queryKey: ['showcase-post'] });
+  authState.api.getShowcasePost.mockReset().mockRejectedValue(new Error('Post not found'));
 });
 
 function collectText(root: renderer.ReactTestInstance) {
@@ -8726,12 +8733,112 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
     });
 
+    // The row above the prompt names the source: its poster, title and creator. Every link
+    // the app builds brings the row; a guest's Make this back from sign-in (which carries
+    // ids only, `homeShelfGuestReturnTo`), a notification or a deep link names the post alone.
+    describe('the remix source row', () => {
+      const row = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Remix source post' });
+      const poster = (tree: renderer.ReactTestRenderer) => row(tree)
+        .findAll((node) => String(node.type) === 'stable-media-image')
+        .map((node) => node.props.url as string);
+      const kungFuCats = {
+        id: 'post-9',
+        title: 'Kung fu cats',
+        prompt: 'Two cats sparring on a rooftop',
+        body: '',
+        mediaUrl: 'https://cdn.example.com/post-9/original.png',
+        mediaKind: 'image',
+        mediaItems: [{
+          id: 'post-9:media',
+          url: 'https://cdn.example.com/post-9/original.png',
+          previewUrl: 'https://cdn.example.com/post-9/poster.webp',
+          mediaKind: 'image',
+          contentType: 'image/png',
+          originalName: null,
+          width: 1024,
+          height: 1024,
+          durationSeconds: null,
+          sortOrder: 0,
+        }],
+        category: 'image',
+        creationMode: null,
+        postFormat: 'media',
+        model: 'nano-banana-2',
+        saveCount: 0,
+        remixCount: 0,
+        commentCount: 0,
+        createdAt: '2026-11-01T09:00:00.000Z',
+        creator: { id: 'creator-9', username: 'fluffy', name: 'Fluffy', avatar: null },
+        generationId: 'gen-9',
+        asset: null,
+        canRemix: true,
+      };
+      const idsOnly = () => <MediaCreationScreen initialTool="image" remixSource={{ generationId: 'gen-9', postId: 'post-9' }} />;
+
+      beforeEach(() => {
+        authState.api.getRemixSourceBundle.mockReturnValue(new Promise(() => {}));
+      });
+
+      it('reads the post a link names by id alone, and names it as Home does', async () => {
+        authState.api.getShowcasePost.mockResolvedValue({ success: true, item: kungFuCats });
+        const tree = await open(idsOnly());
+
+        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+        expect(poster(tree)).toEqual(['https://cdn.example.com/post-9/poster.webp']);
+        expect(authState.api.getShowcasePost).toHaveBeenCalledTimes(1);
+        expect(authState.api.getShowcasePost).toHaveBeenCalledWith('post-9');
+      });
+
+      it('names an untitled post by its prompt', async () => {
+        authState.api.getShowcasePost.mockResolvedValue({ success: true, item: { ...kungFuCats, title: 'Untitled Creation' } });
+        const tree = await open(idsOnly());
+
+        expect(collectText(row(tree))).toEqual(['Two cats sparring on a rooftop', 'By @fluffy']);
+      });
+
+      it('draws the row a link brings from its first frame, and never reads the post', async () => {
+        let tree!: renderer.ReactTestRenderer;
+        renderer.act(() => {
+          tree = renderer.create(
+            <MediaCreationScreen
+              initialTool="image"
+              remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Kung fu cats', creatorLabel: '@fluffy', thumbnailUrl: 'https://cdn.example.com/post-9/poster.webp' }}
+            />,
+          );
+        });
+        expect(collectText(row(tree))).toEqual(['Kung fu cats', 'By @fluffy']);
+        expect(poster(tree)).toEqual(['https://cdn.example.com/post-9/poster.webp']);
+
+        await settle();
+        expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+      });
+
+      it("holds the row's place while the post is read, and keeps the plain row when it cannot be", async () => {
+        let refuse!: (error: Error) => void;
+        authState.api.getShowcasePost.mockReturnValue(new Promise((_resolve, reject) => { refuse = reject; }));
+        const tree = await open(idsOnly());
+
+        // Bones for the poster and both lines, so nothing moves when the post lands.
+        expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(3);
+        expect(collectText(row(tree))).toEqual([]);
+
+        refuse(new Error('Post not found'));
+        await settle();
+        expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(0);
+        expect(collectText(row(tree))).toEqual(['Source creation', 'Make your own version']);
+        expect(poster(tree)).toEqual([]);
+      });
+    });
+
     describe('sign-in from the creator', () => {
       beforeEach(() => {
         authState.user = null;
         authState.identityUserId = null;
       });
 
+      // The source's ids and never its row's words: a sign-in's returnTo comes back decoded
+      // once more than it was encoded, so a title with &, # or + arrived cut and one with a
+      // backslash sent the person Home. The creator reads its row again from the post.
       it('returns to this creator with its remix and its prompt', async () => {
         const tree = await open(
           <MediaCreationScreen
@@ -8746,7 +8853,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(routerState.push).toHaveBeenCalledWith({
           pathname: '/auth',
           params: {
-            returnTo: '/create/video?remix=gen-9&remixPost=post-9&prompt=A%20dancer%20%26%20a%20drum&guided=1&sourceTitle=Night%20run&sourceCreator=Ana&sourceThumbnail=https%3A%2F%2Fcdn.example.com%2Ft.jpg%3Fx%3D1',
+            returnTo: '/create/video?remix=gen-9&remixPost=post-9&prompt=A%20dancer%20%26%20a%20drum&guided=1',
           },
         });
       });

@@ -1,5 +1,6 @@
 import type { ToolAccent } from '@/lib/theme';
 import type { ShowcaseFeedItem } from '@/lib/types';
+import { isPlaceholderTitle } from './placeholder-title';
 import { resourceKindLabel } from './post-resource-bundle-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { isTextOnlyShowcasePost } from './showcase-display';
@@ -126,10 +127,6 @@ function cardTitle(item: ShowcaseFeedItem) {
   if (item.mediaKind === 'video' || item.category === 'video') return 'Video creation';
   if (textPost) return 'Creator note';
   return 'Image creation';
-}
-
-function isPlaceholderTitle(value: string) {
-  return /^(untitled(?: creation)?|community post)$/i.test(value.trim());
 }
 
 export function getShowcaseMediaHeight(
