@@ -109,6 +109,8 @@ function createAdminClientMock(
   loadError: { message: string; code?: string } | null = null,
   options: {
     postMediaRows?: Array<Record<string, unknown>>;
+    /** The rows as the removal's delete finds them, when a sweep recorded on one after the read. */
+    postMediaRowsAtDelete?: Array<Record<string, unknown>>;
     linkedGuestIds?: string[];
     /** The creation's existing post and its stored recipe row. */
     storedPost?: Record<string, unknown> | null;
@@ -124,9 +126,15 @@ function createAdminClientMock(
   const selects: string[] = [];
   const eqs: Array<{ column: string; value: unknown }> = [];
   const deletedMediaRowIds: string[][] = [];
+  const queued: unknown[] = [];
 
   return {
     client: {
+      rpc: vi.fn(async (name: string, args: unknown) => {
+        if (name !== 'queue_unrecorded_showcase_media') throw new Error(`Unexpected admin rpc: ${name}`);
+        queued.push(args);
+        return { data: 1, error: null };
+      }),
       from(table: string) {
         if (table === 'profiles') return linkedProfilesQuery(options.linkedGuestIds ?? []);
         if (table === 'posts' || table === 'post_resource_bundles') {
@@ -157,10 +165,14 @@ function createAdminClientMock(
               eq: vi.fn(async () => ({ data: options.postMediaRows ?? [], error: null })),
             })),
             delete: vi.fn(() => ({
-              in: vi.fn(async (_column: string, ids: string[]) => {
-                deletedMediaRowIds.push(ids);
-                return { error: null };
-              }),
+              in: vi.fn((_column: string, ids: string[]) => ({
+                // The deleted rows, as `.select()` answers them.
+                select: vi.fn(async () => {
+                  deletedMediaRowIds.push(ids);
+                  const rows = options.postMediaRowsAtDelete ?? options.postMediaRows ?? [];
+                  return { data: rows.filter((row) => ids.includes(String(row.id))), error: null };
+                }),
+              })),
             })),
           };
         }
@@ -205,6 +217,7 @@ function createAdminClientMock(
     deletedMediaRowIds,
     downloadMock,
     eqs,
+    queued,
     removeMock,
     selects,
     uploadMock,
@@ -662,7 +675,65 @@ describe('publishGenerationToShowcaseForRoute', () => {
       'showcase/gen-1/example.jpg',
       'showcase/gen-1/example.preview.1234.webp',
     ]);
+    expect(adminClient.queued).toEqual([]);
     expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  // The removal reads the legacy rows, removes what they name, then deletes the
+  // rows: a sweep that records on one in between named its upload only there.
+  it('hands the revocation queue what a sweep recorded on a legacy row while a private publish removed it', async () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: 'showcase/gen-1/example.jpg',
+      title: 'Original title',
+      description: 'Original description',
+      prompt: 'Original prompt',
+    };
+    const legacyRow = {
+      id: 'media-row-1',
+      storage_path: 'showcase/gen-1/example.jpg',
+      preview_storage_path: null,
+      rendition_storage_path: null,
+      teaser_storage_path: null,
+    };
+    const adminClient = createAdminClientMock(generation, null, {
+      postMediaRows: [legacyRow],
+      postMediaRowsAtDelete: [{ ...legacyRow, preview_storage_path: 'showcase/gen-1/example.preview.late.webp' }],
+    });
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'private' },
+      userId: 'user-1',
+      dependencies: {
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [{
+          slug: 'magicbooklet',
+          label: 'magicbooklet',
+          models: [],
+          supportedMediaKinds: ['image' as const, 'video' as const],
+        }]),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+          postId: 'post-1',
+          visibility: 'private' as const,
+          bundleId: null,
+          bundleStatus: null,
+        })),
+      } satisfies Partial<ShowcasePublishServiceDependencies>,
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { visibility: 'private', postId: 'post-1' } });
+    expect(adminClient.removeMock).toHaveBeenCalledWith(['showcase/gen-1/example.jpg']);
+    expect(adminClient.queued).toEqual([{ p_paths: ['showcase/gen-1/example.preview.late.webp'] }]);
   });
 
   // Product decision 12 (2026-10-17): a post is public or private. Installed
