@@ -45,6 +45,17 @@ function createPromptHref(tool: CreatorToolId, prompt?: string | null) {
   return `/create/${tool}?prompt=${encodeURIComponent(trimmedPrompt)}`;
 }
 
+/**
+ * The row a remix's creator draws above its prompt: the source's poster, title
+ * and creator (`getRemixSourceContext`).
+ */
+export interface RemixSourceContext {
+  postId?: string | null;
+  title: string;
+  creatorLabel: string;
+  thumbnailUrl?: string | null;
+}
+
 export function getNativeRemixCreateHref({
   redirectTo,
   generationId,
@@ -57,7 +68,11 @@ export function getNativeRemixCreateHref({
   generationId?: string | null;
   recreateTool: CreatorToolId;
   prompt?: string | null;
-  context?: { postId?: string | null; title: string; creatorLabel: string; thumbnailUrl?: string | null };
+  /**
+   * Asked of every caller: a Home card's Remix left it out, and its creator
+   * opened on "Source creation" with no poster, title or creator (2026-11-01).
+   */
+  context: RemixSourceContext | null;
 }) {
   const withContext = (href: string | null) => {
     if (!href || !context) return href;
@@ -435,6 +450,23 @@ export function getDeleteCreationConfirmation(item: Pick<ImmersivePreviewItem, '
 export function getRemixSourceThumbnailUrl(item: Pick<ImmersivePreviewItem, 'mediaItems' | 'mediaKind' | 'mediaUrl'>) {
   const cover = item.mediaItems?.[0];
   return cover?.previewUrl ?? (item.mediaKind === 'image' ? item.mediaUrl : null);
+}
+
+/**
+ * The source row for an item, as the reel reads it. A surface that holds a
+ * feed post rather than a viewer item reads it through
+ * `buildImmersiveShowcaseItems` first, so the creator says the same thing
+ * whichever Remix opened it.
+ */
+export function getRemixSourceContext(
+  item: Pick<ImmersivePreviewItem, 'showcasePostId' | 'title' | 'creatorLabel' | 'mediaItems' | 'mediaKind' | 'mediaUrl'>,
+): RemixSourceContext {
+  return {
+    postId: item.showcasePostId,
+    title: item.title,
+    creatorLabel: item.creatorLabel,
+    thumbnailUrl: getRemixSourceThumbnailUrl(item),
+  };
 }
 
 /**

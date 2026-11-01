@@ -56,7 +56,7 @@ import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import {
   getNativeRemixCreateHref,
-  getRemixSourceThumbnailUrl,
+  getRemixSourceContext,
   getViewerShareIntent,
   getViewerShareSourceSurface,
   isViewerOwnGeneration,
@@ -370,8 +370,7 @@ export function ProfileMediaFeedScreen() {
       generationId: item.generationId,
       recreateTool: item.recreateTool,
       prompt: item.recreatePrompt,
-      context: { postId: item.showcasePostId, title: item.title, creatorLabel: item.creatorLabel,
-        thumbnailUrl: getRemixSourceThumbnailUrl(item) },
+      context: getRemixSourceContext(item),
     });
     router.push((href ?? `/create/${item.recreateTool}`) as never);
   }, [authReturnTo, identityUserId, isGuest, user]);

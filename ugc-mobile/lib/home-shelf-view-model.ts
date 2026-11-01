@@ -1,4 +1,5 @@
 import { formatCreditCost } from './generation-action-label';
+import { buildImmersiveShowcaseItems } from './immersive-preview-view-model';
 import { SHOWCASE_PLAYBACK_VIEWABILITY } from './showcase-feed-events';
 import type { ToolAccent } from './theme';
 import type {
@@ -9,7 +10,7 @@ import type {
   HomeShelfResponse,
   ShowcaseFeedItem,
 } from './types';
-import { getNativeRemixCreateHref } from './viewer-actions';
+import { getNativeRemixCreateHref, getRemixSourceContext } from './viewer-actions';
 
 /**
  * Home's "Make this" shelf, as the app draws it: what the server sent
@@ -57,11 +58,16 @@ export function readHomeShelfItems(response: HomeShelfResponse | null | undefine
 /**
  * Where a guest's "Make this" lands once they have signed in: this remix's
  * editor (the web's create link, as the app's route, as the web's own card
- * carries it through sign-in), or the post when the card has no such link.
+ * carries it through sign-in) with its source row, or the post when the card
+ * has no such link.
  */
 export function homeShelfGuestReturnTo(creation: HomeShelfCreation): string {
   const href = creation.makeHref
-    ? getNativeRemixCreateHref({ redirectTo: creation.makeHref, recreateTool: creation.tool })
+    ? getNativeRemixCreateHref({
+      redirectTo: creation.makeHref,
+      recreateTool: creation.tool,
+      context: getRemixSourceContext(buildImmersiveShowcaseItems('home-community', [creation.post])[0]),
+    })
     : null;
   return href?.includes('remix=') ? href : `/post/${creation.post.id}`;
 }

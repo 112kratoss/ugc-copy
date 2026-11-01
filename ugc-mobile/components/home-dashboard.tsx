@@ -115,7 +115,7 @@ import type {
   ShowcaseFeedResponse,
   ShowcasePostResponse,
 } from '@/lib/types';
-import { buildShareUrl, getNativeRemixCreateHref } from '@/lib/viewer-actions';
+import { buildShareUrl, getNativeRemixCreateHref, getRemixSourceContext } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { useActiveGenerationCount } from '@/lib/use-active-generations';
 import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib/use-new-posts-probe';
@@ -758,6 +758,8 @@ export function HomeDashboard() {
         redirectTo: result.redirectTo,
         recreateTool: item.category === 'video' ? 'video' : 'image',
         prompt: item.prompt || item.body,
+        // The creator names its source as it does from the reel.
+        context: getRemixSourceContext(buildImmersiveShowcaseItems('home-community', [item])[0]),
       });
       if (href) {
         router.push(href as never);
