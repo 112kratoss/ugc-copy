@@ -892,7 +892,8 @@ describe('shared mobile API v1 contract fixture', () => {
         }) as unknown as SupabaseClient,
         createServiceClient: () => ({
           from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: row, error: null }) }) }) }),
-          rpc: async () => ({ data: null, error: null }),
+          // The library counts as the database returns them, so `stats` is the route's own reading.
+          rpc: async (name: string) => ({ data: name === 'owner_profile_counts' ? pinned.stats : null, error: null }),
         }) as unknown as SupabaseClient,
       },
     });

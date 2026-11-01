@@ -5,7 +5,7 @@ export const INACTIVE_MEDIA_QUERY_LIMIT = 6;
 export const INACTIVE_MEDIA_ITEM_LIMIT = 240;
 const MEDIA_QUERIES = new Set([
   'showcase-feed', 'showcase-post', 'immersive-preview-source',
-  'profile-generations', 'profile-owner-posts', 'profile-saved-media',
+  'profile-generations', 'profile-failed-generations', 'profile-owner-posts', 'profile-saved-media',
   'profile-library-selection',
 ]);
 

@@ -1,7 +1,7 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import type { MagicbookletApiClient } from './api-client';
-import { PROFILE_MEDIA_PAGE_SIZE } from './profile-media-query';
+import { PROFILE_MEDIA_PAGE_SIZE, profileFailedGenerationsQueryKey } from './profile-media-query';
 import {
   PROFILE_GENERATION_PAGES,
   PROFILE_OWNER_POST_PAGES,
@@ -62,5 +62,29 @@ export async function refreshProfileLibraryHead({
   queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse, number | string>>(
     ['profile-saved-media', userId],
     (current) => mergeRefreshedFirstPage(current, fresh, 0, PROFILE_SAVED_MEDIA_PAGES)
+  );
+}
+
+/**
+ * The Creations Failed scope's first page read again and merged, as the
+ * libraries' are. Nothing is read for a scope nobody has opened: its query
+ * makes its own first request when it is.
+ */
+export async function refreshProfileFailedCreationsHead({
+  api,
+  queryClient,
+  userId,
+}: {
+  api: Pick<LibraryApi, 'listGenerations'>;
+  queryClient: Pick<QueryClient, 'getQueryData' | 'setQueryData'>;
+  userId: string | undefined;
+}) {
+  const key = profileFailedGenerationsQueryKey(userId);
+  if (!queryClient.getQueryData(key)) return;
+  const fresh = await api.listGenerations(false, { limit: PROFILE_MEDIA_PAGE_SIZE, status: 'failed' });
+  if (!fresh) return;
+  queryClient.setQueryData<InfiniteData<GenerationListResponse, string | null>>(
+    key,
+    (current) => mergeRefreshedFirstPage(current, fresh, null, PROFILE_GENERATION_PAGES)
   );
 }

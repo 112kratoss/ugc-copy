@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 import {
   listOwnerGenerationsForRoute,
+  OwnerGenerationsQueryError,
   projectGenerationForStudio,
   type OwnerGenerationsRouteClient,
 } from '@/lib/owner-generations-route-service';
@@ -669,6 +670,93 @@ describe('listOwnerGenerationsForRoute', () => {
     ]);
   });
 
+  describe('status=failed', () => {
+    // Newest first, as the route orders them: failures between successes, an
+    // archived one, a failed template step and a run still rendering.
+    const library = [
+      libraryRow({ id: 'made-1', created_at: '2026-10-14T08:09:00.000Z' }),
+      libraryRow({ id: 'failed-1', status: 'failed', created_at: '2026-10-14T08:08:00.000Z' }),
+      libraryRow({ id: 'made-2', created_at: '2026-10-14T08:07:00.000Z' }),
+      libraryRow({
+        id: 'failed-archived',
+        status: 'failed',
+        archived_at: '2026-10-14T09:00:00.000Z',
+        created_at: '2026-10-14T08:06:00.000Z',
+      }),
+      libraryRow({
+        id: 'failed-step',
+        status: 'failed',
+        template_run_id: 'run-1',
+        template_run_step_id: 'step-1',
+        studio_visible: true,
+        created_at: '2026-10-14T08:05:00.000Z',
+      }),
+      libraryRow({ id: 'rendering', status: 'processing', created_at: '2026-10-14T08:04:00.000Z' }),
+      libraryRow({ id: 'failed-2', status: 'failed', created_at: '2026-10-14T08:03:00.000Z' }),
+      libraryRow({ id: 'failed-3', status: 'failed', created_at: '2026-10-14T08:02:00.000Z' }),
+    ];
+
+    async function listPage(query: string) {
+      const stored = createStoredRows({
+        profiles: [{ id: 'someone-else', merged_into_user_id: null }],
+        generations: library,
+        // The template step's run is not the owner's to list, so the projection drops it.
+        template_runs: [],
+        posts: [],
+      });
+      const payload = await listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase: () => stored.client,
+        searchParams: new URLSearchParams(query),
+      });
+      return { ids: payload.generations.map((generation) => generation.id), pagination: payload.pagination };
+    }
+
+    it('cuts each page from the unarchived failed runs alone', async () => {
+      await expect(listPage('detail=summary&status=failed&limit=2')).resolves.toEqual({
+        ids: ['failed-1', 'failed-2'],
+        pagination: { limit: 2, hasMore: true, nextCursor: '2' },
+      });
+      await expect(listPage('detail=summary&status=failed&limit=2&cursor=2')).resolves.toEqual({
+        ids: ['failed-3'],
+        pagination: { limit: 2, hasMore: false, nextCursor: null },
+      });
+    });
+
+    it('takes archived failures only when asked for archived runs, and never a template step', async () => {
+      await expect(listPage('detail=summary&status=failed&includeArchived=true')).resolves.toMatchObject({
+        ids: ['failed-1', 'failed-archived', 'failed-2', 'failed-3'],
+      });
+    });
+
+    it('narrows the status poll the same way', async () => {
+      await expect(listPage('detail=status&status=failed')).resolves.toMatchObject({
+        ids: ['failed-1', 'failed-2', 'failed-3'],
+      });
+    });
+
+    it('leaves the library unfiltered without it', async () => {
+      await expect(listPage('detail=summary')).resolves.toMatchObject({
+        ids: ['made-1', 'failed-1', 'made-2', 'rendering', 'failed-2', 'failed-3'],
+      });
+    });
+
+    it('refuses any other status before reading anything', async () => {
+      const stored = createStoredRows({ generations: library });
+      const getAdminSupabase = vi.fn(() => stored.client);
+
+      await expect(listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase,
+        searchParams: new URLSearchParams('status=succeeded'),
+      })).rejects.toBeInstanceOf(OwnerGenerationsQueryError);
+      expect(getAdminSupabase).not.toHaveBeenCalled();
+      expect(stored.reads).toEqual([]);
+    });
+  });
+
   it('sends the bundle a linked post sells, read once for the page', async () => {
     const post = (id: string, generationId: string) => ({
       id,
@@ -774,6 +862,39 @@ describe('listOwnerGenerationsForRoute', () => {
 
     const { generations } = await listStoredLibrary({ generations: [libraryRow({})], posts: [] }, 'detail=summary');
     for (const key of added) expect(generations[0], `route payload is missing "${key}"`).toHaveProperty(key);
+  });
+
+  it("answers the contract's failed-only query with the failed runs alone, paged as it pins", async () => {
+    const variant = mobileApiContract.endpoints.listGenerations.responseVariants.failedOnly;
+    const example = variant.response.generations[0];
+    const stored = createStoredRows({
+      profiles: [{ id: 'someone-else', merged_into_user_id: null }],
+      generations: [
+        libraryRow({ id: 'made-after', created_at: '2026-10-13T10:00:00.000Z' }),
+        libraryRow({
+          id: example.id,
+          status: example.status,
+          category: example.category,
+          created_at: example.created_at,
+          error_message: example.error_message,
+          refunded: example.refunded,
+        }),
+        libraryRow({ id: 'made-before', created_at: '2026-10-13T08:00:00.000Z' }),
+      ],
+      posts: [],
+    });
+
+    const payload = await listOwnerGenerationsForRoute({
+      userId: OWNER,
+      supabase: stored.client,
+      getAdminSupabase: () => stored.client,
+      searchParams: new URLSearchParams(variant.query),
+    });
+
+    expect(payload.generations.map(({ id, status, archived_at }) => ({ id, status, archived_at }))).toEqual(
+      variant.response.generations.map(({ id, status, archived_at }) => ({ id, status, archived_at })),
+    );
+    expect(payload.pagination).toEqual(variant.response.pagination);
   });
 
   it('removes private template fields from the Studio projection', () => {

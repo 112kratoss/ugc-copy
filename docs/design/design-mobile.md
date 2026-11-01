@@ -568,7 +568,7 @@ Create is a prompt-first single page for Image, Video and Motion, not a wizard.
 
 - A signed-out profile invites sign-in without looking broken.
 - Each segment's empty state says what will appear there.
-- Creations and Posts each have independent Active / Archived filters with loaded-item counts. Creations adds Failed between them while a loaded run failed, and keeps it while it is chosen, so clearing the last failure leaves its empty state in place; its rows are the failed runs, each opening the run's status page, and the Rendering strip stays above them. Archived creations open their scoped management feed for restoring. The filter reuses the existing accessible Pressable radio controls and theme tokens on both platforms, and its row wraps at larger text sizes; no new native module or gesture is needed.
+- Creations and Posts each have independent Active / Archived filters, counted with the server's totals (the profile's `stats`, the rules the lists apply) and with the loaded items only where a server sends none. Creations adds Failed between them while a run failed, and keeps it while it is chosen, so clearing the last failure leaves its empty state in place; its rows are the failed runs, paged on their own (`status=failed`) so a large library is not read to find them, each opening the run's status page, and the Rendering strip stays above them. Archived creations open their scoped management feed for restoring. The filter reuses the existing accessible Pressable radio controls and theme tokens on both platforms, and its row wraps at larger text sizes; no new native module or gesture is needed.
 
 ### Alerts
 

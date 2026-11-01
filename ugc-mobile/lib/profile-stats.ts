@@ -1,5 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 
+import type { CreationAvailability } from './creation-library';
 import type { ProfileResponse, ProfileStatsResponse } from './types';
 
 /**
@@ -16,7 +17,11 @@ export function profileQueryKey(userId: string | null | undefined) {
   return ['profile', userId] as const;
 }
 
-/** Applies the delta to whichever totals are known; a profile with no totals is left alone. */
+/**
+ * Applies the delta to whichever totals are known; a profile with no totals is
+ * left alone, and so is a total this server does not send, which a guess would
+ * turn from unknown into a number.
+ */
 export function applyProfileStatsDelta<T extends Pick<ProfileResponse, 'stats'> | undefined>(
   profile: T,
   delta: ProfileStatsDelta,
@@ -25,9 +30,38 @@ export function applyProfileStatsDelta<T extends Pick<ProfileResponse, 'stats'> 
   const next = { ...profile.stats };
   for (const [key, change] of Object.entries(delta) as Array<[keyof ProfileStatsResponse, number | undefined]>) {
     if (typeof change !== 'number' || !Number.isFinite(change)) continue;
-    next[key] = Math.max(0, next[key] + change);
+    const current = next[key];
+    if (typeof current !== 'number' || !Number.isFinite(current)) continue;
+    next[key] = Math.max(0, current + change);
   }
   return { ...profile, stats: next };
+}
+
+type CreationStatsFields = {
+  archivedAt?: string | null;
+  availability?: CreationAvailability;
+  runStatus?: string | null;
+};
+
+/**
+ * The total a creation counts in, by the rules `owner_profile_counts` applies:
+ * a library member in Active or Archived, an unarchived failed run in Failed,
+ * and nothing for a run still rendering, one with no output or an archived
+ * failure.
+ */
+export function creationStatsKey(item: CreationStatsFields): 'creations' | 'archivedCreations' | 'failedCreations' | null {
+  if (item.availability === 'available' || item.availability === 'source-unavailable') {
+    return item.archivedAt ? 'archivedCreations' : 'creations';
+  }
+  return !item.archivedAt && item.runStatus === 'failed' ? 'failedCreations' : null;
+}
+
+/** A creation archived, restored or deleted (`after` null), as the totals it leaves and joins. */
+export function creationStatsDelta(before: CreationStatsFields, after: CreationStatsFields | null): ProfileStatsDelta {
+  const from = creationStatsKey(before);
+  const to = after ? creationStatsKey(after) : null;
+  if (from === to) return {};
+  return { ...(from ? { [from]: -1 } : {}), ...(to ? { [to]: 1 } : {}) };
 }
 
 export function adjustProfileStats(
@@ -36,6 +70,8 @@ export function adjustProfileStats(
   delta: ProfileStatsDelta,
 ) {
   if (!userId) return;
+  // Nothing to move, as for a run counted in no total: writing would still mark the profile fresh.
+  if (!Object.values(delta).some((change) => typeof change === 'number' && Number.isFinite(change) && change !== 0)) return;
   queryClient.setQueryData<ProfileResponse>(profileQueryKey(userId), (current) => applyProfileStatsDelta(current, delta));
 }
 

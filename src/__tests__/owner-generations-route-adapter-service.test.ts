@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { getOwnerGenerationsRouteResponse } from '@/lib/owner-generations-route-adapter-service';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 function createUserClient(userId: string | null = 'user-1') {
   return {
     auth: {
@@ -119,6 +121,28 @@ describe('owner generations route adapter service', () => {
     expect(response.headers.get('x-request-id')).toBe('owner-generations-error-1');
     await expect(response.json()).resolves.toEqual({ error: 'Internal server error' });
     expect(logError).toHaveBeenCalledWith('Error fetching generations:', expect.any(Error));
+  });
+
+  it('answers a status the library cannot be narrowed to 400, as the contract pins, and logs no failure', async () => {
+    const refusal = mobileApiContract.endpoints.listGenerations.errors.invalidStatusFilter;
+    const logError = vi.fn();
+
+    // The real read service: it refuses the filter before it reads anything.
+    const response = await getOwnerGenerationsRouteResponse({
+      request: new Request(`http://localhost/api/generations?${new URLSearchParams(refusal.query)}`),
+      dependencies: {
+        createServiceClient: vi.fn(),
+        createUserClient: vi.fn(() => createUserClient('user-1') as never),
+        enforceBackendRateLimit: vi.fn(),
+        logError,
+        requireIdentity: requireIdentityForTest as never,
+      },
+    });
+
+    expect(response.status).toBe(refusal.status);
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    await expect(response.json()).resolves.toEqual(refusal.response);
+    expect(logError).not.toHaveBeenCalled();
   });
 
   it('rejects a merged session before privileged owner hydration', async () => {

@@ -13,6 +13,7 @@ import {
 } from '@/lib/backend-rate-limit';
 import {
   listOwnerGenerationsForRoute,
+  OwnerGenerationsQueryError,
   type OwnerGenerationsRoutePayload,
 } from '@/lib/owner-generations-route-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
@@ -92,6 +93,9 @@ async function handleOwnerGenerationsGET(
 
     return NextResponse.json(payload);
   } catch (error) {
+    if (error instanceof OwnerGenerationsQueryError) {
+      return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
+    }
     dependencies.logError('Error fetching generations:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }

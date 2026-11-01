@@ -11,8 +11,14 @@ export function parseOwnerProfileCounts(data: unknown): OwnerProfileStats {
     ? data as Record<string, unknown>
     : {};
 
+  const failedCreations = optionalNonNegativeInteger(record.failedCreations);
+  const archivedCreations = optionalNonNegativeInteger(record.archivedCreations);
   return {
     creations: nonNegativeInteger(record.creations),
+    // Left out, not 0, while a database without them answers: the app then
+    // counts its loaded pages, where a 0 would hide the Failed chip.
+    ...(failedCreations === undefined ? {} : { failedCreations }),
+    ...(archivedCreations === undefined ? {} : { archivedCreations }),
     posts: nonNegativeInteger(record.posts),
     archivedPosts: nonNegativeInteger(record.archivedPosts),
     saved: nonNegativeInteger(record.saved),
@@ -22,4 +28,8 @@ export function parseOwnerProfileCounts(data: unknown): OwnerProfileStats {
 function nonNegativeInteger(value: unknown) {
   const number = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.round(number)) : 0;
+}
+
+function optionalNonNegativeInteger(value: unknown) {
+  return value === undefined || value === null ? undefined : nonNegativeInteger(value);
 }

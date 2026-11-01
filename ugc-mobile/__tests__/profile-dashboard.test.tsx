@@ -222,6 +222,16 @@ const queryState = vi.hoisted(() => ({
   fetchNextGenerations: vi.fn(() => Promise.resolve()),
   fetchNextOwnerPosts: vi.fn(() => Promise.resolve()),
   fetchNextSavedMedia: vi.fn(() => Promise.resolve()),
+  // The Failed scope's own query (`status=failed`) as the screen last asked for
+  // it, and its pages: null until it has answered.
+  failedQuery: null as null | { queryKey: unknown[]; enabled: boolean; queryFn?: (context: { pageParam: unknown }) => unknown },
+  failedPages: null as Array<Record<string, unknown>> | null,
+  failedHasNextPage: false,
+  failedIsLoading: false,
+  fetchNextFailed: vi.fn(() => Promise.resolve()),
+  refetchFailed: vi.fn(() => Promise.resolve()),
+  invalidateQueries: vi.fn(() => Promise.resolve()),
+  getQueryData: vi.fn((): unknown => undefined),
   setQueryData: vi.fn(),
   // The payout state as the Wallet card last asked for it, and its answer.
   payoutQueryOptions: null as null | { queryKey: unknown[]; enabled?: boolean; queryFn?: unknown },
@@ -256,7 +266,11 @@ vi.mock('@tanstack/react-query', () => ({
     }
     return { data: null, isLoading: false };
   },
-  useQueryClient: () => ({ setQueryData: queryState.setQueryData }),
+  useQueryClient: () => ({
+    setQueryData: queryState.setQueryData,
+    invalidateQueries: queryState.invalidateQueries,
+    getQueryData: queryState.getQueryData,
+  }),
   useInfiniteQuery: ({ enabled = true, queryKey, queryFn, initialPageParam }: {
     enabled?: boolean;
     queryKey: string[];
@@ -287,6 +301,22 @@ vi.mock('@tanstack/react-query', () => ({
         isStale: queryState.generationsIsStale,
         dataUpdatedAt: queryState.generationsDataUpdatedAt,
         refetch: queryState.refetchGenerations,
+      };
+    }
+    if (queryKey[0] === 'profile-failed-generations') {
+      // Its request is left to the test that asks about it (`failedQuery.queryFn`).
+      queryState.failedQuery = { queryKey, enabled, queryFn };
+      return {
+        data: queryState.failedPages ? { pages: queryState.failedPages, pageParams: [initialPageParam] } : undefined,
+        fetchNextPage: queryState.fetchNextFailed,
+        hasNextPage: queryState.failedHasNextPage,
+        isFetchNextPageError: false,
+        isFetchingNextPage: false,
+        isFetched: Boolean(queryState.failedPages),
+        isFetching: false,
+        isLoading: queryState.failedIsLoading,
+        isStale: false,
+        refetch: queryState.refetchFailed,
       };
     }
     if (queryKey[0] === 'profile-owner-posts') {
@@ -870,6 +900,14 @@ describe('ProfileDashboard media tiles routing', () => {
     queryState.fetchNextOwnerPosts.mockClear();
     queryState.fetchNextSavedMedia.mockClear();
     queryState.setQueryData.mockClear();
+    queryState.failedQuery = null;
+    queryState.failedPages = null;
+    queryState.failedHasNextPage = false;
+    queryState.failedIsLoading = false;
+    queryState.fetchNextFailed.mockClear();
+    queryState.refetchFailed.mockClear();
+    queryState.invalidateQueries.mockClear();
+    queryState.getQueryData.mockReset();
     authState.api.getSavedMedia.mockClear();
   });
 
@@ -1347,6 +1385,24 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(queryState.refetchSavedMedia).not.toHaveBeenCalled();
     expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual([['profile-saved-media', 'user-123']]);
     authState.api.getSavedMedia.mockReset();
+    // Saved has no scope totals to read again.
+    expect(queryState.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('reads the Creations scope totals again with a stale library, for a run that failed while the reader was away', async () => {
+    queryState.generationsIsStale = true;
+    authState.api.listGenerations.mockImplementation(async () => ({ generations: [], pagination: { limit: 24, hasMore: false, nextCursor: null } }));
+    try {
+      await renderer.act(async () => {
+        renderer.create(<ProfileDashboard initialTab="Creations" />);
+      });
+
+      expect(authState.api.listGenerations).toHaveBeenCalledWith(true, { limit: 24 });
+      expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
+    } finally {
+      queryState.generationsIsStale = false;
+      authState.api.listGenerations.mockReset();
+    }
   });
 
   it('defers inactive Profile datasets until the visible dataset settles', () => {
@@ -2130,6 +2186,8 @@ describe('ProfileDashboard media tiles routing', () => {
     const failedRuns = (count: number) => Array.from({ length: count }, (_, index) => ({
       id: `failed-${index}`, status: 'failed', output_url: null, category: 'image', title: `Failure ${index}`, created_at: '2026-10-13T08:00:00Z',
     }));
+    // The profile every test here starts from: no totals, so the chips count what has loaded.
+    const profileWithoutTotals = () => ({ id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' });
 
     const tabSegment = (tree: renderer.ReactTestRenderer, tab: 'Creations' | 'Posts') => tree.root.find((node) => (
       String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === tab
@@ -2288,30 +2346,136 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(tree.root.findByProps({ accessibilityLabel: 'Creation, Ready image, Not posted' })).toBeTruthy();
     });
 
-    it('reads further pages while its failed runs are too few to fill the screen, as the grid does for tiles', () => {
+    it('asks for failed runs alone, and only once the scope is opened', async () => {
+      const tree = renderDashboard();
+      expect(queryState.failedQuery).toMatchObject({ queryKey: ['profile-failed-generations', 'user-123'], enabled: false });
+
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      expect(queryState.failedQuery?.enabled).toBe(true);
+
+      authState.api.listGenerations.mockClear();
+      await queryState.failedQuery?.queryFn?.({ pageParam: null });
+      expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { cursor: undefined, limit: 24, status: 'failed' });
+    });
+
+    it('lists the failed runs its own pages bring, the ones the library has not reached included', () => {
+      // A large library: its first page holds no failure at all.
+      queryState.generationsHasNextPage = true;
+      queryState.generations = readyRuns(24);
+      queryState.profileData = { ...profileWithoutTotals(), stats: { creations: 46, failedCreations: 3, archivedCreations: 0, posts: 0, archivedPosts: 0, saved: 0 } } as never;
+      const tree = renderDashboard();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (3)').props.onPress(); });
+      queryState.failedPages = [{ generations: failedRuns(3), pagination: { limit: 24, hasMore: false, nextCursor: null } }];
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+
+      expect(failedTiles(tree)).toHaveLength(3);
+      // Not one page of the library was read to find them.
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+    });
+
+    it("counts every scope from the profile's totals, whatever has loaded", () => {
+      queryState.generationsHasNextPage = true;
+      queryState.profileData = { ...profileWithoutTotals(), stats: { creations: 46, failedCreations: 17, archivedCreations: 3, posts: 0, archivedPosts: 0, saved: 0 } } as never;
+      const tree = renderDashboard();
+
+      expect(scopeChips(tree)).toEqual(['Active (46)', 'Failed (17)', 'Archived (3)']);
+    });
+
+    it('waits on its first page only while it has nothing to draw', () => {
+      queryState.failedIsLoading = true;
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      // The failures the library already holds are drawn while it comes.
+      expect(failedTiles(tree)).toHaveLength(2);
+
+      queryState.generations = runs().filter((run) => run.status !== 'failed');
+      queryState.profileData = { ...profileWithoutTotals(), stats: { creations: 1, failedCreations: 2, archivedCreations: 0, posts: 0, archivedPosts: 0, saved: 0 } } as never;
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+      expect(failedTiles(tree)).toHaveLength(0);
+      expect(tree.root.findAllByProps({ children: 'No failed creations' })).toHaveLength(0);
+    });
+
+    it('reads further pages of failed runs alone while they are too few to fill the screen', () => {
       queryState.generationsHasNextPage = true;
       queryState.generations = [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...failedRuns(2)];
+      queryState.failedPages = [{ generations: failedRuns(2), pagination: { limit: 24, hasMore: true, nextCursor: '24' } }];
+      queryState.failedHasNextPage = true;
       const tree = renderDashboard();
       // A screenful of tiles fills the Active grid, so nothing more is read for it.
       expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
 
       renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
 
-      expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+      expect(queryState.fetchNextFailed).toHaveBeenCalledTimes(1);
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
     });
 
     it('leaves further pages to the end of the list once its failed runs fill the screen', () => {
       queryState.generationsHasNextPage = true;
       queryState.generations = [...readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT), ...failedRuns(PROFILE_MEDIA_MIN_FILL_COUNT)];
+      queryState.failedPages = [{
+        generations: failedRuns(PROFILE_MEDIA_MIN_FILL_COUNT),
+        pagination: { limit: 24, hasMore: true, nextCursor: '24' },
+      }];
+      queryState.failedHasNextPage = true;
       const tree = renderDashboard();
 
       renderer.act(() => { findPressableByText(tree.root, `Failed (${PROFILE_MEDIA_MIN_FILL_COUNT})`).props.onPress(); });
 
       expect(failedTiles(tree)).toHaveLength(PROFILE_MEDIA_MIN_FILL_COUNT);
-      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+      expect(queryState.fetchNextFailed).not.toHaveBeenCalled();
       const list = tree.root.find((node) => String(node.type) === 'flash-list');
       renderer.act(() => { list.props.onEndReached(); });
+      expect(queryState.fetchNextFailed).toHaveBeenCalledTimes(1);
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+    });
+
+    it('pages Failed after Active has paged, whose last request says nothing about it', () => {
+      vi.useFakeTimers();
+      queryState.generationsHasNextPage = true;
+      queryState.generationPages = [{ generations: readyRuns(3) }];
+      queryState.profileData = { ...profileWithoutTotals(), stats: { creations: 3, failedCreations: 2, archivedCreations: 0, posts: 0, archivedPosts: 0, saved: 0 } } as never;
+      queryState.failedPages = [{ generations: failedRuns(2), pagination: { limit: 24, hasMore: true, nextCursor: '24' } }];
+      queryState.failedHasNextPage = true;
+      const tree = renderDashboard();
+      // Active, with one page and too few tiles, asked for its second.
       expect(queryState.fetchNextGenerations).toHaveBeenCalledTimes(1);
+
+      renderer.act(() => { vi.advanceTimersByTime(1_000); });
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+
+      expect(queryState.fetchNextFailed).toHaveBeenCalledTimes(1);
+      renderer.act(() => { tree.unmount(); });
+    });
+
+    it('collapses and reads its own pages again on a pull, and the totals with them', () => {
+      queryState.failedPages = [{ generations: failedRuns(2) }];
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+      queryState.setQueryData.mockClear();
+
+      renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Refresh Creations' }).props.onPress(); });
+
+      expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual([['profile-failed-generations', 'user-123']]);
+      expect(queryState.refetchFailed).toHaveBeenCalledTimes(1);
+      expect(queryState.refetchGenerations).not.toHaveBeenCalled();
+      expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
+    });
+
+    it('reads the totals again, and its own first page, when a run leaves the Rendering strip', async () => {
+      queryState.failedPages = [{ generations: failedRuns(2) }];
+      queryState.getQueryData.mockImplementation(() => ({ pages: queryState.failedPages, pageParams: [null] }));
+      const tree = renderDashboard();
+      expect(queryState.invalidateQueries).not.toHaveBeenCalled();
+
+      // The run that was rendering has failed.
+      queryState.generations = runs().map((run) => (run.id === 'running' ? { ...run, status: 'failed' } : run));
+      authState.api.listGenerations.mockClear();
+      await renderer.act(async () => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+
+      expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
+      expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { limit: 24, status: 'failed' });
     });
   });
 });
