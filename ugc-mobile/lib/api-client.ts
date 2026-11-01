@@ -1390,8 +1390,9 @@ export function createApiClient({
     revealNsfwPost: (postId: string) =>
       request<ShowcasePostResponse>(`/api/posts/${encodeURIComponent(postId)}/reveal`, { method: 'POST' }),
     getContentPreferences: () => request<{ showMature: boolean }>('/api/content-preferences'),
+    // Encoded: the creator reads the id a remix link carries, and any app or page can open one.
     getShowcasePost: (postId: string) =>
-      request<ShowcasePostResponse>(`/api/showcase/posts/${postId}`),
+      request<ShowcasePostResponse>(`/api/showcase/posts/${encodeURIComponent(postId)}`),
     // Names the live post behind an id the by-id read did not find: an old
     // link carries a generation id, which the web's post page has always
     // followed. A post id answers with itself; anything else is a 404.

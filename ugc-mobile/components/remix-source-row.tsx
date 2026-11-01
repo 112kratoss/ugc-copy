@@ -61,9 +61,9 @@ export function RemixSourceRow({ source }: { source: RemixSourceSeed }) {
   }
 
   const post = read.data?.item ? showcasePostRemixSourceContext(read.data.item) : null;
-  const title = source.title || post?.title;
-  const creatorLabel = source.creatorLabel || post?.creatorLabel;
-  const thumbnailUrl = source.thumbnailUrl || post?.thumbnailUrl;
+  const title = source.title?.trim() || post?.title;
+  const creatorLabel = source.creatorLabel?.trim() || post?.creatorLabel;
+  const thumbnailUrl = source.thumbnailUrl?.trim() || post?.thumbnailUrl;
   return (
     <View accessibilityLabel="Remix source post" style={ROW_STYLE}>
       {thumbnailUrl ? (
