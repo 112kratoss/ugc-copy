@@ -1,3 +1,4 @@
+import { buildPricingHref, RECIPE_RETURN_ANCHOR } from '@/lib/pricing-return';
 import { getSafeInternalReturnPath } from '@/lib/share';
 
 /**
@@ -32,7 +33,7 @@ export const UNLOCKED_RECIPES_PATH = '/creations?view=unlocks';
 export function buildRecipeTopUpHref(recipePath: string): string {
   const hashIndex = recipePath.indexOf('#');
   const path = hashIndex >= 0 ? recipePath.slice(0, hashIndex) : recipePath;
-  return `/pricing?returnTo=${encodeURIComponent(`${path}#recipe`)}`;
+  return buildPricingHref(`${path}${RECIPE_RETURN_ANCHOR}`);
 }
 
 /**

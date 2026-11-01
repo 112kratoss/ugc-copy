@@ -1943,6 +1943,8 @@ function ImageCreator({
         </div>
     ) : null;
 
+    // A remix keeps no draft: its top-ups tell Pricing the remix, to bring the creator back to it.
+    const topUpHref = remixId ? buildRemixTopUpHref('image', remixId, remixPostId) : undefined;
     const barAction = (
         <CreatorBarAction
             awaitingCheck={isAwaitingStartCheck}
@@ -1950,8 +1952,7 @@ function ImageCreator({
                 if (pendingStart) void replayPendingStart(pendingStart, { reveal: true });
             }}
             showTopUp={showTopUp}
-            // A remix keeps no draft: Pricing is told the remix, to bring the creator back to it.
-            topUpHref={remixId ? buildRemixTopUpHref('/create-image', remixId, remixPostId) : undefined}
+            topUpHref={topUpHref}
             isGenerating={isGenerating}
             disabled={generateBlocked || canvasPublish.inFlight}
             costLabel={quoteUi.costLabel}
@@ -2058,6 +2059,7 @@ function ImageCreator({
                     balance={userCredits}
                     runCost={runShape?.cost ?? currentCost}
                     onMakeAnother={() => promptTextareaRef.current?.focus()}
+                    topUpHref={topUpHref}
                 />
             ) : null}
         />

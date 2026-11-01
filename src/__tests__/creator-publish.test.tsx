@@ -643,6 +643,13 @@ describe('CreatorPostedNext', () => {
     expect(screen.queryByText('or')).toBeNull();
     expect(screen.getByRole('link', { name: 'top up' })).toBeInTheDocument();
   });
+
+  // A remix keeps no draft, so its top-up after Posted tells Pricing the way back too, as the bar's does.
+  it('leads the top-up where the page says', () => {
+    const toRemix = `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-1&remixPost=post-1')}`;
+    render(<CreatorPostedNext balance={3} runCost={19} onMakeAnother={vi.fn()} topUpHref={toRemix} />);
+    expect(screen.getByRole('link', { name: 'top up' })).toHaveAttribute('href', toRemix);
+  });
 });
 
 describe('the recipe’s words', () => {

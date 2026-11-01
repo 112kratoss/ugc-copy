@@ -627,13 +627,15 @@ function CreatorPosted({
  * Under Posted: the balance and the next thing it buys, "3 credits left: make an image or top
  * up", or "22 credits left: make another or top up" where it covers this run again.
  */
-export function CreatorPostedNext({ balance, runCost, imageHref, onMakeAnother }: {
+export function CreatorPostedNext({ balance, runCost, imageHref, onMakeAnother, topUpHref = '/pricing' }: {
   balance: number;
   /** What this run cost; null where it is not known. */
   runCost: number | null;
   /** The image creator, for a balance short of another video. */
   imageHref?: string | null;
   onMakeAnother: () => void;
+  /** Where "top up" leads: Pricing, told on a remix to bring the creator back to it, as the bar's Top up is. */
+  topUpHref?: string;
 }) {
   const coversAnother = runCost !== null && balance >= runCost;
   return (
@@ -645,7 +647,7 @@ export function CreatorPostedNext({ balance, runCost, imageHref, onMakeAnother }
         <Link href={imageHref} className={CREATOR_NOTE_LINK_CLASS}>make an image</Link>
       ) : null}
       {coversAnother || imageHref ? <span>or</span> : null}
-      <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>top up</Link>
+      <Link href={topUpHref} className={CREATOR_NOTE_LINK_CLASS}>top up</Link>
     </p>
   );
 }

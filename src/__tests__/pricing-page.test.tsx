@@ -698,7 +698,7 @@ describe('pricing page sent from a recipe or a remix', () => {
   it('takes the remix from its Top up\'s address', async () => {
     const { default: Pricing } = await import('@/app/pricing/page');
     const { buildRemixTopUpHref } = await import('@/lib/pricing-return');
-    const topUp = new URL(buildRemixTopUpHref('/create-video', 'gen-1', 'post-1'), 'https://magicbooklet.com');
+    const topUp = new URL(buildRemixTopUpHref('video', 'gen-1', 'post-1'), 'https://magicbooklet.com');
     expect(topUp.pathname).toBe('/pricing');
 
     render(await Pricing({ searchParams: Promise.resolve(Object.fromEntries(topUp.searchParams)) }));

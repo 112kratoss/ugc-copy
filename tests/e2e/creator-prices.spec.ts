@@ -53,6 +53,8 @@ async function signIn(page: Page) {
 
 /** "intense": a Seedance 2.5 run of 140 credits at 5 s, past the account's 25. */
 const INTENSE_REMIX_PATH = '/create-video?remix=gen-intense&remixPost=post-intense';
+/** Its Top up: Pricing, told the remix to come back to. */
+const INTENSE_TOP_UP_PATH = `/pricing?returnTo=${encodeURIComponent(INTENSE_REMIX_PATH)}`;
 
 async function answerIntenseRemix(page: Page) {
   await page.route('**/api/remix-source**', (route) => route.fulfill({
@@ -129,8 +131,7 @@ test('a remix the balance cannot cover stays on its original, with Top up in Gen
   await page.goto(INTENSE_REMIX_PATH, COLD_PAGE);
 
   await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
-  await expect(page.getByRole('link', { name: /Top Up Credits/ }))
-    .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent(INTENSE_REMIX_PATH)}`, COLD_PAGE);
+  await expect(page.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', INTENSE_TOP_UP_PATH, COLD_PAGE);
   await expect(page.locator('[data-creator-bar-status]')).toContainText('This run costs 140 credits but you only have 25.');
   // The settings' options are priced by a price list, so once their "+N" line shows, a list has
   // been asked and answered. The fitting this replaced moved a short remix within a second of
@@ -147,8 +148,7 @@ test('a remix the balance cannot cover stays on its original, with Top up in Gen
 });
 
 // A remix keeps no draft, so its Top up tells Pricing the remix, and Pricing's way back opens it
-// again on its original (2026-11-02). Offline, Pricing's server render first waits about 9 seconds
-// for the referral terms read to give up.
+// again on its original (2026-11-02). Pricing's first request compiles it.
 test('a remix\'s Top up leads to Pricing and back to the remix', async ({ page }) => {
   test.setTimeout(120_000);
   await signIn(page);
@@ -159,15 +159,15 @@ test('a remix\'s Top up leads to Pricing and back to the remix', async ({ page }
   await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
   await page.getByRole('link', { name: /Top Up Credits/ }).click();
 
-  await expect(page).toHaveURL(new RegExp(`/pricing\\?returnTo=${encodeURIComponent(INTENSE_REMIX_PATH)}$`), COLD_PAGE);
-  const back = page.getByRole('link', { name: 'Back to your remix' });
-  await expect(back).toHaveAttribute('href', INTENSE_REMIX_PATH, COLD_PAGE);
-  await back.click();
+  await expect(page).toHaveURL(INTENSE_TOP_UP_PATH, COLD_PAGE);
+  // The exchange rates' line is drawn by the page's script alone: the press below reaches React.
+  await expect(page.getByText(/^(Updating FX\.\.\.|FX unavailable|Updated .+)$/)).toBeVisible(COLD_PAGE);
+  await page.getByRole('link', { name: 'Back to your remix' }).click();
 
-  await expect(page).toHaveURL(new RegExp(`${INTENSE_REMIX_PATH.replace('?', '\\?')}$`), COLD_PAGE);
+  await expect(page).toHaveURL(INTENSE_REMIX_PATH, COLD_PAGE);
   await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
-  await expect(page.locator('button[aria-haspopup="listbox"]')).toContainText('Seedance 2.5');
-  await expect(page.getByRole('link', { name: /Top Up Credits/ })).toBeVisible();
+  await expect(page.locator('button[aria-haspopup="listbox"]')).toContainText('Seedance 2.5', COLD_PAGE);
+  await expect(page.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', INTENSE_TOP_UP_PATH, COLD_PAGE);
 });
 
 test('a balance short of every video is offered an image first, with the prompt', async ({ page }) => {

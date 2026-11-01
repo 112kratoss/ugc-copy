@@ -14,7 +14,8 @@
 // published nothing: the profiles row in fixtures/creator-profile.json, which the specs read too. And
 // one post page's: a text post with a free recipe, by a creator of its own
 // (fixtures/post-with-recipe.json). And one post editor's: an image post of the E2E user's with one
-// picture and no recipe (fixtures/post-composer-saved-twice.json).
+// picture and no recipe (fixtures/post-composer-saved-twice.json). And Pricing's referral terms: no
+// active program, which Pricing drew from the failed read too.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -163,6 +164,15 @@ const READS = [
       const program = { amount: 25, enabled: true };
       return json(wantsObject ? program : [program], { 'content-range': '0-0/1' });
     },
+  },
+  {
+    // readActiveReferralProgramTerms: the Invite & Earn terms Pricing's banner prints. No active
+    // program leaves the numbers out, as the failed read did, without the 9 seconds that read
+    // spent giving up on every Pricing a spec drew. maybeSingle() asks for a list.
+    methods: ['GET'],
+    path: '/rest/v1/referral_programs',
+    filters: { status: 'eq.active' },
+    answer: () => json([], { 'content-range': '*/0' }),
   },
 ];
 

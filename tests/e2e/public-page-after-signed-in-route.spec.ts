@@ -32,8 +32,8 @@ const PROPERTIES = [
   'visibility',
 ];
 const WIDTHS = [390, 768, 1440];
-// In `next dev` a page compiles on its first request, and offline Pricing's
-// server render waits about 9 seconds for the referral terms read to give up.
+// In `next dev` a page compiles on its first request. (Pricing's referral terms
+// are answered by the server stub, `supabase-server-stub.cjs`.)
 const COLD_PAGE = { timeout: 45_000 };
 
 type Drawing = Record<number, { name: string; values: string[] }[]>;
