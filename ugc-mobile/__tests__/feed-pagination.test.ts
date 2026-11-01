@@ -68,13 +68,18 @@ describe('feed pagination wait', () => {
     expect(nextFeedPageRequestDelay({ ...LANDED_GATE, isRequestInFlight: true })).toBe(400);
   });
 
+  it('never waits longer than the cooldown, whatever the clock does', () => {
+    // The clock stepped back an hour after the last ask.
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, now: LANDED_GATE.lastRequestedAt - 3_600_000 })).toBe(800);
+  });
+
   it('waits another cooldown for a request that has landed but not settled', () => {
     expect(nextFeedPageRequestDelay({ ...LANDED_GATE, isRequestInFlight: true, now: 2_500 })).toBe(800);
   });
 
-  it('has nothing to wait for once the request would pass', () => {
+  it('waits nothing once the request may go, which is what the gate allows', () => {
     expect(canRequestNextFeedPage({ ...LANDED_GATE, now: 1_800 })).toBe(true);
-    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, now: 1_800 })).toBeNull();
+    expect(nextFeedPageRequestDelay({ ...LANDED_GATE, now: 1_800 })).toBe(0);
   });
 
   it('leaves to a render what renders again as it changes', () => {

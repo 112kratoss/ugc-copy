@@ -12,6 +12,7 @@ import {
   getProfileMediaEmptyBody,
   getProfileMediaEmptyTitle,
   getProfilePostsScopeOptions,
+  getProfileScopeTotal,
   PROFILE_MEDIA_EMPTY_BODY,
   getProfileStats,
   getWalletCardContent,
@@ -552,6 +553,27 @@ describe('the Creations scope counts', () => {
     const counts = getOwnerCreationScopeCounts({ creations: 46, failedCreations: 1, archivedCreations: 0 }, { active: 13, failed: 0, archived: 0 });
     expect(getProfileCreationsScopeOptions('active', counts).map((option) => option.label))
       .toEqual(['Active (46)', 'Failed (1)', 'Archived (0)']);
+  });
+});
+
+describe("a Profile scope's server total", () => {
+  const totals = { creations: 46, failedCreations: 17, archivedCreations: 2, posts: 9, archivedPosts: 1, saved: 30 };
+
+  it("reads the total of each tab's scope", () => {
+    expect(getProfileScopeTotal(totals, 'Creations', 'active')).toBe(46);
+    expect(getProfileScopeTotal(totals, 'Creations', 'failed')).toBe(17);
+    expect(getProfileScopeTotal(totals, 'Creations', 'archived')).toBe(2);
+    expect(getProfileScopeTotal(totals, 'Creations')).toBe(46);
+    expect(getProfileScopeTotal(totals, 'Posts', 'active')).toBe(9);
+    expect(getProfileScopeTotal(totals, 'Posts', 'archived')).toBe(1);
+    expect(getProfileScopeTotal(totals, 'Saved')).toBe(30);
+  });
+
+  it('knows none the server does not send', () => {
+    // A server from before the Failed and Archived totals, and a count that failed.
+    expect(getProfileScopeTotal({ ...totals, failedCreations: undefined, archivedCreations: undefined }, 'Creations', 'archived')).toBeNull();
+    expect(getProfileScopeTotal(null, 'Saved')).toBeNull();
+    expect(getProfileScopeTotal({ ...totals, posts: Number.NaN }, 'Posts', 'active')).toBeNull();
   });
 });
 

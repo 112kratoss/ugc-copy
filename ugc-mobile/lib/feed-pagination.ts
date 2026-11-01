@@ -14,31 +14,18 @@ export type FeedPaginationGate = {
  * number of rendered cards. A successful page can legitimately add no visible
  * items after deduplication or surface-specific filtering.
  */
-export function canRequestNextFeedPage({
-  cooldownMs,
-  hasNextPage,
-  isBusy,
-  isRequestInFlight,
-  lastRequestedAt,
-  lastRequestedPageCount,
-  now,
-  pageCount,
-}: FeedPaginationGate) {
-  return Boolean(hasNextPage)
-    && !isBusy
-    && !isRequestInFlight
-    && lastRequestedPageCount !== pageCount
-    && now - lastRequestedAt >= cooldownMs;
+export function canRequestNextFeedPage(gate: FeedPaginationGate) {
+  return nextFeedPageRequestDelay(gate) === 0;
 }
 
 /**
- * How long a request the gate refused has to wait before it could pass, when
- * only time stands in its way: the cooldown, or a request that has landed and
- * not yet settled. Neither renders again as it ends, so a caller that asks by
- * itself rather than from a scroll (a grid topping itself up) sets a timer for
- * it. Null when the request would pass, or when what refuses it renders again
- * as it changes: no next page, the query busy, no page landed since the last
- * request.
+ * The gate's one list of conditions, as how long a request has to wait: 0 when
+ * it may go now. When only time stands in its way, the rest of the cooldown (at
+ * most a cooldown, whatever the clock does), or another cooldown for a request
+ * that has landed and not yet settled; neither renders again as it ends, so a
+ * caller that must not lose the request sets a timer for it. Null when what
+ * refuses it renders again as it changes: no next page, the query busy, no page
+ * landed since the last request.
  */
 export function nextFeedPageRequestDelay({
   cooldownMs,
@@ -51,7 +38,7 @@ export function nextFeedPageRequestDelay({
   pageCount,
 }: FeedPaginationGate): number | null {
   if (!hasNextPage || isBusy || lastRequestedPageCount === pageCount) return null;
-  const cooldownLeft = lastRequestedAt + cooldownMs - now;
+  const cooldownLeft = Math.min(lastRequestedAt + cooldownMs - now, cooldownMs);
   if (cooldownLeft > 0) return cooldownLeft;
-  return isRequestInFlight ? cooldownMs : null;
+  return isRequestInFlight ? cooldownMs : 0;
 }
