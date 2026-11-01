@@ -92,7 +92,7 @@ COMMENT ON FUNCTION public.recipe_post_public_body(text, text) IS
 
 -- ─── The search document ─────────────────────────────────────────────────────
 --
--- As 20261031100330 made it, but for the post's caption, held as the card
+-- As 20261101040316 left it, but for the post's caption, held as the card
 -- shows it.
 CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_search_documents(
   p_bundle_ids uuid[] DEFAULT NULL
@@ -118,40 +118,13 @@ AS $function$
       nullif(btrim(posts.title), ''),
       nullif(btrim(public.recipe_post_public_body(posts.body, bundles.access_mode)), ''),
       nullif(posts.source_tool, ''),
-      nullif(concat_ws(
-        ' ',
-        CASE WHEN 'prompt' = ANY (items.types) THEN 'prompt' END,
-        CASE WHEN 'workflow' = ANY (items.types) THEN 'workflow' END,
-        CASE WHEN items.types && ARRAY[
-          'reference_image', 'reference_video', 'reference_audio', 'source_file', 'preset', 'external_link'
-        ] THEN 'files' END,
-        CASE WHEN items.types && ARRAY['note', 'settings'] THEN 'notes' END,
-        CASE
-          WHEN bundles.allow_remix IS TRUE
-            OR items.types && ARRAY['remix_access', 'remix_link']
-            OR (bundles.status = 'published' AND posts.generation_id IS NOT NULL)
-          THEN 'remix'
-        END
-      ), '')
+      nullif(array_to_string(public.post_resource_bundle_kinds(
+        bundles.resource_items, bundles.allow_remix, bundles.status, posts.generation_id
+      ), ' '), '')
     ))
   FROM public.post_resource_bundles AS bundles
   LEFT JOIN public.posts AS posts ON posts.id = bundles.post_id
   LEFT JOIN public.profiles AS profiles ON profiles.id = bundles.owner_user_id
-  CROSS JOIN LATERAL (
-    -- The recipe's item types, trimmed as normalizePostResourceItems trims
-    -- them; NULL when it has no item of a known type.
-    SELECT array_agg(DISTINCT btrim(item->>'type')) AS types
-    FROM jsonb_array_elements(
-      CASE
-        WHEN jsonb_typeof(bundles.resource_items) = 'array' THEN bundles.resource_items
-        ELSE '[]'::jsonb
-      END
-    ) AS item
-    WHERE btrim(item->>'type') IN (
-      'prompt', 'workflow', 'reference_image', 'reference_video', 'reference_audio',
-      'source_file', 'preset', 'settings', 'note', 'external_link', 'remix_link', 'remix_access'
-    )
-  ) AS items
   WHERE p_bundle_ids IS NULL OR bundles.id = ANY (p_bundle_ids)
   ON CONFLICT (bundle_id) DO UPDATE SET search_text = excluded.search_text
   WHERE documents.search_text IS DISTINCT FROM excluded.search_text;
@@ -181,7 +154,7 @@ CREATE OR REPLACE TRIGGER post_resource_bundles_refresh_marketplace_search_updat
 
 -- ─── The listing ─────────────────────────────────────────────────────────────
 --
--- As 20260809210000 made it, but for one line of `listable`: a recipe on an
+-- As 20261101040316 left it, but for one line of `listable`: a recipe on an
 -- NSFW-labelled post is not listable.
 CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_listings(
   p_bundle_ids uuid[] DEFAULT NULL
@@ -269,41 +242,18 @@ AS $function$
       nullif(posts.source_tool_slug, ''),
       lower(regexp_replace(btrim(coalesce(posts.source_tool, '')), '[^a-z0-9]+', '-', 'g'))
     ),
-    -- The five resource-kind predicates, byte-for-byte as the list function
-    -- evaluated them per row. Precomputing them is the second half of the
-    -- catalog-scale win: five jsonb containment checks per candidate row become
-    -- five booleans read from a narrow index.
-    (
-      nullif(btrim(coalesce(bundles.prompt_text, '')), '') IS NOT NULL
-      OR bundles.resource_items @> '[{"type":"prompt"}]'::jsonb
-    ),
-    (
-      nullif(btrim(coalesce(bundles.workflow_share_url, '')), '') IS NOT NULL
-      OR bundles.workflow_snapshot IS NOT NULL
-      OR bundles.resource_items @> '[{"type":"workflow"}]'::jsonb
-    ),
-    (
-      (jsonb_typeof(bundles.attachments) = 'array' AND jsonb_array_length(bundles.attachments) > 0)
-      OR bundles.resource_items @> '[{"type":"reference_image"}]'::jsonb
-      OR bundles.resource_items @> '[{"type":"reference_video"}]'::jsonb
-      OR bundles.resource_items @> '[{"type":"reference_audio"}]'::jsonb
-      OR bundles.resource_items @> '[{"type":"source_file"}]'::jsonb
-      OR bundles.resource_items @> '[{"type":"preset"}]'::jsonb
-      OR bundles.resource_items @> '[{"type":"external_link"}]'::jsonb
-    ),
-    (
-      nullif(btrim(coalesce(bundles.notes_markdown, '')), '') IS NOT NULL
-      OR bundles.resource_items @> '[{"type":"note"}]'::jsonb
-      OR bundles.resource_items @> '[{"type":"settings"}]'::jsonb
-    ),
-    (
-      bundles.allow_remix = true
-      OR bundles.resource_items @> '[{"type":"remix_access"}]'::jsonb
-      OR bundles.resource_items @> '[{"type":"remix_link"}]'::jsonb
-    )
+    -- The five filter flags: the kinds the recipe's card shows.
+    'prompt' = ANY (resource.kinds),
+    'workflow' = ANY (resource.kinds),
+    'files' = ANY (resource.kinds),
+    'notes' = ANY (resource.kinds),
+    'remix' = ANY (resource.kinds)
   FROM public.post_resource_bundles bundles
   LEFT JOIN public.posts posts ON posts.id = bundles.post_id
   LEFT JOIN public.profiles profiles ON profiles.id = bundles.owner_user_id
+  CROSS JOIN LATERAL public.post_resource_bundle_kinds(
+    bundles.resource_items, bundles.allow_remix, bundles.status, posts.generation_id
+  ) AS resource(kinds)
   WHERE p_bundle_ids IS NULL OR bundles.id = ANY (p_bundle_ids)
   ON CONFLICT (bundle_id) DO UPDATE SET
     listable = excluded.listable,
@@ -342,6 +292,7 @@ CREATE OR REPLACE TRIGGER posts_refresh_marketplace_listing
     OR OLD.source_tool_slug IS DISTINCT FROM NEW.source_tool_slug
     OR OLD.source_tool IS DISTINCT FROM NEW.source_tool
     OR OLD.is_nsfw IS DISTINCT FROM NEW.is_nsfw
+    OR OLD.generation_id IS DISTINCT FROM NEW.generation_id
   )
   EXECUTE FUNCTION public.trg_refresh_marketplace_listing_for_post();
 
