@@ -142,7 +142,7 @@ import {
 } from '@/lib/media-creation-view-model';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '@/lib/media';
 import { readMediaFileLength } from '@/lib/media-file-length';
-import { listFilesInSentence, readableFileName } from '@/lib/media-file-names';
+import { listFilesInSentence, nameSaysNothing, readableFileName } from '@/lib/media-file-names';
 import { isUploadCancelledError, runWeightedUploadQueue, type WeightedUploadQueueResult } from '@/lib/upload-file';
 import { invalidateProfileCreations } from '@/lib/profile-media-query';
 import { signedStorageUrlExpiresAt } from '@/lib/media-url-expiry';
@@ -2192,8 +2192,16 @@ function IdentityCreationScreen({
         setMessage(uploadFailureMessage(result.failures, 0));
         return;
       }
-      const media = createMediaDraftFromUpload({ ...uploaded, durationSeconds: await length }, { displayName: 'Reference Audio' });
-      setVideoDraft((draft) => normalizeCatalogDraft({ ...draft, referenceAudios: [...draft.referenceAudios, media] }));
+      // Named after its file, as a picture is, or by its place where the file's name says nothing
+      // ("Track 2"), so the line that holds a run for a short track says which one: its tile shows the
+      // name. Normalized against the newest catalog, as a clip is: it lands after its upload and its read.
+      const media = createMediaDraftFromUpload({ ...uploaded, durationSeconds: (await length) ?? uploaded.durationSeconds ?? null });
+      setVideoDraft((draft) => {
+        const track = nameSaysNothing(media.displayName)
+          ? { ...media, displayName: placeName('Track', draft.referenceAudios.length + 1, draft.referenceAudios) }
+          : media;
+        return normalizeCatalogDraft({ ...draft, referenceAudios: [...draft.referenceAudios, track] }, latestCatalog.current);
+      });
       revealInRail(media.id);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
@@ -2979,7 +2987,7 @@ function IdentityCreationScreen({
     const activeGenerationStatus = generationTool === activeTool ? status : null;
     const activeOutputUrl = generationTool === activeTool ? outputUrl : null;
     const parameterSummary = creatorParameterSummary(activeTool === 'video' ? videoDraft : motionDraft, selectedCreatorModel, currentOpening);
-    // The motion clip's own length for the sheet's Source duration, read as the composer reads it.
+    // The motion clip's own length, read once for the composer's line and the sheet's Source duration.
     const motionClipLength = activeTool === 'motion'
       ? motionClipLengthReading(
         motionDraft,
@@ -3120,6 +3128,7 @@ function IdentityCreationScreen({
             <MotionCreatorComposer
               draft={motionDraft}
               model={selectedCreatorModel}
+              clipLength={motionClipLength}
               promptFocusRequest={promptFocusRequest}
               isEnhancing={isEnhancing}
               isUploading={isUploading}
@@ -4932,6 +4941,8 @@ function VideoCreatorComposer({
               {railAudios.map((media) => (
                 <View key={media.id} onLayout={reusableItemLayout(media.id)} style={{ width: 72, gap: 4 }}>
                   <ReferenceMediaPreview media={media} size={72} />
+                  {/* Named as a picture's or a clip's tile is, so a held track can be found among several. */}
+                  <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                   <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${mediaAccessibleName(media)}`} onPress={() => onChange((current) => ({ ...current, referenceAudios: current.referenceAudios.filter((item) => item.id !== media.id) }))} style={({ pressed }) => ({ minHeight: 48, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                     <Text maxFontSizeMultiplier={appTheme.typeScale.control} style={{ color: theme.colors.danger, fontSize: 11, fontWeight: '800' }}>Remove</Text>
                   </Pressable>
@@ -5150,6 +5161,7 @@ function PromptOnlyNote({ modelName }: { modelName: string }) {
 function MotionCreatorComposer({
   draft,
   model,
+  clipLength,
   promptFocusRequest,
   isEnhancing,
   isUploading,
@@ -5174,6 +5186,12 @@ function MotionCreatorComposer({
 }: {
   draft: MotionCreationDraft;
   model: CreatorCatalogModel | null;
+  /**
+   * The clip's own length, read as the web's motion page reads it, and said to be under the slot's
+   * shortest where the run is held for it (`motionClipLengthReading`); the chip keeps the whole seconds
+   * the run is priced on. Read once by the screen, which the parameter sheet's Source duration shares.
+   */
+  clipLength: ReturnType<typeof motionClipLengthReading>;
   /** Bumped to put the cursor in the prompt, after a refusal of what it says. */
   promptFocusRequest: number;
   isEnhancing: boolean;
@@ -5223,9 +5241,6 @@ function MotionCreatorComposer({
   const slotKeys = catalogMotionDraftSlotKeys(draft, model);
   const characterSlot = catalogInputSlot(model, draft, slotKeys.image);
   const motionSlot = catalogInputSlot(model, draft, slotKeys.video);
-  // The clip's own length, read as the web's motion page reads it, and said to be under the slot's
-  // shortest where the run is held for it; the chip keeps the whole seconds the run is priced on.
-  const clipLength = motionClipLengthReading(draft, motionSlot, MOTION_CLIP_DEFAULT_MAX_SECONDS);
   const supportsCharacter = catalogInputSupported(model, draft, slotKeys.image, true);
   const supportsMotion = catalogInputSupported(model, draft, slotKeys.video, true);
 

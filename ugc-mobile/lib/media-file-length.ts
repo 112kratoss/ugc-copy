@@ -8,6 +8,14 @@ import { createVideoPlayer, type VideoPlayer } from 'expo-video';
 export const MEDIA_FILE_LENGTH_DEADLINE_MS = 3_000;
 
 /**
+ * How long a player that says it is ready, with no length yet, is given to bring one. iOS sends its
+ * load (`sourceLoad`) a moment after its status; a file the player can play but not time (a raw ADTS
+ * .aac or an .amr on Android, which ExoPlayer cannot seek) brings none at all, and waiting out the
+ * deadline kept its track off the rail for 3 s after the upload had finished.
+ */
+export const MEDIA_FILE_LENGTH_READY_GRACE_MS = 500;
+
+/**
  * A picked sound file's length in seconds, or null where the phone cannot tell: its player could
  * not load it (a format the phone does not play), reported no length, or took longer than the
  * deadline. A track with no known length is left to the start, which measures the file. Never
@@ -20,53 +28,77 @@ export const MEDIA_FILE_LENGTH_DEADLINE_MS = 3_000;
  * with no view attached, and report its length once loaded. The player is muted and never played,
  * so it takes no audio session from music playing on the phone, and it is let go once the length is
  * read. A file picked into the app's cache is read from there, not through the video cache.
+ *
+ * The length is the player's estimate, which for an MP3 runs a little long (an iPhone read a 1.500 s
+ * file as 1.541 s): it may hold a track for being short, never for being long, and is not sent
+ * (`reportedLengthSeconds` in generation-model-draft.ts).
  */
-export async function readMediaFileLength(uri: string, deadlineMs = MEDIA_FILE_LENGTH_DEADLINE_MS): Promise<number | null> {
+export async function readMediaFileLength(uri: string): Promise<number | null> {
   let player: VideoPlayer | null = null;
   try {
     player = createVideoPlayer({ uri });
     player.muted = true;
     // Never played, so it never needs the audio session; declared as every player's is (hig-full-screen.test.ts).
     player.audioMixingMode = 'auto';
-    return await loadedLength(player, deadlineMs);
+    return await loadedLength(player);
   } catch {
     return null;
   } finally {
-    player?.release();
+    try {
+      player?.release();
+    } catch {
+      // A player that cannot be let go has nothing more to read; the length stands.
+    }
   }
 }
 
-/** A length a player reported, or null for none: expo-video gives 0 before an item has loaded, and iOS NaN. */
+/**
+ * A length a player reported, to the millisecond, or null for none: expo-video gives 0 before an item
+ * has loaded, iOS NaN, and Android a large negative for a stream it cannot time. Android keeps a
+ * duration in single precision (`player.duration / 1000f`), so a 1.9 s track arrives as 1.8999999761,
+ * which a reading rounded down to the tenth would give as 1.8.
+ */
 function knownLength(seconds: unknown): number | null {
-  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
+    ? Math.round(seconds * 1000) / 1000
+    : null;
 }
 
 /**
- * The length the player reports for its file once loaded. iOS reports it as the item becomes ready
- * (`sourceLoad`, with NaN for an item not yet timed), Android once the file's tracks are read, which
- * can come after the player says it is ready; so a ready player with no length yet is waited past,
- * and only an error or the deadline ends the wait without one.
+ * The length the player reports for its file once loaded: iOS sends its load (`sourceLoad`) a
+ * moment after the item is ready, Android from the file's tracks, before it says it is ready. A
+ * ready player with no length is given a short grace for one to arrive; an error ends the wait at
+ * once, and the deadline bounds a load that never ends.
  */
-function loadedLength(player: VideoPlayer, deadlineMs: number): Promise<number | null> {
+function loadedLength(player: VideoPlayer): Promise<number | null> {
   return new Promise((resolve) => {
     const subscriptions: Array<{ remove: () => void }> = [];
-    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (seconds: number | null) => {
-      clearTimeout(deadline);
+      clearTimeout(timer);
       subscriptions.forEach((subscription) => subscription.remove());
       resolve(seconds);
     };
-    const answer = (seconds: unknown) => {
-      const length = knownLength(seconds);
-      if (length !== null) finish(length);
+    const giveUpIn = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(null), ms);
     };
     subscriptions.push(
-      player.addListener('sourceLoad', ({ duration }) => answer(knownLength(duration) ?? player.duration)),
+      player.addListener('sourceLoad', ({ duration }) => {
+        const length = knownLength(duration) ?? knownLength(player.duration);
+        if (length !== null) finish(length);
+      }),
       player.addListener('statusChange', ({ status }) => {
-        if (status === 'readyToPlay') answer(player.duration);
-        else if (status === 'error') finish(null);
+        if (status === 'error') {
+          finish(null);
+          return;
+        }
+        if (status !== 'readyToPlay') return;
+        const length = knownLength(player.duration);
+        if (length !== null) finish(length);
+        else giveUpIn(MEDIA_FILE_LENGTH_READY_GRACE_MS);
       }),
     );
-    deadline = setTimeout(() => finish(null), deadlineMs);
+    giveUpIn(MEDIA_FILE_LENGTH_DEADLINE_MS);
   });
 }

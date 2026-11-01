@@ -882,6 +882,18 @@ function validateCatalogInputLimit(
   if (count > limit.max) errors.push(limitMessage(limit.max));
 }
 
+/**
+ * The length a run reports for an input, which the quote and the caps here judge as given: a clip's
+ * as its picker read the file, and none for a track. The phone reads a track with a player it never
+ * plays (`readMediaFileLength`), whose length for an MP3 runs long by the encoder's padding (an
+ * iPhone read a 1.500 s file as 1.541 s), so a track trimmed to its slot's cap would read past it and
+ * be refused, though the start, which measures every track itself, would take it. The reading still
+ * holds a track for being short (`catalogInputTooShort`), where reading long can only let one through.
+ */
+function reportedLengthSeconds(asset: CatalogDraftInputAsset): number | null {
+  return asset.kind === 'audio' ? null : asset.durationSeconds ?? null;
+}
+
 function catalogInputConstraintValue(
   constraint: CatalogInputConstraint,
   slots: CatalogDraftInputSlots,
@@ -889,7 +901,7 @@ function catalogInputConstraintValue(
   if (constraint.type === 'combined-duration') {
     return constraint.slotKeys.reduce((total, slotKey) => (
       total + (slots[slotKey] ?? []).reduce((slotTotal, asset) => (
-        slotTotal + Math.max(0, asset.durationSeconds ?? 0)
+        slotTotal + Math.max(0, reportedLengthSeconds(asset) ?? 0)
       ), 0)
     ), 0);
   }
@@ -930,10 +942,11 @@ function validateCatalogV2Inputs(
       if (slot.durationMetadata === 'required' && !(typeof asset.durationSeconds === 'number' && asset.durationSeconds >= 0)) {
         errors.push(`${slot.label} requires duration metadata.`);
       }
+      const reportedLength = reportedLengthSeconds(asset);
       if (
         typeof slot.maxDurationSeconds === 'number'
-        && typeof asset.durationSeconds === 'number'
-        && asset.durationSeconds > slot.maxDurationSeconds
+        && typeof reportedLength === 'number'
+        && reportedLength > slot.maxDurationSeconds
       ) {
         errors.push(`${slot.label} inputs must be ${slot.maxDurationSeconds} seconds or shorter.`);
       }
@@ -1221,7 +1234,7 @@ export function buildUnifiedCatalogGenerationRequest(
         storagePath: asset.storagePath ?? null,
         label: asset.displayName ?? asset.fileName ?? null,
         handle: asset.handle ?? null,
-        durationSeconds: asset.durationSeconds ?? null,
+        durationSeconds: reportedLengthSeconds(asset),
         sourceGenerationId: asset.sourceGenerationId ?? null,
       };
     });

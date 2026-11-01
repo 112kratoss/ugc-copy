@@ -1032,6 +1032,27 @@ describe('a clip shorter than its slot takes', () => {
       .toEqual([]);
   });
 
+  // The phone reads a track with a player it never plays, whose length for an MP3 runs long by the
+  // encoder's padding (an iPhone read a 1.500 s file as 1.541 s and a 4.200 s one as 4.232 s). Judged against
+  // a slot's cap, a track trimmed to it would be held, and refused by the quote, which takes a reported length
+  // as given; the start, which measures every track itself, would have taken it.
+  it('holds a track only for being short, and sends no reading to be judged against the cap', () => {
+    const published = structuredClone(seedance2);
+    for (const slot of (published.inputModes ?? []).flatMap((mode) => mode.slots)) {
+      if (slot.key === 'audioReferences') Object.assign(slot, { minDurationSeconds: 2, maxDurationSeconds: 15 });
+    }
+    const clip = upload('wave.mp4', 'video', { durationSeconds: 4 });
+    const track = (seconds: number) => upload('beat.mp3', 'audio', { durationSeconds: seconds });
+    const atTheCap = videoDraft(published, { referenceVideos: [clip], referenceAudios: [track(15.03)] });
+
+    expect(validateCatalogCreationDraft(atTheCap, published, ready).errors).toEqual([]);
+    const sent = buildUnifiedCatalogGenerationRequest(atTheCap, published, 'rev').inputs;
+    expect(sent.filter((input) => input.kind === 'audio').map((input) => input.durationSeconds)).toEqual([null]);
+    expect(sent.filter((input) => input.kind === 'video').map((input) => input.durationSeconds)).toEqual([4]);
+    expect(validateCatalogCreationDraft(videoDraft(published, { referenceVideos: [clip], referenceAudios: [track(1.5)] }), published, ready).errors)
+      .toEqual(['Seedance 2 reference audio must be at least 2 seconds long. beat runs 1.5 seconds.']);
+  });
+
   /** A motion draft on `model` with a picture and a clip of `seconds`, as the composer holds one. */
   const motionDraftOf = (model: ReturnType<typeof parseModelCatalogDetail>, seconds: number) => applyCatalogModelDefaults({
     ...createDefaultCreationDraft('motion'),
@@ -1301,9 +1322,10 @@ describe('a slot whose mode opens on what the draft holds', () => {
     const draft = videoDraft(voiceGated, { referenceAudios: [track] });
     const run = buildUnifiedCatalogGenerationRequest(draft, voiceGated, 'revision-1');
 
-    expect(buildCatalogQuoteRequest(draft, voiceGated, 'revision-1').inputMetadata?.slots?.voiceTrack).toEqual({ count: 1, durationsSeconds: [5] });
+    // A track reports no length: the phone's reading of one runs long, and the start measures it.
+    expect(buildCatalogQuoteRequest(draft, voiceGated, 'revision-1').inputMetadata?.slots?.voiceTrack).toEqual({ count: 1 });
     expect(run.inputs).toEqual([
-      expect.objectContaining({ slot: 'voiceTrack', kind: 'audio', url: track.url, durationSeconds: 5 }),
+      expect.objectContaining({ slot: 'voiceTrack', kind: 'audio', url: track.url, durationSeconds: null }),
     ]);
     // What the standby rail counts as sent is what the run sends.
     expect(Object.values(catalogRunInputSlots(draft, voiceGated)).flat().map((asset) => asset.url))

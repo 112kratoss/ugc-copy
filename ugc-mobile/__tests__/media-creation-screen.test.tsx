@@ -7758,8 +7758,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         };
         return { tree, pickTrack };
       };
-      const storedTracks = () => storedDrafts().video.referenceAudios as Array<{ storagePath: string; durationSeconds: number | null }>;
-      const shortTrack = 'Seedance 2 reference audio must be at least 2 seconds long. Reference Audio runs 1.5 seconds.';
+      const storedTracks = () => storedDrafts().video.referenceAudios as Array<{ storagePath: string; displayName: string; durationSeconds: number | null }>;
+      const railText = (tree: renderer.ReactTestRenderer) => collectText(tree.root.findByProps({ testID: 'video-reference-scroller' }));
+      const counts = (tree: renderer.ReactTestRenderer) => collectText(tree.root.findByProps({ testID: 'video-reference-counts' })).join('');
+      const shortTrack = 'Seedance 2 reference audio must be at least 2 seconds long. beat runs 1.5 seconds.';
 
       it('are read for their length on the phone, and one under its slot’s shortest holds the run in the start’s words', async () => {
         vi.mocked(readMediaFileLength).mockResolvedValue(1.5);
@@ -7771,6 +7773,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(storedTracks()).toEqual([expect.objectContaining({ storagePath: 'uploads/user-123/beat.mp3', durationSeconds: 1.5 })]);
         expect(blocker(tree)).toBe(shortTrack);
         expect(findPressableByLabelPrefix(tree.root, 'Generate').props.disabled).toBe(true);
+      });
+
+      // Every track was "Reference Audio" on a tile that said only "Audio", so with three tracks the line that
+      // holds the run could not say which one is short.
+      it('are named after their file, or by their place where the file’s name says nothing, and their tiles show it', async () => {
+        vi.mocked(readMediaFileLength).mockResolvedValueOnce(4).mockResolvedValueOnce(1.5).mockResolvedValueOnce(5);
+        const { tree, pickTrack } = await openSeedance();
+        await renderer.act(async () => { await pickTrack(); });
+        await settle();
+        for (const nameless of ['1000333161.mp3', '20261021_103000.mp3']) {
+          vi.mocked(pickAudioDocument).mockResolvedValue({ uri: `file:///cache/${nameless}`, name: nameless, mimeType: 'audio/mpeg', size: 1024 } as never);
+          vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded(nameless, { mimeType: 'audio/mpeg', kind: 'audio' }));
+          await renderer.act(async () => { await pickTrack(); });
+          await settle();
+        }
+
+        expect(storedTracks().map((track) => track.displayName)).toEqual(['beat', 'Track 2', 'Track 3']);
+        expect(railText(tree)).toEqual(expect.arrayContaining(['beat', 'Track 2', 'Track 3']));
+        expect(blocker(tree)).toBe('Seedance 2 reference audio must be at least 2 seconds long. Track 2 runs 1.5 seconds.');
       });
 
       it('go with a length the slot takes, and one the phone cannot read is left to the start', async () => {
@@ -7786,20 +7807,34 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(findPressableByLabelPrefix(tree.root, 'Generate ·').props.disabled).toBe(false);
       });
 
-      it('upload while their length is read, so the read adds no wait before the bytes start', async () => {
+      it('upload while their length is read, so the read adds no wait before the bytes start, and join the draft with it', async () => {
         let answer!: (seconds: number | null) => void;
         vi.mocked(readMediaFileLength).mockReturnValue(new Promise((resolve) => { answer = resolve; }));
-        const { pickTrack } = await openSeedance();
+        const { tree, pickTrack } = await openSeedance();
         await renderer.act(async () => {
           void pickTrack();
           await vi.advanceTimersByTimeAsync(0);
         });
 
         expect(uploadPickedMedia).toHaveBeenCalledTimes(1);
+        // Past the autosave's delay, the track is still not in the draft: it waits for its length.
+        await settle();
+        expect(counts(tree)).toContain('Audio 0/3');
         expect(storedTracks()).toEqual([]);
         await renderer.act(async () => { answer(1.5); });
         await settle();
+        expect(counts(tree)).toContain('Audio 1/3');
         expect(storedTracks()).toEqual([expect.objectContaining({ durationSeconds: 1.5 })]);
+      });
+
+      it('keep a length the upload already carries where the phone reads none', async () => {
+        vi.mocked(readMediaFileLength).mockResolvedValue(null);
+        const { pickTrack } = await openSeedance();
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('beat.mp3', { mimeType: 'audio/mpeg', kind: 'audio', durationSeconds: 3 }));
+        await renderer.act(async () => { await pickTrack(); });
+        await settle();
+
+        expect(storedTracks().map((track) => track.durationSeconds)).toEqual([3]);
       });
     });
 

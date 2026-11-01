@@ -19,6 +19,8 @@ const native = vi.hoisted(() => {
     players: [] as unknown[],
     /** Whether making a player throws, as a binary without the module would. */
     refuse: false,
+    /** Whether letting a player go throws. */
+    releaseThrows: false,
     makePlayer(source: { uri: string }) {
       if (state.refuse) throw new Error('Cannot find native module ExpoVideo');
       const listeners = new Map<string, Set<(payload: Record<string, unknown>) => void>>();
@@ -41,7 +43,10 @@ const native = vi.hoisted(() => {
           return { remove: () => { set.delete(listener); } };
         },
         play() { player.played = true; },
-        release() { player.released = true; },
+        release() {
+          player.released = true;
+          if (state.releaseThrows) throw new Error('Player already released');
+        },
       };
       state.players.push(player);
       return player;
@@ -52,7 +57,7 @@ const native = vi.hoisted(() => {
 
 vi.mock('expo-video', () => ({ createVideoPlayer: (source: { uri: string }) => native.makePlayer(source) }));
 
-import { MEDIA_FILE_LENGTH_DEADLINE_MS, readMediaFileLength } from '../lib/media-file-length';
+import { MEDIA_FILE_LENGTH_DEADLINE_MS, MEDIA_FILE_LENGTH_READY_GRACE_MS, readMediaFileLength } from '../lib/media-file-length';
 
 const players = () => native.players as FakePlayer[];
 /** Every queued step that can run now has run. */
@@ -74,6 +79,7 @@ function expectLetGo(player: FakePlayer) {
 beforeEach(() => {
   native.players.length = 0;
   native.refuse = false;
+  native.releaseThrows = false;
 });
 
 afterEach(() => {
@@ -123,18 +129,59 @@ describe('a picked sound file’s length', () => {
     expectLetGo(player);
   });
 
-  it('waits on past a ready player that holds no length yet, for the load that brings it (Android)', async () => {
+  it('takes a length that comes just after the player says it is ready, as iOS sends its load after its status', async () => {
+    vi.useFakeTimers();
     const read = watch(readMediaFileLength('file:///cache/beat.wav'));
     const [player] = players();
 
     player.emit('statusChange', { status: 'readyToPlay' });
-    await settle();
+    await vi.advanceTimersByTimeAsync(MEDIA_FILE_LENGTH_READY_GRACE_MS - 1);
     expect(read.value).toBe('pending');
 
     player.emit('sourceLoad', { duration: 3.2 });
-    await settle();
+    await vi.advanceTimersByTimeAsync(0);
     expect(read.value).toBe(3.2);
     expectLetGo(player);
+  });
+
+  // A file the player can play but not time (a raw ADTS .aac or an .amr on Android: ExoPlayer reports no
+  // duration for an unseekable stream) brings no length after the player is ready. Waiting out the whole
+  // deadline kept the track off the rail for 3 s after its upload had finished.
+  it('is unknown shortly after a ready player that holds no length, not at the deadline', async () => {
+    vi.useFakeTimers();
+    const read = watch(readMediaFileLength('file:///cache/voice.aac'));
+    const [player] = players();
+
+    // Android reports a stream it cannot time as C.TIME_UNSET, a large negative.
+    player.duration = -9.223372e15;
+    player.emit('sourceLoad', { duration: -9.223372e15 });
+    player.emit('statusChange', { status: 'readyToPlay' });
+    await vi.advanceTimersByTimeAsync(MEDIA_FILE_LENGTH_READY_GRACE_MS - 1);
+    expect(read.value).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read.value).toBeNull();
+    expect(MEDIA_FILE_LENGTH_READY_GRACE_MS).toBeLessThan(MEDIA_FILE_LENGTH_DEADLINE_MS);
+    expectLetGo(player);
+  });
+
+  // expo-video on Android keeps a duration in single precision (`player.duration / 1000f`), so a 1.9 s track
+  // arrives as 1.8999999761, which a reading rounded down to the tenth gives as 1.8.
+  it('is read to the millisecond, as Android reports it in single precision', async () => {
+    const read = readMediaFileLength('file:///cache/beat.mp3');
+    const [player] = players();
+
+    player.emit('sourceLoad', { duration: Math.fround(1.9) });
+    await expect(read).resolves.toBe(1.9);
+  });
+
+  it('never rejects, even where letting the player go throws', async () => {
+    native.releaseThrows = true;
+    const read = readMediaFileLength('file:///cache/beat.mp3');
+    const [player] = players();
+
+    player.emit('sourceLoad', { duration: 4 });
+    await expect(read).resolves.toBe(4);
+    expect(player.released).toBe(true);
   });
 
   it('is unknown for a file its player cannot load, a format the phone does not play', async () => {
