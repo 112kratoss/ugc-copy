@@ -103,6 +103,7 @@ The compiler and the tests below name anything left out. This is where each fact
 | Progress bar estimate | `src/lib/generation-timing.ts` | `IMAGE_MODEL_BASE_ESTIMATE_MS`, `VIDEO_MODEL_BASE_ESTIMATE_MS` |
 | Prompt enhancer | `src/lib/prompt-enhancer-playbooks.ts` | `ENHANCER_PLAYBOOKS`, `MODEL_ALIASES` |
 | "Made with" attribution | `src/lib/source-tools.ts` | `APP_SOURCE_TOOL` |
+| The model's name in the app: feed cards, Details, the composer's Made with (`src/__tests__/app-model-display-names.test.ts` fails until it matches the browser copy) | `ugc-mobile/lib/model-display-names.ts` | `MODEL_DISPLAY_NAMES` |
 | Who receives the prompt and media: the model's maker, named in the privacy policy | `src/lib/ai-data-recipients.ts` | `AI_MODEL_MAKER_BY_MODEL_ID` |
 
 A maker the app has not named before needs two more entries, because App Review requires the app and the privacy policy to name everyone who receives a person's data (guidelines 5.1.1(i) and 5.1.2(i)): `AI_MODEL_MAKERS` in `src/lib/ai-data-recipients.ts`, and `AI_MODEL_MAKERS` in `ugc-mobile/lib/ai-data-consent.ts`. Raise `AI_DATA_CONSENT_VERSION` in the same file, so every phone asks again. `src/__tests__/ai-data-recipients.test.ts` fails until both lists are complete.
@@ -229,6 +230,12 @@ know. A mobile release is needed only for:
   arrives; see "Changing a model we already run").
 
 New optional keys are fine.
+
+One thing reaches phones only with an OTA, though the model works without it: its name in the app.
+The app names models from `MODEL_DISPLAY_NAMES` (`ugc-mobile/lib/model-display-names.ts`), so until an
+OTA carries the new line, installed apps leave the model unnamed (never its id) on feed cards, in Details
+and in the composer's Made with, while the web and the stored Made with row name it. Ship the line with the
+next OTA, and say in the hand-off that the name arrives with it.
 
 The first of those is also a web change: both creators render only what the shared lists in
 `ugc-mobile/lib/model-catalog/protocol.ts` name (`CLIENT_RENDERED_CONTROL_TYPES`,

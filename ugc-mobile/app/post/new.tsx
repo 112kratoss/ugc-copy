@@ -72,10 +72,12 @@ import {
   buildOptimisticOwnerPostListItem,
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
+  buildCreationMadeWithRow,
   applyCreationPromptResource,
   createPostComposerResourceCard,
   createMadeWithRow,
   getComposerVisibility,
+  getMadeWithToolLabel,
   getDefaultCreationPackageDraft,
   getDefaultPostComposerDraft,
   getPostComposerDetailErrors,
@@ -134,6 +136,7 @@ import {
   getDefaultResourceDraft,
   MAX_MADE_WITH_ROWS,
 } from '@/lib/post-new-view-model';
+import { homeModelLabel } from '@/lib/home-feed-view-model';
 import {
   COMPOSER_UNDO_WINDOW_MS,
   describeComposerUndo,
@@ -331,7 +334,7 @@ function PostDetailsPage({
   const theme = useAppTheme();
   const primaryAttribution = draft.madeWithRows.find((row) => row.toolLabel.trim());
   const attribution = primaryAttribution
-    ? `${primaryAttribution.toolLabel}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
+    ? `${getMadeWithToolLabel(primaryAttribution)}${primaryAttribution.modelLabel ? ` · ${primaryAttribution.modelLabel}` : ''}`
     : 'Add tool and model';
   // "Suggested" speaks only of a new post's starting title, never of an edit's saved one.
   const titleSuggestionHint = getCreationTitleSuggestionHint(draft, isEditMode ? null : selectedGeneration);
@@ -2234,13 +2237,7 @@ function NewPostComposer() {
             contentText: '',
             sourceTool: 'Magicbooklet',
             sourceToolSlug: 'magicbooklet',
-            madeWithRows: [createMadeWithRow({
-              id: 'mw-generation',
-              toolLabel: 'Magicbooklet',
-              toolSlug: 'magicbooklet',
-              modelLabel: found.model || '',
-              modelSlug: slugifyMobileValue(found.model || '') ?? '',
-            })],
+            madeWithRows: [buildCreationMadeWithRow(found.model)],
             category,
           };
         });
@@ -2385,6 +2382,12 @@ function NewPostComposer() {
           resource: foldRecipeSummaryIntoPreview(sanitizePostComposerResourceCardIds(
             migratePostComposerResourceDraftToCards(persisted.draft.resource),
           )),
+          // A creation's Made with is locked to the row publishing stores, so it
+          // is the creation's, never the kept one: older builds kept the
+          // model's id there.
+          ...(generationId && explicitGeneration && !isEditMode
+            ? { madeWithRows: [buildCreationMadeWithRow(explicitGeneration.model)] }
+            : {}),
         };
         // A kept edit names its media by the ids from when it was kept, and a
         // save since then (one that went through and then failed included)
@@ -3938,7 +3941,7 @@ function MadeWithSection({
   const lockedRow = rows[0];
 
   if (compactReadOnly && lockedRow) {
-    const toolLabel = lockedRow.toolLabel.trim() || 'Magicbooklet';
+    const toolLabel = getMadeWithToolLabel(lockedRow) || 'Magicbooklet';
     const modelLabel = lockedRow.modelLabel.trim();
 
     return (
@@ -4477,6 +4480,9 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
   const previewUrl = getGenerationPreviewImageUrl(item);
   const mediaKind = getPublishGenerationMediaKind(item);
   const visualUrl = item.media?.previewUrl ?? (mediaKind === 'video' ? previewUrl : mediaUrl);
+  // By the name its post shows, as its Made with row names it: none where the
+  // catalog names none (a template result's model is its author's).
+  const modelName = homeModelLabel(item.model);
 
   return (
     <View
@@ -4499,7 +4505,7 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
             {getPublishGenerationTitle(item)}
           </AppText>
           <AppText variant="caption" color="muted" numberOfLines={2}>
-            {`Created in Magicbooklet with ${item.model || 'your latest model'}.`}
+            {`Created in Magicbooklet${modelName ? ` with ${modelName}` : ''}.`}
           </AppText>
         </View>
         <View style={{ flexShrink: 0, alignItems: 'flex-end', gap: appTheme.spacing.compact }}>

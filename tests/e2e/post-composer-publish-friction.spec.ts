@@ -79,6 +79,20 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     ]);
   });
 
+  // A creation's Made with is locked to the row its post stores: the app, then
+  // the creation's model by the name its post prints. The row read the app
+  // alone until the post was published and opened again (2026-11-01).
+  test('a creation’s Made with names its model as its post does', async ({ page }, testInfo) => {
+    await answerTheComposer(page, { ...PLACEHOLDER_PROFILE, username: 'maya-k', displayName: 'Maya K' }, []);
+    await page.goto(`/post/new?generationId=${CREATION.id}`);
+
+    await expect(page.getByRole('textbox', { name: /^title/i })).toHaveValue('Product still lit like a window display', COLD_PAGE);
+    const madeWith = page.getByRole('button', { name: /^made with/i });
+    await madeWith.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('made-with.png') });
+    await expect(madeWith).toContainText('magicbooklet · Nano Banana 2.0');
+  });
+
   test('a creation with no title starts from one its prompt suggests, which follows the recipe', async ({ page }, testInfo) => {
     await answerTheComposer(page, { ...PLACEHOLDER_PROFILE, username: 'maya-k', displayName: 'Maya K' }, []);
     await page.goto(`/post/new?generationId=${CREATION.id}`);
