@@ -4,6 +4,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import DeleteAccountPage from '@/app/delete-account/page';
+import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
 import { siteConfig } from '@/lib/seo';
 
 type TestUser = {
@@ -175,6 +176,7 @@ describe('account deletion page', () => {
     afterEach(() => {
         cleanup();
         clearCookies();
+        window.localStorage.clear();
         vi.unstubAllEnvs();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
@@ -260,6 +262,26 @@ describe('account deletion page', () => {
         expect(screen.getByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
         expect(screen.getByRole('link', { name: 'Continue' })).toHaveAttribute('href', '/login');
         expect(screen.queryByRole('region', { name: 'Delete your account now' })).toBeNull();
+    });
+
+    // The browser's other tabs take the ending for a sign-out, not a lapse, and an open creator
+    // page there clears (owner, 2026-11-01).
+    it('marks its sign-out for the browser’s other tabs before the session ends', async () => {
+        mocks.session = signedInAs(emailUser);
+        answerRequests({ deletions: [scheduled] });
+        let markedAsItEnded = false;
+        mocks.signOut.mockImplementation(async () => {
+            markedAsItEnded = wasSignedOutInBrowser(mocks.session as { access_token: string; user: { id: string } });
+            mocks.session = null;
+            emit('SIGNED_OUT');
+            return { error: null };
+        });
+        render(<DeleteAccountPage />);
+
+        await confirmDeletion();
+
+        await waitFor(() => expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' }));
+        expect(markedAsItEnded).toBe(true);
     });
 
     it('re-checks an email account with its password, then goes on deleting with the new session', async () => {

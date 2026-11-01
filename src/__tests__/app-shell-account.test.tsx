@@ -6,6 +6,7 @@ import AppShellAccountFallback from '@/components/AppShellAccountFallback';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { resetFeedbackState } from '@/components/feedback-state';
+import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
 
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -421,6 +422,7 @@ describe('AppShellAccount', () => {
     afterEach(() => {
       clearCookies();
       vi.unstubAllEnvs();
+      window.localStorage.clear();
     });
 
     // Audit 04-4: auth-js keeps the session when its logout call fails, and
@@ -509,6 +511,22 @@ describe('AppShellAccount', () => {
       expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'local' });
     });
 
+    // The browser's other tabs read the mark as their session ends, and a creator page there
+    // clears, where a lapse keeps it (owner, 2026-11-01).
+    it('marks the sign-out for the browser’s other tabs before the session ends', async () => {
+      let markedAsItEnded = false;
+      mocks.signOut.mockImplementation(async () => {
+        markedAsItEnded = wasSignedOutInBrowser(authenticatedSession);
+        return { error: null };
+      });
+      await openAccountMenu();
+
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      expect(markedAsItEnded).toBe(true);
+    });
+
     it('still signs out when the browser storage refuses', async () => {
       mocks.clearPersistedCreatorData.mockRejectedValue(new Error('IndexedDB unavailable'));
       await openAccountMenu();
@@ -563,6 +581,7 @@ describe('AppShellAccount', () => {
       resetFeedbackState();
       clearCookies();
       vi.unstubAllEnvs();
+      window.localStorage.clear();
     });
 
     it('asks first, then signs out everywhere and leaves this browser as Sign out does', async () => {
@@ -605,6 +624,30 @@ describe('AppShellAccount', () => {
       } finally {
         vi.unstubAllGlobals();
       }
+    });
+
+    it('marks the sign-out for the browser’s other tabs before the session ends everywhere', async () => {
+      let markedAsItEnded = false;
+      mocks.signOut.mockImplementation(async () => {
+        markedAsItEnded = wasSignedOutInBrowser(authenticatedSession);
+        return { error: null };
+      });
+      const dialog = await chooseSignOutEverywhere();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+      expect(markedAsItEnded).toBe(true);
+    });
+
+    it('takes the mark back when the sign-out everywhere fails, so a later lapse of the session reads as one', async () => {
+      mocks.signOut.mockResolvedValue({ error: unreachable });
+      const dialog = await chooseSignOutEverywhere();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+      expect(await screen.findByText(SIGN_OUT_EVERYWHERE_FAILED)).toBeInTheDocument();
+      expect(wasSignedOutInBrowser(authenticatedSession)).toBe(false);
     });
 
     it('does nothing when the person cancels', async () => {

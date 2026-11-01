@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 
 import { describeAuthError } from '@/lib/auth-error-copy';
+import { markBrowserSignOut } from '@/lib/browser-sign-out';
 import { siteConfig } from '@/lib/seo';
 import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 
@@ -164,6 +165,12 @@ async function signOutHere() {
   let signedOut = false;
   try {
     const supabase = await getSupabase();
+    // A sign-out, as the account menu's: the browser's other tabs do not take it for a lapse.
+    await supabase.auth.getSession()
+      .then(({ data: { session } }) => {
+        if (session) markBrowserSignOut(session);
+      })
+      .catch(() => undefined);
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     signedOut = !error;
   } catch {

@@ -89,6 +89,8 @@ const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 const authState = vi.hoisted(() => ({
   credits: 10_000 as number | null,
   session: { access_token: 'test-token', user: { id: 'user-1' } } as { access_token: string; user: { id: string } } | null,
+  // The account a sign-out made in this browser ended the session of (AuthProvider's `signedOutUserId`).
+  signedOutUserId: null as string | null,
   updateCredits: vi.fn(),
 }));
 const getSessionMock = vi.hoisted(() => vi.fn());
@@ -103,6 +105,7 @@ vi.mock('@/components/AuthProvider', () => ({
     credits: authState.credits,
     isLoading: false,
     session: authState.session,
+    signedOutUserId: authState.signedOutUserId,
     updateCredits: authState.updateCredits,
   }),
 }));
@@ -247,6 +250,7 @@ beforeEach(() => {
   routerMock.push.mockClear();
   authState.credits = 10_000;
   authState.session = { access_token: 'test-token', user: { id: 'user-1' } };
+  authState.signedOutUserId = null;
   authState.updateCredits.mockClear();
   getSessionMock.mockReset();
   getSessionMock.mockResolvedValue(SIGNED_IN_SESSION);
@@ -2104,6 +2108,48 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(setPersistedImageElementRecordsMock.mock.calls.slice(picturesWritten).map(([key]) => key)).not.toContain('create-image:elements:user-1');
       expect(saveCreatorDraftMock.mock.calls.slice(draftsSaved).map(([, owner]) => owner)).not.toContain('user-1');
+    });
+
+    // Owner, 2026-11-01, "Yes, clear it": a sign-out made in another tab clears an open creator page
+    // that opened signed in, and the page is the visitor's after it; a session that lapses keeps it.
+    it('clears the page when its account signs out in another tab, and leaves it the visitor’s', async () => {
+      installFetch();
+      keepAshasPicture();
+      const view = render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+
+      // Asha signs out in another tab of this browser, which marked it so.
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      authState.session = null;
+      authState.signedOutUserId = 'user-1';
+      view.rerender(page());
+      await settleDraftRead();
+
+      expect(screen.queryByAltText('Asha’s harbour')).toBeNull();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('');
+      typePrompt('A lighthouse in fog');
+      fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
+      expect(await screen.findByRole('dialog', { name: 'Continue to generate' })).toBeInTheDocument();
+    });
+
+    it('keeps the page through a session that lapses', async () => {
+      installFetch();
+      keepAshasPicture();
+      const view = render(page());
+      expect(await screen.findByAltText('Asha’s harbour')).toBeInTheDocument();
+      await settleDraftRead();
+      typePrompt('Asha’s harbour at dusk');
+
+      getSessionMock.mockResolvedValue({ data: { session: null } });
+      authState.session = null;
+      view.rerender(page());
+      await settleDraftRead();
+
+      expect(screen.getByAltText('Asha’s harbour')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('Asha’s harbour at dusk');
+      expect(screen.queryByRole('dialog', { name: 'Continue to generate' })).toBeNull();
     });
 
     it('reads the balance again when a paid Enhance answers after the page was left', async () => {

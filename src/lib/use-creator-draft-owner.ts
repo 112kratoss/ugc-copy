@@ -58,20 +58,25 @@ export type CreatorDraftOwner = {
  * - A page that opened signed in and then lost its session keeps nothing, so the
  *   account's form never lands in the browser's visitor slot, where the next
  *   person would open it.
+ * - Once a sign-out made in this browser ends the session (`signedOut`, from any of
+ *   its tabs), the page is the visitor's: the account's form leaves it (owner,
+ *   2026-11-01, "Yes, clear it"). A session that lapses keeps it, as above.
  */
 export function useCreatorDraftOwner(
   tool: CreatorDraftTool,
   userId: string | null,
   handoverNonce: string | null,
+  signedOut = false,
 ): CreatorDraftOwner {
   const [openedSignedIn] = useState(() => userId !== null);
   // Read once, as the page opens: the nonce is in this page's own address.
   const [awaitsHandover] = useState(() => typeof window !== 'undefined' && hasVisitorDraftHandover(tool, handoverNonce));
   const [moved, setMoved] = useState<{ userId: string; answer: MoveAnswer | 'gave-up' } | null>(null);
   // The hand-over's account has left the page: another account signed in, or the page went
-  // back to the visitor. A session that lapses on a page that opened signed in has not.
+  // back to the visitor, a sign-out included. A session that lapses on a page that opened
+  // signed in has not.
   const [handOverLeft, setHandOverLeft] = useState(false);
-  if (moved && !handOverLeft && userId !== moved.userId && (userId !== null || !openedSignedIn)) {
+  if (moved && !handOverLeft && userId !== moved.userId && (userId !== null || !openedSignedIn || signedOut)) {
     setHandOverLeft(true);
   }
 
@@ -98,7 +103,7 @@ export function useCreatorDraftOwner(
     };
   }, [awaitsHandover, handoverNonce, moved, tool, userId]);
 
-  if (!userId) return { owner: openedSignedIn ? null : VISITOR_DRAFT_OWNER, carriedDraft: false, keepsVisitorForm: false };
+  if (!userId) return { owner: openedSignedIn && !signedOut ? null : VISITOR_DRAFT_OWNER, carriedDraft: false, keepsVisitorForm: false };
   if (!awaitsHandover || (moved && moved.userId !== userId)) return { owner: userId, carriedDraft: false, keepsVisitorForm: false };
   if (!moved) return { owner: null, carriedDraft: false, keepsVisitorForm: false };
   return {

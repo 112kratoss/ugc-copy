@@ -54,6 +54,35 @@ describe('whose draft a creator keeps', () => {
     expect(result.current).toEqual({ owner: null, carriedDraft: false, keepsVisitorForm: false });
   });
 
+  // Owner, 2026-11-01: a sign-out made in another tab clears an open creator page; a lapse keeps it.
+  it('goes to the visitor’s once this browser signs out the account of a page that opened signed in', async () => {
+    const useCreatorDraftOwner = await loadHook();
+    const { result, rerender } = renderHook(
+      ({ userId, signedOut }) => useCreatorDraftOwner('image', userId, null, signedOut),
+      { initialProps: { userId: 'user-1' as string | null, signedOut: false } },
+    );
+    expect(result.current.owner).toBe('user-1');
+
+    rerender({ userId: null, signedOut: true });
+    expect(result.current).toEqual({ owner: 'visitor', carriedDraft: false, keepsVisitorForm: false });
+  });
+
+  it('lets a sign-out end the hand-over’s keep of the visitor’s form, as another account would', async () => {
+    const useCreatorDraftOwner = await loadHook();
+    mocks.hasVisitorDraftHandover.mockReturnValue(true);
+    mocks.adoptVisitorDraft.mockRejectedValue(new Error('IndexedDB refused'));
+    const { result, rerender } = renderHook(
+      ({ userId, signedOut }) => useCreatorDraftOwner('image', userId, 'nonce-1', signedOut),
+      { initialProps: { userId: 'user-1' as string | null, signedOut: false } },
+    );
+    await waitFor(() => expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: true }));
+
+    rerender({ userId: null, signedOut: true });
+    expect(result.current.owner).toBe('visitor');
+    rerender({ userId: 'user-1', signedOut: false });
+    expect(result.current).toEqual({ owner: 'user-1', carriedDraft: false, keepsVisitorForm: false });
+  });
+
   it('waits for the visitor’s draft to move to the account on the way back from this creator’s sign-up', async () => {
     const useCreatorDraftOwner = await loadHook();
     mocks.hasVisitorDraftHandover.mockReturnValue(true);
