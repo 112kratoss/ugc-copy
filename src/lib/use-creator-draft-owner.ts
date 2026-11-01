@@ -138,15 +138,30 @@ export function nextCreatorFormHolder(holder: CreatorFormHolder, draft: CreatorD
  * - `replaced`: aborted once another owner's form takes this one's place, in the commit that swaps
  *   them, so the earlier body's work still out (an upload, a save as it unmounts) stops there. A
  *   page that is only left aborts nothing: what the body started for its owner goes on.
+ * - `pageViewer`: whether the form is the page's own viewer's, the visitor's before any account and
+ *   then the first account's. What the server drew for the page (the sign-up's welcome, the posts
+ *   to start from, read for that viewer) is theirs, and no later account's.
  */
-export type CreatorForm = { key: number; owner: string | null; replaced: AbortSignal };
+export type CreatorForm = { key: number; owner: string | null; replaced: AbortSignal; pageViewer: boolean };
+
+const isAccount = (owner: string | null) => owner !== null && owner !== VISITOR_DRAFT_OWNER;
 
 export function useCreatorForm(draft: CreatorDraftOwner): CreatorForm {
-  const [held, setHeld] = useState(() => ({ owner: draft.owner, key: 0, replacement: new AbortController() }));
+  const [held, setHeld] = useState(() => ({
+    owner: draft.owner,
+    key: 0,
+    replacement: new AbortController(),
+    // The key of the first account's form, once there is one.
+    viewerKey: isAccount(draft.owner) ? 0 : null as number | null,
+  }));
   const next = nextCreatorFormHolder(held, draft);
   // Moved as the page draws, so the earlier owner's body is never drawn for the next owner.
   if (next !== held) {
-    setHeld({ ...next, replacement: next.key === held.key ? held.replacement : new AbortController() });
+    setHeld({
+      ...next,
+      replacement: next.key === held.key ? held.replacement : new AbortController(),
+      viewerKey: held.viewerKey ?? (isAccount(next.owner) ? next.key : null),
+    });
   }
   // A layout effect, so the earlier body learns it was replaced before its own unmount effects run.
   const drawn = useRef(held.replacement);
@@ -154,5 +169,10 @@ export function useCreatorForm(draft: CreatorDraftOwner): CreatorForm {
     if (drawn.current !== held.replacement) drawn.current.abort();
     drawn.current = held.replacement;
   }, [held.replacement]);
-  return { key: held.key, owner: held.owner, replaced: held.replacement.signal };
+  return {
+    key: held.key,
+    owner: held.owner,
+    replaced: held.replacement.signal,
+    pageViewer: held.viewerKey === null || held.viewerKey === held.key,
+  };
 }

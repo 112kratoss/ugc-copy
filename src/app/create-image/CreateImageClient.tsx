@@ -373,8 +373,18 @@ export default function CreateImageClient(props: CreateImageClientProps) {
     const { session } = useAuth();
     const draft = useCreatorDraftOwner('image', session?.user?.id ?? null, props.handoverNonce ?? null);
     const form = useCreatorForm(draft);
-    // The sign-up's welcome is the account's the page came back with, the form it opened on.
-    return <ImageCreator key={form.key} {...props} welcome={form.key === 0 ? props.welcome : null} draft={draft} form={form} />;
+    // What the server drew for the page's viewer (the sign-up's welcome, the posts to start from, read
+    // for them) is theirs: a later account's form is drawn without it.
+    return (
+        <ImageCreator
+            key={form.key}
+            {...props}
+            welcome={form.pageViewer ? props.welcome : null}
+            startPosts={form.pageViewer ? props.startPosts : null}
+            draft={draft}
+            form={form}
+        />
+    );
 }
 
 function ImageCreator({
@@ -447,8 +457,9 @@ function ImageCreator({
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     // The look, as the page opens, for a run already at work.
     const activeRunLookupRef = useRef<AbortController | null>(null);
-    // Aborted as this creator goes, another owner's form drawn in its place: a press, a check or
-    // an answer of its own still out then sends, shows and saves nothing more.
+    // Aborted as this creator goes, left or drawn anew for another owner: a check or an answer of its
+    // own still out then shows nothing more and sends no one to sign in. A press already out goes on
+    // under its own account; only another owner's form stops it (`form.replaced`).
     const unmountSignal = useUnmountSignal();
     const elementRefs = useRef<ImageElementDraft[]>([]);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);

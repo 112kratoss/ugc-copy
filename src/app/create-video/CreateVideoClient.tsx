@@ -250,7 +250,7 @@ interface MultiShot {
     duration: number;
 }
 
-/** The shots the page opens on, and puts back when another owner's words are in them. */
+/** The shots the page opens on. */
 function openingShots(): MultiShot[] {
     return [{ id: '1', prompt: '', duration: 5 }];
 }
@@ -336,19 +336,19 @@ type StagedUpload = { storagePath: string; signedUrl: string; uploadedAt: number
  * fresh link, while it is younger than STAGED_UPLOAD_REUSE_MS, or a new upload. Every
  * press used to upload every reference again, each one a sign request against the
  * limit of 60 a user per 10 minutes. An object the sweep took anyway answers
- * MEDIA_OBJECT_NOT_FOUND, and the file goes up again. `press`, for a run's: the
- * account it goes up for, and the creator whose going stops it, then or as it ends,
- * so the run keeps nothing of it.
+ * MEDIA_OBJECT_NOT_FOUND, and the file goes up again. `press`: the account it goes up
+ * for, and the signal that stops it (another owner's form taking this one's place),
+ * then or as it ends, so nothing keeps it.
  */
 async function stageReferenceFile(
     file: File,
     staged: StagedUpload | null | undefined,
-    press?: TemporaryMediaUploadOptions,
+    press: TemporaryMediaUploadOptions,
 ): Promise<StagedUpload> {
     if (staged && Date.now() - staged.uploadedAt < STAGED_UPLOAD_REUSE_MS) {
         try {
             const signedUrl = await refreshTemporaryMediaUrl(staged.storagePath, press);
-            if (press?.signal?.aborted) throw new UploadCancelledError();
+            if (press.signal?.aborted) throw new UploadCancelledError();
             return { ...staged, signedUrl };
         } catch (refreshError) {
             if (!(refreshError instanceof TemporaryMediaReadUrlError && refreshError.code === 'MEDIA_OBJECT_NOT_FOUND')) {
@@ -357,7 +357,7 @@ async function stageReferenceFile(
         }
     }
     const upload = await uploadMediaToTemporaryStorage(file, press);
-    if (press?.signal?.aborted) throw new UploadCancelledError();
+    if (press.signal?.aborted) throw new UploadCancelledError();
     return { storagePath: upload.storagePath, signedUrl: upload.signedUrl, uploadedAt: Date.now() };
 }
 
@@ -1230,8 +1230,18 @@ export default function CreateVideoClient(props: CreateVideoClientProps) {
     const { session } = useAuth();
     const draft = useCreatorDraftOwner('video', session?.user?.id ?? null, props.handoverNonce ?? null);
     const form = useCreatorForm(draft);
-    // The sign-up's welcome is the account's the page came back with, the form it opened on.
-    return <VideoCreator key={form.key} {...props} welcome={form.key === 0 ? props.welcome : null} draft={draft} form={form} />;
+    // What the server drew for the page's viewer (the sign-up's welcome, the posts to start from, read
+    // for them) is theirs: a later account's form is drawn without it.
+    return (
+        <VideoCreator
+            key={form.key}
+            {...props}
+            welcome={form.pageViewer ? props.welcome : null}
+            startPosts={form.pageViewer ? props.startPosts : null}
+            draft={draft}
+            form={form}
+        />
+    );
 }
 
 function VideoCreator({
@@ -1376,8 +1386,9 @@ function VideoCreator({
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     // The look, as the page opens, for a run already at work.
     const activeRunLookupRef = useRef<AbortController | null>(null);
-    // Aborted as this creator goes, another owner's form drawn in its place: a press, a check or
-    // an answer of its own still out then sends, shows and saves nothing more.
+    // Aborted as this creator goes, left or drawn anew for another owner: a check or an answer of its
+    // own still out then shows nothing more and sends no one to sign in. A press already out goes on
+    // under its own account; only another owner's form stops it (`form.replaced`).
     const unmountSignal = useUnmountSignal();
     const elementInputRef = useRef<HTMLInputElement>(null);
     const referenceVideoInputRef = useRef<HTMLInputElement>(null);
@@ -2271,6 +2282,20 @@ function VideoCreator({
     const enhanceFrameUploadCacheRef = useRef<Map<File, { url: string; at: number }>>(new Map());
     const ENHANCE_FRAME_CACHE_TTL_MS = 10 * 60 * 1000;
 
+    /**
+     * The uploads of a Prepare or of an Enhance's frames: for the form's account, and stopped if
+     * another owner's form takes this one's place. None while the browser holds another account's
+     * session (signed in from another tab, before the page has heard): nothing of this form goes up
+     * under it.
+     */
+    const prepareUploads = async (): Promise<TemporaryMediaUploadOptions | null> => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session && formAccount && session.user.id !== formAccount) return null;
+        // The form's account even while the browser holds no session: one that lands before the
+        // upload reads it is refused there.
+        return { userId: formAccount ?? session?.user.id, signal: form.replaced };
+    };
+
     const resolveEnhancerFrameUrl = async (file: File | null, url: string | null): Promise<string | null> => {
         if (url && url.startsWith('https://')) return url;
         if (!file) return null;
@@ -2278,7 +2303,10 @@ function VideoCreator({
         if (cached && Date.now() - cached.at < ENHANCE_FRAME_CACHE_TTL_MS) {
             return cached.url;
         }
-        const upload = await uploadMediaToTemporaryStorage(file);
+        const uploads = await prepareUploads();
+        // Under another account's session the frame stays out of the Enhance.
+        if (!uploads) return null;
+        const upload = await uploadMediaToTemporaryStorage(file, uploads);
         enhanceFrameUploadCacheRef.current.set(file, { url: upload.signedUrl, at: Date.now() });
         return upload.signedUrl;
     };
@@ -3233,13 +3261,13 @@ function VideoCreator({
         durationSeconds,
     });
     /**
-     * Picked files' seeds once each length is read, or none when the creator went meanwhile (it was
-     * left, or another owner's form took its place): the files go with the form they were picked on,
-     * unsaved.
+     * Picked files' seeds once each length is read, or none when another owner's form took this
+     * one's place meanwhile: the files go with the form they were picked on, unsaved. A page that is
+     * only left keeps them, saved for its owner's next visit.
      */
     const readPickSeeds = async <Seed extends { previewUrl: string }>(read: Promise<Seed[]>): Promise<Seed[] | null> => {
         const seeds = await read;
-        if (!unmountSignal.current.aborted) return seeds;
+        if (!form.replaced.aborted) return seeds;
         seeds.forEach((seed) => revokeObjectUrl(seed.previewUrl));
         return null;
     };
@@ -3919,7 +3947,7 @@ function VideoCreator({
         });
     };
 
-    const ensureUploadedElement = async (element: VideoElementDraft, press?: TemporaryMediaUploadOptions): Promise<VideoElementDraft> => {
+    const ensureUploadedElement = async (element: VideoElementDraft, press: TemporaryMediaUploadOptions): Promise<VideoElementDraft> => {
         if (!element.file) {
             return element;
         }
@@ -3941,7 +3969,7 @@ function VideoCreator({
     const ensureUploadedReference = async (
         reference: SeedanceMediaReferenceDraft,
         assetType: SeedanceAssetKind,
-        press?: TemporaryMediaUploadOptions,
+        press: TemporaryMediaUploadOptions,
     ): Promise<SeedanceMediaReferenceDraft> => {
         if (!reference.file) {
             return reference;
@@ -3963,7 +3991,7 @@ function VideoCreator({
 
     const ensureUploadedKlingVideoElement = async (
         element: KlingVideoElementDraft,
-        press?: TemporaryMediaUploadOptions,
+        press: TemporaryMediaUploadOptions,
     ): Promise<KlingVideoElementDraft> => {
         if (!element.file) {
             return element;
@@ -4038,16 +4066,6 @@ function VideoCreator({
         return nextReferences.find((reference) => reference.id === referenceId) ?? null;
     };
 
-    /**
-     * The uploads of a Prepare: under the session of the form's account, and stopped if another
-     * owner's form takes this one's place. None while the browser holds another account's session
-     * (signed in from another tab, before the page has heard): nothing of this form goes up under it.
-     */
-    const prepareUploads = async (): Promise<TemporaryMediaUploadOptions | null> => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session && formAccount && session.user.id !== formAccount) return null;
-        return { userId: session?.user.id, signal: form.replaced };
-    };
 
     const prepareElementSeedanceAsset = async (elementId: string) => {
         // Preparing uploads the file, which takes an account.
@@ -5057,7 +5075,7 @@ function VideoCreator({
                     });
                 }
                 // Keep the uploaded URLs so a retry does not re-upload the set: on the subjects the
-                // form holds now, as each list above, which an owner change meanwhile has emptied.
+                // form holds now, as each list above.
                 commitKlingSubjects(klingSubjectsRef.current.map((subject) => ({
                     ...subject,
                     images: subject.images.map((image) => uploadedImages.get(image) ?? image),
@@ -5198,8 +5216,6 @@ function VideoCreator({
         }
     };
 
-    // The creator's own choice to stop waiting, priced on its button: the unanswered
-    // start may yet have started, so this can be a second run.
     /**
      * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
      * another owner's form took its place) is read again for whoever holds the session instead.
@@ -5212,6 +5228,8 @@ function VideoCreator({
         updateCredits(credits);
     };
 
+    // The creator's own choice to stop waiting, priced on its button: the unanswered
+    // start may yet have started, so this can be a second run.
     const startNewRunInstead = () => {
         clearPendingWebStart('video');
         setUnconfirmedStart(null);
@@ -6483,7 +6501,9 @@ function VideoCreator({
                                                                 {item.asset.assetId ? (
                                                                     <button
                                                                         type="button"
-                                                                        onClick={() => void item.onRefresh().catch((refreshError) => setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh Seedance asset'))}
+                                                                        onClick={() => void item.onRefresh().catch((refreshError) => {
+                                                                            if (!isUploadCancelledError(refreshError)) setError(refreshError instanceof Error ? refreshError.message : 'Failed to refresh Seedance asset');
+                                                                        })}
                                                                         disabled={isBusy}
                                                                         className={CREATOR_REFERENCE_CHIP_CLASS}
                                                                     >

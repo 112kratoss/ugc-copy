@@ -9,6 +9,7 @@ import { resetFeedbackState } from '@/components/feedback-state';
 import { clearGenerationsOnPage, subscribeToGenerationOnPage } from '@/lib/generation-status-client';
 import { creatorOpeningFromCatalog, type CreatorOpening, type CreatorOpeningLink } from '@/lib/creator-opening';
 import type { CreatorStartPost } from '@/lib/creator-start-posts';
+import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { VIDEO_MODELS } from '@/lib/client-generation-models';
 import { buildGenerationModelCatalog, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import type { PersistedImageElementRecord, PersistedMediaRecord, PersistedSubjectRecord } from '@/lib/persisted-media';
@@ -5520,6 +5521,38 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(setPersistedMediaRecordsMock.mock.calls.slice(clipWrites).map(([key]) => key)).toEqual([]);
       });
 
+      it('saves a clip whose length is still being read when the page is only left', async () => {
+        keepMedia({
+          'user-1': { clips: [{ id: 'asha-clip', displayName: 'Asha’s tide', durationSeconds: 5, file: new File(['tide'], 'tide.mp4', { type: 'video/mp4' }) }] },
+        });
+        ownDraftAs('user-1');
+        const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+        await waitFor(() => expect(screen.queryAllByText('Asha’s tide').length).toBeGreaterThan(0));
+        let readLength: (seconds: number) => void = () => undefined;
+        readDurationMock.mockImplementation((source: File | string) => (
+          typeof source !== 'string' && source.name === 'wave.mp4'
+            ? new Promise<number>((resolve) => { readLength = resolve; })
+            : Promise.resolve(4.2)
+        ));
+        fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="video/*"]')!, {
+          target: { files: [new File(['wave'], 'wave.mp4', { type: 'video/mp4' })] },
+        });
+        await waitFor(() => expect(readDurationMock).toHaveBeenCalledWith(expect.objectContaining({ name: 'wave.mp4' })));
+
+        // Asha goes to another page before it is read: the clip is still hers, saved for her next visit.
+        view.unmount();
+        await act(async () => readLength(4));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+        expect(setPersistedMediaRecordsMock.mock.calls.filter(([key]) => key === 'create-video:reference-videos:user-1').at(-1)?.[1])
+          .toEqual([
+            expect.objectContaining({ id: 'asha-clip' }),
+            expect.objectContaining({ displayName: 'Video reference 2', durationSeconds: 4 }),
+          ]);
+      });
+
       it('keeps the earlier owner’s named subjects off the form, and their saved ones as they were, when a run’s upload ends after the owner changed', async () => {
         getPersistedSubjectRecordsMock.mockImplementation(async (key: string) => (key.endsWith(':user-1') ? [{
           id: 'asha-subject',
@@ -5796,6 +5829,107 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(welcomeReads()).not.toContain('Bearer token-user-2');
         expect(screen.queryByText(/You’re signed in|You’re in:/)).toBeNull();
+      });
+
+      it('greets the account back from sign-up when the page first drew the visitor’s form', async () => {
+        const welcomePage = () => <CreateVideoClient prefill={{}} welcome={{ referral: null }} handoverNonce="nonce-1" />;
+        const welcomeReads = () => fetchMock.mock.calls
+          .filter(([input]) => String(input) === '/api/credits/welcome')
+          .map(([, init]) => authorizationOf(init));
+        // The server read no session on the way back from sign-up, so the page opened as the visitor's.
+        authClient.session = null;
+        authState.signedIn = false;
+        draftOwnerOverride.current = { owner: VISITOR_DRAFT_OWNER, carriedDraft: false, keepsVisitorForm: false };
+        const view = render(welcomePage());
+        await settle();
+
+        // The browser then has the account's session, and the visitor's draft moves to it.
+        authState.signedIn = true;
+        authClientSignsInAs('user-1');
+        draftOwnerOverride.current = { owner: null, carriedDraft: false, keepsVisitorForm: false };
+        view.rerender(welcomePage());
+        await settle();
+        signInAs('user-1');
+        draftOwnerOverride.current = { owner: 'user-1', carriedDraft: true, keepsVisitorForm: false };
+        view.rerender(welcomePage());
+
+        await waitFor(() => expect(welcomeReads()).toContain('Bearer token-user-1'));
+      });
+
+      it('shows the next account none of the posts the page was drawn with for the earlier one', async () => {
+        // One stream of posts for the page, as the server hands it.
+        const posts = Promise.resolve([startPost('cats')]);
+        const postsPage = () => <CreateVideoClient prefill={{}} startPosts={posts} />;
+        signInAs('user-1');
+        let view!: ReturnType<typeof render>;
+        await act(async () => {
+          view = render(postsPage());
+        });
+        await waitFor(() => expect(screen.getAllByRole('link', { name: /^Remix “Kung fu cats”/ }).length).toBeGreaterThan(0));
+
+        // Read for Asha, shown to her: Ben's blocks and hides never filtered them.
+        signInAs('user-2', () => view.rerender(postsPage()));
+        await settle();
+
+        expect(screen.queryAllByRole('link', { name: /^Remix “Kung fu cats”/ })).toEqual([]);
+      });
+
+      it('sends none of the earlier account’s frames up for an Enhance under a session another account has taken', async () => {
+        keepAshasStartImage();
+        signInAs('user-1');
+        render(page());
+        await waitFor(() => expect(screen.getByAltText('Start image')).toBeInTheDocument());
+
+        authClientSignsInAs('user-2');
+        const enhance = enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as { prepareContext?: () => Promise<unknown> };
+        await act(async () => {
+          await enhance.prepareContext?.().catch(() => undefined);
+        });
+
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+      });
+
+      it('says nothing of a Seedance refresh refused under a session another account has taken', async () => {
+        getPersistedImageElementRecordsMock.mockImplementation(async (key: string) => (key.endsWith(':user-1')
+          ? [{ id: 'asha-picture', displayName: 'Asha’s lantern', file: new File(['lantern'], 'lantern.png', { type: 'image/png' }) }]
+          : []));
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+          String(input).startsWith('/api/seedance-assets')
+            ? { ok: true, status: 200, json: async () => ({ success: true, assetId: 'asset-lantern', status: 'active' }) } as Response
+            : defaultResponse(input, init)
+        ));
+        signInAs('user-1');
+        render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+        const card = await screen.findByRole('group', { name: 'Seedance Assets' });
+        fireEvent.click(within(card).getAllByRole('button', { name: 'Prepare asset' })[0]);
+        await waitFor(() => expect(card).toHaveTextContent('Asset ID: asset-lantern'));
+
+        authClientSignsInAs('user-2');
+        fireEvent.click(within(card).getByRole('button', { name: 'Refresh' }));
+        await settle();
+
+        expect(screen.queryByText('Upload cancelled.')).toBeNull();
+        expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/seedance-assets?assetId='))).toEqual([]);
+      });
+
+      it('names the form’s account to a Prepare’s upload while the browser holds no session', async () => {
+        getPersistedImageElementRecordsMock.mockImplementation(async (key: string) => (key.endsWith(':user-1')
+          ? [{ id: 'asha-picture', displayName: 'Asha’s lantern', file: new File(['lantern'], 'lantern.png', { type: 'image/png' }) }]
+          : []));
+        signInAs('user-1');
+        const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+        const [prepare] = await screen.findAllByRole('button', { name: 'Prepare asset' });
+
+        // Asha signs out in another tab; the page keeps her form, and her Prepare names her to its
+        // upload, which then goes up under no other account's session that lands meanwhile.
+        signOutHere(() => view.rerender(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />));
+        fireEvent.click(prepare);
+        await settle();
+
+        expect(temporaryUploadMock).toHaveBeenCalledWith(
+          expect.objectContaining({ name: 'lantern.png' }),
+          expect.objectContaining({ userId: 'user-1' }),
+        );
       });
 
       it('takes the earlier account’s result, its caption and its Post form off the canvas', async () => {

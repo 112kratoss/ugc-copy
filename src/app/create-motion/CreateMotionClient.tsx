@@ -259,8 +259,18 @@ export default function CreateMotionClient(props: CreateMotionClientProps) {
     const { session } = useAuth();
     const draft = useCreatorDraftOwner('motion', session?.user?.id ?? null, props.handoverNonce ?? null);
     const form = useCreatorForm(draft);
-    // The sign-up's welcome is the account's the page came back with, the form it opened on.
-    return <MotionCreator key={form.key} {...props} welcome={form.key === 0 ? props.welcome : null} draft={draft} form={form} />;
+    // What the server drew for the page's viewer (the sign-up's welcome, the posts to start from, read
+    // for them) is theirs: a later account's form is drawn without it.
+    return (
+        <MotionCreator
+            key={form.key}
+            {...props}
+            welcome={form.pageViewer ? props.welcome : null}
+            startPosts={form.pageViewer ? props.startPosts : null}
+            draft={draft}
+            form={form}
+        />
+    );
 }
 
 function MotionCreator({
@@ -299,8 +309,9 @@ function MotionCreator({
     const generationPollAbortControllerRef = useRef<AbortController | null>(null);
     // The look, as the page opens, for a run already at work.
     const activeRunLookupRef = useRef<AbortController | null>(null);
-    // Aborted as this creator goes, another owner's form drawn in its place: a press, a check or
-    // an answer of its own still out then sends, shows and saves nothing more.
+    // Aborted as this creator goes, left or drawn anew for another owner: a check or an answer of its
+    // own still out then shows nothing more and sends no one to sign in. A press already out goes on
+    // under its own account; only another owner's form stops it (`form.replaced`).
     const unmountSignal = useUnmountSignal();
 
     const [characterImage, setCharacterImage] = useState<string | null>(null);
@@ -492,10 +503,7 @@ function MotionCreator({
 
     // Per account, and never on a remix page: a remix restores its own inputs,
     // and saving them under the ordinary keys replaced the creator's own draft.
-    // Nothing from a form another owner's has replaced: it would write the earlier owner's files back.
-    const getPersistedMediaKey = (key: string) => (
-        draftOwner && !remixId && !form.replaced.aborted ? scopedPersistedMediaKey(key, draftOwner) : null
-    );
+    const getPersistedMediaKey = (key: string) => (draftOwner && !remixId ? scopedPersistedMediaKey(key, draftOwner) : null);
 
     const processImageFile = async (file: File) => {
         const refusal = describeRefusedMotionPick(file, 'image');

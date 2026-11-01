@@ -245,4 +245,21 @@ describe('the form a creator holds', () => {
     unmount();
     expect(bens.aborted).toBe(false);
   });
+
+  // What the server drew for the page (the sign-up's welcome, the posts to start from) is its
+  // viewer's: the visitor's before any account, then the first account's, and no later one's.
+  it.each<[string, Owned[], boolean[]]>([
+    ['a page that opened signed in, and another account after it', [owned('user-1'), owned(null), owned('user-2')], [true, true, false]],
+    ['a sign-up return whose hand-over is on its way', [owned(null), owned('user-1'), owned('user-2')], [true, true, false]],
+    ['a sign-up return the page first drew for the visitor', [owned('visitor'), owned(null), owned('user-1'), owned('user-2')], [true, true, true, false]],
+    ['the first account, back after another', [owned('user-1'), owned('user-2'), owned('user-1')], [true, false, false]],
+  ])('holds what the server drew for the page for its viewer’s form: %s', async (_case, drafts, viewers) => {
+    const { useCreatorForm } = await import('@/lib/use-creator-draft-owner');
+    const { result, rerender } = renderHook(({ draft }) => useCreatorForm(draft), { initialProps: { draft: drafts[0] } });
+    const seen = drafts.map((draft) => {
+      rerender({ draft });
+      return result.current.pageViewer;
+    });
+    expect(seen).toEqual(viewers);
+  });
 });
