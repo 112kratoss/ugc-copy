@@ -230,6 +230,10 @@ export function ProfileDashboard({
   useEffect(() => {
     setCreationsScope('active');
   }, [creationsUserId]);
+  // Posts are the account's alone (a guest has none), so another account's open on Active too.
+  useEffect(() => {
+    setPostsScope('active');
+  }, [user?.id]);
 
   // The Failed scope pages a query of its own, whose page count the last request's says nothing about.
   useEffect(() => {
