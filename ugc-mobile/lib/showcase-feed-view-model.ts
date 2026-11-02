@@ -5,6 +5,7 @@ import { resourceKindLabel } from './post-resource-bundle-view-model';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess } from './showcase-remix-access';
+import { appTheme } from './theme';
 
 export interface ShowcaseMasonryCard {
   id: string;
@@ -81,7 +82,7 @@ export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
   return {
     columnGap: compactPhone ? 7 : 8,
     pinGap: compactPhone ? 14 : 16,
-    mediaRadius: compactPhone ? 17 : 18,
+    mediaRadius: appTheme.radii.md,
   };
 }
 

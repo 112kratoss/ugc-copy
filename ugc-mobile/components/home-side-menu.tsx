@@ -278,7 +278,7 @@ export function HomeSideMenu({
                 style={({ pressed }) => ({
                   width: 48,
                   height: 48,
-                  borderRadius: 24,
+                  borderRadius: appTheme.radii.pill,
                   alignItems: 'center',
                   justifyContent: 'center',
                   borderWidth: 1,
@@ -297,7 +297,7 @@ export function HomeSideMenu({
               onPress={() => navigateAndClose('/profile')}
               style={({ pressed }) => ({
                 minHeight: 88,
-                borderRadius: 20,
+                borderRadius: appTheme.radii.lg,
                 borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: pressed ? theme.colors.primaryStrong : theme.colors.border,
@@ -311,7 +311,7 @@ export function HomeSideMenu({
                   style={{
                     width: 54,
                     height: 54,
-                    borderRadius: 27,
+                    borderRadius: appTheme.radii.pill,
                     overflow: 'hidden',
                     borderWidth: 1,
                     borderColor: theme.colors.primaryStrong,
@@ -350,7 +350,7 @@ export function HomeSideMenu({
               onPress={() => navigateAndClose('/pricing')}
               style={({ pressed }) => ({
                 minHeight: 68,
-                borderRadius: 20,
+                borderRadius: appTheme.radii.lg,
                 borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: pressed ? hexWithAlpha(theme.colors.amber, 0.34) : theme.colors.border,
@@ -364,7 +364,7 @@ export function HomeSideMenu({
               })}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
-                <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.amber, 0.12) }}>
+                <View style={{ width: 44, height: 44, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.amber, 0.12) }}>
                   <Crown size={21} color={theme.colors.amber} />
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
@@ -379,7 +379,7 @@ export function HomeSideMenu({
               accessibilityLabel={totalSalesUsdCents === null ? 'Tracked earnings loading' : `Tracked earnings ${formatUsdCents(totalSalesUsdCents)}`}
               style={{
                 minHeight: 72,
-                borderRadius: 20,
+                borderRadius: appTheme.radii.lg,
                 borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: theme.colors.border,
@@ -388,7 +388,7 @@ export function HomeSideMenu({
               }}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.workflow, 0.10) }}>
+                <View style={{ width: 44, height: 44, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.workflow, 0.10) }}>
                   <Wallet size={21} color={theme.colors.success} />
                 </View>
                 <View style={{ gap: 1, minWidth: 0, flex: 1 }}>
@@ -420,7 +420,7 @@ export function HomeSideMenu({
               onPress={() => void handleAuthPress()}
               style={({ pressed }) => ({
                 minHeight: 52,
-                borderRadius: 18,
+                borderRadius: appTheme.radii.md,
                 borderCurve: 'continuous',
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -461,7 +461,7 @@ function MenuRow({
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 52,
-        borderRadius: 16,
+        borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         flexDirection: 'row',
         alignItems: 'center',
@@ -471,7 +471,7 @@ function MenuRow({
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+      <View style={{ width: 36, height: 36, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
         {icon}
       </View>
       <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.text, fontSize: 15, lineHeight: 20, fontWeight: '700' }}>

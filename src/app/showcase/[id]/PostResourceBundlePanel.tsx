@@ -1370,7 +1370,7 @@ export default function PostResourceBundlePanel({
       {isRecipeVisible ? (
         <div className="mt-5 space-y-5">
           {purchasedRevision ? (
-            <div className="rounded-[20px] border border-amber-300/20 bg-amber-300/[0.06] px-4 py-3">
+            <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.06] px-4 py-3">
               <p className="text-xs leading-5 text-amber-100/90">
                 The creator has updated this recipe since you bought it. You can read either version.
               </p>

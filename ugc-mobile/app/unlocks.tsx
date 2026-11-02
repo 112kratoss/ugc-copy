@@ -248,7 +248,7 @@ function UnlockThumbnail({
       style={{
         width: THUMBNAIL_SIZE,
         height: THUMBNAIL_SIZE,
-        borderRadius: 14,
+        borderRadius: appTheme.radii.sm,
         borderCurve: 'continuous',
         overflow: 'hidden',
         alignItems: 'center',

@@ -5,6 +5,7 @@ import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
+import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedItem } from '@/lib/types';
 
@@ -72,7 +73,7 @@ export function NsfwPostNotice({
       {item.mediaItems?.length ? <View style={{ width: mediaWidth }}><ShowcaseMediaPreview
         accent={theme.colors.primary}
         mediaItems={item.mediaItems}
-        width={mediaWidth} height={mediaWidth * 1.25} radius={16}
+        width={mediaWidth} height={mediaWidth * 1.25} radius={appTheme.radii.md}
         recyclingKey={`revealed:${postId}`} videoActivation="visible"
       /></View> : null}
       {/* A recipe on a mature post is reachable once the post is (D4): the

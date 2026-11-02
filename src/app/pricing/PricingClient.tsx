@@ -404,7 +404,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
 
                 <section
                     aria-label="Invite and earn bonus credits"
-                    className="mb-10 overflow-hidden rounded-[28px] border border-amber-300/20 bg-[linear-gradient(110deg,rgba(242,185,94,0.12),rgba(255,122,89,0.06),rgba(25,25,28,0.96))] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6"
+                    className="mb-10 overflow-hidden rounded-3xl border border-amber-300/20 bg-[linear-gradient(110deg,rgba(242,185,94,0.12),rgba(255,122,89,0.06),rgba(25,25,28,0.96))] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6"
                 >
                     <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
                         <div className="flex min-w-0 gap-4">
@@ -432,7 +432,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                     {plans.map((plan) => (
                         <div
                             key={plan.id}
-                            className={`relative rounded-[28px] p-6 transition duration-200 sm:p-7 ${plan.popular
+                            className={`relative rounded-3xl p-6 transition duration-200 sm:p-7 ${plan.popular
                                 ? "z-10 border border-amber-300/30 bg-[var(--ui-surface-raised)] shadow-[var(--ui-shadow-panel)]"
                                 : "border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] hover:border-[var(--ui-border-default)]"
                                 }`}
@@ -603,7 +603,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                             <Link
                                 key={link.href}
                                 href={link.href}
-                                className="ui-focus-ring rounded-[1.5rem] border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-[var(--ui-primary)]/40 hover:bg-white/[0.05]"
+                                className="ui-focus-ring rounded-3xl border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-[var(--ui-primary)]/40 hover:bg-white/[0.05]"
                             >
                                 <h3 className="text-xl font-semibold text-white">{link.title}</h3>
                                 <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>

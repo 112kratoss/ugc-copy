@@ -293,7 +293,7 @@ export default async function CreatorPage({ params, searchParams }: CreatorPageP
         />
       ) : null}
       <div className="studio-shell max-w-[1560px]">
-        <section className="overflow-hidden rounded-[28px] border border-white/8 bg-[#111215] shadow-[0_24px_80px_-60px_rgba(255,122,89,0.32)]">
+        <section className="overflow-hidden rounded-3xl border border-white/8 bg-[#111215] shadow-[0_24px_80px_-60px_rgba(255,122,89,0.32)]">
           <div className="relative h-40 overflow-hidden bg-[#0b0c10] sm:h-52 lg:h-60">
             {data.profile.coverUrl ? (
               // Full-bleed banner: served at viewport width rather than at
@@ -324,10 +324,10 @@ export default async function CreatorPage({ params, searchParams }: CreatorPageP
                     width={112}
                     height={112}
                     sizes="(min-width: 640px) 112px, 96px"
-                    className="h-24 w-24 shrink-0 rounded-[24px] border-4 border-[#111215] bg-zinc-900 object-cover shadow-xl sm:h-28 sm:w-28"
+                    className="h-24 w-24 shrink-0 rounded-full border-4 border-[#111215] bg-zinc-900 object-cover shadow-xl sm:h-28 sm:w-28"
                   />
                 ) : (
-                  <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-[24px] border-4 border-[#111215] bg-zinc-800 text-3xl font-black text-white shadow-xl sm:h-28 sm:w-28">
+                  <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-full border-4 border-[#111215] bg-zinc-800 text-3xl font-black text-white shadow-xl sm:h-28 sm:w-28">
                     {data.profile.displayName[0]?.toUpperCase() ?? 'C'}
                   </div>
                 )}

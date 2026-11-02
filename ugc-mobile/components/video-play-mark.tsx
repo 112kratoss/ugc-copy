@@ -14,7 +14,7 @@ export function VideoPlayMark({ onPicture }: { onPicture: boolean }) {
   const theme = useAppTheme();
   const glyph = onPicture ? mediaColors.onMedia : theme.colors.video;
   return (
-    <View pointerEvents="none" style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
+    <View pointerEvents="none" style={{ width: 44, height: 44, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center',
       backgroundColor: onPicture ? mediaColors.mediaScrimStrong : `${theme.colors.video}1f`,
       borderWidth: onPicture ? 0 : 1, borderColor: `${theme.colors.video}66` }}>
       <Play size={appTheme.icon.default} color={glyph} fill={glyph} />

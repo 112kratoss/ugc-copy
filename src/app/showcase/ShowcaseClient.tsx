@@ -508,7 +508,7 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
             className="flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
         >
             {/* Pinterest Style Card Frame */}
-            <div className="group relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
+            <div className="group relative overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] focus-within:border-[rgba(255,122,89,0.34)]">
                 <div ref={measureVideoFrame} className="relative overflow-hidden bg-black">
                     {mediaItems.length > 0 ? (
                         <ShowcaseMediaCarousel
@@ -2184,7 +2184,7 @@ export default function ShowcaseClient({
                     </div>
                 </div>
 
-                <div className="sticky top-[calc(var(--app-shell-topbar-height)+0.5rem)] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4">
+                <div className="sticky top-[calc(var(--app-shell-topbar-height)+0.5rem)] z-30 mb-7 rounded-4xl border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div className="relative min-w-0 w-full sm:w-auto">
                       <div
@@ -2368,7 +2368,7 @@ export default function ShowcaseClient({
                         ))}
                     </div>
                 ) : tileableItems.length === 0 && !tileRemoval ? (
-                    <div className="rounded-[28px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">
+                    <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">
                         <span className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--ui-surface-2)] text-[var(--ui-text-faint)]">
                             <ImageIcon className="h-6 w-6" aria-hidden />
                         </span>
@@ -2443,7 +2443,7 @@ export default function ShowcaseClient({
                 ) : null}
 
                 {loadMoreError ? (
-                    <div role="alert" className="mt-8 flex flex-col items-start justify-between gap-4 rounded-[24px] border border-rose-300/25 bg-rose-400/10 p-4 sm:flex-row sm:items-center">
+                    <div role="alert" className="mt-8 flex flex-col items-start justify-between gap-4 rounded-3xl border border-rose-300/25 bg-rose-400/10 p-4 sm:flex-row sm:items-center">
                         <div>
                             <p className="text-sm font-bold text-rose-200">Could not load more posts</p>
                             <p className="mt-1 text-sm text-[var(--ui-text-secondary)]">{loadMoreError}</p>

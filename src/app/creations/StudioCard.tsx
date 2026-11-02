@@ -237,7 +237,7 @@ export default function StudioCard({
   const stateClass = highlighted
     ? 'ring-2 ring-[var(--ui-primary)] ring-offset-2 ring-offset-black'
     : tone === 'failed' ? 'opacity-60' : '';
-  const surface = `group relative overflow-hidden rounded-[24px] border backdrop-blur-md transition duration-300 ${SURFACE_TONE_CLASS[tone]} ${stateClass} ${className}`;
+  const surface = `group relative overflow-hidden rounded-3xl border backdrop-blur-md transition duration-300 ${SURFACE_TONE_CLASS[tone]} ${stateClass} ${className}`;
 
   const body = isCompact ? (
     <>
@@ -257,7 +257,7 @@ export default function StudioCard({
     </>
   ) : (
     <div className="grid gap-4 p-3 md:grid-cols-[180px_minmax(0,1fr)]">
-      <div className="relative overflow-hidden rounded-[18px] border border-white/8 bg-black/60">
+      <div className="relative overflow-hidden rounded-xl border border-white/8 bg-black/60">
         {media}
         {badge}
       </div>

@@ -1165,7 +1165,7 @@ export default function FeedClient({
                 // A lane that failed to load is not an empty one: the alert
                 // above says so, with its Retry, and nothing invites a post.
                 removalRow ?? (loadError ? null : (
-                    <div className="rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center">
+                    <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center">
                         <p className="text-lg font-bold text-[var(--ui-text-primary)]">Nothing in this lane yet</p>
                         <p className="mt-2 text-sm text-[var(--ui-text-muted)]">
                             Switch lanes, or share a note, prompt, or creation to start it.
@@ -1249,7 +1249,7 @@ export default function FeedClient({
             {loadingMore ? (
                 <div aria-hidden="true" className="flex flex-col gap-3" data-feed-load-more-skeleton="true">
                     {[0, 1].map((placeholder) => (
-                        <SkeletonLoader key={placeholder} className="h-64 rounded-[1.5rem]" />
+                        <SkeletonLoader key={placeholder} className="h-64 rounded-3xl" />
                     ))}
                 </div>
             ) : null}

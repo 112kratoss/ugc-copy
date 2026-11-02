@@ -233,7 +233,7 @@ function DialogShell({
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#080a09] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.72)]"
+        className="w-full max-w-md rounded-3xl border border-white/10 bg-[#080a09] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.72)]"
         onMouseDown={(event) => event.stopPropagation()}
       >
         {children}
@@ -281,15 +281,15 @@ function WorkflowCard({
   }, [menuOpen, onMenuChange]);
 
   return (
-    <article className="group relative overflow-visible rounded-[26px] border border-white/10 bg-[#0a0c0b] transition duration-200 hover:-translate-y-0.5 hover:border-emerald-400/25 hover:shadow-[0_24px_80px_rgba(0,0,0,0.38)] focus-within:border-emerald-400/35 motion-reduce:transform-none">
+    <article className="group relative overflow-visible rounded-3xl border border-white/10 bg-[#0a0c0b] transition duration-200 hover:-translate-y-0.5 hover:border-emerald-400/25 hover:shadow-[0_24px_80px_rgba(0,0,0,0.38)] focus-within:border-emerald-400/35 motion-reduce:transform-none">
       <button
         type="button"
         onClick={onOpen}
         disabled={isPending}
         aria-label={`Open canvas ${canvas.title}`}
-        className="block w-full rounded-t-[26px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400/70 disabled:cursor-wait disabled:opacity-60"
+        className="block w-full rounded-t-3xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400/70 disabled:cursor-wait disabled:opacity-60"
       >
-        <div className="relative h-40 overflow-hidden rounded-t-[25px] border-b border-white/[0.07] bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.12),transparent_45%),linear-gradient(145deg,#090b0a,#050505)] p-4">
+        <div className="relative h-40 overflow-hidden rounded-t-3xl border-b border-white/[0.07] bg-[radial-gradient(circle_at_30%_20%,rgba(16,185,129,0.12),transparent_45%),linear-gradient(145deg,#090b0a,#050505)] p-4">
           <div className="absolute inset-0 opacity-35 [background-image:radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.12)_1px,transparent_0)] [background-size:18px_18px]" />
           <div className="relative h-full">
             <MiniGraphPreview preview={canvas.preview} />
@@ -575,10 +575,10 @@ export default function WorkflowLibraryClient() {
 
         {isLoading ? (
           <div className="mt-8 grid gap-5 sm:grid-cols-2 xl:grid-cols-3" aria-label="Loading workflows">
-            {[0, 1, 2].map((item) => <div key={item} className="h-[365px] animate-pulse rounded-[26px] border border-white/[0.07] bg-white/[0.025]" />)}
+            {[0, 1, 2].map((item) => <div key={item} className="h-[365px] animate-pulse rounded-3xl border border-white/[0.07] bg-white/[0.025]" />)}
           </div>
         ) : loadError ? (
-          <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-[28px] border border-rose-500/20 bg-rose-500/[0.05] p-8 text-center">
+          <div className="mt-8 flex min-h-72 flex-col items-center justify-center rounded-3xl border border-rose-500/20 bg-rose-500/[0.05] p-8 text-center">
             <RefreshCw className="h-8 w-8 text-rose-300" />
             <h2 className="mt-4 text-xl font-semibold">Your workflows could not be loaded</h2>
             <p className="mt-2 max-w-md text-sm text-zinc-400">{loadError}</p>
@@ -610,7 +610,7 @@ export default function WorkflowLibraryClient() {
             ))}
           </section>
         ) : (
-          <div className="mt-8 flex min-h-80 flex-col items-center justify-center rounded-[28px] border border-dashed border-white/10 bg-white/[0.018] p-8 text-center">
+          <div className="mt-8 flex min-h-80 flex-col items-center justify-center rounded-3xl border border-dashed border-white/10 bg-white/[0.018] p-8 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-500/10 text-emerald-200"><Workflow className="h-7 w-7" /></div>
             <h2 className="mt-5 text-xl font-semibold">{canvases.length === 0 ? 'Build your first workflow' : 'No workflows match that search'}</h2>
             <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">{canvases.length === 0 ? 'Start with a flexible canvas, connect your media steps, and turn the result into a reusable template when it is ready.' : 'Try a shorter title or clear the search to see the full library.'}</p>

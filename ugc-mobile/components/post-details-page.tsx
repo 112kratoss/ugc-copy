@@ -613,7 +613,7 @@ function HeaderButton({ accessibilityLabel, children, onPress }: { accessibility
       style={({ pressed }) => ({
         width: 48,
         height: 48,
-        borderRadius: 24,
+        borderRadius: appTheme.radii.pill,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: theme.colors.surfaceStrong,
@@ -734,7 +734,7 @@ function DetailActionButton({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        borderRadius: 22,
+        borderRadius: appTheme.radii.pill,
         backgroundColor: primary ? primaryColor : theme.colors.surfaceStrong,
         opacity: disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
         paddingHorizontal: 15,

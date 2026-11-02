@@ -123,7 +123,7 @@ export default function InviteScreen() {
 
       <Card accent="commerce" padding="lg">
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <View style={{ width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
+          <View style={{ width: 58, height: 58, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
             <Gift size={appTheme.icon.feature} color={theme.colors.commerce} />
           </View>
           <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -206,7 +206,7 @@ function SignedOutInvite() {
       />
       <Card accent="commerce" padding="lg">
         <View style={{ alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-          <View style={{ width: 68, height: 68, borderRadius: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
+          <View style={{ width: 68, height: 68, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
             <Gift size={32} color={theme.colors.commerce} />
           </View>
           <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>Friends create better together</AppText>
@@ -292,7 +292,7 @@ function RewardActivity({ rewards }: { rewards: ReferralReward[] }) {
           {rewards.map((reward, index) => (
             <View key={reward.id}>
               <View accessible accessibilityLabel={`${reward.status === 'reversed' ? 'Reversed' : 'Earned'} ${formatCreditAmount(reward.credits)} credits`} style={{ minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-                <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: reward.status === 'reversed' ? theme.semantic.warning.background : theme.semantic.success.background }}>
+                <View style={{ width: 38, height: 38, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: reward.status === 'reversed' ? theme.semantic.warning.background : theme.semantic.success.background }}>
                   {reward.status === 'reversed'
                     ? <RotateCcw size={18} color={theme.colors.warning} />
                     : <Gift size={18} color={theme.colors.success} />}
@@ -318,7 +318,7 @@ function RuleRow({ icon, text }: { icon: React.ReactNode; text: string }) {
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-      <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>{icon}</View>
+      <View style={{ width: 34, height: 34, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>{icon}</View>
       <AppText variant="bodySm" color="textSecondary" style={{ flex: 1, paddingTop: 6 }}>{text}</AppText>
     </View>
   );

@@ -112,7 +112,7 @@ function WorkflowDeleteDialog({
           aria-labelledby="workflow-delete-dialog-title"
           aria-describedby="workflow-delete-dialog-description"
           data-testid="workflow-delete-dialog"
-          className="w-full max-w-md rounded-[28px] border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
+          className="w-full max-w-md rounded-3xl border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
           onClick={(event) => event.stopPropagation()}
         >
           <div className="text-[11px] uppercase tracking-[0.18em] text-rose-300">Delete workflow</div>

@@ -125,7 +125,7 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
 
         {isFirstRunProfile ? (
           <>
-            <section className="mb-7 rounded-[28px] border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
+            <section className="mb-7 rounded-3xl border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
               <div className="max-w-2xl">
                 <div className="inline-flex items-center gap-2 rounded-full border border-[rgba(255,122,89,0.24)] bg-[var(--ui-primary-soft)] px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary-strong)]">
                   <BadgeCheck className="h-3.5 w-3.5" aria-hidden />
@@ -142,7 +142,7 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
                 {setupSteps.map((step) => (
                   <div
                     key={step.label}
-                    className={`rounded-[22px] border p-4 ${step.done
+                    className={`rounded-2xl border p-4 ${step.done
                       ? 'border-emerald-300/20 bg-emerald-500/10'
                       : 'border-white/8 bg-white/[0.03]'}`}
                   >

@@ -561,7 +561,7 @@ export function MetricCard({
           style={{
             width: compact ? 34 : 42,
             height: compact ? 34 : 42,
-            borderRadius: compact ? 17 : 21,
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: accent ? `${accentColor(accent, theme.colors)}1f` : theme.colors.surfaceStrong,
@@ -672,7 +672,7 @@ export function ReadinessRow({
         paddingVertical: appTheme.spacing.compact,
       }}
     >
-      <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: semantic.foreground }} />
+      <View style={{ width: 9, height: 9, borderRadius: appTheme.radii.pill, backgroundColor: semantic.foreground }} />
       <View style={{ flex: 1, gap: 2 }}>
         <AppText selectable={false} variant="label" color={semantic.foreground}>
           {label}
@@ -757,7 +757,7 @@ export function ToggleRow({
           style={{
             width: 48,
             height: 30,
-            borderRadius: 15,
+            borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: value ? `${color}88` : theme.colors.borderStrong,
             backgroundColor: value ? `${color}30` : theme.colors.surfaceInset,
@@ -769,7 +769,7 @@ export function ToggleRow({
             style={{
             width: 22,
             height: 22,
-            borderRadius: 11,
+            borderRadius: appTheme.radii.pill,
               backgroundColor: value ? accentFill(accent) : theme.colors.muted,
               transform: thumbTranslate ? [{ translateX: thumbTranslate }] : undefined,
           }}

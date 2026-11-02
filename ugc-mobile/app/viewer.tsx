@@ -3082,7 +3082,7 @@ function ActiveVideoAttempt({
           inset must match it or the card sits off-centre. */}
       {playbackFailed ? (
         <View style={{ position: 'absolute', left: 80, right: 80, alignItems: 'center' }}>
-          <View style={{ backgroundColor: theme.colors.panel, padding: 20, borderRadius: 20, gap: 12 }}>
+          <View style={{ backgroundColor: theme.colors.panel, padding: 20, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', gap: 12 }}>
             <Text accessibilityRole="alert" style={{ color: theme.colors.text, fontSize: 16, textAlign: 'center' }}>
               Video couldn’t load
             </Text>
@@ -3108,12 +3108,12 @@ function StatusSlide({ item, width, height }: { item: ImmersivePreviewItem; widt
     <View
       style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: theme.colors.app }}
     >
-      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
+      <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
         <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: tone.foreground }} />
         <View
           style={{
             alignSelf: 'flex-start',
-            borderRadius: 999,
+            borderRadius: appTheme.radii.pill,
             backgroundColor: tone.background,
             borderWidth: 1,
             borderColor: tone.border,
@@ -3155,9 +3155,9 @@ function AudioSlide({ item, active, width, height }: { item: ImmersivePreviewIte
     <View
       style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: theme.colors.app }}
     >
-      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 18, overflow: 'hidden' }}>
+      <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 18, overflow: 'hidden' }}>
         <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: theme.colors.motion }} />
-        <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 999, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
+        <View style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
           <AudioLines size={appTheme.icon.xs} color={theme.colors.motion} />
           <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
             {item.badge}
@@ -3182,9 +3182,9 @@ function TextSlide({ item, width, height }: { item: ImmersivePreviewItem; width:
     <View
       style={{ width, height, justifyContent: 'center', paddingLeft: 22, paddingRight: 90, paddingBottom: 120, backgroundColor: theme.colors.app }}
     >
-      <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
+      <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 20, gap: 13, overflow: 'hidden' }}>
         <View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, backgroundColor: theme.colors.primary }} />
-        <View style={{ alignSelf: 'flex-start', borderRadius: 999, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
+        <View style={{ alignSelf: 'flex-start', borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 11, paddingVertical: 6 }}>
           <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
             {item.badge}
           </Text>

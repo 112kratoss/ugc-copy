@@ -970,7 +970,7 @@ function SignedOutCard() {
   return (
     <View
       style={{
-        borderRadius: 22,
+        borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -980,7 +980,7 @@ function SignedOutCard() {
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 13 }}>
-        <View style={{ width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft, borderWidth: 1, borderColor: theme.colors.borderStrong }}>
+        <View style={{ width: 52, height: 52, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft, borderWidth: 1, borderColor: theme.colors.borderStrong }}>
           <UserRound size={appTheme.icon.feature} color={theme.colors.muted} />
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
@@ -997,7 +997,7 @@ function SignedOutCard() {
         onPress={() => router.push({ pathname: '/auth', params: { returnTo: '/profile' } } as never)}
         style={({ pressed }) => ({
           minHeight: 50,
-          borderRadius: 18,
+          borderRadius: appTheme.radii.pill,
           backgroundColor: theme.colors.primaryFill,
           alignItems: 'center',
           justifyContent: 'center',
@@ -1026,7 +1026,7 @@ function GuestCreationsNotice() {
       onPress={() => router.push({ pathname: '/auth', params: { mode: 'signup', returnTo: '/profile' } } as never)}
       style={({ pressed }) => ({
         minHeight: 44,
-        borderRadius: 14,
+        borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -1104,7 +1104,7 @@ function ProfileHeroCard({
     <View
       style={{
         overflow: 'hidden',
-        borderRadius: 24,
+        borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -1117,7 +1117,7 @@ function ProfileHeroCard({
         ) : (
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
             <View style={{ width: 36, height: 1, backgroundColor: theme.colors.borderStrong }} />
-            <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.primary }} />
+            <View style={{ width: 7, height: 7, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.primary }} />
             <View style={{ width: 36, height: 1, backgroundColor: theme.colors.borderStrong }} />
           </View>
         )}
@@ -1133,7 +1133,7 @@ function ProfileHeroCard({
             onPress={onEdit}
             style={({ pressed }) => ({
               minHeight: 48,
-              borderRadius: 18,
+              borderRadius: appTheme.radii.pill,
               backgroundColor: theme.colors.primaryFill,
               flexDirection: 'row',
               alignItems: 'center',
@@ -1161,7 +1161,7 @@ function ProfileHeroCard({
                 style={({ pressed }) => ({
                   flex: 1,
                   minHeight: 44,
-                  borderRadius: 14,
+                  borderRadius: appTheme.radii.pill,
                   borderWidth: 1,
                   borderColor: theme.colors.border,
                   alignItems: 'center',
@@ -1180,7 +1180,7 @@ function ProfileHeroCard({
                 style={({ pressed }) => ({
                   flex: 1,
                   minHeight: 44,
-                  borderRadius: 14,
+                  borderRadius: appTheme.radii.pill,
                   borderWidth: 1,
                   borderColor: theme.colors.border,
                   alignItems: 'center',
@@ -1202,7 +1202,8 @@ function ProfileHeroCard({
             style={({ pressed }) => ({
               marginTop: 10,
               minHeight: 44,
-              borderRadius: 14,
+              borderRadius: appTheme.radii.md,
+              borderCurve: 'continuous',
               borderWidth: 1,
               borderColor: theme.colors.border,
               flexDirection: 'row',
@@ -1258,12 +1259,12 @@ function ProfileAvatar({ profile, initials }: { profile?: ProfileResponse | null
       style={{
         width: 68,
         height: 68,
-        borderRadius: 34,
+        borderRadius: appTheme.radii.pill,
         padding: 3,
         backgroundColor: theme.colors.background,
       }}
     >
-        <View style={{ flex: 1, overflow: 'hidden', borderRadius: 31, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft, borderWidth: 2, borderColor: theme.colors.primary }}>
+        <View style={{ flex: 1, overflow: 'hidden', borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft, borderWidth: 2, borderColor: theme.colors.primary }}>
           {profile?.avatarUrl ? (
             <Image source={{ uri: profile.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
           ) : (
@@ -1303,7 +1304,7 @@ function BalanceCard({
       style={({ pressed }) => ({
         flex: 1,
         minHeight: 74,
-        borderRadius: 20,
+        borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -1317,7 +1318,7 @@ function BalanceCard({
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
+      <View style={{ width: 36, height: 36, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
         {icon}
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -1344,7 +1345,7 @@ function InviteAndEarnButton() {
       onPress={() => router.push('/invite' as never)}
       style={({ pressed }) => ({
         minHeight: 58,
-        borderRadius: 20,
+        borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: `${theme.colors.commerce}55`,
@@ -1356,7 +1357,7 @@ function InviteAndEarnButton() {
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: `${theme.colors.commerce}1f`, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ width: 38, height: 38, borderRadius: appTheme.radii.pill, backgroundColor: `${theme.colors.commerce}1f`, alignItems: 'center', justifyContent: 'center' }}>
         <Gift size={appTheme.icon.default} color={theme.colors.commerce} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -1484,7 +1485,7 @@ function ProfileRenderingTile({
     <View
       style={{
         width,
-        borderRadius: 16,
+        borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -1548,7 +1549,7 @@ function ProfileFailedTile({ item, width }: { item: ProfileMediaCard; width: num
       style={({ pressed }) => ({
         width,
         minHeight: 84,
-        borderRadius: 16,
+        borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,
@@ -1571,7 +1572,7 @@ function ProfileMediaEmpty({ title, body = PROFILE_MEDIA_EMPTY_BODY }: { title: 
     <View
       style={{
         minHeight: 154,
-        borderRadius: 24,
+        borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.borderSubtle,
@@ -1624,7 +1625,7 @@ function getProfileMediaSwipeDirection(gestureState: PanResponderGestureState): 
 function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange: (value: ProfileMediaTab) => void }) {
   const theme = useAppTheme();
   return (
-    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: 4, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 4 }}>
       {PROFILE_MEDIA_TABS.map((tab) => {
         const active = tab === value;
         return (
@@ -1637,7 +1638,7 @@ function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange:
             style={({ pressed }) => ({
               flex: 1,
               minHeight: appTheme.touch.compact,
-              borderRadius: 14,
+              borderRadius: appTheme.radii.pill,
               backgroundColor: active ? theme.colors.primaryFill : 'transparent',
               alignItems: 'center',
               justifyContent: 'center',
@@ -1680,7 +1681,7 @@ function ProfileMediaScopeControl<Scope extends string>({
             style={({ pressed }) => ({
               minHeight: appTheme.touch.compact,
               paddingHorizontal: 14,
-              borderRadius: 999,
+              borderRadius: appTheme.radii.pill,
               borderWidth: 1,
               borderColor: active ? theme.colors.primary : theme.colors.border,
               backgroundColor: active ? hexWithAlpha(theme.colors.primary, 0.14) : theme.colors.panel,
@@ -1744,7 +1745,7 @@ function ProfileMediaTile({
   const previewUrl = item.previewUrl ?? item.mediaUrl;
   const zoomSource = useMediaZoomSource({
     itemId: item.sourceId,
-    radius: 12,
+    radius: appTheme.radii.sm,
     // The media's own shape: the cell crops every post to the same one.
     aspectRatio: item.aspectRatio ?? null,
     preview: previewUrl ? { url: previewUrl, cacheKey: item.previewCacheKey ?? item.id, thumbhash: item.previewThumbhash } : null,
@@ -1800,7 +1801,7 @@ function ProfileMediaTile({
         style={{
           flex: 1,
           overflow: 'hidden',
-          borderRadius: 12,
+          borderRadius: appTheme.radii.sm,
           borderCurve: 'continuous',
           // A light outline becomes a bright frame when UIKit enlarges it.
           borderWidth: highlighted ? 2 : nativeZoomTile ? 0 : 1,
@@ -1819,7 +1820,7 @@ function ProfileMediaTile({
           />
         )}
         {item.mediaKind === 'video' ? (
-          <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: mediaColors.mediaScrim }}>
+          <View style={{ position: 'absolute', top: 8, right: 8, width: 28, height: 28, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: mediaColors.mediaScrim }}>
             <Play size={appTheme.icon.sm} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
           </View>
         ) : null}
@@ -1862,7 +1863,7 @@ function ProfileSavedFeedOverlay({
           flexDirection: 'row',
           alignItems: 'center',
           gap: 6,
-          borderRadius: 14,
+          borderRadius: appTheme.radii.pill,
           backgroundColor: mediaColors.mediaChip,
           borderWidth: 1,
           borderColor: hexWithAlpha(mediaColors.onMedia, 0.16),
@@ -1874,7 +1875,7 @@ function ProfileSavedFeedOverlay({
           style={{
             width: 21,
             height: 21,
-            borderRadius: 10.5,
+            borderRadius: appTheme.radii.pill,
             overflow: 'hidden',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1985,7 +1986,7 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           left: 8,
           width: 28,
           height: 28,
-          borderRadius: 14,
+          borderRadius: appTheme.radii.pill,
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: mediaColors.mediaChip,
@@ -2012,7 +2013,7 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           left: 8,
           width: 22,
           height: 22,
-          borderRadius: 11,
+          borderRadius: appTheme.radii.pill,
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: mediaColors.mediaChip,
@@ -2038,7 +2039,7 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 3,
-            borderRadius: 11,
+            borderRadius: appTheme.radii.pill,
             paddingHorizontal: 6,
             backgroundColor: mediaColors.mediaChip,
             borderWidth: 1,
@@ -2131,7 +2132,7 @@ function ProfileAudioPreview({ item, height }: { item: ProfileMediaCard; height:
         <View
           style={{
             alignSelf: 'flex-start',
-            borderRadius: 999,
+            borderRadius: appTheme.radii.pill,
             backgroundColor: `${accent}1f`,
             borderWidth: 1,
             borderColor: `${accent}66`,
@@ -2162,7 +2163,7 @@ function ProfileTextPreview({ item, height }: { item: ProfileMediaCard; height: 
         <View
           style={{
             alignSelf: 'flex-start',
-            borderRadius: 999,
+            borderRadius: appTheme.radii.pill,
             backgroundColor: `${accent}1f`,
             borderWidth: 1,
             borderColor: `${accent}66`,
@@ -2193,7 +2194,7 @@ function ProfileVideoFallback({ item, height }: { item: ProfileMediaCard; height
           style={{
             width: 42,
             height: 42,
-            borderRadius: 21,
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: `${theme.colors.video}1f`,
@@ -2236,7 +2237,7 @@ function ProfileUnavailableFallback({
           style={{
             width: 28,
             height: 28,
-            borderRadius: 14,
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: `${accent}1f`,

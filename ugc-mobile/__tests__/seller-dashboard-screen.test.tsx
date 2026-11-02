@@ -85,9 +85,10 @@ vi.mock('@/lib/home-view-model', () => ({
 }));
 vi.mock('@/lib/profile-view-model', () => ({ WALLET_UNAVAILABLE_CAPTION: 'Balance unavailable' }));
 vi.mock('@/lib/use-creator-payout-state', () => ({ useCreatorPayoutState: () => payout.result }));
-vi.mock('@/lib/theme', () => ({
-  appTheme: { icon: { feature: 22 }, opacity: { pressed: 0.7 }, spacing: { gap: 12 } },
-}));
+vi.mock('@/lib/theme', async () => {
+  const { appTheme } = await vi.importActual<typeof import('@/lib/theme')>('@/lib/theme');
+  return { appTheme: { icon: { feature: 22 }, opacity: { pressed: 0.7 }, radii: appTheme.radii, spacing: { gap: 12 } } };
+});
 vi.mock('@/lib/theme-context', () => ({
   useAppTheme: () => ({ colors: { commerce: '#0a0', faint: '#999', info: '#08f', primary: '#f60', success: '#0a0', surface: '#eee' } }),
 }));

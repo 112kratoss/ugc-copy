@@ -450,7 +450,7 @@ export default function ShowcaseMediaCarousel({
     <div ref={carouselRef} className={className}>
       <div
         data-showcase-media-viewport
-        className={`group/carousel relative overflow-hidden bg-black ${isDetail ? 'rounded-[22px]' : ''} ${isReel ? 'h-full' : ''} ${onOpen ? 'cursor-pointer' : ''} ${viewportClassName}`}
+        className={`group/carousel relative overflow-hidden bg-black ${isDetail ? 'rounded-ui-xl' : ''} ${isReel ? 'h-full' : ''} ${onOpen ? 'cursor-pointer' : ''} ${viewportClassName}`}
         style={isReel ? undefined : {
           aspectRatio: frameAspectRatio,
           ...(numericFrameRatio ? { '--media-ratio': numericFrameRatio } as React.CSSProperties : {}),
@@ -731,7 +731,7 @@ export default function ShowcaseMediaCarousel({
               type="button"
               onClick={() => selectIndex(index)}
               aria-label={`Show media ${index + 1}`}
-              className={`relative h-20 w-16 shrink-0 overflow-hidden rounded-md border bg-black ${
+              className={`relative h-20 w-16 shrink-0 overflow-hidden rounded-xl border bg-black ${
                 index === activeIndex ? 'border-emerald-300/70' : 'border-white/10'
               }`}
             >

@@ -885,7 +885,7 @@ function KlingSubjectsEditor({
                         const imageCountOk = subject.images.length >= KLING_SUBJECT_MIN_IMAGES
                             && subject.images.length <= KLING_SUBJECT_MAX_IMAGES;
                         return (
-                            <div key={subject.id} className="rounded-[24px] border border-zinc-700/40 bg-black/35 p-3">
+                            <div key={subject.id} className="rounded-2xl border border-zinc-700/40 bg-black/35 p-3">
                                 {/* The handle is made from the name, so a long name gives a long handle.
                                     It stays beside the name field while it takes no more than half of
                                     their line, and leaves the field 10rem on a wide one. A longer handle

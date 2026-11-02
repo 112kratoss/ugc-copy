@@ -186,7 +186,7 @@ function HomeShelfRow({ items, offerFreeToTry }: { items: HomeShelfItem[]; offer
           <Link
             href="/showcase"
             prefetch={false}
-            className="ui-focus-ring inline-flex min-h-12 items-center rounded-md px-1 text-sm font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]"
+            className="ui-focus-ring inline-flex min-h-12 items-center rounded-lg px-1 text-sm font-bold text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]"
           >
             See all
           </Link>

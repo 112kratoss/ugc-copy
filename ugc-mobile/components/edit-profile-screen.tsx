@@ -531,7 +531,7 @@ export function EditProfileScreen() {
                 style={({ pressed }) => ({
                   width: 84,
                   height: 84,
-                  borderRadius: 42,
+                  borderRadius: appTheme.radii.pill,
                   padding: 3,
                   borderWidth: 2,
                   borderColor: theme.colors.primary,
@@ -539,14 +539,14 @@ export function EditProfileScreen() {
                   opacity: pressed ? appTheme.opacity.pressed : 1,
                 })}
               >
-                  <View style={{ flex: 1, overflow: 'hidden', borderRadius: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
+                  <View style={{ flex: 1, overflow: 'hidden', borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
                     {avatarDraftUri || form.avatarUrl ? (
                       <Image source={{ uri: avatarDraftUri ?? form.avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
                     ) : (
                       <AppText variant="sectionTitle">{preview.initials}</AppText>
                     )}
                   </View>
-                <View style={{ position: 'absolute', right: -2, bottom: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.primaryFill, borderWidth: 3, borderColor: theme.colors.background }}>
+                <View style={{ position: 'absolute', right: -2, bottom: 0, width: 32, height: 32, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.primaryFill, borderWidth: 3, borderColor: theme.colors.background }}>
                   <Camera size={appTheme.icon.sm} color={theme.colors.onPrimary} />
                 </View>
               </Pressable>

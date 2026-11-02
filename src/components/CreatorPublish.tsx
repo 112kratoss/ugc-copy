@@ -260,7 +260,7 @@ function CreatorRemixCredit({
       <div className="min-w-0 flex-1 text-xs leading-5 text-[var(--ui-text-muted)]">
         <p className="text-sm font-semibold leading-5 text-[var(--ui-text-primary)] [overflow-wrap:anywhere]">
           Remix of {original.title ? `“${original.title}”` : 'a post'} by{' '}
-          <Link href={profileHref} className="ui-focus-ring rounded-sm underline-offset-4 hover:underline">{handle}</Link>
+          <Link href={profileHref} className="ui-focus-ring rounded-lg underline-offset-4 hover:underline">{handle}</Link>
         </p>
         <p>
           {handle} was told when your remix finished.
@@ -595,7 +595,7 @@ function CreatorPosted({
         <Check className="h-5 w-5" strokeWidth={2.5} />
       </span>
       <div role="status">
-        <h3 ref={headingRef} tabIndex={-1} className="ui-focus-ring rounded-sm text-lg font-bold text-[var(--ui-text-primary)] outline-none">
+        <h3 ref={headingRef} tabIndex={-1} className="ui-focus-ring rounded-lg text-lg font-bold text-[var(--ui-text-primary)] outline-none">
           {isPublic ? 'Posted to the feed' : 'Saved as a private post'}
         </h3>
         <p className="mt-1 text-sm leading-6 text-[var(--ui-text-muted)] [overflow-wrap:anywhere]">

@@ -97,7 +97,7 @@ export function OnboardingBookletGoal({
                 style={({ pressed }) => ({
                   minHeight: 88,
                   flex: 1,
-                  borderRadius: 18,
+                  borderRadius: appTheme.radii.lg,
                   borderCurve: 'continuous',
                   borderWidth: isSelected ? 2 : 1,
                   borderColor: isSelected ? theme.colors[item.tone] : theme.colors.borderSubtle,
@@ -118,7 +118,7 @@ export function OnboardingBookletGoal({
                         top: -9,
                         width: 20,
                         height: 20,
-                        borderRadius: 10,
+                        borderRadius: appTheme.radii.pill,
                         backgroundColor: theme.colors[item.tone],
                         alignItems: 'center',
                         justifyContent: 'center',

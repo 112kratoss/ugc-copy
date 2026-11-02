@@ -32,7 +32,7 @@ function AssistantMessageBubble({
 
   return (
     <div
-      className={`rounded-[24px] border px-4 py-3 ${
+      className={`rounded-2xl border px-4 py-3 ${
         isAssistant
           ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-zinc-100'
           : 'border-white/10 bg-white/[0.03] text-zinc-100'
@@ -110,7 +110,7 @@ function ProposalCard({
   const totalChangedNodes = proposal.diff.nodes.added.length + proposal.diff.nodes.changed.length + proposal.diff.nodes.removed.length;
 
   return (
-    <div className="rounded-[28px] border border-emerald-500/25 bg-emerald-500/[0.06] p-4 shadow-[0_18px_60px_rgba(0,0,0,0.28)]">
+    <div className="rounded-3xl border border-emerald-500/25 bg-emerald-500/[0.06] p-4 shadow-[0_18px_60px_rgba(0,0,0,0.28)]">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-200">Proposal preview</div>
@@ -162,7 +162,7 @@ function ProposalCard({
           type="button"
           onClick={onApply}
           disabled={isApplying || isDiscarding || isProposalStale}
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border border-emerald-500/35 bg-emerald-500/15 px-4 py-3 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-emerald-500/35 bg-emerald-500/15 px-4 py-3 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
           {isApplying ? 'Applying...' : 'Apply to canvas'}
@@ -171,7 +171,7 @@ function ProposalCard({
           type="button"
           onClick={onDiscard}
           disabled={isApplying || isDiscarding}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isDiscarding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
           {isDiscarding ? 'Discarding...' : 'Discard'}
@@ -285,7 +285,7 @@ export function WorkflowAssistantDrawer({
         {isOpen ? (
           <aside
             data-testid="workflow-assistant-popup"
-            className="pointer-events-auto flex min-h-0 flex-1 w-[min(440px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-x-hidden overflow-y-auto rounded-[30px] border border-white/10 bg-[#050505]/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] backdrop-blur-xl"
+            className="pointer-events-auto flex min-h-0 flex-1 w-[min(440px,calc(100vw-2rem))] max-w-[calc(100vw-2rem)] flex-col overflow-x-hidden overflow-y-auto rounded-3xl border border-white/10 bg-[#050505]/96 shadow-[0_30px_120px_rgba(0,0,0,0.58)] backdrop-blur-xl"
           >
             <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
               <div className="flex items-start gap-3">
@@ -315,7 +315,7 @@ export function WorkflowAssistantDrawer({
             </div>
 
             <div className="shrink-0 border-b border-white/10 px-5 py-4">
-              <div className="rounded-[24px] border border-emerald-500/20 bg-emerald-500/[0.07] p-4 text-sm text-zinc-200">
+              <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.07] p-4 text-sm text-zinc-200">
                 <div className="flex items-start gap-3">
                   <div className="rounded-full bg-black/30 p-2 text-emerald-100">
                     <Wand2 className="h-4 w-4" />
@@ -341,7 +341,7 @@ export function WorkflowAssistantDrawer({
                 ) : null}
 
                 {isSetupRequired ? (
-                  <div className="rounded-[24px] border border-amber-500/30 bg-amber-500/10 px-4 py-4 text-sm text-amber-100">
+                  <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-4 text-sm text-amber-100">
                     <div className="text-[11px] uppercase tracking-[0.18em] text-amber-200">Setup required</div>
                     <div className="mt-2 leading-relaxed">
                       {setupMessage || 'AI Builder needs the latest workflow assistant migration before it can create proposals.'}
@@ -372,7 +372,7 @@ export function WorkflowAssistantDrawer({
             </div>
 
             <div className="shrink-0 border-t border-white/10 px-5 py-4">
-              <div className="rounded-[24px] border border-white/10 bg-white/[0.03] p-3">
+              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3">
                 <textarea
                   aria-label="Workflow assistant prompt"
                   value={input}

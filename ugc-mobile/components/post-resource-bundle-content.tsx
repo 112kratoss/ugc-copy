@@ -333,7 +333,7 @@ function ResourceMediaSelector({
               style={({ pressed }) => ({
                 width: 48,
                 height: 48,
-                borderRadius: 14,
+                borderRadius: appTheme.radii.sm,
                 borderCurve: 'continuous',
                 borderWidth: 2,
                 borderColor: selected ? theme.colors.primary : theme.colors.border,
@@ -343,7 +343,7 @@ function ResourceMediaSelector({
               })}
             >
               <MediaScopeThumbnail item={item} />
-              <View style={{ position: 'absolute', right: 3, bottom: 3, minWidth: 17, height: 17, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.72), paddingHorizontal: 4 }}>
+              <View style={{ position: 'absolute', right: 3, bottom: 3, minWidth: 17, height: 17, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.72), paddingHorizontal: 4 }}>
                 <Text style={{ color: mediaColors.onMedia, fontSize: 11, lineHeight: 14, fontWeight: '900' }}>{index + 1}</Text>
               </View>
             </Pressable>
@@ -609,7 +609,7 @@ function ScopeSummary({ mediaItems, scope }: { mediaItems: ShowcaseMediaItem[]; 
         Applies to {normalizedScope.mediaKeys.length} {normalizedScope.mediaKeys.length === 1 ? 'output' : 'outputs'}
       </Text>
       {targets.slice(0, 4).map((item) => (
-        <View key={resourceMediaKey(item)} style={{ width: 28, height: 28, borderRadius: 9, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
+        <View key={resourceMediaKey(item)} style={{ width: 28, height: 28, borderRadius: appTheme.radii.xs, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
           <MediaScopeThumbnail item={item} />
         </View>
       ))}
@@ -655,7 +655,7 @@ function RecipeGroupIcon({ kind }: { kind: RecipeGroupKind }) {
   const theme = useAppTheme();
   const Icon = RECIPE_GROUP_ICONS[kind];
   return (
-    <View style={{ width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.primary}18` }}>
+    <View style={{ width: 38, height: 38, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.primary}18` }}>
       <Icon size={18} color={theme.colors.primary} />
     </View>
   );

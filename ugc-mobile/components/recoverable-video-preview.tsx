@@ -11,7 +11,7 @@ import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { useVideoHasBeenReady } from '@/lib/use-video-has-been-ready';
 import { useVideoSourceAfterSurface } from '@/lib/use-video-source-after-surface';
-import { mediaColors } from '@/lib/theme';
+import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 type VideoPreviewProps = {
@@ -193,7 +193,7 @@ function VideoPreviewAttempt({
       ) : null}
       {failed ? (
         <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.panel, borderRadius: 20, padding: 20, gap: 12 }}>
+          <View style={{ backgroundColor: theme.colors.panel, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', padding: 20, gap: 12 }}>
             <Text accessibilityRole="alert" style={{ color: theme.colors.text, fontSize: 16, textAlign: 'center' }}>
               {renewalFailed ? 'Couldn’t refresh video. Try again.' : 'Video couldn’t load'}
             </Text>

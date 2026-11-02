@@ -416,7 +416,7 @@ export function FeedVideoPreview({
             style={{
               width: 36,
               height: 36,
-              borderRadius: 18,
+              borderRadius: appTheme.radii.pill,
               alignItems: 'center',
               justifyContent: 'center',
               backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.55),

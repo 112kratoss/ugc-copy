@@ -467,8 +467,7 @@ function AppearanceSetting() {
           flexDirection: 'row',
           gap: 4,
           padding: 4,
-          borderRadius: 18,
-          borderCurve: 'continuous',
+          borderRadius: appTheme.radii.pill,
           borderWidth: 1,
           borderColor: theme.colors.border,
           backgroundColor: theme.colors.surfaceInset,
@@ -490,8 +489,7 @@ function AppearanceSetting() {
               style={({ pressed }) => ({
                 flex: 1,
                 minHeight: appTheme.touch.compact,
-                borderRadius: 14,
-                borderCurve: 'continuous',
+                borderRadius: appTheme.radii.pill,
                 alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: active ? theme.colors.primaryFill : 'transparent',
@@ -563,7 +561,7 @@ function SettingsCard({
       style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       <Card style={{ minHeight: 92, flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
           {icon}
         </View>
         <View style={{ flex: 1, gap: 3 }}>

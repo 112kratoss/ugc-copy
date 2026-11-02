@@ -105,6 +105,7 @@ The guards below fail the mobile suite, so a red guard is a real violation: fix 
 | `hig-type-and-contrast.test.ts` | 11pt minimum type, 4.5:1 contrast for text on every panel in both schemes, 44pt hit regions, no `fontWeight` on a display variant |
 | `hig-dynamic-type.test.tsx` | Text always follows the OS text size, within each tier's cap |
 | `hig-icon-size.test.ts`, `hig-icon-weight.test.tsx` | Icon sizes come from the ramp; one stroke weight app-wide |
+| `hig-corner-radius.test.ts` | Radii come from the token scale (Radius below); rounded rectangles draw the continuous corner, capsules and circles do not |
 | `theme-color-literals.test.ts` | No raw colour outside the `EXEMPT` list |
 | `theme-palette-parity.test.ts` | The light and dark palettes carry the same names |
 | `motion-token-compliance.test.ts` | Press opacity and springs come from the theme; every timing names its easing |
@@ -228,16 +229,27 @@ Rules:
 
 ### Radius
 
+Three shapes on one scale, the web's too (`design-web.md` → Radius), drawn as Apple draws them (the HIG's Buttons chapter; SwiftUI's `Capsule` and `RoundedRectangle`, and iOS 26's `ConcentricRectangle`). Until November 2026 the app drew 36 radii, 263 of them as bare numbers.
+
+- **Capsule** (`pill`): anything pressed on one row (buttons, chips, segmented controls and their thumbs, toggles, search fields, the creator bar with its settings chip and Generate, Templates and Enhance, the dock's tabs) and every circle (icon buttons, avatars, badges, dots, progress tracks). Rows in a vertical stack (menu and drawer rows, list rows, a grid of options) are rounded rectangles, as the HIG prefers for a stack.
+- **Fixed**, the outermost container's own step, by its size (table below).
+- **Concentric**, a shape nested 12pt or less inside a rounded container: the container's radius less the gap, snapped to a step and never under 8, so the two curves share a centre. Write it from the tokens: the Android menu's rows are `MENU_RADIUS - MENU_PADDING`, 20 less 4. A bar of capsules on one row, such as the creator's, is a capsule itself.
+- **A capsule whose label can wrap** takes half its minimum height as a fixed radius instead of `pill` (`xl` on a 48pt control), so it is a capsule on one line and grows into a rounded rectangle, not a stadium that cuts its words, when a large text size wraps the label. Templates and Enhance do; their labels are also capped at the control tier.
+
 | Token | Value | Use |
 | --- | --- | --- |
-| `xs` | 8 | Tiny tags, thumbnails |
-| `sm` | 12 | Compact controls |
-| `md` | 16 | Inputs, buttons, small cards |
-| `lg` | 20 | Feed and standard cards |
-| `xl` | 24 | Panels, media cards, the top corners of sheets |
-| `pill` | 999 | Pills, chips, round buttons |
+| `xs` | 8 | Tiny thumbnails, icon wells inside a field |
+| `sm` | 12 | Compact rows and fields, thumbnails, option cells, a field inside a section |
+| `md` | 16 | Inputs, notices, list rows, tiles, feed and Explore media |
+| `lg` | 20 | Sections, standard cards and large tiles, media frames |
+| `xl` | 24 | Panels and cards that stand alone, dialogs, the top corners of sheets |
+| `pill` | 999 | Capsules and circles |
 
-Use `borderCurve: 'continuous'` on rounded rectangles, and nothing off this scale unless a component owns the value.
+The web's 32 step (its bars of capsules held 8px in) has no app token yet: add `xxl` with the first app surface that needs it.
+
+Every uniformly rounded rectangle declares iOS's continuous corner (`borderCurve: 'continuous'`, which Android ignores). Capsules and circles keep circular ends, so a capsule matches the circles beside it and a placeholder the avatar it stands in for (`SkeletonBone` chooses by its radius). SwiftUI's own `Capsule` defaults to continuous ends; the app keeps them circular. React Native puts the continuous corner on the fill; a visible border on a view that does not clip is stroked circular, within a fraction of a point at these radii, and per-corner radii (a sheet's top corners) are drawn circular whatever `borderCurve` says, so they need none (`RCTViewComponentView.mm`).
+
+A radius is a token, the `/ 2` of a size (never of a token), or an expression of tokens, never a number. `__tests__/hig-corner-radius.test.ts` reads `app/`, `components/` and `lib/` through TypeScript's parser and holds every `border*Radius` (logical corners included), every `radius`, `mediaRadius` and `cornerRadius` handed to a component, and every `*_RADIUS` constant to that, every uniform rounded rectangle to its curve and every capsule or circle to no continuous one. Its counted exceptions: the aspect-ratio mark; the Android zoom flight's animated clip; `MediaPreview`'s picture with its fallback and its player's frame (expo-image takes no `borderCurve`, so the three keep one circular corner and no state changes shape); the unlock page's player frame, which takes the still's place; and the remix row's poster.
 
 ### Elevation
 

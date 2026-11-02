@@ -64,7 +64,6 @@ export function NewPostsPill({
               gap: appTheme.spacing.compact,
               paddingHorizontal: appTheme.spacing.card,
               borderRadius: appTheme.radii.pill,
-              borderCurve: 'continuous',
               backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
               boxShadow: theme.shadow.soft.boxShadow,
             })}

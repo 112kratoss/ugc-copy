@@ -1835,7 +1835,7 @@ export default function CreationsPage() {
                 {activeView === 'unlocks' ? <UnlockLibrary /> : null}
 
                 {shouldShowPortfolioStarter ? (
-                    <section className="mb-8 rounded-[28px] border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
+                    <section className="mb-8 rounded-3xl border border-[rgba(255,122,89,0.2)] bg-[var(--ui-surface-1)] p-5 shadow-[var(--ui-shadow-panel)] sm:p-6">
                         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
                             <div>
                                 <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-300">
@@ -1904,7 +1904,7 @@ export default function CreationsPage() {
                             ].map((item) => (
                                 <div
                                     key={item.title}
-                                    className="rounded-[22px] border border-white/8 bg-black/25 p-4"
+                                    className="rounded-2xl border border-white/8 bg-black/25 p-4"
                                 >
                                     <div className="flex items-center gap-2 text-sm font-semibold text-white">
                                         <CheckCircle2 className={`h-4 w-4 ${item.ready ? 'text-emerald-300' : 'text-zinc-500'}`} />
@@ -1983,7 +1983,7 @@ export default function CreationsPage() {
                 )}
 
                 {activeView === 'creations' && !isLoading && loadError ? (
-                    <div role="alert" className="mb-10 flex flex-col items-center gap-4 rounded-[28px] border border-rose-500/20 bg-rose-500/5 px-6 py-10 text-center">
+                    <div role="alert" className="mb-10 flex flex-col items-center gap-4 rounded-3xl border border-rose-500/20 bg-rose-500/5 px-6 py-10 text-center">
                         <p className="text-base font-semibold text-rose-100">{loadError}</p>
                         <button
                             type="button"
@@ -2019,7 +2019,7 @@ export default function CreationsPage() {
                             ].map((item) => {
                                 const Icon = item.icon;
                                 return (
-                                    <div key={item.title} className="rounded-[22px] border border-white/8 bg-white/[0.03] p-4 text-left">
+                                    <div key={item.title} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 text-left">
                                         <Icon className="h-5 w-5 text-[var(--ui-primary)]" />
                                         <div className="mt-3 text-sm font-semibold text-white">{item.title}</div>
                                         <p className="mt-1 text-xs leading-5 text-zinc-500">{item.body}</p>
@@ -2312,7 +2312,7 @@ export default function CreationsPage() {
                                                     <Link
                                                         href={linkedPostHref}
                                                         aria-label={workspaceState.secondaryAction.label ?? 'Open post'}
-                                                        className="ui-focus-ring flex items-center gap-1.5 rounded-md text-sm font-semibold text-white transition hover:text-[var(--ui-primary)]"
+                                                        className="ui-focus-ring flex items-center gap-1.5 rounded-lg text-sm font-semibold text-white transition hover:text-[var(--ui-primary)]"
                                                     >
                                                         <span className="truncate">{workspaceState.linkedPost.title}</span>
                                                         <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />

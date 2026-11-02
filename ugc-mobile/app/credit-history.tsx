@@ -319,7 +319,7 @@ function CreditHistoryRow({ entry, first, last }: { entry: CreditHistoryEntry; f
           style={{
             width: 36,
             height: 36,
-            borderRadius: 18,
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: theme.colors.panelSoft,
