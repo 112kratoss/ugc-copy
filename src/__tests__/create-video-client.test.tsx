@@ -7814,6 +7814,8 @@ describe('CreateVideoClient Kling video elements', () => {
           restoreIssues: [],
         } as unknown as RemixSourceBundle;
       }
+      const remixReads = () => fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'));
+      const remixPromptBox = () => screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
 
       it('stays on the original\'s model and settings when the balance is short of it, and offers a top-up', async () => {
         authState.credits = 22;
@@ -7973,6 +7975,57 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'))).toHaveLength(1);
         expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
+      });
+
+      // A session back from a lapse comes with a new token too, and is the same reader.
+      it('keeps the creator’s prompt and model through a lapse’s return', async () => {
+        authState.credits = 22;
+        stubRemix(remixOf({ duration: 5 }));
+        const page = () => <CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />;
+        const view = render(page());
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        fireEvent.change(remixPromptBox(), { target: { value: 'A duel on a rooftop at night' } });
+        openModelList();
+        fireEvent.click(within(screen.getByRole('group', { name: 'Fits your 22 credits' })).getByRole('option', { name: /Seedance 2 Mini/ }));
+        await waitFor(() => expect(costShown()).toBe('19 credits'));
+
+        authState.signedIn = false;
+        view.rerender(page());
+        await act(async () => {});
+        authState.signedIn = true;
+        authState.token = 'token-after-lapse';
+        view.rerender(page());
+        await act(async () => {});
+
+        expect(remixReads()).toHaveLength(1);
+        expect(remixPromptBox()).toHaveValue('A duel on a rooftop at night');
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini');
+      });
+
+      // A token renewed while the remix is still on its way is not another reader either.
+      it('is read once though the session token is renewed while it loads, keeping words typed meanwhile', async () => {
+        const bundle = remixOf({ duration: 5 });
+        let release: () => void = () => undefined;
+        const released = new Promise<void>((resolve) => { release = resolve; });
+        // Each read is answered once the test lets the remix through.
+        fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+          if (!String(input).includes('/api/remix-source')) return defaultResponse(input, init);
+          await released;
+          return { ok: true, status: 200, json: async () => bundle } as Response;
+        });
+        const page = () => <CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />;
+        const view = render(page());
+        await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+        fireEvent.change(remixPromptBox(), { target: { value: 'A duel on a rooftop at night' } });
+        authState.token = 'renewed-token';
+        view.rerender(page());
+        await act(async () => {});
+        await act(async () => release());
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(remixPromptBox()).toHaveValue('A duel on a rooftop at night');
+        expect(remixReads()).toHaveLength(1);
       });
 
       it('opens on its original while the balance covers it', async () => {

@@ -1996,6 +1996,91 @@ describe('CreateMotionClient drafts and media', () => {
     expect(persistedMediaMocks.setPersistedFile).not.toHaveBeenCalled();
   });
 
+  // Supabase renews the session token about hourly, and a session back from a lapse comes with a new
+  // one. Neither is another reader: the remix was read again and put its prompt, model, picture and
+  // clip back over the creator's.
+  describe('a remix through a renewed session', () => {
+    const remixPage = () => <CreateMotionClient prefill={{ remixId: 'generation-source' }} />;
+    const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
+    const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
+    const remixReads = () => fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/remix-source?'));
+    /** The page's session as AuthProvider passes it on: a new token, or none while it has lapsed. */
+    function sessionBecomes(accessToken: string | null, redraw: () => void) {
+      authState.session = accessToken ? { access_token: accessToken, user: { id: 'user-1' } } : null;
+      redraw();
+    }
+    async function settle() {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    beforeEach(() => {
+      modelCatalogState.summaries = motionModelSummaries;
+      remixSourceBody = {
+        generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
+        result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
+        inputs: {
+          motion: {
+            characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
+            referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
+          },
+        },
+        workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
+        restoreIssues: [],
+      };
+    });
+
+    it('keeps the creator’s prompt, model and picture through a renewed token and a lapse’s return', async () => {
+      const view = render(remixPage());
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(box()).toHaveValue('Dance on the roof at dusk');
+
+      fireEvent.change(box(), { target: { value: 'Moonwalk across the roof' } });
+      chooseModel(view.container, 'Kling 3.0 Motion');
+      pickFile(view.container, 'motion-character-image-input', new File(['selfie'], 'selfie.png', { type: 'image/png' }));
+      await waitFor(() => expect(screen.getByAltText('Character image').getAttribute('src')).toMatch(/^blob:/));
+      const selfie = screen.getByAltText('Character image').getAttribute('src');
+
+      sessionBecomes('renewed-token', () => view.rerender(remixPage()));
+      await settle();
+      sessionBecomes(null, () => view.rerender(remixPage()));
+      await settle();
+      sessionBecomes('token-after-lapse', () => view.rerender(remixPage()));
+      await settle();
+
+      expect(box()).toHaveValue('Moonwalk across the roof');
+      expect(modelChip(view.container)).toHaveTextContent('Kling 3.0 Motion');
+      expect(screen.getByAltText('Character image')).toHaveAttribute('src', selfie);
+      expect(remixReads()).toHaveLength(1);
+    });
+
+    it('reads it once though the token is renewed while it loads, keeping words typed meanwhile', async () => {
+      const answerOthers = fetchMock.getMockImplementation()!;
+      onTestFinished(() => {
+        fetchMock.mockImplementation(answerOthers);
+      });
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      // Each read is answered once the test lets the remix through.
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).startsWith('/api/remix-source?')) await released;
+        return answerOthers(input, init);
+      });
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+      fireEvent.change(box(), { target: { value: 'Spin slowly on the spot' } });
+      sessionBecomes('renewed-token', () => view.rerender(remixPage()));
+      await settle();
+      await act(async () => release());
+
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(box()).toHaveValue('Spin slowly on the spot');
+      expect(remixReads()).toHaveLength(1);
+    });
+  });
+
   it('refuses a file the upload would refuse, naming it, and keeps the attached clip', async () => {
     const view = render(<CreateMotionClient prefill={{}} />);
     await attachBothInputs(view.container);

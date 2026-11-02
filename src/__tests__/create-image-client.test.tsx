@@ -2239,6 +2239,76 @@ describe('CreateImageClient generation pipeline', () => {
     expect(removePersistedMediaMock).not.toHaveBeenCalled();
   });
 
+  // Supabase renews the session token about hourly, and a session back from a lapse comes with a new
+  // one. Neither is another reader: the remix was read again and put its prompt, model and pictures
+  // back over the creator's.
+  describe('a remix through a renewed session', () => {
+    const remixPage = () => <CreateImageClient prefill={{ remixId: 'gen-1' }} />;
+    const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
+    const remixReads = (fetchMock: ReturnType<typeof installFetch>) => fetchMock.mock.calls
+      .filter(([url]) => String(url).startsWith('/api/remix-source?'));
+    /** The page's session as AuthProvider passes it on: a new token, or none while it has lapsed. */
+    function sessionBecomes(accessToken: string | null, redraw: () => void) {
+      authState.session = accessToken ? { access_token: accessToken, user: { id: 'user-1' } } : null;
+      redraw();
+    }
+
+    beforeEach(() => {
+      modelCatalogState.summaries = [
+        { id: 'nano-banana-2', kind: 'image', displayName: 'Nano Banana 2.0', description: 'Test image model' },
+        { id: 'nano-banana-pro', kind: 'image', displayName: 'Nano Banana Pro', description: 'Test image model' },
+      ];
+    });
+
+    it('keeps the creator’s prompt, model and pictures through a renewed token and a lapse’s return', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX });
+      const view = render(remixPage());
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+
+      typePrompt('@lead rows across the harbour at noon');
+      chooseModel(view.container, 'Nano Banana Pro');
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]')!, {
+        target: { files: [new File(['selfie'], 'selfie.png', { type: 'image/png' })] },
+      });
+      expect(await screen.findByAltText('Element 3')).toBeInTheDocument();
+
+      sessionBecomes('renewed-token', () => view.rerender(remixPage()));
+      await settleDraftRead();
+      sessionBecomes(null, () => view.rerender(remixPage()));
+      await settleDraftRead();
+      sessionBecomes('token-after-lapse', () => view.rerender(remixPage()));
+      await settleDraftRead();
+
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead rows across the harbour at noon');
+      expect(modelChip(view.container)).toHaveTextContent('Nano Banana Pro');
+      expect(screen.getByAltText('Element 3')).toBeInTheDocument();
+      expect(remixReads(fetchMock)).toHaveLength(1);
+    });
+
+    it('reads it once though the token is renewed while it loads, keeping words typed meanwhile', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX });
+      const answerOthers = fetchMock.getMockImplementation()!;
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => { release = resolve; });
+      // Each read is answered once the test lets the remix through.
+      fetchMock.mockImplementation(async (input, init) => {
+        if (String(input).startsWith('/api/remix-source?')) await released;
+        return answerOthers(input, init);
+      });
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads(fetchMock)).toHaveLength(1));
+
+      typePrompt('A rowing boat at dawn');
+      sessionBecomes('renewed-token', () => view.rerender(remixPage()));
+      await settleDraftRead();
+      await act(async () => release());
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('A rowing boat at dawn');
+      expect(remixReads(fetchMock)).toHaveLength(1);
+    });
+  });
+
   describe('a reference staged by an earlier press', () => {
     beforeEach(() => {
       getPersistedImageElementRecordsMock.mockResolvedValue([{ id: 'restored-1', displayName: 'Restored product', file: restoredFile }]);
