@@ -696,6 +696,8 @@ function chooseModel(container: HTMLElement, displayName: string) {
   fireEvent.click(screen.getByRole('option', { name: new RegExp(displayName) }));
 }
 
+const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
+
 describe('CreateImageClient model notices', () => {
   beforeEach(() => {
     getPersistedImageElementRecordsMock.mockReset();
@@ -816,11 +818,13 @@ function jsonResponse(status: number, body: unknown) {
  * Answers the start POSTs in order, the creation read the publish form makes, and the look
  * for a run already at work as the page opens (`activeRun`, none by default).
  */
-function installFetch({ starts = [], publishDetails = null, remixBundle = null, activeRun = null, activeRunAnswer = null }: {
+function installFetch({ starts = [], publishDetails = null, remixBundle = null, remixHold = null, activeRun = null, activeRunAnswer = null }: {
   starts?: StartReply[];
   publishDetails?: unknown;
-  /** The remix source, or what it answers each reader by their Authorization header. */
-  remixBundle?: RemixSourceBundle | ((authorization: string | undefined) => RemixSourceBundle) | null;
+  /** The remix source, or what it answers each reader by their Authorization header (null: refused). */
+  remixBundle?: RemixSourceBundle | ((authorization: string | undefined) => RemixSourceBundle | null) | null;
+  /** Holds each remix read until it settles. */
+  remixHold?: Promise<unknown> | null;
   activeRun?: Record<string, unknown> | null;
   /** Answers the look in place of `activeRun`, when the test resolves it. */
   activeRunAnswer?: Promise<Response> | null;
@@ -839,7 +843,9 @@ function installFetch({ starts = [], publishDetails = null, remixBundle = null, 
     if (url.startsWith('/api/generations?')) return jsonResponse(200, publishDetails ?? { generations: [] });
     if (url === '/api/generations/active?tool=image') return activeRunAnswer ?? jsonResponse(200, { run: activeRun });
     if (url.startsWith('/api/remix-source?') && remixBundle) {
-      return jsonResponse(200, typeof remixBundle === 'function' ? remixBundle(authorizationOf(init)) : remixBundle);
+      if (remixHold) await remixHold;
+      const bundle = typeof remixBundle === 'function' ? remixBundle(authorizationOf(init)) : remixBundle;
+      return bundle ? jsonResponse(200, bundle) : jsonResponse(401, { error: 'Unauthorized' });
     }
     throw new Error(`Unexpected fetch: ${url}`);
   });
@@ -853,6 +859,10 @@ function startCalls(fetchMock: ReturnType<typeof installFetch>) {
 
 function activeRunReads(fetchMock: ReturnType<typeof installFetch>) {
   return fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/generations/active'));
+}
+
+function remixReads(fetchMock: ReturnType<typeof installFetch>) {
+  return fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/remix-source?'));
 }
 
 /** An answer the test gives when it chooses. */
@@ -2209,8 +2219,7 @@ describe('CreateImageClient generation pipeline', () => {
       expect(await screen.findByAltText('Element 3')).toBeInTheDocument();
 
       signInAs('user-2', () => view.rerender(remixPage()));
-      await waitFor(() => expect(fetchMock.mock.calls
-        .filter(([url]) => String(url).startsWith('/api/remix-source?'))
+      await waitFor(() => expect(remixReads(fetchMock)
         .map(([, init]) => authorizationOf(init as RequestInit))).toEqual(['Bearer token-user-1', 'Bearer token-user-2']));
       await settleDraftRead();
 
@@ -2237,6 +2246,105 @@ describe('CreateImageClient generation pipeline', () => {
       expect.arrayContaining([expect.objectContaining({ displayName: 'Restored product' })]),
     ));
     expect(removePersistedMediaMock).not.toHaveBeenCalled();
+  });
+
+  // Supabase renews the session token about hourly, and a session back from a lapse comes with a new
+  // one. Neither is another reader: the remix was read again and put its prompt, model and pictures
+  // back over the creator's.
+  describe('a remix through a renewed session', () => {
+    const remixPage = () => <CreateImageClient prefill={{ remixId: 'gen-1' }} />;
+    /** The page's session as AuthProvider passes it on: a new token, or none while it has lapsed. */
+    function sessionBecomes(accessToken: string | null, redraw: () => void) {
+      authState.session = accessToken ? { access_token: accessToken, user: { id: 'user-1' } } : null;
+      redraw();
+    }
+
+    beforeEach(() => {
+      // Imagen 4 takes no pictures; Nano Banana Pro keeps the creator's.
+      modelCatalogState.summaries = [
+        ...imageModelSummaries,
+        { id: 'nano-banana-pro', kind: 'image', displayName: 'Nano Banana Pro', description: 'Test image model' },
+      ];
+    });
+
+    it('keeps the creator’s prompt, model and pictures through a renewed token and a lapse’s return', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX });
+      const view = render(remixPage());
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+
+      typePrompt('@lead rows across the harbour at noon');
+      chooseModel(view.container, 'Nano Banana Pro');
+      fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]')!, {
+        target: { files: [new File(['selfie'], 'selfie.png', { type: 'image/png' })] },
+      });
+      expect(await screen.findByAltText('Element 3')).toBeInTheDocument();
+
+      sessionBecomes('renewed-token', () => view.rerender(remixPage()));
+      await settleDraftRead();
+      sessionBecomes(null, () => view.rerender(remixPage()));
+      await settleDraftRead();
+      sessionBecomes('token-after-lapse', () => view.rerender(remixPage()));
+      await settleDraftRead();
+
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead rows across the harbour at noon');
+      expect(modelChip(view.container)).toHaveTextContent('Nano Banana Pro');
+      expect(screen.getByAltText('Element 3')).toBeInTheDocument();
+      expect(remixReads(fetchMock)).toHaveLength(1);
+    });
+
+    it('reads it once though the token is renewed while it loads, keeping words typed meanwhile', async () => {
+      let release: () => void = () => undefined;
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX, remixHold: new Promise<void>((resolve) => { release = resolve; }) });
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads(fetchMock)).toHaveLength(1));
+
+      typePrompt('A rowing boat at dawn');
+      sessionBecomes('renewed-token', () => view.rerender(remixPage()));
+      await settleDraftRead();
+      await act(async () => release());
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('A rowing boat at dawn');
+      expect(remixReads(fetchMock)).toHaveLength(1);
+    });
+
+    // Development's Strict Mode mounts the form twice over its one read.
+    it('fills the form from its one read in development’s Strict Mode', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX });
+      render(<StrictMode>{remixPage()}</StrictMode>);
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
+      expect(remixReads(fetchMock)).toHaveLength(1);
+    });
+
+    // Back can draw the page again from Next's cache with the session it was first drawn with, expired
+    // since; the one read would be refused. The browser's own session, renewed as it nears its end, is
+    // the account's too.
+    it('reads it with the browser’s own session when the page’s has expired', async () => {
+      authState.session = { access_token: 'expired-token', user: { id: 'user-1' } };
+      getSessionMock.mockResolvedValue({ data: { session: { access_token: 'fresh-token', user: { id: 'user-1' } } } });
+      const fetchMock = installFetch({ remixBundle: (authorization) => (authorization === 'Bearer expired-token' ? null : HARBOUR_REMIX) });
+      render(remixPage());
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
+      expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init as RequestInit))).toEqual(['Bearer fresh-token']);
+    });
+
+    // Never another account's session (one signed in from another tab), and the page's own where the
+    // browser holds none (the E2E sign-in, a lapse): the remix source answers as its reader.
+    it.each([
+      ['another account', { access_token: 'token-user-2', user: { id: 'user-2' } }],
+      ['no one', null],
+    ])('reads it with the page’s session when the browser’s belongs to %s', async (_case, browserSession) => {
+      getSessionMock.mockResolvedValue({ data: { session: browserSession } });
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX });
+      render(remixPage());
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init as RequestInit))).toEqual(['Bearer test-token']);
+    });
   });
 
   describe('a reference staged by an earlier press', () => {
@@ -2979,7 +3087,6 @@ describe('CreateImageClient opening', () => {
     settings: { aspectRatio: '4:5', resolution: '2K' },
     costCredits: 14,
   };
-  const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
 
   it('draws the opening\'s model, settings and price before its catalog is in', () => {
     modelCatalogState.catalogReady = false;

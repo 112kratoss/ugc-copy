@@ -606,12 +606,19 @@ describe('CreateVideoClient Kling video elements', () => {
   }
 
   /** Answers the page's remix request with this bundle, and every other request as the page's own answers do. */
-  function stubRemix(bundle: RemixSourceBundle) {
-    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
-      String(input).includes('/api/remix-source')
-        ? { ok: true, status: 200, json: async () => bundle } as Response
-        : defaultResponse(input, init)
-    ));
+  /** The remix source answers `bundle`: after `hold` settles, and refusing `refusedToken` (401) as one expired. */
+  function stubRemix(bundle: RemixSourceBundle, { hold = null, refusedToken = null }: { hold?: Promise<unknown> | null; refusedToken?: string | null } = {}) {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).includes('/api/remix-source')) return defaultResponse(input, init);
+      if (hold) await hold;
+      return (init?.headers as Record<string, string> | undefined)?.Authorization === `Bearer ${refusedToken}`
+        ? { ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) } as Response
+        : { ok: true, status: 200, json: async () => bundle } as Response;
+    });
+  }
+
+  function remixReads() {
+    return fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'));
   }
 
   /** What the Enhance button of one shot was last given. */
@@ -6021,8 +6028,7 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(screen.queryAllByDisplayValue('Element 1').length).toBeGreaterThan(0));
 
         signInAs('user-2', () => view.rerender(remixPage()));
-        await waitFor(() => expect(fetchMock.mock.calls
-          .filter(([input]) => String(input).includes('/api/remix-source'))
+        await waitFor(() => expect(remixReads()
           .map(([, init]) => authorizationOf(init))).toEqual(['Bearer token-user-1', 'Bearer token-user-2']));
         await settle();
 
@@ -7814,6 +7820,7 @@ describe('CreateVideoClient Kling video elements', () => {
           restoreIssues: [],
         } as unknown as RemixSourceBundle;
       }
+      const remixPromptBox = () => screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
 
       it('stays on the original\'s model and settings when the balance is short of it, and offers a top-up', async () => {
         authState.credits = 22;
@@ -7960,19 +7967,90 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');
       });
 
-      // Supabase renews the session token about hourly: the remix is not loaded again over the creator's edits.
-      it('is loaded once though the session token is renewed', async () => {
+      // Supabase renews the session token about hourly, and a session back from a lapse comes with a new
+      // one. Neither is another reader: the remix is not read again over the creator's prompt and model.
+      it('keeps the creator’s prompt and model through a renewed token and a lapse’s return', async () => {
         authState.credits = 22;
         stubRemix(remixOf({ duration: 5 }));
-        const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        const page = () => <CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />;
+        const view = render(page());
         expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        fireEvent.change(remixPromptBox(), { target: { value: 'A duel on a rooftop at night' } });
+        openModelList();
+        fireEvent.click(within(screen.getByRole('group', { name: 'Fits your 22 credits' })).getByRole('option', { name: /Seedance 2 Mini/ }));
+        await waitFor(() => expect(costShown()).toBe('19 credits'));
 
         authState.token = 'renewed-token';
-        view.rerender(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        view.rerender(page());
+        await act(async () => {});
+        authState.signedIn = false;
+        view.rerender(page());
+        await act(async () => {});
+        authState.signedIn = true;
+        authState.token = 'token-after-lapse';
+        view.rerender(page());
         await act(async () => {});
 
-        expect(fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'))).toHaveLength(1);
-        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-5');
+        expect(remixPromptBox()).toHaveValue('A duel on a rooftop at night');
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini');
+        expect(remixReads()).toHaveLength(1);
+      });
+
+      // A token renewed while the remix is still on its way is not another reader either.
+      it('is read once though the session token is renewed while it loads, keeping words typed meanwhile', async () => {
+        let release: () => void = () => undefined;
+        stubRemix(remixOf({ duration: 5 }), { hold: new Promise<void>((resolve) => { release = resolve; }) });
+        const page = () => <CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />;
+        const view = render(page());
+        await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+        fireEvent.change(remixPromptBox(), { target: { value: 'A duel on a rooftop at night' } });
+        authState.token = 'renewed-token';
+        view.rerender(page());
+        await act(async () => {});
+        await act(async () => release());
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(remixPromptBox()).toHaveValue('A duel on a rooftop at night');
+        expect(remixReads()).toHaveLength(1);
+      });
+
+      // Development's Strict Mode mounts the form twice over its one read.
+      it('fills the form from its one read in development’s Strict Mode', async () => {
+        stubRemix(remixOf({ duration: 5 }));
+        render(<StrictMode><CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} /></StrictMode>);
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(remixPromptBox()).toHaveValue('Two figures face off in a dim hall.');
+        expect(remixReads()).toHaveLength(1);
+      });
+
+      // Back can draw the page again from Next's cache with the session it was first drawn with, expired
+      // since; the one read would be refused. The browser's own session, renewed as it nears its end, is
+      // the account's too.
+      it('reads it with the browser’s own session when the page’s has expired', async () => {
+        authState.token = 'expired-token';
+        authClient.session = { access_token: 'fresh-token', user: { id: 'user-1' } };
+        stubRemix(remixOf({ duration: 5 }), { refusedToken: 'expired-token' });
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(remixPromptBox()).toHaveValue('Two figures face off in a dim hall.');
+        expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer fresh-token']);
+      });
+
+      // Never another account's session (one signed in from another tab), and the page's own where the
+      // browser holds none (the E2E sign-in, a lapse): the remix source answers as its reader.
+      it.each([
+        ['another account', { access_token: 'token-user-2', user: { id: 'user-2' } }],
+        ['no one', null],
+      ])('reads it with the page’s session when the browser’s belongs to %s', async (_case, browserSession) => {
+        authClient.session = browserSession;
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token']);
       });
 
       it('opens on its original while the balance covers it', async () => {

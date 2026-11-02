@@ -95,6 +95,7 @@ import {
     createRemixResultReferenceElement,
     getRemixRestoreWarning,
     getRemixResultReferenceLabel,
+    REMIX_RESTORE_WARNING,
 } from '@/lib/remix-source-client';
 import {
     getPersistedImageElementRecords,
@@ -695,16 +696,29 @@ function ImageCreator({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // Handle Remix Pre-fill
+    // Handle Remix Pre-fill, once for this form: the effect runs again for a renewed session token
+    // (Supabase renews it about hourly) and for a session back from a lapse, and reading the remix
+    // again put the original's prompt, model and pictures back over the creator's. Another account's
+    // form is drawn anew (`useCreatorForm`) and reads it for itself.
+    const remixReadStartedRef = useRef(false);
     useEffect(() => {
-        if (!remixId) return;
+        if (!remixId || remixReadStartedRef.current) return;
         if (!session?.access_token) return;
+        remixReadStartedRef.current = true;
 
-        let isCancelled = false;
+        // The answer is the form's while it is on the page, whichever run of this effect is the
+        // latest: development's Strict Mode mounts it twice over the one read.
+        const isCancelled = () => unmountSignal.current.aborted;
         const promptWhenRemixStarted = promptRef.current;
+        const pageToken = session.access_token;
 
         const fetchRemixData = async () => {
             try {
+                // The browser's own session where it is the form's account, renewed as it nears its
+                // end: Back can draw the page again from Next's cache with the session it was first
+                // drawn with, expired since, and the one read would be refused.
+                const { data: { session: browserSession } } = await supabase.auth.getSession();
+                const accessToken = browserSession?.user.id === formAccount ? browserSession.access_token : pageToken;
                 const remixSourceParams = new URLSearchParams({ id: remixId });
                 if (remixPostId) {
                     remixSourceParams.set('postId', remixPostId);
@@ -712,7 +726,7 @@ function ImageCreator({
 
                 const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
                     headers: {
-                        Authorization: `Bearer ${session.access_token}`,
+                        Authorization: `Bearer ${accessToken}`,
                     },
                 });
                 const data = await response.json();
@@ -722,7 +736,7 @@ function ImageCreator({
                 }
 
                 const bundle = data as RemixSourceBundle;
-                if (isCancelled) {
+                if (isCancelled()) {
                     return;
                 }
 
@@ -770,24 +784,18 @@ function ImageCreator({
                 }
             } catch (err) {
                 console.error('Error fetching remix:', err);
-                if (!isCancelled) {
-                    setRemixRestoreWarning(
-                        'Some source media could not be restored automatically, so you may need to re-add a few references.'
-                    );
+                if (!isCancelled()) {
+                    setRemixRestoreWarning(REMIX_RESTORE_WARNING);
                 }
             } finally {
-                if (!isCancelled) {
+                if (!isCancelled()) {
                     setIsRemixLoading(false);
                 }
             }
         };
 
         void fetchRemixData();
-
-        return () => {
-            isCancelled = true;
-        };
-    }, [commitElements, remixId, remixPostId, session?.access_token]);
+    }, [commitElements, formAccount, remixId, remixPostId, session?.access_token, unmountSignal]);
 
     useEffect(() => {
         elementRefs.current = elements;
