@@ -152,8 +152,10 @@ describe('the sign-in return', () => {
     expect(router.dismissTo).toHaveBeenCalledWith(returnTo);
   });
 
-  // The screen reads its params from the route because of this second decode. Should a later
-  // expo-router stop making it, `useLocalSearchParams` is safe for the return again.
+  // This screen and the creator route (`app/create/[tool].tsx`) read their params from the route
+  // because of this second decode, and both tests stand in for the hook with it
+  // (`create-tool-screen.test.tsx` too). Should a later expo-router stop making it, update both
+  // stand-ins; `useLocalSearchParams` is then safe for either screen's text again.
   it('is read past the decode expo-router’s useLocalSearchParams still adds', () => {
     const hooks = readFileSync('node_modules/expo-router/build/hooks.js', 'utf8');
     const start = hooks.indexOf('function useLocalSearchParams(');

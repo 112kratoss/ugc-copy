@@ -7161,6 +7161,49 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           expect(prompt().props.value).toBe('@hero walks in, then @hero @hero');
         });
 
+        // The insert from the sheet puts focus and the caret back once the sheet has gone, on the
+        // video prompt's own field.
+        it('put the caret back in the prompt after an insert from the subject’s sheet', async () => {
+          catalogState.catalog = parityCatalog([parityKlingO3()]);
+          memory.set(ordinaryKey, heroDraft({}));
+          const focus = vi.fn();
+          const setNativeProps = vi.fn();
+          const tree = await open(<MediaCreationScreen initialTool="video" />, {
+            createNodeMock: (element) => (
+              String(element.type) === 'textinput' && (element.props as { testID?: string }).testID === 'video-prompt-input'
+                ? { focus, setNativeProps }
+                : null
+            ),
+          });
+          const prompt = () => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+          renderer.act(() => prompt().props.onFocus());
+          typeAtEnd(tree, '@hero walks in');
+          renderer.act(() => prompt().props.onBlur());
+          renderer.act(() => labelled(tree.root, 'Open details for Hero, @hero').props.onPress());
+          renderer.act(() => findPressableByText(tree.root, 'Insert @hero').props.onPress());
+          expect(prompt().props.value).toBe('@hero walks in @hero');
+
+          await renderer.act(async () => { await vi.advanceTimersByTimeAsync(279); });
+          expect(focus).not.toHaveBeenCalled();
+          await renderer.act(async () => { await vi.advanceTimersByTimeAsync(1); });
+          expect(focus).toHaveBeenCalledTimes(1);
+          expect(setNativeProps).toHaveBeenCalledWith({ selection: { start: 20, end: 20 } });
+        });
+
+        // A story writes its shots: the single shot's @ list goes with its field, which leaves
+        // without a blur.
+        it('close the @ list when the run turns into a story', async () => {
+          catalogState.catalog = parityCatalog([parityKlingO3()]);
+          memory.set(ordinaryKey, heroDraft({}));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onFocus());
+          typeAtEnd(tree, 'Walks in beside @');
+          expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).not.toHaveLength(0);
+
+          renderer.act(() => { labelled(tree.root, 'Multi-shot').props.onPress(); });
+          expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).toHaveLength(0);
+        });
+
         it('have a link that ran out renewed in the draft', async () => {
           catalogState.catalog = parityCatalog([parityKlingO3()]);
           memory.set(ordinaryKey, heroDraft({ url: expiredLink('uploads/user-123/hero-side.png') }));

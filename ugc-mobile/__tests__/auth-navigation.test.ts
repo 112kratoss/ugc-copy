@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { completeAuthScreen, leaveAuthScreen, normalizeAuthReturnTo } from '../lib/auth-navigation';
+import * as expoRouterNavigationParams from 'expo-router/build/navigationParams';
+import { resolveHref } from 'expo-router/build/link/href';
+
+import { completeAuthScreen, focusedRouteReturnPath, leaveAuthScreen, normalizeAuthReturnTo } from '../lib/auth-navigation';
+import { AWKWARD_PROMPT, homeTabs, pushedRoute, rootStateWith, stateInFront } from './fixtures/navigation-state';
 
 describe('leaveAuthScreen', () => {
   it('uses navigation history when a back stack exists', () => {
@@ -80,5 +84,86 @@ describe('auth return navigation', () => {
 
     expect(router.replace).toHaveBeenCalledWith('/(tabs)');
     expect(router.back).not.toHaveBeenCalled();
+  });
+});
+
+describe('the screen in front, as a return', () => {
+  it('is Home on Home, and a tab by its own name with its params', () => {
+    expect(focusedRouteReturnPath(stateInFront())).toBe('/');
+    expect(focusedRouteReturnPath(rootStateWith(homeTabs({ name: 'creator', params: { tool: 'video', guided: '1' } }))))
+      .toBe('/creator?tool=video&guided=1');
+  });
+
+  // expo-router copies the params of the tab it sends the tabs to onto their
+  // own route, as onboarding's guided video creator leaves it, and they stay
+  // there; a tab press gives the tab in front no params of its own.
+  it('takes no params from the tabs\' own route, which keeps those of the tab they were last sent to', () => {
+    const sent = { tool: 'video', guided: '1' };
+    const tabsParams = { ...sent, screen: 'creator', params: sent };
+
+    expect(focusedRouteReturnPath(rootStateWith(homeTabs({ name: 'index' }, tabsParams)))).toBe('/');
+    expect(focusedRouteReturnPath(rootStateWith(homeTabs({ name: 'creator' }, tabsParams)))).toBe('/creator');
+    expect(focusedRouteReturnPath(rootStateWith(homeTabs({ name: 'showcase' }, tabsParams)))).toBe('/showcase');
+  });
+
+  // React Navigation's NAVIGATE for a link opened while the app runs, which stays on `__root`.
+  it('takes nothing from a link left on the root slot', () => {
+    const link = { username: 'luna', initial: false, screen: 'creators/[username]', path: '/creators/luna', params: { username: 'luna' } };
+    const root = { name: '__root', params: link, state: { index: 0, routes: [homeTabs({ name: 'profile' })] } };
+
+    expect(focusedRouteReturnPath({ index: 0, routes: [root] })).toBe('/profile');
+  });
+
+  it('writes a pushed screen as its push did, each value encoded once', () => {
+    const params = { tool: 'video', remix: 'gen-9', prompt: AWKWARD_PROMPT };
+    const path = focusedRouteReturnPath(stateInFront(pushedRoute('/create/[tool]', params)));
+
+    expect(path).toBe(resolveHref({ pathname: '/create/[tool]', params }));
+    // A backslash or a line break, written raw, would be refused.
+    expect(normalizeAuthReturnTo(path)).toBe(path);
+  });
+
+  it('encodes a path segment once, as expo-router decodes one', () => {
+    expect(focusedRouteReturnPath(stateInFront(pushedRoute('/post/[id]', { id: 'a b/c?d#e' })))).toBe('/post/a%20b%2Fc%3Fd%23e');
+  });
+
+  it('follows a stack inside the root stack to the screen in front', () => {
+    const post = { name: '[id]', params: { id: 'post-9', comments: 'post-9' } };
+    const showcase = { name: 'showcase', params: { ...post.params, screen: '[id]', params: post.params }, state: { index: 0, routes: [post] } };
+
+    expect(focusedRouteReturnPath(stateInFront(showcase))).toBe('/showcase/post-9?comments=post-9');
+  });
+
+  it('follows a navigator that has not drawn its screens yet to the screen its params name', () => {
+    const tabs = { name: '(tabs)', params: { tool: 'image', screen: 'creator', params: { tool: 'image', initial: false } } };
+
+    expect(focusedRouteReturnPath(rootStateWith(tabs))).toBe('/creator?tool=image');
+  });
+
+  it('leaves out the params expo-router keeps for itself', () => {
+    const own = Object.entries(expoRouterNavigationParams)
+      .filter(([name]) => name.endsWith('_PARAM_NAME'))
+      .map(([, name]) => [name as string, 'zoom|r1|post-9']);
+    expect(own.length).toBeGreaterThan(0);
+
+    expect(focusedRouteReturnPath(stateInFront({ name: 'viewer', params: { source: 'home', initialId: 'post-9', ...Object.fromEntries(own) } })))
+      .toBe('/viewer?source=home&initialId=post-9');
+  });
+
+  // The post page counts an open carrying it as a share visit; in-app links never carry it.
+  it('leaves out a shared link\'s surface, which would count the visit again', () => {
+    expect(focusedRouteReturnPath(stateInFront(pushedRoute('/post/[id]', { id: 'post-9', s: 'whatsapp', comments: 'post-9' }))))
+      .toBe('/post/post-9?comments=post-9');
+  });
+
+  it('writes a list once per item and a number as written, and leaves out what has no text', () => {
+    const params = { tag: ['a', 'b'], page: 2, open: true, empty: undefined, draft: { id: 1 } };
+
+    expect(focusedRouteReturnPath(stateInFront({ name: 'templates/index', params }))).toBe('/templates?tag=a&tag=b&page=2&open=true');
+  });
+
+  it('has nothing to come back to without a screen, or on a page the app does not have', () => {
+    expect(focusedRouteReturnPath(undefined)).toBeNull();
+    expect(focusedRouteReturnPath(rootStateWith({ name: '+not-found', params: { 'not-found': ['nowhere'] } }))).toBeNull();
   });
 });

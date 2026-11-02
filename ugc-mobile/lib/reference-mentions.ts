@@ -37,6 +37,16 @@ export function findActiveReferenceMention(text: string, selection: TextSelectio
   return { start: atIndex, end: cursor, query };
 }
 
+/**
+ * Whether a reference answers the mention being typed: its handle without the "@", or its name,
+ * contains the query, in any case. A reference with no handle cannot be mentioned.
+ */
+export function referenceMatchesMention(reference: { handle?: string | null; displayName: string }, query: string) {
+  if (!reference.handle) return false;
+  const needle = query.toLowerCase();
+  return reference.handle.slice(1).toLowerCase().includes(needle) || reference.displayName.toLowerCase().includes(needle);
+}
+
 export function insertHandleAtSelection(text: string, handle: string, selection: TextSelection) {
   const normalized = normalizeTextSelection(text, selection);
   const before = text.slice(0, normalized.start);

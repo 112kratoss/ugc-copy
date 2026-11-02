@@ -4,6 +4,7 @@ import {
   findActiveReferenceMention,
   insertHandleAtSelection,
   normalizeTextSelection,
+  referenceMatchesMention,
 } from '../lib/reference-mentions';
 
 describe('reference mentions', () => {
@@ -17,6 +18,15 @@ describe('reference mentions', () => {
     expect(findActiveReferenceMention(email, { start: email.length, end: email.length })).toBeNull();
     expect(findActiveReferenceMention('Use @flo', { start: 4, end: 8 })).toBeNull();
     expect(findActiveReferenceMention('Use @flowers', { start: 8, end: 8 })).toBeNull();
+  });
+
+  it('offers a reference to a mention by its handle or its name, in any case, and never one with no handle', () => {
+    const flowers = { handle: '@flowers', displayName: 'Spring bouquet' };
+    expect(referenceMatchesMention(flowers, '')).toBe(true);
+    expect(referenceMatchesMention(flowers, 'FLO')).toBe(true);
+    expect(referenceMatchesMention(flowers, 'bouq')).toBe(true);
+    expect(referenceMatchesMention(flowers, 'rose')).toBe(false);
+    expect(referenceMatchesMention({ handle: null, displayName: 'Flowers' }, 'flo')).toBe(false);
   });
 
   it('inserts handles at the beginning, middle, and end with natural spacing', () => {
