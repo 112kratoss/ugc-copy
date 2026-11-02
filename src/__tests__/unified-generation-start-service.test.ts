@@ -621,7 +621,8 @@ describe('reference lengths a caller reports', () => {
     quote = referencePricedQuote,
     existingGeneration = null,
     resolveLink = (url: string) => url,
-    resolveInputSource = vi.fn(async (_client: unknown, url: string) => resolveLink(url)),
+    // Called as the start calls it: the client, the reference, the caller, and the start's options.
+    resolveInputSource = vi.fn(async (...call: [unknown, string, string, { recipeCopyReads?: unknown }?]) => resolveLink(call[1])),
   }: {
     body: Record<string, unknown>;
     measuredSeconds: number;
@@ -631,14 +632,12 @@ describe('reference lengths a caller reports', () => {
     /** The link a reference resolves to. */
     resolveLink?: (url: string) => string;
     /** How a reference is resolved, where a test needs more than `resolveLink`: a held or refused resolve. */
-    resolveInputSource?: (client: unknown, url: string, userId: string) => Promise<string>;
+    resolveInputSource?: (client: unknown, url: string, userId: string, options?: { recipeCopyReads?: unknown }) => Promise<string>;
   }) {
     const started = { predictionId: 'provider-task', generationId: 'generation-1', remainingCredits: 50, cost: 0 };
     const startVideo = vi.fn(async () => started);
     const startMotion = vi.fn(async () => started);
     const probeInputDuration = vi.fn(async () => measuredSeconds);
-    // Called as the start calls it: the client, the reference, the caller, and the start's options.
-    const resolveInputSource = vi.fn(async (...call: [unknown, string, string, { recipeCopyReads?: unknown }?]) => resolveLink(call[1]));
     const outcome = startUnifiedGenerationForRoute(
       {
         request: new Request('http://localhost/api/generations', {
@@ -886,6 +885,38 @@ describe('reference lengths a caller reports', () => {
     }));
     // Resolved as the user it starts for, with the client it starts under.
     expect(run.resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, CHARACTER_URL, 'user-1');
+  });
+
+  // The picture is resolved beside the clip, which pricing resolves to measure: its latency is off
+  // the start's way, and a picture the caller may not use is refused as early as such a clip.
+  it("resolves a motion run's picture beside its clip, the clip asked first", async () => {
+    let releaseClip: (link: string) => void = () => undefined;
+    const resolveInputSource = vi.fn((_client: unknown, url: string) => (
+      url === REFERENCE_URL ? new Promise<string>((resolve) => { releaseClip = resolve; }) : Promise.resolve(url)
+    ));
+    const run = start({ body: motionBody(5, 5), measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote, resolveInputSource });
+
+    await vi.waitFor(() => expect(resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL, CHARACTER_URL]));
+    releaseClip(REFERENCE_URL);
+    await expect(run.outcome).resolves.toMatchObject({ success: true });
+  });
+
+  it('refuses a motion picture the caller may not use before the run is priced', async () => {
+    const notTheirs = new GenerationServiceError('Media references must belong to the authenticated user.', 400);
+    const run = start({
+      // Quoted for 1 second of a 30-second clip: once priced, the run would be sent to quote again.
+      body: motionBody(1, 1),
+      measuredSeconds: 30,
+      operation: MOTION_OPERATION,
+      quote: durationPricedQuote,
+      resolveInputSource: vi.fn(async (_client: unknown, url: string) => {
+        if (url === CHARACTER_URL) throw notTheirs;
+        return url;
+      }),
+    });
+
+    await expect(run.outcome).rejects.toBe(notTheirs);
+    expect(run.startMotion).not.toHaveBeenCalled();
   });
 
   it('refuses a reference whose length cannot be read, or that is not an HTTPS object', async () => {

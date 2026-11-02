@@ -162,7 +162,14 @@ export async function startMotionGenerationForRoute({
     start: async (clientRequestKeyHash) => {
       // One for the start: the clip and the character share each unlock's read.
       const recipeCopyReads = createRecipeCopyReads();
-      const measured = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId, recipeCopyReads);
+      // The picture is resolved beside the clip, which is resolved to be measured (the clip asked
+      // first): the adapter sends both as given, and a remix's restored picture is the link the
+      // remix was read with, which lasts an hour. A picture the caller may not use is refused as
+      // early as such a clip.
+      const [measured, characterImageSource] = await Promise.all([
+        measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId, recipeCopyReads),
+        resolveGenerationMediaSource(supabase, characterImageUrl, userId, { recipeCopyReads }),
+      ]);
       const measuredSeconds = measured.seconds;
       // Kie's motion control takes a clip of 3 to 30 seconds; a shorter one was priced
       // at 3, held, and refused by the provider.
@@ -188,9 +195,6 @@ export async function startMotionGenerationForRoute({
       const normalizedSettings = billableQuote.normalizedSettings;
       const characterOrientation = String(normalizedSettings.characterOrientation);
       const mode = String(normalizedSettings.resolution);
-      // The picture resolved as the clip is, once the price stands: the adapter sends it as given, and
-      // a remix's restored picture is the link the remix was read with, which lasts an hour.
-      const characterImageSource = await resolveGenerationMediaSource(supabase, characterImageUrl, userId, { recipeCopyReads });
       return startMotionGeneration({
         supabase,
         creditSupabase: adminSupabase,

@@ -529,24 +529,23 @@ export async function resolveBillableInputDurations({
 }
 
 /**
- * A motion run's picture as its provider is to fetch it. The motion adapter sends both inputs as
- * it is given them (startMotionGeneration resolves nothing): the clip comes resolved from its
- * measuring (resolveBillableInputDurations), and the picture, the input the adapter takes for it,
- * is resolved here as every other adapter resolves its inputs. So a link the client kept past
- * its hour (a remix's restored picture, signed when the remix opened) is signed again from the
- * object it names, and another creator's kept picture a remix restored is copied in under the
- * remix gate, as their clip is, rather than sent on.
+ * A motion run's picture as its provider is to fetch it, with its place among the run's inputs.
+ * The motion adapter sends both inputs as it is given them (startMotionGeneration resolves
+ * nothing): the clip comes resolved from its measuring (resolveBillableInputDurations), and the
+ * picture, the input the adapter takes for it, is resolved beside it, as every other adapter
+ * resolves its inputs. So a link the client kept past its hour (a remix's restored picture,
+ * signed when the remix opened) is signed again from the object it names, and another creator's
+ * kept picture a remix restored is copied in under the remix gate, as their clip is, rather than
+ * sent on.
  */
-export async function resolveMotionPictureInput(
+export async function resolveMotionPicture(
   request: UnifiedGenerationRequest,
   resolveInputSource: (url: string) => Promise<string>,
-): Promise<UnifiedGenerationRequest> {
-  if (request.kind !== 'motion') return request;
+): Promise<{ index: number; url: string } | null> {
+  if (request.kind !== 'motion') return null;
   const index = request.inputs.findIndex((asset) => asset.kind === 'image' || asset.kind === 'character');
-  const picture = index >= 0 ? request.inputs[index] : null;
-  if (!picture?.url) return request;
-  const url = await resolveInputSource(picture.url);
-  return { ...request, inputs: request.inputs.map((asset, at) => (at === index ? { ...asset, url } : asset)) };
+  const source = index >= 0 ? request.inputs[index].url : null;
+  return source ? { index, url: await resolveInputSource(source) } : null;
 }
 
 function platformForRequest(request: Request): CatalogPlatform {
@@ -983,15 +982,22 @@ export async function startUnifiedGenerationForRoute(
       );
       // One for the whole start: the pricing's resolves and the run's share each unlock's read.
       const recipeCopyReads = createRecipeCopyReads();
-      const billable = await resolveBillableInputDurations({
-        request: run,
-        descriptor: snapshot.catalog.models.find((model) => (
-          model.id === parsed.modelId && model.kind === parsed.kind
-        )),
-        operation,
-        resolveInputSource: (url) => resolveInputSource(supabase, url, userId, { recipeCopyReads }),
-        probeInputDuration,
-      });
+      const resolveRunInput = (url: string) => resolveInputSource(supabase, url, userId, { recipeCopyReads });
+      // A motion run's picture is resolved beside its clip, which is resolved to be measured (the
+      // clip asked first): off the start's way, and a picture the caller may not use is refused as
+      // early as such a clip. Only for the motion adapter: the others resolve their own inputs.
+      const [billable, motionPicture] = await Promise.all([
+        resolveBillableInputDurations({
+          request: run,
+          descriptor: snapshot.catalog.models.find((model) => (
+            model.id === parsed.modelId && model.kind === parsed.kind
+          )),
+          operation,
+          resolveInputSource: resolveRunInput,
+          probeInputDuration,
+        }),
+        operation.adapterKey === 'motion-v1' ? resolveMotionPicture(run, resolveRunInput) : null,
+      ]);
       const billableQuote = billable.verified.length > 0
         ? quoteModel(buildUnifiedGenerationQuoteInputForCatalog(billable.request, snapshot), {
           catalog: snapshot.catalog,
@@ -1030,10 +1036,11 @@ export async function startUnifiedGenerationForRoute(
           : generationCostChangedError();
       }
 
-      // After the price checks, so a run refused its price copies nothing in. Only for the motion
-      // adapter: the catalog adapter resolves every input itself, after its replay check.
-      const runRequest = operation.adapterKey === 'motion-v1'
-        ? await resolveMotionPictureInput(billable.request, (url) => resolveInputSource(supabase, url, userId))
+      const runRequest = motionPicture
+        ? {
+          ...billable.request,
+          inputs: billable.request.inputs.map((asset, at) => (at === motionPicture.index ? { ...asset, url: motionPicture.url } : asset)),
+        }
         : billable.request;
       return dispatchCatalogGenerationAdapter({
         request: runRequest,

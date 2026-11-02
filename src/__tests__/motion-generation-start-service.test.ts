@@ -428,6 +428,56 @@ describe('startMotionGenerationForRoute', () => {
     }));
   });
 
+  // The picture is resolved beside the clip, which is resolved to be measured: its latency is off
+  // the start's way, and a picture the caller may not use is refused as early as such a clip.
+  it('resolves the picture beside the clip, the clip asked first', async () => {
+    let releaseClip: (link: string) => void = () => undefined;
+    resolveGenerationMediaSourceMock.mockImplementation((_client: unknown, url: string) => (
+      url === 'https://signed.example.com/reference.mp4'
+        ? new Promise<string>((resolve) => { releaseClip = resolve; })
+        : Promise.resolve(url)
+    ));
+    startMotionGenerationMock.mockResolvedValueOnce({ predictionId: 'task-motion-9', generationId: 'gen-motion-9', remainingCredits: 500, cost: 162 });
+
+    const outcome = startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-9' } }),
+      body: motionBody({ duration: 6 }),
+      userId: 'user-1',
+      callerIsGuest: false,
+      supabase: createClientMock().client,
+      adminSupabase: createClientMock().client,
+    });
+
+    await vi.waitFor(() => expect(resolveGenerationMediaSourceMock.mock.calls.map(([, url]) => url)).toEqual([
+      'https://signed.example.com/reference.mp4',
+      'https://signed.example.com/character.png',
+    ]));
+    releaseClip(resolvedReference);
+    await expect(outcome).resolves.toMatchObject({ predictionId: 'task-motion-9' });
+  });
+
+  it('refuses a picture the caller may not use before the clip is priced', async () => {
+    const notTheirs = new Error('Media references must belong to the authenticated user.');
+    resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => {
+      if (url === 'https://signed.example.com/character.png') throw notTheirs;
+      return resolvedReference;
+    });
+    // Measured longer than the caller was quoted for: once priced, the run would be sent to quote again.
+    probeMediaDurationSecondsMock.mockResolvedValueOnce(29.6);
+
+    const refusal = await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-10' } }),
+      body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 1 }),
+      userId: 'user-1',
+      callerIsGuest: false,
+      supabase: createClientMock().client,
+      adminSupabase: createClientMock().client,
+    }).catch((error: unknown) => error);
+
+    expect(refusal).toBe(notTheirs);
+    expect(startMotionGenerationMock).not.toHaveBeenCalled();
+  });
+
   it('replays a start already accepted without reading its clip again', async () => {
     const adminClient = createClientMock({
       existingGeneration: { id: 'gen-motion-5', prediction_id: 'task-motion-5', status: 'processing', cost: 162 },
