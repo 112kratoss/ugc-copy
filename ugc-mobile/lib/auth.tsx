@@ -1,7 +1,7 @@
 import type { Session, User } from '@supabase/supabase-js';
 import { useQueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
-import { router, usePathname } from 'expo-router';
+import { router, useNavigationContainerRef } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Platform } from 'react-native';
 
@@ -42,7 +42,7 @@ import {
   type AccountReauthenticationMethod,
 } from './account-reauthentication';
 import { GUEST_MERGE_PREPARE_ERROR_CODE } from './auth-error-copy';
-import { normalizeAuthReturnTo } from './auth-navigation';
+import { focusedRouteReturnPath, normalizeAuthReturnTo } from './auth-navigation';
 import {
   ACCOUNT_DELETING_CODE,
   ApiError,
@@ -427,8 +427,9 @@ function isViewerlessCreatorQuery(query: { queryKey: readonly unknown[] }) {
 
 /**
  * The sign-in screen with the notice that says why the person is there, and
- * the route they were on to come back to once signed in: Home when it is not
- * known, or when it is the sign-in screen itself (audit 01-12).
+ * the screen they were on, with its params, to come back to once signed in:
+ * Home when it is not known, or when it is the sign-in screen itself (audit
+ * 01-12).
  */
 export function signInNoticeRoute(
   notice: 'signed-out' | 'session-merged',
@@ -501,9 +502,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Guest identities this run signed in from, by the account they went into, so
   // deleting that account also clears what the guest left on the phone.
   const linkedGuestUserIdsRef = useRef(new Map<string, Set<string>>());
-  // The route on screen, published by CurrentRouteTracker below, so a forced
-  // sign-out can send the person back to it after signing in (audit 01-12).
-  const currentRouteRef = useRef<string | null>(null);
+  // Read for the screen in front when a forced sign-out happens, so the person
+  // is sent back to it after signing in (audit 01-12).
+  const navigationRef = useNavigationContainerRef();
   const [mergeState, setMergeState] = useState<GuestMergeState>('idle');
   // The link outcome kept until dismissed, with the account it is for. The ref
   // is `undefined` until the copy on the device has been read or replaced.
@@ -1623,6 +1624,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
+   * The screen in front, with its params, as a path to come back to after a
+   * forced sign-out. Read before the session is torn down: a screen can answer
+   * the sign-out by moving, as the composer does by sending its own way to
+   * sign-in.
+   */
+  const screenInFront = () => focusedRouteReturnPath(navigationRef.isReady() ? navigationRef.getRootState() : null);
+
+  /**
    * Recovery for a guest identity that was linked to an account elsewhere.
    *
    * Every authenticated route answers this device 409 SESSION_MERGED, so there
@@ -1646,10 +1655,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // here is a bug upstream and is safer ignored than acted on.
     const mergedSession = sessionRef.current;
     if (!isGuestSession(mergedSession)) return;
+    // Signed in, the person comes back to where they were (audit 01-12).
+    const returnTo = screenInFront();
     beginFeedIdentityTransition(mergedSession)?.commit();
     await tearDownLocalSession({ reason: 'guest-merged', endedSession: mergedSession });
-    // Signed in, the person comes back to where they were (audit 01-12).
-    router.replace(signInNoticeRoute('session-merged', currentRouteRef.current));
+    router.replace(signInNoticeRoute('session-merged', returnTo));
   };
 
   /**
@@ -1710,6 +1720,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (accountDeletionInFlightRef.current || isEndedDeletionSession(refusedSession)) return;
 
     const wasGuest = isGuestSession(refusedSession);
+    const returnTo = screenInFront();
     beginFeedIdentityTransition(refusedSession)?.commit();
     // Local only: the push unregister route, like every other, would be
     // refused as the request that started this was.
@@ -1717,7 +1728,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // A guest had nothing to sign back in to and carries on as a fresh one. A
     // registered person is told why they are suddenly signed out, and comes
     // back to where they were once signed in again (audit 01-12).
-    if (!wasGuest) router.replace(signInNoticeRoute('signed-out', currentRouteRef.current));
+    if (!wasGuest) router.replace(signInNoticeRoute('signed-out', returnTo));
   };
 
   /**
@@ -1891,23 +1902,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         updateCredits,
       }}
     >
-      <CurrentRouteTracker routeRef={currentRouteRef} />
       {children}
     </AuthContext.Provider>
   );
-}
-
-/**
- * Publishes the route on screen into `routeRef`. A component of its own, so a
- * navigation re-renders only it and not every screen that reads the auth
- * context.
- */
-function CurrentRouteTracker({ routeRef }: { routeRef: { current: string | null } }) {
-  const pathname = usePathname();
-  useEffect(() => {
-    routeRef.current = pathname;
-  }, [pathname, routeRef]);
-  return null;
 }
 
 async function recoverInvalidAuthSession(error: unknown) {

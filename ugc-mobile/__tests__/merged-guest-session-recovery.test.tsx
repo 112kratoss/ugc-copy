@@ -11,11 +11,12 @@ const state = vi.hoisted(() => ({
   forgetGuestMergeTickets: vi.fn(),
   clearPersistedSession: vi.fn(),
   getSession: vi.fn(),
-  pathname: '/',
   prepareGuestAccountMerge: vi.fn(),
   removeGuestMergeTicket: vi.fn(),
   queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   replace: vi.fn(),
+  // React Navigation's state for the screens on screen.
+  rootState: undefined as StateFixture | undefined,
   sessionResolve: null as null | ((result: unknown) => void),
   signInAnonymously: vi.fn(),
   signInWithPassword: vi.fn(),
@@ -33,10 +34,14 @@ vi.mock('expo-constants', () => ({
 
 // One stable object, never a fresh literal per render: an unstable router mock
 // re-runs the provider's effects forever and hangs the suite.
-vi.mock('expo-router', () => ({
-  router: { replace: state.replace },
-  usePathname: () => state.pathname,
-}));
+vi.mock('expo-router', () => {
+  // expo-router's store keeps one container ref for the app's life.
+  const navigationRef = { isReady: () => true, getRootState: () => state.rootState };
+  return {
+    router: { replace: state.replace },
+    useNavigationContainerRef: () => navigationRef,
+  };
+});
 
 vi.mock('react-native', () => ({
   AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
@@ -116,7 +121,9 @@ vi.mock('../lib/supabase', () => ({
 }));
 
 import { GUEST_MERGE_PREPARE_ERROR_CODE } from '../lib/auth-error-copy';
+import { APPLE_ZOOM_SOURCE_PARAM } from '../lib/apple-zoom';
 import { AuthProvider, useAuth } from '../lib/auth';
+import { homeTabs, pushedRoute, rootStateWith, type StateFixture } from './fixtures/navigation-state';
 
 function sessionFor(user: Record<string, unknown>) {
   return {
@@ -165,7 +172,7 @@ describe('abandoning a guest session the server has merged', () => {
     state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
     state.queryClient.clear.mockReset();
     state.queryClient.removeQueries.mockReset();
-    state.pathname = '/';
+    state.rootState = rootStateWith(homeTabs());
     state.prepareGuestAccountMerge.mockReset();
     state.signInWithPassword.mockReset();
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
@@ -201,7 +208,7 @@ describe('abandoning a guest session the server has merged', () => {
 
   // Audit 01-12: signed in, the person comes back to the page they were on.
   it('carries the route the guest was on to the sign-in screen', async () => {
-    state.pathname = '/creators/luna';
+    state.rootState = rootStateWith(homeTabs(), pushedRoute('/creators/[username]', { username: 'luna' }));
     const { latest, unmount } = await mountWith(guestSession);
 
     await renderer.act(async () => {
@@ -211,6 +218,23 @@ describe('abandoning a guest session the server has merged', () => {
     expect(state.replace).toHaveBeenCalledWith({
       pathname: '/auth',
       params: { notice: 'session-merged', returnTo: '/creators/luna' },
+    });
+
+    unmount();
+  });
+
+  it('carries the reel on the item the guest was on, without the zoom it opened with', async () => {
+    const reel = pushedRoute('/viewer', { source: 'home', initialId: 'post-9', [APPLE_ZOOM_SOURCE_PARAM]: 'zoom|r1|post-9' });
+    state.rootState = rootStateWith(homeTabs(), reel);
+    const { latest, unmount } = await mountWith(guestSession);
+
+    await renderer.act(async () => {
+      await latest.current?.abandonMergedGuestSession();
+    });
+
+    expect(state.replace).toHaveBeenCalledWith({
+      pathname: '/auth',
+      params: { notice: 'session-merged', returnTo: '/viewer?source=home&initialId=post-9' },
     });
 
     unmount();

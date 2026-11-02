@@ -45,10 +45,14 @@ vi.mock('expo-constants', () => ({
   default: { expoConfig: { version: '1.0.0' } },
 }));
 
-vi.mock('expo-router', () => ({
-  router: { dismissTo: state.routerDismissTo, replace: state.routerReplace },
-  usePathname: () => '/',
-}));
+vi.mock('expo-router', () => {
+  // No screen in front: nothing these cases send to sign-in reads one.
+  const navigationRef = { isReady: () => false };
+  return {
+    router: { dismissTo: state.routerDismissTo, replace: state.routerReplace },
+    useNavigationContainerRef: () => navigationRef,
+  };
+});
 
 vi.mock('react-native', () => ({
   AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
