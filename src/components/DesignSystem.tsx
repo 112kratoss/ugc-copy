@@ -46,6 +46,8 @@ type AccentClasses = {
   tile: string;
   /** The same tile while a file is dragged over it. */
   tileActive: string;
+  /** A quiet tile's hover, drawn at rest in the neutral border: its outline in the accent. */
+  tileHover: string;
   /** An icon drawn in the accent. */
   mark: string;
   /** A native control's own accent colour (a range slider). */
@@ -82,6 +84,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     fieldFocus: 'focus:border-brand-blue/50',
     tile: 'border-brand-blue/35 bg-brand-blue/5 hover:border-brand-blue/60',
     tileActive: 'border-brand-blue bg-brand-blue/10',
+    tileHover: 'hover:border-brand-blue/60',
     mark: 'text-brand-blue',
     control: 'accent-brand-blue',
   },
@@ -99,6 +102,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     fieldFocus: 'focus:border-[var(--ui-accent-video)]/50',
     tile: 'border-[var(--ui-accent-video)]/35 bg-[var(--ui-accent-video)]/5 hover:border-[var(--ui-accent-video)]/60',
     tileActive: 'border-[var(--ui-accent-video)] bg-[var(--ui-accent-video)]/10',
+    tileHover: 'hover:border-[var(--ui-accent-video)]/60',
     mark: 'text-[var(--ui-accent-video)]',
     control: 'accent-[var(--ui-accent-video)]',
   },
@@ -116,6 +120,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     fieldFocus: 'focus:border-[var(--ui-accent-motion)]/50',
     tile: 'border-[var(--ui-accent-motion)]/35 bg-[var(--ui-accent-motion)]/5 hover:border-[var(--ui-accent-motion)]/60',
     tileActive: 'border-[var(--ui-accent-motion)] bg-[var(--ui-accent-motion)]/10',
+    tileHover: 'hover:border-[var(--ui-accent-motion)]/60',
     mark: 'text-[var(--ui-accent-motion)]',
     control: 'accent-[var(--ui-accent-motion)]',
   },
@@ -133,6 +138,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     fieldFocus: 'focus:border-brand-emerald/50',
     tile: 'border-brand-emerald/35 bg-brand-emerald/5 hover:border-brand-emerald/60',
     tileActive: 'border-brand-emerald bg-brand-emerald/10',
+    tileHover: 'hover:border-brand-emerald/60',
     mark: 'text-brand-emerald',
     control: 'accent-brand-emerald',
   },
@@ -150,6 +156,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     fieldFocus: 'focus:border-[var(--ui-accent-commerce)]/50',
     tile: 'border-[var(--ui-accent-commerce)]/35 bg-[var(--ui-accent-commerce)]/5 hover:border-[var(--ui-accent-commerce)]/60',
     tileActive: 'border-[var(--ui-accent-commerce)] bg-[var(--ui-accent-commerce)]/10',
+    tileHover: 'hover:border-[var(--ui-accent-commerce)]/60',
     mark: 'text-[var(--ui-accent-commerce)]',
     control: 'accent-[var(--ui-accent-commerce)]',
   },
@@ -167,6 +174,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     fieldFocus: 'focus:border-brand-red/50',
     tile: 'border-brand-red/35 bg-brand-red/5 hover:border-brand-red/60',
     tileActive: 'border-brand-red bg-brand-red/10',
+    tileHover: 'hover:border-brand-red/60',
     mark: 'text-brand-red',
     control: 'accent-brand-red',
   },
@@ -184,6 +192,7 @@ const ACCENT_CLASSES: Record<NormalizedAccent, AccentClasses> = {
     fieldFocus: 'focus:border-[var(--ui-border-strong)]',
     tile: 'border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] hover:border-[var(--ui-border-strong)]',
     tileActive: 'border-[var(--ui-text-secondary)] bg-[var(--ui-surface-3)]',
+    tileHover: 'hover:border-[var(--ui-border-strong)]',
     mark: 'text-[var(--ui-text-secondary)]',
     control: 'accent-[var(--ui-text-secondary)]',
   },

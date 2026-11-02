@@ -41,6 +41,7 @@ import { reportGenerationOutput } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
+import { holdsRemixOriginal, remixOriginalMedia, remixOriginalOf, remixOriginalPlace, replacedRemixOriginal, storedRemixOriginal, withRenewedRemixOriginal, type RemixOriginal, type RemixOriginalPlace } from '@/lib/remix-original-reference';
 import { APP_CREATOR_OPENINGS } from '@/lib/app-creator-opening/app-creator-opening';
 import { creatorParameterSummary } from '@/lib/creator-parameter-summary';
 import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
@@ -1095,12 +1096,23 @@ function IdentityCreationScreen({
   const remixResolvedRef = useRef(false);
   const [remixRetry, setRemixRetry] = useState(0);
   const [remixRestoreFailed, setRemixRestoreFailed] = useState(false);
+  // The source's own result, which the remix may add as a reference (the source row's button): read
+  // with the source, or from the saved session a resume reads in its place, and kept with the source
+  // it was read for. None read for this source is not "none offered", so a session never saves it so.
+  const [remixOriginalRead, setRemixOriginalRead] = useState<{ sourceId: string; original: RemixOriginal | null } | null>(null);
+  const remixOriginalAskedRef = useRef<string | null>(null);
+  // The source whose original the saved session holds, so a session saved before sessions kept it
+  // is saved again once its original is read, and its next resume reads nothing.
+  const remixOriginalSavedFor = useRef<string | null>(null);
+  const remixSourceId = remixSource?.generationId?.trim() || null;
+  const remixOriginalKnown = Boolean(remixSourceId && remixOriginalRead?.sourceId === remixSourceId);
+  const remixOriginal = remixOriginalKnown ? remixOriginalRead!.original : null;
   const remixScope = remixDraftScope(identityUserId, remixSource);
   // Every saved draft is kept under an identity, a registered account or a
   // guest session. With no identity yet there is no one to keep it for, so
   // nothing is written until there is.
   const draftScope = remixScope ?? (identityUserId ? ordinaryDraftScope(identityUserId) : null);
-  const draftWriter = useMemo(() => createDraftSaveQueue((drafts: { image: ImageCreationDraft; video: VideoCreationDraft; motion: MotionCreationDraft; remixRestored?: boolean; remixEditedKeys?: Partial<Record<CreatorToolId, string[]>> }) => (
+  const draftWriter = useMemo(() => createDraftSaveQueue((drafts: { image: ImageCreationDraft; video: VideoCreationDraft; motion: MotionCreationDraft; remixRestored?: boolean; remixEditedKeys?: Partial<Record<CreatorToolId, string[]>>; remixOriginal?: RemixOriginal | null }) => (
     draftScope ? persistCreationDrafts(drafts, draftScope) : Promise.resolve()
   )), [draftScope]);
   const [dirty, setDirty] = useState(false);
@@ -1244,6 +1256,9 @@ function IdentityCreationScreen({
         resumedRemixRef.current = Boolean(remixScope && persisted.remixRestored && !recoveringRemixReferences.current);
         remixResolvedRef.current = resumedRemixRef.current;
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
+        const storedOriginal = remixScope && remixSourceId ? storedRemixOriginal(persisted.remixOriginal) : undefined;
+        remixOriginalSavedFor.current = storedOriginal !== undefined ? remixSourceId : null;
+        if (storedOriginal !== undefined) setRemixOriginalRead({ sourceId: remixSourceId!, original: storedOriginal });
       }
       // Typed while there was no identity, by the person this one belongs to
       // (see MediaCreationScreen). With no draft of their own to resume, it
@@ -1277,7 +1292,10 @@ function IdentityCreationScreen({
     do {
       saved = latestDrafts.current;
       const fingerprint = JSON.stringify(saved);
-      if (fingerprint === lastSavedFingerprint.current) return;
+      // A resumed session whose original was only now read is saved for it, edits or none.
+      const keepsOriginal = Boolean(remixScope && remixOriginalKnown && resumedRemixRef.current
+        && remixOriginalSavedFor.current !== remixSourceId);
+      if (fingerprint === lastSavedFingerprint.current && !keepsOriginal) return;
       const remixEditedKeys = Object.fromEntries((['image', 'video', 'motion'] as const).map((tool) => {
         // Compare with the baseline as the catalog leaves it, so the screen's own
         // normalization is never saved as something the creator changed.
@@ -1290,8 +1308,14 @@ function IdentityCreationScreen({
       }));
       // A session whose repair is still to come was restored already: saved so, the next visit repairs it
       // again, rather than restoring it afresh over a draft the catalog has named meanwhile.
-      await draftWriter.save({ ...saved, remixRestored: remixResolvedRef.current || recoveringRemixReferences.current, remixEditedKeys });
+      await draftWriter.save({
+        ...saved,
+        remixRestored: remixResolvedRef.current || recoveringRemixReferences.current,
+        remixEditedKeys,
+        ...(remixScope && remixOriginalKnown ? { remixOriginal } : {}),
+      });
       lastSavedFingerprint.current = fingerprint;
+      if (remixScope && remixOriginalKnown) remixOriginalSavedFor.current = remixSourceId;
     } while (saved.image !== latestDrafts.current.image || saved.video !== latestDrafts.current.video || saved.motion !== latestDrafts.current.motion);
   };
   const saveLatestDraftRef = useRef(saveLatestDraft);
@@ -1740,6 +1764,8 @@ function IdentityCreationScreen({
         const modelId = typeof bundle.workflowSettings.model === 'string' ? bundle.workflowSettings.model : bundle.generation.model;
         const restoredCatalog = await loadCatalogDetails([modelId]);
         if (isCancelled) return;
+        const original = remixOriginalOf(bundle);
+        setRemixOriginalRead({ sourceId: generationId, original });
         const baseDraft = createDefaultCreationDraft(targetTool);
         const restored = hydrateCatalogCreationDraftFromRemixSource(baseDraft, bundle, restoredCatalog);
         const creatorPrompt = draftPromptsRef.current[targetTool];
@@ -1755,7 +1781,7 @@ function IdentityCreationScreen({
         const restoredPrompt = savedRemixEdits.current[targetTool]?.includes('prompt') ? current.prompt : prompt;
         // A model chosen while loading keeps its compatible settings as a unit.
         const unnamed = recoveringRemixReferences.current
-          ? recoverRemixReferences(current, restored.draft)
+          ? withRenewedRemixOriginal(recoverRemixReferences(current, restored.draft), original)
           : 'model' in edits
           ? { ...current, sourceGenerationId: restored.draft.sourceGenerationId }
           : { ...restored.draft, ...edits, prompt: restoredPrompt };
@@ -1819,6 +1845,29 @@ function IdentityCreationScreen({
       setIsRestoringRemix(false);
     };
   }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId, revisionUnconfirmed]);
+
+  // A resumed remix does not read its source again (above). Its session keeps the original it was
+  // offered; one saved before sessions kept it does not say, so its source is asked once, for the
+  // original alone: nothing in the draft is restored over.
+  useEffect(() => {
+    const generationId = remixSource?.generationId?.trim();
+    if (!generationId || !draftsHydrated || !resumedRemixRef.current || !identityUserId || remixOriginalKnown) return;
+    if (remixOriginalAskedRef.current === generationId) return;
+    remixOriginalAskedRef.current = generationId;
+    let active = true;
+    void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null }).then(
+      (bundle) => { if (active) setRemixOriginalRead({ sourceId: generationId, original: remixOriginalOf(bundle) }); },
+      () => { remixOriginalAskedRef.current = null; },
+    );
+    return () => { active = false; };
+  }, [api, draftsHydrated, identityUserId, remixOriginalKnown, remixSource?.generationId, remixSource?.postId]);
+
+  // That read kept with the session, once: its next resume asks the source nothing.
+  useEffect(() => {
+    if (!draftsHydrated || !remixScope || !remixOriginalKnown || !resumedRemixRef.current) return;
+    if (remixOriginalSavedFor.current === remixSourceId) return;
+    void saveLatestDraftRef.current();
+  }, [draftsHydrated, remixScope, remixOriginalKnown, remixSourceId]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));
@@ -2151,6 +2200,84 @@ function IdentityCreationScreen({
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const originalPlace = remixOriginal ? remixOriginalPlace(activeTool, remixOriginal) : null;
+
+  /** How many of the original's kind the model takes where it goes: what that kind's pick button allows. */
+  const remixOriginalLimit = (place: RemixOriginalPlace) => {
+    if (place === 'references') {
+      const model = catalog ? getCatalogModel(catalog, imageDraft.model) : null;
+      return catalogInputLimit(model, imageDraft, 'imageReferences', model?.inputs.imageReferences?.max ?? 0, 'elements');
+    }
+    if (place === 'referenceVideos') {
+      const model = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
+      return model?.inputModes
+        ? referenceVideoSlot(model, videoDraft, referenceRailShape(videoDraft, model))?.max ?? 0
+        : model?.inputs.videoReferences?.max ?? 0;
+    }
+    const model = catalog ? getCatalogModel(catalog, motionDraft.model) : null;
+    return catalogInputLimit(model, motionDraft, catalogMotionDraftSlotKeys(motionDraft, model).video, 1, 'elements');
+  };
+
+  /**
+   * Adds the source's result as a reference (owner, 2026-11-02, as the web's creators offer it): a
+   * picture among the image run's references, a clip among the video run's clips, or as the motion
+   * run's clip in place of the one attached. Nothing is uploaded: the start imports it into the
+   * creator's own storage.
+   */
+  const addRemixOriginalAsReference = async () => {
+    if (!remixOriginal || !originalPlace || holdsRemixOriginal(currentDraft, remixOriginal) || replacedRemixOriginal(currentDraft, remixOriginal)) return;
+    setMessage(null);
+    setPromptMessage(null);
+    const limit = remixOriginalLimit(originalPlace);
+    if (originalPlace === 'references') {
+      if (imageDraft.references.length >= limit) {
+        setMessage(limit > 0 ? `This model supports up to ${limit} reference images.` : 'This model does not support image references.');
+        return;
+      }
+      const media = remixOriginalMedia(remixOriginal);
+      setImageDraft((draft) => (holdsRemixOriginal(draft, remixOriginal) ? draft : normalizeCatalogDraft({
+        ...draft,
+        references: [...draft.references, withUniqueReferenceHandle(media, draft.references)],
+      })));
+      revealInRail(media.id);
+      return;
+    }
+    if (originalPlace === 'referenceVideos' && videoDraft.referenceVideos.length >= limit) {
+      setMessage(limit > 0
+        ? `This model supports up to ${limit} reference video${limit === 1 ? '' : 's'}.`
+        : 'This model does not support reference videos.');
+      return;
+    }
+    setIsUploading(true);
+    try {
+      // Its length read as a picked clip's is, which the quote and the slot's caps are told. One the
+      // phone cannot read is left to the start, which measures the file.
+      const media = remixOriginalMedia(remixOriginal, await readMediaFileLength(remixOriginal.url));
+      if (originalPlace === 'motionClip') {
+        const model = catalog ? getCatalogModel(catalog, motionDraft.model) : null;
+        const maxSeconds = catalogInputSlot(model, motionDraft, catalogMotionDraftSlotKeys(motionDraft, model).video)?.maxDurationSeconds
+          ?? MOTION_CLIP_DEFAULT_MAX_SECONDS;
+        if ((media.durationSeconds ?? 0) > maxSeconds) {
+          setMessage(`The original is longer than the ${maxSeconds}s this model takes.`);
+          return;
+        }
+        setMotionDraft((draft) => ({ ...draft, referenceVideo: media, duration: Math.ceil(media.durationSeconds ?? draft.duration) }));
+        return;
+      }
+      // Named and normalized as an added clip is (uploadReferenceVideo), for the model the draft is on by now.
+      const source = latestCatalog.current;
+      setVideoDraft((draft) => {
+        if (holdsRemixOriginal(draft, remixOriginal)) return draft;
+        const model = source ? getCatalogModel(source, draft.model) : null;
+        const added = clipsTakeHandles(model, draft) ? withCreatorClipHandle(draft, media) : media;
+        return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, added] }, source);
+      });
+      revealInRail(media.id);
     } finally {
       setIsUploading(false);
     }
@@ -2777,6 +2904,18 @@ function IdentityCreationScreen({
     };
   }, [draftsHydrated, identityUserId]);
 
+  // Offered where the model takes the original's kind there, or while the draft holds it; not while a
+  // tile under its id holds a file the creator put in its place.
+  const originalUsed = Boolean(remixOriginal && holdsRemixOriginal(currentDraft, remixOriginal));
+  const originalReplaced = Boolean(remixOriginal && replacedRemixOriginal(currentDraft, remixOriginal));
+  const offersOriginal = Boolean(originalPlace) && !originalReplaced
+    && (originalUsed || (Boolean(catalog) && remixOriginalLimit(originalPlace!) > 0));
+  const remixSourceRow = remixSource ? (
+    <RemixSourceRow
+      source={remixSource}
+      original={offersOriginal ? { using: originalUsed, busy: isUploading, onUse: () => void addRemixOriginalAsReference() } : null}
+    />
+  ) : null;
   // New models in the Create tab only (D9), from the catalog pages this screen has read. A first
   // creation, opened from onboarding, keeps to its starters: every model is new to its creator.
   const whatsNewStrip = insideTab && !guided ? (
@@ -3046,7 +3185,7 @@ function IdentityCreationScreen({
             remix={Boolean(remixSource)}
           />
           {whatsNewStrip}
-          {remixSource ? <RemixSourceRow source={remixSource} /> : null}
+          {remixSourceRow}
 
           {guided ? (
             <>
@@ -3323,7 +3462,7 @@ function IdentityCreationScreen({
             remix={Boolean(remixSource)}
           />
           {whatsNewStrip}
-          {remixSource ? <RemixSourceRow source={remixSource} /> : null}
+          {remixSourceRow}
 
           {guided ? (
             <>

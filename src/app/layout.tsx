@@ -5,6 +5,7 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 
 import { siteConfig } from "@/lib/seo";
 import { TYPED_BEFORE_HYDRATION_CAPTURE } from "@/lib/typed-before-hydration";
+import { APP_SHELL_SIDEBAR_RESTORE } from "@/lib/app-shell-sidebar-restore";
 
 import "./globals.css";
 import AppShell from "@/components/AppShell";
@@ -102,6 +103,8 @@ export default function RootLayout({
           builds the root layout again, so React never makes it in the browser.
         */}
         <script dangerouslySetInnerHTML={{ __html: TYPED_BEFORE_HYDRATION_CAPTURE }} />
+        {/* The sidebar hidden in this browser, marked on the root element before the shell is drawn (`src/lib/app-shell-sidebar-restore.ts`). */}
+        <script dangerouslySetInnerHTML={{ __html: APP_SHELL_SIDEBAR_RESTORE }} />
         <a
           href="#main-content"
           className="ui-focus-ring fixed left-4 top-3 z-[120] -translate-y-24 rounded-full bg-[var(--ui-primary)] px-4 py-3 text-sm font-bold text-[var(--ui-primary-on)] transition focus:translate-y-0"

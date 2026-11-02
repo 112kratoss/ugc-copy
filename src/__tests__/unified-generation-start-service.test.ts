@@ -767,6 +767,32 @@ describe('reference lengths a caller reports', () => {
     expect(honest.startMotion).toHaveBeenCalledWith(expect.objectContaining({ duration: 30, quotedCostCredits: 300 }));
   });
 
+  // A motion run's adapter sends its clip as given, so it is handed the link resolved to measure it: the
+  // file measured is the one the provider fetches, and a client's link past its hour is not sent on.
+  it("hands a motion run the clip's resolved link, and leaves a video run's to its own adapter", async () => {
+    const fresh = 'https://project.supabase.co/storage/v1/object/sign/generated_videos/creator-1/result.mp4?token=fresh';
+    const motion = await resolveBillableInputDurations({
+      request: parseUnifiedGenerationRequest(motionBody(5, 5)),
+      descriptor: null,
+      operation: MOTION_OPERATION,
+      resolveInputSource: async (url) => (url === REFERENCE_URL ? fresh : url),
+      probeInputDuration: async () => 5,
+    });
+    expect(motion.request.inputs).toEqual([
+      expect.objectContaining({ slot: 'characterImage', url: CHARACTER_URL }),
+      expect.objectContaining({ slot: 'referenceVideo', url: fresh, durationSeconds: 5 }),
+    ]);
+
+    const video = await resolveBillableInputDurations({
+      request: parseUnifiedGenerationRequest(seedanceBody(10)),
+      descriptor: null,
+      operation: SEEDANCE_OPERATION,
+      resolveInputSource: async () => fresh,
+      probeInputDuration: async () => 10,
+    });
+    expect(video.request.inputs[0]).toMatchObject({ url: REFERENCE_URL, durationSeconds: 10 });
+  });
+
   it('refuses a reference whose length cannot be read, or that is not an HTTPS object', async () => {
     await expect(resolveBillableInputDurations({
       request: parseUnifiedGenerationRequest(seedanceBody(10)),

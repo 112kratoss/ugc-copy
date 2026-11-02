@@ -1599,6 +1599,7 @@ function MotionCreator({
             awaitingCheck={isAwaitingStartCheck}
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
+            topUpNeed={estimatedCost !== null && userCredits !== null ? { cost: estimatedCost, balance: userCredits } : null}
             topUpHref={topUpHref}
             isGenerating={isGenerating}
             // A visitor's press needs no price: it checks the form, then asks for an account.

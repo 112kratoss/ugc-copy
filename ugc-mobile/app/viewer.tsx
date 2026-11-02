@@ -160,6 +160,7 @@ import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profi
 import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 import { useScreenLeaving } from '@/lib/use-screen-leaving';
+import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -653,6 +654,13 @@ function ImmersivePreviewViewer() {
     creatorUsername,
     lane: laneParam,
   });
+  // A forced sign-in (the session ended elsewhere) brings the reel back on the
+  // post the person is on. The route's `initialId` stays the post it opened on:
+  // `setParams` would refetch the reel, `initialId` being in its source's key.
+  // On that post the route's own params stand, and so they do until the reel
+  // lands on it: behind the notice that it is missing (C1), the active post is
+  // only the first the source sent.
+  useScreenReturn(initialPositionReady && activeItem && activeItem.id !== initialId ? returnPathFor(activeItem) : null);
   // Read as each event is sent rather than captured: a new session gave
   // `submitViewerFeedEvent` a new identity, which restarted the attention
   // effect and filed a skip or a dwell for the post on screen (audit 03-2).

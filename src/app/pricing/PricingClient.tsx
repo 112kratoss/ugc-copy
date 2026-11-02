@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import Script from "next/script";
 import { ArrowLeft, ArrowRight, Check, Crown, Gift, History, Loader2, Sparkles, Wallet, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -10,13 +9,7 @@ import { Button, Surface, Text, getAccentClasses } from "@/components/DesignSyst
 import { JsonLd } from "@/components/JsonLd";
 import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/pricing";
 import { pricingReturnLabel } from "@/lib/pricing-return";
-import {
-    clearRazorpayCheckoutIntentKey,
-    getOrCreateRazorpayCheckoutIntentKey,
-    pollCreditBalanceAfterPayment,
-    verifyRazorpayCheckoutUntilSettled,
-    type RazorpayCheckoutVerificationResult,
-} from "@/lib/razorpay-checkout-client";
+import { CREDIT_CHECKOUT_STATUS_COPY, useCreditPackCheckout } from "@/components/useCreditPackCheckout";
 import { supabase } from "@/lib/supabase";
 import { buildSoftwareApplicationSchema, siteConfig } from "@/lib/seo";
 import {
@@ -44,32 +37,6 @@ interface PricingClientProps {
      */
     returnTo?: string | null;
 }
-
-// What Razorpay's `payment.failed` says went wrong, when it says anything.
-function paymentFailureDescription(payload: unknown) {
-    if (!payload || typeof payload !== 'object') return null;
-    const error = (payload as { error?: unknown }).error;
-    if (!error || typeof error !== 'object') return null;
-    const description = (error as { description?: unknown }).description;
-    return typeof description === 'string' && description.trim() ? description.trim() : null;
-}
-
-/**
- * What the page says about a checkout, under the button that started it. After
- * the sheet reports a payment the money is taken, so from `confirming` on no
- * state may read as a failure or invite a second payment: Razorpay's webhook
- * settles the order even when this page cannot.
- */
-type CheckoutStatus =
-    | { planId: PricingPlanId; kind: 'confirming' | 'settled' | 'pending' | 'paid' }
-    | { planId: PricingPlanId; kind: 'failed'; message: string };
-
-const CHECKOUT_STATUS_COPY = {
-    confirming: 'Confirming your payment…',
-    settled: 'Payment successful! Credits added to your account.',
-    pending: 'Payment received and waiting for capture. Your credits will appear automatically once Razorpay confirms it.',
-    paid: 'Your payment went through and your credits will appear in your balance shortly. You do not need to pay again.',
-} as const;
 
 const percentFormatter = new Intl.NumberFormat('en', { maximumFractionDigits: 2 });
 // Credits are grouped in en-IN wherever they are shown, as the app and the credit history page do.
@@ -224,9 +191,6 @@ function inferDefaultCurrency(initialCountryCode?: string | null): SupportedCurr
 
 export function PricingClient({ initialCountryCode = null, referralProgram = null, returnTo = null }: PricingClientProps) {
     const [userId, setUserId] = useState<string | null>(null);
-    const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
-    const [checkoutStatus, setCheckoutStatus] = useState<CheckoutStatus | null>(null);
-    const stopBalanceRefreshRef = useRef<(() => void) | null>(null);
     const [selectedCurrency, setSelectedCurrency] = useState<SupportedCurrency>(() => (
         inferCurrencyFromCountry(initialCountryCode) ?? 'INR'
     ));
@@ -302,148 +266,14 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
         fetchFx();
     }, [initialCountryCode]);
 
-    useEffect(() => () => {
-        stopBalanceRefreshRef.current?.();
-        stopBalanceRefreshRef.current = null;
-    }, []);
-
-    const refreshBalanceForAMinute = () => {
-        stopBalanceRefreshRef.current?.();
-        stopBalanceRefreshRef.current = pollCreditBalanceAfterPayment();
-    };
-
-    // Read right before each verify attempt, not at the click: the buyer can
-    // spend minutes in the sheet, long enough for that token to expire.
-    const readAccessToken = async () => {
-        const { data: { session: current } } = await supabase.auth.getSession();
-        if (!current?.access_token) {
-            throw new Error('The session ended while the payment was being made.');
-        }
-        return current.access_token;
-    };
-
-    const handlePayment = async (planId: PricingPlanId) => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.user) {
-            router.push('/login?redirect=/pricing');
-            return;
-        }
-        const buyerId = session.user.id;
-        if (buyerId !== userId) setUserId(buyerId);
-        setCheckoutStatus(null);
-        const checkoutIntentScope = `credits:${planId}`;
-
-        try {
-            setLoadingPlan(planId);
-
-            const token = session.access_token;
-
-            if (!token) {
-                throw new Error("Authentication token not found. Please log in again.");
-            }
-
-            const clientIntentKey = getOrCreateRazorpayCheckoutIntentKey(checkoutIntentScope);
-            const orderRes = await fetch('/api/razorpay/order', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ planId, userId: buyerId, clientIntentKey }),
-            });
-
-            const orderData = await orderRes.json().catch(() => ({}));
-
-            if (!orderRes.ok) {
-                if (orderData.code === 'CHECKOUT_PAYLOAD_MISMATCH') {
-                    clearRazorpayCheckoutIntentKey(checkoutIntentScope);
-                }
-                throw new Error(orderData.error || 'Failed to create order');
-            }
-
-            const options = {
-                key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
-                amount: orderData.amount,
-                currency: orderData.currency,
-                name: 'magicbooklet',
-                description: `Purchase ${planId} credits`,
-                order_id: orderData.orderId,
-                handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {
-                    // The sheet has taken the money; from here on, nothing says "try again".
-                    setCheckoutStatus({ planId, kind: 'confirming' });
-                    let verification: RazorpayCheckoutVerificationResult;
-                    try {
-                        verification = await verifyRazorpayCheckoutUntilSettled({
-                            url: '/api/razorpay/verify',
-                            token: readAccessToken,
-                            body: {
-                                razorpay_payment_id: response.razorpay_payment_id,
-                                razorpay_order_id: response.razorpay_order_id,
-                                razorpay_signature: response.razorpay_signature,
-                                userId: buyerId,
-                            },
-                        });
-                    } catch (err) {
-                        console.error("Verification error:", err);
-                        // A dropped network, a timeout, a 5xx or an expired token
-                        // after payment: the webhook settles this order, and the
-                        // intent key would replay the paid order on the next try.
-                        clearRazorpayCheckoutIntentKey(checkoutIntentScope);
-                        setCheckoutStatus({ planId, kind: 'paid' });
-                        refreshBalanceForAMinute();
-                        return;
-                    }
-
-                    // The payment is now bound to this provider order. Credits are
-                    // repeat-purchasable, so do not pin the next checkout to an
-                    // order that is (or may become) paid.
-                    clearRazorpayCheckoutIntentKey(checkoutIntentScope);
-                    if (verification.state === 'pending') {
-                        // The webhook owns final settlement.
-                        setCheckoutStatus({ planId, kind: 'pending' });
-                        refreshBalanceForAMinute();
-                        return;
-                    }
-
-                    setCheckoutStatus({ planId, kind: 'settled' });
-                    // AuthProvider and the header re-read `profiles.credits` on this.
-                    window.dispatchEvent(new Event('credits_updated'));
-                },
-                theme: {
-                    color: '#ff7a59',
-                },
-            };
-
-            const Razorpay = window.Razorpay;
-            if (typeof Razorpay !== 'function') {
-                throw new Error('Checkout is still loading. Try again in a moment.');
-            }
-            const rzp = new Razorpay(options);
-
-            // A failed attempt took no money, and the sheet stays open for another.
-            rzp.on('payment.failed', function (failure: unknown) {
-                const description = paymentFailureDescription(failure);
-                console.error("Payment failed:", description ?? failure);
-                setCheckoutStatus({
-                    planId,
-                    kind: 'failed',
-                    message: `Payment failed: ${description ?? 'Please try again.'}`,
-                });
-            });
-
-            rzp.open();
-
-        } catch (error: unknown) {
-            console.error("Payment initiation error:", error);
-            setCheckoutStatus({
-                planId,
-                kind: 'failed',
-                message: error instanceof Error ? error.message : "An error occurred while initiating payment.",
-            });
-        } finally {
-            setLoadingPlan(null);
-        }
-    };
+    // The purchase is the shared checkout's (`useCreditPackCheckout`), as the creators'
+    // top-up sheet makes it.
+    const { buy: handlePayment, loadingPlan, status: checkoutStatus } = useCreditPackCheckout({
+        onSignedOut: () => router.push('/login?redirect=/pricing'),
+        onBuyer: (buyerId) => {
+            if (buyerId !== userId) setUserId(buyerId);
+        },
+    });
 
     const checkoutConfirming = checkoutStatus?.kind === 'confirming';
     const returnLabel = returnTo ? pricingReturnLabel(returnTo) : null;
@@ -469,10 +299,6 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
     return (
         <div className="ui-page ui-page-ambient min-h-screen">
             <JsonLd data={[faqSchema, pricingSchema]} />
-            <Script
-                id="razorpay-checkout-js"
-                src="https://checkout.razorpay.com/v1/checkout.js"
-            />
 
             <div className="studio-shell py-10 sm:py-14">
                 <Link
@@ -686,7 +512,7 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                                     <span>
                                         {checkoutStatus.kind === 'failed'
                                             ? checkoutStatus.message
-                                            : CHECKOUT_STATUS_COPY[checkoutStatus.kind]}
+                                            : CREDIT_CHECKOUT_STATUS_COPY[checkoutStatus.kind]}
                                         {checkoutStatus.kind === 'settled' ? (
                                             // The buyer now stays on this page, so the way on to spending the
                                             // credits is offered here: the recipe or the remix they came from, if any.

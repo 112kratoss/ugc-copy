@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as expoRouterNavigationParams from 'expo-router/build/navigationParams';
 import { resolveHref } from 'expo-router/build/link/href';
 
-import { completeAuthScreen, focusedRouteReturnPath, leaveAuthScreen, normalizeAuthReturnTo } from '../lib/auth-navigation';
+import { completeAuthScreen, focusedRouteReturnPath, leaveAuthScreen, normalizeAuthReturnTo, publishScreenReturn } from '../lib/auth-navigation';
 import { AWKWARD_PROMPT, homeTabs, pushedRoute, rootStateWith, stateInFront } from './fixtures/navigation-state';
 
 describe('leaveAuthScreen', () => {
@@ -165,5 +165,39 @@ describe('the screen in front, as a return', () => {
   it('has nothing to come back to without a screen, or on a page the app does not have', () => {
     expect(focusedRouteReturnPath(undefined)).toBeNull();
     expect(focusedRouteReturnPath(rootStateWith({ name: '+not-found', params: { 'not-found': ['nowhere'] } }))).toBeNull();
+  });
+});
+
+describe('a return the screen in front gave for itself', () => {
+  const reel = pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1');
+  const swiped = '/viewer?source=home&initialId=post-14';
+
+  it('is the return while that route is in front, and the one its params build once taken back', () => {
+    const takeBack = publishScreenReturn('viewer-1', swiped);
+    expect(focusedRouteReturnPath(stateInFront(reel))).toBe(swiped);
+
+    takeBack();
+
+    expect(focusedRouteReturnPath(stateInFront(reel))).toBe('/viewer?source=home&initialId=post-9');
+  });
+
+  it('is not the return of a screen pushed over it', () => {
+    const takeBack = publishScreenReturn('viewer-1', swiped);
+
+    expect(focusedRouteReturnPath(rootStateWith(homeTabs(), reel, pushedRoute('/creators/[username]', { username: 'luna' }, 'creators-1'))))
+      .toBe('/creators/luna');
+
+    takeBack();
+  });
+
+  it('stays the later of two, whatever order they are taken back in', () => {
+    const takeBackFirst = publishScreenReturn('viewer-1', swiped);
+    const takeBackSecond = publishScreenReturn('viewer-1', '/viewer?source=home&initialId=post-15');
+
+    takeBackFirst();
+    expect(focusedRouteReturnPath(stateInFront(reel))).toBe('/viewer?source=home&initialId=post-15');
+
+    takeBackSecond();
+    expect(focusedRouteReturnPath(stateInFront(reel))).toBe('/viewer?source=home&initialId=post-9');
   });
 });

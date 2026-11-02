@@ -95,6 +95,7 @@
 @source "../components/templates/useTemplatePosterRecovery.ts";
 @source "../components/useAnchoredMenu.ts";
 @source "../components/useConfirmation.ts";
+@source "../components/useCreditPackCheckout.ts";
 @source "../components/useHandleAvailability.ts";
 @source "../components/useInertPageBeneath.ts";
 @source "../components/useInlineMediaPlayback.ts";
@@ -1256,6 +1257,27 @@ button:disabled,
 @media (min-width: 1280px) {
   .app-shell-root {
     grid-template-columns: 224px minmax(0, 1fr);
+  }
+}
+
+/* The sidebar's toggle at the top bar's start, where the sidebar stands beside the page
+   (src/lib/app-shell-sidebar.ts). Hidden from it, read off the root element (which an inline
+   script marks ahead of the first paint), the page takes the sidebar's column. */
+.app-shell-sidebar-toggle {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .app-shell-sidebar-toggle {
+    display: inline-flex;
+  }
+
+  html[data-sidebar='hidden'] .app-shell-root {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  html[data-sidebar='hidden'] .app-shell-sidebar {
+    display: none;
   }
 }
 

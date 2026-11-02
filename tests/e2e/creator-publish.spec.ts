@@ -377,9 +377,13 @@ test('a remix credits its original with Follow, says the alert went when it fini
   await form.getByRole('button', { name: 'Follow @fluffy' }).click();
   await expect(form.getByRole('button', { name: 'Following @fluffy' })).toHaveAttribute('aria-pressed', 'true');
 
-  // A remix keeps no draft, so Posted's top-up tells Pricing the remix, as the bar's does (2026-11-02).
+  // Posted's top up sells the packs on the page (2026-11-02). A remix keeps no draft, so the sheet's
+  // way to every pack tells Pricing the remix, as the bar's does.
   await form.getByRole('button', { name: 'Publish to the feed' }).click();
   await expect(canvas(page).getByRole('heading', { name: 'Posted to the feed' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'top up', exact: true }))
+  await page.getByRole('button', { name: 'top up', exact: true }).click();
+  const sheet = page.getByRole('dialog', { name: 'Top up credits' });
+  await expect(sheet).toBeVisible({ timeout: 30_000 });
+  await expect(sheet.getByRole('link', { name: 'See every pack' }))
     .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-cats&remixPost=post-cats')}`);
 });

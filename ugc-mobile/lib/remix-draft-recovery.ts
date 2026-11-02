@@ -169,10 +169,20 @@ export function recoverRemixReferences(current: CreationDraft, restored: Creatio
   return references.length ? { ...renewed, references } : renewed;
 }
 
+/**
+ * The id a remix's original result takes as a reference (`remix-original-reference.ts`): one id
+ * whichever visit adds it, so a renewed link and a resumed draft find it again. It is stored
+ * nowhere of the creator's, so it is told apart by id, as `isSameMedia` tells such media.
+ */
+export function remixOriginalReferenceId(generationId: string): string {
+  return `remix-result:${generationId}`;
+}
+
 /** A fresh link for saved media from its source read again, or null when the source no longer has it. */
 export function remixSourceMediaUrl(bundle: RemixSourceBundle, media: MediaDraft): string | null {
   const { image, video, motion } = bundle.inputs;
   const candidates: { id?: string | null; storagePath?: string | null; url: string | null }[] = [
+    { id: remixOriginalReferenceId(bundle.generation.id), url: bundle.result?.url ?? null },
     ...(image?.elements ?? []),
     ...(video?.elements ?? []),
     ...(video?.referenceVideos ?? []),

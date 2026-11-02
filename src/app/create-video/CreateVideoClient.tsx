@@ -23,16 +23,14 @@ import {
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorInputsCard,
-    CreatorLowBalanceNote,
-    CreatorLowBalanceNotice,
-    CreatorMakeImageInstead,
     CreatorMentionPanel,
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
+    CreatorMediaReferenceTile,
+    CreatorReferenceRow,
     CreatorReferenceStrip,
     CreatorReferenceTile,
-    CreatorReplaceButton,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -50,6 +48,7 @@ import {
     creatorCanvasChip,
     creditsWords,
     describeRunFailure,
+    type CreatorReferenceKind,
 } from '@/components/CreatorColumn';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import { useConfirmation } from '@/components/useConfirmation';
@@ -62,7 +61,6 @@ import { useCreatorDraftOwner, useCreatorForm, useCreatorSignOut, type CreatorDr
 import { getAccentClasses, IconButton } from '@/components/DesignSystem';
 import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
-    cheapestCost,
     referenceKeepWords,
     samePriceForEach,
 } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
@@ -78,7 +76,6 @@ import {
     listedFromQuote,
     NO_SETTINGS_VARIANTS,
     optionPricesOf,
-    readyCost,
     settingsVariants,
     smallestOverBalance,
     useQuotePrices,
@@ -101,7 +98,7 @@ import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSe
 import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPublishPanel, useCreatorPublish } from '@/components/CreatorPublish';
 import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
-import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, IMAGE_MODELS, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
+import { ALWAYS_ON_AUDIO_VIDEO_MODELS, clampVideoDuration, getDefaultVideoDuration, getVideoDurationRange, isValidVideoDuration, VIDEO_MODELS, VideoModelId, videoLengthOptions } from '@/lib/client-generation-models';
 import { getVideoInputAffordances, getVideoRunAffordances } from '@/lib/generation-model-affordances';
 import { heldLengthNote, lengthReading, planVideoRunInputs, type VideoRunInput } from '@/lib/creator-run-inputs';
 import {
@@ -151,6 +148,7 @@ import {
     REMIX_RESTORE_WARNING,
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
+    getRemixResultReferenceLabel,
 } from '@/lib/remix-source-client';
 import {
     getPersistedFile,
@@ -564,17 +562,6 @@ function choiceColumns(count: number): 3 | 4 | 5 {
  * which shows the price of the length it is on.
  */
 const PRICED_LENGTH_BUTTONS_MAX = 15;
-/** A prompt longer than this does not ride along in the image creator's link. */
-const PROMPT_IN_LINK_MAX = 1500;
-
-/** The image creator, on the image model that costs least, with the prompt when it fits a link. */
-function makeImageInsteadHref(modelId: string, prompt: string): string {
-    const params = new URLSearchParams({ model: modelId });
-    const text = prompt.trim();
-    if (text && text.length <= PROMPT_IN_LINK_MAX) params.set('prompt', text);
-    return `/create-image?${params.toString()}`;
-}
-
 function PromptQualityWarnings({ warnings }: { warnings: PromptEnhancementWarning[] }) {
     if (warnings.length === 0) {
         return null;
@@ -1362,9 +1349,6 @@ function VideoCreator({
     // own still out then shows nothing more and sends no one to sign in. A press already out goes on
     // under its own account; only another owner's form stops it (`form.replaced`).
     const unmountSignal = useUnmountSignal();
-    const elementInputRef = useRef<HTMLInputElement>(null);
-    const referenceVideoInputRef = useRef<HTMLInputElement>(null);
-    const referenceAudioInputRef = useRef<HTMLInputElement>(null);
     const klingVideoInputRef = useRef<HTMLInputElement>(null);
     const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
     const multiShotTextareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
@@ -1372,7 +1356,6 @@ function VideoCreator({
     const referenceVideosRef = useRef<SeedanceMediaReferenceDraft[]>([]);
     const referenceAudiosRef = useRef<SeedanceMediaReferenceDraft[]>([]);
     const klingVideoElementsRef = useRef<KlingVideoElementDraft[]>([]);
-    const [isDraggingElements, setIsDraggingElements] = useState(false);
     const [isDraggingKlingVideos, setIsDraggingKlingVideos] = useState(false);
     const [activeSeedanceAssetKey, setActiveSeedanceAssetKey] = useState<string | null>(null);
     const [activeMentionQuery, setActiveMentionQuery] = useState<{
@@ -1825,7 +1808,6 @@ function VideoCreator({
     // for one. Kling 3.0's clips are its named video elements, a slot of their own with
     // a panel of their own, so its limit here is zero.
     const supportsMultimodalReferences = referenceVideoLimit > 0 || referenceAudioLimit > 0;
-    const supportsReferenceAudio = referenceAudioLimit > 0;
     // A multi-shot run is quoted and started at its shots' total, the length the server
     // derives from the shots; a body naming another length is refused.
     const totalDuration = currentIsMultiShot
@@ -1997,13 +1979,11 @@ function VideoCreator({
     // Top up stands in Generate's place while the balance is short of this run, read from the
     // held price as well, so a re-priced setting does not swap it out and back.
     const showTopUp = (userCredits !== null && affordCost !== null && userCredits < affordCost) || creditRefusalApplies;
-    // Every model is priced while the list is open, and while the balance is short of this run,
-    // to tell a balance short of every video. A remix is not weighed against other models: it
-    // stays on its original's model and settings, and a short balance is offered a top-up
-    // (owner, 2026-11-01), never another model, nor an image in Generate's place.
-    const balanceShort = !isVisitor && userCredits !== null && affordCost !== null && userCredits < affordCost;
-    const weighsOtherRuns = balanceShort && !remixId;
-    const pricesModelList = isModelDropdownOpen || weighsOtherRuns;
+    // Every model is priced while the list is open. A balance short of this run is offered a top-up
+    // in Generate's place, which sells credits on the page (`CreditTopUpSheet`), on a remix and on
+    // any other run alike: never another model, nor an image instead (owner, 2026-11-02, after the
+    // remix's 2026-11-01; an image first, from 2026-10-28, sent the sale away).
+    const pricesModelList = isModelDropdownOpen;
     const videoModelIdsKey = videoModelOptions.map((option) => option.id).join(',');
     const ensureModelDetails = modelCatalog.ensureDetails;
     useEffect(() => {
@@ -2051,36 +2031,10 @@ function VideoCreator({
             return run && slotsFilled(run.inputs) !== filled ? run.quoteInput : null;
         });
     }, [settingsOpen, quoteRequest, settingsAxes, modelCatalog.catalog?.revision, runInputs, currentMode, selectedModel, pageForm, formHeld]);
-    // While the balance is short of this run, the image models too: for a balance short of every
-    // video, and for what Posted offers next ("make an image or top up"), after a remix too.
-    const imageRuns = useMemo(() => {
-        const revision = modelCatalog.catalog?.revision;
-        if (!balanceShort || !revision) return [];
-        return Object.keys(IMAGE_MODELS).map((id) => catalogRunQuoteInput({ kind: 'image' as const, modelId: id, catalogRevision: revision, settings: {}, inputs: [] }));
-    }, [balanceShort, modelCatalog.catalog?.revision]);
     const priceOf = useQuotePrices([
         ...[...modelRuns.values()].map((run) => run.quoteInput),
         ...variants.values(),
-        ...imageRuns,
     ]);
-    // Every model's price is in: each model with details has its answer, and the rest are
-    // missing, or will not load (a model whose details failed counts as unpriced).
-    const modelListSettled = pricesModelList && Boolean(modelCatalog.catalog) && videoModelIdsKey.split(',').every((id) => (
-        id === selectedModel
-            || modelCatalog.missingIds.includes(id)
-            || (modelRuns.has(id) ? priceOf(modelRuns.get(id)!.quoteInput).status !== 'pending' : Boolean(modelCatalog.error))
-    ));
-    const videoCosts = [affordCost, ...[...modelRuns.values()].map((run) => readyCost(priceOf(run.quoteInput)))];
-    const videosFrom = cheapestCost(videoCosts);
-    // Short of every video (owner, 2026-10-28): an image first, on the image model that costs least.
-    const imageOffer = imageRuns.reduce<{ modelId: string; name: string; cost: number } | null>((best, run) => {
-        const cost = readyCost(priceOf(run));
-        if (cost === null || (best && best.cost <= cost)) return best;
-        const name = (IMAGE_MODELS as Record<string, { displayName?: string } | undefined>)[run.modelId]?.displayName ?? run.modelId;
-        return { modelId: run.modelId, name, cost };
-    }, null);
-    const shortOfEveryVideo = weighsOtherRuns && userCredits !== null && modelListSettled && videosFrom !== null && userCredits < videosFrom;
-    const offersImageInstead = shortOfEveryVideo && imageOffer !== null && imageOffer.cost <= (userCredits ?? 0);
     // An option's price in the settings, against the balance: "19", or "23 · +1" past it.
     const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
     // A single-shot prompt may mention only what its run sends: the server refuses any
@@ -3171,14 +3125,6 @@ function VideoCreator({
         }
     };
 
-    const handleElementDrop = async (event: React.DragEvent) => {
-        event.preventDefault();
-        setIsDraggingElements(false);
-        if (event.dataTransfer.files?.length) {
-            await processElementFiles(event.dataTransfer.files);
-        }
-    };
-
     const handleKlingVideoElementDrop = async (event: React.DragEvent) => {
         event.preventDefault();
         setIsDraggingKlingVideos(false);
@@ -3191,13 +3137,6 @@ function VideoCreator({
         const file = event.target.files?.[0];
         if (file) {
             await persistFrame(file, type);
-            event.target.value = '';
-        }
-    };
-
-    const handleElementUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.files?.length) {
-            await processElementFiles(event.target.files);
             event.target.value = '';
         }
     };
@@ -3225,6 +3164,35 @@ function VideoCreator({
         if (!form.replaced.aborted) return seeds;
         seeds.forEach((seed) => revokeObjectUrl(seed.previewUrl));
         return null;
+    };
+
+    /**
+     * The clip a remix opens on, as one of its reference clips (owner, 2026-11-02, as the image
+     * and motion creators offer their originals): kept by its link, as the remix's own clips are,
+     * and measured as an upload is, since the quote is told each clip's length.
+     */
+    const addOriginalResultAsReferenceVideo = async () => {
+        const url = remixVideoUrl;
+        if (!url || !remixId || referenceVideosRef.current.some((reference) => reference.providerUrl === url)) return;
+        if (referenceVideosRef.current.length >= referenceVideoLimit) return;
+        const seeds = await readPickSeeds((async () => [{
+            displayName: getRemixResultReferenceLabel(remixTitle ?? ''),
+            file: null,
+            previewUrl: url,
+            providerUrl: url,
+            storagePath: null,
+            source: 'remix' as const,
+            sourceGenerationId: remixId,
+            durationSeconds: await readVideoDurationSeconds(url),
+        }])());
+        if (!seeds) return;
+        // A second press made while the clip's length was read: the first has added it by now.
+        if (referenceVideosRef.current.some((reference) => reference.providerUrl === url)) return;
+        if (referenceVideosRef.current.length >= referenceVideoLimit) return;
+        const nextReferences = [...referenceVideosRef.current, ...hydrateSeedanceMediaReferences('Video', seeds)];
+        commitReferenceVideos(nextReferences);
+        await persistReferenceVideos(nextReferences);
+        await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
     };
 
     const processReferenceVideoFiles = async (files: FileList | File[]) => {
@@ -3306,23 +3274,9 @@ function VideoCreator({
         await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
     };
 
-    const handleReferenceVideoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.files?.length) {
-            await processReferenceVideoFiles(event.target.files);
-            event.target.value = '';
-        }
-    };
-
     const handleKlingVideoElementUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
         if (event.target.files?.length) {
             await processKlingVideoElementFiles(event.target.files);
-            event.target.value = '';
-        }
-    };
-
-    const handleReferenceAudioUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        if (event.target.files?.length) {
-            await processReferenceAudioFiles(event.target.files);
             event.target.value = '';
         }
     };
@@ -5109,6 +5063,42 @@ function VideoCreator({
             : referenceAudios.map((reference) => ({ kind: 'audio' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceAudio(reference.id) }))),
     ];
 
+    // A remix's own clip as a reference, where the model takes clips and has room for it, or holds it already.
+    const usingOriginalResult = Boolean(remixVideoUrl) && referenceVideos.some((reference) => reference.providerUrl === remixVideoUrl);
+    const offersOriginalResult = Boolean(remixId && remixVideoUrl) && referenceVideoLimit > 0
+        && (usingOriginalResult || referenceVideos.length < referenceVideoLimit);
+
+    // The references' rows, one for each kind the model takes, with how many of it the run holds
+    // and takes: pictures where the model takes image references outside a multi-shot run, then
+    // clips and tracks where it takes them.
+    const imageReferenceKind: CreatorReferenceKind | null = showElementEditor ? {
+        name: 'Image',
+        railLabel: 'Images',
+        hint: 'Pictures of people or products, used by @handle',
+        accept: 'image/*',
+        count: elements.length,
+        limit: videoElementSupport.maxElements,
+        onFiles: (files) => void processElementFiles(files),
+    } : null;
+    const videoReferenceKind: CreatorReferenceKind | null = referenceVideoLimit > 0 ? {
+        name: 'Video',
+        railLabel: 'Video',
+        hint: 'Short clips for motion and framing',
+        accept: 'video/*',
+        count: referenceVideos.length,
+        limit: referenceVideoLimit,
+        onFiles: (files) => void processReferenceVideoFiles(files),
+    } : null;
+    const audioReferenceKind: CreatorReferenceKind | null = referenceAudioLimit > 0 ? {
+        name: 'Audio',
+        railLabel: 'Audio',
+        hint: 'Clips for beat, voice or dialogue timing',
+        accept: 'audio/*',
+        count: referenceAudios.length,
+        limit: referenceAudioLimit,
+        onFiles: (files) => void processReferenceAudioFiles(files),
+    } : null;
+
     // The line under the inputs' switch, and a frame's slot: the start image's shows on either
     // side of Wan 2.7 (its reference endpoint takes a first frame beside the references).
     const inputsHint = videoInputsHint({
@@ -5235,10 +5225,9 @@ function VideoCreator({
     ) : quoteState.status === 'error' ? (
         quoteRetry
     ) : null;
-    const shortOfEveryVideoShown = offersImageInstead && !isGenerating && !isAwaitingStartCheck;
     // A remix short of its original lands here too: it says what the original costs, with
     // Top up in Generate's place, and the run stays the original's (owner, 2026-11-01).
-    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating && !shortOfEveryVideoShown ? (
+    const topUpNotice = showTopUp && !isAwaitingStartCheck && !isGenerating ? (
         <CreatorTopUpNotice cost={affordCost} balance={userCredits} message={creditRefusal?.message ?? null} />
     ) : null;
     // A line of its own, so no other status (a pick's notice, an unanswered start) hides why
@@ -5258,13 +5247,12 @@ function VideoCreator({
     const topUpHref = remixId ? buildRemixTopUpHref('video', remixId, remixPostId) : undefined;
     // Check again goes through Generate's own path, which checks an unanswered start first.
     // A visitor's press needs no price: it checks the form, then asks for an account.
-    const barAction = shortOfEveryVideoShown && imageOffer ? (
-        <CreatorMakeImageInstead href={makeImageInsteadHref(imageOffer.modelId, prompt)} fromCost={imageOffer.cost} />
-    ) : (
+    const barAction = (
         <CreatorBarAction
             awaitingCheck={isAwaitingStartCheck}
             onCheckAgain={() => void handleGenerate()}
             showTopUp={showTopUp}
+            topUpNeed={affordCost !== null && userCredits !== null ? { cost: affordCost, balance: userCredits } : null}
             topUpHref={topUpHref}
             isGenerating={isGenerating}
             disabled={(!isVisitor && quotePending) || runHeld || canvasPublish.inFlight}
@@ -5276,8 +5264,6 @@ function VideoCreator({
     );
     const barNote = isVisitor ? (
         <CreatorVisitorNote welcomeCredits={visitorWelcomeCredits} cost={notedCost} />
-    ) : shortOfEveryVideoShown && userCredits !== null && videosFrom !== null ? (
-        <CreatorLowBalanceNote balance={userCredits} videosFrom={videosFrom} />
     ) : userCredits !== null ? (
         <CreatorBalanceNote balance={userCredits} cost={notedCost} />
     ) : undefined;
@@ -5410,7 +5396,7 @@ function VideoCreator({
                 over={smallestOver}
                 balance={listBalance}
                 isVisitor={isVisitor}
-                offersTopUp={!isVisitor && !shortOfEveryVideoShown}
+                offersTopUp={!isVisitor}
             />
 
             <CatalogAdditionalControls
@@ -5441,7 +5427,6 @@ function VideoCreator({
                 <CreatorPostedNext
                     balance={userCredits}
                     runCost={nextRunCost}
-                    imageHref={imageOffer && imageOffer.cost <= userCredits ? makeImageInsteadHref(imageOffer.modelId, runPrompt ?? prompt) : null}
                     onMakeAnother={() => (promptTextareaRef.current ?? Object.values(multiShotTextareaRefs.current).find(Boolean))?.focus()}
                     topUpHref={topUpHref}
                 />
@@ -5547,18 +5532,22 @@ function VideoCreator({
                                     <StudioRemixNotice
                                         description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
+                                        action={offersOriginalResult ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => void addOriginalResultAsReferenceVideo()}
+                                                disabled={usingOriginalResult}
+                                                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${usingOriginalResult
+                                                    ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
+                                                    : 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15'}`}
+                                            >
+                                                <Sparkles className="h-4 w-4" />
+                                                {usingOriginalResult ? 'Using original result' : 'Use as reference'}
+                                            </button>
+                                        ) : undefined}
                                     />
                                 </motion.div>
                             )}
-                            {shortOfEveryVideoShown && userCredits !== null && videosFrom !== null ? (
-                                <motion.div key="short-of-every-video" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
-                                    <CreatorLowBalanceNotice
-                                        balance={userCredits}
-                                        videosFrom={videosFrom}
-                                        image={imageOffer ? { name: imageOffer.name, cost: imageOffer.cost } : null}
-                                    />
-                                </motion.div>
-                            ) : null}
                             {modelNotice ? (
                                 <motion.div key="model-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioModelNotice
@@ -5802,226 +5791,134 @@ function VideoCreator({
                                     </>
                                 ) : (
                                     <>
-                                        {showElementEditor ? (
-                                            <div className="space-y-3">
-                                                {supportsMultimodalReferences ? (
-                                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference images</h3>
-                                                ) : null}
-                                                {elements.length > 0 ? (
-                                                    <CreatorReferenceStrip aria-label="Reference images">
-                                                        {elements.map((element) => (
-                                                            <CreatorReferenceTile
-                                                                key={element.id}
-                                                                accent="video"
-                                                                preview={
-                                                                    <button
-                                                                        type="button"
-                                                                        onClick={() => setUploadPreview({
-                                                                            type: 'image',
-                                                                            src: element.previewUrl,
-                                                                            alt: element.displayName,
-                                                                            title: element.displayName,
-                                                                        })}
-                                                                        aria-label={`Preview ${element.displayName}`}
-                                                                        className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
-                                                                    >
-                                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                                        <img
-                                                                            src={element.previewUrl}
-                                                                            alt={element.displayName}
-                                                                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
-                                                                        />
-                                                                    </button>
-                                                                }
-                                                                displayName={element.displayName}
-                                                                nameDraft={elementNames.drafts[element.id]}
-                                                                placeholder="Rename element"
-                                                                onNameChange={(value) => handleElementDraftChange(element.id, value)}
-                                                                onNameCommit={() => void commitElementDraft(element.id)}
-                                                                onNameCancel={() => elementNames.dropDraft(element.id)}
-                                                                onRemove={() => void handleRemoveElement(element.id)}
-                                                                handle={element.handle}
-                                                                handleClassName="text-sky-300"
-                                                                onInsert={() => handleInsertElementHandle(element.handle)}
-                                                                replace={element.restoredFromRemix ? {
-                                                                    label: `Replace ${element.handle} with your own photo`,
-                                                                    accept: 'image/*',
-                                                                    onFile: (file) => void replaceElement(element.id, file),
-                                                                } : undefined}
-                                                            />
-                                                        ))}
-                                                    </CreatorReferenceStrip>
-                                                ) : null}
-                                                {elements.length < videoElementSupport.maxElements && (
-                                                    <CreatorAddTile
-                                                        accent="video"
-                                                        icon={Plus}
-                                                        label={isDraggingElements ? 'Drop reference images here' : 'Add reference images'}
-                                                        input={{
-                                                            ref: elementInputRef,
-                                                            accept: 'image/*',
-                                                            multiple: true,
-                                                            onChange: handleElementUpload,
-                                                        }}
-                                                        dragging={isDraggingElements}
-                                                        onDragOver={(event) => { event.preventDefault(); setIsDraggingElements(true); }}
-                                                        onDragLeave={(event) => { event.preventDefault(); setIsDraggingElements(false); }}
-                                                        onDrop={handleElementDrop}
-                                                    />
-                                                )}
-                                            </div>
-                                        ) : null}
-                                        {supportsMultimodalReferences ? (
-                                            <div className="space-y-4">
-                                        <div className="space-y-2">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference videos</h3>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => referenceVideoInputRef.current?.click()}
-                                                    disabled={referenceVideos.length >= referenceVideoLimit}
-                                                    className={CREATOR_REFERENCE_CHIP_CLASS}
-                                                >
-                                                    Add video
-                                                </button>
-                                            </div>
-                                            <input
-                                                ref={referenceVideoInputRef}
-                                                type="file"
-                                                accept="video/*"
-                                                multiple
-                                                onChange={handleReferenceVideoUpload}
-                                                className="hidden"
-                                            />
-                                            {referenceVideos.length > 0 ? (
-                                                <ul className="space-y-2">
-                                                    {referenceVideos.map((reference) => {
-                                                        const length = cardLength(reference.id, reference.durationSeconds, 'videoReferences', 'clip');
-                                                        return (
-                                                            <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
-                                                                <div className="flex items-start justify-between gap-3">
-                                                                    <div className="min-w-0">
-                                                                        <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                        <div className={`mt-1 text-xs ${length?.held ? 'text-red-400' : 'text-[var(--ui-text-faint)]'}`}>
-                                                                            {length?.text ?? 'Duration unavailable'}
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
-                                                                        {reference.restoredFromRemix ? (
-                                                                            <CreatorReplaceButton
-                                                                                label={`Replace ${reference.displayName} with your own clip`}
-                                                                                accept="video/*"
-                                                                                onFile={(file) => void replaceMediaReference('video', reference.id, file)}
-                                                                            />
-                                                                        ) : null}
-                                                                        <IconButton
-                                                                            label={`Remove ${reference.displayName}`}
-                                                                            icon={X}
-                                                                            onClick={() => void handleRemoveReferenceVideo(reference.id)}
-                                                                            className="shrink-0"
-                                                                        />
-                                                                    </div>
-                                                                </div>
-                                                                {reference.previewUrl || reference.providerUrl ? (
-                                                                    <InlineMediaVideo
-                                                                        src={reference.previewUrl || reference.providerUrl || undefined}
-                                                                        className="mt-3 h-40 w-full rounded-ui-md border border-[var(--ui-border-subtle)] bg-black object-cover"
-                                                                        controls
-                                                                        muted
-                                                                        playsInline
-                                                                    />
-                                                                ) : null}
-                                                            </li>
-                                                        );
-                                                    })}
-                                                </ul>
-                                            ) : (
-                                                <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
-                                                    Add up to {referenceVideoLimit} short clips as motion and framing guidance.
-                                                </p>
-                                            )}
-                                        </div>
-
-                                        {supportsReferenceAudio ? (
+                                        {/* A row for each kind the model takes: its add box, then its references beside it,
+                                            or what the kind is for while it has none. */}
+                                        {imageReferenceKind || videoReferenceKind || audioReferenceKind ? (
                                             <div className="space-y-2">
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <h3 className="text-xs font-semibold text-[var(--ui-text-secondary)]">Reference audio</h3>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => referenceAudioInputRef.current?.click()}
-                                                        disabled={referenceAudios.length >= referenceAudioLimit}
-                                                        className={CREATOR_REFERENCE_CHIP_CLASS}
-                                                    >
-                                                        Add audio
-                                                    </button>
-                                                </div>
-                                                <input
-                                                    ref={referenceAudioInputRef}
-                                                    type="file"
-                                                    accept="audio/*"
-                                                    multiple
-                                                    onChange={handleReferenceAudioUpload}
-                                                    className="hidden"
-                                                />
-                                                {referenceAudios.length > 0 ? (
-                                                    <ul className="space-y-2">
-                                                        {referenceAudios.map((reference) => {
-                                                            const length = cardLength(reference.id, reference.durationSeconds, 'audioReferences', 'track');
-                                                            return (
-                                                                <li key={reference.id} className="rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3">
-                                                                    <div className="flex items-start justify-between gap-3">
-                                                                        <div className="min-w-0">
-                                                                            <div className="truncate text-sm font-semibold text-[var(--ui-text-primary)]">{reference.displayName}</div>
-                                                                            {/* Only the Seedance 2 family prepares assets. On any other model the row says how long the track is. A held track says it is under the minimum, as its line does, in place of either. */}
-                                                                            {length?.held ? (
-                                                                                <div className="mt-1 text-xs text-red-400">{length.text}</div>
-                                                                            ) : isSeedance2Family ? (
-                                                                                <div className="mt-1 text-xs text-[var(--ui-text-faint)]">
-                                                                                    {reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared'}
-                                                                                </div>
-                                                                            ) : length ? (
-                                                                                <div className="mt-1 text-xs text-[var(--ui-text-faint)]">{length.text}</div>
-                                                                            ) : null}
-                                                                        </div>
-                                                                        <div className="-my-1 -mr-1 flex shrink-0 items-center gap-1.5">
-                                                                            {reference.restoredFromRemix ? (
-                                                                                <CreatorReplaceButton
-                                                                                    label={`Replace ${reference.displayName} with your own track`}
-                                                                                    accept="audio/*"
-                                                                                    onFile={(file) => void replaceMediaReference('audio', reference.id, file)}
-                                                                                />
-                                                                            ) : null}
-                                                                            <IconButton
-                                                                                label={`Remove ${reference.displayName}`}
-                                                                                icon={X}
-                                                                                onClick={() => void handleRemoveReferenceAudio(reference.id)}
-                                                                                className="shrink-0"
+                                            {imageReferenceKind ? (
+                                                <CreatorReferenceRow accent="video" kind={imageReferenceKind}>
+                                                    {elements.length > 0 ? (
+                                                        <CreatorReferenceStrip aria-label="Reference images" className="min-w-0 flex-1">
+                                                            {elements.map((element) => (
+                                                                <CreatorReferenceTile
+                                                                    key={element.id}
+                                                                    accent="video"
+                                                                    preview={
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => setUploadPreview({
+                                                                                type: 'image',
+                                                                                src: element.previewUrl,
+                                                                                alt: element.displayName,
+                                                                                title: element.displayName,
+                                                                            })}
+                                                                            aria-label={`Preview ${element.displayName}`}
+                                                                            className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
+                                                                        >
+                                                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                            <img
+                                                                                src={element.previewUrl}
+                                                                                alt={element.displayName}
+                                                                                className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
                                                                             />
-                                                                        </div>
-                                                                    </div>
-                                                                    {reference.providerUrl ? (
-                                                                        <RecoverableMediaAudio
-                                                                            src={reference.providerUrl}
-                                                                            className="mt-3 w-full"
-                                                                        />
-                                                                    ) : reference.previewUrl ? (
-                                                                        <RecoverableMediaAudio
-                                                                            src={reference.previewUrl}
-                                                                            className="mt-3 w-full"
-                                                                        />
-                                                                    ) : null}
-                                                                </li>
-                                                            );
-                                                        })}
-                                                    </ul>
-                                                ) : (
-                                                    <p className="rounded-ui-lg border border-dashed border-[var(--ui-border-default)] px-4 py-4 text-sm text-[var(--ui-text-muted)]">
-                                                        Add up to {referenceAudioLimit} audio clip{referenceAudioLimit === 1 ? '' : 's'} for beat, voice, or dialogue timing guidance.
-                                                    </p>
-                                                )}
+                                                                        </button>
+                                                                    }
+                                                                    displayName={element.displayName}
+                                                                    nameDraft={elementNames.drafts[element.id]}
+                                                                    placeholder="Rename element"
+                                                                    onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                                                                    onNameCommit={() => void commitElementDraft(element.id)}
+                                                                    onNameCancel={() => elementNames.dropDraft(element.id)}
+                                                                    onRemove={() => void handleRemoveElement(element.id)}
+                                                                    handle={element.handle}
+                                                                    handleClassName="text-sky-300"
+                                                                    onInsert={() => handleInsertElementHandle(element.handle)}
+                                                                    replace={element.restoredFromRemix ? {
+                                                                        label: `Replace ${element.handle} with your own photo`,
+                                                                        accept: 'image/*',
+                                                                        onFile: (file) => void replaceElement(element.id, file),
+                                                                    } : undefined}
+                                                                />
+                                                            ))}
+                                                        </CreatorReferenceStrip>
+                                                    ) : null}
+                                                </CreatorReferenceRow>
+                                            ) : null}
+                                            {videoReferenceKind ? (
+                                                <CreatorReferenceRow accent="video" kind={videoReferenceKind}>
+                                                    {referenceVideos.length > 0 ? (
+                                                        <CreatorReferenceStrip aria-label="Reference videos" className="min-w-0 flex-1">
+                                                            {referenceVideos.map((reference) => {
+                                                                const length = cardLength(reference.id, reference.durationSeconds, 'videoReferences', 'clip');
+                                                                const src = reference.previewUrl || reference.providerUrl;
+                                                                return (
+                                                                    <CreatorMediaReferenceTile
+                                                                        key={reference.id}
+                                                                        preview={
+                                                                            <button
+                                                                                type="button"
+                                                                                onClick={() => {
+                                                                                    if (src) setUploadPreview({ type: 'video', src, alt: reference.displayName, title: reference.displayName });
+                                                                                }}
+                                                                                aria-label={`Preview ${reference.displayName}`}
+                                                                                className="ui-focus-ring relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
+                                                                            >
+                                                                                {src ? (
+                                                                                    <InlineMediaVideo src={src} className="pointer-events-none h-full w-full object-cover" muted playsInline preload="metadata" />
+                                                                                ) : null}
+                                                                                <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
+                                                                            </button>
+                                                                        }
+                                                                        displayName={reference.displayName}
+                                                                        line={length?.text ?? 'Duration unavailable'}
+                                                                        lineHeld={Boolean(length?.held)}
+                                                                        onRemove={() => void handleRemoveReferenceVideo(reference.id)}
+                                                                        replace={reference.restoredFromRemix ? {
+                                                                            label: `Replace ${reference.displayName} with your own clip`,
+                                                                            accept: 'video/*',
+                                                                            onFile: (file) => void replaceMediaReference('video', reference.id, file),
+                                                                        } : undefined}
+                                                                    />
+                                                                );
+                                                            })}
+                                                        </CreatorReferenceStrip>
+                                                    ) : null}
+                                                </CreatorReferenceRow>
+                                            ) : null}
+                                            {audioReferenceKind ? (
+                                                <CreatorReferenceRow accent="video" kind={audioReferenceKind}>
+                                                    {referenceAudios.length > 0 ? (
+                                                        <CreatorReferenceStrip aria-label="Reference audio" wide className="min-w-0 flex-1">
+                                                            {referenceAudios.map((reference) => {
+                                                                const length = cardLength(reference.id, reference.durationSeconds, 'audioReferences', 'track');
+                                                                const src = reference.providerUrl || reference.previewUrl;
+                                                                return (
+                                                                    <CreatorMediaReferenceTile
+                                                                        key={reference.id}
+                                                                        player={src ? <RecoverableMediaAudio src={src} className="w-full" /> : null}
+                                                                        displayName={reference.displayName}
+                                                                        // Only the Seedance 2 family prepares assets. On any other model the line says how long the
+                                                                        // track is. A held track says it is under the minimum, in place of either.
+                                                                        line={length?.held
+                                                                            ? length.text
+                                                                            : isSeedance2Family
+                                                                                ? (reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared')
+                                                                                : length?.text}
+                                                                        lineHeld={Boolean(length?.held)}
+                                                                        onRemove={() => void handleRemoveReferenceAudio(reference.id)}
+                                                                        replace={reference.restoredFromRemix ? {
+                                                                            label: `Replace ${reference.displayName} with your own track`,
+                                                                            accept: 'audio/*',
+                                                                            onFile: (file) => void replaceMediaReference('audio', reference.id, file),
+                                                                        } : undefined}
+                                                                    />
+                                                                );
+                                                            })}
+                                                        </CreatorReferenceStrip>
+                                                    ) : null}
+                                                </CreatorReferenceRow>
+                                            ) : null}
                                             </div>
-                                        ) : null}
-                                    </div>
                                         ) : null}
                                         {inputSides.references?.keepsStart
                                             ? renderFrameSlot('start', `${videoModel.displayName} can start from it, with your references.`)
@@ -6350,7 +6247,6 @@ function VideoCreator({
                             ) : null}
                             action={barAction}
                             note={barNote}
-                            stacked={shortOfEveryVideoShown}
                         />
                     </>
                 }
@@ -6411,7 +6307,7 @@ function VideoCreator({
                                 cause={describeRunFailure(runFailure.message, 'video')}
                                 returnedCredits={runFailure.cost}
                                 retryLabel={estimatedCost !== null ? `Try again · ${quoteUi.costLabel}` : 'Try again'}
-                                retryDisabled={quotePending || runHeld || showTopUp || shortOfEveryVideoShown}
+                                retryDisabled={quotePending || runHeld || showTopUp}
                                 onRetry={() => void handleGenerate()}
                                 retryable={isRetryableProviderFailure(runFailure.message)}
                                 onPickModel={() => setIsModelDropdownOpen(true)}

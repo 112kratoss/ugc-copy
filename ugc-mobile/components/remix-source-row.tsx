@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
+import { Check } from 'lucide-react-native';
 import { useState } from 'react';
 import { Text, useWindowDimensions, View } from 'react-native';
 
 import { StableMediaImage } from '@/components/media-preview';
 import { SkeletonBone } from '@/components/skeleton';
+import { AppText, SecondaryButton } from '@/components/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { showcasePostRemixSourceContext } from '@/lib/remix-start';
@@ -18,6 +20,16 @@ export type RemixSourceSeed = {
   title?: string | null;
   creatorLabel?: string | null;
   thumbnailUrl?: string | null;
+};
+
+/**
+ * The source's own result offered as a reference (`lib/remix-original-reference.ts`), as the web's
+ * creators offer it: whether the draft holds it already, and whether it is being added.
+ */
+export type RemixOriginalAction = {
+  using: boolean;
+  busy: boolean;
+  onUse: () => void;
 };
 
 const ROW_STYLE = { flexDirection: 'row', alignItems: 'center', gap: 10 } as const;
@@ -46,7 +58,7 @@ function retryUnlessRefused(failureCount: number, error: unknown) {
  * that cannot be read leaves the plain row, and is not asked for again when the
  * app comes back to the foreground.
  */
-export function RemixSourceRow({ source }: { source: RemixSourceSeed }) {
+export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; original?: RemixOriginalAction | null }) {
   const theme = useAppTheme();
   const { fontScale } = useWindowDimensions();
   const { api, user } = useAuth();
@@ -103,6 +115,31 @@ export function RemixSourceRow({ source }: { source: RemixSourceSeed }) {
         <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{title || 'Source creation'}</Text>
         <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{creatorLabel ? `By ${creatorLabel}` : 'Make your own version'}</Text>
       </View>
+      {original ? <OriginalAsReference action={original} /> : null}
     </View>
+  );
+}
+
+/**
+ * The row's button: it adds the source's result to the draft, then says the draft is using it.
+ * That second state is a plain label, not a button turned off: the reference's own tile removes it.
+ */
+function OriginalAsReference({ action }: { action: RemixOriginalAction }) {
+  const theme = useAppTheme();
+  if (action.using) {
+    return (
+      <View accessible accessibilityLabel="Using the original as a reference" style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <Check size={appTheme.icon.sm} color={theme.colors.primary} />
+        <AppText selectable={false} variant="label" color="muted">Using original</AppText>
+      </View>
+    );
+  }
+  return (
+    <SecondaryButton
+      label="Use as reference"
+      accessibilityHint="Adds the original's result to your references"
+      disabled={action.busy}
+      onPress={action.onUse}
+    />
   );
 }

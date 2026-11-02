@@ -4,7 +4,8 @@
  * model list is split by what the balance covers, and how an option's price is read
  * against the balance ("23 · +1"). A remix is never fitted: it opens on its original's
  * model and settings whatever the balance, and a balance short of it is offered a top-up
- * (owner, 2026-11-01: another model would not make what the creator came to remake).
+ * (owner, 2026-11-01: another model would not make what the creator came to remake), as
+ * every short balance is (owner, 2026-11-02: never a picture instead).
  * Each side brings its own facts (its descriptors, its form, the prices its server
  * quoted); the decisions are made here, so the two cannot decide differently. The web
  * bundle compiles this file too: keep it free of React Native, Expo and Node imports.
@@ -132,17 +133,6 @@ export function groupModelsByBalance<T>(
 export function optionPriceLabel(cost: number, balance: number | null): { text: string; over: number | null } {
   const over = balance !== null && cost > balance ? cost - balance : null;
   return { text: over === null ? String(cost) : `${cost} · +${over}`, over };
-}
-
-/**
- * The lowest of the known prices, or null. A balance under it is short of every model's
- * run, the cheapest included: then the video creator offers an image first and a top-up
- * second (owner, 2026-10-28), except on a remix, which is offered the top-up alone
- * (owner, 2026-11-01). Unknown prices say nothing.
- */
-export function cheapestCost(costs: ReadonlyArray<number | null>): number | null {
-  const known = costs.filter((cost): cost is number => cost !== null);
-  return known.length > 0 ? Math.min(...known) : null;
 }
 
 /** Whether a setting's options all cost the same, every price known: then it says so once ("Same price for each"). */
