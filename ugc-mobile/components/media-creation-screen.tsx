@@ -147,13 +147,7 @@ import { listFilesInSentence, nameSaysNothing, readableFileName } from '@/lib/me
 import { isUploadCancelledError, runWeightedUploadQueue, type WeightedUploadQueueResult } from '@/lib/upload-file';
 import { invalidateProfileCreations } from '@/lib/profile-media-query';
 import { signedStorageUrlExpiresAt } from '@/lib/media-url-expiry';
-import {
-  findActiveReferenceMention,
-  insertHandleAtSelection,
-  normalizeTextSelection,
-  type ActiveReferenceMention,
-  type TextSelection,
-} from '@/lib/reference-mentions';
+import { referenceMatchesMention, type ActiveReferenceMention } from '@/lib/reference-mentions';
 import { formatCreditAmount } from '@/lib/pricing';
 import { withCreditCost, formatCreditCost } from '@/lib/generation-action-label';
 import {
@@ -178,12 +172,17 @@ import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useRailReveal, type RailRevealRequest } from '@/lib/use-rail-reveal';
+import { useReferenceMentionInput } from '@/lib/use-reference-mention-input';
 import { showActionSheet } from '@/lib/action-sheet';
 
 // The space each reference rail keeps after its last item: its scroller's end padding, and where
 // a reveal leaves the item just added (`useRailReveal`).
 const REFERENCE_RAIL_END_INSET = 16;
 const REUSABLE_RAIL_END_INSET = 6;
+
+// How long an insert from the Reference details sheet waits to put focus and the caret back in
+// the prompt; the sheet takes 220 ms to leave (`SHEET_EXIT_DURATION` in sheet-chrome.tsx).
+const REFERENCE_SHEET_INSERT_FOCUS_DELAY = 280;
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
@@ -3798,16 +3797,13 @@ function ImagePromptComposer({
 }) {
   const theme = useAppTheme();
   const [referenceId, setReferenceId] = useState<string | null>(null);
-  const initialSelection = { start: draft.prompt.length, end: draft.prompt.length };
-  const [promptSelection, setPromptSelection] = useState<TextSelection>(initialSelection);
-  const [promptFocused, setPromptFocused] = useState(false);
-  const [dismissedMentionKey, setDismissedMentionKey] = useState<string | null>(null);
-  const promptInputRef = useRef<TextInput>(null);
-  const promptTextRef = useRef(draft.prompt);
-  const lastPromptSelectionRef = useRef<TextSelection>(initialSelection);
-  const restoringSelectionRef = useRef<TextSelection | null>(null);
-  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    inputRef: promptInputRef,
+    inputProps: promptInputProps,
+    activeMention,
+    insertHandleAtMention,
+    insertHandleAtCaret,
+  } = useReferenceMentionInput({ prompt: draft.prompt, onPromptChange, onFocus, onBlur, onMentionStateChange });
   const selectedReference = draft.references.find((media) => media.id === referenceId) ?? null;
   const referenceLimitReached = maxReferences === null || maxReferences === 0 || draft.references.length >= maxReferences;
   // The rest wait in the draft for a model that takes them.
@@ -3819,73 +3815,19 @@ function ImagePromptComposer({
     scrollerProps: referenceScrollerProps,
     itemLayout: referenceItemLayout,
   } = useRailReveal(railRevealRequest, sentReferences.map((media) => media.id), REFERENCE_RAIL_END_INSET, !reducedMotion);
-  const detectedMention = useMemo(
-    () => promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
-    [draft.prompt, promptFocused, promptSelection],
-  );
-  const mentionKey = detectedMention ? `${draft.prompt}:${promptSelection.start}:${promptSelection.end}` : null;
-  const activeMention = detectedMention && mentionKey !== dismissedMentionKey ? detectedMention : null;
   const mentionReferences = useMemo(() => {
     if (!activeMention) return [];
-    const query = activeMention.query.toLowerCase();
     return draft.references.filter((media) => {
       if (!media.handle) return false;
       // Only what the run sends can be named: the server refuses a mention of anything else.
       if (mentionHandles && !mentionHandles.includes(media.handle)) return false;
-      const normalizedHandle = media.handle.slice(1).toLowerCase();
-      return normalizedHandle.includes(query) || media.displayName.toLowerCase().includes(query);
+      return referenceMatchesMention(media, activeMention.query);
     });
   }, [activeMention, draft.references, mentionHandles]);
 
   useEffect(() => {
     if (promptFocusRequest > 0) promptInputRef.current?.focus();
   }, [promptFocusRequest]);
-
-  useEffect(() => {
-    promptTextRef.current = draft.prompt;
-    const normalized = normalizeTextSelection(draft.prompt, lastPromptSelectionRef.current);
-    if (normalized.start === lastPromptSelectionRef.current.start && normalized.end === lastPromptSelectionRef.current.end) return;
-    lastPromptSelectionRef.current = normalized;
-    setPromptSelection(normalized);
-  }, [draft.prompt]);
-
-  useEffect(() => () => {
-    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
-    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
-  }, []);
-
-  useEffect(() => {
-    onMentionStateChange(Boolean(activeMention));
-    return () => onMentionStateChange(false);
-  }, [activeMention, onMentionStateChange]);
-
-  const clearPromptBlurTimer = () => {
-    if (!blurTimerRef.current) return;
-    clearTimeout(blurTimerRef.current);
-    blurTimerRef.current = null;
-  };
-
-  const restorePromptFocus = (delay = 0) => {
-    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
-    focusTimerRef.current = setTimeout(() => {
-      promptInputRef.current?.focus();
-      promptInputRef.current?.setNativeProps({ selection: lastPromptSelectionRef.current });
-      focusTimerRef.current = null;
-    }, delay);
-  };
-
-  const insertReferenceHandle = (handle: string, selection: TextSelection, focusDelay = 0) => {
-    clearPromptBlurTimer();
-    const result = insertHandleAtSelection(promptTextRef.current, handle, selection);
-    promptTextRef.current = result.text;
-    lastPromptSelectionRef.current = result.selection;
-    restoringSelectionRef.current = result.selection;
-    setPromptSelection(result.selection);
-    setDismissedMentionKey(`${result.text}:${result.selection.start}:${result.selection.end}`);
-    setPromptFocused(true);
-    onPromptChange(result.text);
-    restorePromptFocus(focusDelay);
-  };
 
   return (
     <>
@@ -3912,39 +3854,12 @@ function ImagePromptComposer({
             ref={promptInputRef}
             accessibilityLabel="Generation prompt"
             value={draft.prompt}
-            onChangeText={(prompt) => {
-              clearPromptBlurTimer();
-              setPromptFocused(true);
-              setDismissedMentionKey(null);
-              promptTextRef.current = prompt;
-              onPromptChange(prompt);
-            }}
-            onSelectionChange={(event) => {
-              const selection = normalizeTextSelection(promptTextRef.current, event.nativeEvent.selection);
-              const matchesRestoredSelection = restoringSelectionRef.current?.start === selection.start && restoringSelectionRef.current.end === selection.end;
-              lastPromptSelectionRef.current = selection;
-              setPromptSelection(selection);
-              if (!matchesRestoredSelection) setDismissedMentionKey(null);
-              if (matchesRestoredSelection) restoringSelectionRef.current = null;
-            }}
+            {...promptInputProps}
             multiline
             scrollEnabled
             textAlignVertical="top"
             placeholder="Describe the subject, setting, lighting, composition, and style…"
             placeholderTextColor={theme.colors.faint}
-            onFocus={() => {
-              clearPromptBlurTimer();
-              setPromptFocused(true);
-              onFocus();
-            }}
-            onBlur={() => {
-              onBlur();
-              clearPromptBlurTimer();
-              blurTimerRef.current = setTimeout(() => {
-                setPromptFocused(false);
-                blurTimerRef.current = null;
-              }, 160);
-            }}
             style={{
               height: 190,
               overflow: 'hidden',
@@ -3976,7 +3891,7 @@ function ImagePromptComposer({
             references={mentionReferences}
             prompt={draft.prompt}
             mention={activeMention}
-            onSelect={(handle) => insertReferenceHandle(handle, activeMention)}
+            onSelect={insertHandleAtMention}
           />
         ) : null}
 
@@ -4085,7 +4000,7 @@ function ImagePromptComposer({
           if (selectedReference) onRenameReference(selectedReference.id, displayName);
         }}
         onUseHandle={(handle) => {
-          insertReferenceHandle(handle, lastPromptSelectionRef.current, 280);
+          insertHandleAtCaret(handle, REFERENCE_SHEET_INSERT_FOCUS_DELAY);
           setReferenceId(null);
         }}
         onReplace={() => {
@@ -4440,16 +4355,21 @@ function VideoCreatorComposer({
 }) {
   const theme = useAppTheme();
   const [referenceId, setReferenceId] = useState<string | null>(null);
-  const initialSelection = { start: draft.prompt.length, end: draft.prompt.length };
-  const [promptSelection, setPromptSelection] = useState<TextSelection>(initialSelection);
-  const [promptFocused, setPromptFocused] = useState(false);
-  const [dismissedMentionKey, setDismissedMentionKey] = useState<string | null>(null);
-  const promptInputRef = useRef<TextInput>(null);
-  const promptTextRef = useRef(draft.prompt);
-  const lastPromptSelectionRef = useRef<TextSelection>(initialSelection);
-  const restoringSelectionRef = useRef<TextSelection | null>(null);
-  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    inputRef: promptInputRef,
+    inputProps: promptInputProps,
+    activeMention,
+    insertHandleAtMention,
+    insertHandleAtCaret,
+  } = useReferenceMentionInput({
+    prompt: draft.prompt,
+    // A story's prompt is its shots: the single shot's field is not on screen.
+    enabled: !draft.isMultiShot,
+    onPromptChange,
+    onFocus,
+    onBlur,
+    onMentionStateChange,
+  });
   const supportsStartFrame = catalogInputSupported(
     model,
     draft,
@@ -4614,12 +4534,6 @@ function VideoCreatorComposer({
     && [...draft.references, ...draft.referenceVideos].some((media) => media.id === selectedReference.id)
     ? selectedReference
     : null;
-  const detectedMention = useMemo(
-    () => !draft.isMultiShot && promptFocused ? findActiveReferenceMention(draft.prompt, promptSelection) : null,
-    [draft.isMultiShot, draft.prompt, promptFocused, promptSelection],
-  );
-  const mentionKey = detectedMention ? `${draft.prompt}:${promptSelection.start}:${promptSelection.end}` : null;
-  const activeMention = detectedMention && mentionKey !== dismissedMentionKey ? detectedMention : null;
   // A plain derivation where ImagePromptComposer's is a useMemo. React Compiler keeps a manual
   // memo only when the block it builds for each dependency closes before the memo, and its block
   // for `subjects` stays open almost to the end of the render: what is picked out of it
@@ -4629,57 +4543,15 @@ function VideoCreatorComposer({
   // change what it is given. Kept, the memo made the compiler skip the whole component
   // (2026-10-22, `__tests__/compiled-screens.test.ts`). Nothing is lost: `runHandles` is a new
   // Set each render, so the memo recomputed on every render, as this does compiled or not.
-  const mentionQuery = activeMention ? activeMention.query.toLowerCase() : null;
-  const mentionReferences = mentionQuery === null ? [] : [
+  const mentionReferences = activeMention === null ? [] : [
     ...draft.references,
     ...draft.referenceVideos,
     ...subjects.map(subjectAsReference),
-  ].filter((media) => media.handle && runHandles.has(media.handle) && (
-    media.handle.slice(1).toLowerCase().includes(mentionQuery) || media.displayName.toLowerCase().includes(mentionQuery)
-  ));
-
-  useEffect(() => {
-    promptTextRef.current = draft.prompt;
-    const normalized = normalizeTextSelection(draft.prompt, lastPromptSelectionRef.current);
-    lastPromptSelectionRef.current = normalized;
-    setPromptSelection(normalized);
-  }, [draft.prompt]);
-
-  useEffect(() => () => {
-    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
-    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
-  }, []);
-
-  useEffect(() => {
-    onMentionStateChange(Boolean(activeMention));
-    return () => onMentionStateChange(false);
-  }, [activeMention, onMentionStateChange]);
+  ].filter((media) => media.handle && runHandles.has(media.handle) && referenceMatchesMention(media, activeMention.query));
 
   useEffect(() => {
     if (promptFocusRequest > 0) promptInputRef.current?.focus();
   }, [promptFocusRequest]);
-
-  const restorePromptFocus = (delay = 0) => {
-    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
-    focusTimerRef.current = setTimeout(() => {
-      promptInputRef.current?.focus();
-      promptInputRef.current?.setNativeProps({ selection: lastPromptSelectionRef.current });
-      focusTimerRef.current = null;
-    }, delay);
-  };
-
-  const insertReferenceHandle = (handle: string, selection: TextSelection, focusDelay = 0) => {
-    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
-    const result = insertHandleAtSelection(promptTextRef.current, handle, selection);
-    promptTextRef.current = result.text;
-    lastPromptSelectionRef.current = result.selection;
-    restoringSelectionRef.current = result.selection;
-    setPromptSelection(result.selection);
-    setDismissedMentionKey(`${result.text}:${result.selection.start}:${result.selection.end}`);
-    setPromptFocused(true);
-    onPromptChange(result.text);
-    restorePromptFocus(focusDelay);
-  };
 
   const draftTextNames = (handle?: string | null) => videoDraftTextNames(draft, handle);
 
@@ -4773,36 +4645,12 @@ function VideoCreatorComposer({
             testID="video-prompt-input"
             accessibilityLabel="Generation prompt"
             value={draft.prompt}
-            onChangeText={(prompt) => {
-              if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
-              setPromptFocused(true);
-              setDismissedMentionKey(null);
-              promptTextRef.current = prompt;
-              onPromptChange(prompt);
-            }}
-            onSelectionChange={(event) => {
-              const selection = normalizeTextSelection(promptTextRef.current, event.nativeEvent.selection);
-              const restored = restoringSelectionRef.current?.start === selection.start && restoringSelectionRef.current.end === selection.end;
-              lastPromptSelectionRef.current = selection;
-              setPromptSelection(selection);
-              if (!restored) setDismissedMentionKey(null);
-              if (restored) restoringSelectionRef.current = null;
-            }}
+            {...promptInputProps}
             multiline
             scrollEnabled
             textAlignVertical="top"
             placeholder="Describe action, camera movement, lighting, pace, and sound…"
             placeholderTextColor={theme.colors.faint}
-            onFocus={() => {
-              if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
-              setPromptFocused(true);
-              onFocus();
-            }}
-            onBlur={() => {
-              onBlur();
-              if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
-              blurTimerRef.current = setTimeout(() => setPromptFocused(false), 160);
-            }}
             style={{ height: 188, color: theme.colors.text, fontSize: 14, lineHeight: 20, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 28 }}
           />
           <PromptLengthCounter meter={catalogPromptMeters(draft, model).prompt} />
@@ -4812,7 +4660,7 @@ function VideoCreatorComposer({
       )}
 
       {activeMention ? (
-        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} mention={activeMention} onSelect={(handle) => insertReferenceHandle(handle, activeMention)} />
+        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} mention={activeMention} onSelect={insertHandleAtMention} />
       ) : null}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
@@ -5000,7 +4848,7 @@ function VideoCreatorComposer({
         // A story's prompt is its shots: the single shot's prompt an insert would write into is hidden.
         onUseHandle={selectedReference && !draft.isMultiShot && (selectedSubject !== null || Boolean(selectedReference.handle && runHandles.has(selectedReference.handle)))
           ? (handle) => {
-              insertReferenceHandle(handle, lastPromptSelectionRef.current, 280);
+              insertHandleAtCaret(handle, REFERENCE_SHEET_INSERT_FOCUS_DELAY);
               setReferenceId(null);
             }
           : undefined}
