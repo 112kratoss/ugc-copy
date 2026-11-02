@@ -132,7 +132,7 @@ export default function LoginClient({
                     Back home
                 </Link>
                 <Link href="/" prefetch={false} className="ui-focus-ring flex items-center gap-2 rounded-xl text-[var(--ui-text-primary)]">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
                         <WandSparkles className="h-4 w-4" aria-hidden />
                     </span>
                     <span className="hidden text-sm font-extrabold sm:inline">magicbooklet</span>
@@ -152,7 +152,7 @@ export default function LoginClient({
                         </p>
                     </div>
 
-                    <div className="rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
+                    <div className="rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
                         <div className="mb-6 grid grid-cols-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] p-1" role="group" aria-label="Choose authentication mode">
                             <button
                                 type="button"

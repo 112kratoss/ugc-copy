@@ -1647,7 +1647,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const actionColumns = actionGrid.findAll(
       (node) =>
         node.props.accessibilityRole === 'button' &&
-        node.props.style?.minHeight === 60,
+        // Capsules on one row, as the web draws them.
+        node.props.style?.minHeight === 48 &&
+        node.props.style?.borderRadius === 999 &&
+        node.props.style?.flexDirection === 'row',
     );
     expect(actionColumns.map((node) => node.props.accessibilityLabel)).toEqual(['Templates', 'Enhance · 2 credits']);
     const referenceRail = tree!.root.findByProps({ testID: 'image-reference-rail' });
@@ -4082,8 +4085,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     const resolution = tree!.root.find((node) => String(node.type) === 'pressable' && node.props.testID === 'parameter-choice-resolution-1K');
     const output = tree!.root.find((node) => String(node.type) === 'pressable' && node.props.testID === 'parameter-choice-outputFormat-jpg');
-    expect(resolution.props.style).toEqual(expect.objectContaining({ width: '31%', minHeight: 48, borderRadius: 14 }));
-    expect(output.props.style).toEqual(expect.objectContaining({ width: '48.5%', minHeight: 48, borderRadius: 14 }));
+    expect(resolution.props.style).toEqual(expect.objectContaining({ width: '31%', minHeight: 48, borderRadius: 12, borderCurve: 'continuous' }));
+    expect(output.props.style).toEqual(expect.objectContaining({ width: '48.5%', minHeight: 48, borderRadius: 12, borderCurve: 'continuous' }));
     expect(resolution.props.accessibilityState).toEqual({ selected: true });
     expect(output.props.accessibilityState).toEqual({ selected: true });
 

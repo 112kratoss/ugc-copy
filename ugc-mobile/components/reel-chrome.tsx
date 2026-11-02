@@ -149,7 +149,7 @@ export function ReelSlideChrome({
             flexDirection: 'row',
             alignItems: 'center',
             gap: 5,
-            borderRadius: 14,
+            borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: 'rgba(255,255,255,0.14)',
             backgroundColor: 'rgba(3,3,6,0.68)',
@@ -325,7 +325,7 @@ export function ReelSlideChrome({
         {isTextPost ? null : (
         <>
         <View pointerEvents="none" style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-          <View style={{ borderRadius: 999, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
+          <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 10, paddingVertical: 6 }}>
             <Text numberOfLines={1} style={{ color: '#fff', fontSize: 11, lineHeight: 13, fontWeight: '800' }}>
               {item.badge}
             </Text>
@@ -335,7 +335,7 @@ export function ReelSlideChrome({
           {stateChip ? (
             <View
               style={{
-                borderRadius: 999,
+                borderRadius: appTheme.radii.pill,
                 borderWidth: 1,
                 borderColor: viewerStateChipStyle(stateChip.tone, theme.semantic).border,
                 backgroundColor: viewerStateChipStyle(stateChip.tone, theme.semantic).background,
@@ -492,7 +492,7 @@ function FollowPill({ following, pending, onPress }: { following: boolean; pendi
       style={({ pressed }) => ({
         minHeight: 30,
         justifyContent: 'center',
-        borderRadius: 999,
+        borderRadius: appTheme.radii.pill,
         borderWidth: 1.5,
         borderColor: following ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.92)',
         backgroundColor: 'rgba(0,0,0,0.18)',
@@ -668,7 +668,7 @@ function RailActionButton({
           height: bare ? 48 : 54,
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: 27,
+          borderRadius: appTheme.radii.pill,
           borderWidth: primary || bare ? 0 : 1,
           borderColor: 'rgba(255,255,255,0.16)',
           backgroundColor: bare ? 'transparent' : primary ? theme.colors.primaryFill : 'rgba(12,12,16,0.42)',
@@ -681,7 +681,7 @@ function RailActionButton({
               position: 'absolute',
               width: 54,
               height: 54,
-              borderRadius: 27,
+              borderRadius: appTheme.radii.pill,
               backgroundColor: animationSpec.haloColor,
               opacity: haloOpacity,
               transform: [{ scale: haloScale }],

@@ -130,7 +130,7 @@ function BootstrapCard({
     return (
         <article
             data-showcase-bootstrap-card="true"
-            className="min-w-0 overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
+            className="min-w-0 overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
         >
             <div className="relative overflow-hidden bg-black" style={{ aspectRatio: '4 / 5' }}>
                 {isPriority && posterUrl ? (
@@ -166,7 +166,7 @@ function BootstrapCard({
                     <a
                         href={detailHref}
                         onClick={openInPage}
-                        className="ui-focus-ring block max-w-full truncate rounded-sm text-left text-sm font-semibold text-zinc-100"
+                        className="ui-focus-ring block max-w-full truncate rounded-lg text-left text-sm font-semibold text-zinc-100"
                     >
                         {item.title}
                     </a>
@@ -174,7 +174,7 @@ function BootstrapCard({
                         <a
                             href={`/creators/${encodeURIComponent(item.creator.username)}`}
                             data-showcase-static-link="true"
-                            className="ui-focus-ring mt-1 block min-h-6 max-w-full truncate rounded-sm text-xs font-semibold leading-6 text-zinc-300 hover:text-white"
+                            className="ui-focus-ring mt-1 block min-h-6 max-w-full truncate rounded-lg text-xs font-semibold leading-6 text-zinc-300 hover:text-white"
                         >
                             {item.creator.name}
                         </a>
@@ -434,7 +434,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
 
                 <nav
                     aria-label="Explore filters"
-                    className="sticky top-[calc(var(--app-shell-topbar-height)+0.5rem)] z-30 mb-7 rounded-[28px] border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4"
+                    className="sticky top-[calc(var(--app-shell-topbar-height)+0.5rem)] z-30 mb-7 rounded-4xl border border-[var(--ui-border-default)] bg-[rgba(25,25,28,0.92)] p-3 shadow-[0_12px_30px_rgba(0,0,0,0.24)] backdrop-blur-xl sm:p-4"
                 >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div className="relative min-w-0 w-full sm:w-auto">
@@ -494,7 +494,7 @@ export default function ShowcaseBootstrapClient(props: ShowcaseBootstrapClientPr
                         ))}
                     </div>
                 ) : (
-                    <div className="rounded-[28px] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">
+                    <div className="rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-6 py-16 text-center text-[var(--ui-text-muted)]">
                         <p className="text-lg font-bold text-[var(--ui-text-primary)]">Nothing in this lane yet</p>
                         <p className="mt-2 text-sm">Choose another filter or share the first post.</p>
                     </div>

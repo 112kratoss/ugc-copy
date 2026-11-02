@@ -197,7 +197,7 @@ describe('MediaPreview frame', () => {
     const held = mount(<MediaPreview url="https://cdn/reference.mp4" kind="video" height={300} radius={22} letterbox playerHeld />);
     expect(held.root.findAll((node) => String(node.type) === 'video-preview')).toHaveLength(0);
     const frame = held.root.findAll((node) => String(node.type) === 'view')[0].props.style;
-    expect(frame).toEqual({ width: '100%', height: 300, borderRadius: 22, backgroundColor: mediaColors.mediaGround });
+    expect(frame).toEqual({ width: '100%', height: 300, borderRadius: 22, borderCurve: 'continuous', backgroundColor: mediaColors.mediaGround });
     renderer.act(() => held.unmount());
 
     const built = mount(<MediaPreview url="https://cdn/reference.mp4" kind="video" height={300} radius={22} letterbox />);

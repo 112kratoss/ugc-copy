@@ -1331,7 +1331,7 @@ button:disabled,
   position: relative;
   width: min(32rem, 100%);
   border: 1px solid var(--ui-border-default);
-  border-radius: 1.75rem;
+  border-radius: var(--ui-radius-2xl);
   background: var(--ui-surface-1);
   padding: 1.25rem;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);

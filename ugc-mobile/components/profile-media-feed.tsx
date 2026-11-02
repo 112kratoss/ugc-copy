@@ -726,7 +726,7 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
           height: 44,
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: 22,
+          borderRadius: appTheme.radii.pill,
           opacity: pressed ? appTheme.opacity.pressed : 1,
         })}
       >
@@ -756,6 +756,7 @@ function FeedNotice({ label, onPress }: { label: string; onPress: () => void }) 
         paddingHorizontal: 14,
         paddingVertical: 10,
         borderRadius: appTheme.radii.sm,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: tone.border,
         backgroundColor: tone.background,

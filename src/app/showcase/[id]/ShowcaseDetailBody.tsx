@@ -386,7 +386,7 @@ export default function ShowcaseDetailBody({
             data-testid="canonical-post-actions"
             className="canonical-post-actions min-w-0 space-y-4"
           >
-            <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+            <div className="overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.86),rgba(10,10,12,0.9))] shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
               {/*
                 * A pointer, not a pitch: the recipe is presented once, in the
                 * document column, under the post — this sticky one-liner keeps
@@ -468,7 +468,7 @@ export default function ShowcaseDetailBody({
         // bottom edge below 768px (z-60) and was drawn over the whole CTA there.
         <Link
           href="#recipe"
-          className="canonical-post-mobile-cta fixed inset-x-3 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-40 flex items-center justify-between gap-3 rounded-[22px] border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
+          className="canonical-post-mobile-cta fixed inset-x-3 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+0.75rem)] z-40 flex items-center justify-between gap-3 rounded-full border border-emerald-300/25 bg-emerald-300 px-4 py-3 text-slate-950 shadow-[0_18px_60px_rgba(0,0,0,0.45)]"
         >
           <span>
             <span className="block text-sm font-bold">

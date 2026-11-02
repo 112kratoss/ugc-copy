@@ -10,7 +10,7 @@ export function HomeFeedSkeleton() {
       {[220, 320, 260].map((height, index) => (
         <div
           key={index}
-          className="relative overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
+          className="relative overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)]"
           style={{ minHeight: height }}
         >
           <div className="absolute inset-0 -translate-x-full animate-[skeleton-shimmer_1.5s_linear_infinite] bg-gradient-to-r from-transparent via-white/5 to-transparent" />

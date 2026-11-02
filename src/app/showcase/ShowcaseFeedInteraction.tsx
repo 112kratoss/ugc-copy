@@ -1057,7 +1057,7 @@ export function FeedRemovalUndoRow({
     <div
       role="group"
       aria-label={label}
-      className={`flex min-h-14 items-center justify-center gap-2 rounded-[1.25rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-4 text-sm text-[var(--ui-text-muted)] ${className}`}
+      className={`flex min-h-14 items-center justify-center gap-2 rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-4 text-sm text-[var(--ui-text-muted)] ${className}`}
     >
       {/* The spaces read "Hidden · Undo" as text; a flex row lays out by its gap and drops them. */}
       <span>Hidden</span>{' '}

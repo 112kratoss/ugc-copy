@@ -88,7 +88,7 @@ function PostSearchCard({ item, returnTo }: { item: ShowcaseFeedItem; returnTo: 
   return (
     <Link
       href={buildShowcaseDetailPath(item.id, { from: 'search', returnTo })}
-      className="ui-focus-ring group overflow-hidden rounded-[26px] border border-white/8 bg-white/[0.035] transition hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.055]"
+      className="ui-focus-ring group overflow-hidden rounded-3xl border border-white/8 bg-white/[0.035] transition hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.055]"
     >
       {preview ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -118,7 +118,7 @@ function RecipeSearchCard({ recipe, returnTo }: { recipe: RecipeSearchResult; re
   return (
     <Link
       href={buildShowcaseDetailPath(recipe.postId, { from: 'search', returnTo, section: 'resources' })}
-      className="ui-focus-ring group flex min-h-32 overflow-hidden rounded-[24px] border border-white/8 bg-white/[0.035] transition hover:border-white/15 hover:bg-white/[0.06]"
+      className="ui-focus-ring group flex min-h-32 overflow-hidden rounded-2xl border border-white/8 bg-white/[0.035] transition hover:border-white/15 hover:bg-white/[0.06]"
     >
       {preview ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -310,7 +310,7 @@ export default function SearchClient({
           <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-400 sm:text-base">Find people, public work, and production-ready recipes without leaving your creative flow.</p>
         </div>
 
-        <div className="sticky top-20 z-20 mt-8 rounded-[28px] bg-black/70 p-2 backdrop-blur-xl sm:top-24">
+        <div className="sticky top-20 z-20 mt-8 rounded-full bg-black/70 p-2 backdrop-blur-xl sm:top-24">
           <SearchField value={query} onChange={setQuery} onClear={() => setQuery('')} autoFocus={!initialQuery} />
           <div
             className="mt-2 flex gap-1 overflow-x-auto px-1 pb-1"
@@ -360,7 +360,7 @@ export default function SearchClient({
             />
           ) : !shownAnswer || resultCount === 0 ? (
             pending ? (
-              <div className="flex min-h-72 items-center justify-center rounded-[32px] border border-white/8 bg-white/[0.025] text-sm text-zinc-400">
+              <div className="flex min-h-72 items-center justify-center rounded-3xl border border-white/8 bg-white/[0.025] text-sm text-zinc-400">
                 <LoaderCircle className="mr-2 h-5 w-5 animate-spin" /> Searching…
               </div>
             ) : (

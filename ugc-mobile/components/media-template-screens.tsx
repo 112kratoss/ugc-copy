@@ -401,7 +401,7 @@ function TemplateCard({ template, posterAttempt, posterFailed, onPosterError, re
           >
             {/* On the gradient's black foot, so the dark palette in both schemes. */}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-              <View style={{ width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.onMedia, 0.14) }}>
+              <View style={{ width: 32, height: 32, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(mediaColors.onMedia, 0.14) }}>
                 <Play size={16} fill={themes.dark.colors.text} color={themes.dark.colors.text} />
               </View>
               <Kicker color={themes.dark.colors.primary}>{template.outputKind} template</Kicker>
@@ -457,7 +457,7 @@ function ResumeRunCard({ run, templateName }: { run: TemplateRun; templateName: 
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
+      <View style={{ width: 44, height: 44, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
         <RefreshCw size={appTheme.icon.default} color={theme.colors.primary} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -738,7 +738,7 @@ function TemplateDetailContent({
           const SlotIcon = slot.kind === 'video' ? Video : ImageIcon;
           return (
             <View key={slot.key} style={{ flexDirection: 'row', gap: 12, alignItems: 'flex-start' }}>
-              <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: theme.colors.pressed, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ width: 34, height: 34, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.pressed, alignItems: 'center', justifyContent: 'center' }}>
                 <SlotIcon size={16} color={theme.colors.primary} />
               </View>
               <View style={{ flex: 1, gap: 2 }}>
@@ -1071,7 +1071,7 @@ function RunHeader({
         style={{ flexDirection: 'row', gap: 6 }}
       >
         {Array.from({ length: Math.max(progress.total, 1) }, (_, index) => (
-          <View key={index} style={{ flex: 1, height: 4, borderRadius: 2, backgroundColor: index < progress.complete ? theme.colors.success : index === progress.complete ? theme.colors.primary : theme.colors.borderStrong }} />
+          <View key={index} style={{ flex: 1, height: 4, borderRadius: appTheme.radii.pill, backgroundColor: index < progress.complete ? theme.colors.success : index === progress.complete ? theme.colors.primary : theme.colors.borderStrong }} />
         ))}
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -1148,7 +1148,7 @@ function InputStage({
                   gets no player controls: the slot is one button, so a tap on
                   them opened the picker as well. */}
               {preview ? <MediaPreview url={preview} kind={slot.kind} height={210} letterbox nativeControls={false} /> : <SlotIcon size={appTheme.icon.hero} color={theme.colors.faint} />}
-              <View style={{ position: preview ? 'absolute' : 'relative', bottom: preview ? 14 : undefined, minWidth: 132, minHeight: 48, borderRadius: 24, paddingHorizontal: 16, backgroundColor: hexWithAlpha(theme.colors.panel, 0.9), flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ position: preview ? 'absolute' : 'relative', bottom: preview ? 14 : undefined, minWidth: 132, minHeight: 48, borderRadius: appTheme.radii.pill, paddingHorizontal: 16, backgroundColor: hexWithAlpha(theme.colors.panel, 0.9), flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
                 {uploadingSlot === slot.key ? <ActivityIndicator color={theme.colors.primary} /> : <Upload size={18} color={theme.colors.primary} />}
                 <AppText variant="label">{uploadingSlot === slot.key ? 'Uploading…' : uploaded ? `Replace ${slot.kind}` : `Choose ${slot.kind}`}</AppText>
               </View>
@@ -1471,7 +1471,7 @@ function ResultStage({
   return (
     <View style={{ gap: 16 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.semantic.success.background, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ width: 32, height: 32, borderRadius: appTheme.radii.pill, backgroundColor: theme.semantic.success.background, alignItems: 'center', justifyContent: 'center' }}>
           <Check size={18} color={theme.colors.success} />
         </View>
         <AppText variant="cardTitle">Final {result.kind}</AppText>

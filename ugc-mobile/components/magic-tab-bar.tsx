@@ -572,7 +572,7 @@ function GenerationRing({ size, running }: { size: number; running: boolean }) {
         left: inset,
         right: inset,
         bottom: inset,
-        borderRadius: (size + RING_GAP * 2) / 2,
+        borderRadius: appTheme.radii.pill,
         borderWidth: RING_WIDTH,
         borderColor: 'transparent',
         borderTopColor: theme.colors.primaryStrong,
@@ -797,8 +797,7 @@ function TabBadge({ value, iconSize }: { value: string; iconSize: number }) {
         minWidth: 17,
         height: 17,
         paddingHorizontal: 4,
-        borderRadius: 9,
-        borderCurve: 'continuous',
+        borderRadius: appTheme.radii.pill,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: theme.colors.badge,
@@ -985,8 +984,7 @@ function TabButton({
         minHeight: android ? 50 : 52,
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: android ? 25 : 18,
-        borderCurve: 'continuous',
+        borderRadius: appTheme.radii.pill,
         // The Android content presses as one unit inside the selection capsule.
         backgroundColor: pressed && !android ? theme.colors.surfaceStrong : 'transparent',
       })}

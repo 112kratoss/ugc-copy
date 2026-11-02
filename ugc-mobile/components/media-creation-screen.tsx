@@ -3710,7 +3710,7 @@ function CompactCreatorHeader({
               style={({ pressed }) => ({
                 width: 48,
                 height: 48,
-                borderRadius: 24,
+                borderRadius: appTheme.radii.pill,
                 backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -3831,7 +3831,7 @@ function SlimCreatorBanner({ label, body, loading, onDismiss }: { label: string;
     <View
       style={{
         minHeight: 56,
-        borderRadius: 18,
+        borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: hexWithAlpha(theme.colors.primary, 0.28),
@@ -3977,7 +3977,7 @@ function ImagePromptComposer({
       <View style={{ gap: 12 }}>
       <View
         style={{
-          borderRadius: 28,
+          borderRadius: appTheme.radii.xl,
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: hexWithAlpha(theme.colors.image, 0.2),
@@ -4057,7 +4057,7 @@ function ImagePromptComposer({
         <View
           testID="image-reference-rail"
           style={{
-            borderRadius: 24,
+            borderRadius: appTheme.radii.xl,
             borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: hexWithAlpha(theme.colors.image, 0.13),
@@ -4093,7 +4093,8 @@ function ImagePromptComposer({
                   style={({ pressed }) => ({
                     width: 72,
                     height: 72,
-                    borderRadius: 16,
+                    borderRadius: appTheme.radii.md,
+                    borderCurve: 'continuous',
                     borderWidth: 1,
                     borderStyle: 'dashed',
                     borderColor: hexWithAlpha(theme.colors.image, 0.42),
@@ -4200,7 +4201,7 @@ function CompactReferenceSlot({
         flex: 1,
         minWidth: 0,
         minHeight: 148,
-        borderRadius: 22,
+        borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderStyle: media ? 'solid' : 'dashed',
@@ -4313,7 +4314,7 @@ function CompactShotEditor({
             onChange((current) => ({ ...current, multiPrompts: [...current.multiPrompts, { id, prompt: '', duration: 5 }] }));
             setSelectedId(id);
           }}
-          style={({ pressed }) => ({ minHeight: 48, borderRadius: 16, paddingHorizontal: 13, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: atShotCap ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, paddingHorizontal: 13, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: atShotCap ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
         >
           <Plus size={16} color={theme.colors.video} />
           <Text style={{ color: theme.colors.text, fontSize: 11, fontWeight: '800' }}>Add shot</Text>
@@ -4331,7 +4332,7 @@ function CompactShotEditor({
               accessibilityLabel={`Edit shot ${index + 1}${over ? ', over the character limit' : ''}`}
               accessibilityState={{ selected: active }}
               onPress={() => setSelectedId(shot.id)}
-              style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: over ? theme.colors.danger : active ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: active ? hexWithAlpha(theme.colors.image, 0.12) : theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              style={({ pressed }) => ({ minWidth: 76, minHeight: 48, borderRadius: appTheme.radii.md, borderCurve: 'continuous', borderWidth: 1, borderColor: over ? theme.colors.danger : active ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: active ? hexWithAlpha(theme.colors.image, 0.12) : theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', gap: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: over ? theme.colors.danger : active ? theme.colors.text : theme.colors.muted, fontSize: 11, fontWeight: '900' }}>Shot {index + 1}</Text>
               <Text style={{ color: theme.colors.faint, fontSize: 11 }}>{shot.duration}s</Text>
@@ -4340,7 +4341,7 @@ function CompactShotEditor({
         })}
       </ScrollView>
       {selectedShot ? (
-        <View style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
+        <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <TextInput
             maxLength={GENERATION_PROMPT_MAX_LENGTH}
             testID="selected-shot-prompt"
@@ -4371,7 +4372,7 @@ function CompactShotEditor({
               accessibilityState={{ disabled: shotEnhanceDisabled }}
               disabled={shotEnhanceDisabled}
               onPress={() => onEnhanceShot(selectedShot.id)}
-              style={({ pressed }) => ({ minHeight: 44, borderRadius: 16, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.primary, 0.3), backgroundColor: hexWithAlpha(theme.colors.primary, 0.11), flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12, opacity: shotEnhanceDisabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1 })}
+              style={({ pressed }) => ({ minHeight: 44, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.primary, 0.3), backgroundColor: hexWithAlpha(theme.colors.primary, 0.11), flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12, opacity: shotEnhanceDisabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Wand2 size={16} color={theme.colors.primary} />
               <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '800' }}>{shotEnhanceLabels.label}</Text>
@@ -4397,7 +4398,7 @@ function CompactShotEditor({
               onChange((current) => ({ ...current, multiPrompts: current.multiPrompts.filter((shot) => shot.id !== id) }));
               setSelectedId(nextShots[Math.max(0, index - 1)]?.id ?? nextShots[0]?.id ?? '');
             }}
-            style={({ pressed }) => ({ width: 48, height: 48, position: 'absolute', right: 6, top: 6, borderRadius: 24, backgroundColor: pressed ? theme.colors.pressed : hexWithAlpha(theme.colors.surfaceInset, 0.78), alignItems: 'center', justifyContent: 'center', opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1 })}
+            style={({ pressed }) => ({ width: 48, height: 48, position: 'absolute', right: 6, top: 6, borderRadius: appTheme.radii.pill, backgroundColor: pressed ? theme.colors.pressed : hexWithAlpha(theme.colors.surfaceInset, 0.78), alignItems: 'center', justifyContent: 'center', opacity: draft.multiPrompts.length <= 1 ? 0.35 : 1 })}
           >
             <Trash2 size={17} color={theme.colors.muted} />
           </Pressable>
@@ -4727,7 +4728,7 @@ function VideoCreatorComposer({
   return (
     <View testID="video-creator-composer" style={{ gap: 12 }}>
       {model?.capabilities.multiShot ? (
-        <View testID="video-shot-mode" style={{ minHeight: 48, borderRadius: 18, backgroundColor: theme.colors.surfaceStrong, padding: 4, flexDirection: 'row', gap: 4 }}>
+        <View testID="video-shot-mode" style={{ minHeight: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, padding: 4, flexDirection: 'row', gap: 4 }}>
           {[
             { label: 'Single shot', value: false },
             { label: 'Multi-shot', value: true },
@@ -4744,7 +4745,7 @@ function VideoCreatorComposer({
                 onChange((current) => ({ ...current, isMultiShot: option.value, referenceMode: option.value ? 'frames' : current.referenceMode }));
               }}
               hitSlop={verticalHitSlop(40)}
-              style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? theme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: appTheme.radii.pill, backgroundColor: draft.isMultiShot === option.value ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? theme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               <Text style={{ color: draft.isMultiShot === option.value ? theme.colors.text : theme.colors.muted, fontSize: 12, fontWeight: '800' }}>{option.label}</Text>
             </Pressable>
@@ -4767,7 +4768,7 @@ function VideoCreatorComposer({
           onBlur={onBlur}
         />
       ) : (
-        <View style={{ borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
+        <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.2), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
           <View style={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8 }}>
             <Text style={{ color: theme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Prompt</Text>
           </View>
@@ -4810,7 +4811,7 @@ function VideoCreatorComposer({
           disabled={isEnhancing}
         />
 
-      <View testID="video-reference-section" style={{ borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.13), backgroundColor: theme.colors.panel, padding: 14, gap: 12 }}>
+      <View testID="video-reference-section" style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.image, 0.13), backgroundColor: theme.colors.panel, padding: 14, gap: 12 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <View style={{ gap: 2 }}>
             <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{draft.isMultiShot ? 'Story inputs' : 'Visual inputs'}</Text>
@@ -5019,7 +5020,7 @@ function CompactRailAddButton({ label, uploadingLabel = label, icon = 'image', o
       onPress={onPress}
       // At least 80pt, and wider when a larger text size needs it: a label of one long word
       // ("References") has nowhere to wrap, and a fixed width broke it mid-word.
-      style={({ pressed }) => ({ minWidth: 80, minHeight: 96, borderRadius: 16, borderWidth: 1, borderStyle: 'dashed', borderColor: hexWithAlpha(theme.colors.image, 0.38), backgroundColor: hexWithAlpha(theme.colors.image, 0.055), alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: progress ? 1 : disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
+      style={({ pressed }) => ({ minWidth: 80, minHeight: 96, borderRadius: appTheme.radii.md, borderCurve: 'continuous', borderWidth: 1, borderStyle: 'dashed', borderColor: hexWithAlpha(theme.colors.image, 0.38), backgroundColor: hexWithAlpha(theme.colors.image, 0.055), alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 6, opacity: progress ? 1 : disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
     >
       {progress
         ? <ActivityIndicator color={theme.colors.image} size="small" />
@@ -5198,7 +5199,7 @@ function MotionCreatorComposer({
 
   return (
     <View testID="motion-creator-composer" style={{ gap: 12 }}>
-      {supportsCharacter || supportsMotion ? <View testID="motion-required-inputs" style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.18), backgroundColor: theme.colors.panel, padding: 14, gap: 12 }}>
+      {supportsCharacter || supportsMotion ? <View testID="motion-required-inputs" style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.18), backgroundColor: theme.colors.panel, padding: 14, gap: 12 }}>
         <View style={{ gap: 3 }}>
           <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Required inputs</Text>
           <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>Choose the character to preserve and the movement to transfer.</Text>
@@ -5228,7 +5229,7 @@ function MotionCreatorComposer({
         ) : null}
       </View> : null}
 
-      <View style={{ borderRadius: 26, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.16), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
+      <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.motion, 0.16), backgroundColor: theme.colors.panel, overflow: 'hidden' }}>
         <View style={{ paddingHorizontal: 16, paddingTop: 15, paddingBottom: 7 }}>
           <Text style={{ color: theme.colors.motion, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Optional direction</Text>
         </View>
@@ -5315,7 +5316,7 @@ function ReferenceMentionSuggestions({
       accessibilityLabel={`Reference suggestions, ${matchLabel}`}
       style={{
         maxHeight: 210,
-        borderRadius: 20,
+        borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: hexWithAlpha(theme.colors.image, 0.26),
@@ -5498,7 +5499,10 @@ function EnhanceOffer({ onUse }: { onUse: () => void }) {
   );
 }
 
-/** A toolbar button under the prompt: Enhance is the accent, Templates the quiet one beside it. */
+/**
+ * A toolbar button under the prompt: Enhance is the accent, Templates the quiet one beside it.
+ * Two buttons side by side are capsules, as the web's are (docs/design/design-mobile.md → Radius).
+ */
 function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disabled, accent }: { icon: React.ReactNode; label: string; accessibilityLabel?: string; onPress: () => void; disabled?: boolean; accent?: boolean }) {
   const theme = useAppTheme();
   return (
@@ -5509,23 +5513,23 @@ function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disab
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 60,
+        minHeight: appTheme.touch.default,
         flex: 1,
-        borderRadius: 18,
-        borderCurve: 'continuous',
+        borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderColor: accent ? hexWithAlpha(theme.colors.primary, 0.3) : hexWithAlpha(theme.colors.text, 0.055),
         backgroundColor: accent ? hexWithAlpha(theme.colors.primary, 0.11) : pressed ? theme.colors.pressed : hexWithAlpha(theme.colors.text, 0.025),
         alignItems: 'center',
         justifyContent: 'center',
-        flexDirection: 'column',
-        gap: 4,
+        flexDirection: 'row',
+        gap: 6,
+        paddingHorizontal: 12,
         opacity: disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       {icon}
-      {/* Centred, because a priced label ("Enhance · 2 credits") can take two lines in half the row. */}
-      <Text style={{ color: accent ? theme.colors.primary : theme.colors.muted, fontSize: 11, fontWeight: '800', textAlign: 'center', paddingHorizontal: 4 }}>{label}</Text>
+      {/* Centred and free to wrap, because a priced label ("Enhance · 2 credits") can take two lines in half the row. */}
+      <Text style={{ flexShrink: 1, color: accent ? theme.colors.primary : theme.colors.muted, fontSize: 12, fontWeight: '800', textAlign: 'center' }}>{label}</Text>
     </Pressable>
   );
 }
@@ -5722,13 +5726,13 @@ function ReferenceDetailsOverlay({
       <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets followsKeyboard={presentation.settled} testID="reference-details-keyboard-area" style={{ justifyContent: 'flex-end' }}>
           <SheetBackdrop drag={drag} style={motion.backdrop} color={hexWithAlpha(theme.dim.color, 0.68 * theme.dim.scale)} onPress={onClose} />
-          <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, motion.panel]}>
+          <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ maxHeight: '88%', borderTopLeftRadius: appTheme.radii.xl, borderCurve: 'continuous', borderTopRightRadius: appTheme.radii.xl, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 30, gap: 14 }, motion.panel]}>
             <SheetGrabber drag={drag} />
             {/* The title takes a pull as the grabber does, wherever the body is scrolled to. The panel's own
                 drag waits for the body to be at its top, and with the keyboard up the body never quite is. */}
             <View {...drag.panHandlers} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>{`${nounLabel} details`}</Text>
-              <Pressable accessibilityRole="button" accessibilityLabel={`Close ${content.noun} details`} onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Close ${content.noun} details`} onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                 <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
               </Pressable>
             </View>
@@ -5741,7 +5745,7 @@ function ReferenceDetailsOverlay({
                 </ScrollView>
               ) : (
                 /* The whole reference, centred across the sheet: it is what the model is given, so none of it is cropped away. */
-                <MediaPreview url={shownUrl} kind={shown.kind === 'video' ? 'video' : 'image'} height={300} radius={22} letterbox playerHeld={!arrived} />
+                <MediaPreview url={shownUrl} kind={shown.kind === 'video' ? 'video' : 'image'} height={300} radius={appTheme.radii.lg} letterbox playerHeld={!arrived} />
               )}
               <View style={{ gap: 7 }}>
                 <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>{`${nounLabel} name`}</Text>
@@ -5752,7 +5756,7 @@ function ReferenceDetailsOverlay({
                   onBlur={renameStatus === 'saving' ? markRenameSaved : undefined}
                   placeholder={`${nounLabel} name`}
                   placeholderTextColor={theme.colors.faint}
-                  style={{ minHeight: 52, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, color: theme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
+                  style={{ minHeight: 52, borderRadius: appTheme.radii.md, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, color: theme.colors.text, paddingHorizontal: 14, fontSize: 14, fontWeight: '700' }}
                 />
                 {renameStatus !== 'idle' ? (
                   <Text accessibilityLiveRegion="polite" style={{ color: renameStatus === 'saved' ? theme.colors.image : theme.colors.muted, fontSize: 11, fontWeight: '700' }}>
@@ -5871,20 +5875,20 @@ function CreatorPersistentBar({
   return (
     <View testID="creator-persistent-bar" pointerEvents="box-none" onLayout={(event) => onHeightChange(Math.ceil(event.nativeEvent.layout.height))} style={{ position: 'absolute', left: 14, right: 14, bottom, zIndex: 8, gap: 7 }}>
       {blocker ? (
-        <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: 14, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: theme.colors.panelSoft, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.amber }} />
+        <View testID="creator-contextual-blocker" accessibilityRole="alert" style={{ minHeight: 40, borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: theme.colors.panelSoft, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={{ width: 7, height: 7, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.amber }} />
           <Text numberOfLines={2} style={{ flex: 1, color: theme.colors.textSecondary, fontSize: 11, fontWeight: '700', lineHeight: 15 }}>{blocker}</Text>
           {/* The creator stack has no tab bar and no balance in its header, so this was a dead end;
               the web shows "Top Up Credits" here. */}
           {blocker.startsWith('Insufficient credits') ? <GetCreditsButton onPress={() => router.push('/(tabs)/pricing' as never)} /> : null}
         </View>
       ) : null}
-      <View style={{ minHeight: PERSISTENT_BAR_HEIGHT, borderRadius: 24, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: theme.shadow.floating.boxShadow }}>
+      <View style={{ minHeight: PERSISTENT_BAR_HEIGHT, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 8, boxShadow: theme.shadow.floating.boxShadow }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Generation parameters. ${summary}`}
           onPress={onOpenParameters}
-          style={({ pressed }) => ({ minHeight: 54, flex: 0.9, borderRadius: 18, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({ minHeight: 54, flex: 0.9, borderRadius: appTheme.radii.pill, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           <Settings2 size={16} color={theme.colors.textSecondary} />
           <Text numberOfLines={1} style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{summary}</Text>
@@ -5895,7 +5899,7 @@ function CreatorPersistentBar({
           accessibilityState={{ disabled: actionDisabled }}
           disabled={actionDisabled}
           onPress={action === 'generate' && quoteStatus === 'error' ? onRetryQuote : onAction}
-          style={({ pressed }) => ({ minHeight: 54, flex: 1.2, borderRadius: 18, backgroundColor: actionDisabled ? theme.colors.surfaceStrong : theme.colors.primaryFill, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', opacity: actionDisabled ? 0.58 : pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({ minHeight: 54, flex: 1.2, borderRadius: appTheme.radii.pill, backgroundColor: actionDisabled ? theme.colors.surfaceStrong : theme.colors.primaryFill, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', opacity: actionDisabled ? 0.58 : pressed ? appTheme.opacity.pressed : 1 })}
         >
           <Text accessibilityLiveRegion="polite" numberOfLines={1} style={{ color: actionDisabled ? theme.colors.muted : theme.colors.onPrimary, fontSize: 12, fontWeight: '900' }}>{actionLabel}</Text>
         </Pressable>
@@ -5913,7 +5917,7 @@ function GetCreditsButton({ onPress }: { onPress: () => void }) {
       accessibilityLabel="Get credits"
       hitSlop={8}
       onPress={onPress}
-      style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: theme.colors.primaryFill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.primaryFill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       <Text style={{ color: theme.colors.onPrimary, fontSize: 11, fontWeight: '900' }}>Get credits</Text>
     </Pressable>
@@ -6002,7 +6006,7 @@ function SearchableModelPickerSheet({
       <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1 }}>
         <KeyboardAvoidingArea iosScrollViewAdjustsInsets followsKeyboard={presentation.settled} testID="model-picker-keyboard-area" style={{ justifyContent: 'flex-end' }}>
           <SheetBackdrop drag={drag} style={motion.backdrop} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
-          <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ height: '78%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, motion.panel]}>
+          <SheetPanel {...drag.contentPanHandlers} accessibilityViewIsModal onLayout={presentation.onPanelLayout} style={[{ height: '78%', borderTopLeftRadius: appTheme.radii.xl, borderCurve: 'continuous', borderTopRightRadius: appTheme.radii.xl, backgroundColor: theme.colors.panel, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 20, gap: 12 }, motion.panel]}>
             <SheetGrabber drag={drag} />
             {/* The title takes a pull as the grabber does, wherever the list is scrolled to. The panel's own
                 drag waits for the list to be at its top, so a pull from here did nothing once it had scrolled. */}
@@ -6011,11 +6015,11 @@ function SearchableModelPickerSheet({
                 <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
                 <Text style={{ color: theme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
               </View>
-              <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
                 <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
               </Pressable>
             </View>
-            <View style={{ minHeight: 52, borderRadius: 17, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+            <View style={{ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
               <Search size={18} color={theme.colors.muted} />
               <TextInput accessibilityLabel="Search model names" value={query} onChangeText={setQuery} placeholder="Search models" placeholderTextColor={theme.colors.faint} autoCapitalize="none" autoCorrect={false} spellCheck={false} returnKeyType="search" clearButtonMode="while-editing" style={{ flex: 1, color: theme.colors.text, fontSize: 14, paddingVertical: 12 }} />
             </View>
@@ -6032,9 +6036,9 @@ function SearchableModelPickerSheet({
                     accessibilityLabel={`${item.displayName}. ${item.description}`}
                     disabled={pendingId !== null}
                     onPress={() => onChange(item.id)}
-                    style={({ pressed }) => ({ minHeight: 76, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.1) : theme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+                    style={({ pressed }) => ({ minHeight: 76, borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: selected ? hexWithAlpha(theme.colors.image, 0.55) : theme.colors.border, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.1) : theme.colors.surfaceStrong, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
                   >
-                    <View style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.18) : theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
+                    <View style={{ width: 40, height: 40, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', backgroundColor: selected ? hexWithAlpha(theme.colors.image, 0.18) : theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center' }}>
                       <ImageIcon size={19} color={selected ? theme.colors.image : theme.colors.muted} />
                     </View>
                     <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -6122,7 +6126,7 @@ function CreatorParameterSheet({
     <Modal visible={visible} transparent statusBarTranslucent animationType={reducedMotion ? 'none' : 'slide'} onRequestClose={onClose}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
         <SheetBackdrop drag={drag} color={hexWithAlpha(theme.dim.color, 0.7 * theme.dim.scale)} onPress={onClose} />
-        <SheetPanel {...drag.contentPanHandlers} testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: theme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
+        <SheetPanel {...drag.contentPanHandlers} testID="creator-parameter-sheet" accessibilityViewIsModal style={[{ maxHeight: '88%', borderTopLeftRadius: appTheme.radii.xl, borderCurve: 'continuous', borderTopRightRadius: appTheme.radii.xl, backgroundColor: theme.colors.panel, paddingTop: 6, paddingBottom: bottomInset + 12 }, drag.dragStyle]}>
           <SheetGrabber drag={drag} />
           {/* The title takes a pull as the grabber does, wherever the list is scrolled to. The panel's own
               drag waits for the list to be at its top, so a pull from here did nothing once it had scrolled. */}
@@ -6131,7 +6135,7 @@ function CreatorParameterSheet({
               <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
               <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
               <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
             </Pressable>
           </View>
@@ -6324,7 +6328,7 @@ function GenerationWorkspace({
               run the ✕ only hides the outcome, which the panel's "Back to creator" clears, so it is
               Close there, not a second "Back to creator" (A3, 2026-10-21); over a start it could not
               confirm, both only hide the view, and share the name. */}
-          <Pressable accessibilityRole="button" accessibilityLabel={succeeded ? 'Close' : pollingInterrupted ? 'Minimize generation' : attemptUnconfirmed ? 'Back to creator' : failed ? 'Close' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+          <Pressable accessibilityRole="button" accessibilityLabel={succeeded ? 'Close' : pollingInterrupted ? 'Minimize generation' : attemptUnconfirmed ? 'Back to creator' : failed ? 'Close' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
           </Pressable>
         </View>
@@ -6334,7 +6338,7 @@ function GenerationWorkspace({
             <>
               {/* The whole result, whatever its shape: cropping it to fill
                   would hide part of what was just made. */}
-              <MediaPreview url={shownUrl ?? outputUrl} kind={previewKind} height={480} radius={26} nativeControls={previewKind === 'video'} letterbox />
+              <MediaPreview url={shownUrl ?? outputUrl} kind={previewKind} height={480} radius={appTheme.radii.xl} nativeControls={previewKind === 'video'} letterbox />
               {outputs.length > 1 ? (
                 // A run can return several options (Grok Imagine); each is kept, and Post to feed
                 // publishes the first, as the web creator says.
@@ -6389,8 +6393,8 @@ function GenerationWorkspace({
             </>
           ) : pollingInterrupted ? (
             <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
-              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.24), backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
-                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: hexWithAlpha(theme.colors.amber, 0.12), alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ height: 310, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.24), backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: appTheme.radii.pill, backgroundColor: hexWithAlpha(theme.colors.amber, 0.12), alignItems: 'center', justifyContent: 'center' }}>
                   <Sparkles size={28} color={theme.colors.amber} />
                 </View>
                 <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>Progress check interrupted</Text>
@@ -6403,8 +6407,8 @@ function GenerationWorkspace({
             </View>
           ) : attemptUnconfirmed ? (
             <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
-              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
-                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ height: 310, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
                   <Sparkles size={28} color={theme.colors.amber} />
                 </View>
                 <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t confirm this {medium} started</Text>
@@ -6421,8 +6425,8 @@ function GenerationWorkspace({
             </View>
           ) : failed ? (
             <View style={{ flex: 1, minHeight: 560, justifyContent: 'center', gap: 18 }}>
-              <View style={{ height: 310, borderRadius: 28, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.24), backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
-                <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: hexWithAlpha(theme.colors.danger, 0.12), alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ height: 310, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.danger, 0.24), backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 14, padding: 28 }}>
+                <View style={{ width: 64, height: 64, borderRadius: appTheme.radii.pill, backgroundColor: hexWithAlpha(theme.colors.danger, 0.12), alignItems: 'center', justifyContent: 'center' }}>
                   <X size={28} color={theme.colors.danger} />
                 </View>
                 <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800', textAlign: 'center' }}>We couldn’t create this {medium}</Text>
@@ -6439,8 +6443,8 @@ function GenerationWorkspace({
             </View>
           ) : (
             <View style={{ flex: 1, minHeight: 620, gap: 18 }}>
-              <View accessibilityRole="progressbar" accessibilityLabel={`${TOOL_META[tool].title} generation in progress`} accessibilityValue={{ text: waitDetail }} style={{ flex: 1, minHeight: 430, borderRadius: 28, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
-                <View style={{ width: 82, height: 82, borderRadius: 28, backgroundColor: hexWithAlpha(theme.colors.primary, 0.12), alignItems: 'center', justifyContent: 'center' }}>
+              <View accessibilityRole="progressbar" accessibilityLabel={`${TOOL_META[tool].title} generation in progress`} accessibilityValue={{ text: waitDetail }} style={{ flex: 1, minHeight: 430, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.panel, alignItems: 'center', justifyContent: 'center', gap: 18 }}>
+                <View style={{ width: 82, height: 82, borderRadius: appTheme.radii.pill, backgroundColor: hexWithAlpha(theme.colors.primary, 0.12), alignItems: 'center', justifyContent: 'center' }}>
                   <Sparkles size={38} color={theme.colors.primary} />
                 </View>
                 <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>{waitTitle}</Text>
@@ -6450,8 +6454,8 @@ function GenerationWorkspace({
                   // model and these settings is that duration; a run without one
                   // keeps the spinner.
                   <View testID="generation-wait-estimate" style={{ alignSelf: 'stretch', paddingHorizontal: 40, gap: 10 }}>
-                    <View style={{ height: 6, borderRadius: 3, overflow: 'hidden', backgroundColor: theme.colors.borderStrong }}>
-                      <View testID="generation-wait-bar" style={{ width: `${waitPercent}%`, height: '100%', borderRadius: 3, backgroundColor: theme.colors.primary }} />
+                    <View style={{ height: 6, borderRadius: appTheme.radii.pill, overflow: 'hidden', backgroundColor: theme.colors.borderStrong }}>
+                      <View testID="generation-wait-bar" style={{ width: `${waitPercent}%`, height: '100%', borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.primary }} />
                     </View>
                     <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '800', textAlign: 'center', fontVariant: ['tabular-nums'] }}>{waitCountdown}</Text>
                   </View>
@@ -6550,7 +6554,7 @@ function ToolSwitcher({ value, onChange }: { value: CreatorToolId; onChange: (to
                   right: 18,
                   bottom: -1,
                   height: 2,
-                  borderRadius: 1,
+                  borderRadius: appTheme.radii.pill,
                   backgroundColor: color,
                 }}
               />
@@ -6686,7 +6690,7 @@ function PreparedReferenceIds({
           style={{
             flex: 1,
             minHeight: appTheme.touch.default,
-            borderRadius: 16,
+            borderRadius: appTheme.radii.md,
             borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: hexWithAlpha(theme.colors.text, 0.12),
@@ -6704,8 +6708,7 @@ function PreparedReferenceIds({
           style={({ pressed }) => ({
             minWidth: 64,
             minHeight: appTheme.touch.default,
-            borderRadius: 16,
-            borderCurve: 'continuous',
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: hexWithAlpha(theme.colors.primary, 0.16),
@@ -6718,7 +6721,7 @@ function PreparedReferenceIds({
         </Pressable>
       </View>
       {items.map((item) => (
-        <View key={item} style={{ minHeight: 46, borderRadius: 15, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.text, 0.08), backgroundColor: hexWithAlpha(theme.colors.text, 0.035), paddingLeft: 12, paddingRight: 6, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View key={item} style={{ minHeight: 46, borderRadius: appTheme.radii.md, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.text, 0.08), backgroundColor: hexWithAlpha(theme.colors.text, 0.035), paddingLeft: 12, paddingRight: 6, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Text selectable numberOfLines={1} style={{ flex: 1, color: theme.colors.textSecondary, fontFamily: 'monospace', fontSize: 12 }}>{item}</Text>
           <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item}`} onPress={() => onChange(items.filter((value) => value !== item))} hitSlop={8} style={({ pressed }) => ({ padding: 9, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
             <Trash2 size={16} color={theme.colors.muted} />
@@ -6867,7 +6870,8 @@ function ParameterChoiceOptions({
               width,
               minWidth: options.length <= 2 ? 120 : 68,
               minHeight: 48,
-              borderRadius: 14,
+              borderRadius: appTheme.radii.sm,
+              borderCurve: 'continuous',
               borderWidth: 1,
               borderColor: active ? `${color}8a` : theme.colors.border,
               backgroundColor: active ? `${color}20` : pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
@@ -6912,7 +6916,8 @@ function ParameterStepper({
     width: '31%' as const,
     minWidth: 68,
     minHeight: 48,
-    borderRadius: 14,
+    borderRadius: appTheme.radii.sm,
+    borderCurve: 'continuous' as const,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
@@ -6934,7 +6939,7 @@ function ParameterStepper({
       <View
         accessibilityRole="text"
         accessibilityLabel={`${controlLabel}, ${value}`}
-        style={{ width: '31%', minWidth: 68, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: `${color}8a`, backgroundColor: `${color}20`, alignItems: 'center', justifyContent: 'center' }}
+        style={{ width: '31%', minWidth: 68, minHeight: 48, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', borderWidth: 1, borderColor: `${color}8a`, backgroundColor: `${color}20`, alignItems: 'center', justifyContent: 'center' }}
       >
         <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>{value}</Text>
       </View>
@@ -6981,7 +6986,8 @@ function AspectRatioOptions({
               width: '23%',
               minWidth: 68,
               minHeight: 48,
-              borderRadius: 14,
+              borderRadius: appTheme.radii.sm,
+              borderCurve: 'continuous',
               borderWidth: 1,
               borderColor: active ? `${color}8a` : theme.colors.border,
               backgroundColor: active ? `${color}20` : pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
@@ -7023,7 +7029,7 @@ function ReadOnlyParameterValue({ value }: { value: string }) {
       accessibilityRole="text"
       accessibilityLabel={`${value}. Fixed for this model`}
       testID="read-only-parameter-value"
-      style={{ width: '100%', minHeight: 48, borderRadius: 16, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+      style={{ width: '100%', minHeight: 48, borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
     >
       <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>{value}</Text>
       <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700' }}>Fixed for this model</Text>
@@ -7127,7 +7133,7 @@ function PromptQualityNotes({ warnings }: { warnings: PromptEnhancementWarning[]
   const theme = useAppTheme();
   if (warnings.length === 0) return null;
   return (
-    <View testID="prompt-quality-notes" style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: 14, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: hexWithAlpha(theme.colors.amber, 0.08), paddingHorizontal: 12, paddingVertical: 10, gap: 4 }}>
+    <View testID="prompt-quality-notes" style={{ marginHorizontal: 16, marginBottom: 12, borderRadius: appTheme.radii.md, borderCurve: 'continuous', borderWidth: 1, borderColor: hexWithAlpha(theme.colors.amber, 0.28), backgroundColor: hexWithAlpha(theme.colors.amber, 0.08), paddingHorizontal: 12, paddingVertical: 10, gap: 4 }}>
       <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '800' }}>Prompt quality notes</Text>
       {warnings.map((warning, index) => (
         <Text key={`${warning.code}:${index}`} style={{ color: theme.colors.textSecondary, fontSize: 12, lineHeight: 17 }}>{warning.message}</Text>
@@ -7148,7 +7154,7 @@ function SubjectPreview({ subject, size = 72 }: { subject: SubjectDraft; size?: 
   return (
     <View
       testID={`subject-preview-${subject.id}`}
-      style={{ width: size, height: size, borderRadius: 16, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceStrong, flexDirection: 'row', flexWrap: 'wrap', gap }}
+      style={{ width: size, height: size, borderRadius: appTheme.radii.md, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceStrong, flexDirection: 'row', flexWrap: 'wrap', gap }}
     >
       {subject.images.slice(0, 4).map((image) => (
         <SubjectPicture key={image.id} image={image} size={cell} renewLink={renewLink} />
@@ -7200,7 +7206,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
         style={{
           width,
           height,
-          borderRadius: 16,
+          borderRadius: appTheme.radii.md,
           borderCurve: 'continuous',
           borderWidth: 1,
           borderStyle: 'dashed',
@@ -7223,7 +7229,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
         style={{
           width,
           height,
-          borderRadius: 16,
+          borderRadius: appTheme.radii.md,
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: hexWithAlpha(theme.colors.motion, 0.26),
@@ -7246,7 +7252,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
       style={{
         width,
         height,
-        borderRadius: 16,
+        borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         overflow: 'hidden',
         backgroundColor: theme.colors.surfaceStrong,
@@ -7266,7 +7272,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
           url={previewUrl}
           kind={kind}
           height={height}
-          radius={16}
+          radius={appTheme.radii.md}
           nativeControls={false}
           // Fills the tile, with the clip centred in it. A 4:5 card of this
           // height is narrower than a square tile and sits against its left edge.
@@ -7283,7 +7289,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
             bottom: 6,
             width: 24,
             height: 24,
-            borderRadius: 12,
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.58),

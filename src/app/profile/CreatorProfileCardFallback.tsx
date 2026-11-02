@@ -18,7 +18,7 @@ export default function CreatorProfileCardFallback({
 
   if (loadError) {
     return (
-      <section className="rounded-[28px] border border-red-500/20 bg-red-500/10 p-6 text-sm text-red-100">
+      <section className="rounded-3xl border border-red-500/20 bg-red-500/10 p-6 text-sm text-red-100">
         {loadError}
       </section>
     );
@@ -28,7 +28,7 @@ export default function CreatorProfileCardFallback({
     <section
       aria-busy="true"
       aria-label="Loading the profile editor"
-      className="overflow-hidden rounded-[28px] border border-white/8 bg-zinc-950/80 shadow-[0_24px_70px_rgba(0,0,0,0.35)]"
+      className="overflow-hidden rounded-3xl border border-white/8 bg-zinc-950/80 shadow-[0_24px_70px_rgba(0,0,0,0.35)]"
     >
       <div className="h-24 bg-gradient-to-r from-[#19191c] via-[#202024] to-[#2a1b1a]" />
       <div className="p-5 sm:p-6">

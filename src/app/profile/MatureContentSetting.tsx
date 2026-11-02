@@ -86,7 +86,7 @@ export default function MatureContentSetting() {
         : 'Off. NSFW posts stay hidden; turn on (18+) to reveal one at a time.';
 
   return (
-    <div className="col-span-2 flex min-h-14 items-center gap-3 rounded-[20px] border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 lg:col-span-2">
+    <div className="col-span-2 flex min-h-14 items-center gap-3 rounded-2xl border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 lg:col-span-2">
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-zinc-300"><EyeOff className="h-4 w-4" aria-hidden /></span>
       <span className="min-w-0 flex-1">
         <span id="mature-content-label" className="block text-sm font-bold text-white">Mature content</span>

@@ -128,20 +128,20 @@ export function HomeFeedSkeleton({ width, cards = 2 }: { width: number; cards?: 
           }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: appTheme.spacing.gap }}>
-            <SkeletonBone width={22} height={22} radius={11} strong />
-            <SkeletonBone width={92} height={11} radius={6} />
+            <SkeletonBone width={22} height={22} radius={appTheme.radii.pill} strong />
+            <SkeletonBone width={92} height={11} radius={appTheme.radii.pill} />
             <View style={{ flex: 1 }} />
-            <SkeletonBone width={54} height={20} radius={10} />
+            <SkeletonBone width={54} height={20} radius={appTheme.radii.pill} />
           </View>
           <View style={{ gap: 8, paddingTop: appTheme.spacing.gap, paddingBottom: appTheme.spacing.gap }}>
-            <SkeletonBone width="84%" height={17} radius={6} strong />
-            <SkeletonBone width="58%" height={17} radius={6} strong />
+            <SkeletonBone width="84%" height={17} radius={appTheme.radii.pill} strong />
+            <SkeletonBone width="58%" height={17} radius={appTheme.radii.pill} strong />
           </View>
           <SkeletonBone width="100%" height={mediaHeight} radius={FEED_CARD_MEDIA_RADIUS} />
           <View style={{ flexDirection: 'row', gap: 18, paddingVertical: 15 }}>
-            <SkeletonBone width={46} height={14} radius={7} />
-            <SkeletonBone width={46} height={14} radius={7} />
-            <SkeletonBone width={46} height={14} radius={7} />
+            <SkeletonBone width={46} height={14} radius={appTheme.radii.pill} />
+            <SkeletonBone width={46} height={14} radius={appTheme.radii.pill} />
+            <SkeletonBone width={46} height={14} radius={appTheme.radii.pill} />
           </View>
         </View>
       ))}
@@ -168,7 +168,7 @@ export function ProfileGridSkeleton({
       {Array.from({ length: rows }, (_, row) => (
         <View key={row} style={{ flexDirection: 'row', gap }}>
           {Array.from({ length: columns }, (_, column) => (
-            <SkeletonBone key={column} width={cardWidth} height={cardHeight} radius={12} strong={(row + column) % 3 === 0} />
+            <SkeletonBone key={column} width={cardWidth} height={cardHeight} radius={appTheme.radii.md} strong={(row + column) % 3 === 0} />
           ))}
         </View>
       ))}
@@ -182,10 +182,10 @@ export function CommentListSkeleton({ rows = 4 }: { rows?: number }) {
     <View accessibilityRole="progressbar" accessibilityLabel="Loading comments" style={{ gap: 18 }}>
       {Array.from({ length: rows }, (_, index) => (
         <View key={index} style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
-          <SkeletonBone width={25} height={25} radius={12.5} strong />
+          <SkeletonBone width={25} height={25} radius={appTheme.radii.pill} strong />
           <View style={{ flex: 1, gap: 7, paddingTop: 3 }}>
-            <SkeletonBone width={index % 2 === 0 ? '38%' : '52%'} height={11} radius={5} strong />
-            <SkeletonBone width={index % 3 === 0 ? '92%' : '74%'} height={12} radius={5} />
+            <SkeletonBone width={index % 2 === 0 ? '38%' : '52%'} height={11} radius={appTheme.radii.pill} strong />
+            <SkeletonBone width={index % 3 === 0 ? '92%' : '74%'} height={12} radius={appTheme.radii.pill} />
           </View>
         </View>
       ))}
@@ -225,11 +225,11 @@ export function CardListSkeleton({
             padding: appTheme.spacing.card,
           }}
         >
-          <SkeletonBone width={56} height={56} radius={14} strong />
+          <SkeletonBone width={56} height={56} radius={appTheme.radii.sm} strong />
           <View style={{ flex: 1, gap: 8 }}>
             {/* Uneven widths so the stack reads as content rather than a pattern. */}
-            <SkeletonBone width={index % 2 === 0 ? '72%' : '58%'} height={13} radius={6} strong />
-            <SkeletonBone width={index % 3 === 0 ? '44%' : '36%'} height={11} radius={5} />
+            <SkeletonBone width={index % 2 === 0 ? '72%' : '58%'} height={13} radius={appTheme.radii.pill} strong />
+            <SkeletonBone width={index % 3 === 0 ? '44%' : '36%'} height={11} radius={appTheme.radii.pill} />
           </View>
         </View>
       ))}
@@ -259,11 +259,11 @@ export function DetailSkeleton({ label }: { label: string }) {
         padding: appTheme.spacing.panel,
       }}
     >
-      <SkeletonBone width="62%" height={18} radius={8} strong />
+      <SkeletonBone width="62%" height={18} radius={appTheme.radii.pill} strong />
       <View style={{ gap: 9 }}>
-        <SkeletonBone width="100%" height={12} radius={5} />
-        <SkeletonBone width="88%" height={12} radius={5} />
-        <SkeletonBone width="54%" height={12} radius={5} />
+        <SkeletonBone width="100%" height={12} radius={appTheme.radii.pill} />
+        <SkeletonBone width="88%" height={12} radius={appTheme.radii.pill} />
+        <SkeletonBone width="54%" height={12} radius={appTheme.radii.pill} />
       </View>
       <SkeletonBone width="100%" height={appTheme.touch.default} radius={appTheme.radii.pill} strong />
     </View>
@@ -296,9 +296,9 @@ export function MetricGridSkeleton({ tiles = 4, label }: { tiles?: number; label
             padding: appTheme.spacing.card,
           }}
         >
-          <SkeletonBone width={22} height={22} radius={11} />
-          <SkeletonBone width="46%" height={20} radius={8} strong />
-          <SkeletonBone width="70%" height={11} radius={5} />
+          <SkeletonBone width={22} height={22} radius={appTheme.radii.pill} />
+          <SkeletonBone width="46%" height={20} radius={appTheme.radii.pill} strong />
+          <SkeletonBone width="70%" height={11} radius={appTheme.radii.pill} />
         </View>
       ))}
     </View>
@@ -323,17 +323,17 @@ export function CreatorProfileSkeleton({ label = 'Loading creator' }: { label?: 
       <View style={{ gap: appTheme.spacing.gap }}>
         <SkeletonBone width="100%" height={104} radius={appTheme.radii.xl} />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.gap }}>
-          <SkeletonBone width={64} height={64} radius={32} strong />
+          <SkeletonBone width={64} height={64} radius={appTheme.radii.pill} strong />
           <View style={{ flex: 1, gap: 8 }}>
-            <SkeletonBone width="54%" height={18} radius={8} strong />
-            <SkeletonBone width="34%" height={12} radius={5} />
+            <SkeletonBone width="54%" height={18} radius={appTheme.radii.pill} strong />
+            <SkeletonBone width="34%" height={12} radius={appTheme.radii.pill} />
           </View>
         </View>
         <View style={{ flexDirection: 'row', gap: appTheme.spacing.section }}>
           {Array.from({ length: 3 }, (_, index) => (
             <View key={index} style={{ gap: 6 }}>
-              <SkeletonBone width={34} height={16} radius={6} strong />
-              <SkeletonBone width={46} height={10} radius={4} />
+              <SkeletonBone width={34} height={16} radius={appTheme.radii.pill} strong />
+              <SkeletonBone width={46} height={10} radius={appTheme.radii.pill} />
             </View>
           ))}
         </View>

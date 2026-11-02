@@ -95,7 +95,7 @@ async function loadMarketplacePageData(searchParams: MarketplacePageProps['searc
 function MarketplaceResultsFallback() {
   return (
     <div aria-label="Loading marketplace recipes">
-      <div className="relative mt-8 min-h-44 overflow-hidden rounded-[28px] border border-white/8 bg-zinc-950/70 p-5">
+      <div className="relative mt-8 min-h-44 overflow-hidden rounded-3xl border border-white/8 bg-zinc-950/70 p-5">
         <div className="h-3 w-28 rounded-full bg-white/8" />
         <div className="mt-4 h-12 rounded-full bg-white/[0.04]" />
         <div className="mt-4 flex gap-2">
@@ -147,7 +147,7 @@ export default function MarketplacePage({ searchParams }: MarketplacePageProps) 
           docs/design/design-web.md rules out purely atmospheric backgrounds, and they were
           spending two of the system's content-type accents on decoration. */}
       <div className="studio-shell relative z-10 py-8 sm:py-10">
-        <div className="rounded-[34px] border border-white/8 bg-[linear-gradient(135deg,rgba(5,8,12,0.98),rgba(16,18,25,0.92))] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.5)] sm:p-8">
+        <div className="rounded-3xl border border-white/8 bg-[linear-gradient(135deg,rgba(5,8,12,0.98),rgba(16,18,25,0.92))] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.5)] sm:p-8">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-3xl">
               <div className="inline-flex items-center gap-2 rounded-full border border-amber-400/20 bg-amber-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-100">

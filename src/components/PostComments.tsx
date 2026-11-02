@@ -973,7 +973,7 @@ export default function PostComments({
                                                 <Link
                                                     href={display.authorHref}
                                                     prefetch={false}
-                                                    className="ui-focus-ring rounded-sm font-bold text-[var(--ui-text-secondary)] hover:text-[var(--ui-text-primary)]"
+                                                    className="ui-focus-ring rounded-lg font-bold text-[var(--ui-text-secondary)] hover:text-[var(--ui-text-primary)]"
                                                 >
                                                     {display.authorLabel}
                                                 </Link>

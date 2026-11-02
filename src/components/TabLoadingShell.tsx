@@ -40,7 +40,7 @@ export default function TabLoadingShell({
         className="studio-shell py-8 sm:py-10"
       >
         <div
-          className={`rounded-[30px] border bg-gradient-to-br ${accentClasses[accent]} p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)] sm:p-6`}
+          className={`rounded-3xl border bg-gradient-to-br ${accentClasses[accent]} p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)] sm:p-6`}
         >
           <div className="inline-flex rounded-full border border-white/10 bg-black/25 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-300">
             {eyebrow}

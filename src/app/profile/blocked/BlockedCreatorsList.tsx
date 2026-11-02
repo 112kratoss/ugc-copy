@@ -94,7 +94,7 @@ export default function BlockedCreatorsList() {
   const loading = (
     <div role="status" aria-label="Loading blocked users" className="space-y-3">
       {[0, 1, 2].map((row) => (
-        <div key={row} className="h-[76px] animate-pulse rounded-[22px] border border-white/8 bg-[var(--ui-surface-1)]" />
+        <div key={row} className="h-[76px] animate-pulse rounded-2xl border border-white/8 bg-[var(--ui-surface-1)]" />
       ))}
     </div>
   );
@@ -103,7 +103,7 @@ export default function BlockedCreatorsList() {
 
   if (state.status === 'failed') {
     return (
-      <div role="alert" className="flex flex-col items-start gap-4 rounded-[24px] border border-rose-400/20 bg-rose-500/5 p-6">
+      <div role="alert" className="flex flex-col items-start gap-4 rounded-3xl border border-rose-400/20 bg-rose-500/5 p-6">
         <p className="text-sm leading-6 text-rose-100">Could not load your blocked users. {state.message}</p>
         <button
           type="button"
@@ -125,7 +125,7 @@ export default function BlockedCreatorsList() {
 
   if (blockedUsers.length === 0) {
     return (
-      <div className="flex min-h-56 flex-col items-center justify-center rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] px-6 text-center">
+      <div className="flex min-h-56 flex-col items-center justify-center rounded-3xl border border-white/8 bg-[var(--ui-surface-1)] px-6 text-center">
         <ShieldCheck className="h-7 w-7 text-zinc-500" aria-hidden />
         <h2 className="mt-4 text-lg font-bold text-white">You have not blocked anyone</h2>
         <p className="mt-2 max-w-md text-sm leading-6 text-zinc-500">
@@ -143,7 +143,7 @@ export default function BlockedCreatorsList() {
           return (
             <li
               key={creator.id}
-              className="flex min-h-[76px] items-center gap-3 rounded-[22px] border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 sm:gap-4 sm:px-5"
+              className="flex min-h-[76px] items-center gap-3 rounded-2xl border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 sm:gap-4 sm:px-5"
             >
               <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-zinc-900 text-zinc-500">
                 {creator.avatar ? (

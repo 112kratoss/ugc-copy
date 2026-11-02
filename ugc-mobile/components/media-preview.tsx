@@ -482,6 +482,7 @@ function MediaFallback({
       ? { position: 'absolute' as const, inset: 0 }
       : { ...previewFrame(height), borderWidth: 1, borderColor: theme.colors.border }),
     borderRadius: radius,
+    borderCurve: 'continuous' as const,
     backgroundColor: theme.colors.surfaceInset,
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
@@ -601,6 +602,7 @@ function videoFrame(height: number | undefined, radius: number) {
   return {
     ...previewFrame(height),
     borderRadius: radius,
+    borderCurve: 'continuous' as const,
     // The player shows its clip whole and its view is transparent, with
     // controls or without, so this colour is the bands beside a clip of
     // any other shape than the frame. They are black in both schemes, as

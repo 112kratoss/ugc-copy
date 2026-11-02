@@ -1297,10 +1297,10 @@ function SkeletonPin({ height, layout }: { height: number; layout: ShowcaseGridL
       <SkeletonBone width="100%" height={height} radius={layout.mediaRadius} />
       <View style={{ paddingHorizontal: 2, paddingBottom: 2 }}>
         <View style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-          <SkeletonBone width={24} height={24} radius={12} strong />
-          <SkeletonBone width="55%" height={13} radius={4} />
+          <SkeletonBone width={24} height={24} radius={appTheme.radii.pill} strong />
+          <SkeletonBone width="55%" height={13} radius={appTheme.radii.pill} />
           <View style={{ flex: 1 }} />
-          <SkeletonBone width={24} height={24} radius={12} />
+          <SkeletonBone width={24} height={24} radius={appTheme.radii.pill} />
         </View>
       </View>
     </View>
@@ -1523,7 +1523,7 @@ function VideoCornerPlay() {
         right: 10,
         width: 31,
         height: 31,
-        borderRadius: 15.5,
+        borderRadius: appTheme.radii.pill,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.42),

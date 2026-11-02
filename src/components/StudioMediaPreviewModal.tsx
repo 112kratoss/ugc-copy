@@ -94,7 +94,7 @@ export function StudioMediaPreviewModal({
         aria-labelledby={titleId}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-[28px] border border-white/10 bg-zinc-900 p-4 shadow-2xl outline-none sm:max-h-[90dvh] sm:gap-6 sm:rounded-[30px] sm:p-6"
+        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-zinc-900 p-4 shadow-2xl outline-none sm:max-h-[90dvh] sm:gap-6 sm:p-6"
       >
         <button
           type="button"
@@ -107,7 +107,7 @@ export function StudioMediaPreviewModal({
 
         <h2 id={titleId} className="pr-10 text-lg font-bold tracking-tight text-white sm:pr-12 sm:text-xl">{title}</h2>
 
-        <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-[20px] border border-white/5 bg-black/50 sm:min-h-[320px] sm:flex-1 sm:rounded-[24px]">
+        <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-ui-xl border border-white/5 bg-black/50 sm:min-h-[320px] sm:flex-1">
           {mediaType === 'image' ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={alt} className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
@@ -117,7 +117,7 @@ export function StudioMediaPreviewModal({
         </div>
 
         {footer ? (
-          <div className="rounded-[20px] border border-white/5 bg-black/40 p-4 sm:rounded-[22px]">{footer}</div>
+          <div className="rounded-2xl border border-white/5 bg-black/40 p-4">{footer}</div>
         ) : null}
       </div>
     </div>,

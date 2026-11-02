@@ -659,7 +659,7 @@ function CreatorTopBar({ topInset }: { topInset: number }) {
       style={({ pressed }) => ({
         width: 44,
         height: 44,
-        borderRadius: 22,
+        borderRadius: appTheme.radii.pill,
         alignItems: 'center',
         justifyContent: 'center',
         opacity: pressed ? appTheme.opacity.pressed : 1,
@@ -681,7 +681,7 @@ function CreatorTopBar({ topInset }: { topInset: number }) {
         </Text>
         <View style={{ position: 'absolute', left: 16, top: 0 }}>
           {glassAvailable && !reduceTransparency ? (
-            <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive style={{ width: 44, height: 44, borderRadius: 22 }}>
+            <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive style={{ width: 44, height: 44, borderRadius: appTheme.radii.pill }}>
               {back}
             </GlassView>
           ) : back}
@@ -718,7 +718,7 @@ function CreatorHeader({
   const initial = creatorInitial(profile);
 
   return (
-    <View style={{ overflow: 'hidden', borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
+    <View style={{ overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
       <View style={{ height: 136, backgroundColor: theme.colors.panelSoft }}>
         {profile.coverUrl ? (
           <Image source={{ uri: profile.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
@@ -821,7 +821,7 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
   };
 
   return (
-    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, padding: 4 }}>
+    <View style={{ flexDirection: 'row', gap: 4, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, padding: 4 }}>
       {CREATOR_PROFILE_TABS.map((tab) => {
         const active = activeTab === tab.id;
         const count = counts[tab.id];
@@ -831,7 +831,7 @@ function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileT
             accessibilityRole="tab"
             accessibilityState={{ selected: active }}
             onPress={() => onChange(tab.id)}
-            style={({ pressed }) => ({ flex: 1, minHeight: appTheme.touch.default, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? theme.colors.primaryFill : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
+            style={({ pressed }) => ({ flex: 1, minHeight: appTheme.touch.default, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? theme.colors.primaryFill : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
           >
             <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, ...appTheme.type.label, fontWeight: '700' }}>
               {count === null ? tab.label : `${tab.label} ${formatCompactCount(count)}`}
@@ -855,7 +855,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
   const zoomSource = useMediaZoomSource({
     itemId: item.id,
     // The card clips its own top corners; the window matches them on the way out.
-    radius: 20,
+    radius: appTheme.radii.lg,
     // The media's own shape, not the tile's 4:5 crop of it.
     aspectRatio: mediaItemAspectRatio(tileMediaItems[0]),
     preview: showcaseMediaZoomPreview(tileMediaItems[0]),
@@ -868,7 +868,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
 
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
+      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
         <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
         <View style={{ height, backgroundColor: theme.colors.surfaceInset }}>
           {isTextPost ? (
@@ -882,7 +882,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} /></View>
           )}
           {hasVideo ? (
-            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: themes.dark.colors.overlay }}>
+            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: themes.dark.colors.overlay }}>
               <Play size={appTheme.icon.sm} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
             </View>
           ) : null}
@@ -920,9 +920,9 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
       accessibilityRole="button"
       accessibilityLabel={`View posts made with ${tool.label}`}
       onPress={() => router.push({ pathname: '/(tabs)/showcase', params: { tool: tool.slug } } as never)}
-      style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.image}22` }}>
+      <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.image}22` }}>
         <Layers3 size={20} color={theme.colors.image} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
@@ -967,7 +967,7 @@ function SocialChip({ label, url }: { label: string; url: string }) {
 function CircleAction({ children, label, onPress }: { children: ReactNode; label: string; onPress: () => void }) {
   const theme = useAppTheme();
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panelSoft, opacity: pressed ? appTheme.opacity.pressed : 1 })}>{children}</Pressable>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panelSoft, opacity: pressed ? appTheme.opacity.pressed : 1 })}>{children}</Pressable>
   );
 }
 
@@ -980,7 +980,7 @@ function CreatorAvatar({ avatarUrl, initial, size }: { avatarUrl: string | null;
   const theme = useAppTheme();
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, padding: 3, backgroundColor: theme.colors.panel, borderWidth: 2, borderColor: theme.colors.primary }}>
-      <View style={{ flex: 1, overflow: 'hidden', borderRadius: size / 2 - 5, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
+      <View style={{ flex: 1, overflow: 'hidden', borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
         {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: theme.colors.text, fontSize: 26, fontWeight: '800' }}>{initial}</Text>}
       </View>
     </View>

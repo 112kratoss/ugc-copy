@@ -178,13 +178,13 @@ function InviteSkeleton() {
   return (
     <div role="status" aria-live="polite" aria-label="Loading Invite & Earn" className="space-y-6">
       <span className="sr-only">Loading your invite rewards.</span>
-      <SkeletonLoader className="h-52 rounded-[28px]" />
+      <SkeletonLoader className="h-52 rounded-3xl" />
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {Array.from({ length: 5 }, (_, index) => (
           <SkeletonLoader key={index} className="h-28 rounded-3xl" />
         ))}
       </div>
-      <SkeletonLoader className="h-64 rounded-[28px]" />
+      <SkeletonLoader className="h-64 rounded-3xl" />
     </div>
   );
 }
@@ -384,7 +384,7 @@ export default function InviteClient() {
   return (
     <div className="ui-page ui-page-ambient min-h-screen pb-20">
       <div className="studio-shell relative z-10 py-8 sm:py-12">
-        <header className="ui-enter relative mb-8 overflow-hidden rounded-[30px] border border-amber-300/15 bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8 lg:p-10">
+        <header className="ui-enter relative mb-8 overflow-hidden rounded-3xl border border-amber-300/15 bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8 lg:p-10">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_82%_12%,rgba(242,185,94,0.18),transparent_32rem),radial-gradient(circle_at_18%_100%,rgba(255,122,89,0.1),transparent_28rem)]" aria-hidden />
           <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)] lg:items-end">
             <div>

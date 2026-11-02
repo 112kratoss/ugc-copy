@@ -1346,7 +1346,7 @@ function TopBarControl({
             height: 48,
             alignItems: 'center',
             justifyContent: 'center',
-            borderRadius: 24,
+            borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: theme.colors.borderSubtle,
             backgroundColor: theme.colors.panel,
@@ -1389,7 +1389,7 @@ function FeedChips({
             <View
               style={{
                 height: 2,
-                borderRadius: 1,
+                borderRadius: appTheme.radii.pill,
                 backgroundColor: active ? theme.colors.primary : 'transparent',
               }}
             />

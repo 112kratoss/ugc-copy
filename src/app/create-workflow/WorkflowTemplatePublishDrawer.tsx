@@ -713,7 +713,7 @@ export function WorkflowTemplatePublishDrawer({
       aria-modal="false"
       aria-label="Publish workflow as template"
       data-testid="workflow-template-publish-drawer"
-      className="pointer-events-auto fixed inset-2 z-[80] flex w-auto max-w-none flex-col overflow-hidden rounded-[24px] border border-emerald-500/20 bg-[#050505]/98 shadow-[0_28px_120px_rgba(0,0,0,0.68)] backdrop-blur-xl lg:absolute lg:inset-x-auto lg:inset-y-3 lg:right-3 lg:w-[430px] lg:max-w-[calc(100%-1.5rem)] lg:rounded-[30px]"
+      className="pointer-events-auto fixed inset-2 z-[80] flex w-auto max-w-none flex-col overflow-hidden rounded-3xl border border-emerald-500/20 bg-[#050505]/98 shadow-[0_28px_120px_rgba(0,0,0,0.68)] backdrop-blur-xl lg:absolute lg:inset-x-auto lg:inset-y-3 lg:right-3 lg:w-[430px] lg:max-w-[calc(100%-1.5rem)]"
     >
       <div className="border-b border-white/10 px-5 py-4">
         <div className="flex items-start justify-between gap-3">

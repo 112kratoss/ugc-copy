@@ -8,6 +8,7 @@ import { AppText, Card, Kicker, PrimaryButton, SecondaryButton } from '@/compone
 import { checkAppVersionFloor, type AppVersionFloorCheck } from '@/lib/app-compatibility';
 import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
+import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
 /** What Check again says when it cannot let the person through. */
@@ -50,7 +51,7 @@ export default function UpdateRequiredScreen() {
     <View style={{ flex: 1, justifyContent: 'center', backgroundColor: theme.colors.background, padding: 20 }}>
       <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
       <Card accent="primary" padding="lg" style={{ alignItems: 'center', gap: 18, paddingVertical: 34 }}>
-        <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
+        <View style={{ width: 72, height: 72, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
           <Sparkles size={32} color={theme.colors.primary} />
         </View>
         <View style={{ alignItems: 'center', gap: 8 }}>

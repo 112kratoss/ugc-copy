@@ -228,16 +228,23 @@ Rules:
 
 ### Radius
 
+Three shapes on one scale, the web's too (`design-web.md` → Radius), drawn as Apple draws them (the HIG's Buttons chapter; SwiftUI's `Capsule` and `RoundedRectangle`, and iOS 26's `ConcentricRectangle`). Until November 2026 the app drew 36 radii, 263 of them as bare numbers.
+
+- **Capsule** (`pill`): anything pressed on one row (buttons, chips, segmented controls and their thumbs, toggles, search fields, the creator bar with its settings chip and Generate, Templates and Enhance, the dock's tabs) and every circle (icon buttons, avatars, badges, dots, progress tracks). Rows in a vertical stack (menu and drawer rows, list rows, a grid of options) are rounded rectangles, as the HIG prefers for a stack.
+- **Fixed**, the outermost container's own step, by its size (table below).
+- **Concentric**, a shape nested 12pt or less inside a rounded container: the container's radius less the gap, snapped to a step and never under 8, so the two curves share a centre. Write it from the tokens: the Android menu's rows are `MENU_RADIUS - MENU_PADDING`, 20 less 4. A container that holds capsules 8pt in takes their half height plus the gap (`xxl`), and a bar of capsules on one row, such as the creator's, is a capsule itself.
+
 | Token | Value | Use |
 | --- | --- | --- |
-| `xs` | 8 | Tiny tags, thumbnails |
-| `sm` | 12 | Compact controls |
-| `md` | 16 | Inputs, buttons, small cards |
-| `lg` | 20 | Feed and standard cards |
-| `xl` | 24 | Panels, media cards, the top corners of sheets |
-| `pill` | 999 | Pills, chips, round buttons |
+| `xs` | 8 | Tiny thumbnails, icon wells inside a field |
+| `sm` | 12 | Compact rows and fields, thumbnails, option cells, a field inside a section |
+| `md` | 16 | Inputs, notices, list rows, tiles, feed and Explore media |
+| `lg` | 20 | Sections, standard cards and large tiles, media frames |
+| `xl` | 24 | Panels and cards that stand alone, dialogs, the top corners of sheets |
+| `xxl` | 32 | A container holding capsule controls 8pt from its edge |
+| `pill` | 999 | Capsules and circles |
 
-Use `borderCurve: 'continuous'` on rounded rectangles, and nothing off this scale unless a component owns the value.
+Every rounded rectangle draws iOS's continuous corner (`borderCurve: 'continuous'`, which Android ignores); capsules and circles keep round ends. A radius is a token, the `/ 2` of a size, or an expression of tokens, never a number. `__tests__/hig-corner-radius.test.ts` holds every `border*Radius`, every `radius` handed to a component (`MediaPreview`, `SkeletonBone`, a zoom source) and every `*_RADIUS` constant to that, and every rounded rectangle to its continuous corner; its counted exceptions are the aspect-ratio mark and the Android zoom flight's animated clip.
 
 ### Elevation
 

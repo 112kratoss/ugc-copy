@@ -155,7 +155,7 @@ export default async function ModelsIndexPage() {
                                             <td className="py-3 pr-4 align-top">
                                                 <Link
                                                     href={`/models/${toModelSlug(model.id)}`}
-                                                    className="ui-focus-ring rounded-sm text-sm font-semibold text-[var(--ui-text-primary)] hover:text-[var(--ui-primary)]"
+                                                    className="ui-focus-ring rounded-lg text-sm font-semibold text-[var(--ui-text-primary)] hover:text-[var(--ui-primary)]"
                                                 >
                                                     {model.displayName}
                                                 </Link>

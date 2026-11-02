@@ -18,7 +18,7 @@ export default function MarketplaceError({ retry }: { retry: () => void }) {
     <div className="ui-page ui-page-ambient px-4 py-8 sm:px-6 sm:py-12">
       <section
         role="alert"
-        className="mx-auto max-w-2xl rounded-[28px] border border-rose-300/25 bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8"
+        className="mx-auto max-w-2xl rounded-3xl border border-rose-300/25 bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8"
       >
         <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-400/10 text-[var(--ui-accent-danger)]">
           <AlertTriangle className="h-5 w-5" aria-hidden />

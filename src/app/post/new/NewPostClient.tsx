@@ -2938,7 +2938,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         // bottom edge below 768px (z-60): at `bottom-4` the nav was drawn over
         // both buttons, so a phone could not save or publish.
         <div className="fixed inset-x-4 bottom-[calc(var(--app-shell-bottom-nav-space,0px)+1rem)] z-40 lg:hidden">
-          <div className="flex items-center gap-3 rounded-[24px] border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+          <div className="flex items-center gap-3 rounded-full border border-white/10 bg-zinc-950/95 p-3 shadow-[0_20px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl">
             <button
               type={isEditMode ? 'button' : 'submit'}
               form={isEditMode ? undefined : 'post-composer-form'}
@@ -2978,7 +2978,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         </Link>
 
         <div className="mt-10 grid gap-8 xl:grid-cols-[minmax(0,1fr)_280px]">
-          <section className="rounded-[32px] border border-white/8 bg-zinc-950/70 p-5 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
+          <section className="rounded-3xl border border-white/8 bg-zinc-950/70 p-5 shadow-[0_28px_80px_rgba(0,0,0,0.45)] backdrop-blur-sm sm:p-6">
             <div className="mb-6">
               <h1 className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">
                 {isRecipeAddIntent
@@ -3024,7 +3024,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
               }}
             >
               {initialPost?.archivedAt ? (
-                <div className="rounded-[24px] border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
+                <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-5 py-4 text-sm leading-6 text-amber-50">
                   This post is archived. It stays out of public surfaces until you restore it from My Studio.
                 </div>
               ) : null}
@@ -3084,11 +3084,11 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     {!hasGeneratedProof && generationId && isLoadingGeneration ? (
                       // The creation is still loading: no drop zone, which read
                       // as "upload something" and whose files the publish ignored.
-                      <div className="flex min-h-[240px] items-center justify-center rounded-[28px] border border-white/10 bg-white/[0.02]" aria-busy="true" aria-label="Loading your creation">
+                      <div className="flex min-h-[240px] items-center justify-center rounded-3xl border border-white/10 bg-white/[0.02]" aria-busy="true" aria-label="Loading your creation">
                         <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
                       </div>
                     ) : !hasGeneratedProof && generationId && generationError ? (
-                      <div role="alert" className="rounded-[28px] border border-rose-500/20 bg-rose-500/5 p-5">
+                      <div role="alert" className="rounded-3xl border border-rose-500/20 bg-rose-500/5 p-5">
                         <div className="text-sm font-semibold text-rose-100">Could not load this creation</div>
                         <p className="mt-1.5 text-sm leading-6 text-rose-100/80">{generationError}</p>
                         <button
@@ -3100,7 +3100,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                         </button>
                       </div>
                     ) : hasGeneratedProof ? (
-                      <div className="rounded-[28px] border border-white/10 bg-white/[0.02] p-5">
+                      <div className="rounded-3xl border border-white/10 bg-white/[0.02] p-5">
                         <div className="flex flex-wrap items-start justify-between gap-4">
                           <div>
                             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Generated media</div>
@@ -3116,7 +3116,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                           </div>
                         </div>
 
-                        <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
+                        <div className="mt-5 rounded-2xl border border-white/8 bg-black/50 p-3">
                           {isLoadingGeneration ? (
                             <div className="flex min-h-[320px] items-center justify-center">
                               <Loader2 className="h-6 w-6 animate-spin text-zinc-500" />
@@ -3127,18 +3127,18 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                                 src={prefilledGeneration.outputUrl}
                                 controls
                                 playsInline
-                                className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
+                                className="max-h-[520px] w-full rounded-lg bg-black object-contain"
                               />
                             ) : (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={prefilledGeneration.outputUrl}
                                 alt={title || 'Generated preview'}
-                                className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
+                                className="max-h-[520px] w-full rounded-lg bg-black object-contain"
                               />
                             )
                           ) : (
-                            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-[18px] border border-dashed border-white/10 bg-zinc-950/60 text-center">
+                            <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-white/10 bg-zinc-950/60 text-center">
                               <Sparkles className="h-10 w-10 text-zinc-500" />
                               <p className="mt-4 max-w-sm text-sm leading-6 text-zinc-400">
                                 The generation is attached, but the preview could not be loaded here.

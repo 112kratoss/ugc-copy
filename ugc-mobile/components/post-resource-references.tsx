@@ -220,7 +220,7 @@ export function PostResourceReferences({
               style={({ pressed }) => ({
                 width: 142,
                 minHeight: 222,
-                borderRadius: 16,
+                borderRadius: appTheme.radii.md,
                 borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: theme.colors.border,

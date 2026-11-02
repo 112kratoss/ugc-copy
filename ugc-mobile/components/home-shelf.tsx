@@ -304,7 +304,7 @@ function ActiveRendersLine({ count }: { count: number }) {
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.success }} />
+      <View style={{ width: 7, height: 7, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.success }} />
       <AppText variant="caption" color="muted" numberOfLines={1}>{status}</AppText>
     </Pressable>
   );
