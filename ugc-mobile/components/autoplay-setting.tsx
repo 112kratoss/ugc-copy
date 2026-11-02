@@ -1,15 +1,12 @@
-import { Pressable, View } from 'react-native';
+import { View } from 'react-native';
 
-import { AppText, Card } from '@/components/ui';
+import { AppText, Card, SegmentedControl } from '@/components/ui';
 import {
   AUTOPLAY_PREFERENCES,
   useAutoplayPreference,
   writeAutoplayPreference,
   type AutoplayPreference,
 } from '@/lib/autoplay-preference';
-import { haptic } from '@/lib/haptics';
-import { appTheme } from '@/lib/theme';
-import { useAppTheme } from '@/lib/theme-context';
 
 const AUTOPLAY_LABELS: Record<AutoplayPreference, string> = {
   wifi: 'Wi-Fi only',
@@ -24,6 +21,8 @@ const AUTOPLAY_BODIES: Record<AutoplayPreference, string> = {
   never: 'Videos show a still frame until you open them.',
 };
 
+const AUTOPLAY_OPTIONS = AUTOPLAY_PREFERENCES.map((option) => ({ value: option, label: AUTOPLAY_LABELS[option] }));
+
 /**
  * Whether feed previews play by themselves (`lib/autoplay-preference.ts`).
  * Drawn as the Appearance row is: the app's segmented control with radio
@@ -31,7 +30,6 @@ const AUTOPLAY_BODIES: Record<AutoplayPreference, string> = {
  * feed follows the change in the next frame; there is nothing to confirm.
  */
 export function AutoplaySetting() {
-  const theme = useAppTheme();
   const preference = useAutoplayPreference();
 
   return (
@@ -40,54 +38,12 @@ export function AutoplaySetting() {
         <AppText variant="cardTitle">Autoplay previews</AppText>
         <AppText variant="bodySm" color="muted">{AUTOPLAY_BODIES[preference]}</AppText>
       </View>
-      <View
-        accessibilityRole="radiogroup"
+      <SegmentedControl
         accessibilityLabel="Autoplay previews"
-        style={{
-          flexDirection: 'row',
-          gap: 4,
-          padding: 4,
-          borderRadius: appTheme.radii.pill,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.surfaceInset,
-        }}
-      >
-        {AUTOPLAY_PREFERENCES.map((option) => {
-          const active = option === preference;
-          return (
-            <Pressable
-              key={option}
-              accessibilityRole="radio"
-              accessibilityLabel={AUTOPLAY_LABELS[option]}
-              accessibilityState={{ checked: active }}
-              onPress={() => {
-                if (active) return;
-                haptic.select();
-                void writeAutoplayPreference(option);
-              }}
-              style={({ pressed }) => ({
-                flex: 1,
-                minHeight: appTheme.touch.compact,
-                borderRadius: appTheme.radii.pill,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: active ? theme.colors.primaryFill : 'transparent',
-                opacity: pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              <AppText
-                selectable={false}
-                variant="label"
-                color={active ? theme.colors.onPrimary : theme.colors.muted}
-                numberOfLines={1}
-              >
-                {AUTOPLAY_LABELS[option]}
-              </AppText>
-            </Pressable>
-          );
-        })}
-      </View>
+        options={AUTOPLAY_OPTIONS}
+        value={preference}
+        onChange={(option) => void writeAutoplayPreference(option)}
+      />
     </Card>
   );
 }

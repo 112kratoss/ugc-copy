@@ -9,6 +9,7 @@ import {
     type PromptEnhancementResult,
     requestPromptEnhancement,
 } from '@/components/enhancePromptClient';
+import { SegmentedControl } from '@/components/DesignSystem';
 
 // The service debits this same constant, so the price on the button is the charge.
 const ENHANCEMENT_PRICE_LABEL = `${PROMPT_ENHANCEMENT_COST_CREDITS} ${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? 'credit' : 'credits'}`;
@@ -19,6 +20,12 @@ const ENHANCE_READY_CLASS = 'border border-brand-coral/30 bg-brand-coral/10 text
 const ENHANCE_IDLE_CLASS = 'bg-zinc-900/30 text-zinc-600 border border-white/5 cursor-not-allowed';
 const PRICE_READY_CLASS = 'bg-black/25 text-[#ffc1b2]';
 const PRICE_IDLE_CLASS = 'bg-zinc-800 text-zinc-600';
+
+// The level, in the app's words: Full rewrites with the model's craft, Light keeps the creator's.
+const ENHANCEMENT_LEVEL_OPTIONS = [
+    { value: 'cinematic', label: 'Full', title: 'Full rewrite with model-specific craft' },
+    { value: 'faithful', label: 'Light', title: 'Light touch — keeps your wording, fills only missing essentials' },
+] as const;
 
 interface EnhancePromptButtonProps {
     prompt: string;
@@ -194,26 +201,14 @@ export default function EnhancePromptButton({
     const enhanceLabel = `${isEnhancing ? loadingLabel : label}, ${ENHANCEMENT_PRICE_LABEL}`;
 
     const levelToggle = showLevelToggle ? (
-        <div className="flex items-center rounded-full border border-white/10 bg-zinc-900/40 p-0.5" role="group" aria-label="Enhancement level">
-            {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, levelLabel]) => (
-                <button
-                    key={value}
-                    type="button"
-                    onClick={() => setLevel(value)}
-                    aria-pressed={level === value}
-                    title={value === 'cinematic'
-                        ? 'Full rewrite with model-specific craft'
-                        : 'Light touch — keeps your wording, fills only missing essentials'}
-                    className={`rounded-full font-semibold transition-colors ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-0.5 text-[10px]'} ${
-                        level === value
-                            ? 'bg-brand-coral/20 text-[#ffb09c]'
-                            : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
-                >
-                    {levelLabel}
-                </button>
-            ))}
-        </div>
+        <SegmentedControl
+            fill={false}
+            size="compact"
+            ariaLabel="Enhancement level"
+            options={ENHANCEMENT_LEVEL_OPTIONS}
+            value={level}
+            onChange={setLevel}
+        />
     ) : null;
 
     const undoButton = canUndo ? (

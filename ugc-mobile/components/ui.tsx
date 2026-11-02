@@ -1,4 +1,4 @@
-import { useId, useState, type Ref } from 'react';
+import { isValidElement, useId, useState, type Ref } from 'react';
 import { MediaViewportScrollView as ScrollView } from '@/components/media-viewport-scroll-view';
 import { Image } from 'expo-image';
 import { Link } from 'expo-router';
@@ -10,6 +10,7 @@ import {
   TextInput,
   useWindowDimensions,
   View,
+  type PressableProps,
   type StyleProp,
   type TextInputProps,
   type TextProps,
@@ -37,10 +38,23 @@ type IconComponent = React.ComponentType<{
   size?: number;
   strokeWidth?: number;
 }>;
+/**
+ * What a button draws beside its label: an icon, which the button colours and
+ * sizes with the label, or an element the caller draws itself (`SaveHeart`,
+ * whose pop is its own).
+ */
+type ButtonIcon = IconComponent | React.ReactElement;
+
+function ButtonGlyph({ icon, color, size }: { icon?: ButtonIcon; color: string; size: number }) {
+  if (!icon) return null;
+  if (isValidElement(icon)) return icon;
+  const Icon = icon;
+  return <Icon color={color} size={size} />;
+}
 
 function resolveMotionView() {
   try {
-    return Animated.View;
+    return Animated.View ?? View;
   } catch {
     // Keeps shared primitives usable under minimal react-native test mocks.
     return View;
@@ -533,6 +547,140 @@ export function ChoiceChip({
   );
 }
 
+/** The clearance between a segmented control's track and its thumbs, on every side. */
+const SEGMENT_INSET = appTheme.spacing.unit;
+/** The track's hairline. */
+const SEGMENT_TRACK_BORDER = 1;
+/**
+ * The control is as tall as a button beside it (`touch.default`), so a thumb is
+ * drawn 4pt inside the track and each segment answers to the track's full
+ * height through its slop: a 48pt hit region on a 38pt capsule.
+ */
+const SEGMENT_THUMB_HEIGHT = appTheme.touch.default - 2 * (SEGMENT_INSET + SEGMENT_TRACK_BORDER);
+const SEGMENT_HIT_SLOP = {
+  top: SEGMENT_INSET + SEGMENT_TRACK_BORDER,
+  bottom: SEGMENT_INSET + SEGMENT_TRACK_BORDER,
+  left: SEGMENT_INSET / 2,
+  right: SEGMENT_INSET / 2,
+};
+
+export type SegmentedControlOption<Value extends string> = {
+  value: Value;
+  label: string;
+  /** Spoken in the label's place when the drawn word needs its context ("Switch to sign up"). */
+  accessibilityLabel?: string;
+};
+
+/**
+ * One choice among two to five closely related options, drawn once for the
+ * whole app: a capsule track in the inset fill with a hairline, and the choice
+ * in use a coral capsule 4pt inside it, so the two curves share a centre.
+ * Until November 2026 the app drew this control by hand seven times, with three
+ * track fills, three label sizes and haptics on two of them.
+ *
+ * `role` says what a choice does. `radio` picks a setting (Appearance, a
+ * draft's shot mode); `tab` switches the view below the control (Profile's
+ * collections, sign in or sign up, the comment order). Segmented controls:
+ * "Consider a segmented control to switch between closely related subviews."
+ *
+ * `fill` shares the row equally, as the HIG prefers ("keep segment size
+ * consistent"); `fill={false}` sizes each segment to its label, for a control
+ * beside a title or another control. A label stays on one line and shrinks a
+ * little before it would truncate, as counts in a third of a phone's width do
+ * at large text sizes.
+ *
+ * Choosing the segment already in use does nothing, and only a real change
+ * ticks (`haptic.select`).
+ */
+export function SegmentedControl<Value extends string>({
+  options,
+  value,
+  onChange,
+  accessibilityLabel,
+  role = 'radio',
+  fill = true,
+  disabled = false,
+  style,
+  testID,
+}: {
+  options: readonly SegmentedControlOption<Value>[];
+  value: Value;
+  onChange: (value: Value) => void;
+  /** Names the group for a screen reader: "Appearance", "Sort comments". */
+  accessibilityLabel?: string;
+  role?: 'radio' | 'tab';
+  fill?: boolean;
+  disabled?: boolean;
+  /** Where the control sits: margins, `alignSelf`, a width. */
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+}) {
+  const theme = useAppTheme();
+  const tabs = role === 'tab';
+
+  return (
+    <View
+      testID={testID}
+      accessibilityRole={tabs ? 'tablist' : 'radiogroup'}
+      accessibilityLabel={accessibilityLabel}
+      style={[
+        {
+          flexDirection: 'row',
+          gap: SEGMENT_INSET,
+          padding: SEGMENT_INSET,
+          borderRadius: appTheme.radii.pill,
+          borderWidth: SEGMENT_TRACK_BORDER,
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.surfaceInset,
+          opacity: disabled ? appTheme.opacity.disabled : 1,
+        },
+        style,
+      ]}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole={tabs ? 'tab' : 'radio'}
+            accessibilityLabel={option.accessibilityLabel ?? option.label}
+            accessibilityState={tabs ? { selected: active, disabled } : { checked: active, disabled }}
+            disabled={disabled}
+            hitSlop={SEGMENT_HIT_SLOP}
+            onPress={() => {
+              if (active) return;
+              haptic.select();
+              onChange(option.value);
+            }}
+            style={({ pressed }) => ({
+              flex: fill ? 1 : undefined,
+              minWidth: fill ? undefined : appTheme.touch.default,
+              minHeight: SEGMENT_THUMB_HEIGHT,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: appTheme.radii.pill,
+              backgroundColor: active ? theme.colors.primaryFill : pressed ? theme.colors.pressed : 'transparent',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+              paddingHorizontal: fill ? appTheme.spacing.compact : appTheme.spacing.gap,
+            })}
+          >
+            <AppText
+              selectable={false}
+              variant="label"
+              color={active ? 'onPrimary' : 'muted'}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+            >
+              {option.label}
+            </AppText>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function MetricCard({
   icon,
   label,
@@ -780,16 +928,47 @@ export function ToggleRow({
   );
 }
 
-export function PrimaryButton({
+/**
+ * What a button draws: its label alone, or the label between its glyphs. While
+ * it waits, the activity indicator takes the leading glyph's place, beside the
+ * waiting label when there is one (HIG Buttons: "the system displays the
+ * activity indicator next to the original or alternative label, hiding the
+ * button image").
+ */
+function ButtonContent({
   label,
-  loadingLabel,
-  onPress,
-  disabled,
   loading,
-  accent = 'primary',
-  size = 'default',
-  accessibilityHint,
+  loadingLabel,
+  icon,
+  trailingIcon,
+  variant,
+  color,
+  iconSize,
 }: {
+  label: string;
+  loading: boolean;
+  loadingLabel?: string;
+  icon?: ButtonIcon;
+  trailingIcon?: ButtonIcon;
+  variant: 'button' | 'label';
+  color: string;
+  iconSize: number;
+}) {
+  if (loading && !loadingLabel) return <ActivityIndicator color={color} />;
+  const text = loading ? loadingLabel : label;
+  if (!loading && !icon && !trailingIcon) {
+    return <AppText selectable={false} variant={variant} color={color}>{text}</AppText>;
+  }
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact }}>
+      {loading ? <ActivityIndicator color={color} /> : <ButtonGlyph icon={icon} color={color} size={iconSize} />}
+      <AppText selectable={false} variant={variant} color={color} style={{ flexShrink: 1, textAlign: 'center' }}>{text}</AppText>
+      {loading ? null : <ButtonGlyph icon={trailingIcon} color={color} size={iconSize} />}
+    </View>
+  );
+}
+
+type ButtonProps = {
   label: string;
   /**
    * What the button says while it waits. HIG Buttons: "you can also configure
@@ -802,10 +981,37 @@ export function PrimaryButton({
   onPress?: () => void;
   disabled?: boolean;
   loading?: boolean;
-  accent?: ToolAccent;
+  /** Before the label; the spinner's place while the button waits. */
+  icon?: ButtonIcon;
+  /** After the label: a chevron that says where the button goes. */
+  trailingIcon?: ButtonIcon;
+  /** `roomy` for the one action that closes a screen or a sheet, in its footer. */
   size?: 'default' | 'roomy';
+  /** The spoken name, when the drawn label is a number or needs its context. */
+  accessibilityLabel?: string;
   accessibilityHint?: string;
-}) {
+  accessibilityValue?: PressableProps['accessibilityValue'];
+  /** Where the button sits: `flex`, `alignSelf`, margins. Never its look. */
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+};
+
+export function PrimaryButton({
+  label,
+  loadingLabel,
+  onPress,
+  disabled,
+  loading,
+  accent = 'primary',
+  size = 'default',
+  icon,
+  trailingIcon,
+  accessibilityLabel,
+  accessibilityHint,
+  accessibilityValue,
+  style,
+  testID,
+}: ButtonProps & { accent?: ToolAccent }) {
   const theme = useAppTheme();
   const fillColor = accentFill(accent);
   const unavailable = Boolean(disabled || loading);
@@ -815,11 +1021,13 @@ export function PrimaryButton({
   const motion = usePressMotion(unavailable);
 
   return (
-    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+    <MotionView style={[style, motion.animatedStyle as StyleProp<ViewStyle>]}>
       <Pressable
+        testID={testID}
         accessibilityRole="button"
-        accessibilityLabel={label}
+        accessibilityLabel={accessibilityLabel ?? label}
         accessibilityHint={accessibilityHint}
+        accessibilityValue={accessibilityValue}
         accessibilityLiveRegion={loading ? 'polite' : 'none'}
         accessibilityState={{ busy: Boolean(loading), disabled: unavailable }}
         disabled={unavailable}
@@ -843,61 +1051,86 @@ export function PrimaryButton({
           paddingHorizontal: appTheme.spacing.panel,
         })}
       >
-        {loading && !loadingLabel ? (
-          <ActivityIndicator color={textColor} />
-        ) : loading ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-            <ActivityIndicator color={textColor} />
-            <AppText selectable={false} variant="button" color={textColor}>{loadingLabel}</AppText>
-          </View>
-        ) : (
-          <AppText selectable={false} variant="button" color={textColor}>{label}</AppText>
-        )}
+        <ButtonContent
+          label={label}
+          loading={Boolean(loading)}
+          loadingLabel={loadingLabel}
+          icon={icon}
+          trailingIcon={trailingIcon}
+          variant="button"
+          color={textColor}
+          iconSize={appTheme.icon.compact}
+        />
       </Pressable>
     </MotionView>
   );
 }
 
+/**
+ * A supporting action: never competes with the primary. Neutral by default; an
+ * `accent` tints it (the accent's wash and hairline, its label in the accent),
+ * for an action that belongs to one tool, such as enhancing a shot.
+ */
 export function SecondaryButton({
   label,
+  loadingLabel,
   onPress,
   disabled,
+  loading,
+  accent,
+  size = 'default',
+  icon,
+  trailingIcon,
+  accessibilityLabel,
   accessibilityHint,
-}: {
-  label: string;
-  onPress?: () => void;
-  disabled?: boolean;
-  accessibilityHint?: string;
-}) {
+  accessibilityValue,
+  style,
+  testID,
+}: ButtonProps & { accent?: ToolAccent }) {
   const theme = useAppTheme();
-  const motion = usePressMotion(Boolean(disabled));
+  const unavailable = Boolean(disabled || loading);
+  const motion = usePressMotion(unavailable);
+  const tint = accent ? accentColor(accent, theme.colors) : null;
+  const textColor = tint ?? theme.colors.text;
 
   return (
-    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+    <MotionView style={[style, motion.animatedStyle as StyleProp<ViewStyle>]}>
       <Pressable
+        testID={testID}
         accessibilityRole="button"
-        accessibilityLabel={label}
+        accessibilityLabel={accessibilityLabel ?? label}
         accessibilityHint={accessibilityHint}
-        accessibilityState={{ disabled: Boolean(disabled) }}
-        disabled={disabled}
+        accessibilityValue={accessibilityValue}
+        accessibilityLiveRegion={loading ? 'polite' : 'none'}
+        accessibilityState={{ busy: Boolean(loading), disabled: unavailable }}
+        disabled={unavailable}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
         onPress={onPress}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
         style={({ pressed }) => ({
-          minHeight: appTheme.touch.default,
+          minHeight: size === 'roomy' ? appTheme.touch.roomy : appTheme.touch.default,
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.pill,
           borderWidth: motion.focused ? theme.state.focus.width : 1,
-          borderColor: motion.focused ? theme.state.focus.color : theme.colors.border,
-          backgroundColor: pressed ? theme.colors.pressed : theme.colors.panelSoft,
+          borderColor: motion.focused ? theme.state.focus.color : tint ? `${tint}55` : theme.colors.border,
+          backgroundColor: tint ? `${tint}1f` : pressed ? theme.colors.pressed : theme.colors.panelSoft,
           opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
           paddingHorizontal: appTheme.spacing.card,
         })}
       >
-        <AppText selectable={false} variant="label" color="text">{label}</AppText>
+        <ButtonContent
+          label={label}
+          loading={Boolean(loading)}
+          loadingLabel={loadingLabel}
+          icon={icon}
+          trailingIcon={trailingIcon}
+          variant="label"
+          color={textColor}
+          iconSize={appTheme.icon.sm}
+        />
       </Pressable>
     </MotionView>
   );
@@ -1103,60 +1336,71 @@ export function Pill({
   );
 }
 
+/**
+ * An icon-only control: a 48pt circle, the glyph at `icon.feature`, the size
+ * every Back and Close in the app is drawn at (`lib/platform-glyphs.ts`). It
+ * takes the filled circle iOS draws a Close button in. `plain` leaves the
+ * circle out until it is pressed, for a button in a header bar whose own
+ * surface already holds it (HIG Buttons: a button in a toolbar is the exception
+ * to "prefer buttons that have a discernible background shape and fill").
+ */
 export function IconButton({
   icon: Icon,
   label,
   onPress,
   disabled,
+  busy = false,
   accent,
+  variant = 'filled',
   style,
   accessibilityHint,
+  testID,
 }: {
   icon: IconComponent;
   label: string;
   onPress?: () => void;
   disabled?: boolean;
+  /** Announced while the press is still being acted on (closing a draft that saves first). */
+  busy?: boolean;
   accent?: ToolAccent;
+  variant?: 'filled' | 'plain';
+  /** Where the button sits: margins, `alignSelf`, an absolute position. Never its look. */
   style?: StyleProp<ViewStyle>;
   accessibilityHint?: string;
+  testID?: string;
 }) {
   const theme = useAppTheme();
-  const color = accent ? accentColor(accent, theme.colors) : theme.colors.text;
+  const tint = accent ? accentColor(accent, theme.colors) : null;
   const motion = usePressMotion(Boolean(disabled), { scale: appTheme.motion.scale.pressedControl });
+  const restingFill = tint ? `${tint}1f` : variant === 'plain' ? 'transparent' : theme.colors.surfaceStrong;
 
   return (
-    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+    <MotionView style={[style, motion.animatedStyle as StyleProp<ViewStyle>]}>
       <Pressable
+        testID={testID}
         accessibilityRole="button"
         accessibilityLabel={label}
         accessibilityHint={accessibilityHint}
-        accessibilityState={{ disabled: Boolean(disabled) }}
+        accessibilityState={{ busy, disabled: Boolean(disabled) }}
         disabled={disabled}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
         onPress={onPress}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
-        style={({ pressed }) => [
-          {
-            minHeight: appTheme.touch.default,
-            minWidth: appTheme.touch.default,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: motion.focused ? theme.state.focus.width : 1,
-            borderColor: motion.focused
-              ? theme.state.focus.color
-              : accent ? `${color}55` : theme.colors.border,
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: accent
-              ? `${color}1f`
-              : pressed ? theme.colors.pressed : theme.colors.surface,
-            opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
-          },
-          style,
-        ]}
+        style={({ pressed }) => ({
+          minHeight: appTheme.touch.default,
+          minWidth: appTheme.touch.default,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.pill,
+          borderWidth: theme.state.focus.width,
+          borderColor: motion.focused ? theme.state.focus.color : 'transparent',
+          backgroundColor: pressed && !tint ? theme.colors.pressed : restingFill,
+          opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
+        })}
       >
-        <Icon color={color} size={appTheme.icon.default} />
+        <Icon color={tint ?? theme.colors.text} size={appTheme.icon.feature} />
       </Pressable>
     </MotionView>
   );

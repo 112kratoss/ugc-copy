@@ -47,12 +47,12 @@ describe('EnhancePromptButton', () => {
       renderToolbar();
       const templates = screen.getByRole('button', { name: 'Templates' });
       const enhance = screen.getByRole('button', { name: `Enhance, ${PROMPT_ENHANCEMENT_COST_CREDITS} credits` });
-      const level = screen.getByRole('group', { name: 'Enhancement level' });
+      const level = screen.getByRole('radiogroup', { name: 'Enhancement level' });
 
       expect(enhance).toBeEnabled();
       expect(templates.compareDocumentPosition(enhance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(enhance.compareDocumentPosition(level) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Full' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('radio', { name: 'Full' })).toHaveAttribute('aria-checked', 'true');
     });
 
     it('waits for a prompt, and for a run to end', () => {

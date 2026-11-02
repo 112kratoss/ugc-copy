@@ -1,7 +1,8 @@
 import { Lock } from 'lucide-react-native';
-import { ActivityIndicator, Modal, Pressable, Text, View } from 'react-native';
+import { Modal, Text, View } from 'react-native';
 
 import { ResourceKindRow } from '@/components/resource-kind-row';
+import { IconButton, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { SheetBackdrop, SheetGrabber, SheetPanel, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { useAuth } from '@/lib/auth';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
@@ -67,7 +68,6 @@ export function UnlockRemixPrompt({
     : unlock?.accessMode === 'paid'
       ? priceLabel ? `Unlock for ${priceLabel}` : 'Unlock with credits'
       : 'Get free recipe';
-  const ctaDisabled = bundleUnlock.isPending || bundleUnlock.shortfall > 0;
 
   if (!item || !unlock) {
     return null;
@@ -112,22 +112,7 @@ export function UnlockRemixPrompt({
                 Unlock the recipe to remix
               </Text>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Close unlock prompt"
-              onPress={onClose}
-              style={({ pressed }) => ({
-                width: 48,
-                height: 48,
-                borderRadius: appTheme.radii.pill,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: theme.colors.surfaceStrong,
-                opacity: pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-            </Pressable>
+            <IconButton icon={CloseGlyph} label="Close unlock prompt" onPress={onClose} />
           </View>
 
           <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
@@ -159,50 +144,16 @@ export function UnlockRemixPrompt({
           ) : null}
           {bundleUnlock.error ? <Text selectable style={{ color: theme.colors.danger, ...appTheme.type.caption, fontWeight: '800' }}>{bundleUnlock.error}</Text> : null}
 
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={ctaLabel}
-            accessibilityState={{ disabled: ctaDisabled }}
-            disabled={ctaDisabled}
+          <PrimaryButton
+            label={ctaLabel}
+            loadingLabel="Unlocking…"
+            icon={Lock}
+            disabled={bundleUnlock.shortfall > 0}
+            loading={bundleUnlock.isPending}
             onPress={bundleUnlock.request}
-            style={({ pressed }) => ({
-              minHeight: 50,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 9,
-              borderRadius: appTheme.radii.pill,
-              backgroundColor: theme.colors.primaryFill,
-              opacity: ctaDisabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-              paddingHorizontal: 18,
-            })}
-          >
-            {bundleUnlock.isPending ? (
-              <ActivityIndicator color={theme.colors.onPrimary} />
-            ) : (
-              <Lock size={appTheme.icon.default} color={theme.colors.onPrimary} />
-            )}
-            <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
-              {bundleUnlock.isPending ? 'Unlocking…' : ctaLabel}
-            </Text>
-          </Pressable>
+          />
           {bundleUnlock.offersCredits ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Get credits"
-              onPress={bundleUnlock.goToCredits}
-              style={({ pressed }) => ({
-                minHeight: 50,
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: appTheme.radii.pill,
-                backgroundColor: theme.colors.surfaceStrong,
-                opacity: pressed ? appTheme.opacity.pressed : 1,
-                paddingHorizontal: 18,
-              })}
-            >
-              <Text style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>Get credits</Text>
-            </Pressable>
+            <SecondaryButton label="Get credits" onPress={bundleUnlock.goToCredits} />
           ) : null}
         </SheetPanel>
       </View>

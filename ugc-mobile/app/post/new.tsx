@@ -8,7 +8,7 @@ import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ContentPolicyGate } from '@/components/content-policy-gate';
-import { AppText, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
+import { AppText, IconButton, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaFileName, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { CompactFieldLabel, ComposerFieldShell, ComposerInput, FieldErrorText } from '@/components/composer-fields';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -264,28 +264,9 @@ function PostComposerHeader({
   );
 }
 
+/** Plain: the composer's header bar is the surface its Back and Close sit on. */
 function HeaderIconButton({ label, icon, onPress }: { label: string; icon: 'back' | 'close'; onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      hitSlop={4}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 48,
-        height: 48,
-        borderRadius: appTheme.radii.pill,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
-      })}
-    >
-      {icon === 'back'
-        ? <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-        : <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />}
-    </Pressable>
-  );
+  return <IconButton icon={icon === 'back' ? BackGlyph : CloseGlyph} label={label} variant="plain" onPress={onPress} />;
 }
 
 function PostDetailsPage({
@@ -645,23 +626,7 @@ function PostResourcesPage({
                 <AppText variant="cardTitle">What people receive</AppText>
                 <AppText variant="caption" color="muted">{itemsLabel}</AppText>
               </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Add item"
-                onPress={onAddResource}
-                style={({ pressed }) => ({
-                  minHeight: 48,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 7,
-                  borderRadius: appTheme.radii.pill,
-                  paddingHorizontal: 14,
-                  backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
-                })}
-              >
-                <Plus size={17} color={theme.colors.onPrimary} />
-                <AppText variant="label" color="onPrimary">Add</AppText>
-              </Pressable>
+              <PrimaryButton label="Add" accessibilityLabel="Add item" icon={Plus} onPress={onAddResource} />
             </View>
 
             {/* A recipe people have is edited like any other (recipe audit S2): each save is a new
@@ -1175,67 +1140,26 @@ function PostComposerFooter({
       }}
     >
       {step === 'details' ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Next"
-          onPress={onNext}
-          style={({ pressed }) => ({
-            minHeight: 54,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
-          })}
-        >
-          <AppText variant="button" color="onPrimary">Next</AppText>
-          <ChevronRight size={19} color={theme.colors.onPrimary} />
-        </Pressable>
+        <PrimaryButton label="Next" size="roomy" trailingIcon={ChevronRight} onPress={onNext} />
       ) : (
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Pressable
-            accessibilityRole="button"
+          <SecondaryButton
+            label={visibilityLabel}
             accessibilityLabel={`Visibility: ${visibilityLabel}`}
+            size="roomy"
+            icon={Globe2}
+            trailingIcon={ChevronDown}
             onPress={onVisibility}
-            style={({ pressed }) => ({
-              minWidth: 112,
-              minHeight: 54,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 7,
-              borderRadius: appTheme.radii.pill,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
-            })}
-          >
-            <Globe2 size={17} color={theme.colors.textSecondary} />
-            <AppText variant="label">{visibilityLabel}</AppText>
-            <ChevronDown size={15} color={theme.colors.muted} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={submitLabel}
-            accessibilityState={{ disabled: disabled || loading, busy: loading }}
-            disabled={disabled || loading}
+          />
+          <PrimaryButton
+            label={submitLabel}
+            loadingLabel={submitLabel}
+            size="roomy"
+            disabled={disabled}
+            loading={loading}
             onPress={onPublish}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 54,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              borderRadius: appTheme.radii.pill,
-              backgroundColor: theme.colors.primaryFill,
-              opacity: disabled || loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            {loading ? <ActivityIndicator size="small" color={theme.colors.onPrimary} /> : null}
-            <AppText variant="button" color="onPrimary">{submitLabel}</AppText>
-          </Pressable>
+            style={{ flex: 1 }}
+          />
         </View>
       )}
     </View>
@@ -1850,26 +1774,15 @@ function ResourceComposerContent({
             {saveHint && !isUploading ? (
               <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>{saveHint}</AppText>
             ) : null}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Save item"
-              accessibilityState={{ disabled: !isReady || isUploading }}
+            <PrimaryButton
+              label="Save item"
+              size="roomy"
               disabled={!isReady || isUploading}
               onPress={() => {
                 Keyboard.dismiss();
                 onSave();
               }}
-              style={({ pressed }) => ({
-                minHeight: 54,
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: appTheme.radii.pill,
-                backgroundColor: theme.colors.primaryFill,
-                opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              <AppText variant="button" color="onPrimary">Save item</AppText>
-            </Pressable>
+            />
           </View>
         </>
       ) : null}

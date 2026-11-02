@@ -273,7 +273,7 @@ describe('HIG modality — sheets, alerts and the way out', () => {
     expect(file('components/edit-profile-screen.tsx')).not.toContain('BackGlyph');
     // The composer is a push by deliberate choice (DV7), but the step that
     // leaves it still closes with the shared Close control, not a bare glyph.
-    expect(file('app/post/new.tsx')).toContain('<CloseGlyph');
+    expect(file('app/post/new.tsx')).toMatch(/<IconButton icon=\{[^}]*\bCloseGlyph\b/);
   });
 
   it('pairs the sheet Done button with a Cancel, not a Back', () => {

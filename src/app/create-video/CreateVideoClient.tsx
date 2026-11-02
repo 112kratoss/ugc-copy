@@ -5750,7 +5750,6 @@ function VideoCreator({
                                         value={inputView.side}
                                         onChange={(side) => void requestInputSide(side)}
                                         appearance="pill"
-                                        accent="video"
                                     />
                                 ) : null}
                                 hint={inputsHint}

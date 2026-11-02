@@ -320,9 +320,9 @@ describe('HIG S15 — the way out and the way through', () => {
     // now say the same thing.
     expect(screen).toContain('Edit profile');
     expect(screen).not.toContain('Edit Profile');
+    // A button primitive draws its label and speaks it, so one string is both.
     const dashboard = file('components/profile-dashboard.tsx');
-    expect(dashboard).toContain('accessibilityLabel="Edit profile"');
-    expect(dashboard).toContain('>Edit profile</Text>');
+    expect(dashboard).toContain('<PrimaryButton label="Edit profile"');
     expect(dashboard).not.toContain('Edit Profile');
   });
 

@@ -17,7 +17,7 @@ import {
   type StudioMediaPreviewType,
 } from '@/components/CreatorStudio';
 import { CreditTopUpHost } from '@/components/CreditTopUpSheet';
-import { getAccentClasses, IconButton, type UiAccent } from '@/components/DesignSystem';
+import { getAccentClasses, IconButton, SegmentedControl, type UiAccent } from '@/components/DesignSystem';
 import type { CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
 import { openCreditTopUp, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
@@ -409,8 +409,12 @@ const FLOATING_BAR_CLASS = `rounded-4xl ${FLOATING_SURFACE_FILL}`;
 /** How a choice's options sit: a grid of equal cells, or a pill sized to their words. */
 type CreatorChoiceLayout =
   | { appearance?: 'grid'; columns: keyof typeof CHOICE_COLUMNS }
-  /** Side by side in a pill: a choice in a card's heading (the video creator's frames or references). */
-  | { appearance: 'pill'; columns?: undefined };
+  /**
+   * Side by side in a pill: a choice in a card's heading (the video creator's frames or
+   * references), drawn by the shared `SegmentedControl`, so it takes words only and the
+   * control's own coral, never a tool's accent.
+   */
+  | { appearance: 'pill'; columns?: undefined; accent?: never; capitalize?: never; optionPrice?: never; optionMark?: never };
 
 /**
  * The box an aspect-ratio option draws beside its words, as the app's parameter
@@ -502,23 +506,39 @@ export function CreatorSettingChoices<T extends string>({
     choose(moves[event.key]);
   };
 
+  const heading = labelHidden ? (
+    <p id={labelId} className="sr-only">{label}</p>
+  ) : (
+    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
+      {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
+    </div>
+  );
+
+  if (pill) {
+    return (
+      <div className="shrink-0">
+        {heading}
+        <SegmentedControl
+          ref={ref}
+          fill={false}
+          ariaLabelledBy={labelId}
+          options={options.map((option) => ({ value: option, label: optionLabel ? optionLabel(option) : option }))}
+          value={value}
+          onChange={onChange}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className={clsx(pill && 'shrink-0')}>
-      {labelHidden ? (
-        <p id={labelId} className="sr-only">{label}</p>
-      ) : (
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
-          {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
-        </div>
-      )}
+    <div>
+      {heading}
       <div
         ref={ref}
         role="radiogroup"
         aria-labelledby={labelId}
-        className={pill
-          ? 'inline-flex rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1'
-          : clsx('grid gap-1.5', CHOICE_COLUMNS[columns ?? 1])}
+        className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns ?? 1])}
       >
         {options.map((option, index) => {
           const checked = index === selectedIndex;
@@ -542,18 +562,15 @@ export function CreatorSettingChoices<T extends string>({
               onClick={() => onChange(option)}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={clsx(
-                'ui-focus-ring min-h-10 border text-xs font-bold transition-colors duration-150',
-                pill ? 'inline-flex items-center rounded-full px-3.5' : 'rounded-ui-md px-2',
+                'ui-focus-ring min-h-10 rounded-ui-md border px-2 text-xs font-bold transition-colors duration-150',
                 optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
-                // The room a mark has is measured on the option itself (a grid cell, never a pill),
-                // and its line is centred, so a long one shares the padding on both sides.
-                mark && !pill && '@container flex items-center justify-center',
+                // The room a mark has is measured on the option itself, and its line is
+                // centred, so a long one shares the padding on both sides.
+                mark && '@container flex items-center justify-center',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
-                  : pill
-                    ? 'border-transparent text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-secondary)]'
-                    : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
+                  : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
               {mark ? (

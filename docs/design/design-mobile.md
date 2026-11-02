@@ -106,6 +106,7 @@ The guards below fail the mobile suite, so a red guard is a real violation: fix 
 | `hig-dynamic-type.test.tsx` | Text always follows the OS text size, within each tier's cap |
 | `hig-icon-size.test.ts`, `hig-icon-weight.test.tsx` | Icon sizes come from the ramp; one stroke weight app-wide |
 | `hig-corner-radius.test.ts` | Radii come from the token scale (Radius below); rounded rectangles draw the continuous corner, capsules and circles do not |
+| `hig-shared-controls.test.tsx` | The segmented control and the button slots behave as [Segmented control and buttons](#segmented-control-and-buttons) says; no screen draws a segmented control of its own |
 | `theme-color-literals.test.ts` | No raw colour outside the `EXEMPT` list |
 | `theme-palette-parity.test.ts` | The light and dark palettes carry the same names |
 | `motion-token-compliance.test.ts` | Press opacity and springs come from the theme; every timing names its easing |
@@ -406,18 +407,42 @@ New or migrated UI uses these primitives from `components/ui.tsx`. A missing one
 | `SurfaceSection` | A titled panel grouping related controls |
 | `DisclosureSection` | A section that expands and collapses (advanced settings) |
 | `ChoiceChip` | One choice among a few, with real selected state |
+| `SegmentedControl` | One choice among two to five closely related options: `radio` for a setting, `tab` for the view below it (below) |
 | `Pill` | A static tag, optionally with an icon |
 | `MetricCard` | A number with its label, an optional icon, body and action |
 | `ReadinessRow` | A pre-flight line: neutral, ready, warning, danger |
 | `ToggleRow` | A labelled switch with an explanation |
-| `PrimaryButton` | The one main action of a decision area. It takes a coral fill or a tool accent, and `loadingLabel` narrates the wait ("Publishing…") |
-| `SecondaryButton` | Supporting actions; never competes with the primary |
-| `IconButton` | An icon-only control; its label is required |
+| `PrimaryButton` | The one main action of a decision area. It takes a coral fill or a tool accent, a leading `icon` and a `trailingIcon`, `size="roomy"` in a footer, and `loadingLabel` narrates the wait ("Publishing…") |
+| `SecondaryButton` | Supporting actions; never competes with the primary. The same slots and sizes, and an `accent` that tints it for one tool's action (Enhance shot) |
+| `IconButton` | An icon-only control, a filled 48pt circle; `plain` in a header bar. Its label is required |
 | `AppTextInput` | Label above; `hint`, an announced `error`, a `footer` for counts, a clear button |
 | `MediaFrame` | A picture or video with its aspect ratio held before load |
 | `StatusBlock` | Empty, info, success, warning and error states: a title and a next step |
 | `WebLinkButton` | Opens a web page (help, legal) |
 | `CreatorAvatar` | A creator's photo with an initial as fallback |
+
+### Segmented control and buttons
+
+A control's shape lives in its primitive, so a screen cannot drift from it: a value guard holds a radius, not a control a screen draws for itself (the web's sign-in switch drifted that way). Until November 2026 the app drew its segmented control seven times by hand, with three track fills (`panel`, `surfaceInset`, `surfaceStrong`), three label sizes (12, 13 and a 12/800 raw `Text`), a haptic on two of them and three ways of saying which was chosen; about twenty buttons re-spelled the button primitives at 44, 48, 50 and 54pt, most with no press state but opacity.
+
+**The segmented control** (`SegmentedControl`), one look:
+- A capsule track in `surfaceInset` with the `border` hairline, and the choice in use a capsule of `primaryFill` with `onPrimary` ink, 4pt inside it, so the two curves share a centre (`radii.pill` both, no continuous corner). The others carry no fill until pressed (`pressed`).
+- As tall as a button beside it: the track is `touch.default` (48pt) and a thumb 38pt, and each segment answers to the whole track through its slop, so the hit region is 48pt with no dead edge.
+- Labels in the `label` role, on one line, shrinking a little (to 0.7) before they would truncate, as counts in a third of a phone's width do at large text sizes.
+- `role="radio"` (the default) picks a setting: Appearance, Autoplay previews, a draft's shot mode, Enhance's Full or Light. `role="tab"` switches the view below it: Profile's collections, sign in or sign up, a creator's tabs, the comment order. Segmented controls: "Consider a segmented control to switch between closely related subviews."
+- `fill` shares the row equally ("keep segment size consistent"); `fill={false}` sizes each segment to its word, at least 48pt, for a control beside a title (the comment order) or another control (Full or Light beside Undo).
+- Choosing the segment in use does nothing; a real change ticks (`haptic.select`), so a screen never ticks for it.
+
+The coral thumb is the app's own (iOS's system control draws a neutral one): six of the seven copies drew it, and `primaryFill` is the token for "buttons and the selected segment" (Color above). The web draws the same control the same way (`design-web.md` → Components).
+
+**Buttons** come from `PrimaryButton`, `SecondaryButton` and `IconButton`, one height and one press feel per role:
+- **Height:** 48pt (`touch.default`) for every button; `size="roomy"` (56pt) only for the one action that closes a screen's or a sheet's footer (the composer's Next and Publish beside its Visibility, Save item). Buttons side by side share a height (Buttons: "use style — not size — to visually distinguish the preferred choice").
+- **Press:** the shared spring (`usePressMotion`: 0.96 for buttons, 0.9 for icon buttons) with the pressed opacity, a `pressed` fill, and on a primary the `light` haptic.
+- **Glyphs:** `icon` before the label and `trailingIcon` after it, drawn in the label's colour at the label's size (`icon.compact` beside a primary's `button` text, `icon.sm` beside a secondary's `label`); an element is drawn as given (`SaveHeart`'s pop). While a button waits the activity indicator takes the leading glyph's place, beside `loadingLabel` (Buttons: "hiding the button image").
+- **`IconButton`** is a filled 48pt circle (`surfaceStrong`), its glyph at `icon.feature`, the size every Back and Close is drawn at (`lib/platform-glyphs.ts`). `variant="plain"` leaves the circle out until it is pressed, for a button in a header bar whose own surface holds it (the composer's header, the media feed's, the creator page's glass circle): the HIG's exception for "a button in a toolbar".
+- `style` places a primitive (`flex`, `alignSelf`, an absolute position) and never restyles it; `accessibilityLabel` and `accessibilityValue` speak a button whose label is a number (Comments).
+
+Still drawn by hand, on purpose: Explore search's scope (Top, Creators, Posts, Recipes; a segmented control by the HIG, next to move once the primitive takes a disabled segment), the recipe's Latest or Purchased chips, the creator bar's settings chip and Generate (a bar of capsules of its own), the edit-profile sheet's Cancel and Save (a sheet's bar buttons), inline actions in Alerts rows, and everything drawn over a picture (the reel's rail, the lightbox), which takes `mediaColors`.
 
 Beyond `ui.tsx`:
 

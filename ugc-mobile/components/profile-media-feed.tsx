@@ -22,7 +22,7 @@ import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { MediaZoomSurface } from '@/components/media-zoom';
 import { ZoomVeilScope } from '@/components/zoom-veil';
 import { ProfileFeedCardView } from '@/components/profile-feed-card';
-import { SecondaryButton, StatusBlock } from '@/components/ui';
+import { IconButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
 import { changeGenerationArchive, type ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
@@ -717,21 +717,7 @@ function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
         backgroundColor: theme.colors.background,
       }}
     >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Go back"
-        onPress={leaveFeed}
-        style={({ pressed }) => ({
-          width: 44,
-          height: 44,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: appTheme.radii.pill,
-          opacity: pressed ? appTheme.opacity.pressed : 1,
-        })}
-      >
-        <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-      </Pressable>
+      <IconButton icon={BackGlyph} label="Go back" variant="plain" onPress={leaveFeed} />
       <Text style={{ color: theme.colors.text, ...appTheme.type.sectionTitle, fontWeight: '800' }}>
         {title}
       </Text>

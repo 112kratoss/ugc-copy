@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NativeMenu } from '@/components/native-menu';
 import { CommentListSkeleton } from '@/components/skeleton';
-import { CreatorAvatar, StatusBlock } from '@/components/ui';
+import { CreatorAvatar, PrimaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { useAuth } from '@/lib/auth';
 import {
@@ -356,9 +356,9 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     });
   }, [postId, queryClient]);
 
+  // The control ticks the change itself (`SegmentedControl`).
   const selectSort = useCallback((next: PostCommentSort) => {
     if (next === sort) return;
-    haptic.select();
     setSortChoice({ postId, sort: next });
     // In the sheet the control sits above the list, which may be scrolled
     // far down the old order; the new one is read from its start. On the
@@ -700,29 +700,12 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         body={loadError.body}
       />
       {loadError.canRetry ? (
-        <Pressable
-          accessibilityRole="button"
+        <PrimaryButton
+          label="Try again"
           accessibilityLabel="Try loading comments again"
-          accessibilityState={{ busy: commentsQuery.isRefetching }}
-          disabled={commentsQuery.isRefetching}
+          loading={commentsQuery.isRefetching}
           onPress={() => void commentsQuery.refetch()}
-          style={({ pressed }) => ({
-            minHeight: 48,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: theme.colors.primaryFill,
-            opacity: pressed ? appTheme.opacity.pressed : 1,
-          })}
-        >
-          {commentsQuery.isRefetching ? (
-            <ActivityIndicator color={theme.colors.onPrimary} />
-          ) : (
-            <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.bodySm, fontWeight: '800' }}>
-              Try again
-            </Text>
-          )}
-        </Pressable>
+        />
       ) : null}
     </View>
   ) : null;
@@ -948,54 +931,22 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   return <Overlay visible={presented}>{keyboardSurface}</Overlay>;
 });
 
+const COMMENT_SORT_OPTIONS = POST_COMMENT_SORTS.map((option) => ({ value: option.id, label: option.label }));
+
 /**
- * Top or New, drawn as the app's segmented control (`ProfileSegment`, the
- * creator page's tabs): a track with a solid fill on the order in use, each
- * order a tab at the 48pt touch height.
+ * Top or New: the app's segmented control as tabs, each order sized to its
+ * word, so the control fits beside the sheet's title.
  */
 function CommentSortControl({ value, onChange }: { value: PostCommentSort; onChange: (sort: PostCommentSort) => void }) {
-  const theme = useAppTheme();
   return (
-    <View
-      accessibilityRole="tablist"
+    <SegmentedControl
+      role="tab"
+      fill={false}
       accessibilityLabel="Sort comments"
-      style={{
-        flexDirection: 'row',
-        gap: 4,
-        padding: 4,
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surfaceInset,
-      }}
-    >
-      {POST_COMMENT_SORTS.map((option) => {
-        const active = option.id === value;
-        return (
-          <Pressable
-            key={option.id}
-            accessibilityRole="tab"
-            accessibilityLabel={option.label}
-            accessibilityState={{ selected: active }}
-            onPress={() => onChange(option.id)}
-            style={({ pressed }) => ({
-              minWidth: 56,
-              minHeight: appTheme.touch.compact,
-              paddingHorizontal: appTheme.spacing.gap,
-              borderRadius: appTheme.radii.pill,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: active ? theme.colors.primaryFill : 'transparent',
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <Text numberOfLines={1} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, ...appTheme.type.label }}>
-              {option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
+      options={COMMENT_SORT_OPTIONS}
+      value={value}
+      onChange={onChange}
+    />
   );
 }
 

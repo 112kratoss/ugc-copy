@@ -173,7 +173,7 @@ describe('LoginPage onboarding redirects', () => {
   it('has no email sign-up: the Sign-up tab is Google and Apple, the agreement and a sentence saying so', () => {
     const { container } = renderLogin();
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
 
     expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
     expect(screen.getByText('New accounts are created with Google or Apple. Your creator profile comes next.')).toBeInTheDocument();
@@ -189,7 +189,7 @@ describe('LoginPage onboarding redirects', () => {
     expect(mocks.signUp).not.toHaveBeenCalled();
 
     // The Sign-in tab keeps email and password for the accounts made before.
-    fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign in$/i }));
     expect(screen.getByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
     expect(screen.getByLabelText(/email address/i)).toHaveAttribute('autocomplete', 'email');
     expect(screen.getByLabelText(/^password$/i)).toHaveAttribute('autocomplete', 'current-password');
@@ -202,7 +202,7 @@ describe('LoginPage onboarding redirects', () => {
   it('keeps the invite landing link working: the Sign-up tab, then Google with its destination', async () => {
     await renderPageAt('mode=signup&next=%2Fcreate');
 
-    expect(screen.getByRole('button', { name: /^sign up$/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('tab', { name: /^sign up$/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
 
@@ -221,7 +221,7 @@ describe('LoginPage onboarding redirects', () => {
     const welcomeRewardLink = `returnUrl=${encodeURIComponent('/welcome-reward?next=%2Fcreate')}`;
     const google = await renderPageAt(welcomeRewardLink);
 
-    expect(screen.getByRole('button', { name: /^sign in$/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^sign in$/i, selected: true })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
@@ -241,7 +241,7 @@ describe('LoginPage onboarding redirects', () => {
     mocks.searchParams = new URLSearchParams('returnUrl=/create');
     renderLogin();
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
     fireEvent.click(screen.getByRole('button', { name: /google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
@@ -284,7 +284,7 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.queryByRole('button', { name: /forgot password/i })).toBeNull();
 
     // It opens on the Sign-in tab with the form, and Google keeps the return path.
-    expect(screen.getByRole('button', { name: /^sign in$/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^sign in$/i, selected: true })).toBeInTheDocument();
     expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
     expect(mocks.resetPasswordForEmail).not.toHaveBeenCalled();
@@ -318,7 +318,7 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.getByRole('button', { name: /continue with google/i })).toHaveAccessibleDescription(AGREEMENT);
     expect(screen.getByRole('button', { name: /continue with apple/i })).toHaveAccessibleDescription(AGREEMENT);
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
 
     const signUpAgreements = screen.getAllByText(/By continuing you agree to the/);
     expect(signUpAgreements).toHaveLength(1);
@@ -352,7 +352,7 @@ describe('LoginPage onboarding redirects', () => {
   // is said there rather than inside a form that tab no longer draws.
   it('shows a failed Google start on the Sign-up tab and lets it be tried again', async () => {
     renderLogin();
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
     mocks.signInWithOAuth.mockResolvedValueOnce({ error: new Error('Unsupported provider: provider is not enabled') });
 
     fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
@@ -362,7 +362,7 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
 
     // Switching tabs clears it.
-    fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign in$/i }));
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -371,7 +371,7 @@ describe('LoginPage onboarding redirects', () => {
   it('starts Apple from either tab, through the callback, with the destination kept', async () => {
     const signIn = await renderPageAt('returnUrl=%2Fcreate');
 
-    expect(screen.getByRole('button', { name: /^sign in$/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^sign in$/i, selected: true })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
@@ -385,7 +385,7 @@ describe('LoginPage onboarding redirects', () => {
     // A started sign-in leaves the page, so the Sign-up tab is its own visit.
     signIn.unmount();
     await renderPageAt('mode=signup&next=%2Fcreate');
-    expect(screen.getByRole('button', { name: /^sign up$/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^sign up$/i, selected: true })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
 
@@ -415,7 +415,7 @@ describe('LoginPage onboarding redirects', () => {
   // PKCE verifier.
   it('names Apple when its sign-in cannot be started, and lets it be tried again', async () => {
     renderLogin();
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
     mocks.signInWithOAuth.mockRejectedValueOnce(new Error('The operation is insecure.'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
