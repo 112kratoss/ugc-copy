@@ -331,12 +331,19 @@ and this one goes private after launch.
   The workflow holds the key to `APPLE_SIGN_IN_KEY_SHA256`, the SHA-256 of its
   public half, so a wrong `.p8` (APNs and App Store Connect keys are P-256 too)
   is refused before anything is minted.
-- `SUPABASE_AUTH_CONFIG_TOKEN`: a Supabase access token limited to this project,
-  with Auth config read and write (the update) and read for the probe. Install it
+- `SUPABASE_AUTH_CONFIG_TOKEN`: a scoped Supabase access token for `ugc-app`
+  only, with **Auth Config** and **Project Settings** both at read-write.
+  Supabase grants the Auth config update only with both. With Project Settings
+  at read, the token reads the config (enough for the probe) but not the update.
+  Project Settings read-write also covers pausing, restarting, changing and
+  deleting the project, so the token lives nowhere but this secret. Install it
   from the clipboard with
   `pbpaste | gh secret set SUPABASE_AUTH_CONFIG_TOKEN --repo 112kratoss/ugc-copy`.
-  A scoped token can expire; when it does, the run fails with HTTP 401, the
+  A token with an expiry fails the run with HTTP 401 once it ends; the
   incident issue opens, and the live secret still has about five months.
+
+Both were installed on 2026-11-03. The token, "GitHub Actions: Apple client
+secret renewal" in Supabase's Access Tokens, never expires (the owner's choice).
 
 Before it applies the new secret, the script checks four things, and with any of
 them wrong it leaves the live secret alone:
