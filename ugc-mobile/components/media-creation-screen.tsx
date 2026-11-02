@@ -4607,7 +4607,12 @@ function VideoCreatorComposer({
               accessibilityRole="button"
               accessibilityLabel={option.label}
               accessibilityState={{ selected: draft.isMultiShot === option.value }}
-              onPress={() => onChange((current) => ({ ...current, isMultiShot: option.value, referenceMode: option.value ? 'frames' : current.referenceMode }))}
+              onPress={() => {
+                // The field being typed in leaves with the switch, without a blur, and Android keeps
+                // its keyboard up for a field that is gone.
+                if (draft.isMultiShot !== option.value) Keyboard.dismiss();
+                onChange((current) => ({ ...current, isMultiShot: option.value, referenceMode: option.value ? 'frames' : current.referenceMode }));
+              }}
               hitSlop={verticalHitSlop(40)}
               style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? theme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >

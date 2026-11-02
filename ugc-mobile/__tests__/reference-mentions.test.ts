@@ -78,4 +78,24 @@ describe('reference mentions', () => {
     expect(selectionAfterTextChange('Same words', 'Same words', caret(4))).toEqual(caret(4));
     expect(selectionAfterTextChange('Place @flowers beside the vase', 'Place @roses beside the vase', { start: 0, end: 5 })).toEqual({ start: 0, end: 5 });
   });
+
+  // A rename changes every place the prompt names the reference, so a caret between two of them sits
+  // inside the one run that changed: the words beside it place it (the review of #660).
+  it('keeps a caret between two renamed mentions beside the words it was beside', () => {
+    const caret = (at: number) => ({ start: at, end: at });
+    expect(selectionAfterTextChange(
+      'Use @flowers for the sky, then place beside @flowers',
+      'Use @roses for the sky, then place beside @roses',
+      caret(36),
+    )).toEqual(caret(34));
+    // Close after the first mention, the words in front of it are part of the change: the shortest
+    // end of them the new text holds once still places it.
+    expect(selectionAfterTextChange('Use @flowers for @flowers', 'Use @roses for @roses', caret(16))).toEqual(caret(14));
+    // A rename typed letter by letter grows both mentions at once.
+    expect(selectionAfterTextChange('@ali walks in, then @ali waves', '@alis walks in, then @alis waves', caret(19))).toEqual(caret(20));
+    // Words the new run holds twice place nothing, so the ones after the caret do; where no words
+    // survive, the caret ends the run.
+    expect(selectionAfterTextChange('@ab then then @ab', '@cd then then @cd', caret(8))).toEqual(caret(8));
+    expect(selectionAfterTextChange('A small cat', 'Totally different words', caret(4))).toEqual(caret(23));
+  });
 });

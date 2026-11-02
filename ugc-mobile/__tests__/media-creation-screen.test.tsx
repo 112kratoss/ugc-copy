@@ -7201,8 +7201,14 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           typeAtEnd(tree, 'Walks in beside @he');
           expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).not.toHaveLength(0);
 
+          // Each switch puts the keyboard away with the field it takes; Android kept it up for a field
+          // that was gone. Pressing the mode already on takes nothing away.
           renderer.act(() => { labelled(tree.root, 'Multi-shot').props.onPress(); });
+          expect(keyboardState.dismiss).toHaveBeenCalledTimes(1);
           renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+          expect(keyboardState.dismiss).toHaveBeenCalledTimes(2);
+          renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+          expect(keyboardState.dismiss).toHaveBeenCalledTimes(2);
           await settle();
           expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).toHaveLength(0);
           expect(blocker(tree)).toContain('@he');
