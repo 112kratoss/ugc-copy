@@ -19,11 +19,11 @@ export function normalizeTextSelection(text: string, selection: TextSelection): 
 /**
  * Where a caret in `before` stands once the text is `after`, for a change the field did not type (a
  * saved draft arriving, Enhance, Undo, a rename): before or after the run of text that changed, it
- * keeps its place among the words around it. Inside that run (a rename of a handle the prompt names
- * twice changes the text on both sides of a caret between them) it stays after the words it
- * followed, or before the ones it preceded, where those appear once in the new run; otherwise, and
- * at the run's edges, it goes to the run's end, as a caret moves past text typed at it. A caret at
- * the end stays at the end, so a field that fills puts it there, as both platforms' fields do.
+ * keeps its place among the words around it. Inside that run or at its start (a rename of a handle
+ * the prompt names twice changes the text on both sides of a caret between them) it stays after the
+ * words it followed, or before the ones it preceded, where those appear once in the new run;
+ * otherwise, and at the run's end, it goes to the run's end, as a caret moves past text typed at it.
+ * A caret at the end stays at the end, so a field that fills puts it there, as both platforms' fields do.
  */
 export function selectionAfterTextChange(before: string, after: string, selection: TextSelection): TextSelection {
   const caret = normalizeTextSelection(before, selection);
@@ -38,7 +38,7 @@ export function selectionAfterTextChange(before: string, after: string, selectio
   const place = (offset: number) => {
     if (offset < head) return offset;
     if (offset > runEnd) return after.length - (before.length - offset);
-    const anchored = offset > head && offset < runEnd
+    const anchored = offset < runEnd
       ? anchorInChangedRun(before.slice(head, offset), before.slice(offset, runEnd), after.slice(head, after.length - tail))
       : null;
     return anchored === null ? after.length - tail : head + anchored;

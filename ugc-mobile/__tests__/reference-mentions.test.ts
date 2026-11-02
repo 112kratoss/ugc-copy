@@ -91,8 +91,11 @@ describe('reference mentions', () => {
     // Close after the first mention, the words in front of it are part of the change: the shortest
     // end of them the new text holds once still places it.
     expect(selectionAfterTextChange('Use @flowers for @flowers', 'Use @roses for @roses', caret(16))).toEqual(caret(14));
-    // A rename typed letter by letter grows both mentions at once.
+    // A rename typed letter by letter grows both mentions at once, also under a caret right after
+    // the first one, where the run starts (the sweep of #660's review), and under a selection there.
     expect(selectionAfterTextChange('@ali walks in, then @ali waves', '@alis walks in, then @alis waves', caret(19))).toEqual(caret(20));
+    expect(selectionAfterTextChange('@ali walks in, then @ali waves', '@alis walks in, then @alis waves', caret(4))).toEqual(caret(5));
+    expect(selectionAfterTextChange('@ali walks in, then @ali waves', '@alis walks in, then @alis waves', { start: 4, end: 10 })).toEqual({ start: 5, end: 11 });
     // Words the new run holds twice place nothing, so the ones after the caret do; where no words
     // survive, the caret ends the run.
     expect(selectionAfterTextChange('@ab then then @ab', '@cd then then @cd', caret(8))).toEqual(caret(8));

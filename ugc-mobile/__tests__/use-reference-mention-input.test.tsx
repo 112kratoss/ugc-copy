@@ -333,6 +333,16 @@ describe('useReferenceMentionInput', () => {
     expect(composer.prompt).toBe('A cat @flowers on a velvet sofa, soft light');
   });
 
+  // iOS scrolls a field to the caret it is given: a saved draft filling a field no one is typing in
+  // leaves it on its first lines (the sweep of #660's review).
+  it('leaves an unfocused field’s own caret alone when the prompt changes from outside', () => {
+    const composer = mount();
+    composer.replace('A long saved prompt that fills the field');
+    expect(composer.setSelection).not.toHaveBeenCalled();
+    composer.act(() => { composer.field.insertHandleAtCaret('@flowers', 280); });
+    expect(composer.prompt).toBe('A long saved prompt that fills the field @flowers');
+  });
+
   it('drops an insert’s pending caret when the prompt changes before it is put back', () => {
     const composer = mount('Walk to ');
     composer.focusField();

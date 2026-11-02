@@ -41,8 +41,8 @@ type PendingCaret = { caret: TextSelection; from: number; to: number };
  *
  * A prompt the field did not type (a saved draft arriving after the composer mounted, Enhance,
  * Undo, a rename) moves the caret with the words around it (`selectionAfterTextChange`), and puts
- * the field's own caret there too: iOS keeps its caret's distance from the end and Android moves its
- * caret in proportion, so the visible caret and the one an insert uses would part. The sync is a
+ * a focused field's own caret there too: iOS keeps its caret's distance from the end and Android
+ * moves its caret in proportion, so the visible caret and the one an insert uses would part. The sync is a
  * layout effect, run in the commit's own task: as a passive effect it ran after later keystrokes on
  * the Pixel 9a and took the field's own text for an outside change.
  *
@@ -112,12 +112,14 @@ export function useReferenceMentionInput({
       : normalizeTextSelection(prompt, lastSelectionRef.current);
     if (outside) {
       pendingCaretRef.current = null;
-      inputRef.current?.setSelection(next.start, next.end);
+      // Only on a field in use: iOS scrolls a field to the caret it is given, and one a saved
+      // draft fills while no one is typing opens on its first lines.
+      if (focused) inputRef.current?.setSelection(next.start, next.end);
     }
     if (sameSelection(lastSelectionRef.current, next)) return;
     lastSelectionRef.current = next;
     setSelection(next);
-  }, [prompt]);
+  }, [prompt, focused]);
 
   useEffect(() => {
     if (enabled) return;
