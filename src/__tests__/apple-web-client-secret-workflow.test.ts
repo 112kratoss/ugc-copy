@@ -46,11 +46,13 @@ describe('the Apple web client secret renewal', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  // A job that runs out of time is cancelled, not failed.
+  // A job that runs out of time is cancelled, not failed. A run that failed at its checkout has
+  // no git remote, so `gh` takes the repository from GH_REPO.
   it('says so in an incident issue when it fails or times out, and closes it on recovery', () => {
     expect(workflow).toContain('if: failure() || cancelled()');
     expect(workflow).toContain('if: success()');
     expect(workflow).toContain('INCIDENT_TITLE: Apple web client secret renewal is failing');
+    expect(workflow.match(/GH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}\n(?: {10}#.*\n)* {10}GH_REPO: \$\{\{ github\.repository \}\}\n/g)).toHaveLength(2);
   });
 
   it('never puts the key or the minted secret in the run log', () => {
