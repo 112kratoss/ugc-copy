@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  isSameRemixMedia,
-  remixAnswerNeedsRenewal,
-  renewedRemixLink,
-  storedObjectOfLink,
-} from '@/lib/remix-link-renewal';
+import { remixAnswerNeedsRenewal, renewedRemixLink } from '@/lib/remix-link-renewal';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { SIGNED_LINK_SECONDS, signedStorageLink } from './fixtures/signed-storage-links';
 
@@ -41,17 +36,25 @@ function answerSignedAt(signedAt: number): RemixSourceBundle {
 }
 
 describe('a remix link renewed', () => {
-  it('tells two signings of one file from links to two files', () => {
-    const first = signedStorageLink('generation_inputs/user-1/gen-1/00.png', SIGNED_AT);
-    const second = signedStorageLink('generation_inputs/user-1/gen-1/00.png', SIGNED_AT + HOUR_MS);
-    expect(first).not.toBe(second);
-    expect(storedObjectOfLink(first)).toBe('generation_inputs/user-1/gen-1/00.png');
-    expect(isSameRemixMedia(first, second)).toBe(true);
-    expect(isSameRemixMedia(first, signedStorageLink('generation_inputs/user-1/gen-1/01.png', SIGNED_AT))).toBe(false);
-    expect(isSameRemixMedia('blob:one', 'blob:one')).toBe(true);
-    expect(isSameRemixMedia('blob:one', 'blob:two')).toBe(false);
-    expect(isSameRemixMedia(first, null)).toBe(false);
-    expect(isSameRemixMedia(undefined, undefined)).toBe(false);
+  it('finds the file a lapsed link opens by its bucket and path, an upload’s too, and no other', () => {
+    // A run kept before its inputs were: its picture comes back as the upload it was made from.
+    const legacy = (signedAt: number): RemixSourceBundle => ({
+      ...answerSignedAt(signedAt),
+      inputs: {
+        motion: {
+          characterImage: { kind: 'image', label: 'Character image', storagePath: 'uploads/user-1/hero-still.png', url: signedStorageLink('uploads/user-1/hero-still.png', signedAt) },
+          referenceVideo: { kind: 'video', label: 'Clip', storagePath: 'generation_inputs/user-1/gen-1/01.mp4', url: signedStorageLink('generation_inputs/user-1/gen-1/01.mp4', signedAt) },
+        },
+      },
+    });
+    const lapsed = legacy(SIGNED_AT);
+    const fresh = legacy(SIGNED_AT + 2 * HOUR_MS);
+    expect(fresh.inputs.motion!.characterImage!.url).not.toBe(lapsed.inputs.motion!.characterImage!.url);
+
+    expect(renewedRemixLink(lapsed.inputs.motion!.characterImage!.url!, fresh)).toBe(fresh.inputs.motion!.characterImage!.url);
+    expect(renewedRemixLink(lapsed.inputs.motion!.referenceVideo!.url!, fresh)).toBe(fresh.inputs.motion!.referenceVideo!.url);
+    expect(renewedRemixLink(signedStorageLink('generation_inputs/user-1/gen-1/02.mp4', SIGNED_AT), fresh)).toBeNull();
+    expect(renewedRemixLink('blob:https://magicbooklet.com/5d1c', fresh)).toBeNull();
   });
 
   it('takes a lapsed link’s file from a fresh answer, never from what the answer records of the run', () => {

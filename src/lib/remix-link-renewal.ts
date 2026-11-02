@@ -1,4 +1,5 @@
 import type { RemixSourceBundle } from '@/lib/remix-source';
+import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 
 /*
@@ -9,33 +10,16 @@ import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
  * on it (a clip's length, a preview's first bytes) does not find it gone midway.
  */
 
-const STORED_OBJECT_PATH = /\/storage\/v1\/object\/(sign|public)\/(.+)$/;
-
-function parseLink(link: string): URL | null {
-  try {
-    return new URL(link);
-  } catch {
-    return null;
-  }
-}
-
-/** The stored object a storage link opens (`bucket/path`), whatever its token. Null for any other link. */
-export function storedObjectOfLink(link: string): string | null {
-  const match = parseLink(link)?.pathname.match(STORED_OBJECT_PATH);
-  if (!match) return null;
-  try {
-    return decodeURIComponent(match[2]);
-  } catch {
-    return null;
-  }
-}
-
-/** Whether two links open one stored file: the same link, or two signings of it. */
-export function isSameRemixMedia(first: string | null | undefined, second: string | null | undefined): boolean {
-  if (!first || !second) return false;
+/**
+ * Whether two links open one stored file: the same link, or two signings of it, read as the
+ * server reads a link's file (`getCanonicalStoredMediaLocation`: its bucket and path, an upload's
+ * included, whatever its token).
+ */
+function isSameStoredFile(first: string, second: string): boolean {
   if (first === second) return true;
-  const object = storedObjectOfLink(first);
-  return object !== null && object === storedObjectOfLink(second);
+  const file = getCanonicalStoredMediaLocation(first);
+  const other = file ? getCanonicalStoredMediaLocation(second) : null;
+  return Boolean(file && other && file.bucket === other.bucket && file.filePath === other.filePath);
 }
 
 /**
@@ -81,5 +65,5 @@ export function renewedRemixLink(
   options: { result?: boolean } = {},
 ): string | null {
   if (options.result) return answer.result?.url || null;
-  return remixAnswerLinks(answer).find((candidate) => isSameRemixMedia(candidate, link)) ?? null;
+  return remixAnswerLinks(answer).find((candidate) => isSameStoredFile(candidate, link)) ?? null;
 }
