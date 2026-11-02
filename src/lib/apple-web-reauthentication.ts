@@ -17,8 +17,9 @@ const APPLE_AUTHORIZE_URL = 'https://appleid.apple.com/auth/authorize';
 export const APPLE_WEB_RETURN_PATH = '/delete-account';
 
 /**
- * The website's Services ID, or null where none is set (a local or E2E server):
- * the page then sends an account with an Apple identity to the iPhone app.
+ * The website's Services ID, or null where none is set (a local server; the
+ * E2E server has a placeholder): the page then sends an account with an Apple
+ * identity to the iPhone app.
  */
 export function getAppleWebClientId(): string | null {
   return process.env.NEXT_PUBLIC_APPLE_SERVICES_ID?.trim() || null;

@@ -703,7 +703,27 @@ describe('account deletion page', () => {
 
             expect(await within(section).findByRole('heading', { name: 'Confirm it is you' })).toBeInTheDocument();
             expect(within(section).getByRole('link', { name: 'Sign in again to continue' })).toBeInTheDocument();
+            // No Google identity to name.
+            expect(within(section).getByText('Sign in again, then confirm the deletion here.')).toBeInTheDocument();
             expect(within(section).queryByRole('button', { name: 'Continue with Apple' })).toBeNull();
+        });
+
+        // A refusal read as the page opened is said before anything is sent, never as the
+        // answer to a later deletion request.
+        it("does not show Apple's earlier answer as the answer to a later request", async () => {
+            mocks.session = signedInAs(googleUser);
+            rememberAppleWebAuthorizationStart({ state: 'state-1', userId: googleUser.id });
+            openPage('#error=user_cancelled_authorize&state=state-1');
+            answerRequests({
+                deletions: [appleRefusal('APPLE_REAUTH_REQUIRED', 'Continue with Apple before permanently deleting your account.', true)],
+            });
+            render(<DeleteAccountPage />);
+
+            // This browser's copy of the account names no Apple identity yet: the plain form.
+            const section = await confirmDeletion();
+
+            expect(await within(section).findByRole('button', { name: 'Continue with Apple' })).toBeInTheDocument();
+            expect(within(section).queryByRole('alert')).toBeNull();
         });
 
         // Apple returns only to the address registered with it, on the site's own host.

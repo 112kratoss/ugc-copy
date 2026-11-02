@@ -622,7 +622,8 @@ export default function SignedInAccountDeletion() {
   const appleWeb = isAppleLinked ? getAppleWebAuthorization(window.location.origin) : null;
   const canUsePassword = Boolean(user.email) && (providers.has('email') || providers.size === 0);
   const canUseGoogle = providers.has('google');
-  const appleRefusal = appleWeb?.returnsHere && appleJudgement && 'refusal' in appleJudgement
+  // Said only before anything is sent: a later answer has its own words.
+  const appleRefusal = stage.kind === 'confirm' && appleWeb?.returnsHere && appleJudgement && 'refusal' in appleJudgement
     ? APPLE_REFUSAL_COPY[appleJudgement.refusal]
     : null;
   const shownError = error ?? appleRefusal;
@@ -693,9 +694,11 @@ export default function SignedInAccountDeletion() {
           {canUseGoogle || !canUsePassword ? (
             <div className="mt-4">
               <p className="text-sm leading-6 text-zinc-400">
-                {canUsePassword
-                  ? 'Or sign in again with Google, then confirm the deletion here.'
-                  : 'Sign in again with Google, then confirm the deletion here.'}
+                {!canUseGoogle
+                  ? 'Sign in again, then confirm the deletion here.'
+                  : canUsePassword
+                    ? 'Or sign in again with Google, then confirm the deletion here.'
+                    : 'Sign in again with Google, then confirm the deletion here.'}
               </p>
               <SignInAgainLink>Sign in again to continue</SignInAgainLink>
             </div>

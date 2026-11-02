@@ -545,7 +545,8 @@ function selfTest() {
   const saysNeither = /says neither .* open https:\/\/appleid\.apple\.com\/auth\/authorize\?client_id=x/;
   assert.throws(() => readAppleAuthorizePage(page({ urlContext: '' })), saysNeither);
   assert.throws(() => readAppleAuthorizePage({ ...page(null, 503), html: '<html>Service Unavailable</html>' }), /HTTP 503\) says neither/);
-  assert.throws(() => readAppleAuthorizePage({ ...page(null), html: applePage(undefined).replace('"direct"', '"moved"') }), saysNeither);
+  // Apple's verdict under another key: the page no longer says either.
+  assert.throws(() => readAppleAuthorizePage({ ...page(null), html: applePage({ appleOAuth: {} }).replace('"direct"', '"moved"') }), saysNeither);
   assert.deepEqual(
     Object.fromEntries(new URL(buildAppleDeletionAuthorizeUrl('com.example.app.web', 'https://site.example/delete-account')).searchParams),
     {
