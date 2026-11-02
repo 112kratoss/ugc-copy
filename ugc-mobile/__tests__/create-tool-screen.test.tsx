@@ -7,9 +7,7 @@ import path from 'node:path';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-// expo-router's own code for both ends of a push: `resolveHref` writes the href, and
-// `parseQueryParams` is how `getStateFromPath` reads its query into the route's params.
-import { resolveHref } from 'expo-router/build/link/href';
+// How expo-router's `getStateFromPath` reads a pushed link's query into the route's params.
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 
 const routeState = vi.hoisted(() => ({
@@ -17,9 +15,11 @@ const routeState = vi.hoisted(() => ({
   /**
    * What expo-router 55's `useLocalSearchParams` (build/hooks.js) returns for these
    * params: each one through `decodeURIComponent` again, one it cannot decode as it is
-   * (`auth-screen-return-to.test.tsx` checks the installed hook still does).
+   * (`auth-screen-return-to.test.tsx` checks the installed hook still does). The route
+   * no longer calls it: one that went back to reading its params through it fails the
+   * link cases here as on a phone.
    */
-  localSearchParams(params: Record<string, string | string[] | undefined>) {
+  localSearchParams(params: Record<string, string | string[] | undefined> | undefined) {
     const decode = (value: string) => {
       try {
         return decodeURIComponent(value);
@@ -27,7 +27,7 @@ const routeState = vi.hoisted(() => ({
         return value;
       }
     };
-    return Object.fromEntries(Object.entries(params).map(([key, value]) => [
+    return Object.fromEntries(Object.entries(params ?? {}).map(([key, value]) => [
       key,
       value === undefined ? value : Array.isArray(value) ? value.map(decode) : decode(value),
     ]));
@@ -85,10 +85,13 @@ vi.mock('@/components/ui', () => ({
 import CreateToolScreen from '../app/create/[tool]';
 import { getNativeRemixCreateHref } from '../lib/viewer-actions';
 
-/** The creator route's params after `router.push(href)`: its `[tool]` segment and its query. */
+/**
+ * The creator route's params after `router.push(href)`: its `[tool]` segment and its query. A pushed
+ * string reaches `getStateFromPath` as it was built (`resolveHref` returns a string unchanged).
+ */
 function creatorRoute(href: string) {
   const tool = href.split('?', 1)[0].split('/').pop()!;
-  return { tool, ...parseQueryParams(resolveHref(href), { name: 'create/[tool]', params: { tool } }) };
+  return { tool, ...parseQueryParams(href, { name: 'create/[tool]', params: { tool } }) };
 }
 
 /** Text a decode once too many alters: a valid %XX, as in a pasted link. */
@@ -213,13 +216,7 @@ describe('create tool route', () => {
     expect({ initialTool, initialPrompt, remixSource }).toEqual({
       initialTool: 'video',
       initialPrompt: PROMPT,
-      remixSource: {
-        generationId: 'gen-1',
-        postId: 'post-1',
-        title: context.title,
-        creatorLabel: context.creatorLabel,
-        thumbnailUrl: context.thumbnailUrl,
-      },
+      remixSource: { generationId: 'gen-1', ...context },
     });
   });
 
