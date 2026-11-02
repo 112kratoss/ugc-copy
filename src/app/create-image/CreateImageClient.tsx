@@ -1119,21 +1119,26 @@ function ImageCreator({
         if (!remixSourceBundle) {
             return;
         }
+        // Asked before the remix is read again for a link, so a press refused reads nothing, and
+        // again once the link is in, as the form may have changed meanwhile.
+        const refused = () => {
+            if (elementRefs.current.length >= model.maxImages) {
+                setError(`This model supports up to ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}.`);
+                return true;
+            }
+            return elementRefs.current.some((element) => isRemixResultReference(element, remixSourceBundle.generation.id));
+        };
+        if (refused()) return;
         let resultUrl = remixSourceBundle.result?.url ?? null;
         // The link the remix was read with lasts an hour: past it the picture was drawn from a link
         // storage refuses. One about to lapse is renewed first.
         if (resultUrl && isSignedMediaUrlExpiring(resultUrl, Date.now())) {
             resultUrl = await renewRemixLink(resultUrl, { result: true });
-            if (unmountSignal.current.aborted) return;
-        }
-
-        if (elementRefs.current.length >= model.maxImages) {
-            setError(`This model supports up to ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}.`);
-            return;
+            if (unmountSignal.current.aborted || refused()) return;
         }
 
         const nextElement = createRemixResultReferenceElement(remixSourceBundle, resultUrl);
-        if (!nextElement || elementRefs.current.some((element) => isRemixResultReference(element, remixSourceBundle.generation.id))) {
+        if (!nextElement) {
             return;
         }
 

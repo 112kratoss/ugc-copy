@@ -3432,6 +3432,25 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
     expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead rows across the harbour at noon');
   });
 
+  // The remix is read again for a link only for a picture that goes on: a press the model's limit
+  // refuses reads nothing, and says so as it did before.
+  it('refuses “Use as reference” at the model’s limit past the hour without reading the remix again', async () => {
+    movePageClock(OPENED_AT);
+    modelCatalogState.summaries = [...imageModelSummaries, { id: 'ideogram-v3', kind: 'image', displayName: 'Ideogram V3', description: 'Test one-picture image model' }];
+    const fetchMock = installFetch({ remixBundle: () => ownRunRemix() });
+    const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    // Ideogram V3 takes one picture: the restored one fills it.
+    chooseModel(view.container, 'Ideogram V3');
+
+    advancePageClock(PAST_THE_HOUR_MS);
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    expect(await screen.findByText('This model supports up to 1 reference image.')).toBeInTheDocument();
+    expect(remixReads(fetchMock)).toHaveLength(1);
+    expect(screen.queryByAltText('Original result · Harbour')).toBeNull();
+  });
+
   it('shows the original past the hour by a link that opens', async () => {
     movePageClock(OPENED_AT);
     installFetch({ remixBundle: () => ownRunRemix() });
