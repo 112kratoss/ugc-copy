@@ -3,7 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import * as expoRouterNavigationParams from 'expo-router/build/navigationParams';
 import { resolveHref } from 'expo-router/build/link/href';
 
-import { completeAuthScreen, focusedRouteReturnPath, leaveAuthScreen, normalizeAuthReturnTo, publishScreenReturn } from '../lib/auth-navigation';
+import {
+  completeAuthScreen,
+  focusedRouteReturnPath,
+  frontRouteKey,
+  leaveAuthScreen,
+  normalizeAuthReturnTo,
+  publishScreenReturn,
+  signInNoticeRoute,
+  tookReturnsPlace,
+} from '../lib/auth-navigation';
 import { AWKWARD_PROMPT, homeTabs, pushedRoute, rootStateWith, stateInFront } from './fixtures/navigation-state';
 
 describe('leaveAuthScreen', () => {
@@ -73,21 +82,17 @@ describe('auth return navigation', () => {
     expect(router.back).not.toHaveBeenCalled();
   });
 
-  it('puts a forced sign-in\'s return where sign-in stands, and goes Home without one as any sign-in does', () => {
-    const router = {
-      canGoBack: vi.fn(() => true),
-      back: vi.fn(),
-      dismissTo: vi.fn(),
-      replace: vi.fn(),
-    };
+  it.each([
+    ['its return', '/viewer?source=home&initialId=post-9', [], [['/viewer?source=home&initialId=post-9']]],
+    ['no return', undefined, [['/(tabs)']], []],
+    ['a return that is not the app\'s', 'https://example.com', [['/(tabs)']], []],
+  ])('puts a sign-in that took the place of its return back with %s, or goes Home as any sign-in does', (_label, returnTo, dismissed, replaced) => {
+    const router = { back: vi.fn(), dismissTo: vi.fn(), replace: vi.fn() };
 
-    completeAuthScreen(router, '/viewer?source=home&initialId=post-9', { inPlace: true });
-    completeAuthScreen(router, undefined, { inPlace: true });
-    completeAuthScreen(router, 'https://example.com', { inPlace: true });
+    completeAuthScreen(router, returnTo, { inPlace: true });
 
-    expect(router.replace.mock.calls).toEqual([['/viewer?source=home&initialId=post-9']]);
-    expect(router.dismissTo.mock.calls).toEqual([['/(tabs)'], ['/(tabs)']]);
-    expect(router.back).not.toHaveBeenCalled();
+    expect(router.dismissTo.mock.calls).toEqual(dismissed);
+    expect(router.replace.mock.calls).toEqual(replaced);
   });
 
   it('falls back to replacing auth when dismissTo is unavailable', () => {
@@ -216,5 +221,44 @@ describe('a return the screen in front gave for itself', () => {
 
     takeBackSecond();
     expect(focusedRouteReturnPath(stateInFront(reel))).toBe('/viewer?source=home&initialId=post-9');
+  });
+});
+
+describe('the sign-in a forced sign-out opens', () => {
+  it('carries the screen in front as its return, and whether sign-in took its place', () => {
+    expect(signInNoticeRoute('signed-out', '/post/post-9', { inPlace: true }))
+      .toEqual({ pathname: '/auth', params: { notice: 'signed-out', returnTo: '/post/post-9', inPlace: '1' } });
+    expect(signInNoticeRoute('session-merged', '/post/post-9', { inPlace: false }))
+      .toEqual({ pathname: '/auth', params: { notice: 'session-merged', returnTo: '/post/post-9' } });
+  });
+
+  it('has no return when the screen in front is not known, or is sign-in itself', () => {
+    for (const screen of [null, 'https://example.com', '/auth', '/auth?returnTo=%2Fpost%2Fpost-9']) {
+      expect(signInNoticeRoute('signed-out', screen, { inPlace: true })).toEqual({ pathname: '/auth', params: { notice: 'signed-out' } });
+    }
+  });
+
+  it('is read back as it was written, and nothing else is', () => {
+    const { params } = signInNoticeRoute('signed-out', '/post/post-9', { inPlace: true });
+
+    expect(tookReturnsPlace('inPlace' in params ? params.inPlace : undefined)).toBe(true);
+    expect(tookReturnsPlace(['1'])).toBe(true);
+    expect(tookReturnsPlace(undefined)).toBe(false);
+    expect(tookReturnsPlace('true')).toBe(false);
+  });
+});
+
+describe('the route in front on the root stack', () => {
+  it('is the root stack\'s own route: Home\'s tabs when a tab is in front', () => {
+    const tabs = { key: 'tabs-1', ...homeTabs({ name: 'creator' }) };
+    const post = { key: 'post-1', ...pushedRoute('/post/[id]', { id: 'post-9' }) };
+
+    expect(frontRouteKey(rootStateWith(tabs))).toBe('tabs-1');
+    expect(frontRouteKey(rootStateWith(tabs, post))).toBe('post-1');
+  });
+
+  it('is nothing without a state, or before the root stack is drawn', () => {
+    expect(frontRouteKey(undefined)).toBeNull();
+    expect(frontRouteKey({ routes: [{ name: '__root' }] })).toBeNull();
   });
 });

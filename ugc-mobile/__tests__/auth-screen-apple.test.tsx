@@ -610,6 +610,33 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
 
     expect(recorded()).toEqual([]);
   });
+
+  // Signed out elsewhere over reel B, the person pressed Apple, then Close before it finished, and
+  // is on the screen below. A return now would take that screen's place.
+  it('goes nowhere when the sign-in finishes after the person left the screen', async () => {
+    const { router } = await import('expo-router');
+    vi.mocked(router.dismissTo).mockClear();
+    vi.mocked(router.replace).mockClear();
+    paramsState.params = { notice: 'signed-out', returnTo: '/viewer?source=home&initialId=post-b', inPlace: '1' };
+    let finishApple!: () => void;
+    authState.signInWithApple.mockReturnValue(new Promise<void>((resolve) => {
+      finishApple = resolve;
+    }));
+    const tree = mount();
+
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
+    });
+    leave();
+    renderer.act(() => tree.unmount());
+    await renderer.act(async () => {
+      finishApple();
+    });
+
+    expect(recorded()).toEqual([['auth_started', '/viewer'], ['auth_canceled', '/viewer'], ['auth_succeeded', '/viewer']]);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(router.dismissTo).not.toHaveBeenCalled();
+  });
 });
 
 describe('AuthScreen copy names only the buttons it draws (audit 01-8)', () => {

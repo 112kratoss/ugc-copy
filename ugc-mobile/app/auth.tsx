@@ -23,7 +23,7 @@ import {
 } from '@/lib/auth-error-copy';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
-import { completeAuthScreen, leaveAuthScreen, normalizeAuthReturnTo } from '@/lib/auth-navigation';
+import { completeAuthScreen, leaveAuthScreen, normalizeAuthReturnTo, tookReturnsPlace } from '@/lib/auth-navigation';
 import { env } from '@/lib/env';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { trackOnboardingEvent } from '@/lib/onboarding';
@@ -64,10 +64,11 @@ export default function AuthScreen() {
   // The route's own params: the URL parse has decoded them once, as every caller encoded its
   // return once. expo-router's `useLocalSearchParams` decodes them again, which cut a prompt in a
   // return at & or #, turned its + into a space, and sent one with a backslash or a line break Home.
-  const { returnTo, mode: requestedMode, notice: requestedNotice } = (useRoute().params ?? {}) as {
+  const { returnTo, mode: requestedMode, notice: requestedNotice, inPlace } = (useRoute().params ?? {}) as {
     returnTo?: string | string[];
     mode?: string | string[];
     notice?: string | string[];
+    inPlace?: string | string[];
   };
   const { api, user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
   const navigation = useNavigation();
@@ -132,9 +133,11 @@ export default function AuthScreen() {
     // A sign-in made here. Opened by someone signed in already, the screen
     // only steps aside, and nothing was signed in.
     if (hasStartedAuth.current) trackAuthEvent('auth_succeeded');
-    // A redirect's notice: this screen took the place of the one it returns to.
-    completeAuthScreen(router, returnTo, { inPlace: initialNotice !== null });
-  }, [initialNotice, returnTo, trackAuthEvent]);
+    // Left before its sign-in finished (Close, a swipe down, Android's back):
+    // the person is on the screen they went to, which a return would replace.
+    if (hasCanceledAuth.current) return;
+    completeAuthScreen(router, returnTo, { inPlace: tookReturnsPlace(inPlace) });
+  }, [inPlace, returnTo, trackAuthEvent]);
 
   useEffect(() => {
     if (user) {

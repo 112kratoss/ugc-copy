@@ -2,6 +2,8 @@ import { INTERNAL_SLOT_NAME, NOT_FOUND_ROUTE_NAME, SITEMAP_ROUTE_NAME } from 'ex
 import { matchDynamicName } from 'expo-router/build/matchers';
 import { removeInternalExpoRouterParams } from 'expo-router/build/navigationParams';
 
+import type { RedirectNoticeKey } from './auth-error-copy';
+
 type AuthRouter<Href> = {
   canGoBack?: () => boolean;
   back: () => void;
@@ -111,6 +113,17 @@ function paramValues(value: unknown): string[] {
   ));
 }
 
+/**
+ * The key of the route in front on the root stack (under the `__root` slot):
+ * the route a sign-in opened with `router.replace` takes the place of, all of
+ * Home's tabs when a tab is in front. Null with no state.
+ */
+export function frontRouteKey(state: NavigationStateLike | null | undefined): string | null {
+  const slot = state?.routes[state.index ?? 0];
+  const stack = slot?.name === INTERNAL_SLOT_NAME ? slot.state : state;
+  return stack?.routes[stack.index ?? 0]?.key ?? null;
+}
+
 export function normalizeAuthReturnTo(value: string | string[] | null | undefined) {
   const candidate = (Array.isArray(value) ? value[0] : value)?.trim();
   if (
@@ -126,14 +139,44 @@ export function normalizeAuthReturnTo(value: string | string[] | null | undefine
   return candidate;
 }
 
+/** The sign-in route's `inPlace`: it took the place of the screen it returns to. */
+const IN_PLACE = '1';
+
 /**
- * Where the sign-in screen goes once someone is signed in. A prompt in the app
- * is pushed over the screen that asked, which is still there below it:
- * `dismissTo` goes back to it, or to Home with no return. A forced sign-in
- * (`signInNoticeRoute`) took the place of the screen it returns to, so
- * `inPlace` puts that screen back where sign-in stands. `dismissTo` would go to
- * the nearest screen of its name lower in the stack (React Navigation's
- * POP_TO), which keeps its own state: a reel there came back on its own post.
+ * The sign-in screen for a sign-in nothing on screen asked for (the session
+ * ended elsewhere, or a guest's was merged), opened with `router.replace`: the
+ * notice that says why the person is there, and the screen they were on, with
+ * its params, to come back to once signed in. `inPlace` when sign-in takes that
+ * screen's place, so signing in puts it back there; not when another screen
+ * came in front of it meanwhile, which sign-in then replaces, leaving the one
+ * to come back to below. No return when it is not known, or when it is the
+ * sign-in screen itself (audit 01-12): signing in then goes Home.
+ */
+export function signInNoticeRoute(
+  notice: RedirectNoticeKey,
+  currentRoute: string | null | undefined,
+  { inPlace }: { inPlace: boolean },
+) {
+  const route = normalizeAuthReturnTo(currentRoute);
+  const returnTo = route && !/^\/auth(?:[/?#]|$)/.test(route) ? route : null;
+  if (!returnTo) return { pathname: '/auth', params: { notice } } as const;
+  return { pathname: '/auth', params: inPlace ? { notice, returnTo, inPlace: IN_PLACE } : { notice, returnTo } } as const;
+}
+
+/** The sign-in route's `inPlace` param, as `signInNoticeRoute` writes it. */
+export function tookReturnsPlace(inPlace: string | string[] | undefined) {
+  return (Array.isArray(inPlace) ? inPlace[0] : inPlace) === IN_PLACE;
+}
+
+/**
+ * Where the sign-in screen goes once someone is signed in. `dismissTo` goes
+ * back to the nearest screen of the return's name below (React Navigation's
+ * POP_TO, which keeps that screen and its state): the screen that asked, for a
+ * prompt pushed over it; with none of that name below, the return takes
+ * sign-in's place; Home with no return. A sign-in that took the place of the
+ * screen it returns to (`inPlace`) puts it back there instead: a pop would go
+ * to an earlier screen of its name lower in the stack, as to an earlier reel,
+ * which then stayed on its own post.
  */
 export function completeAuthScreen<Href>(
   router: AuthRouter<Href>,

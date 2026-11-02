@@ -124,7 +124,13 @@ import { GUEST_MERGE_PREPARE_ERROR_CODE } from '../lib/auth-error-copy';
 import { APPLE_ZOOM_SOURCE_PARAM } from '../lib/apple-zoom';
 import { AuthProvider, useAuth } from '../lib/auth';
 import { publishScreenReturn } from '../lib/auth-navigation';
-import { pushedRoute, stateInFront, type StateFixture } from './fixtures/navigation-state';
+import { homeTabs, pushedRoute, rootStateWith, stateInFront, type StateFixture } from './fixtures/navigation-state';
+
+/** Where a merged guest is sent: sign-in, with why, where it was, and whether it took that screen's place. */
+function mergedNotice(returnTo: string, { inPlace = true } = {}) {
+  const params = { notice: 'session-merged', returnTo };
+  return { pathname: '/auth', params: inPlace ? { ...params, inPlace: '1' } : params };
+}
 
 function sessionFor(user: Record<string, unknown>) {
   return {
@@ -199,10 +205,7 @@ describe('abandoning a guest session the server has merged', () => {
     // to the registered account this guest was folded into.
     expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(state.clearPersistedSession).toHaveBeenCalledOnce();
-    expect(state.replace).toHaveBeenCalledWith({
-      pathname: '/auth',
-      params: { notice: 'session-merged', returnTo: '/' },
-    });
+    expect(state.replace).toHaveBeenCalledWith(mergedNotice('/'));
 
     unmount();
   });
@@ -216,10 +219,7 @@ describe('abandoning a guest session the server has merged', () => {
       await latest.current?.abandonMergedGuestSession();
     });
 
-    expect(state.replace).toHaveBeenCalledWith({
-      pathname: '/auth',
-      params: { notice: 'session-merged', returnTo: '/creators/luna' },
-    });
+    expect(state.replace).toHaveBeenCalledWith(mergedNotice('/creators/luna'));
 
     unmount();
   });
@@ -233,10 +233,28 @@ describe('abandoning a guest session the server has merged', () => {
       await latest.current?.abandonMergedGuestSession();
     });
 
-    expect(state.replace).toHaveBeenCalledWith({
-      pathname: '/auth',
-      params: { notice: 'session-merged', returnTo: '/viewer?source=home&initialId=post-9' },
+    expect(state.replace).toHaveBeenCalledWith(mergedNotice('/viewer?source=home&initialId=post-9'));
+
+    unmount();
+  });
+
+  // The teardown waits on the network: a page opened meanwhile is the one sign-in replaces, and
+  // the screen to come back to is still below it, to be gone back to.
+  it('does not put the return in sign-in\'s place when another screen came in front meanwhile', async () => {
+    const tabs = { key: 'tabs', ...homeTabs() };
+    const post = { key: 'post', ...pushedRoute('/post/[id]', { id: 'post-9' }) };
+    state.rootState = rootStateWith(tabs, post);
+    state.signOut.mockImplementationOnce(async () => {
+      state.rootState = rootStateWith(tabs, post, { key: 'creator', ...pushedRoute('/creators/[username]', { username: 'luna' }) });
+      return { error: null };
     });
+    const { latest, unmount } = await mountWith(guestSession);
+
+    await renderer.act(async () => {
+      await latest.current?.abandonMergedGuestSession();
+    });
+
+    expect(state.replace).toHaveBeenCalledWith(mergedNotice('/post/post-9', { inPlace: false }));
 
     unmount();
   });
@@ -251,10 +269,7 @@ describe('abandoning a guest session the server has merged', () => {
       await latest.current?.abandonMergedGuestSession();
     });
 
-    expect(state.replace).toHaveBeenCalledWith({
-      pathname: '/auth',
-      params: { notice: 'session-merged', returnTo: '/viewer?source=home&initialId=post-14' },
-    });
+    expect(state.replace).toHaveBeenCalledWith(mergedNotice('/viewer?source=home&initialId=post-14'));
 
     takeBack();
     unmount();

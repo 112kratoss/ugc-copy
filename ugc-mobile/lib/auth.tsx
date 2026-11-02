@@ -42,7 +42,7 @@ import {
   type AccountReauthenticationMethod,
 } from './account-reauthentication';
 import { GUEST_MERGE_PREPARE_ERROR_CODE } from './auth-error-copy';
-import { focusedRouteReturnPath, normalizeAuthReturnTo } from './auth-navigation';
+import { focusedRouteReturnPath, frontRouteKey, signInNoticeRoute } from './auth-navigation';
 import {
   ACCOUNT_DELETING_CODE,
   ApiError,
@@ -423,22 +423,6 @@ async function forgetGuestMergeTicketsOfGuest(guestUserId: string) {
 /** Creator pages and follow buttons, cached without the viewer in their key. */
 function isViewerlessCreatorQuery(query: { queryKey: readonly unknown[] }) {
   return query.queryKey[0] === 'creator-profile' || query.queryKey[0] === 'creator-follow-state';
-}
-
-/**
- * The sign-in screen with the notice that says why the person is there, put in
- * place of the screen they were on, and that screen, with its params, to come
- * back to once signed in, where it was (`completeAuthScreen`). No return when
- * it is not known, or when it is the sign-in screen itself (audit 01-12):
- * signing in then goes Home.
- */
-export function signInNoticeRoute(
-  notice: 'signed-out' | 'session-merged',
-  currentRoute: string | null | undefined,
-) {
-  const route = normalizeAuthReturnTo(currentRoute);
-  const returnTo = route && !/^\/auth(?:[/?#]|$)/.test(route) ? route : null;
-  return { pathname: '/auth', params: returnTo ? { notice, returnTo } : { notice } } as const;
 }
 
 function getUsableCachedAccessToken(session: Session | null, now = Date.now()): string | null {
@@ -1633,6 +1617,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const screenInFront = () => focusedRouteReturnPath(navigationRef.isReady() ? navigationRef.getRootState() : null);
 
   /**
+   * The route a forced sign-in will take the place of, read with the screen in
+   * front and again once the session is torn down. The teardown waits on the
+   * network (the sign-out asks the server to end the session), and a screen
+   * opened meanwhile is the one sign-in replaces, with the one to come back to
+   * still below it.
+   */
+  const routeInFront = () => frontRouteKey(navigationRef.isReady() ? navigationRef.getRootState() : null);
+
+  /**
    * Recovery for a guest identity that was linked to an account elsewhere.
    *
    * Every authenticated route answers this device 409 SESSION_MERGED, so there
@@ -1658,9 +1651,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!isGuestSession(mergedSession)) return;
     // Signed in, the person comes back to where they were (audit 01-12).
     const returnTo = screenInFront();
+    const inFront = routeInFront();
     beginFeedIdentityTransition(mergedSession)?.commit();
     await tearDownLocalSession({ reason: 'guest-merged', endedSession: mergedSession });
-    router.replace(signInNoticeRoute('session-merged', returnTo));
+    router.replace(signInNoticeRoute('session-merged', returnTo, { inPlace: routeInFront() === inFront }));
   };
 
   /**
@@ -1722,6 +1716,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const wasGuest = isGuestSession(refusedSession);
     const returnTo = wasGuest ? null : screenInFront();
+    const inFront = routeInFront();
     beginFeedIdentityTransition(refusedSession)?.commit();
     // Local only: the push unregister route, like every other, would be
     // refused as the request that started this was.
@@ -1729,7 +1724,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // A guest had nothing to sign back in to and carries on as a fresh one. A
     // registered person is told why they are suddenly signed out, and comes
     // back to where they were once signed in again (audit 01-12).
-    if (!wasGuest) router.replace(signInNoticeRoute('signed-out', returnTo));
+    if (!wasGuest) router.replace(signInNoticeRoute('signed-out', returnTo, { inPlace: routeInFront() === inFront }));
   };
 
   /**

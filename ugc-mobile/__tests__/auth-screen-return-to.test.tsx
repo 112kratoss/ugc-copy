@@ -102,7 +102,7 @@ vi.mock('@/lib/auth-navigation', async (importOriginal) => {
 
 import { router } from 'expo-router';
 import AuthScreen from '../app/auth';
-import { completeAuthScreen } from '../lib/auth-navigation';
+import { completeAuthScreen, focusedRouteReturnPath, signInNoticeRoute } from '../lib/auth-navigation';
 
 /** The auth route's params after a caller's `router.push({ pathname: '/auth', params })`. */
 function authRoute(params: Record<string, string>) {
@@ -217,7 +217,11 @@ describe("the sign-in screen's other params", () => {
 type RootStack = StackNavigationState<ParamListBase>;
 type StackRoute = RootStack['routes'][number];
 
-const ROOT_ROUTE_NAMES = ['(tabs)', 'viewer', 'auth'];
+const ROOT_ROUTER_OPTIONS = {
+  routeNames: ['(tabs)', 'viewer', 'creators/[username]', 'auth', '+not-found'],
+  routeParamList: {},
+  routeGetIdList: {},
+};
 const stackRouter = StackRouter({});
 let rootStack: RootStack;
 
@@ -227,27 +231,31 @@ function rootStackOf(...routes: StackRoute[]): RootStack {
     type: 'stack',
     key: 'root-stack',
     index: routes.length - 1,
-    routeNames: ROOT_ROUTE_NAMES,
+    routeNames: ROOT_ROUTER_OPTIONS.routeNames,
     routes,
     preloadedRoutes: [],
   };
 }
 
+/** The app's navigation state with this root stack, under expo-router's `__root` slot. */
+const rootStateOf = (stack: RootStack) => ({ routes: [{ name: '__root', state: stack }] });
+
 /**
  * The root stack as React Navigation runs it for expo-router's `router`: `dismissTo` sends it a
- * POP_TO and `replace` a REPLACE, naming the route a path names with the params a push of the
- * path gives it.
+ * POP_TO and `replace` a REPLACE, naming the route a path names (one static segment here) with the
+ * params a push of the path gives it. An action the stack refuses fails the test.
  */
 function dispatchToRootStack(type: 'POP_TO' | 'REPLACE') {
   return (href: unknown) => {
-    const path = String(href);
+    const path = typeof href === 'string' ? href : resolveHref(href as never);
     const name = new URL(path, 'file:').pathname.slice(1);
     const next = stackRouter.getStateForAction(
       rootStack,
       { type, payload: { name, params: parseQueryParams(path, { name }) } },
-      { routeNames: ROOT_ROUTE_NAMES, routeParamList: {}, routeGetIdList: {} },
+      ROOT_ROUTER_OPTIONS,
     );
-    if (next) rootStack = next as RootStack;
+    if (!next) throw new Error(`The root stack refused ${type} ${path}`);
+    rootStack = next as RootStack;
   };
 }
 
@@ -260,6 +268,7 @@ function reelRoute(key: string, params: Record<string, string>): StackRoute {
 describe('the sign-in screen, signed in, on the root stack', () => {
   const TABS: StackRoute = { key: 'tabs', name: '(tabs)' };
   const REEL_A = reelRoute('reel-a', { source: 'home', initialId: 'post-a' });
+  const REEL_B = reelRoute('reel-b', { source: 'profile-creations', initialId: 'post-b' });
   const REEL_B_RETURN = '/viewer?source=profile-creations&initialId=post-b';
 
   beforeEach(() => {
@@ -274,9 +283,9 @@ describe('the sign-in screen, signed in, on the root stack', () => {
     authState.user = null;
   });
 
-  const openOnStack = async (params: Record<string, string>, ...below: StackRoute[]) => {
-    routeState.params = authRoute(params);
-    rootStack = rootStackOf(...below, { key: 'sign-in', name: 'auth', params: routeState.params });
+  /** The sign-in screen in front of the stack, signed in: it completes, and is gone. */
+  const completeOnTop = async () => {
+    routeState.params = rootStack.routes[rootStack.index].params as Record<string, string>;
     let tree!: renderer.ReactTestRenderer;
     await renderer.act(async () => {
       tree = renderer.create(<AuthScreen />);
@@ -284,39 +293,55 @@ describe('the sign-in screen, signed in, on the root stack', () => {
     renderer.act(() => tree.unmount());
   };
 
-  // Reel A, then reel B over it, and B's session ended elsewhere: `AuthProvider` put sign-in in
-  // B's place (`router.replace(signInNoticeRoute(…))`), so reel A is the only reel left below.
+  /** What `AuthProvider` does at a forced sign-out: sign-in in place of the route in front. */
+  const forceSignIn = (returnTo: string | null, { inPlace }: { inPlace: boolean }) => {
+    router.replace(signInNoticeRoute('signed-out', returnTo, { inPlace }) as never);
+  };
+
+  // Reel A, then reel B over it, and B's session ended elsewhere.
   it('puts the screen a forced sign-in took the place of back there, not on an earlier one of its name', async () => {
-    await openOnStack({ notice: 'signed-out', returnTo: REEL_B_RETURN }, TABS, REEL_A);
+    rootStack = rootStackOf(TABS, REEL_A, REEL_B);
+    forceSignIn(focusedRouteReturnPath(rootStateOf(rootStack)), { inPlace: true });
+
+    await completeOnTop();
 
     // A pop to reel A gave it B's params, and A's own saved post won over them.
-    expect(rootStack.routes.slice(0, 2)).toEqual([TABS, REEL_A]);
-    expect(rootStack.routes).toHaveLength(3);
-    expect(rootStack.routes[2]).toMatchObject({
-      name: 'viewer',
-      params: { source: 'profile-creations', initialId: 'post-b' },
-    });
-    expect(rootStack.index).toBe(2);
+    expect(rootStack.routes).toMatchObject([TABS, REEL_A, { name: 'viewer', params: REEL_B.params }]);
   });
 
-  // The reel's own prompt is pushed over it, and the reel waits below to be gone back to.
-  it('takes an in-app prompt back to the screen that asked, still on the stack', async () => {
-    const reelB = reelRoute('reel-b', { source: 'profile-creations', initialId: 'post-b' });
+  // Reel B's session ended while the person opened a creator page from it: sign-in took the
+  // page's place, and B, its return, is still below.
+  it('takes a forced sign-in back to its return when another screen took sign-in to its place', async () => {
+    rootStack = rootStackOf(TABS, REEL_A, REEL_B);
+    const returnTo = focusedRouteReturnPath(rootStateOf(rootStack));
+    rootStack = rootStackOf(TABS, REEL_A, REEL_B, { key: 'creator', name: 'creators/[username]', params: { username: 'luna' } });
+    forceSignIn(returnTo, { inPlace: false });
 
-    await openOnStack({ returnTo: REEL_B_RETURN }, TABS, REEL_A, reelB);
+    await completeOnTop();
 
     expect(rootStack.routes.map((route) => route.key)).toEqual(['tabs', 'reel-a', 'reel-b']);
   });
 
-  // `signInNoticeRoute` gives no return when the screen in front was not known (a page the app does not have).
-  it('takes a forced sign-in with no screen to put back to Home, below it', async () => {
-    await openOnStack({ notice: 'session-merged' }, TABS);
+  // The reel's own prompt is pushed over it, and the reel waits below to be gone back to.
+  it('takes an in-app prompt back to the screen that asked, still on the stack', async () => {
+    rootStack = rootStackOf(TABS, REEL_A, REEL_B, { key: 'sign-in', name: 'auth', params: authRoute({ returnTo: REEL_B_RETURN }) });
+
+    await completeOnTop();
+
+    expect(rootStack.routes.map((route) => route.key)).toEqual(['tabs', 'reel-a', 'reel-b']);
+  });
+
+  // A page the app does not have was in front: no return (`signInNoticeRoute`).
+  it('takes a forced sign-in with no return down to Home\'s tabs below it, not a second Home over them', async () => {
+    rootStack = rootStackOf(TABS, { key: 'page', name: '+not-found' });
+    forceSignIn(focusedRouteReturnPath(rootStateOf(rootStack)), { inPlace: true });
+
+    await completeOnTop();
 
     expect(rootStack.routes.map((route) => route.key)).toEqual(['tabs']);
   });
 
-  // The stand-in above, against the expo-router it stands in for: its stack takes over PUSH,
-  // NAVIGATE and PRELOAD and hands every other action to React Navigation's StackRouter.
+  // The stand-in above, against the expo-router it stands in for.
   it('dispatches as expo-router does', () => {
     const routing = readFileSync('node_modules/expo-router/build/global-state/routing.js', 'utf8');
     const body = (name: string) => {
@@ -325,7 +350,13 @@ describe('the sign-in screen, signed in, on the root stack', () => {
     };
     expect(body('dismissTo')).toContain("event: 'POP_TO'");
     expect(body('replace')).toContain("event: 'REPLACE'");
-    expect(readFileSync('node_modules/expo-router/build/layouts/StackClient.js', 'utf8'))
-      .not.toMatch(/case '(POP_TO|REPLACE)'/);
+    // The default, then the three changes: a push into another navigator, anything sent to tabs,
+    // a replace in a drawer. To a stack, POP_TO and REPLACE go as they are.
+    expect(body('getNavigateAction').match(/\btype = '[A-Z_]+'/g))
+      .toEqual(["type = 'NAVIGATE'", "type = 'NAVIGATE'", "type = 'JUMP_TO'", "type = 'JUMP_TO'"]);
+    // Its stack takes over PUSH, NAVIGATE and PRELOAD and hands the rest to React Navigation's.
+    const stack = readFileSync('node_modules/expo-router/build/layouts/StackClient.js', 'utf8');
+    expect(stack).not.toMatch(/case '(POP_TO|REPLACE)'/);
+    expect(stack).toMatch(/default: \{\s*return original\.getStateForAction\(state, action, options\);/);
   });
 });

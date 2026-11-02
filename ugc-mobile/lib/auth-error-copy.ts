@@ -79,10 +79,15 @@ export const GUEST_MERGE_PREPARE_FAILED: AuthNotice = {
   tone: 'info',
 };
 
-const REDIRECT_NOTICES = new Map<string, AuthNotice>([
-  ['session-merged', GUEST_SESSION_MERGED],
-  ['signed-out', SESSION_ENDED_ELSEWHERE],
-]);
+/** Why a redirect sent the person to sign in (`signInNoticeRoute`): each has its copy below. */
+export type RedirectNoticeKey = 'session-merged' | 'signed-out';
+
+const REDIRECT_NOTICE_COPY: Record<RedirectNoticeKey, AuthNotice> = {
+  'session-merged': GUEST_SESSION_MERGED,
+  'signed-out': SESSION_ENDED_ELSEWHERE,
+};
+
+const REDIRECT_NOTICES = new Map<string, AuthNotice>(Object.entries(REDIRECT_NOTICE_COPY));
 
 /**
  * The notice a redirect asked the sign-in screen to show, from its `notice`

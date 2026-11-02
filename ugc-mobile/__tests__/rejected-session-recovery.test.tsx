@@ -132,9 +132,14 @@ import { AuthProvider, useAuth } from '../lib/auth';
 import { useScreenReturn } from '../lib/use-screen-return';
 import { AWKWARD_PROMPT, homeTabs, pushedRoute, rootStateWith, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
-/** Where a refused registered session is sent: the sign-in screen, with why and, when known, where it was. */
-function signedOutNotice(returnTo?: string) {
-  return { pathname: '/auth', params: returnTo ? { notice: 'signed-out', returnTo } : { notice: 'signed-out' } };
+/**
+ * Where a refused registered session is sent: the sign-in screen, with why and, when known, where
+ * it was, and whether sign-in took that screen's place.
+ */
+function signedOutNotice(returnTo?: string, { inPlace = true } = {}) {
+  if (!returnTo) return { pathname: '/auth', params: { notice: 'signed-out' } };
+  const params = { notice: 'signed-out', returnTo };
+  return { pathname: '/auth', params: inPlace ? { ...params, inPlace: '1' } : params };
 }
 
 /** The return the sign-in screen was sent, read back as expo-router reads a path: its pathname and its query's params. */
@@ -431,6 +436,27 @@ describe('recovering from a session ended elsewhere', () => {
     await recover(latest);
 
     expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/post-9'));
+
+    unmount();
+  });
+
+  // The teardown waits on the network (the sign-out asks the server too): a page opened meanwhile
+  // is the one sign-in replaces, and the post to come back to is still below it.
+  it('does not put the return in sign-in\'s place when another screen came in front meanwhile', async () => {
+    const tabs = { key: 'tabs', ...homeTabs() };
+    const post = { key: 'post', ...pushedRoute('/post/[id]', { id: 'post-9' }) };
+    state.rootState = rootStateWith(tabs, post);
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+    state.signOut.mockImplementationOnce(async () => {
+      state.rootState = rootStateWith(tabs, post, { key: 'creator', ...pushedRoute('/creators/[username]', { username: 'luna' }) });
+      state.authCallback?.('SIGNED_OUT', null);
+      return { error: null };
+    });
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/post-9', { inPlace: false }));
 
     unmount();
   });
