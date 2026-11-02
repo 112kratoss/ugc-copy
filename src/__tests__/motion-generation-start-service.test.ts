@@ -236,9 +236,10 @@ describe('startMotionGenerationForRoute', () => {
       userId: 'user-1',
       model: 'kling-3.0',
       prompt: 'Transfer the performance naturally.',
-      // The clip as resolved to measure it, not the caller's link, which may have run out.
+      // Each input as resolved (this file's resolver answers one link for every input), not the
+      // caller's links, which may have run out.
       referenceVideoUrl: resolvedReference,
-      characterImageUrl: 'https://signed.example.com/character.png',
+      characterImageUrl: resolvedReference,
       duration: 6,
       characterOrientation: 'image',
       mode: '1080p',
@@ -389,6 +390,42 @@ describe('startMotionGenerationForRoute', () => {
     });
     expect(probeMediaDurationSecondsMock).toHaveBeenCalledTimes(which === 'probe' ? 1 : 0);
     expect(startMotionGenerationMock).not.toHaveBeenCalled();
+  });
+
+  // The provider is sent the picture as this route passes it on. A remix's restored picture is the
+  // link the remix was read with, signed for an hour: past it, storage refused the provider and the
+  // run failed after its credits were held. It goes resolved, as the clip does.
+  it("resolves the picture as it resolves the clip, so a link the client kept past its hour is not sent on", async () => {
+    const freshPicture = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-1/00-character_image.png?token=fresh';
+    resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => (
+      url === 'https://signed.example.com/character.png' ? freshPicture : resolvedReference
+    ));
+    startMotionGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-motion-8',
+      generationId: 'gen-motion-8',
+      remainingCredits: 500,
+      cost: 162,
+    });
+    const userClient = createClientMock();
+
+    await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-8' } }),
+      body: motionBody({ duration: 6 }),
+      userId: 'user-1',
+      callerIsGuest: false,
+      supabase: userClient.client,
+      adminSupabase: createClientMock().client,
+    });
+
+    expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith(
+      userClient.client,
+      'https://signed.example.com/character.png',
+      'user-1',
+    );
+    expect(startMotionGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      characterImageUrl: freshPicture,
+      referenceVideoUrl: resolvedReference,
+    }));
   });
 
   it('replays a start already accepted without reading its clip again', async () => {

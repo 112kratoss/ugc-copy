@@ -861,6 +861,60 @@ describe('reference lengths a caller reports', () => {
     expect(video.request.inputs[0]).toMatchObject({ url: REFERENCE_URL, durationSeconds: 10 });
   });
 
+  // The motion adapter sends its picture as given too. A remix's restored picture comes as the link
+  // the remix was read with, signed for an hour: a run started past it handed the provider a link
+  // storage refuses, and the run failed after its credits were held. The picture goes resolved, as
+  // the clip does and as every other adapter resolves its inputs.
+  it("hands a motion run the picture's resolved link too, not the client's", async () => {
+    const freshPicture = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/character.png?token=fresh';
+    const freshClip = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/reference.mp4?token=fresh';
+    const resolveInputSource = vi.fn(async (_client: unknown, url: string) => (
+      url === CHARACTER_URL ? freshPicture : url === REFERENCE_URL ? freshClip : url
+    ));
+    const startMotion = vi.fn(async () => ({ predictionId: 'provider-task', generationId: 'generation-1', remainingCredits: 50, cost: 50 }));
+
+    await expect(startUnifiedGenerationForRoute(
+      {
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'motion-picture-key' },
+        }),
+        body: motionBody(5, 5),
+        userId: 'user-1',
+        callerIsGuest: false,
+        supabase: { label: 'user-client' } as never,
+        adminSupabase: createAdminClient(null) as never,
+      },
+      {
+        loadCatalog: vi.fn(async () => ({
+          catalog: {
+            schemaVersion: 2,
+            revision: 'catalog-v2',
+            defaults: { image: null, video: 'seedance-2', motion: 'kling-2.6' },
+            models: [],
+          },
+          operations: new Map([[MOTION_OPERATION.modelId, MOTION_OPERATION]]),
+          source: 'database' as const,
+          releaseId: 'release-v2',
+          releaseSchemaVersion: 2,
+        })) as never,
+        quoteModel: vi.fn(durationPricedQuote) as never,
+        resolveSource: vi.fn(async () => null) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        startMotion: startMotion as never,
+        resolveInputSource,
+        probeInputDuration: vi.fn(async () => 5),
+      },
+    )).resolves.toMatchObject({ success: true });
+
+    expect(startMotion).toHaveBeenCalledWith(expect.objectContaining({
+      characterImageUrl: freshPicture,
+      referenceVideoUrl: freshClip,
+    }));
+    // Resolved as the user it starts for, with the client it starts under.
+    expect(resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, CHARACTER_URL, 'user-1');
+  });
+
   it('refuses a reference whose length cannot be read, or that is not an HTTPS object', async () => {
     await expect(resolveBillableInputDurations({
       request: parseUnifiedGenerationRequest(seedanceBody(10)),

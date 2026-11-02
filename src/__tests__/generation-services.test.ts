@@ -11,6 +11,7 @@ import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
 import { referenceTrackLinkExtension } from '@/lib/provider-input-limits';
 import type { VideoModelId } from '@/lib/models';
 import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
+import { SIGNED_LINK_SECONDS, signedStorageLink } from './fixtures/signed-storage-links';
 
 // Foreign references stay rejected by default; individual tests opt into an
 // authorized shared-media import.
@@ -6597,6 +6598,26 @@ describe('generation services', () => {
       expect(credits.rpcCalls).toEqual([]);
       expect(fetch).not.toHaveBeenCalled();
     });
+  });
+
+  // A remix page sends the inputs it restored by the links the remix was read with, which are signed
+  // for an hour. A start resolves each by the object its link names, so one past its hour still
+  // runs: the token is never read.
+  it('signs a lapsed link to the caller’s own kept input again from the object it names', async () => {
+    const { resolveGenerationMediaSource } = await import('@/lib/generation-services');
+    const createSignedUrl = vi.fn(async (filePath: string) => ({
+      data: { signedUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/${filePath}?token=fresh` },
+      error: null,
+    }));
+    const from = vi.fn(() => ({ createSignedUrl }));
+    const supabase = { storage: { from } } as unknown as SupabaseClient;
+    const lapsed = signedStorageLink('generation_inputs/user-1/gen-1/00-character_image.png', Date.now() - 2 * SIGNED_LINK_SECONDS * 1000);
+
+    await expect(resolveGenerationMediaSource(supabase, lapsed, 'user-1')).resolves.toBe(
+      'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-1/00-character_image.png?token=fresh',
+    );
+    expect(from).toHaveBeenCalledWith('generation_inputs');
+    expect(createSignedUrl).toHaveBeenCalledWith('user-1/gen-1/00-character_image.png', 3600);
   });
 
   // 02-1 / C2: the start sends Kie every shot, so the shots' total is what a multi-shot

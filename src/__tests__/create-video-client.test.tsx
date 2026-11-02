@@ -33,6 +33,7 @@ import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from 
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings, queryGenerateButton } from './fixtures/creator-column-bar';
+import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
 
 // One router for every render: a new object per render restarts effects that read it.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -8427,6 +8428,115 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.getByRole('button', { name: 'Add your video for Reference video 1' })).toBeInTheDocument();
       // Nothing mentions either box, so nothing holds the run.
       expect(generateButton()).toBeEnabled();
+    });
+  });
+
+  /**
+   * A remix hands its media out by storage links signed for an hour, and a form reads its remix
+   * once, so a page kept open past the hour holds links storage no longer opens. Each use of one
+   * reaches the file by a link that opens; the creator's edits stay as they are.
+   */
+  describe('a remix kept open past its links’ hour', () => {
+    const OPENED_AT = Date.UTC(2026, 10, 2, 9, 0, 0);
+    const RESULT = 'generated_videos/user-1/intense.mp4';
+    const CLIP = 'generation_inputs/user-1/gen-1/00-reference_video.mp4';
+    /** An unposted Seedance 2.5 run of the creator's own, as the remix source answers a read of it: by links signed as it answers. */
+    function ownRunRemix({ referenceClip = false } = {}): RemixSourceBundle {
+      return {
+        generation: { id: 'gen-1', title: 'intense', prompt: 'Two figures face off in a dim hall.', category: 'video', model: 'seedance-2-5' },
+        result: { mediaType: 'video', url: signedStorageLink(RESULT) },
+        inputs: {
+          video: {
+            referenceMode: referenceClip ? 'elements' : 'frames',
+            startFrame: null,
+            endFrame: null,
+            elements: [],
+            referenceVideos: referenceClip
+              ? [{ kind: 'video', label: 'Video reference 1', url: signedStorageLink(CLIP), storagePath: CLIP, sourceGenerationId: null, durationSeconds: 4.2 }]
+              : [],
+            referenceAudios: [],
+          },
+        },
+        workflowSettings: { model: 'seedance-2-5', aspectRatio: '9:16', resolution: '480p', sound: false, duration: 5 },
+        restoreIssues: [],
+      } as unknown as RemixSourceBundle;
+    }
+    /** The remix source answers each read with `remix()` as it is then, and every other request as the page's own answers do. */
+    function stubRemixReads(remix: () => RemixSourceBundle) {
+      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes('/api/remix-source')
+          ? { ok: true, status: 200, json: async () => remix() } as Response
+          : defaultResponse(input, init)
+      ));
+    }
+    const promptBox = () => screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
+
+    beforeEach(() => {
+      authState.credits = 500;
+      // The browser reads a clip's length only by a link storage still opens.
+      readDurationMock.mockImplementation(async (source: File | string) => (
+        typeof source === 'string' && !storageOpens(source) ? null : 4.2
+      ) as number);
+    });
+
+    /** The link the preview dialog named `title` draws its clip or picture from, once it draws one. */
+    async function previewLink(title: string) {
+      const dialog = await screen.findByRole('dialog', { name: title });
+      await waitFor(() => expect(dialog.querySelector('video, img')).not.toBeNull());
+      return dialog.querySelector('video, img')!.getAttribute('src')!;
+    }
+
+    it('measures the original’s clip by a link that opens when “Use as reference” is pressed past the hour, keeping the creator’s edits', async () => {
+      movePageClock(OPENED_AT);
+      stubRemixReads(() => ownRunRemix());
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
+      const use = await screen.findByRole('button', { name: 'Use as reference' });
+      fireEvent.change(promptBox(), { target: { value: 'Two figures circle, then strike.' } });
+
+      advancePageClock(PAST_THE_HOUR_MS);
+      fireEvent.click(use);
+
+      const clips = await screen.findByRole('list', { name: 'Reference videos' });
+      expect(within(clips).getByText('Original result · intense')).toBeInTheDocument();
+      // On main the clip was measured by the link the remix opened with, which storage refuses by
+      // now: its card said "Duration unavailable" and the price was asked without its length.
+      expect(within(clips).queryByText('Duration unavailable')).toBeNull();
+      expect(within(clips).getByText('4.2s clip')).toBeInTheDocument();
+      const read = readDurationMock.mock.calls.at(-1)?.[0] as string;
+      expect(storedObjectOf(read)).toBe(RESULT);
+      expect(storageOpens(read), 'read by a link storage refuses: its hour is up').toBe(true);
+      expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
+      await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.2] }));
+      // The remix read again for the link puts nothing of the original back over the form.
+      expect(promptBox()).toHaveValue('Two figures circle, then strike.');
+    });
+
+    it('plays the original past the hour by a link that opens', async () => {
+      movePageClock(OPENED_AT);
+      stubRemixReads(() => ownRunRemix());
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
+      const original = await screen.findByRole('button', { name: 'View original' });
+
+      advancePageClock(PAST_THE_HOUR_MS);
+      fireEvent.click(original);
+
+      const shown = await previewLink('Original Creation');
+      expect(storedObjectOf(shown)).toBe(RESULT);
+      expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+    });
+
+    it('plays a restored reference clip past the hour by a link that opens', async () => {
+      movePageClock(OPENED_AT);
+      stubRemixReads(() => ownRunRemix({ referenceClip: true }));
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
+      const clips = await screen.findByRole('list', { name: 'Reference videos' });
+
+      advancePageClock(PAST_THE_HOUR_MS);
+      fireEvent.click(within(clips).getByRole('button', { name: 'Preview Video reference 1' }));
+
+      const shown = await previewLink('Video reference 1');
+      expect(storedObjectOf(shown)).toBe(CLIP);
+      expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
     });
   });
 });

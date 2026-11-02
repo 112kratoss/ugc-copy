@@ -14,6 +14,7 @@ import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
 import { outsideAct } from './fixtures/outside-act';
+import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -3368,5 +3369,82 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     fillBox(view.container, 'slot-2', myPicture());
     expect(await screen.findByDisplayValue('Reference image 2')).toBeInTheDocument();
     expect(screen.queryByText(/^The creator kept/)).toBeNull();
+  });
+});
+
+/**
+ * A remix hands its media out by storage links signed for an hour, and a form reads its remix once
+ * (#664), so a page kept open past the hour holds links storage no longer opens. Each use of one
+ * reaches the file by a link that opens; the creator's edits stay as they are.
+ */
+describe('CreateImageClient a remix kept open past its links’ hour', () => {
+  const OPENED_AT = Date.UTC(2026, 10, 2, 9, 0, 0);
+  const RESULT = 'generated_images/user-1/harbour.png';
+  const PICTURE = 'generation_inputs/user-1/gen-1/00-reference_image.png';
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  /** An unposted run of the creator's own, as the remix source answers a read of it: by links signed as it answers. */
+  function ownRunRemix(): RemixSourceBundle {
+    return {
+      generation: { id: 'gen-1', title: 'Harbour', prompt: '@lead walks the harbour at dusk', category: 'image', model: 'nano-banana-2' },
+      result: { mediaType: 'image', url: signedStorageLink(RESULT) },
+      inputs: {
+        image: {
+          elements: [{ id: 'remix-1', displayName: 'Hero shot', handle: '@lead', url: signedStorageLink(PICTURE), storagePath: PICTURE, sourceGenerationId: null }],
+        },
+      },
+      workflowSettings: { model: 'nano-banana-2' },
+      restoreIssues: [],
+    };
+  }
+
+  beforeEach(() => {
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    URL.createObjectURL = vi.fn(() => 'blob:element') as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
+    window.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('draws the original by a link that opens when “Use as reference” is pressed past the hour, keeping the creator’s edits', async () => {
+    movePageClock(OPENED_AT);
+    installFetch({ remixBundle: () => ownRunRemix() });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    typePrompt('@lead rows across the harbour at noon');
+
+    advancePageClock(PAST_THE_HOUR_MS);
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    // On main the new picture was drawn from the link the remix opened with, which storage refuses by now.
+    const shown = (await screen.findByAltText('Original result · Harbour')).getAttribute('src')!;
+    expect(storedObjectOf(shown)).toBe(RESULT);
+    expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+    expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
+    // The remix read again for the link puts nothing of the original back over the form.
+    expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead rows across the harbour at noon');
+  });
+
+  it('shows the original past the hour by a link that opens', async () => {
+    movePageClock(OPENED_AT);
+    installFetch({ remixBundle: () => ownRunRemix() });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    const original = await screen.findByRole('button', { name: /View original/ });
+
+    advancePageClock(PAST_THE_HOUR_MS);
+    fireEvent.click(original);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Original Creation' });
+    await waitFor(() => expect(dialog.querySelector('img')).not.toBeNull());
+    const shown = dialog.querySelector('img')!.getAttribute('src')!;
+    expect(storedObjectOf(shown)).toBe(RESULT);
+    expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
   });
 });
