@@ -253,7 +253,7 @@ describe('uploadMediaToTemporaryStorage', () => {
   });
 
   // Chrome names an .m4a file audio/x-m4a; the sign step keeps it as audio/mp4 and
-  // answers with that name, so the file is stored under the type Kie lists.
+  // answers with that name, and the file is stored under it.
   it('sends the file under the type the sign step answers with', async () => {
     const sent = stubXhr();
     // The sign request is the first call.

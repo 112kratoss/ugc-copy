@@ -352,9 +352,9 @@ describe('mobile media uploads', () => {
   });
 
   // An iPhone's document picker names an .m4a track audio/x-m4a. The sign step keeps
-  // it as audio/mp4 and answers with that name; the file goes up under it, so storage
-  // holds the type Kie lists. Before the server answered with a type, the picker's
-  // name went up, which is why the uploads bucket also takes the alias.
+  // it as audio/mp4 and answers with that name, and the file goes up under it.
+  // Before the server answered with a type, the picker's name went up, which is
+  // why the uploads bucket also takes the alias.
   it('sends a track under the type the sign step answers with', async () => {
     uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'audio/x-m4a', sizeBytes: 5 });
     const createMediaUpload = vi.fn(async () => ({

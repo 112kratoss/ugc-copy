@@ -28,7 +28,8 @@ export const STORAGE_MEDIA_MIME_TYPES = {
  * audio/x-m4a for an .m4a (Voice Memos, most phone recordings) and audio/vnd.wave
  * for a .wav, and Chrome types an .m4a file audio/x-m4a too. Every signer reads
  * an alias as the listed name, keeps the upload under it and answers with it, so
- * the file is stored under the name Kie's docs list.
+ * a format is stored and recorded under one name. (Kie judges a track by its
+ * link's extension, not this name: on 2026-11-02 Wan 3.0 refused any .m4a.)
  */
 export const STORAGE_MEDIA_MIME_TYPE_ALIASES = {
   'audio/x-m4a': 'audio/mp4',
