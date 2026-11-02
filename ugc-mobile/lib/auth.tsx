@@ -426,18 +426,19 @@ function isViewerlessCreatorQuery(query: { queryKey: readonly unknown[] }) {
 }
 
 /**
- * The sign-in screen with the notice that says why the person is there, and
- * the screen they were on, with its params, to come back to once signed in:
- * Home when it is not known, or when it is the sign-in screen itself (audit
- * 01-12).
+ * The sign-in screen with the notice that says why the person is there, put in
+ * place of the screen they were on, and that screen, with its params, to come
+ * back to once signed in, where it was (`completeAuthScreen`). No return when
+ * it is not known, or when it is the sign-in screen itself (audit 01-12):
+ * signing in then goes Home.
  */
 export function signInNoticeRoute(
   notice: 'signed-out' | 'session-merged',
   currentRoute: string | null | undefined,
 ) {
   const route = normalizeAuthReturnTo(currentRoute);
-  const returnTo = route && !/^\/auth(?:[/?#]|$)/.test(route) ? route : '/(tabs)';
-  return { pathname: '/auth', params: { notice, returnTo } } as const;
+  const returnTo = route && !/^\/auth(?:[/?#]|$)/.test(route) ? route : null;
+  return { pathname: '/auth', params: returnTo ? { notice, returnTo } : { notice } } as const;
 }
 
 function getUsableCachedAccessToken(session: Session | null, now = Date.now()): string | null {

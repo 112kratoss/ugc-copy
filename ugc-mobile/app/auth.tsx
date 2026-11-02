@@ -132,8 +132,9 @@ export default function AuthScreen() {
     // A sign-in made here. Opened by someone signed in already, the screen
     // only steps aside, and nothing was signed in.
     if (hasStartedAuth.current) trackAuthEvent('auth_succeeded');
-    completeAuthScreen(router, returnTo);
-  }, [returnTo, trackAuthEvent]);
+    // A redirect's notice: this screen took the place of the one it returns to.
+    completeAuthScreen(router, returnTo, { inPlace: initialNotice !== null });
+  }, [initialNotice, returnTo, trackAuthEvent]);
 
   useEffect(() => {
     if (user) {

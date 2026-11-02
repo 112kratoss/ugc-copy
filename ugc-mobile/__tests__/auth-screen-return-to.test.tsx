@@ -1,12 +1,15 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { StackRouter, type ParamListBase, type StackNavigationState } from '@react-navigation/routers';
 // expo-router's own code for both ends of a push: `resolveHref` writes the caller's
 // `{ pathname, params }` as a path, and `parseQueryParams` is how `getStateFromPath`
 // reads that path's query into the params React Navigation gives the route.
 import { resolveHref } from 'expo-router/build/link/href';
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
+
+import { pushedRoute } from './fixtures/navigation-state';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -148,7 +151,7 @@ describe('the sign-in return', () => {
     });
 
     expect(completeAuthScreen).toHaveBeenCalledTimes(1);
-    expect(completeAuthScreen).toHaveBeenCalledWith(router, returnTo);
+    expect(completeAuthScreen).toHaveBeenCalledWith(router, returnTo, { inPlace: false });
     expect(router.dismissTo).toHaveBeenCalledWith(returnTo);
   });
 
@@ -208,5 +211,121 @@ describe("the sign-in screen's other params", () => {
     });
 
     expect(router.dismissTo).toHaveBeenCalledWith('/(tabs)');
+  });
+});
+
+type RootStack = StackNavigationState<ParamListBase>;
+type StackRoute = RootStack['routes'][number];
+
+const ROOT_ROUTE_NAMES = ['(tabs)', 'viewer', 'auth'];
+const stackRouter = StackRouter({});
+let rootStack: RootStack;
+
+function rootStackOf(...routes: StackRoute[]): RootStack {
+  return {
+    stale: false,
+    type: 'stack',
+    key: 'root-stack',
+    index: routes.length - 1,
+    routeNames: ROOT_ROUTE_NAMES,
+    routes,
+    preloadedRoutes: [],
+  };
+}
+
+/**
+ * The root stack as React Navigation runs it for expo-router's `router`: `dismissTo` sends it a
+ * POP_TO and `replace` a REPLACE, naming the route a path names with the params a push of the
+ * path gives it.
+ */
+function dispatchToRootStack(type: 'POP_TO' | 'REPLACE') {
+  return (href: unknown) => {
+    const path = String(href);
+    const name = new URL(path, 'file:').pathname.slice(1);
+    const next = stackRouter.getStateForAction(
+      rootStack,
+      { type, payload: { name, params: parseQueryParams(path, { name }) } },
+      { routeNames: ROOT_ROUTE_NAMES, routeParamList: {}, routeGetIdList: {} },
+    );
+    if (next) rootStack = next as RootStack;
+  };
+}
+
+/** A reel as a push of it leaves it on the stack. */
+function reelRoute(key: string, params: Record<string, string>): StackRoute {
+  const { name, params: routeParams } = pushedRoute('/viewer', params);
+  return { key, name, params: routeParams };
+}
+
+describe('the sign-in screen, signed in, on the root stack', () => {
+  const TABS: StackRoute = { key: 'tabs', name: '(tabs)' };
+  const REEL_A = reelRoute('reel-a', { source: 'home', initialId: 'post-a' });
+  const REEL_B_RETURN = '/viewer?source=profile-creations&initialId=post-b';
+
+  beforeEach(() => {
+    vi.mocked(router.dismissTo).mockImplementation(dispatchToRootStack('POP_TO'));
+    vi.mocked(router.replace).mockImplementation(dispatchToRootStack('REPLACE'));
+    authState.user = { id: 'user-1' };
+  });
+
+  afterEach(() => {
+    vi.mocked(router.dismissTo).mockReset();
+    vi.mocked(router.replace).mockReset();
+    authState.user = null;
+  });
+
+  const openOnStack = async (params: Record<string, string>, ...below: StackRoute[]) => {
+    routeState.params = authRoute(params);
+    rootStack = rootStackOf(...below, { key: 'sign-in', name: 'auth', params: routeState.params });
+    let tree!: renderer.ReactTestRenderer;
+    await renderer.act(async () => {
+      tree = renderer.create(<AuthScreen />);
+    });
+    renderer.act(() => tree.unmount());
+  };
+
+  // Reel A, then reel B over it, and B's session ended elsewhere: `AuthProvider` put sign-in in
+  // B's place (`router.replace(signInNoticeRoute(…))`), so reel A is the only reel left below.
+  it('puts the screen a forced sign-in took the place of back there, not on an earlier one of its name', async () => {
+    await openOnStack({ notice: 'signed-out', returnTo: REEL_B_RETURN }, TABS, REEL_A);
+
+    // A pop to reel A gave it B's params, and A's own saved post won over them.
+    expect(rootStack.routes.slice(0, 2)).toEqual([TABS, REEL_A]);
+    expect(rootStack.routes).toHaveLength(3);
+    expect(rootStack.routes[2]).toMatchObject({
+      name: 'viewer',
+      params: { source: 'profile-creations', initialId: 'post-b' },
+    });
+    expect(rootStack.index).toBe(2);
+  });
+
+  // The reel's own prompt is pushed over it, and the reel waits below to be gone back to.
+  it('takes an in-app prompt back to the screen that asked, still on the stack', async () => {
+    const reelB = reelRoute('reel-b', { source: 'profile-creations', initialId: 'post-b' });
+
+    await openOnStack({ returnTo: REEL_B_RETURN }, TABS, REEL_A, reelB);
+
+    expect(rootStack.routes.map((route) => route.key)).toEqual(['tabs', 'reel-a', 'reel-b']);
+  });
+
+  // `signInNoticeRoute` gives no return when the screen in front was not known (a page the app does not have).
+  it('takes a forced sign-in with no screen to put back to Home, below it', async () => {
+    await openOnStack({ notice: 'session-merged' }, TABS);
+
+    expect(rootStack.routes.map((route) => route.key)).toEqual(['tabs']);
+  });
+
+  // The stand-in above, against the expo-router it stands in for: its stack takes over PUSH,
+  // NAVIGATE and PRELOAD and hands every other action to React Navigation's StackRouter.
+  it('dispatches as expo-router does', () => {
+    const routing = readFileSync('node_modules/expo-router/build/global-state/routing.js', 'utf8');
+    const body = (name: string) => {
+      const start = routing.indexOf(`function ${name}(`);
+      return routing.slice(start, routing.indexOf('\nfunction ', start + 1));
+    };
+    expect(body('dismissTo')).toContain("event: 'POP_TO'");
+    expect(body('replace')).toContain("event: 'REPLACE'");
+    expect(readFileSync('node_modules/expo-router/build/layouts/StackClient.js', 'utf8'))
+      .not.toMatch(/case '(POP_TO|REPLACE)'/);
   });
 });

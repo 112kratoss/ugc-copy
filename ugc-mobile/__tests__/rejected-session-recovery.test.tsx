@@ -132,9 +132,9 @@ import { AuthProvider, useAuth } from '../lib/auth';
 import { useScreenReturn } from '../lib/use-screen-return';
 import { AWKWARD_PROMPT, homeTabs, pushedRoute, rootStateWith, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
-/** Where a refused registered session is sent: the sign-in screen, with why and where it was. */
-function signedOutNotice(returnTo: string) {
-  return { pathname: '/auth', params: { notice: 'signed-out', returnTo } };
+/** Where a refused registered session is sent: the sign-in screen, with why and, when known, where it was. */
+function signedOutNotice(returnTo?: string) {
+  return { pathname: '/auth', params: returnTo ? { notice: 'signed-out', returnTo } : { notice: 'signed-out' } };
 }
 
 /** The return the sign-in screen was sent, read back as expo-router reads a path: its pathname and its query's params. */
@@ -528,14 +528,14 @@ describe('recovering from a session ended elsewhere', () => {
     unmount();
   });
 
-  it('falls back to Home when the route on screen is the sign-in screen itself', async () => {
+  it('gives no return when the route on screen is the sign-in screen itself', async () => {
     state.rootState = stateInFront(pushedRoute('/auth', { returnTo: '/post/post-9' }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
     await recover(latest);
 
-    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/(tabs)'));
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice());
 
     unmount();
   });

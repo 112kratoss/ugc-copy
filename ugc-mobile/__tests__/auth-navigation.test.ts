@@ -73,6 +73,23 @@ describe('auth return navigation', () => {
     expect(router.back).not.toHaveBeenCalled();
   });
 
+  it('puts a forced sign-in\'s return where sign-in stands, and goes Home without one as any sign-in does', () => {
+    const router = {
+      canGoBack: vi.fn(() => true),
+      back: vi.fn(),
+      dismissTo: vi.fn(),
+      replace: vi.fn(),
+    };
+
+    completeAuthScreen(router, '/viewer?source=home&initialId=post-9', { inPlace: true });
+    completeAuthScreen(router, undefined, { inPlace: true });
+    completeAuthScreen(router, 'https://example.com', { inPlace: true });
+
+    expect(router.replace.mock.calls).toEqual([['/viewer?source=home&initialId=post-9']]);
+    expect(router.dismissTo.mock.calls).toEqual([['/(tabs)'], ['/(tabs)']]);
+    expect(router.back).not.toHaveBeenCalled();
+  });
+
   it('falls back to replacing auth when dismissTo is unavailable', () => {
     const router = {
       canGoBack: vi.fn(() => true),

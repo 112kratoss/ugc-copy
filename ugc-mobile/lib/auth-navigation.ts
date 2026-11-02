@@ -126,11 +126,27 @@ export function normalizeAuthReturnTo(value: string | string[] | null | undefine
   return candidate;
 }
 
+/**
+ * Where the sign-in screen goes once someone is signed in. A prompt in the app
+ * is pushed over the screen that asked, which is still there below it:
+ * `dismissTo` goes back to it, or to Home with no return. A forced sign-in
+ * (`signInNoticeRoute`) took the place of the screen it returns to, so
+ * `inPlace` puts that screen back where sign-in stands. `dismissTo` would go to
+ * the nearest screen of its name lower in the stack (React Navigation's
+ * POP_TO), which keeps its own state: a reel there came back on its own post.
+ */
 export function completeAuthScreen<Href>(
   router: AuthRouter<Href>,
-  returnTo: string | string[] | null | undefined
+  returnTo: string | string[] | null | undefined,
+  { inPlace = false }: { inPlace?: boolean } = {},
 ) {
-  const destination = (normalizeAuthReturnTo(returnTo) ?? '/(tabs)') as unknown as Href;
+  const route = normalizeAuthReturnTo(returnTo);
+  if (inPlace && route) {
+    router.replace(route as unknown as Href);
+    return;
+  }
+
+  const destination = (route ?? '/(tabs)') as unknown as Href;
 
   if (router.dismissTo) {
     router.dismissTo(destination);
