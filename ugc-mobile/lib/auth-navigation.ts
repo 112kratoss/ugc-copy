@@ -89,6 +89,28 @@ function paramValues(value: unknown): string[] {
   ));
 }
 
+/** The returns screens gave for themselves, by the key of their route (`publishScreenReturn`). */
+const screenReturns = new Map<string, string>();
+
+/**
+ * Gives the path a forced sign-in comes back to while the route `routeKey` is
+ * in front, in place of the one `focusedRouteReturnPath` builds from its
+ * params: for a screen whose params say where it opened, not where the person
+ * has moved since, as the reel's `initialId` names the post it opened on. The
+ * function returned takes it back, unless a later one has replaced it.
+ */
+export function publishScreenReturn(routeKey: string, path: string) {
+  screenReturns.set(routeKey, path);
+  return () => {
+    if (screenReturns.get(routeKey) === path) screenReturns.delete(routeKey);
+  };
+}
+
+/** The return the screen of route `routeKey` gave for itself, if it gave one. */
+export function publishedScreenReturn(routeKey: string | undefined) {
+  return routeKey === undefined ? undefined : screenReturns.get(routeKey);
+}
+
 export function normalizeAuthReturnTo(value: string | string[] | null | undefined) {
   const candidate = (Array.isArray(value) ? value[0] : value)?.trim();
   if (

@@ -23,7 +23,8 @@ import { resolveHref } from 'expo-router/build/link/href';
 import type { NavigationStateLike } from '../../lib/auth-navigation';
 
 export type StateFixture = NavigationStateLike;
-export type RouteFixture = NavigationStateLike['routes'][number];
+/** A route, with the key React Navigation gives it where a case reads one. */
+export type RouteFixture = NavigationStateLike['routes'][number] & { key?: string };
 
 /** Everything a return can lose on the way: & and # would cut it, + turn to a space, % be read again, \ and a line break send it Home. */
 export const AWKWARD_PROMPT = 'A dancer & a drum #2 + 100% real \\ one\nline two';

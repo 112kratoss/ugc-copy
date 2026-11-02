@@ -105,7 +105,10 @@ vi.mock('expo-router', () => ({
 
 vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
 
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+// The reel's own route, whose key its forced sign-in return is given under.
+const reelRoute = vi.hoisted(() => ({ key: 'viewer-route', name: 'viewer' }));
+
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true, useRoute: () => reelRoute }));
 
 vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
@@ -294,8 +297,9 @@ vi.mock('@/lib/remix-start', async (importOriginal) => ({
 
 import ImmersivePreviewViewerScreen from '@/app/viewer';
 import type { FeedUndoNoticeModel } from '@/components/feed-undo-notice';
+import { publishedScreenReturn } from '@/lib/auth-navigation';
 import { haptic } from '@/lib/haptics';
-import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { immersiveViewerReturnPath, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { startShowcaseRemix } from '@/lib/remix-start';
 import {
   filterAnonymousSessionShowcaseFeedItems,
@@ -394,6 +398,14 @@ async function renderReel(initialId = 'post-b', route: Record<string, string> = 
 
 function reelIds(tree: renderer.ReactTestRenderer) {
   return (tree.root.findByType('flat-list' as never).props.data as ImmersivePreviewItem[]).map((item) => item.id);
+}
+
+/** A flick that comes to rest on the page at `index`, as the list reports it. */
+async function swipeTo(tree: renderer.ReactTestRenderer, index: number) {
+  act(() => {
+    tree.root.findByType('flat-list' as never).props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { y: 844 * index } } });
+  });
+  await settle();
 }
 
 const activeId = () => screenState.zoomOptions?.activeItemId ?? null;
@@ -1410,5 +1422,45 @@ describe('a recipe opened from search', () => {
     const unknown = await renderReel('post-recipe', { source: 'showcase-feed', initialPage: 'details', initialSection: 'comments' });
     expect(slideProps(unknown, 'post-recipe')).toMatchObject({ pageKey: 'details' });
     expect(slideProps(unknown, 'post-recipe').initialSection).toBeUndefined();
+  });
+});
+
+describe('the return a forced sign-in comes back to', () => {
+  // The route's `initialId` stays the post the reel opened on; a session
+  // ended elsewhere reads the return the reel gives (`useScreenReturn`).
+  it('is the post the reader swiped to, and the route again once they are back on the one it opened on', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    expect(publishedScreenReturn(reelRoute.key)).toBeUndefined();
+
+    await swipeTo(tree, 2);
+
+    expect(activeId()).toBe('post-c');
+    expect(publishedScreenReturn(reelRoute.key)).toBe(immersiveViewerReturnPath({
+      source: 'showcase-feed',
+      initialId: 'post-c',
+      feedSessionId: 'session-1',
+      algorithmVersion: 'for-you-rules-v4',
+      lane: LANE_ROUTE.lane,
+    }));
+
+    await swipeTo(tree, 1);
+
+    expect(activeId()).toBe('post-b');
+    expect(publishedScreenReturn(reelRoute.key)).toBeUndefined();
+  });
+
+  it('is taken back when the reel goes', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    await swipeTo(tree, 3);
+    expect(publishedScreenReturn(reelRoute.key)).toContain('initialId=post-d');
+
+    act(() => {
+      trees.splice(trees.indexOf(tree), 1);
+      tree.unmount();
+    });
+
+    expect(publishedScreenReturn(reelRoute.key)).toBeUndefined();
   });
 });

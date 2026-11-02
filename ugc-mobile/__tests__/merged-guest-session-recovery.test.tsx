@@ -34,9 +34,15 @@ vi.mock('expo-constants', () => ({
 
 // One stable object, never a fresh literal per render: an unstable router mock
 // re-runs the provider's effects forever and hangs the suite.
-vi.mock('expo-router', () => {
+vi.mock('expo-router', async () => {
+  const { findFocusedRoute } = await import('@react-navigation/core');
   // expo-router's store keeps one container ref for the app's life.
-  const navigationRef = { isReady: () => true, getRootState: () => state.rootState };
+  const navigationRef = {
+    isReady: () => true,
+    getRootState: () => state.rootState,
+    // As the container finds it: the route in front at the deepest level.
+    getCurrentRoute: () => (state.rootState ? findFocusedRoute(state.rootState as never) : undefined),
+  };
   return {
     router: { replace: state.replace },
     useNavigationContainerRef: () => navigationRef,

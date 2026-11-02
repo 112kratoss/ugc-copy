@@ -42,7 +42,7 @@ import {
   type AccountReauthenticationMethod,
 } from './account-reauthentication';
 import { GUEST_MERGE_PREPARE_ERROR_CODE } from './auth-error-copy';
-import { focusedRouteReturnPath, normalizeAuthReturnTo } from './auth-navigation';
+import { focusedRouteReturnPath, normalizeAuthReturnTo, publishedScreenReturn } from './auth-navigation';
 import {
   ACCOUNT_DELETING_CODE,
   ApiError,
@@ -1624,12 +1624,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * The screen in front, with its params, as a path to come back to after a
-   * forced sign-out. Read before the session is torn down: a screen can answer
-   * the sign-out by moving, as the composer does by sending its own way to
-   * sign-in.
+   * The screen in front as a path to come back to after a forced sign-out: the
+   * return it gave for itself (`useScreenReturn`), as the reel gives the post
+   * the person is on, or else one built from its params. Read before the
+   * session is torn down: a screen can answer the sign-out by moving, as the
+   * composer does by sending its own way to sign-in.
    */
-  const screenInFront = () => focusedRouteReturnPath(navigationRef.isReady() ? navigationRef.getRootState() : null);
+  const screenInFront = () => {
+    if (!navigationRef.isReady()) return null;
+    // Typed `never`: the app declares no root param list.
+    const routeKey = (navigationRef.getCurrentRoute() as { key: string } | undefined)?.key;
+    return publishedScreenReturn(routeKey) ?? focusedRouteReturnPath(navigationRef.getRootState());
+  };
 
   /**
    * Recovery for a guest identity that was linked to an account elsewhere.
