@@ -125,27 +125,19 @@ vi.mock('../lib/supabase', () => ({
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 import { APPLE_ZOOM_SOURCE_PARAM } from '../lib/apple-zoom';
 import { AuthProvider, useAuth } from '../lib/auth';
-import { homeTabs, pushedRoute, rootStateWith, type RouteFixture, type StateFixture } from './fixtures/navigation-state';
+import { AWKWARD_PROMPT, pushedRoute, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
 /** Where a refused registered session is sent: the sign-in screen, with why and where it was. */
 function signedOutNotice(returnTo: string) {
   return { pathname: '/auth', params: { notice: 'signed-out', returnTo } };
 }
 
-/** Puts `route` in front, pushed over Home. */
-function showRoute(route: RouteFixture) {
-  state.rootState = rootStateWith(homeTabs(), route);
-}
-
 /** The return the sign-in screen was sent, read back as expo-router reads a path: its pathname and its query's params. */
 function sentReturn() {
   const [[route]] = state.replace.mock.calls as [[{ params: { returnTo: string } }]];
   const { returnTo } = route.params;
-  return { pathname: new URL(returnTo, 'file:').pathname, params: parseQueryParams(returnTo, { name: 'return' } as never) ?? {} };
+  return { pathname: new URL(returnTo, 'file:').pathname, params: parseQueryParams(returnTo, { name: 'return' }) ?? {} };
 }
-
-/** Everything a return can lose on the way: & and # would cut it, + would turn to a space. */
-const PROMPT = 'A dancer & a drum #2 + 100% real';
 
 type RemoveQueriesFilter = { predicate: (query: { queryKey: readonly unknown[] }) => boolean };
 
@@ -217,7 +209,7 @@ describe('recovering from a session ended elsewhere', () => {
     state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
     state.queryClient.clear.mockReset();
     state.queryClient.removeQueries.mockReset();
-    state.rootState = rootStateWith(homeTabs());
+    state.rootState = stateInFront();
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.clearLocalPush.mockReset().mockResolvedValue(undefined);
     state.probe.mockReset();
@@ -413,7 +405,7 @@ describe('recovering from a session ended elsewhere', () => {
 
   // Audit 01-12: signed in again, the person is back where they were.
   it('sends the person back, once signed in again, to the route they were on', async () => {
-    showRoute(pushedRoute('/post/[id]', { id: 'post-9' }));
+    state.rootState = stateInFront(pushedRoute('/post/[id]', { id: 'post-9' }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
@@ -425,8 +417,8 @@ describe('recovering from a session ended elsewhere', () => {
   });
 
   it('brings a remix creator back with its remix and its prompt', async () => {
-    const remix = { remix: 'gen-9', remixPost: 'post-9', prompt: PROMPT, guided: '1' };
-    showRoute(pushedRoute('/create/[tool]', { tool: 'video', ...remix }));
+    const remix = { remix: 'gen-9', remixPost: 'post-9', prompt: AWKWARD_PROMPT, guided: '1' };
+    state.rootState = stateInFront(pushedRoute('/create/[tool]', { tool: 'video', ...remix }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
@@ -437,9 +429,11 @@ describe('recovering from a session ended elsewhere', () => {
     unmount();
   });
 
-  it('brings the reel back on the item it was on, without the zoom it opened with', async () => {
+  // The zoom follows the post on screen (`useAppleZoomRetarget`); the route's
+  // own `initialId` stays the post the reel opened on, and that comes back.
+  it('brings the reel back on the post it was opened on, without the zoom it opened with', async () => {
     const reel = { source: 'home', initialId: 'post-9', feedSessionId: 'feed-1' };
-    showRoute(pushedRoute('/viewer', { ...reel, [APPLE_ZOOM_SOURCE_PARAM]: 'zoom|r1|post-9' }));
+    state.rootState = stateInFront(pushedRoute('/viewer', { ...reel, [APPLE_ZOOM_SOURCE_PARAM]: 'zoom|r1|post-14' }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
@@ -453,9 +447,9 @@ describe('recovering from a session ended elsewhere', () => {
   // The composer answers a sign-out by redirecting to sign-in itself: the
   // screen to come back to is the one in front when the session ended.
   it('returns to the screen the session ended on, not where a screen moved during the sign-out', async () => {
-    showRoute(pushedRoute('/post/new', { generationId: 'gen-9' }));
+    state.rootState = stateInFront(pushedRoute('/post/new', { generationId: 'gen-9' }));
     state.clearPersistedSession.mockImplementation(async () => {
-      showRoute(pushedRoute('/auth', { returnTo: '/post/new?generationId=gen-9' }));
+      state.rootState = stateInFront(pushedRoute('/auth', { returnTo: '/post/new?generationId=gen-9' }));
     });
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
@@ -468,7 +462,7 @@ describe('recovering from a session ended elsewhere', () => {
   });
 
   it('falls back to Home when the route on screen is the sign-in screen itself', async () => {
-    showRoute(pushedRoute('/auth', { returnTo: '/post/post-9' }));
+    state.rootState = stateInFront(pushedRoute('/auth', { returnTo: '/post/post-9' }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 

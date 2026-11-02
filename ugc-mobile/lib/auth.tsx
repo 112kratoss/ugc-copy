@@ -1720,7 +1720,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (accountDeletionInFlightRef.current || isEndedDeletionSession(refusedSession)) return;
 
     const wasGuest = isGuestSession(refusedSession);
-    const returnTo = screenInFront();
+    const returnTo = wasGuest ? null : screenInFront();
     beginFeedIdentityTransition(refusedSession)?.commit();
     // Local only: the push unregister route, like every other, would be
     // refused as the request that started this was.

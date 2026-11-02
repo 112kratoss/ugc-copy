@@ -123,7 +123,7 @@ vi.mock('../lib/supabase', () => ({
 import { GUEST_MERGE_PREPARE_ERROR_CODE } from '../lib/auth-error-copy';
 import { APPLE_ZOOM_SOURCE_PARAM } from '../lib/apple-zoom';
 import { AuthProvider, useAuth } from '../lib/auth';
-import { homeTabs, pushedRoute, rootStateWith, type StateFixture } from './fixtures/navigation-state';
+import { pushedRoute, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
 function sessionFor(user: Record<string, unknown>) {
   return {
@@ -172,7 +172,7 @@ describe('abandoning a guest session the server has merged', () => {
     state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
     state.queryClient.clear.mockReset();
     state.queryClient.removeQueries.mockReset();
-    state.rootState = rootStateWith(homeTabs());
+    state.rootState = stateInFront();
     state.prepareGuestAccountMerge.mockReset();
     state.signInWithPassword.mockReset();
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
@@ -208,7 +208,7 @@ describe('abandoning a guest session the server has merged', () => {
 
   // Audit 01-12: signed in, the person comes back to the page they were on.
   it('carries the route the guest was on to the sign-in screen', async () => {
-    state.rootState = rootStateWith(homeTabs(), pushedRoute('/creators/[username]', { username: 'luna' }));
+    state.rootState = stateInFront(pushedRoute('/creators/[username]', { username: 'luna' }));
     const { latest, unmount } = await mountWith(guestSession);
 
     await renderer.act(async () => {
@@ -223,9 +223,9 @@ describe('abandoning a guest session the server has merged', () => {
     unmount();
   });
 
-  it('carries the reel on the item the guest was on, without the zoom it opened with', async () => {
+  it('carries the reel on the post the guest opened it on, without the zoom it opened with', async () => {
     const reel = pushedRoute('/viewer', { source: 'home', initialId: 'post-9', [APPLE_ZOOM_SOURCE_PARAM]: 'zoom|r1|post-9' });
-    state.rootState = rootStateWith(homeTabs(), reel);
+    state.rootState = stateInFront(reel);
     const { latest, unmount } = await mountWith(guestSession);
 
     await renderer.act(async () => {
