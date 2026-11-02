@@ -16,7 +16,6 @@ import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting, costShown } from './fixtures/creator-column-bar';
 import { outsideAct } from './fixtures/outside-act';
-import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
 
 const modelCatalogState = vi.hoisted(() => ({
