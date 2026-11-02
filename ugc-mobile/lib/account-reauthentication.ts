@@ -66,16 +66,23 @@ export function getAccountReauthenticationMethods(
   ]);
 
   // Apple requires its own authorization code for token revocation, even when
-  // another identity is linked to the same Magicbooklet account. Off iOS the
-  // app cannot get one, and the website can.
-  if (providers.has('apple')) {
-    return platform === 'ios' ? ['apple'] : ['website'];
-  }
+  // another identity is linked to the same Magicbooklet account.
+  if (providers.has('apple')) return getAppleReauthenticationMethods(platform);
 
   const methods: AccountReauthenticationMethod[] = [];
   if (providers.has('email') || (providers.size === 0 && user.email)) methods.push('password');
   if (providers.has('google')) methods.push('google');
   return methods;
+}
+
+/**
+ * The ways to confirm a deletion for an account with an Apple identity, read
+ * from the session or learned from the server's APPLE_REAUTH_REQUIRED. An
+ * iPhone or iPad gets Apple's code from the native sheet; anywhere else only
+ * the website can.
+ */
+export function getAppleReauthenticationMethods(platform = Platform.OS): AccountReauthenticationMethod[] {
+  return platform === 'ios' ? ['apple'] : ['website'];
 }
 
 export async function reauthenticateAccountForDeletion({

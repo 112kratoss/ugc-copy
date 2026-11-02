@@ -8,6 +8,7 @@ vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
 import {
   AccountReauthenticationAccountMismatchError,
   getAccountReauthenticationMethods,
+  getAppleReauthenticationMethods,
   reauthenticateAccountForDeletion,
 } from '../lib/account-reauthentication';
 
@@ -191,5 +192,13 @@ describe('an Apple account off iOS deletes itself on the website', () => {
 
   it('keeps the native Apple sheet on iOS', () => {
     expect(getAccountReauthenticationMethods(user('user-1', ['apple']), 'ios')).toEqual(['apple']);
+  });
+
+  // What the deletion screen offers once the server's APPLE_REAUTH_REQUIRED
+  // says the account has Apple, whatever this session's copy of it says.
+  it('gives an account the server says has Apple the same ways as one the session shows with Apple', () => {
+    expect(getAppleReauthenticationMethods('ios')).toEqual(['apple']);
+    expect(getAppleReauthenticationMethods('android')).toEqual(['website']);
+    expect(getAppleReauthenticationMethods()).toEqual(['apple']); // the mocked Platform.OS
   });
 });

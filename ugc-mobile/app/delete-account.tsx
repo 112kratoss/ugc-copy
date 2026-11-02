@@ -9,7 +9,9 @@ import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import {
   ACCOUNT_DELETION_SCHEDULED_NOTICE,
   AccountReauthenticationFailedError,
+  getAppleReauthenticationMethods,
   isAccountReauthenticationRequired,
+  isAppleReauthenticationRequired,
   useAuth,
   type AccountDeletionReauthentication,
   type AccountReauthenticationMethod,
@@ -94,10 +96,17 @@ export default function DeleteAccountScreen() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
   const [needsReauthentication, setNeedsReauthentication] = useState(false);
+  // Set by the server's APPLE_REAUTH_REQUIRED. The server reads the account
+  // afresh, so it knows of an Apple sign-in linked since this session began.
+  const [serverRequiresApple, setServerRequiresApple] = useState(false);
   const [failure, setFailure] = useState<DeletionFailure | null>(null);
   const isConfirmed = confirmation.trim().toUpperCase() === 'DELETE';
-  // An Apple account off iOS: only the website can get Apple's code.
-  const continuesOnWebsite = accountReauthenticationMethods.includes('website');
+  const reauthenticationMethods = serverRequiresApple
+    ? getAppleReauthenticationMethods()
+    : accountReauthenticationMethods;
+  // An Apple account off iOS, once the server asks for Apple: only the website
+  // can get Apple's code, so nothing on this phone completes the deletion.
+  const continuesOnWebsite = needsReauthentication && reauthenticationMethods.includes('website');
   // A seller's balance not yet paid out goes with the account, so the screen
   // says how much before anything is typed. It never holds the deletion up.
   const payoutQuery = useCreatorPayoutState();
@@ -131,12 +140,13 @@ export default function DeleteAccountScreen() {
         : ACCOUNT_DELETION_SCHEDULED_NOTICE);
     } catch (nextError) {
       if (nextError instanceof AccountReauthenticationFailedError) {
-        setFailure(reauthenticationFailure(nextError, accountReauthenticationMethods));
+        setFailure(reauthenticationFailure(nextError, reauthenticationMethods));
         setIsDeleting(false);
         return;
       }
       if (isAccountReauthenticationRequired(nextError)) {
         setNeedsReauthentication(true);
+        if (isAppleReauthenticationRequired(nextError)) setServerRequiresApple(true);
         if (reauthentication) {
           setFailure(notDeleted(nextError instanceof Error
             ? nextError.message
@@ -189,7 +199,7 @@ export default function DeleteAccountScreen() {
               : 'Sign in again with the same account. After verification, deletion continues immediately.'}
           </AppText>
 
-          {accountReauthenticationMethods.includes('password') ? (
+          {reauthenticationMethods.includes('password') ? (
             <View style={{ gap: appTheme.spacing.gap }}>
               <AppTextInput
                 accessibilityLabel="Current password for account deletion"
@@ -218,7 +228,7 @@ export default function DeleteAccountScreen() {
             </View>
           ) : null}
 
-          {accountReauthenticationMethods.includes('google') ? (
+          {reauthenticationMethods.includes('google') ? (
             <SecondaryButton
               disabled={isDeleting}
               label={isDeleting ? 'Verifying…' : 'Continue with Google and delete'}
@@ -226,7 +236,7 @@ export default function DeleteAccountScreen() {
             />
           ) : null}
 
-          {accountReauthenticationMethods.includes('apple') && Platform.OS === 'ios' ? (
+          {reauthenticationMethods.includes('apple') && Platform.OS === 'ios' ? (
             <AppleAuthentication.AppleAuthenticationButton
               accessibilityLabel="Continue with Apple and delete"
               buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
@@ -243,7 +253,7 @@ export default function DeleteAccountScreen() {
             <WebLinkButton href={`${env.siteUrl}/delete-account`} label="Continue on the website" />
           ) : null}
 
-          {accountReauthenticationMethods.length === 0 ? (
+          {reauthenticationMethods.length === 0 ? (
             <StatusBlock
               tone="warning"
               title="Use the original sign-in device"
@@ -253,20 +263,23 @@ export default function DeleteAccountScreen() {
         </Card>
       ) : null}
 
-      <View style={{ gap: appTheme.spacing.gap }}>
-        <AppText variant="bodySm" color="muted">
-          Type DELETE to permanently remove {user?.email ?? 'this account'}.
-        </AppText>
-        <AppTextInput
-          accessibilityLabel="Type DELETE to confirm"
-          autoCapitalize="characters"
-          editable={!isDeleting}
-          label="Confirmation"
-          onChangeText={setConfirmation}
-          placeholder="DELETE"
-          value={confirmation}
-        />
-      </View>
+      {/* Nothing here acts on it once the deletion continues on the website. */}
+      {!continuesOnWebsite ? (
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <AppText variant="bodySm" color="muted">
+            Type DELETE to permanently remove {user?.email ?? 'this account'}.
+          </AppText>
+          <AppTextInput
+            accessibilityLabel="Type DELETE to confirm"
+            autoCapitalize="characters"
+            editable={!isDeleting}
+            label="Confirmation"
+            onChangeText={setConfirmation}
+            placeholder="DELETE"
+            value={confirmation}
+          />
+        </View>
+      ) : null}
 
       {!needsReauthentication ? (
         <PrimaryButton
