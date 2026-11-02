@@ -314,10 +314,29 @@ confirmations without a sender would silently block every affected sign-in.
 Set up on 2026-11-02: Services ID `com.magicbooklet.mobile.web` ("Magicbooklet
 Web", primary App ID `5HNNML93ST.com.magicbooklet.mobile`), its client secret
 signed with the Sign in with Apple key `6924Q753C6` of team `5HNNML93ST`, and
-Client IDs `com.magicbooklet.mobile.web,com.magicbooklet.mobile`. **That secret
-expires 2027-05-01.** Renew it before then with step 2 below
-(`--key-id 6924Q753C6 --team-id 5HNNML93ST --client-id com.magicbooklet.mobile.web`)
-and paste it over the old one.
+Client IDs `com.magicbooklet.mobile.web,com.magicbooklet.mobile`. The secret
+minted by hand that day expires 2027-05-01.
+
+Renewal is automatic. On the 1st of every month
+`.github/workflows/apple-web-client-secret.yml` mints a fresh 180-day secret and
+installs it in the Supabase Apple provider through the Management API, so the
+live one is never more than about a month old. The workflow's settings:
+
+- Environment: `production`.
+- Key: the `APPLE_SIGN_IN_PRIVATE_KEY` environment secret, the same `.p8` as
+  Vercel's.
+- Supabase access: the environment's `SUPABASE_ACCESS_TOKEN`.
+
+Before installing, the script checks that the provider is on, that the Services
+ID is first in Client IDs and that the bundle id is still listed; it then probes
+the result. A failed run emails whoever last edited its schedule and opens the
+issue "Apple web client secret renewal is failing", and a failure leaves about
+five months before the live secret ends. To renew at once, run the workflow by
+hand from Actions (`workflow_dispatch`), or do step 2 below. While the
+repository is public, GitHub switches scheduled workflows off after 60 days
+without activity, and switching one back on restarts it. Once the repository is
+private, each run costs under a minute of the Actions allowance: it installs
+nothing, because the script signs with Node's own crypto.
 
 The iPhone app signs in with Apple natively (`signInWithIdToken`, audience the
 bundle id). The website's Continue with Apple buttons (the login page's tabs and
@@ -343,15 +362,17 @@ Apple's invalid_client page.
    `node scripts/ops/apple-web-client-secret.mjs --p8 <AuthKey_….p8> --key-id <key id> --team-id <APPLE_TEAM_ID> --client-id <Services ID>`.
    It puts the secret on the clipboard (or in a new file with `--out`), never on
    the screen, and prints its expiry. The key file can be Apple's download or the
-   one-line form `.env` files keep. The `.p8` behind `APPLE_SIGN_IN_KEY_ID`
-   serves, and then revoking or rotating that key ends both this secret and the
-   account-deletion revocation, which signs with it. The secret lives 180 days
-   (Apple's ceiling is six months): every web Apple sign-in fails from that day,
-   so put the date in the calendar and mint the next one before it. Nothing can
-   check a secret before a real web sign-in (Apple answers a made-up code the
-   same way whoever signed it), so a wrong key id, team or Services ID shows only
-   then, in production logs as `auth_callback_provider_error` from
-   `/auth/callback`, as a lapse does.
+   one-line form `.env` files keep. With `--install-supabase` and
+   `SUPABASE_ACCESS_TOKEN` it installs the secret in Supabase itself instead, as
+   the monthly workflow does. The `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves.
+   Revoking or rotating that key therefore ends this secret and the
+   account-deletion revocation, which signs with it; put the new key in Vercel
+   and in the workflow's environment secret. The secret lives 180 days (Apple's
+   ceiling is six months), and every web Apple sign-in fails from that day.
+   Nothing can check a secret before a real web sign-in, because Apple answers a
+   made-up code the same way whoever signed it. So a wrong key id, team or
+   Services ID shows only then, in production logs as
+   `auth_callback_provider_error` from `/auth/callback`, as a lapse does.
 3. Supabase Dashboard → Authentication → Providers → Apple: Client IDs is a
    comma-separated list with the Services ID first, then the bundle id.
    Supabase sends the first entry to Apple for the web flow and accepts any of
