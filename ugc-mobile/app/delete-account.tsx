@@ -96,6 +96,8 @@ export default function DeleteAccountScreen() {
   const [needsReauthentication, setNeedsReauthentication] = useState(false);
   const [failure, setFailure] = useState<DeletionFailure | null>(null);
   const isConfirmed = confirmation.trim().toUpperCase() === 'DELETE';
+  // An Apple account off iOS: only the website can get Apple's code.
+  const continuesOnWebsite = accountReauthenticationMethods.includes('website');
   // A seller's balance not yet paid out goes with the account, so the screen
   // says how much before anything is typed. It never holds the deletion up.
   const payoutQuery = useCreatorPayoutState();
@@ -182,7 +184,9 @@ export default function DeleteAccountScreen() {
         <Card style={{ gap: appTheme.spacing.gap }}>
           <AppText variant="cardTitle">Confirm your identity</AppText>
           <AppText variant="bodySm" color="muted">
-            Sign in again with the same account. After verification, deletion continues immediately.
+            {continuesOnWebsite
+              ? 'This account uses Sign in with Apple, which the app can confirm only on an iPhone. The deletion continues on the website: sign in there with the same account, then continue with Apple.'
+              : 'Sign in again with the same account. After verification, deletion continues immediately.'}
           </AppText>
 
           {accountReauthenticationMethods.includes('password') ? (
@@ -233,6 +237,10 @@ export default function DeleteAccountScreen() {
               }}
               style={{ height: APPLE_BUTTON_HEIGHT, width: '100%', opacity: isDeleting ? appTheme.opacity.disabled : 1 }}
             />
+          ) : null}
+
+          {continuesOnWebsite ? (
+            <WebLinkButton href={`${env.siteUrl}/delete-account`} label="Continue on the website" />
           ) : null}
 
           {accountReauthenticationMethods.length === 0 ? (

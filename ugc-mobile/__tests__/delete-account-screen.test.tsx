@@ -16,7 +16,7 @@ type PayoutState = {
 };
 
 const authState = vi.hoisted(() => ({
-  accountReauthenticationMethods: ['apple'] as Array<'password' | 'google' | 'apple'>,
+  accountReauthenticationMethods: ['apple'] as Array<'password' | 'google' | 'apple' | 'website'>,
   api: { getCreatorPayoutState: vi.fn() },
   deleteAccount: vi.fn(),
   isGuest: false,
@@ -322,6 +322,58 @@ describe('DeleteAccountScreen reauthentication', () => {
       title: 'Your account is being deleted',
       message: 'You have been signed out.',
     });
+  });
+});
+
+// An Apple account off iOS: the server needs Apple's own code to delete it
+// (APPLE_REAUTH_REQUIRED), which only the website can get there, so the card
+// sends the person to its /delete-account instead of to a dead end.
+describe('DeleteAccountScreen and the website', () => {
+  const websiteLinks = (tree: renderer.ReactTestRenderer) => byType(tree, 'web-link-button')
+    .filter((node) => node.props.label === 'Continue on the website');
+  const signInAgain = 'Sign in again with the same account. After verification, deletion continues immediately.';
+
+  it('sends an Apple account on Android on to the website, after a sign-in there, once the server asks for Apple', async () => {
+    platformState.os = 'android';
+    authState.accountReauthenticationMethods = ['website'];
+    authState.deleteAccount.mockRejectedValueOnce(Object.assign(
+      new Error('Continue with Apple before permanently deleting your account.'),
+      { code: 'APPLE_REAUTH_REQUIRED' },
+    ));
+    const tree = renderScreen();
+    expect(websiteLinks(tree)).toHaveLength(0);
+
+    await requestInitialDeletion(tree);
+
+    expect(websiteLinks(tree).map((node) => node.props.href)).toEqual(['https://site.example/delete-account']);
+    expect(texts(tree)).toContain(
+      'This account uses Sign in with Apple, which the app can confirm only on an iPhone. The deletion continues on the website: sign in there with the same account, then continue with Apple.',
+    );
+    expect(texts(tree)).not.toContain(signInAgain);
+    // No sign-in of the phone's own, and no "use the original device" dead end.
+    expect(byType(tree, 'apple-button')).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Current password for account deletion' })).toHaveLength(0);
+    expect(byType(tree, 'secondary-button').map((node) => node.props.label)).toEqual(['Keep my account']);
+    expect(byType(tree, 'status-block')).toHaveLength(0);
+    expect(tree.root.findAllByProps({ label: 'Permanently delete account' })).toHaveLength(0);
+    expect(authState.deleteAccount.mock.calls).toEqual([[undefined]]);
+  });
+
+  it.each([
+    ['ios', ['apple'], 'APPLE_REAUTH_REQUIRED'],
+    ['ios', ['password', 'google'], 'RECENT_AUTH_REQUIRED'],
+    ['android', ['password'], 'RECENT_AUTH_REQUIRED'],
+    ['android', ['google'], 'RECENT_AUTH_REQUIRED'],
+  ] as const)('keeps every account it can confirm on %s (%j) in the app', async (os, methods, code) => {
+    platformState.os = os;
+    authState.accountReauthenticationMethods = [...methods];
+    authState.deleteAccount.mockRejectedValueOnce(Object.assign(new Error('Sign in again.'), { code }));
+    const tree = renderScreen();
+
+    await requestInitialDeletion(tree);
+
+    expect(texts(tree)).toContain(signInAgain);
+    expect(websiteLinks(tree)).toHaveLength(0);
   });
 });
 

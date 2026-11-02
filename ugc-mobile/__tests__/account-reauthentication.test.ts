@@ -115,7 +115,7 @@ describe('account deletion reauthentication', () => {
     const linkedUser = user('user-1', ['email', 'apple']);
 
     expect(getAccountReauthenticationMethods(linkedUser, 'ios')).toEqual(['apple']);
-    expect(getAccountReauthenticationMethods(linkedUser, 'android')).toEqual([]);
+    expect(getAccountReauthenticationMethods(linkedUser, 'android')).toEqual(['website']);
   });
 
   it('offers password and Google for non-Apple linked identities', () => {
@@ -145,7 +145,7 @@ describe('Google reauthentication on iOS and Android alike', () => {
     // sign-in cannot stand in for it (APPLE_REAUTH_REQUIRED).
     const linked = user('user-1', ['google', 'apple']);
     expect(getAccountReauthenticationMethods(linked, 'ios')).toEqual(['apple']);
-    expect(getAccountReauthenticationMethods(linked, 'android')).toEqual([]);
+    expect(getAccountReauthenticationMethods(linked, 'android')).toEqual(['website']);
   });
 
   it.each(['ios', 'android'] as const)('runs the same Google OAuth on %s and checks it came back to the same account', async (platform) => {
@@ -162,5 +162,34 @@ describe('Google reauthentication on iOS and Android alike', () => {
     })).resolves.toEqual({ session: session(currentUser) });
     expect(googleSignIn).toHaveBeenCalledWith(supabase);
     expect(supabase.auth.getSession).toHaveBeenCalledOnce();
+  });
+});
+
+// Off iOS the app cannot get Apple's code, which the server needs to revoke
+// Apple's token (APPLE_REAUTH_REQUIRED), and the website's /delete-account can:
+// it signs the person in and runs its own Continue with Apple.
+describe('an Apple account off iOS deletes itself on the website', () => {
+  it.each([
+    ['Apple alone', ['apple']],
+    ['Apple and a password', ['email', 'apple']],
+    ['Apple and Google', ['google', 'apple']],
+  ])('sends an account with %s on Android to the website, and to no sign-in of its own', (_name, providers) => {
+    expect(getAccountReauthenticationMethods(user('user-1', providers), 'android')).toEqual(['website']);
+  });
+
+  it('reads the Apple identity from the account metadata when the identities list is missing', () => {
+    const fromMetadata = { ...user('user-1', ['apple']), identities: undefined };
+    expect(getAccountReauthenticationMethods(fromMetadata, 'android')).toEqual(['website']);
+  });
+
+  it.each([
+    ['a password', ['email'], ['password']],
+    ['Google', ['google'], ['google']],
+  ])('sends no account without Apple to the website: %s stays in the app', (_name, providers, methods) => {
+    expect(getAccountReauthenticationMethods(user('user-1', providers), 'android')).toEqual(methods);
+  });
+
+  it('keeps the native Apple sheet on iOS', () => {
+    expect(getAccountReauthenticationMethods(user('user-1', ['apple']), 'ios')).toEqual(['apple']);
   });
 });

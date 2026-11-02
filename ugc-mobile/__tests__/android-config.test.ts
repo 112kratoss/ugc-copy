@@ -422,6 +422,18 @@ end
     expect(appJson.expo.ios.associatedDomains).toContain(`applinks:${contract.host}`);
   });
 
+  it('keeps the website deletion page out of the app links', () => {
+    // Off iOS an Apple account deletes itself on /delete-account: the app opens
+    // it in the browser, and Apple returns its one-time code to it there. As an
+    // app link, the phone would hand both to the app and the deletion would stop.
+    const contract = JSON.parse(
+      readFileSync(join(projectRoot, '..', 'contracts', 'universal-links-v1.json'), 'utf8')
+    ) as { paths: string[] };
+    const covers = (path: string) => '/delete-account'.startsWith(path.endsWith('*') ? path.slice(0, -1) : path);
+
+    expect(contract.paths.filter(covers)).toEqual([]);
+  });
+
   it('sets a manifest placeholder and debug-only Gradle values for local HTTP', () => {
     const manifest: {
       manifest: {

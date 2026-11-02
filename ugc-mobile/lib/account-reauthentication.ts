@@ -4,7 +4,12 @@ import { Platform } from 'react-native';
 import { authorizeNativeAppleAccountDeletion } from './apple-auth';
 import { signInWithGoogleOAuth } from './google-auth';
 
-export type AccountReauthenticationMethod = 'password' | 'google' | 'apple';
+/**
+ * `website`: the deletion continues on the website's /delete-account, which
+ * signs the person in and runs its own Continue with Apple. Nothing on this
+ * device confirms it, so it is never an `AccountDeletionReauthentication`.
+ */
+export type AccountReauthenticationMethod = 'password' | 'google' | 'apple' | 'website';
 export type AccountDeletionReauthentication =
   | { method: 'password'; password: string }
   | { method: 'google' }
@@ -25,7 +30,7 @@ export class AccountReauthenticationAccountMismatchError extends Error {
  */
 export class AccountReauthenticationFailedError extends Error {
   constructor(
-    readonly method: AccountReauthenticationMethod,
+    readonly method: AccountDeletionReauthentication['method'],
     readonly failure: unknown,
   ) {
     super(failure instanceof Error ? failure.message : 'Sign-in verification failed.');
@@ -34,10 +39,11 @@ export class AccountReauthenticationFailedError extends Error {
 }
 
 /**
- * The ways this device can confirm a deletion for `user`. Apple needs an iPhone
- * or iPad (its native authorization code); the password and Google work on
- * either phone, as Google sign-in does since decision D1, so an account with a
- * Google identity is offered Google on iOS as well as Android.
+ * The ways the deletion screen offers to confirm a deletion for `user`. Apple
+ * needs an iPhone or iPad (its native authorization code), so anywhere else an
+ * account with an Apple identity is sent to the website; the password and
+ * Google work on either phone, as Google sign-in does since decision D1, so an
+ * account with a Google identity is offered Google on iOS as well as Android.
  */
 export function getAccountReauthenticationMethods(
   user: User | null,
@@ -60,9 +66,10 @@ export function getAccountReauthenticationMethods(
   ]);
 
   // Apple requires its own authorization code for token revocation, even when
-  // another identity is linked to the same Magicbooklet account.
+  // another identity is linked to the same Magicbooklet account. Off iOS the
+  // app cannot get one, and the website can.
   if (providers.has('apple')) {
-    return platform === 'ios' ? ['apple'] : [];
+    return platform === 'ios' ? ['apple'] : ['website'];
   }
 
   const methods: AccountReauthenticationMethod[] = [];
