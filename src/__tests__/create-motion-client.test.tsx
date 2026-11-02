@@ -256,6 +256,8 @@ let generationLookupBody: unknown = { generations: [] };
 let remixSourceBody: unknown = null;
 /** Holds each remix read until it settles. */
 let remixSourceHold: Promise<unknown> | null = null;
+/** What the first remix reads answer instead, in turn: a response, or an Error the fetch throws (the network). */
+let remixSourceFailures: Array<Response | Error> = [];
 /** A token the remix source refuses (401), as one expired. */
 let refusedRemixToken: string | null = null;
 /** The motion run already at work as the page opens, as the API describes it. */
@@ -290,6 +292,9 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
   }
   if (url.startsWith('/api/remix-source?') && remixSourceBody) {
     if (remixSourceHold) await remixSourceHold;
+    const failure = remixSourceFailures.shift();
+    if (failure instanceof Error) throw failure;
+    if (failure) return failure;
     return new Headers(init?.headers).get('Authorization') === `Bearer ${refusedRemixToken}`
       ? jsonResponse({ error: 'Unauthorized' }, 401)
       : jsonResponse(remixSourceBody);
@@ -428,6 +433,7 @@ beforeEach(() => {
   generationLookupBody = { generations: [] };
   remixSourceBody = null;
   remixSourceHold = null;
+  remixSourceFailures = [];
   refusedRemixToken = null;
   activeRun = null;
   activeRunAnswer = null;
@@ -2125,6 +2131,67 @@ describe('CreateMotionClient drafts and media', () => {
 
       expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
       expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token']);
+    });
+  });
+
+  // A read that fails is final for its form (#664) until the creator asks again: Try again on the
+  // failure notice reads under the form's account, and its answer keeps what the creator did since,
+  // words read against the prompt as the first read began.
+  describe('a remix read that failed', () => {
+    const remixPage = () => <CreateMotionClient prefill={{ remixId: 'generation-source' }} />;
+    const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
+
+    beforeEach(() => {
+      modelCatalogState.summaries = motionModelSummaries;
+      remixSourceBody = ROOFTOP_REMIX;
+    });
+
+    it('offers Try again, which reads the remix again and keeps words typed since the failure', async () => {
+      remixSourceFailures = [jsonResponse({ error: 'Too many requests' }, 429)];
+      const view = render(remixPage());
+      await screen.findByRole('button', { name: 'Try again' });
+      expect(screen.getByText(/Some source media could not be restored automatically/)).toBeInTheDocument();
+
+      fireEvent.change(box(), { target: { value: 'Moonwalk across the roof' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(screen.getByAltText('Character image')).toHaveAttribute('src', 'https://cdn.example/hero.png');
+      expect(box()).toHaveValue('Moonwalk across the roof');
+      expect(modelChip(view.container)).toHaveTextContent('Kling 2.6');
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token', 'Bearer test-token']);
+    });
+  });
+
+  // The first answer replaced the model and the inputs the creator had picked while it loaded; only
+  // typed words stayed. What the creator did meanwhile stays now, as the app's restore keeps it.
+  describe('edits made while a remix loads', () => {
+    const remixPage = () => <CreateMotionClient prefill={{ remixId: 'generation-source' }} />;
+    const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
+
+    beforeEach(() => {
+      modelCatalogState.summaries = motionModelSummaries;
+      remixSourceBody = ROOFTOP_REMIX;
+    });
+
+    it('keeps a model chosen and a picture picked while it loads, and takes the original’s clip', async () => {
+      let release: () => void = () => undefined;
+      remixSourceHold = new Promise<void>((resolve) => { release = resolve; });
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+      chooseModel(view.container, 'Kling 3.0 Motion');
+      pickFile(view.container, 'motion-character-image-input', new File(['selfie'], 'selfie.png', { type: 'image/png' }));
+      await waitFor(() => expect(screen.getByAltText('Character image').getAttribute('src')).toMatch(/^blob:/));
+      const selfie = screen.getByAltText('Character image').getAttribute('src');
+      await act(async () => release());
+
+      // The original's clip fills the slot the creator left empty.
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(screen.getByAltText('Character image')).toHaveAttribute('src', selfie);
+      expect(modelChip(view.container)).toHaveTextContent('Kling 3.0');
+      expect(box()).toHaveValue('Dance on the roof at dusk');
     });
   });
 

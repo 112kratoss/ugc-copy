@@ -826,18 +826,21 @@ function jsonResponse(status: number, body: unknown) {
  * Answers the start POSTs in order, the creation read the publish form makes, and the look
  * for a run already at work as the page opens (`activeRun`, none by default).
  */
-function installFetch({ starts = [], publishDetails = null, remixBundle = null, remixHold = null, activeRun = null, activeRunAnswer = null }: {
+function installFetch({ starts = [], publishDetails = null, remixBundle = null, remixHold = null, remixFailures = [], activeRun = null, activeRunAnswer = null }: {
   starts?: StartReply[];
   publishDetails?: unknown;
   /** The remix source, or what it answers each reader by their Authorization header (null: refused). */
   remixBundle?: RemixSourceBundle | ((authorization: string | undefined) => RemixSourceBundle | null) | null;
   /** Holds each remix read until it settles. */
   remixHold?: Promise<unknown> | null;
+  /** What the first remix reads answer instead, in turn: a status and body, or an Error the fetch throws (the network). */
+  remixFailures?: Array<{ status: number; body: unknown } | Error>;
   activeRun?: Record<string, unknown> | null;
   /** Answers the look in place of `activeRun`, when the test resolves it. */
   activeRunAnswer?: Promise<Response> | null;
 } = {}) {
   const replies = [...starts];
+  const failedReads = [...remixFailures];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url === '/api/generations' && init?.method === 'POST') {
@@ -852,6 +855,9 @@ function installFetch({ starts = [], publishDetails = null, remixBundle = null, 
     if (url === '/api/generations/active?tool=image') return activeRunAnswer ?? jsonResponse(200, { run: activeRun });
     if (url.startsWith('/api/remix-source?') && remixBundle) {
       if (remixHold) await remixHold;
+      const failure = failedReads.shift();
+      if (failure instanceof Error) throw failure;
+      if (failure) return jsonResponse(failure.status, failure.body);
       const bundle = typeof remixBundle === 'function' ? remixBundle(authorizationOf(init)) : remixBundle;
       return bundle ? jsonResponse(200, bundle) : jsonResponse(401, { error: 'Unauthorized' });
     }
@@ -925,6 +931,12 @@ function pressGenerate() {
 function frameShown() {
   const parts = (screen.getByTestId('creator-settings-summary').textContent ?? '').split(' · ');
   return parts.find((part) => /^(?:\d+:\d+|AUTO)$/.test(part))?.toLowerCase();
+}
+
+/** The resolution the bar's settings chip reads back ("2K"). */
+function resolutionShown() {
+  const parts = (screen.getByTestId('creator-settings-summary').textContent ?? '').split(' · ');
+  return parts.find((part) => /^\dK$/.test(part));
 }
 
 async function findResult() {
@@ -2334,6 +2346,138 @@ describe('CreateImageClient generation pipeline', () => {
 
       expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
       expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init as RequestInit))).toEqual(['Bearer test-token']);
+    });
+  });
+
+  // A read that fails (a 5xx, a 429, the network, a revoked session) is final for its form (#664): the
+  // token-driven re-read it replaced put the original over the creator's work, up to an hour later.
+  // The creator asks again instead, with Try again on the failure notice.
+  describe('a remix read that failed', () => {
+    const remixPage = () => <CreateImageClient prefill={{ remixId: 'gen-1' }} />;
+
+    beforeEach(() => {
+      modelCatalogState.summaries = [
+        ...imageModelSummaries,
+        { id: 'nano-banana-pro', kind: 'image', displayName: 'Nano Banana Pro', description: 'Test image model' },
+      ];
+    });
+
+    it('offers Try again, which reads the remix again under the form’s account and fills the form', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX, remixFailures: [{ status: 503, body: { error: 'Service unavailable' } }] });
+      render(remixPage());
+
+      const tryAgain = await screen.findByRole('button', { name: 'Try again' });
+      expect(screen.getByText(/Some source media could not be restored automatically/)).toBeInTheDocument();
+      expect(screen.queryByAltText('Hero shot')).toBeNull();
+
+      // The account's session was renewed meanwhile: the read goes with its newest token.
+      getSessionMock.mockResolvedValue({ data: { session: { access_token: 'renewed-token', user: { id: 'user-1' } } } });
+      fireEvent.click(tryAgain);
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByAltText('Umbrella')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      expect(screen.queryByText(/could not be restored automatically/)).toBeNull();
+      expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init as RequestInit)))
+        .toEqual(['Bearer test-token', 'Bearer renewed-token']);
+    });
+
+    // The words are read against the prompt as the first read began, so words typed after the failure
+    // are the creator's too, and so is a model picked then.
+    it('keeps words typed and a model picked after the failure through Try again’s answer', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX, remixFailures: [new TypeError('Failed to fetch')] });
+      const view = render(remixPage());
+      await screen.findByRole('button', { name: 'Try again' });
+
+      typePrompt('@lead rows across the harbour at noon');
+      chooseModel(view.container, 'Nano Banana Pro');
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead rows across the harbour at noon');
+      expect(modelChip(view.container)).toHaveTextContent('Nano Banana Pro');
+      expect(remixReads(fetchMock)).toHaveLength(2);
+    });
+  });
+
+  // The first answer replaced the model, settings and pictures the creator had picked while it loaded;
+  // only typed words stayed. What the creator did meanwhile stays now, as the app's restore keeps it:
+  // the original's model and settings give way only to ones picked by hand (a remix opens on its
+  // original's whatever the balance, #649), and its pictures fill the room the creator's leave.
+  describe('edits made while a remix loads', () => {
+    const remixPage = () => <CreateImageClient prefill={{ remixId: 'gen-1' }} />;
+    const attachPicture = (container: HTMLElement, name: string) => fireEvent.change(
+      container.querySelector<HTMLInputElement>('input[type="file"][multiple]')!,
+      { target: { files: [new File([name], `${name}.png`, { type: 'image/png' })] } },
+    );
+    /** The remix source, held until the test lets it answer. */
+    function heldRemix(bundle: RemixSourceBundle) {
+      let answer: () => void = () => undefined;
+      const fetchMock = installFetch({ remixBundle: bundle, remixHold: new Promise<void>((resolve) => { answer = resolve; }) });
+      return { fetchMock, release: () => act(async () => answer()) };
+    }
+
+    beforeEach(() => {
+      modelCatalogState.summaries = [
+        ...imageModelSummaries,
+        { id: 'nano-banana-pro', kind: 'image', displayName: 'Nano Banana Pro', description: 'Test image model' },
+      ];
+    });
+
+    it('keeps a picture added while it loads, with the original’s pictures beside it', async () => {
+      const remix = heldRemix(HARBOUR_REMIX);
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads(remix.fetchMock)).toHaveLength(1));
+
+      attachPicture(view.container, 'selfie');
+      expect(await screen.findByAltText('Element 1')).toBeInTheDocument();
+      await remix.release();
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByAltText('Umbrella')).toBeInTheDocument();
+      expect(screen.getByAltText('Element 1')).toBeInTheDocument();
+      // No words were typed: the original's come back.
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
+    });
+
+    it('brings back as many of the original’s pictures as the model has room for beside the creator’s, and says so', async () => {
+      const ten = Array.from({ length: 10 }, (_, index) => ({
+        id: `remix-${index + 1}`,
+        displayName: `Ref ${index + 1}`,
+        handle: `@ref_${index + 1}`,
+        url: `https://signed.example.com/${index + 1}.png`,
+        storagePath: `generation_inputs/owner-1/gen-1/${String(index).padStart(2, '0')}.png`,
+        sourceGenerationId: 'gen-1',
+      }));
+      const remix = heldRemix({ ...HARBOUR_REMIX, inputs: { image: { elements: ten } } });
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads(remix.fetchMock)).toHaveLength(1));
+
+      attachPicture(view.container, 'selfie');
+      expect(await screen.findByAltText('Element 1')).toBeInTheDocument();
+      await remix.release();
+
+      // Nano Banana 2 takes 10: nine of the original's beside the creator's one.
+      expect(await screen.findByText(/takes up to 10 reference images, so with the 1 you added, 9 of this run's 10 came back\./)).toBeInTheDocument();
+      expect(screen.getByAltText('Ref 9')).toBeInTheDocument();
+      expect(screen.queryByAltText('Ref 10')).toBeNull();
+      expect(screen.getByAltText('Element 1')).toBeInTheDocument();
+    });
+
+    it('keeps a model and a ratio picked while it loads, and takes the original’s other settings', async () => {
+      const remix = heldRemix({ ...HARBOUR_REMIX, workflowSettings: { model: 'nano-banana-2', aspectRatio: '9:16', resolution: '2K' } });
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads(remix.fetchMock)).toHaveLength(1));
+
+      chooseModel(view.container, 'Nano Banana Pro');
+      chooseAspectRatio('1:1');
+      await remix.release();
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(modelChip(view.container)).toHaveTextContent('Nano Banana Pro');
+      expect(frameShown()).toBe('1:1');
+      expect(resolutionShown()).toBe('2K');
     });
   });
 

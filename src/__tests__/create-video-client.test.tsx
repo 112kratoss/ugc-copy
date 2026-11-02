@@ -612,12 +612,23 @@ describe('CreateVideoClient Kling video elements', () => {
   }
 
   /** Answers the page's remix request with this bundle, and every other request as the page's own answers do. */
-  /** The remix source answers `bundle`: after `hold` settles, and refusing `refusedToken` (401) as one expired. */
-  /** `bundle` may be a function: each read then answers it as it is then (links signed as it answers). */
-  function stubRemix(bundle: RemixSourceBundle | (() => RemixSourceBundle), { hold = null, refusedToken = null }: { hold?: Promise<unknown> | null; refusedToken?: string | null } = {}) {
+  /**
+   * The remix source answers `bundle`: after `hold` settles, refusing `refusedToken` (401) as one expired, and
+   * the first reads with `failures` in turn (a status and body, or an Error the fetch throws: the network).
+   * `bundle` may be a function: each read then answers it as it is then (links signed as it answers).
+   */
+  function stubRemix(bundle: RemixSourceBundle | (() => RemixSourceBundle), { hold = null, refusedToken = null, failures = [] }: {
+    hold?: Promise<unknown> | null;
+    refusedToken?: string | null;
+    failures?: Array<{ status: number; body: unknown } | Error>;
+  } = {}) {
+    const failedReads = [...failures];
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (!String(input).includes('/api/remix-source')) return defaultResponse(input, init);
       if (hold) await hold;
+      const failure = failedReads.shift();
+      if (failure instanceof Error) throw failure;
+      if (failure) return { ok: false, status: failure.status, json: async () => failure.body } as Response;
       const answer = typeof bundle === 'function' ? bundle() : bundle;
       return (init?.headers as Record<string, string> | undefined)?.Authorization === `Bearer ${refusedToken}`
         ? { ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) } as Response
@@ -1422,6 +1433,27 @@ describe('CreateVideoClient Kling video elements', () => {
         await chooseInputs('References');
         await attachPictures(view.container, [picture('own')]);
         expect(screen.queryByRole('button', { name: /^Replace / })).toBeNull();
+      });
+
+      // The first answer put the original's pictures over one the creator added while it loaded. Theirs
+      // stays now, and the original's fill the room the model has left beside it.
+      it('keeps a picture added while it loads, and brings back as many of the original’s as the model has room for', async () => {
+        modelCatalogState.summaries = [{ id: 'seedance-1.5-pro', kind: 'video', displayName: 'Seedance 1.5 Pro', description: 'Test element-capable video model' }];
+        let release: () => void = () => undefined;
+        stubRemix(remixOf('seedance-1.5-pro'), { hold: new Promise<void>((resolve) => { release = resolve; }) });
+        const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+        chooseModel(view.container, 'Seedance 1.5 Pro');
+        await chooseInputs('References');
+        await attachPictures(view.container, [picture('own')]);
+        await act(async () => release());
+
+        // Seedance 1.5 Pro takes two: the original's first beside the creator's one.
+        expect(await screen.findByText(/Seedance 1\.5 Pro takes up to 2 reference images, so with the 1 you added, 1 of this run's 2 came back\./)).toBeInTheDocument();
+        expect(screen.getByAltText('Hero shot')).toBeInTheDocument();
+        expect(screen.getByAltText('Element 1')).toBeInTheDocument();
+        expect(screen.queryByAltText('Umbrella')).toBeNull();
       });
 
       const START = {
@@ -8080,6 +8112,51 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
         expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token']);
+      });
+
+      // A read that fails is final for its form (#664) until the creator asks again: Try again on the
+      // failure notice reads under the form's account.
+      it('offers Try again after a read that failed, which reads the remix again and fills the form', async () => {
+        authState.credits = 500;
+        stubRemix(remixOf({ duration: 5 }), { failures: [{ status: 500, body: { error: 'Internal error' } }] });
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(remixPromptBox()).toHaveValue('Two figures face off in a dim hall.');
+        await waitFor(() => expect(costShown()).toBe('140 credits'));
+        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token', 'Bearer test-token']);
+      });
+
+      // The first answer put the original's model and frames over a model picked and a frame added while
+      // it loaded. A model picked by hand stays, on the original's settings where it offers them (as a
+      // pick after the restore would), and so does the frame.
+      it('keeps a model picked and a start image added while it loads, on the original’s settings', async () => {
+        authState.credits = 22;
+        let release: () => void = () => undefined;
+        stubRemix(remixOf({ duration: 5 }), { hold: new Promise<void>((resolve) => { release = resolve; }) });
+        const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+        openModelList();
+        fireEvent.click(screen.getByRole('option', { name: /Seedance 2 Mini/ }));
+        const startField = await waitFor(() => {
+          const found = view.container.querySelector<HTMLInputElement>('#video-start-frame-input');
+          expect(found).not.toBeNull();
+          return found!;
+        });
+        fireEvent.change(startField, { target: { files: [new File(['frame'], 'start.jpg', { type: 'image/jpeg' })] } });
+        await screen.findByAltText('Start image');
+        await act(async () => release());
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(screen.getByAltText('Start image').getAttribute('src')).toMatch(/^blob:start\.jpg:/);
+        await waitFor(() => expect(costShown()).toBe('19 credits'));
+        expect(quoteStandIn.lastRequest()?.modelId).toBe('seedance-2-mini');
+        expect(screen.getByRole('button', { name: /^Generation settings: / })).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');
+        expect(remixPromptBox()).toHaveValue('Two figures face off in a dim hall.');
       });
 
       it('opens on its original while the balance covers it', async () => {
