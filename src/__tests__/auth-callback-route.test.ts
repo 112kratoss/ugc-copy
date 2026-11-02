@@ -244,6 +244,44 @@ describe('/auth/callback', () => {
       'https://magicbooklet.com/auth/auth-code-error?next=%2Fcreate'
     );
   });
+
+  // Supabase sends a provider's refusal back here with no code: Apple's Cancel
+  // (user_cancelled_authorize) and Google's (access_denied) are a change of mind,
+  // not a dead link.
+  it.each(['user_cancelled_authorize', 'access_denied'])(
+    'sends a sign-in cancelled at the provider (%s) back to sign in, keeping where it was going',
+    async (providerError) => {
+      const { GET } = await import('@/app/auth/callback/route');
+      const response = await GET(new Request(
+        `https://magicbooklet.com/auth/callback?next=%2Fcreate-video%3Fhandover%3Dnonce-1&error=${providerError}&error_description=The+user+cancelled`
+      ));
+
+      expect(mocks.createAuthRouteClient).not.toHaveBeenCalled();
+      expect(mocks.logBackendError).not.toHaveBeenCalled();
+      expect(response.headers.get('location')).toBe(
+        'https://magicbooklet.com/login?returnUrl=%2Fcreate-video%3Fhandover%3Dnonce-1'
+      );
+    },
+  );
+
+  // An expired Apple client secret fails every web Apple sign-in this way, and the
+  // person's page cannot say why, so the log has to.
+  it('logs any other provider failure that comes back without a code, then shows the error page', async () => {
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(new Request(
+      'https://magicbooklet.com/auth/callback?next=%2Fcreate&error=server_error&error_code=unexpected_failure&error_description=Unable+to+exchange+external+code'
+    ));
+
+    expect(mocks.createAuthRouteClient).not.toHaveBeenCalled();
+    expect(mocks.logBackendError).toHaveBeenCalledWith('auth_callback_provider_error', {
+      error: 'server_error',
+      errorCode: 'unexpected_failure',
+      errorDescription: 'Unable to exchange external code',
+    });
+    expect(response.headers.get('location')).toBe(
+      'https://magicbooklet.com/auth/auth-code-error?next=%2Fcreate'
+    );
+  });
 });
 
 describe('/auth/continue', () => {

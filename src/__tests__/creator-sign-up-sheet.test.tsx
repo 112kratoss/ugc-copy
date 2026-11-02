@@ -105,8 +105,6 @@ describe('the sign-up a visitor meets at Generate', () => {
     expect(redirectNext()).toBe('/create-video?handover=nonce-test-1234');
   });
 
-  // An account made with Sign in with Apple on an iPhone signs in here as itself (the runbook's
-  // "Sign in with Apple on the web"), and leaves the same way Google does.
   it('leaves for Apple the way it leaves for Google: the draft marked first, back with its nonce', async () => {
     renderSheet();
 
@@ -146,8 +144,11 @@ describe('the sign-up a visitor meets at Generate', () => {
     expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeEnabled();
   });
 
+  // auth-js builds the address and navigates, so what fails here is the start in this browser.
   it('names Apple when Apple cannot be started, and stays open', async () => {
-    mocks.signInWithOAuth.mockImplementation(async () => ({ data: {}, error: new Error('Unsupported provider: provider is not enabled') }));
+    mocks.signInWithOAuth.mockImplementation(async () => {
+      throw new Error('The operation is insecure.');
+    });
     renderSheet();
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));

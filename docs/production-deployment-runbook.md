@@ -143,7 +143,8 @@ These settings are intentionally verified against the provider dashboards/adviso
 - Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
 - Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
 - Google Auth Platform: set Branding app name to `Magicbooklet`, add `magicbooklet.com` as an authorized domain, publish/verify the OAuth consent screen, and keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
-- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified. Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
+- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified, and add the branded host and callback to the Apple Services ID before activation ("Sign in with Apple on the web" below). Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
+- Apple Services ID and the Supabase Apple provider for the website's Continue with Apple: the steps, the six-month client secret and `--probe-apple-web-sign-in` are under "Sign in with Apple on the web" below.
 - RevenueCat project `proj4a602455`: send a production test webhook for integration `whintgr1689ecfb68` to `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, then verify Vercel logs show the route accepted the signed event. Current configured event types are `cancellation`, `non_renewing_purchase`, and `refund_reversed`.
 
 The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
@@ -313,33 +314,56 @@ confirmations without a sender would silently block every affected sign-in.
 The iPhone app signs in with Apple natively (`signInWithIdToken`, audience the
 bundle id). The website's Continue with Apple buttons (the login page's tabs and
 the creators' sign-up sheet) use Supabase's web OAuth flow, which needs its own
-Apple client, a Services ID:
+Apple client, a Services ID. The buttons are drawn whatever the dashboard holds,
+so these steps come before the deploy that brings them: until then a press ends
+on Supabase's JSON 400 ("Unsupported provider: missing OAuth secret") or on
+Apple's invalid_client page.
 
 1. Apple Developer → Certificates, Identifiers & Profiles → Identifiers → add a
    Services ID (an identifier of its own, such as the bundle id with `.web`).
    Enable Sign in with Apple and configure it with the iPhone app's App ID as
-   its primary App ID, so that Apple gives the website the same user id as the
-   app and an account made on an iPhone signs in on the website as itself.
-   Domains: `ildfmhozpibwiopeavfg.supabase.co`. Return URL:
-   `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback`. If the Supabase
-   custom domain above is activated, add its host and its `/auth/v1/callback` too.
-2. Generate the OAuth client secret, a JWT signed with a Sign in with Apple key
-   (the `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves) for the Services ID; the
-   generator on Supabase's "Login with Apple" guide runs in the browser. Apple
-   caps it at six months, after which every web Apple sign-in fails: renew it
-   before then.
-3. Supabase Dashboard → Auth → Providers → Apple: Client IDs is a
+   its primary App ID, so the website and the app are one entry in a person's
+   Apple ID settings. Apple's user id is the same for every app of the team,
+   which is what makes an account made on an iPhone sign in on the website as
+   itself. Domains: `ildfmhozpibwiopeavfg.supabase.co`. Return URL:
+   `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback`. Before a
+   Supabase custom domain is activated (the dashboard gates above), add its host
+   and its `/auth/v1/callback` here as well: Supabase sends Apple the custom
+   callback from activation on, and Apple refuses a return URL it was not given.
+2. Mint the client secret on the Mac that holds the Sign in with Apple key, so
+   the key never goes into a web page:
+   `node scripts/ops/apple-web-client-secret.mjs --p8 <AuthKey_….p8> --key-id <key id> --team-id <APPLE_TEAM_ID> --client-id <Services ID> | pbcopy`.
+   The `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves, and then revoking or rotating
+   that key ends both this secret and the account-deletion revocation, which
+   signs with it. The secret lives 180 days (Apple's ceiling is six months) and
+   the script prints its expiry: every web Apple sign-in fails from that day,
+   so put the date in the calendar and mint the next one before it. A lapse
+   shows in production logs as `auth_callback_provider_error` from
+   `/auth/callback`.
+3. Supabase Dashboard → Authentication → Providers → Apple: Client IDs is a
    comma-separated list with the Services ID first, then the bundle id.
    Supabase sends the first entry to Apple for the web flow and accepts any of
    them as the audience of a native sign-in, so the bundle id must stay listed.
-   Put the secret in the secret field.
+   Paste the secret into the secret field and save.
+4. Check before the deploy, and after any change to these settings:
+   `npm run ops:external-gates -- --probe-apple-web-sign-in` reads where
+   Supabase sends a press of Continue with Apple, with no token, and fails
+   unless it is Apple's authorize page for a client other than the bundle id,
+   returning to the project's callback. It cannot see an expired secret. After
+   the deploy, sign in on the website with the Apple ID of an iPhone account and
+   check that it is the same account (handle and credits).
 
-Apple returns no name through the web flow, so an account made on the website
-gets its name from the profile setup that follows. Deleting an account with an
+Apple sends a person's name only the first time they authorize Magicbooklet,
+web or app, and Supabase keeps it then; an account made on the website without
+one gets it from the profile setup that follows. Deleting an account with an
 Apple identity stays in the iPhone app (the website's `/delete-account` says
 so): the deletion revokes the app's Apple authorization with the one-time code
 of a native sign-in (`apple-account-deletion-service.ts`), and Supabase's web
-flow exchanges Apple's code itself.
+flow exchanges Apple's code itself. That leaves the email request as the only
+way for an account with an Apple identity whose owner has no iPhone: one made
+with Apple on the website, or a Google account that Supabase linked an Apple
+sign-in to because both carry the same verified email. The Android app offers
+such an account no way to delete it (`ugc-mobile/lib/account-reauthentication.ts`).
 
 ### Legacy email/password accounts
 

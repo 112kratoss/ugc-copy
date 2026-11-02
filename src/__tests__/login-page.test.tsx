@@ -366,9 +366,8 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  // An account made with Sign in with Apple on an iPhone had no way in on the
-  // website. Supabase's Apple web flow, through a Services ID grouped with the
-  // app, signs it in as itself (the runbook's "Sign in with Apple on the web").
+  // Apple is Supabase's web flow, finished by /auth/callback like Google's (the
+  // runbook's "Sign in with Apple on the web").
   it('starts Apple from either tab, through the callback, with the destination kept', async () => {
     const signIn = await renderPageAt('returnUrl=%2Fcreate');
 
@@ -386,6 +385,8 @@ describe('LoginPage onboarding redirects', () => {
     // A started sign-in leaves the page, so the Sign-up tab is its own visit.
     signIn.unmount();
     await renderPageAt('mode=signup&next=%2Fcreate');
+    expect(screen.getByRole('button', { name: /^sign up$/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(2));
@@ -409,17 +410,42 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.getByRole('button', { name: /processing/i })).toBeDisabled();
   });
 
+  // auth-js builds the address and navigates, so a provider that is off shows its own
+  // error page; what fails here is the start in this browser, such as storing the
+  // PKCE verifier.
   it('names Apple when its sign-in cannot be started, and lets it be tried again', async () => {
     renderLogin();
     fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
-    mocks.signInWithOAuth.mockResolvedValueOnce({ error: new Error('Unsupported provider: provider is not enabled') });
+    mocks.signInWithOAuth.mockRejectedValueOnce(new Error('The operation is insecure.'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not start Apple sign-in. Try again.');
-    expect(screen.queryByText(/unsupported provider/i)).toBeNull();
+    expect(screen.queryByText(/insecure/i)).toBeNull();
     expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeEnabled();
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
+  });
+
+  it('is usable again on a page the browser brings back after leaving for Apple', async () => {
+    renderLogin();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
+    // A started sign-in leaves the page with every way in waiting.
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeDisabled();
+
+    // Back from Apple's page: an ordinary pageshow changes nothing, a restored one does.
+    act(() => {
+      window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    });
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeDisabled();
+    act(() => {
+      window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    });
+
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
+    expect(signInSubmitButton()).toBeEnabled();
   });
 
   it('allows an explicit auth redirect origin to override the public site URL', async () => {

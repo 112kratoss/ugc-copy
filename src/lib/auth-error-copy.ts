@@ -5,8 +5,7 @@
  * ("Invalid login credentials", "For security purposes, you can only request
  * this after 42 seconds"). Anything not recognised gets the caller's own
  * sentence: Supabase's text is written for a developer, and some of it (the
- * sign-up hook's refusal, the default mail sender's) names things this site
- * does not have.
+ * default mail sender's) names things this site does not have.
  */
 export function describeAuthError(error: unknown, fallback: string): string {
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
@@ -28,10 +27,6 @@ export function describeAuthError(error: unknown, fallback: string): string {
   }
   if (message.includes('too many requests') || message.includes('for security purposes') || message.includes('rate limit')) {
     return 'Too many attempts. Wait a minute before trying again.';
-  }
-  // The sign-up hook's own refusal, which names the two ways in this site offers.
-  if (message.includes('email sign-up is temporarily unavailable')) {
-    return 'Email sign-up is temporarily unavailable. Continue with Google or Apple.';
   }
   if (code === 'same_password' || message.includes('should be different from the old password')) {
     return 'Choose a password different from your current one.';

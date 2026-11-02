@@ -20,16 +20,6 @@ describe('describeAuthError', () => {
     expect(describeAuthError(authError(raw), FALLBACK)).toBe(shown);
   });
 
-  // Audit 01-9: the hook's refusal named Apple when the web did not offer it; it does now.
-  it('words the sign-up hook\'s refusal with the two ways in the site offers', () => {
-    const shown = describeAuthError(
-      authError('Email sign-up is temporarily unavailable. Continue with Google or Apple.', { status: 403 }),
-      FALLBACK,
-    );
-
-    expect(shown).toBe('Email sign-up is temporarily unavailable. Continue with Google or Apple.');
-  });
-
   it('says what to do about a reused password', () => {
     expect(describeAuthError(authError('New password should be different from the old password.', { status: 422, code: 'same_password' }), FALLBACK))
       .toBe('Choose a password different from your current one.');
@@ -39,6 +29,8 @@ describe('describeAuthError', () => {
   it.each([
     authError('Error sending confirmation email', { status: 500 }),
     authError('Signups not allowed for this instance', { status: 422 }),
+    // The sign-up hook's refusal: the web makes no email sign-up that could meet it.
+    authError('Email sign-up is temporarily unavailable. Continue with Google or Apple.', { status: 403 }),
     'Database error saving new user',
     { message: 'Unexpected failure, please check server logs for more information' },
     null,

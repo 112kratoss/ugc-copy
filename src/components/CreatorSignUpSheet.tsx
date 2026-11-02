@@ -10,12 +10,10 @@ import AppleLogo from '@/components/AppleLogo';
 import { getAccentClasses } from '@/components/DesignSystem';
 import { ModalSheet } from '@/components/ModalSheet';
 import SignInAgreement from '@/components/SignInAgreement';
-import { describeAuthError } from '@/lib/auth-error-copy';
-import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
 import { creatorSignUpReturnPath } from '@/lib/auth-onboarding';
 import { markVisitorDraftForHandover } from '@/lib/creator-visitor-draft';
 import type { CreatorDraftTool } from '@/lib/persisted-media';
-import { supabase } from '@/lib/supabase';
+import { startProviderSignIn, type SignInProvider } from '@/lib/provider-sign-in';
 
 /** What a signed-out visitor pressed that needs an account. */
 export type CreatorSignUpReason = 'generate' | 'enhance' | 'prepare';
@@ -91,7 +89,7 @@ function CreatorSignUpPanel({
   const router = useRouter();
   const agreementId = useId();
   const googleRef = useRef<HTMLButtonElement>(null);
-  const [leaving, setLeaving] = useState<'google' | 'apple' | 'email' | null>(null);
+  const [leaving, setLeaving] = useState<SignInProvider | 'email' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // A page the browser restores after leaving for Google or Apple (Back from its
@@ -110,18 +108,12 @@ function CreatorSignUpPanel({
     handsOverDraft ? markVisitorDraftForHandover(tool) : null,
   );
 
-  const continueWith = async (provider: 'google' | 'apple') => {
+  const continueWith = async (provider: SignInProvider) => {
     setLeaving(provider);
     setError(null);
-    try {
-      const { error: signInError } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: { redirectTo: getAuthCallbackUrl(returnPath()) },
-      });
-      if (signInError) throw signInError;
-    } catch (signInError) {
-      const name = provider === 'google' ? 'Google' : 'Apple';
-      setError(describeAuthError(signInError, `Could not start ${name} sign-in. Try again.`));
+    const failure = await startProviderSignIn(provider, returnPath());
+    if (failure) {
+      setError(failure);
       setLeaving(null);
     }
   };

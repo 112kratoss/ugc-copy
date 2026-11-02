@@ -9,15 +9,11 @@ import { supabase } from '@/lib/supabase';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, Info, WandSparkles } from 'lucide-react';
 import { buildAuthContinuePath } from '@/lib/auth-onboarding';
-import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
+import { startProviderSignIn, type SignInProvider } from '@/lib/provider-sign-in';
 import AppleLogo from '@/components/AppleLogo';
 import SignInAgreement from '@/components/SignInAgreement';
 
 const SUPPORT_MAILTO = `mailto:${siteConfig.supportEmail}`;
-
-type SignInProvider = 'google' | 'apple';
-
-const PROVIDER_NAMES: Record<SignInProvider, string> = { google: 'Google', apple: 'Apple' };
 
 export interface LoginClientProps {
     initialMode: 'login' | 'signup';
@@ -34,9 +30,6 @@ export interface LoginClientProps {
  * Sign-up tab is the two providers alone, and the Sign-in tab keeps email and
  * password for the few accounts made before that rule, whose way back in when
  * locked out is the support address. The app's sign-in screen says the same.
- * Apple here is Supabase's web flow, through the website's Services ID, which
- * Apple groups with the iPhone app so that an account made in the app signs in
- * here as itself (the runbook's "Sign in with Apple on the web").
  */
 export default function LoginClient({
     initialMode,
@@ -77,6 +70,16 @@ export default function LoginClient({
         };
     }, [redirectTo, router]);
 
+    // A page the browser restores after leaving for Google or Apple (Back from its
+    // sign-in page) comes back as it was left, every button waiting; it is usable again.
+    useEffect(() => {
+        const onPageShow = (event: PageTransitionEvent) => {
+            if (event.persisted) setLoading(false);
+        };
+        window.addEventListener('pageshow', onPageShow);
+        return () => window.removeEventListener('pageshow', onPageShow);
+    }, []);
+
     const handleSignIn = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -100,16 +103,9 @@ export default function LoginClient({
     const handleProviderSignIn = async (provider: SignInProvider) => {
         setLoading(true);
         setError(null);
-        try {
-            const { error } = await supabase.auth.signInWithOAuth({
-                provider,
-                options: {
-                    redirectTo: getAuthCallbackUrl(redirectTo),
-                },
-            });
-            if (error) throw error;
-        } catch (err: unknown) {
-            setError(describeAuthError(err, `Could not start ${PROVIDER_NAMES[provider]} sign-in. Try again.`));
+        const failure = await startProviderSignIn(provider, redirectTo);
+        if (failure) {
+            setError(failure);
             setLoading(false);
         }
     };

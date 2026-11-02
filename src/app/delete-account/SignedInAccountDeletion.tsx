@@ -283,10 +283,12 @@ function EarningsWarning({ earnings }: { earnings: Earnings }) {
 
 /**
  * An account with an Apple identity is deleted in the iPhone app only, though
- * it can sign in here. The deletion has Apple confirm the person and revokes
+ * it can sign in here: one made here, or one Supabase linked an Apple sign-in
+ * to by its email, too. The deletion has Apple confirm the person and revokes
  * the app's Apple authorization with Apple's one-time code, which the app gets
  * from its native sheet (`apple-account-deletion-service.ts`). Supabase's web
- * sign-in exchanges Apple's code itself, so this page has none to send.
+ * sign-in exchanges Apple's code itself, so this page has none to send, and
+ * without an iPhone the email request is the way.
  */
 function AppleAccountNotice() {
   return (

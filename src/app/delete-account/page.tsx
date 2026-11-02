@@ -45,7 +45,8 @@ export default function DeleteAccountPage() {
                         <h2 className="text-xl font-semibold">Request deletion without the app</h2>
                         <p className="mt-4 leading-7 text-zinc-300">
                             Email us from the address connected to your account. We may ask you to verify ownership before
-                            processing the request.
+                            processing the request. If you use Sign in with Apple with Hide My Email, write from any address
+                            and include your handle.
                         </p>
                         <a
                             className="mt-6 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-5 py-3 font-semibold text-black transition hover:bg-zinc-200"
