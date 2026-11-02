@@ -336,9 +336,10 @@ export function videoInputsHint({
   if (view.side === 'references' && sides.references) {
     const { pictures, budget } = sides.references;
     if (pictures === 0) return null;
+    // The pictures' own count is on their add box, so the line keeps only a budget the kinds share.
     const count = budget
       ? ` ${budgetUsed(budget, held)} of ${budget.max} in all.${budget.weights.clips === 2 ? ' A clip counts as two.' : ''}`
-      : ` ${held.pictures} of ${pictures}.`;
+      : '';
     return remixPictures > 0
       ? `Replace the photos to make it yours. Each keeps its @handle, so the prompt still works.${count}`
       : `Type @ in the prompt, or tap a handle, to use a reference.${count}`;

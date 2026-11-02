@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  cheapestCost,
   fitSettingsToControls,
   groupModelsByBalance,
   optionPriceLabel,
@@ -133,11 +132,6 @@ describe('prices read against the balance', () => {
     expect(optionPriceLabel(22, 22)).toEqual({ text: '22', over: null });
     expect(optionPriceLabel(23, 22)).toEqual({ text: '23 · +1', over: 1 });
     expect(optionPriceLabel(57, null)).toEqual({ text: '57', over: null });
-  });
-
-  it('finds the cheapest known price, the one a balance short of every run is under', () => {
-    expect(cheapestCost([19, null, 7])).toBe(7);
-    expect(cheapestCost([null])).toBeNull();
   });
 
   it('tells a setting whose options all cost the same, every price known', () => {

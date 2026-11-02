@@ -2138,6 +2138,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       updatedAt: '2026-10-04T00:00:00.000Z',
       remixRestored: true,
       remixEditedKeys: { video: ['prompt'] },
+      // Its source offered no result to use as a reference, as the session kept (2026-11-02).
+      remixOriginal: null,
     });
     const editor = () => <MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} />;
     // Past the quote's delay and the autosave's, and past every storage read a load makes.
@@ -2239,6 +2241,30 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(collectText(tree.root)).not.toContain(RESTORING);
       expect(generate(tree).props.disabled).toBe(false);
       expect(promptOf(tree)).toBe('My edited scene: @girl is crying');
+    });
+
+    // Sessions kept no original before 2026-11-02: a resume of one asks its source once, for the original
+    // the row's Use as reference offers, and restores nothing over what the creator saved.
+    it('asks the source of a session saved before sessions kept the original, once and for that alone', async () => {
+      const { remixOriginal: _kept, ...older } = JSON.parse(savedRemix) as Record<string, unknown>;
+      void _kept;
+      draftStorage.getItem.mockResolvedValue(JSON.stringify(older));
+      authState.api.getRemixSourceBundle.mockResolvedValue({
+        ...source,
+        result: { mediaType: 'video', url: 'https://project.supabase.co/storage/v1/object/public/showcase_media/showcase/gen-girl/cry.mp4' },
+      });
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor()); });
+      await settle();
+
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      expect(promptOf(tree)).toBe('My edited scene: @girl is crying');
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Use as reference')).toHaveLength(1);
+
+      await renderer.act(async () => { tree.update(editor()); });
+      await settle();
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
     });
 
     it('keeps the restore on screen while a catalog refresh starts it again', async () => {
@@ -5325,6 +5351,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       updatedAt: new Date().toISOString(),
       remixRestored: true,
       remixEditedKeys: { video: ['prompt', 'references', 'aspectRatio'] },
+      remixOriginal: null,
     });
     const openRemix = async () => {
       let tree!: renderer.ReactTestRenderer;
@@ -8979,6 +9006,93 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
         const lineBoxes = row(tree).findAllByType(SkeletonBone).slice(1).map((bone) => bone.parent!.props.style.height);
         expect(lineBoxes).toEqual([21 * 1.5, 17 * 1.5]);
+      });
+    });
+
+    // The row's Use as reference: the source's own result as a reference, as the web's creators offer
+    // it (owner, 2026-11-02). Nothing is uploaded: the start imports the file into the creator's storage.
+    describe("the source's original as a reference", () => {
+      const look = 'https://project.supabase.co/storage/v1/object/public/showcase_media/showcase/gen-9/look.png';
+      const dance = 'https://project.supabase.co/storage/v1/object/public/showcase_media/showcase/gen-8/dance.mp4';
+      const sourceOf = (id: string, tool: 'image' | 'motion', result: { mediaType: 'image' | 'video'; url: string | null } | null) => ({
+        generation: { id, title: 'Rooftop sparring', prompt: 'Two cats sparring on a rooftop', category: tool === 'image' ? 'image' : 'video', model: tool === 'image' ? 'nano-banana-2' : 'kling-3.0' },
+        result,
+        inputs: tool === 'image' ? { image: { elements: [] } } : {},
+        workflowSettings: { model: tool === 'image' ? 'nano-banana-2' : 'kling-3.0' },
+        restoreIssues: [],
+      });
+      const remix = (tool: 'image' | 'motion', id: string) => (
+        <MediaCreationScreen initialTool={tool} remixSource={{ generationId: id, postId: `post-${id}`, title: 'Rooftop sparring', creatorLabel: 'Whiskers' }} />
+      );
+      const useButtons = (tree: renderer.ReactTestRenderer) => row(tree).findAll((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Use as reference'
+      ));
+      const row = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Remix source post' });
+      const sentInputs = () => (authState.api.startGeneration.mock.calls[0][0] as { inputs: Array<Record<string, unknown>> }).inputs;
+
+      it('adds the picture to the references once, says so, and sends it by its link and its creation', async () => {
+        // A catalog whose model publishes its slots, as production's does: what the run sends is read from them.
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.getRemixSourceBundle.mockResolvedValue(sourceOf('gen-9', 'image', { mediaType: 'image', url: look }));
+        authState.api.startGeneration.mockResolvedValue(started('pred-original'));
+        const tree = await open(remix('image', 'gen-9'));
+
+        expect(useButtons(tree)).toHaveLength(1);
+        await renderer.act(async () => { await useButtons(tree)[0].props.onPress(); });
+        await settle();
+        expect(useButtons(tree)).toHaveLength(0);
+        expect(collectText(row(tree))).toContain('Using original');
+        expect(labelled(tree.root, 'Open details for Original result')).toBeTruthy();
+        // A picture never asks the player for a length.
+        expect(readMediaFileLength).not.toHaveBeenCalled();
+
+        await typePrompt(tree, 'The same two cats at dawn, like @original_result');
+        await pressGenerate(tree);
+        expect(sentInputs()).toEqual([
+          expect.objectContaining({ slot: 'imageReferences', kind: 'image', url: look, sourceGenerationId: 'gen-9' }),
+        ]);
+      });
+
+      it('makes a clip the motion run’s clip, with the length the phone read', async () => {
+        vi.mocked(readMediaFileLength).mockResolvedValue(6.4);
+        authState.api.getRemixSourceBundle.mockResolvedValue(sourceOf('gen-8', 'motion', { mediaType: 'video', url: dance }));
+        const tree = await open(remix('motion', 'gen-8'));
+
+        await renderer.act(async () => { await useButtons(tree)[0].props.onPress(); });
+        await settle();
+        expect(readMediaFileLength).toHaveBeenCalledWith(dance);
+        expect(collectText(row(tree))).toContain('Using original');
+        expect(collectText(tree.root.findByProps({ testID: 'motion-video-slot' }))).toContain('Original result');
+      });
+
+      // A resumed session reads its source no more (its links still good), so it keeps the original it was offered.
+      it('keeps the original with the session, so a resume offers it without reading the source', async () => {
+        authState.api.getRemixSourceBundle.mockResolvedValue(sourceOf('gen-9', 'image', { mediaType: 'image', url: look }));
+        const first = await open(remix('image', 'gen-9'));
+        await typePrompt(first, 'Two cats at dawn');
+        const key = creationDraftStorageKey(remixDraftScope('user-123', { generationId: 'gen-9', postId: 'post-gen-9' })!);
+        expect(JSON.parse(memory.get(key) ?? 'null')).toMatchObject({
+          remixRestored: true,
+          remixOriginal: { generationId: 'gen-9', mediaType: 'image', url: look },
+        });
+        first.unmount();
+
+        authState.api.getRemixSourceBundle.mockClear();
+        const resumed = await open(remix('image', 'gen-9'));
+        expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+        expect(useButtons(resumed)).toHaveLength(1);
+      });
+
+      it('offers nothing where the source has no result to hand out, or the creator does not take its kind', async () => {
+        authState.api.getRemixSourceBundle.mockResolvedValue(sourceOf('gen-7', 'image', null));
+        const none = await open(remix('image', 'gen-7'));
+        expect(useButtons(none)).toHaveLength(0);
+        none.unmount();
+
+        // A picture is offered to the image creator alone.
+        authState.api.getRemixSourceBundle.mockResolvedValue(sourceOf('gen-6', 'motion', { mediaType: 'image', url: look }));
+        const motion = await open(remix('motion', 'gen-6'));
+        expect(useButtons(motion)).toHaveLength(0);
       });
     });
 

@@ -14,6 +14,7 @@ import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 // authorized shared-media import.
 const sharedImportMocks = vi.hoisted(() => ({
   importSharedGenerationInputMedia: vi.fn(async () => ({ outcome: 'not-eligible' as const })),
+  importRemixResultMedia: vi.fn(async () => ({ outcome: 'not-eligible' as const })),
 }));
 
 vi.mock('@/lib/generation-input-media-import', () => sharedImportMocks);
@@ -1454,6 +1455,52 @@ describe('generation services', () => {
 
     expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({
       source: foreignReference,
+      viewerUserId: 'user-1',
+    });
+    expect(providerBody).toMatchObject({
+      input: { image_input: [importedSignedUrl] },
+    });
+  });
+
+  // "Use as reference" on a remix hands the start the original's result as the remix source
+  // gave it out: the post's public showcase copy. Every start path refused it as someone
+  // else's media ("must belong to the authenticated user") until the result import.
+  it("imports a remix's original result when the shared-input import declines it", async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    let providerBody: Record<string, unknown> | null = null;
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      providerBody = JSON.parse(String(init?.body));
+      return {
+        ok: true,
+        json: async () => ({ code: 200, data: { taskId: 'task-image-remix-result-1' } }),
+      } as Response;
+    });
+
+    const originalResult = 'https://project.supabase.co/storage/v1/object/public/showcase_media/showcase/gen-9/result.png';
+    const importedSignedUrl =
+      'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/remix-imports/gen-9/result/result.png?token=copy';
+    sharedImportMocks.importRemixResultMedia.mockResolvedValueOnce({
+      outcome: 'imported',
+      storagePath: 'generation_inputs/user-1/remix-imports/gen-9/result/result.png',
+      signedUrl: importedSignedUrl,
+    } as never);
+
+    const { supabase } = createSupabaseMock();
+    await startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Remix that builds on the original picture.',
+      model: 'nano-banana-2',
+      imageUrls: [originalResult],
+    });
+
+    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({
+      source: originalResult,
+      viewerUserId: 'user-1',
+    });
+    expect(sharedImportMocks.importRemixResultMedia).toHaveBeenCalledWith({
+      source: originalResult,
       viewerUserId: 'user-1',
     });
     expect(providerBody).toMatchObject({

@@ -331,11 +331,12 @@ describe('the line under the switch', () => {
     expect(hint(sidesOf(production, 'hailuo-2.3'), NOTHING, 'frames', 'Hailuo 2.3')).toBe('Hailuo 2.3 needs a first image to start from.');
   });
 
-  it('counts the pictures on the references side, and asks a remix to make them its own', () => {
+  // The pictures' own count is on their add box (2026-11-01), so the line names none.
+  it('says how to use the pictures on the references side, and asks a remix to make them its own', () => {
     expect(hint(seedance, { ...NOTHING, pictures: 3 }, 'references', 'Seedance 2.5'))
-      .toBe('Type @ in the prompt, or tap a handle, to use a reference. 3 of 30.');
+      .toBe('Type @ in the prompt, or tap a handle, to use a reference.');
     expect(hint(sidesOf(production, 'seedance-2-mini'), { ...NOTHING, pictures: 2 }, 'references', 'Seedance 2 Mini', { remixPictures: 2 }))
-      .toBe('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works. 2 of 5.');
+      .toBe('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works.');
   });
 
   it('counts against a count the kinds share, as the run is checked', () => {

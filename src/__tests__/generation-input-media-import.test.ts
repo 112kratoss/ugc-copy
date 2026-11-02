@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
-import { importSharedGenerationInputMedia } from '@/lib/generation-input-media-import';
+import { importRemixResultMedia, importSharedGenerationInputMedia } from '@/lib/generation-input-media-import';
 
 const CREATOR = 'creator-1';
 const VIEWER = 'viewer-1';
@@ -115,13 +115,14 @@ function createAdminStub(options: AdminStubOptions = {}) {
     return readError ? failingTable(readError) : stored.client.from(table);
   });
 
+  const storageFrom = vi.fn((bucket: string) => ({ bucket, copy, createSignedUrl }));
   const client = {
     from,
     auth: { admin: { getUserById } },
-    storage: { from: vi.fn(() => ({ copy, createSignedUrl })) },
+    storage: { from: storageFrom },
   };
 
-  return { client, from, copy, createSignedUrl, getUserById };
+  return { client, from, copy, createSignedUrl, getUserById, storageFrom };
 }
 
 function postsReads(stub: ReturnType<typeof createAdminStub>) {
@@ -592,5 +593,167 @@ describe('importSharedGenerationInputMedia', () => {
 
     expect(result).toEqual({ outcome: 'not-eligible' });
     expect(stub.copy).not.toHaveBeenCalled();
+  });
+});
+
+// A remix offers its original's result as a reference ("Use as reference" in the
+// creators, web and app). The remix source hands out the post's showcase copy, or
+// the private output of a creation that has none, and neither is under the
+// remixer's prefix, so the start refused both until the result could be imported.
+describe('importRemixResultMedia', () => {
+  const SHOWCASE_ASSET = 'showcase/gen-9/result.mp4';
+  const OUTPUT_PATH = `generated_videos/${CREATOR}/restored_gen-9_a1.mp4`;
+  const SHOWCASE_RESULT = `https://project.supabase.co/storage/v1/object/public/showcase_media/${SHOWCASE_ASSET}`;
+  // The token is never read: what the file is, and who may have it, comes from its path.
+  const OUTPUT_RESULT = `https://project.supabase.co/storage/v1/object/sign/${OUTPUT_PATH}?token=expired`;
+  const RESULT_DEST_PATH = `${VIEWER}/remix-imports/gen-9/result/result.mp4`;
+
+  // A creator who keeps their inputs to themselves: the result is the post's own media.
+  const RESULT_GENERATION = {
+    ...SHARING_GENERATION,
+    share_input_media_for_remix: false,
+    showcase_asset_path: SHOWCASE_ASSET,
+    output_url: OUTPUT_PATH,
+  };
+  const VIDEO_POST = { ...EXPOSED_POST, category: 'video' };
+
+  function resultStub(overrides: AdminStubOptions = {}) {
+    return createAdminStub({ mediaRows: [], generationRow: RESULT_GENERATION, postRows: [VIDEO_POST], ...overrides });
+  }
+
+  async function importResult(stub: ReturnType<typeof createAdminStub>, source = SHOWCASE_RESULT, overrides: Parameters<typeof createDependencies>[1] = {}) {
+    return importRemixResultMedia({ source, viewerUserId: VIEWER, dependencies: createDependencies(stub, overrides) });
+  }
+
+  it('imports the showcase copy the remix source hands out into the viewer prefix', async () => {
+    const stub = resultStub();
+
+    await expect(importResult(stub)).resolves.toEqual({
+      outcome: 'imported',
+      storagePath: `generation_inputs/${RESULT_DEST_PATH}`,
+      signedUrl: expect.stringContaining(RESULT_DEST_PATH),
+    });
+    expect(stub.storageFrom).toHaveBeenCalledWith('showcase_media');
+    expect(stub.copy).toHaveBeenCalledWith(SHOWCASE_ASSET, RESULT_DEST_PATH, { destinationBucket: 'generation_inputs' });
+    expect(stub.storageFrom).toHaveBeenLastCalledWith('generation_inputs');
+    expect(stub.createSignedUrl).toHaveBeenCalledWith(RESULT_DEST_PATH, 3600);
+  });
+
+  it('imports the private output of a creation with no showcase copy', async () => {
+    const stub = resultStub({ generationRow: { ...RESULT_GENERATION, showcase_asset_path: null } });
+
+    await expect(importResult(stub, OUTPUT_RESULT)).resolves.toMatchObject({
+      outcome: 'imported',
+      storagePath: `generation_inputs/${VIEWER}/remix-imports/gen-9/result/restored_gen-9_a1.mp4`,
+    });
+    expect(stub.storageFrom).toHaveBeenCalledWith('generated_videos');
+    expect(stub.copy).toHaveBeenCalledWith(
+      `${CREATOR}/restored_gen-9_a1.mp4`,
+      `${VIEWER}/remix-imports/gen-9/result/restored_gen-9_a1.mp4`,
+      { destinationBucket: 'generation_inputs' },
+    );
+  });
+
+  it('refuses any file but the one the remix source hands out', async () => {
+    // Another file in the creation's showcase folder.
+    const poster = resultStub();
+    await expect(importResult(poster, 'https://project.supabase.co/storage/v1/object/public/showcase_media/showcase/gen-9/poster.jpg'))
+      .resolves.toEqual({ outcome: 'not-eligible' });
+    // The private output, while the post shows its showcase copy.
+    const output = resultStub();
+    await expect(importResult(output, OUTPUT_RESULT)).resolves.toEqual({ outcome: 'not-eligible' });
+    // Another of the creator's files, which no creation has as its output.
+    const other = resultStub({ generationRow: { ...RESULT_GENERATION, showcase_asset_path: null } });
+    await expect(importResult(other, `generated_videos/${CREATOR}/restored_gen-3_b2.mp4`))
+      .resolves.toEqual({ outcome: 'not-eligible' });
+    expect([poster, output, other].some((stub) => stub.copy.mock.calls.length > 0)).toBe(false);
+  });
+
+  it('rejects sources outside the result buckets without touching the database', async () => {
+    const stub = resultStub();
+    for (const source of [
+      `uploads/${CREATOR}/reference.jpg`,
+      SOURCE_PATH,
+      'https://project.supabase.co/storage/v1/object/public/showcase_media/previews/gen-9/result.webp',
+      'https://example.com/result.mp4',
+    ]) {
+      await expect(importResult(stub, source)).resolves.toEqual({ outcome: 'not-eligible' });
+    }
+    expect(stub.from).not.toHaveBeenCalled();
+  });
+
+  it('refuses a creation its post no longer shows', async () => {
+    for (const overrides of [
+      { postRows: [{ ...VIDEO_POST, archived_at: '2026-11-01T00:00:00Z' }] },
+      { postRows: [{ ...VIDEO_POST, visibility: 'private' }] },
+      { postRows: [] },
+      { generationRow: { ...RESULT_GENERATION, is_public: false } },
+    ] satisfies AdminStubOptions[]) {
+      const stub = resultStub(overrides);
+      await expect(importResult(stub)).resolves.toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses a guest caller, and fails when the caller cannot be read', async () => {
+    const guest = resultStub({ viewer: { id: VIEWER, is_anonymous: true } });
+    await expect(importResult(guest)).resolves.toEqual({ outcome: 'not-eligible' });
+    expect(postsReads(guest)).toBe(0);
+
+    const unread = resultStub({ viewerError: { message: 'auth unavailable' } });
+    await expect(importResult(unread)).resolves.toEqual({ outcome: 'failed' });
+    expect(unread.copy).not.toHaveBeenCalled();
+  });
+
+  it('refuses while a recipe on the post is locked to the viewer, and imports once they unlocked it', async () => {
+    const locked = resultStub({ bundleRows: [PAID_REMIX_RECIPE] });
+    await expect(importResult(locked)).resolves.toEqual({ outcome: 'not-eligible' });
+    expect(locked.copy).not.toHaveBeenCalled();
+
+    const unlocked = resultStub({
+      bundleRows: [PAID_REMIX_RECIPE],
+      purchaseRows: [{ id: 'purchase-1', bundle_id: 'bundle-9', buyer_user_id: VIEWER }],
+    });
+    await expect(importResult(unlocked)).resolves.toMatchObject({ outcome: 'imported' });
+  });
+
+  it('refuses a viewer the creator blocked, and a template result', async () => {
+    const blocked = resultStub();
+    await expect(importResult(blocked, SHOWCASE_RESULT, { blocked: true })).resolves.toEqual({ outcome: 'not-eligible' });
+
+    const templateResult = resultStub({ generationRow: { ...RESULT_GENERATION, template_run_id: 'run-1' } });
+    await expect(importResult(templateResult)).resolves.toEqual({ outcome: 'not-eligible' });
+    expect(blocked.copy).not.toHaveBeenCalled();
+    expect(templateResult.copy).not.toHaveBeenCalled();
+  });
+
+  it("imports the viewer's own result, made under their id or a guest's linked to them, without the checks for other people's", async () => {
+    const own = resultStub({ generationRow: { ...RESULT_GENERATION, user_id: VIEWER }, postRows: [{ ...VIDEO_POST, user_id: VIEWER }] });
+    const ownDependencies = createDependencies(own);
+    await expect(importRemixResultMedia({ source: SHOWCASE_RESULT, viewerUserId: VIEWER, dependencies: ownDependencies }))
+      .resolves.toMatchObject({ outcome: 'imported' });
+    expect(own.getUserById).not.toHaveBeenCalled();
+    expect(postsReads(own)).toBe(0);
+    expect(ownDependencies.isUserRelationshipBlocked).not.toHaveBeenCalled();
+
+    const linkedGuest = resultStub({
+      generationRow: { ...RESULT_GENERATION, user_id: GUEST, is_public: false },
+      profileRows: [{ id: GUEST, merged_into_user_id: VIEWER }],
+    });
+    await expect(importResult(linkedGuest)).resolves.toMatchObject({ outcome: 'imported' });
+  });
+
+  it('treats an existing copy as success, and fails retryably when a read, the copy or signing fails', async () => {
+    const existing = resultStub({ copyError: { statusCode: '409', message: 'The resource already exists', error: 'Duplicate' } });
+    await expect(importResult(existing)).resolves.toMatchObject({ outcome: 'imported' });
+
+    for (const overrides of [
+      { copyError: { message: 'service unavailable' } },
+      { signError: { message: 'signing unavailable' } },
+      { readErrors: { generations: { message: 'timeout' } } },
+      { readErrors: { posts: { message: 'timeout' } } },
+    ] satisfies AdminStubOptions[]) {
+      await expect(importResult(resultStub(overrides))).resolves.toEqual({ outcome: 'failed' });
+    }
   });
 });

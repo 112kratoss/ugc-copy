@@ -151,7 +151,9 @@ test('a switch that would clear the start image asks first, keeps the keys, and 
   await expect(inputs(page).getByRole('button', { name: 'Insert @element_1' })).toBeVisible();
   await expect.poll(() => drawn(page, 'Element 1')).toBe(true);
   await expect(page.locator('#video-start-frame-input')).toHaveCount(0);
-  await expect(inputs(page)).toContainText('Type @ in the prompt, or tap a handle, to use a reference. 1 of 30.');
+  await expect(inputs(page)).toContainText('Type @ in the prompt, or tap a handle, to use a reference.');
+  // The pictures' count is on their add box, not in that line.
+  await expect(inputs(page).getByRole('button', { name: 'Add images, 1 of 30' })).toBeVisible();
 });
 
 test('going back to frames asks the mirror question and brings the first pictures along; "@" waits for References', async ({ page, context }) => {
@@ -212,7 +214,8 @@ test('a remix’s reference is replaced in place, keeping its @handle', async ({
   await page.goto('/create-video?remix=gen-1&remixPost=post-1', COLD_PAGE);
 
   await expect(inputs(page).getByRole('radio', { name: 'References' })).toBeChecked(COLD_PAGE);
-  await expect(inputs(page)).toContainText('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works. 2 of 5.');
+  await expect(inputs(page)).toContainText('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works.');
+  await expect(inputs(page).getByRole('button', { name: 'Add images, 2 of 5' })).toBeVisible();
   const original = await page.getByAltText('Hero shot', { exact: true }).getAttribute('src');
 
   const chooser = page.waitForEvent('filechooser');

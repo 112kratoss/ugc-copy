@@ -949,10 +949,11 @@ describe('CreateVideoClient Kling video elements', () => {
     await chooseInputs('References');
 
     expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
-    expect(screen.getByRole('heading', { name: 'Reference images' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Reference videos' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Reference audio' })).toBeInTheDocument();
-    expect(screen.getByText('Type @ in the prompt, or tap a handle, to use a reference. 0 of 30.')).toBeInTheDocument();
+    // A box for each kind it takes, each with its count.
+    expect(screen.getByRole('button', { name: 'Add images, 0 of 30' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Add video, 0 of \d+$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Add audio, 0 of \d+$/ })).toBeInTheDocument();
+    expect(screen.getByText('Type @ in the prompt, or tap a handle, to use a reference.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /^Start image/ })).toBeNull();
   });
 
@@ -1163,7 +1164,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       await waitFor(() => expect(screen.queryByPlaceholderText('Rename element')).toBeNull());
       expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
-      expect(screen.getByText('Type @ in the prompt, or tap a handle, to use a reference. 0 of 2.')).toBeInTheDocument();
+      expect(screen.getByText('Type @ in the prompt, or tap a handle, to use a reference.')).toBeInTheDocument();
     });
 
     it('shows the Seedance assets card with the references only', async () => {
@@ -1363,7 +1364,7 @@ describe('CreateVideoClient Kling video elements', () => {
         stubRemix(remixOf('seedance-1.5-pro'));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
-        expect(await screen.findByText('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works. 2 of 2.')).toBeInTheDocument();
+        expect(await screen.findByText('Replace the photos to make it yours. Each keeps its @handle, so the prompt still works.')).toBeInTheDocument();
         const replace = screen.getByRole('button', { name: 'Replace @lead with your own photo' });
         const mine = new File(['mine'], 'me.png', { type: 'image/png' });
         fireEvent.change(replace.parentElement!.querySelector<HTMLInputElement>('input[type="file"]')!, { target: { files: [mine] } });
@@ -1663,22 +1664,23 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(postedRun()).toBeDefined());
     }
 
-    it('gives MiniMax H3 the panel, with a button for a clip and a button for a track', async () => {
+    it('gives MiniMax H3 a box for a clip and a box for a track', async () => {
       render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
       await openReferences();
 
-      expect(await screen.findByRole('heading', { name: 'Reference videos' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Add video' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Add audio' })).toBeEnabled();
-      // Three of each, which is what the model takes.
-      expect(screen.getByText('Add up to 3 short clips as motion and framing guidance.')).toBeInTheDocument();
-      expect(screen.getByText('Add up to 3 audio clips for beat, voice, or dialogue timing guidance.')).toBeInTheDocument();
+      // Three of each, which is what the model takes, each box saying what its kind is for.
+      const clips = await screen.findByRole('button', { name: 'Add video, 0 of 3' });
+      const tracks = screen.getByRole('button', { name: 'Add audio, 0 of 3' });
+      expect(clips).toBeEnabled();
+      expect(clips).toHaveAccessibleDescription('Short clips for motion and framing');
+      expect(tracks).toBeEnabled();
+      expect(tracks).toHaveAccessibleDescription('Clips for beat, voice or dialogue timing');
     });
 
     it('sends the clip and the track attached on MiniMax H3, and tells the quote about both', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
       await openReferences();
-      await screen.findByRole('heading', { name: 'Reference videos' });
+      await screen.findByLabelText('Add video');
       const clip = new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' });
       const track = new File(['audio-bytes'], 'voice.mp3', { type: 'audio/mpeg' });
 
@@ -1806,7 +1808,7 @@ describe('CreateVideoClient Kling video elements', () => {
     it('keeps the note about prepared assets on a Seedance 2.5 track', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
       await openReferences();
-      await screen.findByRole('heading', { name: 'Reference audio' });
+      await screen.findByLabelText('Add audio');
 
       fireEvent.change(view.container.querySelector<HTMLInputElement>(trackInput)!, {
         target: { files: [new File(['audio-bytes'], 'voice.mp3', { type: 'audio/mpeg' })] },
@@ -1839,11 +1841,10 @@ describe('CreateVideoClient Kling video elements', () => {
         await screen.findByPlaceholderText(`Describe the ${displayName} scene in rich cinematic detail...`);
         await openReferences();
 
-        expect(Boolean(screen.queryByRole('heading', { name: 'Reference videos' }))).toBe(takesClips);
-        expect(Boolean(screen.queryByRole('heading', { name: 'Reference audio' }))).toBe(takesTracks);
-        expect(Boolean(screen.queryByRole('button', { name: 'Add video' }))).toBe(takesClips);
+        // The references box has a file field for each kind it adds.
+        expect(Boolean(screen.queryByLabelText('Add video'))).toBe(takesClips);
         expect(Boolean(view.container.querySelector(clipInput))).toBe(takesClips);
-        expect(Boolean(screen.queryByRole('button', { name: 'Add audio' }))).toBe(takesTracks);
+        expect(Boolean(screen.queryByLabelText('Add audio'))).toBe(takesTracks);
         expect(Boolean(view.container.querySelector(trackInput))).toBe(takesTracks);
       }
     );
@@ -4639,6 +4640,7 @@ describe('CreateVideoClient Kling video elements', () => {
       // The track is offered only on the standby card, where it can be taken off.
       expect(standbyChips()).toEqual(['Saved track']);
       expect(screen.queryByRole('heading', { name: 'Reference audio' })).toBeNull();
+      expect(screen.queryByLabelText('Add audio')).toBeNull();
       expect(slotCount(lastQuoteRequest(), 'imageReferences') + slotCount(lastQuoteRequest(), 'videoReferences')).toBe(2);
       expect(refusedByTheServer(lastQuoteRequest())).toBeNull();
 
@@ -5973,7 +5975,7 @@ describe('CreateVideoClient Kling video elements', () => {
         await settle();
 
         expect(screen.queryByText('Insufficient credits. This action costs 12 credits.')).toBeNull();
-        expect(screen.queryByRole('link', { name: /Top Up Credits/ })).toBeNull();
+        expect(screen.queryByRole('button', { name: /Top Up Credits/ })).toBeNull();
       });
 
       it('drops the earlier account’s remix inputs and its own, and reads the remix again for the next', async () => {
@@ -6576,7 +6578,7 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.click(generateButton());
 
         expect(await screen.findByText('Insufficient credits. This action costs 12 credits.')).toBeInTheDocument();
-        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
+        expect(screen.getByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
         expect(queryGenerateButton()).toBeNull();
         expect(balance.rereads.length).toBeGreaterThan(0);
         expect(catalogClient.loadPendingWebStart('video', 'user-1')).toBeNull();
@@ -6812,7 +6814,7 @@ describe('CreateVideoClient Kling video elements', () => {
     it('uploads a clip once for two presses, and sends its staged copy the second time', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
       await chooseInputs('References');
-      await screen.findByRole('heading', { name: 'Reference videos' });
+      await screen.findByLabelText('Add video');
       await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
@@ -6877,7 +6879,7 @@ describe('CreateVideoClient Kling video elements', () => {
       refreshTemporaryMediaUrlMock.mockRejectedValue(new TemporaryMediaReadUrlError('That upload is no longer available.', 404, 'MEDIA_OBJECT_NOT_FOUND'));
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
       await chooseInputs('References');
-      await screen.findByRole('heading', { name: 'Reference videos' });
+      await screen.findByLabelText('Add video');
       await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
 
@@ -6893,7 +6895,7 @@ describe('CreateVideoClient Kling video elements', () => {
     it('names a picked file the upload step would refuse, and leaves it out', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
       await chooseInputs('References');
-      await screen.findByRole('heading', { name: 'Reference videos' });
+      await screen.findByLabelText('Add video');
       const huge = new File(['video-bytes'], 'huge.mp4', { type: 'video/mp4' });
       Object.defineProperty(huge, 'size', { value: 300 * 1024 * 1024 });
 
@@ -7245,7 +7247,7 @@ describe('CreateVideoClient Kling video elements', () => {
       }));
       const view = render(<CreateVideoClient prefill={{ model: 'minimax-h3' }} />);
       await chooseInputs('References');
-      await screen.findByRole('heading', { name: 'Reference videos' });
+      await screen.findByLabelText('Add video');
       await attachClip(view.container, new File(['video-bytes'], 'walk.mp4', { type: 'video/mp4' }));
       expect(screen.getByText('4.2s clip')).toBeInTheDocument();
       fireEvent.change(promptBox(), { target: { value: PROMPT } });
@@ -7614,9 +7616,9 @@ describe('CreateVideoClient Kling video elements', () => {
     });
   });
 
-  // PR 2 of the creator redesign (owner, 2026-10-28): every model and every option priced, the
-  // balance read under the bar, and an image offered first when the balance is short of every
-  // video. Prices come from the price lists' stand-in.
+  // PR 2 of the creator redesign (owner, 2026-10-28): every model and every option priced, and the
+  // balance read under the bar; a short balance is sold credits on the page (owner, 2026-11-02),
+  // never offered a picture instead. Prices come from the price lists' stand-in.
   describe('prices and affordability', () => {
     const MINI = { id: 'seedance-2-mini', kind: 'video', displayName: 'Seedance 2 Mini', description: 'Lower cost' };
     const summaries = [
@@ -7701,7 +7703,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       // Past the balance, an option is still chosen, and Top up stands in Generate's place.
       fireEvent.click(within(settings).getByRole('radio', { name: /^6s/ }));
-      await waitFor(() => expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument());
       expect(settings).toHaveTextContent('This run 23 credits · 1 more than your balance');
     });
 
@@ -7725,7 +7727,9 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(note).toHaveTextContent('Leaves 3');
     });
 
-    it('offers an image first, with the prompt, when the balance is short of every video', async () => {
+    // Owner, 2026-11-02: a balance short of every video is a short balance like any other, sold
+    // credits on the page. The image first (2026-10-28) sent the sale away.
+    it('offers a top-up, never an image, when the balance is short of every video, and sells the packs on the page', async () => {
       authState.credits = 3;
       priceListStandIn.price = pricedBy((request) => (
         request.kind === 'image' ? (request.modelId === 'z-image' ? 1 : 8) : videoPrice(request)
@@ -7733,30 +7737,31 @@ describe('CreateVideoClient Kling video elements', () => {
       render(<CreateVideoClient prefill={{}} />);
       fireEvent.change(await screen.findByLabelText('Prompt'), { target: { value: 'A paper boat on a sunlit pond' } });
 
-      const offer = await screen.findByRole('link', { name: 'Make an image instead · from 1 credit' });
-      expect(offer).toHaveAttribute('href', '/create-image?model=z-image&prompt=A+paper+boat+on+a+sunlit+pond');
+      const topUp = await screen.findByRole('button', { name: /Top Up Credits/ });
       expect(queryGenerateButton()).toBeNull();
-      expect(document.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 3 · videos from 7');
-      expect(screen.getByRole('link', { name: 'Top up: 500 for ₹415' })).toHaveAttribute('href', '/pricing');
-      expect(screen.getByText('3 credits: enough for images')).toBeInTheDocument();
-      expect(screen.getByText(/Videos start at 7 credits\. Z-Image makes a picture for 1/)).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
+      expect(screen.queryByText(/enough for images/)).toBeNull();
+      expect(document.querySelector('[data-creator-bar-status]')).toHaveTextContent('This run costs 19 credits but you only have 3.');
+      expect(document.querySelector('[data-creator-bar-note]')).toHaveTextContent('Balance 3');
+      // Nothing is priced to find a cheaper run: no image, and no other video model.
+      await act(async () => {});
+      expect(priceListStandIn.askedRuns().filter((run) => run.kind === 'image')).toEqual([]);
+      expect(priceListStandIn.askedRuns().filter((run) => run.kind === 'video' && run.modelId !== 'seedance-2-mini')).toEqual([]);
 
-      // The bar offers the image, not Top up: the "+N" line says only that options stay selectable.
-      fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
-      const settings = screen.getByRole('dialog', { name: 'Generation settings' });
-      await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 3\. Those options stay selectable\./));
-      expect(settings).not.toHaveTextContent('show Top up in place of Generate');
+      fireEvent.click(topUp);
+      // The packs load the first time they are asked for.
+      const sheet = await screen.findByRole('dialog', { name: 'Top up credits' });
+      expect(sheet).toHaveTextContent('This run costs 19 credits and you have 3.');
+      expect(within(sheet).getByRole('button', { name: 'Buy 500 credits for ₹415, covers this run' })).toBeInTheDocument();
     });
 
     // A settings press asks for the run's price again (a debounce and a round trip): the bar
-    // holds what it offers meanwhile, rather than swapping its action and layout and back.
-    it('keeps the image offer in place while a changed setting is being priced', async () => {
+    // holds Top up meanwhile, rather than swapping its action and layout and back.
+    it('keeps Top up in place while a changed setting is being priced', async () => {
       authState.credits = 3;
-      priceListStandIn.price = pricedBy((request) => (
-        request.kind === 'image' ? (request.modelId === 'z-image' ? 1 : 8) : videoPrice(request)
-      ));
+      priceListStandIn.price = pricedBy((request) => videoPrice(request));
       render(<CreateVideoClient prefill={{}} />);
-      expect(await screen.findByRole('link', { name: 'Make an image instead · from 1 credit' })).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
       const ratios = within(screen.getByRole('radiogroup', { name: /^Aspect ratio/ })).getAllByRole('radio');
@@ -7766,7 +7771,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.click(other);
 
       await waitFor(() => expect(quoteStandIn.lastRequest()?.settings?.aspectRatio).toBe(otherRatio));
-      expect(screen.getByRole('link', { name: 'Make an image instead · from 1 credit' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
       expect(queryGenerateButton()).toBeNull();
     });
 
@@ -7792,7 +7797,7 @@ describe('CreateVideoClient Kling video elements', () => {
       priceListStandIn.price = pricedBy((request) => (request.kind === 'image' ? 1 : videoPrice(request)));
       render(<CreateVideoClient prefill={{}} />);
 
-      expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+      expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
       expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
     });
 
@@ -7816,9 +7821,7 @@ describe('CreateVideoClient Kling video elements', () => {
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
         expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
-        // A remix keeps no draft: Pricing is told the remix, and offers it back once the credits are in.
-        expect(await screen.findByRole('link', { name: /Top Up Credits/ }))
-          .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-1&remixPost=post-1')}`);
+        expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
         const status = document.querySelector('[data-creator-bar-status]');
         expect(status).toHaveTextContent('Not enough credits');
         expect(status).toHaveTextContent('This run costs 140 credits but you only have 22.');
@@ -7827,11 +7830,15 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(queryGenerateButton()).toBeNull();
         expect(screen.queryByText(/Fitted to your/)).toBeNull();
         expect(screen.queryByRole('button', { name: /^Switch back to/ })).toBeNull();
-        // Nothing is weighed against it: no other video model is priced. The image models are,
-        // as on any page short of its run, for what Posted offers once the remix is made.
-        const asked = priceListStandIn.askedRuns();
-        expect(asked.filter((run) => run.kind === 'video')).toEqual([]);
-        expect(asked.some((run) => run.kind === 'image')).toBe(true);
+        // Nothing is weighed against it: no other video model is priced, and no image model either,
+        // since a short balance is offered credits alone, here and under Posted (owner, 2026-11-02).
+        expect(priceListStandIn.askedRuns()).toEqual([]);
+
+        // A remix keeps no draft: the pricing page the packs offer is told the remix, and offers it back.
+        fireEvent.click(screen.getByRole('button', { name: /Top Up Credits/ }));
+        const sheet = await screen.findByRole('dialog', { name: 'Top up credits' });
+        expect(within(sheet).getByRole('link', { name: 'See every pack' }))
+          .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-1&remixPost=post-1')}`);
       });
 
       // A settings press prices the run again (a debounce and a round trip): Top up keeps its place meanwhile.
@@ -7839,7 +7846,7 @@ describe('CreateVideoClient Kling video elements', () => {
         authState.credits = 22;
         stubRemix(remixOf({ duration: 5 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
         const settings = screen.getByRole('dialog', { name: 'Generation settings' });
@@ -7851,7 +7858,7 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.click(other);
 
         await waitFor(() => expect(quoteStandIn.lastRequest()?.settings?.aspectRatio).toBe(otherRatio));
-        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
         expect(document.querySelector('[data-creator-bar-status]')).toHaveTextContent('This run costs 140 credits but you only have 22.');
         expect(queryGenerateButton()).toBeNull();
       });
@@ -7862,7 +7869,7 @@ describe('CreateVideoClient Kling video elements', () => {
         stubRemix(remixOf({ duration: 10 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
-        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
         // Every price the page could ask for answers at once here: a page that weighed other runs has done so.
         await act(async () => {});
         expect(document.querySelector('[data-creator-bar-status]')).toHaveTextContent('This run costs 280 credits but you only have 22.');
@@ -7876,7 +7883,7 @@ describe('CreateVideoClient Kling video elements', () => {
         stubRemix(remixOf({ duration: 5 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
-        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
         await act(async () => {});
         expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
         expect(screen.queryByText(/enough for images/)).toBeNull();
@@ -7888,9 +7895,36 @@ describe('CreateVideoClient Kling video elements', () => {
         openModelList();
         expect(await screen.findByRole('group', { name: 'Needs more credits' })).toBeInTheDocument();
         await act(async () => {});
-        expect(screen.getByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
         expect(screen.queryByRole('link', { name: /Make an image instead/ })).toBeNull();
         expect(screen.queryByText(/enough for images/)).toBeNull();
+      });
+
+      // Owner, 2026-11-02: a remix's own clip can be one of its references, as the image and motion
+      // creators offer their originals; it is kept by its link and measured for the quote.
+      it('adds the original clip as a reference where the model takes clips', async () => {
+        authState.credits = 500;
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Use as reference' }));
+
+        const clips = await screen.findByRole('list', { name: 'Reference videos' });
+        expect(within(clips).getByText('Original result · intense')).toBeInTheDocument();
+        expect(within(clips).getByText('4.2s clip')).toBeInTheDocument();
+        expect(readDurationMock).toHaveBeenCalledWith('https://example.com/intense.mp4');
+        expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.2] }));
+      });
+
+      it('offers no original clip on a model that takes no clips', async () => {
+        authState.credits = 500;
+        stubRemix({ ...remixOf({ duration: 5 }), workflowSettings: { model: 'kling-3.0-video', aspectRatio: '9:16', duration: 5 } } as RemixSourceBundle);
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        await act(async () => {});
+        expect(screen.queryByRole('button', { name: 'Use as reference' })).toBeNull();
       });
 
       // Another model is the creator's own choice: the list is priced as for any run once it is opened.
@@ -7898,7 +7932,7 @@ describe('CreateVideoClient Kling video elements', () => {
         authState.credits = 22;
         stubRemix(remixOf({ duration: 5 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-        expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+        expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
 
         openModelList();
         const fits = screen.getByRole('group', { name: 'Fits your 22 credits' });
@@ -7929,7 +7963,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
         expect(await screen.findByText(/Settings pre-filled from "intense"/)).toBeInTheDocument();
         await waitFor(() => expect(costShown()).toBe('140 credits'));
-        expect(screen.queryByRole('link', { name: /Top Up Credits/ })).toBeNull();
+        expect(screen.queryByRole('button', { name: /Top Up Credits/ })).toBeNull();
       });
     });
   });

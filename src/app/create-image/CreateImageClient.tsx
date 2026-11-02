@@ -1952,6 +1952,7 @@ function ImageCreator({
                 if (pendingStart) void replayPendingStart(pendingStart, { reveal: true });
             }}
             showTopUp={showTopUp}
+            topUpNeed={currentCost !== null && userCredits !== null ? { cost: currentCost, balance: userCredits } : null}
             topUpHref={topUpHref}
             isGenerating={isGenerating}
             disabled={generateBlocked || canvasPublish.inFlight}

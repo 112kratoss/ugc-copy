@@ -5,6 +5,7 @@ import type {
   MotionCreationDraft,
   VideoCreationDraft,
 } from './media-creation-view-model';
+import type { RemixOriginal } from './remix-original-reference';
 
 /**
  * Every draft is kept under this key plus a scope that names its identity.
@@ -79,6 +80,11 @@ export type PersistedCreationDrafts = {
   updatedAt: string;
   remixRestored?: boolean;
   remixEditedKeys?: Partial<Record<'image' | 'video' | 'motion', string[]>>;
+  /**
+   * A remix session's source result, offered as a reference (`remix-original-reference.ts`), null where
+   * it had none; absent from sessions saved before 2026-11-02. Read back through `storedRemixOriginal`.
+   */
+  remixOriginal?: RemixOriginal | null;
 };
 
 function parsePersistedCreationDrafts(raw: string, { remix }: { remix: boolean }): PersistedCreationDrafts | null {

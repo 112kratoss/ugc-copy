@@ -50,6 +50,20 @@ describe('generationInputOrigin', () => {
     expect(generationInputOrigin({ metadata: {}, sourceGenerationId: 'gen-own' }, context)).toBe('own');
   });
 
+  // A remix's reference the start imported from its original (a shared input, or the original's
+  // result used as a reference) keeps the remixer's copy as the link the run read: its folder is the
+  // remixer's, its media the original's, so the source generation says whose it is.
+  it('reads a remix’s imported copy by its source generation, never by the remixer’s folder', () => {
+    const importedCopy = `https://example.supabase.co/storage/v1/object/sign/generation_inputs/${CREATOR}/remix-imports/gen-original/result/result.png?token=x`;
+    const input = { metadata: { sourceStoragePath: null, sourceUrl: importedCopy }, sourceGenerationId: 'gen-original' };
+    expect(needsSourceGenerationOwner(input)).toBe(true);
+    expect(generationInputOrigin(input, context)).toBe('others');
+    // The creator's own work made as a guest, imported for Recreate, stays theirs.
+    expect(generationInputOrigin({ ...input, sourceGenerationId: 'gen-own' }, context)).toBe('own');
+    // With no source generation on record, it stays with the creator, as any unknown source does.
+    expect(generationInputOrigin({ metadata: input.metadata }, context)).toBe('own');
+  });
+
   it('keeps an input whose source is not on record with the creator', () => {
     expect(generationInputOrigin({ metadata: { sourceUrl: 'https://tempfile.redpandaai.co/clip.mp4' } }, context)).toBe('own');
     expect(generationInputOrigin({ metadata: null, sourceGenerationId: 'gen-unknown' }, context)).toBe('own');

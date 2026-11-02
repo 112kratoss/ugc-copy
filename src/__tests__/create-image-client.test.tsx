@@ -2052,7 +2052,7 @@ describe('CreateImageClient generation pipeline', () => {
       await settleDraftRead();
 
       expect(screen.queryByText('Insufficient credits. This action costs 8 credits.')).not.toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: /Top Up Credits/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Top Up Credits/ })).not.toBeInTheDocument();
     });
 
     it('uploads and sends nothing for a press on a page signed out in another tab, once another account took the session', async () => {
@@ -2412,20 +2412,23 @@ describe('CreateImageClient generation pipeline', () => {
       pressGenerate();
 
       expect(await screen.findByText('Insufficient credits. This action costs 8 credits.')).toBeInTheDocument();
-      expect(screen.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
+      expect(screen.getByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Generate · / })).not.toBeInTheDocument();
       expect(creditsUpdated).toHaveBeenCalled();
       window.removeEventListener('credits_updated', creditsUpdated);
     });
 
-    // A remix keeps no draft: its top-up tells Pricing the remix, which offers it back once the credits are in.
-    it('sends a remix short of its price to Pricing with the way back to it', async () => {
+    // A remix keeps no draft: the pricing page its packs offer is told the remix, and offers it back once the credits are in.
+    it('sells a remix short of its price credits on the page, with Pricing\'s way back to it', async () => {
       authState.credits = 6;
       installFetch({ remixBundle: HARBOUR_REMIX });
       render(<CreateImageClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
       await waitFor(() => expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk'));
 
-      expect(await screen.findByRole('link', { name: /Top Up Credits/ }))
+      // The packs open over the remix; the pricing page they offer is told the way back to it.
+      fireEvent.click(await screen.findByRole('button', { name: /Top Up Credits/ }));
+      const sheet = await screen.findByRole('dialog', { name: 'Top up credits' });
+      expect(within(sheet).getByRole('link', { name: 'See every pack' }))
         .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-image?remix=gen-1&remixPost=post-1')}`);
       expect(screen.queryByRole('button', { name: /^Generate · / })).not.toBeInTheDocument();
     });
@@ -2907,7 +2910,7 @@ describe('CreateImageClient prices', () => {
   it('prices each model at this run\'s settings and splits the list by the balance', async () => {
     const view = render(<CreateImageClient prefill={{}} />);
     // 8 credits is past the 6: Top up stands in Generate's place.
-    expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
 
     fireEvent.click(view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!);
 
@@ -2940,7 +2943,7 @@ describe('CreateImageClient prices', () => {
     ];
     modelCatalogState.missingIds = ['ideogram-v3'];
     const view = render(<CreateImageClient prefill={{}} />);
-    expect(await screen.findByRole('link', { name: /Top Up Credits/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
 
     fireEvent.click(view.container.querySelector<HTMLButtonElement>('button[aria-haspopup="listbox"]')!);
 

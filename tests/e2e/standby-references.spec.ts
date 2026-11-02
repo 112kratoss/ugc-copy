@@ -112,14 +112,14 @@ function canvasAsksFor(page: Page) {
   return page.getByText(/^Write a prompt, (add (frames|references) if you like, )?then Generate\.$/);
 }
 
-/** The inputs' references side (the artboard Inputs, PR 4), and its pictures' heading. */
+/** The inputs' references side (the artboard Inputs, PR 4), and its pictures' add box. */
 async function openReferences(page: Page) {
   const references = page.getByRole('radio', { name: 'References' });
   if (!(await references.isChecked())) {
     await page.getByRole('group', { name: 'Inputs' }).getByText('References', { exact: true }).click();
   }
   await expect(references).toBeChecked();
-  return page.getByRole('heading', { name: 'Reference images' });
+  return page.getByRole('button', { name: /^Add images, / });
 }
 
 async function attachStartFrame(page: Page) {
@@ -147,10 +147,9 @@ test.describe('references saved on another video model', () => {
       // upload starts this over, and what is already saved is not uploaded twice.
       await expect(async () => {
         await openModel(page, 'seedance-2');
-        const heading = await openReferences(page);
-        await expect(heading).toBeVisible();
+        await expect(await openReferences(page)).toBeVisible();
         if (await savedCount(page, 'create-video:elements:workflow-user') !== 2) {
-          await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles([
+          await page.getByLabel('Add images', { exact: true }).setInputFiles([
             { name: 'hero.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
             { name: 'scarf.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
           ]);
@@ -187,10 +186,9 @@ test.describe('references saved on another video model', () => {
     // play still counts as a clip: its length reads as unknown.
     await expect(async () => {
       await openModel(page, 'seedance-2');
-      const heading = await openReferences(page);
-      await expect(heading).toBeVisible();
+      await expect(await openReferences(page)).toBeVisible();
       if (await savedCount(page, 'create-video:elements:workflow-user') !== 1) {
-        await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles(
+        await page.getByLabel('Add images', { exact: true }).setInputFiles(
           { name: 'hero.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
         );
       }
@@ -205,7 +203,7 @@ test.describe('references saved on another video model', () => {
     // model until Kie retired it).
     await openModel(page, 'kling-o3');
     await expect(page.getByPlaceholder('Rename element')).toHaveCount(1);
-    await expect(page.getByRole('heading', { name: 'Reference videos' })).toHaveCount(0);
+    await expect(page.getByLabel('Add video', { exact: true })).toHaveCount(0);
     await expect(page.getByText('Saved references are on standby')).toBeVisible();
     await expect(page.getByText('Your saved clip stays saved. Kling O3 takes no reference clip, so this run does not use it.')).toBeVisible();
 
@@ -227,10 +225,9 @@ test.describe('references saved on another video model', () => {
     // on a phone.
     await expect(async () => {
       await openModel(page, 'seedance-2');
-      const heading = await openReferences(page);
-      await expect(heading).toBeVisible();
+      await expect(await openReferences(page)).toBeVisible();
       if (await savedCount(page, 'create-video:elements:workflow-user') !== 1) {
-        await heading.locator('xpath=ancestor::div[.//input[@type="file"]][1]').locator('input[type="file"]').first().setInputFiles(
+        await page.getByLabel('Add images', { exact: true }).setInputFiles(
           { name: 'hero.png', mimeType: 'image/png', buffer: ONE_PIXEL_PNG },
         );
       }

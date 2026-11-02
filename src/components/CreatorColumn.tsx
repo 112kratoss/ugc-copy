@@ -1,10 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref } from 'react';
-import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref, RefObject } from 'react';
+import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import clsx from 'clsx';
 
@@ -15,10 +15,11 @@ import {
   StudioUploadedMediaPreview,
   type StudioMediaPreviewType,
 } from '@/components/CreatorStudio';
+import { CreditTopUpHost } from '@/components/CreditTopUpSheet';
 import { getAccentClasses, IconButton, type UiAccent } from '@/components/DesignSystem';
 import type { CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
+import { openCreditTopUp, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
-import { PRICING_PLANS } from '@/lib/pricing';
 import type { OptionPrice } from '@/lib/use-quote-prices';
 
 /**
@@ -32,7 +33,8 @@ import type { OptionPrice } from '@/lib/use-quote-prices';
  *
  * The two panes need 1120px of window: the app's sidebar takes 216px of it,
  * which leaves the page about 860px. Below that the result follows the column,
- * at most 680px wide, so a tablet keeps the app's proportions.
+ * at most 680px wide, so a tablet keeps the app's proportions. Side by side, the
+ * bar between them drags the column wider or narrower (`CreatorColumnResizer`).
  */
 export function CreatorColumnLayout({
   title,
@@ -50,18 +52,223 @@ export function CreatorColumnLayout({
    */
   resultFirst?: boolean;
 }) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const columnRef = useRef<HTMLDivElement>(null);
+  const columnId = useId();
+  const storedWidth = useStoredColumnWidth();
   return (
     // Its own stacking context: the model picker's layer 50 stays under the
     // shell's top bar (also 50) when the page scrolls.
     <div
+      ref={gridRef}
+      data-resized={storedWidth ? '' : undefined}
+      style={storedWidth ? ({ '--creator-column-width': `${storedWidth}px` } as CSSProperties) : undefined}
       className={clsx(
         'relative z-10 mx-auto grid w-full max-w-[680px] grid-cols-1 gap-4 px-[clamp(1rem,1.9vw,2.25rem)] min-[1120px]:max-w-[1860px] min-[1120px]:grid-cols-[minmax(340px,400px)_minmax(0,1fr)] min-[1120px]:items-start min-[1120px]:gap-5 min-[1440px]:grid-cols-[minmax(380px,440px)_minmax(0,1fr)]',
+        // A column dragged wider or narrower keeps that width, within the layout's floor and
+        // what leaves the result its own floor (`COLUMN_RESULT_ROOM`, the result's 440px and the gap).
+        'min-[1120px]:data-[resized]:grid-cols-[clamp(340px,var(--creator-column-width),calc(100%_-_460px))_minmax(0,1fr)]',
         resultFirst && 'max-[1120px]:[&>section]:order-first',
       )}
     >
       <h1 className="sr-only">{title}</h1>
-      <div className="flex min-w-0 flex-col gap-3" onFocus={keepFocusClearOfBar}>{column}</div>
+      <div ref={columnRef} id={columnId} className="flex min-w-0 flex-col gap-3" onFocus={keepFocusClearOfBar}>{column}</div>
       {canvas}
+      <CreatorColumnResizer gridRef={gridRef} columnRef={columnRef} columnId={columnId} />
+      {/* Every Top up on the page sells credits here, without leaving what is set up. */}
+      <CreditTopUpHost />
+    </div>
+  );
+}
+
+/** The column's width as the creator dragged it, kept in this browser: a viewer's own convenience. */
+const COLUMN_WIDTH_STORAGE_KEY = 'creator-column-width';
+/** The layout's own floor for the column, the width of the app's composer. */
+const COLUMN_MIN_WIDTH = 340;
+const COLUMN_MAX_WIDTH = 720;
+/** What the column leaves beside it: the result's floor, 440px, and the 20px gap. */
+const COLUMN_RESULT_ROOM = 460;
+const COLUMN_KEY_STEP = 16;
+const columnWidthListeners = new Set<() => void>();
+
+function readStoredColumnWidth(): number | null {
+  try {
+    const width = Number(window.localStorage.getItem(COLUMN_WIDTH_STORAGE_KEY));
+    return Number.isFinite(width) && width >= COLUMN_MIN_WIDTH ? width : null;
+  } catch {
+    // Storage refused (a private window): the layout's own width.
+    return null;
+  }
+}
+
+function saveColumnWidth(width: number | null) {
+  try {
+    if (width === null) window.localStorage.removeItem(COLUMN_WIDTH_STORAGE_KEY);
+    else window.localStorage.setItem(COLUMN_WIDTH_STORAGE_KEY, String(Math.round(width)));
+  } catch {
+    // Kept for this page only.
+  }
+  columnWidthListeners.forEach((listener) => listener());
+}
+
+function subscribeColumnWidth(listener: () => void) {
+  columnWidthListeners.add(listener);
+  // Another tab's drag reaches this one too.
+  window.addEventListener('storage', listener);
+  return () => {
+    columnWidthListeners.delete(listener);
+    window.removeEventListener('storage', listener);
+  };
+}
+
+/** The kept width, read after hydration: the server draws the layout's own width. */
+function useStoredColumnWidth(): number | null {
+  return useSyncExternalStore(subscribeColumnWidth, readStoredColumnWidth, () => null);
+}
+
+/**
+ * The widths a drag can reach in a grid this wide: from the layout's floor to the most that
+ * leaves the result its own, and never past 720px.
+ */
+export function columnWidthBounds(gridContentWidth: number): { min: number; max: number } {
+  return {
+    min: COLUMN_MIN_WIDTH,
+    max: Math.max(COLUMN_MIN_WIDTH, Math.min(COLUMN_MAX_WIDTH, gridContentWidth - COLUMN_RESULT_ROOM)),
+  };
+}
+
+/** The same for the grid as drawn: its width inside its padding. */
+function gridColumnBounds(grid: HTMLElement | null) {
+  if (!grid) return columnWidthBounds(0);
+  const style = getComputedStyle(grid);
+  const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  return columnWidthBounds(grid.clientWidth - padding);
+}
+
+/**
+ * The bar between the column and the result, which drags the column wider or narrower where
+ * the two stand side by side (the owner's ask, 2026-11-02: "make this bar move sideways so we
+ * can expand a little"). It is the window splitter of ARIA: a focusable separator that the
+ * arrow keys move too (Shift for bigger steps, Home and End for the ends), and a double-click
+ * gives the column back the layout's own width. A drag sets the grid's width variable straight
+ * on the element, so the creator under it does not render again at every step; the width is
+ * kept once the drag ends. It stands in the gap at the column's right edge, as tall as the row,
+ * with its grip held in the middle of the window.
+ */
+function CreatorColumnResizer({ gridRef, columnRef, columnId }: {
+  gridRef: RefObject<HTMLDivElement | null>;
+  columnRef: RefObject<HTMLDivElement | null>;
+  columnId: string;
+}) {
+  // What the separator says to a screen reader: the column's width and the most it can take.
+  const [measure, setMeasure] = useState<{ width: number; max: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const drag = useRef<{ x: number; width: number; moved: boolean } | null>(null);
+
+  useEffect(() => {
+    const column = columnRef.current;
+    const grid = gridRef.current;
+    if (!column || !grid || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setMeasure({
+      width: Math.round(column.getBoundingClientRect().width),
+      max: gridColumnBounds(grid).max,
+    }));
+    observer.observe(column);
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, [columnRef, gridRef]);
+
+  const columnWidth = () => columnRef.current?.getBoundingClientRect().width || measure?.width || COLUMN_MIN_WIDTH;
+  const apply = (next: number) => {
+    const grid = gridRef.current;
+    if (!grid) return next;
+    const { min, max } = gridColumnBounds(grid);
+    const clamped = Math.round(Math.min(max, Math.max(min, next)));
+    grid.dataset.resized = '';
+    grid.style.setProperty('--creator-column-width', `${clamped}px`);
+    return clamped;
+  };
+  const endDrag = () => {
+    if (!drag.current) return;
+    const { moved } = drag.current;
+    drag.current = null;
+    setDragging(false);
+    document.body.style.removeProperty('cursor');
+    document.body.style.removeProperty('user-select');
+    // A press that never moved (the first half of a double-click) keeps the layout's own width.
+    if (moved) saveColumnWidth(columnWidth());
+  };
+  const reset = () => {
+    const grid = gridRef.current;
+    if (grid) {
+      delete grid.dataset.resized;
+      grid.style.removeProperty('--creator-column-width');
+    }
+    saveColumnWidth(null);
+  };
+  return (
+    // The whole gap is the drag's reach. In it, at the column's right edge, as tall as the row; only
+    // where the two panes stand side by side. Absolute, so it takes no cell of its own (as a grid item
+    // it pushed the column into the second track); both lines are named, since an absolute item's
+    // auto end line is the grid's edge.
+    <div
+      title="Drag to resize. Double-click to reset."
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
+        drag.current = { x: event.clientX, width: columnWidth(), moved: false };
+        setDragging(true);
+        document.body.style.setProperty('cursor', 'col-resize');
+        document.body.style.setProperty('user-select', 'none');
+      }}
+      onPointerMove={(event) => {
+        if (!drag.current) return;
+        const moved = event.clientX - drag.current.x;
+        if (!drag.current.moved && Math.abs(moved) < 2) return;
+        drag.current.moved = true;
+        apply(drag.current.width + moved);
+      }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onLostPointerCapture={endDrag}
+      onDoubleClick={reset}
+      className="group/resizer absolute inset-y-0 right-0 hidden w-5 translate-x-full cursor-col-resize touch-none min-[1120px]:col-[1/2] min-[1120px]:row-[1/2] min-[1120px]:block"
+    >
+      <span
+        aria-hidden
+        className={clsx(
+          'absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors duration-150',
+          dragging ? 'bg-[var(--ui-border-strong)]' : 'bg-transparent group-hover/resizer:bg-[var(--ui-border-default)]'
+        )}
+      />
+      {/* The grip, held in the middle of the window however long the column is, is what the keyboard
+          focuses: focusing the whole row's height scrolled the page to its top. */}
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Column width"
+        aria-controls={columnId}
+        aria-valuenow={measure?.width}
+        aria-valuemin={COLUMN_MIN_WIDTH}
+        aria-valuemax={measure?.max ?? COLUMN_MAX_WIDTH}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          const step = event.shiftKey ? COLUMN_KEY_STEP * 4 : COLUMN_KEY_STEP;
+          const target = event.key === 'ArrowLeft' ? columnWidth() - step
+            : event.key === 'ArrowRight' ? columnWidth() + step
+              : event.key === 'Home' ? -Infinity
+                : event.key === 'End' ? Infinity
+                  : null;
+          if (target === null) return;
+          event.preventDefault();
+          saveColumnWidth(apply(target));
+        }}
+        className={clsx(
+          'ui-focus-ring sticky top-[calc(50vh-1.25rem)] mx-auto block h-10 w-1.5 rounded-full outline-none transition-colors duration-150',
+          dragging ? 'bg-[var(--ui-text-secondary)]' : 'bg-[var(--ui-border-strong)] group-hover/resizer:bg-[var(--ui-text-muted)]'
+        )}
+      />
     </div>
   );
 }
@@ -676,12 +883,18 @@ export function CreatorBarAction({
   hasPrice,
   onGenerate,
   signUp = false,
+  topUpNeed = null,
   topUpHref = '/pricing',
 }: {
   awaitingCheck: boolean;
   onCheckAgain: () => void;
   showTopUp: boolean;
-  /** Where Top up leads: Pricing, told on a remix to bring the creator back to it (`buildRemixTopUpHref`). */
+  /** The run the top-up is for, which the sheet weighs its packs against. */
+  topUpNeed?: CreditTopUpNeed;
+  /**
+   * Where the sheet's way to the pricing page leads, and where a page with no sheet goes: Pricing,
+   * told on a remix to bring the creator back to it (`buildRemixTopUpHref`).
+   */
   topUpHref?: string;
   isGenerating: boolean;
   disabled: boolean;
@@ -709,11 +922,12 @@ export function CreatorBarAction({
     );
   }
   if (showTopUp && !isGenerating) {
+    // The packs on the page (`CreditTopUpSheet`), not the pricing page: the run stays set up (owner, 2026-11-02).
     return (
-      <Link href={topUpHref} className={CREATOR_BAR_PRIMARY_CLASS}>
+      <button type="button" onClick={() => openCreditTopUp(topUpNeed, topUpHref)} className={CREATOR_BAR_PRIMARY_CLASS}>
         <Sparkles aria-hidden className="h-4 w-4" />
         Top Up Credits
-      </Link>
+      </button>
     );
   }
   return (
@@ -785,12 +999,6 @@ export function creditsWords(count: number): string {
   return `${count} ${count === 1 ? 'credit' : 'credits'}`;
 }
 
-/** The smallest credit pack, as a top-up names it: "500 for ₹415". */
-function smallestCreditPackLabel(): string {
-  const pack = PRICING_PLANS.reduce((smallest, plan) => (plan.credits < smallest.credits ? plan : smallest));
-  return `${pack.credits.toLocaleString('en-IN')} for ₹${pack.priceInr.toLocaleString('en-IN')}`;
-}
-
 const NOTE_STRONG_CLASS = 'font-bold text-[var(--ui-text-secondary)]';
 
 /** A link in the line under the bar: the words' size, its press area the 44px of a control. */
@@ -851,52 +1059,6 @@ export function CreatorOverBalanceLegend({ over, balance, isVisitor, offersTopUp
       “+{over}” means {creditsWords(over)} more than {isVisitor ? `the ${balance} free credits` : `your balance of ${balance}`}.
       {offersTopUp ? ' Those options stay selectable, and show Top up in place of Generate.' : ' Those options stay selectable.'}
     </p>
-  );
-}
-
-/**
- * In Generate's place while the balance is short of every video model's run (owner,
- * 2026-10-28): an image first, on the image model that costs least, with the prompt. Never
- * on a remix, which is offered a top-up alone (owner, 2026-11-01).
- */
-export function CreatorMakeImageInstead({ href, fromCost }: { href: string; fromCost: number }) {
-  return (
-    <Link href={href} className={CREATOR_BAR_PRIMARY_CLASS}>
-      <span className="truncate">{`Make an image instead · from ${creditsWords(fromCost)}`}</span>
-    </Link>
-  );
-}
-
-/** Under that bar: the balance, where videos start, and a top-up second. */
-export function CreatorLowBalanceNote({ balance, videosFrom }: { balance: number; videosFrom: number }) {
-  return (
-    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-      <span>Balance <strong className={NOTE_STRONG_CLASS}>{balance}</strong> · videos from {videosFrom}</span>
-      <Link href="/pricing" className={CREATOR_NOTE_LINK_CLASS}>
-        Top up: {smallestCreditPackLabel()}
-      </Link>
-    </div>
-  );
-}
-
-/** Over the column while the balance is short of every video: what it does cover. */
-export function CreatorLowBalanceNotice({ balance, videosFrom, image }: {
-  balance: number;
-  videosFrom: number;
-  /** The image model that costs least, and its price; null while unknown. */
-  image: { name: string; cost: number } | null;
-}) {
-  const coversImage = image !== null && image.cost <= balance;
-  return (
-    <div role="status" className="rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-4">
-      <p className="text-sm font-bold text-[var(--ui-text-primary)]">
-        {creditsWords(balance)}{coversImage ? ': enough for images' : ''}
-      </p>
-      <p className="mt-1 text-sm text-[var(--ui-text-muted)]">
-        Videos start at {creditsWords(videosFrom)}.
-        {image ? ` ${image.name} makes a picture for ${image.cost}, and you can turn a picture into a video later.` : ''}
-      </p>
-    </div>
   );
 }
 
@@ -1038,17 +1200,42 @@ export function CreatorReplaceButton({ label, accept, onFile }: {
  */
 export const SIDEWAYS_TRACK_CLASS = 'app-scrollbar -mx-1 grid snap-x grid-flow-col overflow-x-auto px-1 pb-2';
 
+/** How far a mouse moves on a strip before its press becomes a drag that scrolls the strip. */
+const STRIP_DRAG_THRESHOLD = 6;
+
 /**
  * A creator's references side by side in one row that scrolls sideways, as the
  * app lists them, so ten references take one row of the column rather than ten.
  * One added to a strip that already had some comes into view, as a row added
  * under the list did; the first ones, or a remix's restored set, start at the left.
+ *
+ * A mouse drags the row sideways, as a finger swipes it (the owner's ask, 2026-11-02):
+ * a press that moves 6px becomes a drag, the click that ends it presses nothing, and a
+ * press in a field (a name) stays the field's, to type and select in.
  */
-export function CreatorReferenceStrip({ className, children, ...props }: ComponentPropsWithoutRef<'ul'>) {
+export function CreatorReferenceStrip({ className, children, wide = false, ...props }: ComponentPropsWithoutRef<'ul'> & {
+  /** Wider cells, for tiles that hold a player (a track's). */
+  wide?: boolean;
+}) {
   const listRef = useRef<HTMLUListElement>(null);
   const count = Children.count(children);
   const shownCount = useRef(count);
   const reduceMotion = useReducedMotion();
+  const pan = useRef<{ pointerId: number; x: number; scrollLeft: number; moved: boolean } | null>(null);
+  const swallowClick = useRef(false);
+
+  const endPan = () => {
+    const current = pan.current;
+    const list = listRef.current;
+    pan.current = null;
+    if (!current?.moved || !list) return;
+    for (const property of ['cursor', 'user-select', 'scroll-snap-type']) list.style.removeProperty(property);
+    // The click that ends a drag is no press on what the pointer stopped over (a Remove, a preview).
+    swallowClick.current = true;
+    window.setTimeout(() => {
+      swallowClick.current = false;
+    }, 0);
+  };
 
   useEffect(() => {
     const list = listRef.current;
@@ -1063,7 +1250,46 @@ export function CreatorReferenceStrip({ className, children, ...props }: Compone
   }, [count, reduceMotion]);
 
   return (
-    <ul {...props} ref={listRef} className={clsx(SIDEWAYS_TRACK_CLASS, 'auto-cols-[8rem] gap-2', className)}>
+    <ul
+      {...props}
+      ref={listRef}
+      onPointerDown={(event) => {
+        const list = listRef.current;
+        // A finger or a pen scrolls the row itself; a row that fits has nowhere to go.
+        if (event.pointerType !== 'mouse' || event.button !== 0 || !list || list.scrollWidth <= list.clientWidth) return;
+        if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+        pan.current = { pointerId: event.pointerId, x: event.clientX, scrollLeft: list.scrollLeft, moved: false };
+      }}
+      onPointerMove={(event) => {
+        const current = pan.current;
+        const list = listRef.current;
+        if (!current || !list || event.pointerId !== current.pointerId) return;
+        const dx = event.clientX - current.x;
+        if (!current.moved) {
+          if (Math.abs(dx) < STRIP_DRAG_THRESHOLD) return;
+          current.moved = true;
+          list.setPointerCapture?.(event.pointerId);
+          window.getSelection()?.removeAllRanges();
+          // Snapping would pull the row back at every step; it settles on a card once the drag ends.
+          list.style.setProperty('scroll-snap-type', 'none');
+          list.style.setProperty('cursor', 'grabbing');
+          list.style.setProperty('user-select', 'none');
+        }
+        list.scrollLeft = current.scrollLeft - dx;
+      }}
+      onPointerUp={endPan}
+      onPointerCancel={endPan}
+      onLostPointerCapture={endPan}
+      onClickCapture={(event) => {
+        if (!swallowClick.current) return;
+        swallowClick.current = false;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      // A picture dragged as a file would take the pointer from the row.
+      onDragStart={(event) => event.preventDefault()}
+      className={clsx(SIDEWAYS_TRACK_CLASS, wide ? 'auto-cols-[13rem]' : 'auto-cols-[8rem]', 'gap-2', className)}
+    >
       {children}
     </ul>
   );
@@ -1118,18 +1344,7 @@ export function CreatorReferenceTile({
     <li className="flex min-w-0 snap-start flex-col gap-1.5 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1.5">
       <div className="relative">
         {preview}
-        {/* 48px to press, as every icon button is, and a 32px circle to see, so the picture stays visible. */}
-        <button
-          type="button"
-          onClick={onRemove}
-          aria-label={`Remove ${displayName}`}
-          title={`Remove ${displayName}`}
-          className="ui-focus-ring group/remove absolute right-0 top-0 inline-flex h-12 w-12 items-start justify-end rounded-full p-1"
-        >
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white transition group-hover/remove:bg-rose-500/90">
-            <X className="h-4 w-4" aria-hidden />
-          </span>
-        </button>
+        <TileRemoveButton label={`Remove ${displayName}`} onRemove={onRemove} />
       </div>
       <input
         type="text"
@@ -1170,6 +1385,76 @@ export function CreatorReferenceTile({
         </div>
       ) : null}
       {note ? <p className="px-1.5 text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
+    </li>
+  );
+}
+
+/** Remove on a tile's picture or clip: 48px to press, as every icon button is, and a 32px circle to see, so the picture stays visible. */
+function TileRemoveButton({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onRemove}
+      aria-label={label}
+      title={label}
+      className="ui-focus-ring group/remove absolute right-0 top-0 inline-flex h-12 w-12 items-start justify-end rounded-full p-1"
+    >
+      <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white transition group-hover/remove:bg-rose-500/90">
+        <X className="h-4 w-4" aria-hidden />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * A clip or a track as a tile in its row, as the app's rail draws them: a clip's frame on top
+ * (which opens it) with Remove on it, or for a track its name with Remove beside it and its
+ * player under; its name, the line under it (its length, red where the run holds it back, or
+ * what the run makes of it), and Replace on one a remix brought back. A clip or a track has no
+ * @handle, so the tile has no name field and no Insert.
+ */
+export function CreatorMediaReferenceTile({
+  preview,
+  player,
+  displayName,
+  line,
+  lineHeld = false,
+  onRemove,
+  replace,
+}: {
+  /** A clip's frame, as wide as the tile. */
+  preview?: ReactNode;
+  /** A track's player, under its name. */
+  player?: ReactNode;
+  displayName: string;
+  line?: ReactNode;
+  /** The line says why the run holds the reference back. */
+  lineHeld?: boolean;
+  onRemove: () => void;
+  replace?: { label: string; accept: string; onFile: (file: File) => void };
+}) {
+  return (
+    <li className="flex min-w-0 snap-start flex-col gap-1.5 rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1.5">
+      {preview ? (
+        <div className="relative">
+          {preview}
+          <TileRemoveButton label={`Remove ${displayName}`} onRemove={onRemove} />
+        </div>
+      ) : null}
+      <div className="flex min-w-0 items-start justify-between gap-1">
+        <div className="min-w-0 px-1.5 py-1">
+          {/* A tile shows about a dozen characters of a long name; the rest on hover. */}
+          <p className="truncate text-sm font-semibold text-[var(--ui-text-primary)]" title={displayName}>{displayName}</p>
+          {line ? <p className={clsx('mt-0.5 text-xs', lineHeld ? 'text-red-400' : 'text-[var(--ui-text-faint)]')}>{line}</p> : null}
+        </div>
+        {preview ? null : <IconButton label={`Remove ${displayName}`} icon={X} onClick={onRemove} className="shrink-0" />}
+      </div>
+      {player}
+      {replace ? (
+        <div className="flex flex-wrap gap-1.5">
+          <CreatorReplaceButton {...replace} />
+        </div>
+      ) : null}
     </li>
   );
 }
@@ -1221,6 +1506,113 @@ export function CreatorAddTile({
 /** The same in the shape of a button, for one that adds something other than a file (a shot). */
 export function creatorAddButtonClass(accent: UiAccent) {
   return clsx('ui-focus-ring disabled:cursor-not-allowed disabled:opacity-50', addTileClass(accent, false));
+}
+
+/**
+ * A kind of reference an add box adds (a picture, a clip, a track): its words, its file field,
+ * and how many the run holds of it and takes.
+ */
+export interface CreatorReferenceKind {
+  /** Its name, which keys its box: "Image". */
+  name: string;
+  /** Its word on its box: "Images". */
+  railLabel: string;
+  /** What it is for, the box's tooltip and description. */
+  hint: string;
+  /** The file field's types. */
+  accept: string;
+  count: number;
+  limit: number;
+  /** Takes the files picked or dropped for this kind. */
+  onFiles: (files: File[]) => void;
+}
+
+/**
+ * A kind of reference's row, as the app's rail is: the kind's dashed add box at the start,
+ * outside the references' scroller so it is always in view, then the kind's references, or
+ * while it has none, what the kind is for (the owner's ask, 2026-11-01: a box for each kind,
+ * and each kind in a row of its own). The app keeps one rail with one box that asks which
+ * kind, since three boxes ahead of the pictures left half the first one off a phone; a row for
+ * each kind keeps every kind one press away and its references beside its box.
+ */
+export function CreatorReferenceRow({ accent, kind, children }: {
+  accent: UiAccent;
+  kind: CreatorReferenceKind;
+  /** The kind's references, in a strip; nothing while it has none. */
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <CreatorReferenceAddBox accent={accent} kind={kind} />
+      {children ?? <p className="min-w-0 flex-1 self-center px-1 text-sm leading-6 text-[var(--ui-text-muted)]">{kind.hint}</p>}
+    </div>
+  );
+}
+
+/**
+ * A kind's dashed add box: "+", its word and how many of it the run holds, dimmed once full.
+ * A press opens the kind's picker, and a drop hands the kind its files, whose check refuses one
+ * of another kind as it refuses a pick.
+ */
+function CreatorReferenceAddBox({ accent, kind }: { accent: UiAccent; kind: CreatorReferenceKind }) {
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const hintId = useId();
+  const classes = getAccentClasses(accent);
+  const word = kind.railLabel.toLowerCase();
+
+  return (
+    <div className="shrink-0">
+      <button
+        type="button"
+        aria-label={`Add ${word}, ${kind.count} of ${kind.limit}`}
+        aria-describedby={hintId}
+        title={kind.hint}
+        disabled={kind.count >= kind.limit}
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragging(false);
+          const files = Array.from(event.dataTransfer.files ?? []);
+          if (files.length > 0) kind.onFiles(files);
+        }}
+        className={clsx(
+          'ui-focus-ring flex h-20 w-20 flex-col items-center justify-center gap-0.5 rounded-ui-lg border border-dashed px-1 transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40',
+          // Quiet at rest, as the frame slots on the other side of the switch are; the accent
+          // comes in on hover and while a file is over it, and the plus keeps it throughout.
+          dragging
+            ? clsx(classes.tileActive, 'text-[var(--ui-text-primary)]')
+            : clsx('border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-secondary)] hover:text-[var(--ui-text-primary)]', classes.tileHover)
+        )}
+      >
+        {/* Nothing inside takes the pointer, so a drag over the icon is no leave. */}
+        <Plus aria-hidden className={clsx('pointer-events-none mb-0.5 h-4 w-4', classes.mark)} />
+        {/* The design guide's label (13px bold) and caption (12px, faint) roles. */}
+        <span className="pointer-events-none text-[13px] font-bold leading-[18px]">{dragging ? 'Drop here' : kind.railLabel}</span>
+        <span className="pointer-events-none text-xs font-semibold leading-[17px] tabular-nums text-[var(--ui-text-faint)]">{kind.count}/{kind.limit}</span>
+        <span id={hintId} className="sr-only">{kind.hint}</span>
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={kind.accept}
+        multiple
+        tabIndex={-1}
+        aria-label={`Add ${word}`}
+        className="hidden"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? []);
+          event.target.value = '';
+          if (files.length > 0) kind.onFiles(files);
+        }}
+      />
+    </div>
+  );
 }
 
 /**
