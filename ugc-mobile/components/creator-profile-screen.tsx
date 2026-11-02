@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { NativeMenu } from '@/components/native-menu';
-import { AppText, IconButton, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
+import { AppText, IconButton, iconButtonMenuTrigger, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock, ToggleButton } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { mergeRefreshedFirstPage, type ProfilePageAdapter } from '@/lib/profile-media-refresh';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
@@ -717,7 +717,9 @@ function CreatorHeader({
       </View>
 
       <View style={{ padding: 16, paddingTop: 0, gap: 14 }}>
-        <View style={{ marginTop: -42, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
+        {/* Where the actions do not fit beside the avatar (Follow on a 360dp phone, or at large
+            text sizes) they take the next line, under it, rather than run off the card. */}
+        <View style={{ marginTop: -42, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
           <CreatorAvatar avatarUrl={profile.avatarUrl} initial={initial} size={86} />
           <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
             {data.viewer.isOwner ? (
@@ -730,14 +732,7 @@ function CreatorHeader({
               <NativeMenu
                 model={safetyMenu}
                 accessibilityLabel="More options"
-                trigger={{
-                  width: 48,
-                  height: 48,
-                  iconSize: appTheme.icon.default,
-                  iconColor: theme.colors.text,
-                  vertical: true,
-                  circle: { fill: theme.colors.panelSoft, ring: theme.colors.border },
-                }}
+                trigger={iconButtonMenuTrigger(theme.colors)}
                 onFallbackPress={onSafetyOptions}
                 renderButton={(onPress) => (
                   <IconButton icon={MoreVertical} label="More options" onPress={onPress} />
@@ -905,12 +900,16 @@ function EditProfileButton({ onPress }: { onPress: () => void }) {
   return <PrimaryButton label="Edit" accessibilityLabel="Edit profile" icon={Pencil} onPress={onPress} />;
 }
 
-/** Follow is the prominent action; once followed it steps back to a supporting one. */
+/** Follow is the prominent action; once followed it steps back to a supporting one, as one view. */
 function FollowButton({ following, loading, onPress }: { following: boolean; loading: boolean; onPress: () => void }) {
-  return following ? (
-    <SecondaryButton label="Following" loadingLabel="Following" icon={UserCheck} loading={loading} onPress={onPress} />
-  ) : (
-    <PrimaryButton label="Follow" loadingLabel="Follow" icon={UserPlus} loading={loading} onPress={onPress} />
+  return (
+    <ToggleButton
+      on={following}
+      label={following ? 'Following' : 'Follow'}
+      icon={following ? UserCheck : UserPlus}
+      loading={loading}
+      onPress={onPress}
+    />
   );
 }
 

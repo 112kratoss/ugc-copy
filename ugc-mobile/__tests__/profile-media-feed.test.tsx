@@ -134,9 +134,9 @@ vi.mock('@/components/ui', async (importOriginal) => {
   // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
   const actual = await importOriginal<typeof import('@/components/ui')>();
   return {
+    ...actual,
     SecondaryButton: nothing,
     StatusBlock: (props: { title: string }) => React.createElement('status-block', props),
-    IconButton: actual.IconButton,
   };
 });
 vi.mock('@/components/viewer-action-sheet', () => ({ ViewerActionSheet: nothing }));

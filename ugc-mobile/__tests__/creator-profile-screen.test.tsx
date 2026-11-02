@@ -109,12 +109,12 @@ vi.mock('@/components/ui', async (importOriginal) => {
   // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
   const actual = await importOriginal<typeof import('@/components/ui')>();
   return {
+    ...actual,
     AppText: ({ children, ...props }: MockProps) => React.createElement('app-text', props, children),
     PrimaryButton: (props: MockProps) => React.createElement('primary-button', props),
     SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
+    ToggleButton: (props: MockProps) => React.createElement('toggle-button', props),
     StatusBlock: (props: MockProps) => React.createElement('status-block', props),
-    IconButton: actual.IconButton,
-    SegmentedControl: actual.SegmentedControl,
   };
 });
 vi.mock('@/components/native-menu', () => ({
@@ -287,7 +287,7 @@ describe('the page of a creator the viewer blocked', () => {
     expect(texts(tree)).toContain('Luna Studio');
     expect(tileLabels(tree)).toEqual([]);
     expect(texts(tree)).not.toContain('Posts 2');
-    expect(byType(tree, 'primary-button').map((node) => node.props.label)).not.toContain('Follow');
+    expect(byType(tree, 'toggle-button')).toEqual([]);
     expect(mocks.list.stickyHeaderIndices).toBeUndefined();
     // Blocking again would do nothing; reporting them still matters.
     expect(menuIds(tree)).toEqual(['report-user']);
@@ -328,7 +328,7 @@ describe('the page of a creator the viewer blocked', () => {
     expect(mocks.api.getCreatorProfile).toHaveBeenLastCalledWith('luna', { limit: 24, offset: 0 });
     expect(byType(tree, 'status-block')).toEqual([]);
     expect(tileLabels(tree)).toEqual(['Open Post post-1', 'Open Post post-2']);
-    expect(byType(tree, 'primary-button').map((node) => node.props.label)).toContain('Follow');
+    expect(byType(tree, 'toggle-button').map((node) => [node.props.label, node.props.on])).toEqual([['Follow', false]]);
     expect(menuIds(tree)).toEqual(['report-user', 'block-user']);
     expect(mocks.haptic.success).toHaveBeenCalledTimes(1);
     expect(mocks.announce).toHaveBeenCalledWith('@luna unblocked.');
@@ -516,7 +516,7 @@ describe('the header', () => {
     queryClient.setQueryData(['creator-follow-state', 'creator-1'], { following: false });
     const tree = await renderScreen(queryClient);
 
-    const follow = byType(tree, 'primary-button').find((node) => node.props.label === 'Follow');
+    const follow = byType(tree, 'toggle-button').find((node) => node.props.label === 'Follow');
     await act(async () => {
       (follow!.props.onPress as () => void)();
     });

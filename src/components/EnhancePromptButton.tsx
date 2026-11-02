@@ -215,7 +215,7 @@ export default function EnhancePromptButton({
         <button
             type="button"
             onClick={handleUndo}
-            className={`flex items-center gap-1 rounded-full border border-white/10 bg-zinc-900/40 font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-1 text-[11px]'}`}
+            className="flex min-h-9 items-center gap-1 rounded-full border border-white/10 bg-zinc-900/40 font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 px-3 text-xs"
         >
             <Undo2 className="w-3 h-3" />
             <span>Undo</span>
@@ -226,7 +226,7 @@ export default function EnhancePromptButton({
         <button
             type="button"
             onClick={handleUseOffer}
-            className={`flex items-center gap-1 rounded-full border border-brand-coral/30 bg-brand-coral/10 font-medium text-[#ffb09c] transition-colors hover:border-brand-coral/50 hover:bg-brand-coral/15 ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-1 text-[11px]'}`}
+            className="flex min-h-9 items-center gap-1 rounded-full border border-brand-coral/30 bg-brand-coral/10 font-medium text-[#ffb09c] transition-colors hover:border-brand-coral/50 hover:bg-brand-coral/15 px-3 text-xs"
         >
             <Sparkles className="w-3 h-3" />
             <span>Use enhanced</span>
@@ -290,7 +290,7 @@ export default function EnhancePromptButton({
                     </button>
                 </div>
                 {levelToggle || undoButton || offerButton ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                         {levelToggle}
                         {undoButton}
                         {offerButton}
@@ -303,12 +303,13 @@ export default function EnhancePromptButton({
 
     return (
         <div className="flex flex-col gap-1.5 mb-2">
-            <div className="flex items-center gap-2">
+            {/* One height for the row, the level control's 36px, and it wraps where a shot card is narrow. */}
+            <div className="flex flex-wrap items-center gap-2">
                 <button
                     onClick={handleEnhance}
                     disabled={!canEnhance}
                     aria-label={enhanceLabel}
-                    className={`group flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all duration-300 ${
+                    className={`group flex min-h-9 items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all duration-300 ${
                         canEnhance ? ENHANCE_READY_CLASS : ENHANCE_IDLE_CLASS
                     }`}
                 >

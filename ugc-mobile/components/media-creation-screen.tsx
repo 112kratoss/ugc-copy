@@ -171,7 +171,6 @@ import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAsse
 import type { PromptLengthMeter } from '@/lib/model-catalog/provider-prompt-limits';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
-import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
 import { useFocusRequest } from '@/lib/use-focus-request';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -5421,23 +5420,7 @@ function EnhanceOffer({ onUse }: { onUse: () => void }) {
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Use enhanced prompt"
-        onPress={onUse}
-        hitSlop={verticalHitSlop(32)}
-        style={({ pressed }) => ({
-          minHeight: 32,
-          paddingHorizontal: 12,
-          borderRadius: appTheme.radii.pill,
-          borderWidth: 1,
-          borderColor: hexWithAlpha(theme.colors.primary, 0.3),
-          backgroundColor: hexWithAlpha(theme.colors.primary, 0.11),
-          alignItems: 'center',
-          justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-      >
-        <Text style={{ color: theme.colors.primary, fontWeight: '700', fontSize: 12 }}>Use enhanced</Text>
-      </Pressable>
+      <SecondaryButton accent="primary" label="Use enhanced" accessibilityLabel="Use enhanced prompt" onPress={onUse} />
       <Text accessibilityLiveRegion="polite" style={{ flex: 1, color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>
         Your edits were kept.
       </Text>
@@ -6291,29 +6274,21 @@ function GenerationWorkspace({
                 // publishes the first, as the web creator says.
                 <View testID="result-output-pager" style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
                   {/* Words rather than chevrons: a left chevron is the app's Back glyph. */}
-                  <Pressable
-                    accessibilityRole="button"
+                  <SecondaryButton
+                    label="Previous"
                     accessibilityLabel="Previous output"
-                    accessibilityState={{ disabled: shownIndex === 0 }}
                     disabled={shownIndex === 0}
                     onPress={() => showOutput(shownIndex - 1)}
-                    style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 16, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: shownIndex === 0 ? 0.4 : pressed ? appTheme.opacity.pressed : 1 })}
-                  >
-                    <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>Previous</Text>
-                  </Pressable>
+                  />
                   <Text accessibilityLiveRegion="polite" style={{ minWidth: 64, textAlign: 'center', color: theme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
                     {`${shownIndex + 1} of ${outputs.length}`}
                   </Text>
-                  <Pressable
-                    accessibilityRole="button"
+                  <SecondaryButton
+                    label="Next"
                     accessibilityLabel="Next output"
-                    accessibilityState={{ disabled: shownIndex >= outputs.length - 1 }}
                     disabled={shownIndex >= outputs.length - 1}
                     onPress={() => showOutput(shownIndex + 1)}
-                    style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 16, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: shownIndex >= outputs.length - 1 ? 0.4 : pressed ? appTheme.opacity.pressed : 1 })}
-                  >
-                    <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>Next</Text>
-                  </Pressable>
+                  />
                 </View>
               ) : null}
               <View style={{ gap: 10 }}>

@@ -93,11 +93,9 @@ vi.mock('@/components/ui', async (importOriginal) => {
   // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
   const actual = await importOriginal<typeof import('@/components/ui')>();
   return {
+    ...actual,
     CreatorAvatar: (props: MockProps) => React.createElement('avatar', props),
     Pill: ({ label, ...props }: MockProps) => React.createElement('text', props, label),
-    IconButton: actual.IconButton,
-    PrimaryButton: actual.PrimaryButton,
-    SecondaryButton: actual.SecondaryButton,
   };
 });
 

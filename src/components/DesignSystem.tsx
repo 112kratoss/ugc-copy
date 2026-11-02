@@ -454,6 +454,20 @@ const SEGMENT_SIZES = {
 } as const;
 
 /**
+ * The option a key moves the choice to in a row of `count`, wrapping at the
+ * ends, or null for a key that is not a move. A radio group takes all four
+ * arrows; a horizontal tab list (`vertical: false`) only the side ones, so Up
+ * and Down still scroll the page and step through the reel (WAI-ARIA Tabs:
+ * "so those keys can provide their normal browser scrolling functions").
+ */
+export function choiceKeyTarget(key: string, index: number, count: number, { vertical = true }: { vertical?: boolean } = {}): number | null {
+  const moves: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: count - 1 };
+  if (vertical) Object.assign(moves, { ArrowDown: index + 1, ArrowUp: index - 1 });
+  if (!(key in moves)) return null;
+  return (moves[key] + count) % count;
+}
+
+/**
  * One choice among two to five closely related options, the web's one segmented
  * control: a capsule track in the inset fill with a hairline, and the choice in
  * use a coral capsule inside it, as the app draws it. Until November 2026 the
@@ -466,7 +480,8 @@ const SEGMENT_SIZES = {
  * order), each option's `id` and `controls` naming it and its panel where there
  * is one. Either way it is one stop in the tab order, on the choice in use, and
  * the arrow keys, Home and End move the choice, as WAI-ARIA's radio group and
- * tabs patterns ask.
+ * tabs patterns ask: all four arrows in a radio group, the side ones in a tab
+ * list (`choiceKeyTarget`).
  *
  * `fill` shares the row equally ("keep segment size consistent", HIG Segmented
  * controls); `fill={false}` sizes each to its label, for a control beside a
@@ -505,17 +520,9 @@ export function SegmentedControl<T extends string>({
   const sizing = SEGMENT_SIZES[size];
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const moves: Record<string, number> = {
-      ArrowRight: index + 1,
-      ArrowDown: index + 1,
-      ArrowLeft: index - 1,
-      ArrowUp: index - 1,
-      Home: 0,
-      End: options.length - 1,
-    };
-    if (!(event.key in moves)) return;
+    const next = choiceKeyTarget(event.key, index, options.length, { vertical: !tabs });
+    if (next === null) return;
     event.preventDefault();
-    const next = (moves[event.key] + options.length) % options.length;
     if (options[next].value !== value) onChange(options[next].value);
     const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(':scope > button');
     buttons?.[next]?.focus();

@@ -106,7 +106,7 @@ The guards below fail the mobile suite, so a red guard is a real violation: fix 
 | `hig-dynamic-type.test.tsx` | Text always follows the OS text size, within each tier's cap |
 | `hig-icon-size.test.ts`, `hig-icon-weight.test.tsx` | Icon sizes come from the ramp; one stroke weight app-wide |
 | `hig-corner-radius.test.ts` | Radii come from the token scale (Radius below); rounded rectangles draw the continuous corner, capsules and circles do not |
-| `hig-shared-controls.test.tsx` | The segmented control and the button slots behave as [Segmented control and buttons](#segmented-control-and-buttons) says; no screen draws a segmented control of its own |
+| `hig-shared-controls.test.tsx` | The segmented control and the button slots behave as [Segmented control and buttons](#segmented-control-and-buttons) says; no screen draws a segmented control of its own (read through TypeScript's parser: a capsule tab or radio, or a capsule track of choices whose role, state or fill follows the choice) |
 | `theme-color-literals.test.ts` | No raw colour outside the `EXEMPT` list |
 | `theme-palette-parity.test.ts` | The light and dark palettes carry the same names |
 | `motion-token-compliance.test.ts` | Press opacity and springs come from the theme; every timing names its easing |
@@ -292,8 +292,8 @@ Use `lucide-react-native`. A Babel plugin rewrites each import to that icon's ow
   - `xs` 14 beside `caption`;
   - `sm` 16 beside `label` or `bodySm`;
   - `compact` 18 beside `body`;
-  - `default` 20 for a standalone control;
-  - `feature` 24 beside `sectionTitle`;
+  - `default` 20 for a glyph alone in a row (a chevron, a row's trailing control);
+  - `feature` 24 beside `sectionTitle`, and for every icon-only button (`IconButton`: Back, Close, ⋮);
   - `hero` 32 for hero and empty states.
 
   A size off the ramp fails `hig-icon-size.test.ts`.
@@ -412,9 +412,10 @@ New or migrated UI uses these primitives from `components/ui.tsx`. A missing one
 | `MetricCard` | A number with its label, an optional icon, body and action |
 | `ReadinessRow` | A pre-flight line: neutral, ready, warning, danger |
 | `ToggleRow` | A labelled switch with an explanation |
-| `PrimaryButton` | The one main action of a decision area. It takes a coral fill or a tool accent, a leading `icon` and a `trailingIcon`, `size="roomy"` in a footer, and `loadingLabel` narrates the wait ("Publishing…") |
-| `SecondaryButton` | Supporting actions; never competes with the primary. The same slots and sizes, and an `accent` that tints it for one tool's action (Enhance shot) |
-| `IconButton` | An icon-only control, a filled 48pt circle; `plain` in a header bar. Its label is required |
+| `PrimaryButton` | The one main action of a decision area. It takes a coral fill or a tool accent, a leading `icon` and a `trailingIcon`, `size="roomy"` in a footer; while it waits the spinner takes its glyph's place beside the label, and `loadingLabel` narrates a wait ("Publishing…") |
+| `SecondaryButton` | Supporting actions; never competes with the primary. The same slots and sizes, and an `accent` that tints it for one tool's action (Enhance shot, Use enhanced) |
+| `ToggleButton` | A button that turns something on: the primary until it is on, a supporting action after (Follow, then Following), one view throughout and selected once on |
+| `IconButton` | An icon-only control, a filled 48pt circle; `plain` in a header bar. Its label is required. `iconButtonMenuTrigger` draws a native menu's ⋮ the same way |
 | `AppTextInput` | Label above; `hint`, an announced `error`, a `footer` for counts, a clear button |
 | `MediaFrame` | A picture or video with its aspect ratio held before load |
 | `StatusBlock` | Empty, info, success, warning and error states: a title and a next step |
@@ -437,12 +438,14 @@ The coral thumb is the app's own (iOS's system control draws a neutral one): six
 
 **Buttons** come from `PrimaryButton`, `SecondaryButton` and `IconButton`, one height and one press feel per role:
 - **Height:** 48pt (`touch.default`) for every button; `size="roomy"` (56pt) only for the one action that closes a screen's or a sheet's footer (the composer's Next and Publish beside its Visibility, Save item). Buttons side by side share a height (Buttons: "use style — not size — to visually distinguish the preferred choice").
-- **Press:** the shared spring (`usePressMotion`: 0.96 for buttons, 0.9 for icon buttons) with the pressed opacity, a `pressed` fill, and on a primary the `light` haptic.
-- **Glyphs:** `icon` before the label and `trailingIcon` after it, drawn in the label's colour at the label's size (`icon.compact` beside a primary's `button` text, `icon.sm` beside a secondary's `label`); an element is drawn as given (`SaveHeart`'s pop). While a button waits the activity indicator takes the leading glyph's place, beside `loadingLabel` (Buttons: "hiding the button image").
-- **`IconButton`** is a filled 48pt circle (`surfaceStrong`), its glyph at `icon.feature`, the size every Back and Close is drawn at (`lib/platform-glyphs.ts`). `variant="plain"` leaves the circle out until it is pressed, for a button in a header bar whose own surface holds it (the composer's header, the media feed's, the creator page's glass circle): the HIG's exception for "a button in a toolbar".
-- `style` places a primitive (`flex`, `alignSelf`, an absolute position) and never restyles it; `accessibilityLabel` and `accessibilityValue` speak a button whose label is a number (Comments).
+- **Press:** the shared spring (`usePressMotion`: 0.96 for buttons, 0.9 for icon buttons) with the pressed opacity and a pressed fill (`primaryFillPressed` on a coral primary, `pressed` on the neutral secondary and icon buttons; a tint keeps its wash), and the `light` haptic on a primary, and on a toggle either way.
+- **Glyphs:** `icon` before the label and `trailingIcon` after it, drawn in the label's colour at the label's size (`icon.compact` beside a primary's `button` text, `icon.sm` beside a secondary's `label`); an element is drawn as given (`SaveHeart`'s pop). While a button waits the activity indicator takes the leading glyph's place, beside its label or `loadingLabel` (Buttons: "hiding the button image"); one with no glyph and no `loadingLabel` waits as a bare spinner. An empty label leaves the glyph alone, named by `accessibilityLabel` (the details page's Comments while there are none).
+- **Labels:** several words wrap between them at large text sizes, as the HIG prefers to truncating. One word stays whole: on one line, shrinking to 0.85 (13pt to 11pt, the floor) before it truncates, since a word wrapped in a third of a phone's width breaks inside itself ("Comme / nt").
+- **`IconButton`** is a filled 48pt circle (`surfaceStrong`), its glyph at `icon.feature`, the size every Back and Close is drawn at (`lib/platform-glyphs.ts`). `variant="plain"` leaves the circle out until it is pressed, for a button in a header bar whose own surface holds it (the composer's header, the media feed's, the creator page's glass circle): the HIG's exception for "a button in a toolbar". An `accent` tints it with the accent's wash and hairline, as it tints a secondary. Its hit region is its 48pt circle, with no slop: above the 44pt floor and the same for every Back, Close and ⋮ (the hand-drawn ones reached 56 to 60pt, each its own). A native menu's ⋮ among icon buttons takes `iconButtonMenuTrigger`: iOS draws it in SwiftUI from those values, not from `renderButton`, and the creator page's kept the old ringed circle beside the new Share until it did.
+- **`ToggleButton`** turns something on: the primary until it is on, a supporting action after (Follow, then Following). It stays one view as it flips, so VoiceOver and TalkBack keep their place on it and read it selected; Follow drawn as two buttons swapped by state lost that focus at every press, and ticked one way only.
+- `style` places a primitive (`flex`, `alignSelf`, an absolute position) and never restyles it, and a button given a place fills it, so a row of `flex: 1` buttons shares one height when one of them wraps; `accessibilityLabel` and `accessibilityValue` speak a button whose label is a number (Comments).
 
-Still drawn by hand, on purpose: Explore search's scope (Top, Creators, Posts, Recipes; a segmented control by the HIG, next to move once the primitive takes a disabled segment), the recipe's Latest or Purchased chips, the creator bar's settings chip and Generate (a bar of capsules of its own), the edit-profile sheet's Cancel and Save (a sheet's bar buttons), inline actions in Alerts rows, and everything drawn over a picture (the reel's rail, the lightbox), which takes `mediaColors`.
+Still drawn by hand, on purpose: Profile's Active, Archived and Failed chips (filters with counts, which wrap at large text sizes), Explore search's scope (Top, Creators, Posts, Recipes; a segmented control by the HIG, next to move once the primitive takes a disabled segment), the recipe's Latest or Purchased chips, the creator bar's settings chip and Generate (a bar of capsules of its own), the edit-profile sheet's Cancel and Save (a sheet's bar buttons), inline actions in Alerts rows, and everything drawn over a picture (the reel's rail, the lightbox), which takes `mediaColors`.
 
 Beyond `ui.tsx`:
 

@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import React from 'react';
 import renderer from 'react-test-renderer';
+import ts from 'typescript';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MIN_HIT_TARGET_PT } from '../lib/hit-target';
@@ -15,6 +16,8 @@ import { appTheme, themes } from '../lib/theme';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const haptics = vi.hoisted(() => ({ select: vi.fn(), light: vi.fn() }));
+// How many pressables have mounted: a button that remounts loses a screen reader's focus.
+const pressableMounts = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock('@/lib/haptics', () => ({ haptic: haptics }));
 
@@ -25,11 +28,16 @@ vi.mock('expo-router', () => ({
 // A pressable carries its style resolved at rest, and pressed beside it.
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
-  Pressable: ({ children, style, ...props }: MockProps) => React.createElement('pressable', {
-    ...props,
-    style: typeof style === 'function' ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false }) : style,
-    pressedStyle: typeof style === 'function' ? (style as (state: { pressed: boolean }) => unknown)({ pressed: true }) : style,
-  }, children),
+  Pressable: function MockPressable({ children, style, ...props }: MockProps) {
+    React.useEffect(() => {
+      pressableMounts.count += 1;
+    }, []);
+    return React.createElement('pressable', {
+      ...props,
+      style: typeof style === 'function' ? (style as (state: { pressed: boolean }) => unknown)({ pressed: false }) : style,
+      pressedStyle: typeof style === 'function' ? (style as (state: { pressed: boolean }) => unknown)({ pressed: true }) : style,
+    }, children);
+  },
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scroll-view', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: (props: MockProps) => React.createElement('text-input', props),
@@ -41,7 +49,7 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
 }));
 
-import { IconButton, PrimaryButton, SecondaryButton, SegmentedControl } from '../components/ui';
+import { IconButton, iconButtonMenuTrigger, PrimaryButton, SecondaryButton, SegmentedControl, ToggleButton } from '../components/ui';
 
 const colors = themes.dark.colors;
 type Style = Record<string, unknown>;
@@ -268,6 +276,90 @@ describe('the button primitives', () => {
     expect(pressable.props.style.backgroundColor).toBe('transparent');
     expect(pressable.props.pressedStyle.backgroundColor).toBe(colors.pressed);
   });
+
+  it("keeps an accent icon button's hairline, as a tinted secondary has", () => {
+    const [pressable] = hosts(renderNode(<IconButton icon={GlyphStub} label="Refresh alerts" accent="motion" />), 'pressable');
+    expect(pressable.props.style).toMatchObject({ borderWidth: 1, borderColor: `${colors.motion}55`, backgroundColor: `${colors.motion}1f` });
+  });
+
+  it("draws the native menu's ⋮ as an icon button draws itself", () => {
+    // iOS draws the ⋮ in SwiftUI from these values, beside the icon buttons React Native draws.
+    const [pressable] = hosts(renderNode(<IconButton icon={GlyphStub} label="Share profile" />), 'pressable');
+    expect(iconButtonMenuTrigger(colors)).toEqual({
+      width: pressable.props.style.minWidth,
+      height: pressable.props.style.minHeight,
+      iconSize: hosts(renderNode(<IconButton icon={GlyphStub} label="Share profile" />), 'glyph')[0].props.size,
+      iconColor: colors.text,
+      vertical: true,
+      circle: { fill: pressable.props.style.backgroundColor },
+    });
+  });
+
+  it('keeps a one-word label whole, on one line and shrinking a little first, and wraps several words between them', () => {
+    const [word] = hosts(renderNode(<SecondaryButton label="Comment" icon={GlyphStub} />), 'text');
+    expect(word.props).toMatchObject({ numberOfLines: 1, adjustsFontSizeToFit: true });
+    // Never under the 11pt floor.
+    expect(appTheme.type.label.fontSize * word.props.minimumFontScale).toBeGreaterThanOrEqual(11);
+    const [words] = hosts(renderNode(<SecondaryButton label="View public profile" />), 'text');
+    expect(words.props.numberOfLines).toBeUndefined();
+    expect(words.props.adjustsFontSizeToFit).toBe(false);
+  });
+
+  it('draws the glyph alone where the label is empty, named by its accessible label', () => {
+    const tree = renderNode(<SecondaryButton label="" accessibilityLabel="Comments" icon={GlyphStub} />);
+    expect(hosts(tree, 'text')).toHaveLength(0);
+    expect(hosts(tree, 'glyph')).toHaveLength(1);
+    expect(hosts(tree, 'pressable')[0].props.accessibilityLabel).toBe('Comments');
+  });
+
+  it("keeps a glyph button's label beside the spinner while it waits, and waits as a bare spinner without one", () => {
+    const remix = renderNode(<PrimaryButton label="Remix" loading icon={GlyphStub} />);
+    expect(hosts(remix, 'text').map((text) => text.props.children)).toEqual(['Remix']);
+    expect(hosts(remix, 'activity-indicator')).toHaveLength(1);
+    const plain = renderNode(<PrimaryButton label="Continue" loading />);
+    expect(hosts(plain, 'text')).toHaveLength(0);
+    expect(hosts(plain, 'activity-indicator')).toHaveLength(1);
+  });
+
+  it('fills the place it is given, so a row of buttons shares one height', () => {
+    expect(hosts(renderNode(<SecondaryButton label="Share" style={{ flex: 1 }} />), 'pressable')[0].props.style.flexGrow).toBe(1);
+    expect(hosts(renderNode(<SecondaryButton label="Share" />), 'pressable')[0].props.style.flexGrow).toBeUndefined();
+  });
+
+  it('steps a coral primary to its pressed fill', () => {
+    const [pressable] = hosts(renderNode(<PrimaryButton label="Next" />), 'pressable');
+    expect(pressable.props.style.backgroundColor).toBe(colors.primaryFill);
+    expect(pressable.props.pressedStyle.backgroundColor).toBe(colors.primaryFillPressed);
+  });
+
+  it("flips a toggle's rank as one view, selected once it is on, with the same tick either way", () => {
+    // The swap it replaced remounts: so a count of one below means "kept", not "not looked at".
+    const swapped = (on: boolean) => (on
+      ? <SecondaryButton label="Following" icon={GlyphStub} />
+      : <PrimaryButton label="Follow" icon={GlyphStub} />);
+    pressableMounts.count = 0;
+    const swap = renderNode(swapped(false));
+    renderer.act(() => { swap.update(swapped(true)); });
+    expect(pressableMounts.count).toBe(2);
+
+    pressableMounts.count = 0;
+    const tree = renderNode(<ToggleButton on={false} label="Follow" icon={GlyphStub} onPress={() => undefined} />);
+    const before = hosts(tree, 'pressable')[0];
+    expect(before.props.accessibilityState).toEqual({ busy: false, disabled: false, selected: false });
+    expect(before.props.style.backgroundColor).toBe(colors.primaryFill);
+    renderer.act(() => { before.props.onPress(); });
+
+    renderer.act(() => {
+      tree.update(<ToggleButton on label="Following" icon={GlyphStub} onPress={() => undefined} />);
+    });
+    const after = hosts(tree, 'pressable')[0];
+    // The same native view, so a screen reader stays on it as it flips.
+    expect(pressableMounts.count).toBe(1);
+    expect(after.props.accessibilityState).toEqual({ busy: false, disabled: false, selected: true });
+    expect(after.props.style.backgroundColor).toBe(colors.panelSoft);
+    renderer.act(() => { after.props.onPress(); });
+    expect(haptics.light).toHaveBeenCalledTimes(2);
+  });
 });
 
 /**
@@ -285,41 +377,67 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-function openingTags(source: string, tagName: string) {
-  const found: Array<{ tag: string; start: number; end: number }> = [];
-  const pattern = new RegExp(`<${tagName}\\b`, 'g');
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(source))) {
-    let depth = 0;
-    let end = -1;
-    for (let index = match.index; index < source.length; index += 1) {
-      const character = source[index];
-      if (character === '{' || character === '(') depth += 1;
-      else if (character === '}' || character === ')') depth -= 1;
-      else if (character === '>' && depth === 0) { end = index; break; }
-    }
-    if (end !== -1) found.push({ tag: source.slice(match.index, end + 1), start: match.index, end: end + 1 });
-  }
-  return found;
-}
-
 /**
- * Two signatures: a tab or radio drawn as a capsule, and a capsule track whose
- * children are mapped choices with a selected or checked state (the shot mode
- * and Full/Light were buttons). Both were true of every copy this replaced.
+ * Read through TypeScript's parser, as the corner-radius guards read radii: a
+ * character scan of the first version ended a tag at a `>` inside a string and
+ * looked for its choices only in the 900 characters after a track, and the
+ * web's twin missed a copy that way.
  */
-function handDrawnSegments(source: string) {
-  const line = (index: number) => source.slice(0, index).split('\n').length;
-  const capsuleChoices = openingTags(source, 'Pressable')
-    .filter(({ tag }) => tag.includes('radii.pill') && /accessibilityRole=("(tab|radio)"|\{[^}]*'(tab|radio)')/.test(tag))
-    .map(({ start }) => `${line(start)}: a tab or radio drawn as a capsule`);
-  const tracks = ['View', 'ScrollView'].flatMap((tagName) => openingTags(source, tagName)
-    .filter(({ tag, end }) => tag.includes('radii.pill')
-      && /padding: (2|4|appTheme\.spacing\.unit)\b/.test(tag)
-      && source.slice(end, end + 900).includes('.map(')
-      && /accessibilityState=\{\{[^}]*\b(selected|checked)\b/.test(source.slice(end, end + 900)))
-    .map(({ start }) => `${line(start)}: a capsule track of choices`));
-  return [...capsuleChoices, ...tracks];
+function handDrawnSegments(text: string) {
+  const sourceFile = ts.createSourceFile('scan.tsx', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const line = (node: ts.Node) => sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+  const tagOf = (element: ts.JsxOpeningLikeElement) => element.tagName.getText(sourceFile);
+  const attribute = (element: ts.JsxOpeningLikeElement, name: string) => element.attributes.properties.find(
+    (property): property is ts.JsxAttribute => ts.isJsxAttribute(property) && property.name.getText(sourceFile) === name,
+  );
+  const attributeText = (element: ts.JsxOpeningLikeElement, name: string) => attribute(element, name)?.initializer?.getText(sourceFile) ?? '';
+  /** A style whose look follows a chosen state: a ternary on anything but the press, focus or availability. */
+  const followsChoice = (element: ts.JsxOpeningLikeElement) => {
+    let found = false;
+    const visit = (node: ts.Node) => {
+      if (ts.isConditionalExpression(node) && !/\b(pressed|focused|disabled|hovered)\b/.test(node.condition.getText(sourceFile))) found = true;
+      else ts.forEachChild(node, visit);
+    };
+    const initializer = attribute(element, 'style')?.initializer;
+    if (initializer) visit(initializer);
+    return found;
+  };
+  const capsule = (element: ts.JsxOpeningLikeElement) => attributeText(element, 'style').includes('radii.pill');
+  const tabOrRadio = (element: ts.JsxOpeningLikeElement) => /\b(tab|radio)\b/.test(attributeText(element, 'accessibilityRole'));
+  /** A capsule `Pressable` whose role, state or look says whether it is the one chosen. */
+  const isChoice = (element: ts.JsxOpeningLikeElement) => tagOf(element) === 'Pressable' && capsule(element)
+    && (tabOrRadio(element) || /\b(selected|checked)\b/.test(attributeText(element, 'accessibilityState')) || followsChoice(element));
+  /** The choices a track holds, through layout views; each mapped one counts as two. */
+  const choicesIn = (track: ts.JsxElement) => {
+    let count = 0;
+    const visit = (node: ts.Node, mapped: boolean) => {
+      if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const element = ts.isJsxElement(node) ? node.openingElement : node;
+        if (isChoice(element)) count += mapped ? 2 : 1;
+        if (isChoice(element) || !ts.isJsxElement(node) || tagOf(element) !== 'View') return;
+      }
+      const maps = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'map';
+      ts.forEachChild(node, (child) => visit(child, mapped || maps));
+    };
+    track.children.forEach((child) => visit(child, false));
+    return count;
+  };
+
+  const found: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const element = ts.isJsxElement(node) ? node.openingElement : node;
+      const tag = tagOf(element);
+      if (tag === 'Pressable' && capsule(element) && tabOrRadio(element)) found.push(`${line(node)}: a tab or radio drawn as a capsule`);
+      if (ts.isJsxElement(node) && /^(View|ScrollView|Animated\.View)$/.test(tag) && capsule(element)
+        && /\bpadding: (2|3|4|5|6|appTheme\.spacing\.unit)\b/.test(attributeText(element, 'style')) && choicesIn(node) >= 2) {
+        found.push(`${line(node)}: a capsule track of choices`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return found.sort((a, b) => Number.parseInt(a, 10) - Number.parseInt(b, 10));
 }
 
 /** Capsule choices that are not segmented controls, each with its reason. Counted, so one more fails. */
@@ -344,7 +462,7 @@ describe('one segmented control (the shape lives in one place)', () => {
           </Pressable>
         ))}
       </View>`;
-    expect(handDrawnSegments(modeTabs)).toEqual(['4: a tab or radio drawn as a capsule', '2: a capsule track of choices']);
+    expect(handDrawnSegments(modeTabs)).toEqual(['2: a capsule track of choices', '4: a tab or radio drawn as a capsule']);
 
     // And Full/Light as it was: a capsule track of buttons with a selected state.
     const enhanceLevel = `
@@ -355,6 +473,27 @@ describe('one segmented control (the shape lives in one place)', () => {
         ))}
       </View>`;
     expect(handDrawnSegments(enhanceLevel)).toEqual(['2: a capsule track of choices']);
+
+    // And one with no role or state at all, only its fill following the choice, a ">" in a string before it.
+    const bareSwitch = `
+      <View style={{ flexDirection: 'row', padding: 3, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceInset }}>
+        <Text>{'Media > Text'}</Text>
+        <View style={{ flexDirection: 'row' }}>
+          {MODES.map((item) => (
+            <Pressable key={item} onPress={() => setMode(item)}
+              style={({ pressed }) => ({ borderRadius: appTheme.radii.pill, backgroundColor: pressed ? theme.colors.pressed : item === mode ? theme.colors.primaryFill : 'transparent' })} />
+          ))}
+        </View>
+      </View>`;
+    expect(handDrawnSegments(bareSwitch)).toEqual(['2: a capsule track of choices']);
+
+    // A capsule action that only answers a press is not a choice.
+    const pressOnly = `
+      <View style={{ padding: 4, borderRadius: appTheme.radii.pill }}>
+        <Pressable style={({ pressed }) => ({ borderRadius: appTheme.radii.pill, opacity: pressed ? 0.8 : 1 })} />
+        <Pressable style={({ pressed }) => ({ borderRadius: appTheme.radii.pill, opacity: pressed ? 0.8 : 1 })} />
+      </View>`;
+    expect(handDrawnSegments(pressOnly)).toEqual([]);
   });
 
   it('draws every segmented control in the app with SegmentedControl', () => {

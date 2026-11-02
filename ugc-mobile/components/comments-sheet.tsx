@@ -356,9 +356,8 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     });
   }, [postId, queryClient]);
 
-  // The control ticks the change itself (`SegmentedControl`).
+  // The control reports only a real change, and ticks it itself (`SegmentedControl`).
   const selectSort = useCallback((next: PostCommentSort) => {
-    if (next === sort) return;
     setSortChoice({ postId, sort: next });
     // In the sheet the control sits above the list, which may be scrolled
     // far down the old order; the new one is read from its start. On the
@@ -366,7 +365,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     if (presentation === 'sheet') {
       commentsListRef.current?.scrollToOffset({ offset: 0, animated: false });
     }
-  }, [postId, presentation, sort]);
+  }, [postId, presentation]);
 
   const submitComment = useCallback(async () => {
     const body = draft.trim();

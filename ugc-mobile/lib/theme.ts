@@ -527,10 +527,10 @@ const staticTokens = {
     /**
      * The icon size ramp, stepped to sit beside the type ramp above: 14 next to
      * `caption`, 16 next to `label`/`bodySm`, 18 next to `body`, 20 for a
-     * standalone control, 24 next to `sectionTitle`, 32 for hero and empty
-     * states. HIG Icons asks for a consistent size across the set; a screen
-     * that needs a size not on this ramp is choosing a new one, and
-     * `hig-icon-size.test.ts` will say so.
+     * glyph alone in a row, 24 next to `sectionTitle` and for every icon-only
+     * button, 32 for hero and empty states. HIG Icons asks for a consistent
+     * size across the set; a screen that needs a size not on this ramp is
+     * choosing a new one, and `hig-icon-size.test.ts` will say so.
      */
     xs: 14,
     sm: 16,

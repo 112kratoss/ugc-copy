@@ -57,8 +57,8 @@ vi.mock('@/components/ui', async (importOriginal) => {
   // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
   const actual = await importOriginal<typeof import('@/components/ui')>();
   return {
+    ...actual,
     BrandLockup: () => React.createElement('brand-lockup'),
-    IconButton: actual.IconButton,
   };
 });
 vi.mock('@/lib/dialog', () => ({ showMessageDialog: vi.fn() }));

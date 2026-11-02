@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref, RefObject } from 'react';
+import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, RefObject } from 'react';
 import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Play, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
@@ -17,7 +17,7 @@ import {
   type StudioMediaPreviewType,
 } from '@/components/CreatorStudio';
 import { CreditTopUpHost } from '@/components/CreditTopUpSheet';
-import { getAccentClasses, IconButton, SegmentedControl, type UiAccent } from '@/components/DesignSystem';
+import { choiceKeyTarget, getAccentClasses, IconButton, type UiAccent } from '@/components/DesignSystem';
 import type { CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
 import { openCreditTopUp, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
@@ -406,16 +406,6 @@ const FLOATING_SURFACE_CLASS = `rounded-ui-2xl ${FLOATING_SURFACE_FILL}`;
 /** The bar holds its capsules 8px in, so its corners are concentric with theirs: 24 + 8. */
 const FLOATING_BAR_CLASS = `rounded-4xl ${FLOATING_SURFACE_FILL}`;
 
-/** How a choice's options sit: a grid of equal cells, or a pill sized to their words. */
-type CreatorChoiceLayout =
-  | { appearance?: 'grid'; columns: keyof typeof CHOICE_COLUMNS }
-  /**
-   * Side by side in a pill: a choice in a card's heading (the video creator's frames or
-   * references), drawn by the shared `SegmentedControl`, so it takes words only and the
-   * control's own coral, never a tool's accent.
-   */
-  | { appearance: 'pill'; columns?: undefined; accent?: never; capitalize?: never; optionPrice?: never; optionMark?: never };
-
 /**
  * The box an aspect-ratio option draws beside its words, as the app's parameter
  * sheet does: the long side 14px and the short side to scale, never under 3px, so
@@ -438,9 +428,11 @@ export function aspectRatioMark(option: string): ReactNode {
 
 /**
  * One setting with a single value (aspect ratio, resolution, quality): a radio
- * group, so a screen reader hears which one is chosen, and the arrow keys move
- * the choice as they do in any radio group. The parent decides whether a pick
- * takes effect: one that asks first leaves `value` where it was until it is answered.
+ * group of equal cells, so a screen reader hears which one is chosen, and the
+ * arrow keys move the choice as they do in any radio group. The parent decides
+ * whether a pick takes effect: one that asks first leaves `value` where it was
+ * until it is answered. A choice of a few words with no price, a mode such as
+ * the video creator's shot mode, is the shared `SegmentedControl` instead.
  */
 export function CreatorSettingChoices<T extends string>({
   label,
@@ -450,13 +442,11 @@ export function CreatorSettingChoices<T extends string>({
   optionLabel,
   value,
   onChange,
-  appearance = 'grid',
   columns,
   accent = 'image',
   capitalize = false,
   optionPrice,
   optionMark,
-  ref,
 }: {
   label: string;
   /** For a group whose options say what it is, as the shot mode's do. */
@@ -467,6 +457,7 @@ export function CreatorSettingChoices<T extends string>({
   optionLabel?: (option: T) => string;
   value: T;
   onChange: (value: T) => void;
+  columns: keyof typeof CHOICE_COLUMNS;
   accent?: UiAccent;
   capitalize?: boolean;
   /**
@@ -478,67 +469,34 @@ export function CreatorSettingChoices<T extends string>({
   optionPrice?: (option: T) => OptionPrice | null;
   /** A small picture before an option's words (the ratios' boxes: `aspectRatioMark`), in the accent once chosen. */
   optionMark?: (option: T) => ReactNode;
-  /** The radio group, for a parent that gives the focus back to the chosen option. */
-  ref?: Ref<HTMLDivElement>;
-} & CreatorChoiceLayout) {
+}) {
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.indexOf(value);
   const { selected: selectedClasses, mark: selectedMarkClass } = getAccentClasses(accent);
-  const pill = appearance === 'pill';
 
-  const choose = (index: number) => {
-    const next = (index + options.length) % options.length;
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const next = choiceKeyTarget(event.key, index, options.length);
+    if (next === null) return;
+    event.preventDefault();
     onChange(options[next]);
     optionRefs.current[next]?.focus();
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const moves: Record<string, number> = {
-      ArrowRight: index + 1,
-      ArrowDown: index + 1,
-      ArrowLeft: index - 1,
-      ArrowUp: index - 1,
-      Home: 0,
-      End: options.length - 1,
-    };
-    if (!(event.key in moves)) return;
-    event.preventDefault();
-    choose(moves[event.key]);
-  };
-
-  const heading = labelHidden ? (
-    <p id={labelId} className="sr-only">{label}</p>
-  ) : (
-    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-      <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
-      {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
-    </div>
-  );
-
-  if (pill) {
-    return (
-      <div className="shrink-0">
-        {heading}
-        <SegmentedControl
-          ref={ref}
-          fill={false}
-          ariaLabelledBy={labelId}
-          options={options.map((option) => ({ value: option, label: optionLabel ? optionLabel(option) : option }))}
-          value={value}
-          onChange={onChange}
-        />
-      </div>
-    );
-  }
 
   return (
     <div>
-      {heading}
+      {labelHidden ? (
+        <p id={labelId} className="sr-only">{label}</p>
+      ) : (
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
+          {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
+        </div>
+      )}
       <div
-        ref={ref}
         role="radiogroup"
         aria-labelledby={labelId}
-        className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns ?? 1])}
+        className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns])}
       >
         {options.map((option, index) => {
           const checked = index === selectedIndex;

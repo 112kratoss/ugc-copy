@@ -29,6 +29,7 @@ import { useAuth } from '@/components/AuthProvider';
 import PublicIdentityFields from '@/components/PublicIdentityFields';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
+import { SegmentedControl, type SegmentedControlOption } from '@/components/DesignSystem';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { isGenerationPaywallPrefill } from '@/lib/creation-publish-details';
 import {
@@ -159,6 +160,12 @@ const CREATION_PROMPT_ITEM_TITLE = 'Exact generation prompt';
 /** A post is public or private (decision 12, 2026-10-17). */
 type PostVisibility = 'public' | 'private';
 type ProofMode = 'media' | 'text';
+
+/** What the post shows: pictures and clips, or words alone (`switchToTextProof` lets the media go). */
+const PROOF_MODE_OPTIONS: readonly SegmentedControlOption<ProofMode>[] = [
+  { value: 'media', label: 'Media' },
+  { value: 'text', label: 'Text' },
+];
 type PostFormat = 'text' | 'media' | 'mixed';
 type PostMediaCategory = Exclude<ShowcaseItemCategory, 'text'>;
 
@@ -3045,33 +3052,20 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     </p>
                   </div>
                   {!hasGeneratedProof && !isEditMode ? (
-                    <div className="inline-flex rounded-full border border-white/10 bg-black/30 p-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setProofMode('media');
-                          resetFeedback();
-                        }}
-                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                          proofMode === 'media'
-                            ? 'bg-sky-300 text-slate-950'
-                            : 'text-zinc-300 hover:text-white'
-                        }`}
-                      >
-                        Media
-                      </button>
-                      <button
-                        type="button"
-                        onClick={switchToTextProof}
-                        className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                          proofMode === 'text'
-                            ? 'bg-sky-300 text-slate-950'
-                            : 'text-zinc-300 hover:text-white'
-                        }`}
-                      >
-                        Text
-                      </button>
-                    </div>
+                    <SegmentedControl
+                      fill={false}
+                      ariaLabel="Post media or text"
+                      options={PROOF_MODE_OPTIONS}
+                      value={proofMode}
+                      onChange={(mode) => {
+                        if (mode === 'text') {
+                          switchToTextProof();
+                          return;
+                        }
+                        setProofMode('media');
+                        resetFeedback();
+                      }}
+                    />
                   ) : (
                     <div className="rounded-full border border-white/10 bg-black/30 px-3 py-1 text-xs font-medium text-zinc-300">
                       {stepBadgeLabel}

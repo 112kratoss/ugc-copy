@@ -8,7 +8,7 @@ import { GenerationOutputs, GenerationReferences } from '@/components/generation
 import { PostResourceBundleContent, ResourceRevisionSwitch } from '@/components/post-resource-bundle-content';
 import { ResourceAction } from '@/components/resource-action';
 import { ResourceKindRow } from '@/components/resource-kind-row';
-import { CreatorAvatar, IconButton, Pill, PrimaryButton, SecondaryButton } from '@/components/ui';
+import { CreatorAvatar, IconButton, iconButtonMenuTrigger, Pill, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { SaveHeart } from '@/components/save-heart';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { useAuth } from '@/lib/auth';
@@ -226,9 +226,6 @@ export function PostDetailsPage({
   // The hook's price follows a reprice the server reported before the read of
   // the recipe catches up (S3).
   const unlockPriceLabel = bundleUnlock.priceLabel ?? getUnlockPriceLabel(unlock, bundle);
-  const unlockLabel = !user
-    ? 'Sign in to unlock'
-    : unlock?.accessMode === 'free' ? 'Get free recipe' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits';
   // A creation post's recipe comes with its Remix (S1). The card says so once,
   // in a pill, where a bare "Remix" kind said it least clearly; only on a post
   // that has a Remix at all, since a legacy recipe on an upload can still
@@ -336,8 +333,7 @@ export function PostDetailsPage({
                   (`useBundleUnlock`). */}
               <PrimaryButton
                 disabled={bundleUnlock.shortfall > 0}
-                label={unlockLabel}
-                loadingLabel={unlockLabel}
+                label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get free recipe' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
                 icon={Lock}
                 loading={bundleUnlock.isPending}
                 onPress={bundleUnlock.request}
@@ -460,7 +456,6 @@ export function PostDetailsPage({
           {primaryAction ? (
             <PrimaryButton
               label={primaryAction.label}
-              loadingLabel={primaryAction.label}
               icon={Repeat2}
               loading={remixLoading}
               onPress={() => void onRecreate(item)}
@@ -470,7 +465,6 @@ export function PostDetailsPage({
             <SecondaryButton
               disabled={!item.canSave}
               label={item.isSaved ? 'Saved' : 'Save'}
-              loadingLabel={item.isSaved ? 'Saved' : 'Save'}
               icon={<SaveHeart saved={item.isSaved} size={appTheme.icon.sm} enabled={item.canSave} />}
               loading={saveLoading}
               onPress={() => onSave(item)}
@@ -489,7 +483,9 @@ export function PostDetailsPage({
                 // The count is the label's text, which the label above replaces for a screen reader. Never
                 // undefined: Android keeps a value set back to undefined (hig-accessibility-label-states).
                 accessibilityValue={{ text: commentCount > 0 ? commentCountLabel(commentCount) : '' }}
-                label={commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
+                // With none yet the glyph stands alone: "Comment" in a third of a phone's width
+                // left no room for the word beside its glyph.
+                label={commentCount > 0 ? formatCompactCount(commentCount) : ''}
                 icon={MessageCircle}
                 onPress={openComments}
                 style={{ flex: 1 }}
@@ -576,15 +572,7 @@ function DetailsHeader({
           item={item}
           excludeActions={['view-details']}
           accessibilityLabel="More options"
-          trigger={{
-            width: 48,
-            height: 48,
-            iconSize: appTheme.icon.feature,
-            iconColor: theme.colors.text,
-            vertical: true,
-            circle: { fill: theme.colors.surfaceStrong },
-            hitSlop: 6,
-          }}
+          trigger={iconButtonMenuTrigger(theme.colors)}
           onFallbackPress={onActionsOpen}
           renderButton={(onPress) => (
             <IconButton icon={MoreVertical} label="More options" onPress={onPress} />
