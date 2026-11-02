@@ -9,6 +9,9 @@ const DEFAULT_AUTH_DB_POOL_PERCENT = Number(process.env.SUPABASE_AUTH_DB_POOL_PE
 // The iPhone app's bundle id (ugc-mobile/app.json): Apple refuses the web flow with it as client.
 const IOS_BUNDLE_ID = process.env.IOS_BUNDLE_ID || 'com.magicbooklet.mobile';
 const SITE_AUTH_CALLBACK_URL = 'https://magicbooklet.com/auth/callback';
+// Where Supabase asks Apple to return: its own callback, or a custom domain's once one is active.
+const SUPABASE_AUTH_CALLBACK_URL = process.env.SUPABASE_AUTH_CALLBACK_URL
+  || `https://${PROJECT_REF}.supabase.co/auth/v1/callback`;
 const TARGET_LINTS = new Set([
   'auth_leaked_password_protection',
   'auth_db_connections_absolute',
@@ -245,7 +248,13 @@ async function probeRevenueCatWebhook() {
  * the bundle id as client: the Services ID not first in Client IDs). It cannot
  * see an expired secret, which fails only at the code exchange.
  */
-function assertAppleWebAuthorizeRedirect({ status, location, body, projectRef = PROJECT_REF, bundleId = IOS_BUNDLE_ID }) {
+function assertAppleWebAuthorizeRedirect({
+  status,
+  location,
+  body,
+  expectedCallback = SUPABASE_AUTH_CALLBACK_URL,
+  bundleId = IOS_BUNDLE_ID,
+}) {
   if (status < 300 || status > 399 || !location) {
     throw new Error(`Apple web sign-in probe failed: expected a redirect to Apple, got HTTP ${status}${body ? `: ${String(body).slice(0, 200)}` : ''}.`);
   }
@@ -260,11 +269,28 @@ function assertAppleWebAuthorizeRedirect({ status, location, body, projectRef = 
   if (clientId === bundleId) {
     throw new Error(`Apple web sign-in probe failed: the client is the bundle id ${bundleId}; put the Services ID first in the Apple provider's Client IDs.`);
   }
-  const expectedCallback = `https://${projectRef}.supabase.co/auth/v1/callback`;
   if (target.searchParams.get('redirect_uri') !== expectedCallback) {
-    throw new Error(`Apple web sign-in probe failed: Apple is asked to return to ${target.searchParams.get('redirect_uri')}, not ${expectedCallback}.`);
+    throw new Error(`Apple web sign-in probe failed: Apple is asked to return to ${target.searchParams.get('redirect_uri')}, not ${expectedCallback} (set SUPABASE_AUTH_CALLBACK_URL once a custom domain is active).`);
   }
   return clientId;
+}
+
+/**
+ * The Apple provider's Client IDs, read from the Auth config: the web client
+ * first, and the bundle id still among them, or every native iPhone sign-in
+ * fails Supabase's audience check. The redirect alone cannot show the second.
+ */
+function assertAppleClientIdsKeepNative({ config, webClientId, bundleId = IOS_BUNDLE_ID }) {
+  const listed = [config.external_apple_client_id, config.external_apple_additional_client_ids]
+    .flatMap((value) => String(value || '').split(','))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (listed[0] !== webClientId) {
+    throw new Error(`Apple provider check failed: Client IDs start with ${listed[0] || 'nothing'}, not ${webClientId}.`);
+  }
+  if (!listed.includes(bundleId)) {
+    throw new Error(`Apple provider check failed: the bundle id ${bundleId} is missing from Client IDs, so the iPhone app's Sign in with Apple fails.`);
+  }
 }
 
 async function probeAppleWebSignIn() {
@@ -276,6 +302,14 @@ async function probeAppleWebSignIn() {
   const body = location ? '' : await response.text();
   const clientId = assertAppleWebAuthorizeRedirect({ status: response.status, location, body });
   console.log(`Apple web sign-in probe: Supabase sends Continue with Apple to Apple as ${clientId}`);
+
+  const token = process.env.SUPABASE_MANAGEMENT_API_TOKEN || process.env.SUPABASE_ACCESS_TOKEN;
+  if (!token) {
+    console.log(`Not checked without SUPABASE_MANAGEMENT_API_TOKEN: that ${IOS_BUNDLE_ID} is still in the Apple provider's Client IDs. Sign in with Apple in the iPhone app to check it.`);
+    return;
+  }
+  assertAppleClientIdsKeepNative({ config: await fetchAuthConfig(token), webClientId: clientId });
+  console.log(`Apple provider check: ${IOS_BUNDLE_ID} is still listed for the iPhone's native sign-in`);
 }
 
 function printUsage() {
@@ -351,7 +385,7 @@ function selfTest() {
   const appleAuthorize = (clientId, redirectUri = 'https://ref.supabase.co/auth/v1/callback') => (
     `https://appleid.apple.com/auth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_mode=form_post&response_type=code&scope=email+name&state=x`
   );
-  const appleProbe = { projectRef: 'ref', bundleId: 'com.example.app' };
+  const appleProbe = { expectedCallback: 'https://ref.supabase.co/auth/v1/callback', bundleId: 'com.example.app' };
   assert.equal(assertAppleWebAuthorizeRedirect({
     ...appleProbe,
     status: 302,
@@ -379,6 +413,25 @@ function selfTest() {
     status: 302,
     location: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x',
   }), /not Apple's authorize page/);
+  // A custom domain, once active, is what Supabase sends Apple back to.
+  assert.equal(assertAppleWebAuthorizeRedirect({
+    ...appleProbe,
+    expectedCallback: 'https://auth.example.com/auth/v1/callback',
+    status: 302,
+    location: appleAuthorize('com.example.app.web', 'https://auth.example.com/auth/v1/callback'),
+  }), 'com.example.app.web');
+  const clientIds = (external_apple_client_id, extra = {}) => ({
+    config: { external_apple_client_id, ...extra },
+    webClientId: 'com.example.app.web',
+    bundleId: 'com.example.app',
+  });
+  assert.doesNotThrow(() => assertAppleClientIdsKeepNative(clientIds('com.example.app.web, com.example.app')));
+  assert.doesNotThrow(() => assertAppleClientIdsKeepNative(clientIds('com.example.app.web', {
+    external_apple_additional_client_ids: 'com.example.app',
+  })));
+  // The bundle id replaced by the Services ID: the redirect still looks right, the app's sign-in does not.
+  assert.throws(() => assertAppleClientIdsKeepNative(clientIds('com.example.app.web')), /bundle id com\.example\.app is missing/);
+  assert.throws(() => assertAppleClientIdsKeepNative(clientIds('com.example.app,com.example.app.web')), /start with com\.example\.app,? not/);
   console.log('production-external-gates self-test passed');
 }
 

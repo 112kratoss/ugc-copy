@@ -23,21 +23,24 @@ export async function GET(request: Request) {
   const code = requestUrl.searchParams.get('code');
   const next = getSafeAuthNextPath(requestUrl.searchParams.get('next'));
   const providerError = requestUrl.searchParams.get('error');
+  const errorCode = requestUrl.searchParams.get('error_code');
 
-  // Supabase sends a provider's refusal back here without a code. A cancel goes
-  // back to sign in, keeping where it was going. Anything else is logged, because
-  // the page it ends on cannot say why: an expired Apple client secret, for one,
-  // fails every web Apple sign-in this way (the runbook's "Sign in with Apple on
-  // the web").
+  // Supabase sends a refusal back here without a code. A provider's own, such as
+  // its Cancel, carries no error_code, and goes back to sign in, keeping where it
+  // was going. Supabase's own carry one, its 403s as access_denied too (a
+  // suspended account, an expired email link). Those and every other error are
+  // logged, because the page they end on cannot say why: an expired Apple client
+  // secret, for one, fails every web Apple sign-in this way (the runbook's "Sign
+  // in with Apple on the web").
   if (!code && providerError) {
-    if (PROVIDER_CANCELLATIONS.has(providerError)) {
+    if (!errorCode && PROVIDER_CANCELLATIONS.has(providerError)) {
       return NextResponse.redirect(
         new URL(`/login?returnUrl=${encodeURIComponent(next)}`, requestUrl.origin)
       );
     }
     logBackendError('auth_callback_provider_error', {
       error: providerError,
-      errorCode: requestUrl.searchParams.get('error_code'),
+      errorCode,
       errorDescription: requestUrl.searchParams.get('error_description'),
     });
   }

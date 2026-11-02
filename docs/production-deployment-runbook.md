@@ -332,26 +332,34 @@ Apple's invalid_client page.
    callback from activation on, and Apple refuses a return URL it was not given.
 2. Mint the client secret on the Mac that holds the Sign in with Apple key, so
    the key never goes into a web page:
-   `node scripts/ops/apple-web-client-secret.mjs --p8 <AuthKey_….p8> --key-id <key id> --team-id <APPLE_TEAM_ID> --client-id <Services ID> | pbcopy`.
-   The `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves, and then revoking or rotating
-   that key ends both this secret and the account-deletion revocation, which
-   signs with it. The secret lives 180 days (Apple's ceiling is six months) and
-   the script prints its expiry: every web Apple sign-in fails from that day,
-   so put the date in the calendar and mint the next one before it. A lapse
-   shows in production logs as `auth_callback_provider_error` from
-   `/auth/callback`.
+   `node scripts/ops/apple-web-client-secret.mjs --p8 <AuthKey_….p8> --key-id <key id> --team-id <APPLE_TEAM_ID> --client-id <Services ID>`.
+   It puts the secret on the clipboard (or in a new file with `--out`), never on
+   the screen, and prints its expiry. The key file can be Apple's download or the
+   one-line form `.env` files keep. The `.p8` behind `APPLE_SIGN_IN_KEY_ID`
+   serves, and then revoking or rotating that key ends both this secret and the
+   account-deletion revocation, which signs with it. The secret lives 180 days
+   (Apple's ceiling is six months): every web Apple sign-in fails from that day,
+   so put the date in the calendar and mint the next one before it. Nothing can
+   check a secret before a real web sign-in (Apple answers a made-up code the
+   same way whoever signed it), so a wrong key id, team or Services ID shows only
+   then, in production logs as `auth_callback_provider_error` from
+   `/auth/callback`, as a lapse does.
 3. Supabase Dashboard → Authentication → Providers → Apple: Client IDs is a
    comma-separated list with the Services ID first, then the bundle id.
    Supabase sends the first entry to Apple for the web flow and accepts any of
-   them as the audience of a native sign-in, so the bundle id must stay listed.
-   Paste the secret into the secret field and save.
+   them as the audience of a native sign-in, so the bundle id must stay listed:
+   without it every Sign in with Apple in the iPhone app fails at once. Paste
+   the secret into the secret field and save.
 4. Check before the deploy, and after any change to these settings:
    `npm run ops:external-gates -- --probe-apple-web-sign-in` reads where
    Supabase sends a press of Continue with Apple, with no token, and fails
    unless it is Apple's authorize page for a client other than the bundle id,
-   returning to the project's callback. It cannot see an expired secret. After
-   the deploy, sign in on the website with the Apple ID of an iPhone account and
-   check that it is the same account (handle and credits).
+   returning to the project's callback (set `SUPABASE_AUTH_CALLBACK_URL` to the
+   custom domain's once one is active). With `SUPABASE_MANAGEMENT_API_TOKEN` it
+   also checks that the bundle id is still in Client IDs; without one, sign in
+   with Apple in the iPhone app. It cannot see the secret. After the deploy, sign
+   in on the website with the Apple ID of an iPhone account and check that it is
+   the same account (handle and credits): that sign-in is the secret's check.
 
 Apple sends a person's name only the first time they authorize Magicbooklet,
 web or app, and Supabase keeps it then; an account made on the website without

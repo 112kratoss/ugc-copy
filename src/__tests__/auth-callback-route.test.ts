@@ -264,6 +264,27 @@ describe('/auth/callback', () => {
     },
   );
 
+  // Supabase's own refusals carry an error_code, and its 403s arrive as access_denied too:
+  // a suspended account, an expired email link. Those are no change of mind.
+  it.each([
+    ['user_banned', 'User is banned'],
+    ['otp_expired', 'Email link is invalid or has expired'],
+  ])('keeps Supabase\'s own access_denied (%s) on the error page, logged', async (errorCode, description) => {
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(new Request(
+      `https://magicbooklet.com/auth/callback?next=%2Fcreate&error=access_denied&error_code=${errorCode}&error_description=${encodeURIComponent(description)}`
+    ));
+
+    expect(mocks.logBackendError).toHaveBeenCalledWith('auth_callback_provider_error', {
+      error: 'access_denied',
+      errorCode,
+      errorDescription: description,
+    });
+    expect(response.headers.get('location')).toBe(
+      'https://magicbooklet.com/auth/auth-code-error?next=%2Fcreate'
+    );
+  });
+
   // An expired Apple client secret fails every web Apple sign-in this way, and the
   // person's page cannot say why, so the log has to.
   it('logs any other provider failure that comes back without a code, then shows the error page', async () => {
