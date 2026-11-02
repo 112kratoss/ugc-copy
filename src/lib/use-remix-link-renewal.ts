@@ -22,24 +22,49 @@ type RemixRead = {
 type HeldAnswer = { key: string; answer: Promise<RemixSourceBundle | null> };
 
 /**
- * Reads the remix again, as the form's own read reads it (the browser's session where it is the
- * form's account, which auth-js renews as it nears its end, else the page's), for the links its
- * answer signs. Null where it cannot be read.
+ * How long a read for fresh links may take. Past it the read is given up and the link left as it
+ * was: every press and preview that asked meanwhile waits on the one read, so a read that stalled
+ * held them all.
  */
-async function readRemixAnswer({ remixId, remixPostId, formAccount, pageToken }: RemixRead): Promise<RemixSourceBundle | null> {
+export const REMIX_LINK_READ_TIMEOUT_MS = 12_000;
+
+async function fetchRemixAnswer(
+  { remixId, remixPostId, formAccount, pageToken }: RemixRead,
+  signal: AbortSignal,
+): Promise<RemixSourceBundle | null> {
   if (!remixId) return null;
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const accessToken = session && session.user.id === formAccount ? session.access_token : pageToken;
-    if (!accessToken) return null;
+    if (!accessToken || signal.aborted) return null;
     const params = new URLSearchParams({ id: remixId });
     if (remixPostId) params.set('postId', remixPostId);
     const response = await fetch(`/api/remix-source?${params.toString()}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal,
     });
     return response.ok ? await response.json() as RemixSourceBundle : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Reads the remix again, as the form's own read reads it (the browser's session where it is the
+ * form's account, which auth-js renews as it nears its end, else the page's), for the links its
+ * answer signs. Null where it cannot be read, or by the timeout: the request is aborted then, and
+ * a session read still waiting (on the auth lock, say) is left to finish unwatched.
+ */
+async function readRemixAnswer(read: RemixRead): Promise<RemixSourceBundle | null> {
+  const controller = new AbortController();
+  const givenUp = new Promise<null>((resolve) => {
+    controller.signal.addEventListener('abort', () => resolve(null), { once: true });
+  });
+  const timer = setTimeout(() => controller.abort(), REMIX_LINK_READ_TIMEOUT_MS);
+  try {
+    return await Promise.race([fetchRemixAnswer(read, controller.signal), givenUp]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -50,7 +75,7 @@ async function readRemixAnswer({ remixId, remixPostId, formAccount, pageToken }:
  * at the press or the preview that uses it, for the same file's link in a fresh read of the
  * remix: the same gate as the form's own read, whose answer is used for its links alone, so the
  * form keeps everything the creator changed. One answer serves every link while its own last,
- * and a read that fails leaves the link as it was.
+ * and a read that fails, or stalls past REMIX_LINK_READ_TIMEOUT_MS, leaves the link as it was.
  */
 export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken }: RemixRead): RenewRemixLink {
   const readRef = useRef<RemixRead>({ remixId, remixPostId, formAccount, pageToken });
@@ -77,7 +102,8 @@ export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageTok
       if (answer && !remixAnswerNeedsRenewal(answer, Date.now())) return link;
     }
 
-    // A read that fails leaves the link as it was, and the next use reads again.
+    // A read that fails or is given up leaves the link as it was. Its answer, settled as none,
+    // holds no one after it: the next use reads again.
     const next: HeldAnswer = { key, answer: readRemixAnswer(read) };
     heldRef.current = next;
     return freshLink(await next.answer) ?? link;

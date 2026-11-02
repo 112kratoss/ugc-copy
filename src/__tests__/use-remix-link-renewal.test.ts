@@ -2,7 +2,7 @@ import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemixSourceBundle } from '@/lib/remix-source';
-import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
+import { REMIX_LINK_READ_TIMEOUT_MS, useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
 
 // The browser's auth client: whose session it holds, and its token.
@@ -33,11 +33,10 @@ function answerNow(): RemixSourceBundle {
   };
 }
 
-let answer: () => Response | Promise<Response>;
+let answer: (init?: RequestInit) => Response | Promise<Response>;
 const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   void input;
-  void init;
-  return answer();
+  return answer(init);
 });
 
 function remixReads() {
@@ -130,6 +129,29 @@ describe('useRemixLinkRenewal', () => {
 
     await expect(renewLink(lapsed)).resolves.toBe(lapsed);
 
+    answer = () => new Response(JSON.stringify(answerNow()), { status: 200 });
+    expect(storageOpens(await renewLink(lapsed))).toBe(true);
+    expect(remixReads()).toHaveLength(2);
+  });
+
+  // A read that stalls held every later press and preview that asked meanwhile: it is given up at
+  // its timeout, the link stays as it was, and the next use reads again.
+  it('gives up a read that stalls, leaving the link as it was, and reads again at the next use', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    vi.setSystemTime(OPENED_AT);
+    const lapsed = signedStorageLink(CLIP);
+    advancePageClock(PAST_THE_HOUR_MS);
+    // The remix source answers nothing until the read is given up.
+    answer = (init) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was given up.', 'AbortError')));
+    });
+    const renewLink = renew();
+
+    const stalled = renewLink(lapsed);
+    await vi.advanceTimersByTimeAsync(REMIX_LINK_READ_TIMEOUT_MS);
+
+    await expect(stalled).resolves.toBe(lapsed);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     answer = () => new Response(JSON.stringify(answerNow()), { status: 200 });
     expect(storageOpens(await renewLink(lapsed))).toBe(true);
     expect(remixReads()).toHaveLength(2);
