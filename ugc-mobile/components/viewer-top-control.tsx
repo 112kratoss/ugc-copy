@@ -47,7 +47,6 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
     width: VIEWER_TOP_CONTROL_SIZE,
     height: VIEWER_TOP_CONTROL_SIZE,
     borderRadius: VIEWER_TOP_CONTROL_SIZE / 2,
-    borderCurve: 'continuous',
   };
   const content: ViewStyle = {
     width: '100%',

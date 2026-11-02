@@ -226,7 +226,6 @@ const COVER_VIDEO_FRAME = {
   width: '100%' as const,
   aspectRatio: 4 / 5,
   borderRadius: appTheme.radii.lg,
-  borderCurve: 'continuous' as const,
   backgroundColor: mediaColors.mediaGround,
 };
 const PLAY_CONTROL_SIZE = 64;

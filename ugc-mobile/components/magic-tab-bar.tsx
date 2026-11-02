@@ -830,7 +830,6 @@ function TabBarSurface({
     minHeight: barHeight,
     overflow: 'hidden' as const,
     borderRadius: barHeight / 2,
-    borderCurve: 'continuous' as const,
     borderWidth: 1,
     boxShadow: theme.tabBar.surfaceShadow,
   };

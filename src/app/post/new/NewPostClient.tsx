@@ -3236,21 +3236,21 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                           </div>
                         ) : null}
 
-                        <div className="mt-5 rounded-[24px] border border-white/8 bg-black/50 p-3">
+                        <div className="mt-5 rounded-2xl border border-white/8 bg-black/50 p-3">
                           {coverPreviewItem?.previewUrl ? (
                             coverPreviewItem.mediaKind === 'video' ? (
                               <InlineMediaVideo
                                 src={coverPreviewItem.previewUrl}
                                 controls
                                 playsInline
-                                className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
+                                className="max-h-[520px] w-full rounded-lg bg-black object-contain"
                               />
                             ) : (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={coverPreviewItem.previewUrl}
                                 alt={title || 'Uploaded preview'}
-                                className="max-h-[520px] w-full rounded-[18px] bg-black object-contain"
+                                className="max-h-[520px] w-full rounded-lg bg-black object-contain"
                               />
                             )
                           ) : (
@@ -3264,7 +3264,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                               }}
                               role="button"
                               tabIndex={0}
-                              className={`flex min-h-[320px] cursor-pointer flex-col items-center justify-center rounded-[18px] border border-dashed text-center outline-none transition duration-200 ${
+                              className={`flex min-h-[320px] cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed text-center outline-none transition duration-200 ${
                                 isDragging
                                   ? 'border-sky-400 bg-sky-400/10 text-sky-200 scale-[0.99]'
                                   : 'border-white/10 bg-zinc-950/60 text-zinc-400 hover:border-white/20 hover:bg-zinc-950/80 hover:text-zinc-300'
@@ -3308,7 +3308,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                                       : 'border-white/10 bg-zinc-950'
                                 }`}
                               >
-                                <div className="relative aspect-[4/5] overflow-hidden rounded-md bg-black">
+                                <div className="relative aspect-[4/5] overflow-hidden rounded-xl bg-black">
                                   {item.mediaKind === 'video' ? (
                                     <InlineMediaVideo
                                       src={item.previewUrl ?? undefined}
@@ -3324,14 +3324,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                                       className="h-full w-full object-contain"
                                     />
                                   )}
-                                  <div className="absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/75 text-zinc-200">
+                                  <div className="absolute left-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-black/75 text-zinc-200">
                                     <GripVertical className="h-4 w-4" />
                                   </div>
                                   <button
                                     type="button"
                                     onClick={() => removeMediaItem(item.id)}
                                     aria-label={`Remove media ${index + 1}`}
-                                    className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/75 text-zinc-200 hover:text-white"
+                                    className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-black/75 text-zinc-200 hover:text-white"
                                   >
                                     <X className="h-4 w-4" />
                                   </button>
@@ -3345,7 +3345,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                                     type="button"
                                     onClick={() => setPreviewMediaIndex(index)}
                                     aria-label={`Preview ${getComposerMediaLabel(index)}`}
-                                    className="absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded-md bg-black/75 text-zinc-200 opacity-0 transition-opacity duration-150 ease-out hover:text-white focus-visible:opacity-100 group-hover/media-card:opacity-100"
+                                    className="absolute bottom-1 right-1 flex h-7 w-7 items-center justify-center rounded-full bg-black/75 text-zinc-200 opacity-0 transition-opacity duration-150 ease-out hover:text-white focus-visible:opacity-100 group-hover/media-card:opacity-100"
                                   >
                                     <Maximize2 className="h-3.5 w-3.5" />
                                   </button>
@@ -3382,7 +3382,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                                 aria-label="Add more media"
                                 className="group w-28 shrink-0 rounded-lg border border-dashed border-white/15 bg-zinc-950 p-1 text-left transition-[border-color,background-color] duration-150 ease-out hover:border-sky-300/70 hover:bg-zinc-900"
                               >
-                                <div className="flex aspect-[4/5] flex-col items-center justify-center gap-2 rounded-md bg-black">
+                                <div className="flex aspect-[4/5] flex-col items-center justify-center gap-2 rounded-xl bg-black">
                                   <span className="flex h-10 w-10 items-center justify-center rounded-full border border-sky-400/50 bg-sky-400/10 transition-colors duration-150 ease-out group-hover:bg-sky-400/20">
                                     <Plus className="h-5 w-5 text-sky-300" strokeWidth={2.8} />
                                   </span>
@@ -3399,7 +3399,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     )}
                   </div>
                 ) : (
-                  <div className="mt-5 rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_34%),linear-gradient(180deg,rgba(20,20,24,0.96),rgba(10,10,14,0.96))] p-5">
+                  <div className="mt-5 rounded-3xl border border-white/10 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.14),transparent_34%),linear-gradient(180deg,rgba(20,20,24,0.96),rgba(10,10,14,0.96))] p-5">
                     <div className="flex items-center gap-4">
                       <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-400/20 bg-sky-400/10 text-sky-100">
                         <BookText className="h-6 w-6" />
@@ -3469,7 +3469,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                       />
                     </button>
                     {isMadeWithOpen ? (
-                      <div id={madeWithPanelId} className="mt-3 rounded-[24px] border border-sky-300/15 bg-sky-400/5 p-4">
+                      <div id={madeWithPanelId} className="mt-3 rounded-2xl border border-sky-300/15 bg-sky-400/5 p-4">
                         <p className="max-w-2xl text-sm leading-6 text-zinc-300">
                           Add the tool and model you used.{hasGeneratedProof ? ' magicbooklet is already set.' : ''}
                         </p>
@@ -3693,7 +3693,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                         : 'Share the idea, process, or story behind it…'
                     }
                     rows={proofMode === 'text' ? 8 : 6}
-                    className="w-full rounded-[24px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                   />
                 </label>
 
@@ -3731,7 +3731,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 </div>
 
                 {isGeneratedPaywallIntent ? (
-                  <div className="mt-5 rounded-[24px] border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
+                  <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
                     {isLoadingGeneration
                       ? 'Preparing the saved prompt and generation setup for this paid recipe.'
                       : hasGenerationPaywallPrefill
@@ -3739,13 +3739,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                         : 'This creation does not have enough saved inputs to auto-fill a paid recipe yet. The media is still attached, and you can add the prompt or notes as items below.'}
                   </div>
                 ) : isCreationPaywallManagementIntent ? (
-                  <div className="mt-5 rounded-[24px] border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
+                  <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
                     You came from My Studio to manage this post&apos;s recipe. The access mode is ready here, and the price field is focused so you can adjust the paid layer quickly.
                   </div>
                 ) : null}
 
                 {resourceAccessMode !== 'none' && displayVisibility !== 'public' ? (
-                  <div className="mt-4 rounded-[24px] border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
+                  <div className="mt-4 rounded-2xl border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
                     This recipe will save as a draft until the post is public.
                   </div>
                 ) : null}
@@ -3755,7 +3755,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 {prefilledGeneration?.origin === 'template' ? (
                   // The server refuses a recipe on a template result at publish
                   // time; say so here, as the app does, instead of after the form.
-                  <div className="mt-4 rounded-[24px] border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
+                  <div className="mt-4 rounded-2xl border border-white/8 bg-black/25 px-4 py-3 text-sm text-zinc-200">
                     This template result shares final media only. Its private recipe remains protected.
                   </div>
                 ) : (
@@ -3782,7 +3782,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 {resourceAccessMode !== 'none' ? (
                   <div className="mt-5 space-y-5">
                     {resourceAccessMode === 'paid' ? (
-                      <div className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-3">
+                      <div className="rounded-2xl border border-white/8 bg-black/25 p-4 space-y-3">
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                           <span className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Price</span>
                           <div className="relative inline-flex items-center">
@@ -3830,7 +3830,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     )}
 
                     {canOfferCreationResources ? (
-                      <div role="group" aria-labelledby="from-this-creation-label" className="rounded-[24px] border border-white/8 bg-black/25 p-4 space-y-3">
+                      <div role="group" aria-labelledby="from-this-creation-label" className="rounded-2xl border border-white/8 bg-black/25 p-4 space-y-3">
                         <div id="from-this-creation-label" className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                           From this creation
                         </div>
@@ -3895,7 +3895,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 <div
                   ref={savedPanelRef}
                   tabIndex={-1}
-                  className="rounded-[28px] border border-emerald-500/20 bg-emerald-500/10 p-5 outline-none"
+                  className="rounded-3xl border border-emerald-500/20 bg-emerald-500/10 p-5 outline-none"
                 >
                   <div className="flex flex-wrap items-center gap-3">
                     <div className="text-sm font-semibold text-white">

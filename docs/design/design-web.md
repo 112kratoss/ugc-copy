@@ -124,10 +124,10 @@ Rules:
   | 16 | `rounded-2xl` | `--ui-radius-lg` | `md` |
   | 20 | `rounded-ui-xl` | `--ui-radius-xl` | `lg` |
   | 24 | `rounded-3xl` | `--ui-radius-2xl` | `xl` |
-  | 32 | `rounded-4xl` | `2rem` | `xxl` |
+  | 32 | `rounded-4xl` | `2rem` | none yet |
   | capsule | `rounded-full` | `--ui-radius-pill` | `pill` |
 
-  - No other value: no bracketed `rounded-[...]`, and none of Tailwind's `rounded`, `rounded-sm`, `rounded-md` or `rounded-xs` (4, 4, 6 and 2px). `src/__tests__/corner-radius-scale.test.ts` holds every class, inline radius and stylesheet radius to the table; its counted exceptions are two native checkboxes, the aspect-ratio mark and the welcome reward's confetti.
+  - No other value: no bracketed `rounded-[...]`, and none of Tailwind's `rounded`, `rounded-sm`, `rounded-md` or `rounded-xs` (4, 4, 6 and 2px), behind any variant (`max-[768px]:`, `group-hover/x:`…). `src/__tests__/corner-radius-scale.test.ts` reads `src/app`, `src/components` and `src/lib` through TypeScript's parser, so a `/*` inside a string such as `accept="image/*"` is a string, and holds every class in a string or template, every inline `borderRadius`, CSS written inside a string (a popup's `<style>`) and every stylesheet radius to the table; a `--ui-radius-*` variable globals.css does not define fails, since it would compute to square. Its counted exceptions are four native checkboxes (two in the post composer), the aspect-ratio mark and the welcome reward's confetti. A radius class on `MediaFrame`, `Surface`, `Pill` or `Button` is overruled by their unlayered `.ui-*` rule, so change the primitive's own rule rather than passing one.
 - **Elevation:** `--ui-shadow-panel` for floating panels and `--ui-shadow-card-hover` for a lifted interactive card. Most surfaces need none, and there are no inline `shadow-[...]` strings.
 - **Motion:**
   - Durations are `--ui-duration-fast` 160ms, `--ui-duration-base` 180ms and `--ui-duration-reveal` 240ms, on `--ui-ease-standard` (`cubic-bezier(0.2, 0, 0, 1)`).

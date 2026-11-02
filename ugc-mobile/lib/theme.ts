@@ -435,8 +435,6 @@ const staticTokens = {
     md: 16,
     lg: 20,
     xl: 24,
-    // A container holding capsule controls 8pt from its edge: their 24 plus the gap.
-    xxl: 32,
     pill: 999,
   },
   spacing: {

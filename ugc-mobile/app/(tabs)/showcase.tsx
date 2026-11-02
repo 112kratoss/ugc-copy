@@ -1224,7 +1224,6 @@ function CompactSearchButton({
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.pill,
-          borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: theme.colors.borderStrong,
           backgroundColor: theme.colors.panel,

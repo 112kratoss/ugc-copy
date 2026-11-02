@@ -162,7 +162,7 @@ function ProposalCard({
           type="button"
           onClick={onApply}
           disabled={isApplying || isDiscarding || isProposalStale}
-          className="inline-flex flex-1 items-center justify-center gap-2 rounded-2xl border border-emerald-500/35 bg-emerald-500/15 px-4 py-3 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex flex-1 items-center justify-center gap-2 rounded-full border border-emerald-500/35 bg-emerald-500/15 px-4 py-3 text-sm font-medium text-emerald-50 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
           {isApplying ? 'Applying...' : 'Apply to canvas'}
@@ -171,7 +171,7 @@ function ProposalCard({
           type="button"
           onClick={onDiscard}
           disabled={isApplying || isDiscarding}
-          className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isDiscarding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
           {isDiscarding ? 'Discarding...' : 'Discard'}

@@ -3732,7 +3732,6 @@ function CompactCreatorHeader({
             minHeight: 48,
             maxWidth: onClose ? '48%' : '64%',
             borderRadius: appTheme.radii.pill,
-            borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: `${modelAccent}57`,
             backgroundColor: `${modelAccent}18`,
@@ -5501,7 +5500,9 @@ function EnhanceOffer({ onUse }: { onUse: () => void }) {
 
 /**
  * A toolbar button under the prompt: Enhance is the accent, Templates the quiet one beside it.
- * Two buttons side by side are capsules, as the web's are (docs/design/design-mobile.md → Radius).
+ * Two buttons side by side are capsules, as the web's are (docs/design/design-mobile.md → Radius):
+ * its radius is half its minimum height, so on one line it is a capsule, and when a large text size
+ * wraps its label it grows into a rounded rectangle instead of a stadium whose ends cut the words.
  */
 function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disabled, accent }: { icon: React.ReactNode; label: string; accessibilityLabel?: string; onPress: () => void; disabled?: boolean; accent?: boolean }) {
   const theme = useAppTheme();
@@ -5515,7 +5516,8 @@ function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disab
       style={({ pressed }) => ({
         minHeight: appTheme.touch.default,
         flex: 1,
-        borderRadius: appTheme.radii.pill,
+        borderRadius: appTheme.radii.xl,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: accent ? hexWithAlpha(theme.colors.primary, 0.3) : hexWithAlpha(theme.colors.text, 0.055),
         backgroundColor: accent ? hexWithAlpha(theme.colors.primary, 0.11) : pressed ? theme.colors.pressed : hexWithAlpha(theme.colors.text, 0.025),
@@ -5524,12 +5526,14 @@ function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disab
         flexDirection: 'row',
         gap: 6,
         paddingHorizontal: 12,
+        paddingVertical: appTheme.spacing.compact,
         opacity: disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
       })}
     >
       {icon}
-      {/* Centred and free to wrap, because a priced label ("Enhance · 2 credits") can take two lines in half the row. */}
-      <Text style={{ flexShrink: 1, color: accent ? theme.colors.primary : theme.colors.muted, fontSize: 12, fontWeight: '800', textAlign: 'center' }}>{label}</Text>
+      {/* Centred and free to wrap, because a priced label ("Enhance · 2 credits") can take two lines in half
+          the row; capped at the control tier, so a one-word label never breaks mid-word. */}
+      <Text maxFontSizeMultiplier={appTheme.typeScale.control} style={{ flexShrink: 1, color: accent ? theme.colors.primary : theme.colors.muted, fontSize: 12, fontWeight: '800', textAlign: 'center' }}>{label}</Text>
     </Pressable>
   );
 }

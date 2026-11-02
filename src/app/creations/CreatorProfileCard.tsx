@@ -1168,7 +1168,7 @@ export default function CreatorProfileCard({
 
       {onboardingMode ? (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(300px,0.55fr)]">
-          <div className="rounded-[28px] border border-white/8 bg-zinc-950/70 p-5">
+          <div className="rounded-3xl border border-white/8 bg-zinc-950/70 p-5">
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-[var(--ui-primary)]">
               <BadgeCheck className="h-4 w-4" />
               Profile essentials
@@ -1215,9 +1215,9 @@ export default function CreatorProfileCard({
             </p>
           </div>
 
-          <div className="rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(14,18,25,0.96),rgba(7,9,12,0.98))] p-5">
+          <div className="rounded-3xl border border-white/8 bg-[linear-gradient(180deg,rgba(14,18,25,0.96),rgba(7,9,12,0.98))] p-5">
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">Public preview</div>
-            <div className="mt-4 overflow-hidden rounded-[22px] border border-white/8 bg-black/35">
+            <div className="mt-4 overflow-hidden rounded-2xl border border-white/8 bg-black/35">
               <div className="h-20 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.28),transparent_42%),linear-gradient(135deg,rgba(16,185,129,0.16),rgba(59,130,246,0.1))]">
                 {(coverPreview || form.coverUrl) ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -1330,7 +1330,7 @@ export default function CreatorProfileCard({
                     <div className="flex h-full w-full items-center justify-center text-zinc-600"><UserRound className="h-8 w-8" aria-hidden /></div>
                   )}
                 </div>
-                <label className="group relative flex min-h-12 w-fit cursor-pointer items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-5 py-3 text-sm font-bold text-[var(--ui-text-primary)] transition hover:border-[rgba(255,122,89,0.4)] hover:bg-[var(--ui-surface-2)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
+                <label className="group relative flex min-h-12 w-fit cursor-pointer items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-5 py-3 text-sm font-bold text-[var(--ui-text-primary)] transition hover:border-[rgba(255,122,89,0.4)] hover:bg-[var(--ui-surface-2)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ui-focus)]">
                   <Camera className="h-4 w-4 text-[var(--ui-primary)]" aria-hidden />
                   {avatarPreview || form.avatarUrl ? 'Change avatar' : 'Add avatar'}
                   <input
@@ -1348,7 +1348,7 @@ export default function CreatorProfileCard({
               {fieldErrors.avatarUrl ? <p id="profile-avatar-error" className="text-xs text-red-300">{fieldErrors.avatarUrl}</p> : null}
 
               {avatarPreview ? (
-                <div className="rounded-[24px] border border-sky-300/15 bg-sky-500/[0.06] p-4">
+                <div className="rounded-3xl border border-sky-300/15 bg-sky-500/[0.06] p-4">
                   <div className="flex flex-col gap-5 lg:flex-row lg:items-center">
                     <div className="mx-auto w-full max-w-[220px] shrink-0 lg:mx-0">
                       <button

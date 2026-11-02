@@ -1647,9 +1647,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const actionColumns = actionGrid.findAll(
       (node) =>
         node.props.accessibilityRole === 'button' &&
-        // Capsules on one row, as the web draws them.
+        // Capsules on one row, as the web draws them: half their minimum height, so a wrapped label
+        // grows a rounded rectangle rather than a stadium.
         node.props.style?.minHeight === 48 &&
-        node.props.style?.borderRadius === 999 &&
+        node.props.style?.borderRadius === 24 &&
         node.props.style?.flexDirection === 'row',
     );
     expect(actionColumns.map((node) => node.props.accessibilityLabel)).toEqual(['Templates', 'Enhance · 2 credits']);

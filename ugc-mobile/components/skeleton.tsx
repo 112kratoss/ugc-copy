@@ -100,7 +100,8 @@ export function SkeletonBone({
           width,
           height,
           borderRadius: radius,
-          borderCurve: 'continuous',
+          // Capsules and circles keep round ends, as the avatars and pills they stand in for do.
+          borderCurve: radius >= appTheme.radii.pill ? 'circular' : 'continuous',
           backgroundColor: strong ? theme.colors.boneStrong : theme.colors.bone,
           opacity: value ?? STATIC_OPACITY,
         },
@@ -168,7 +169,7 @@ export function ProfileGridSkeleton({
       {Array.from({ length: rows }, (_, row) => (
         <View key={row} style={{ flexDirection: 'row', gap }}>
           {Array.from({ length: columns }, (_, column) => (
-            <SkeletonBone key={column} width={cardWidth} height={cardHeight} radius={appTheme.radii.md} strong={(row + column) % 3 === 0} />
+            <SkeletonBone key={column} width={cardWidth} height={cardHeight} radius={appTheme.radii.sm} strong={(row + column) % 3 === 0} />
           ))}
         </View>
       ))}

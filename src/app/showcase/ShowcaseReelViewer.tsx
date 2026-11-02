@@ -1719,19 +1719,19 @@ export default function ShowcaseReelViewer({
 
         </section>
 
-        <aside className="flex min-w-0 items-center justify-center gap-2 overflow-x-auto rounded-4xl border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:overflow-visible lg:border-0 lg:bg-transparent lg:p-0">
+        <aside className="flex min-w-0 items-center justify-center gap-2 overflow-x-auto rounded-3xl border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:overflow-visible lg:border-0 lg:bg-transparent lg:p-0">
           <div
             role="group"
             aria-label="Browse posts"
             data-showcase-post-navigation
-            className="hidden shrink-0 items-center gap-1 rounded-3xl border border-white/10 bg-white/[0.035] p-1 sm:flex lg:flex-col"
+            className="hidden shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.035] p-1 sm:flex lg:flex-col"
           >
             <button
               type="button"
               onClick={goPrevious}
               disabled={!previousItem}
               aria-label="Previous post"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
               <ArrowUp size={16} className="h-4 w-4 shrink-0" />
             </button>
@@ -1741,7 +1741,7 @@ export default function ShowcaseReelViewer({
               disabled={!nextItem && !hasMoreItems}
               aria-busy={!nextItem && hasMoreItems && isLoadingMoreItems}
               aria-label="Next post"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
               {!nextItem && hasMoreItems && isLoadingMoreItems ? (
                 <Loader2 size={16} className="h-4 w-4 shrink-0 animate-spin" />

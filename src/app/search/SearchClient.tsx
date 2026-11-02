@@ -310,7 +310,7 @@ export default function SearchClient({
           <p className="mt-3 max-w-xl text-sm leading-6 text-zinc-400 sm:text-base">Find people, public work, and production-ready recipes without leaving your creative flow.</p>
         </div>
 
-        <div className="sticky top-20 z-20 mt-8 rounded-full bg-black/70 p-2 backdrop-blur-xl sm:top-24">
+        <div className="sticky top-20 z-20 mt-8 rounded-4xl bg-black/70 p-2 backdrop-blur-xl sm:top-24">
           <SearchField value={query} onChange={setQuery} onClear={() => setQuery('')} autoFocus={!initialQuery} />
           <div
             className="mt-2 flex gap-1 overflow-x-auto px-1 pb-1"

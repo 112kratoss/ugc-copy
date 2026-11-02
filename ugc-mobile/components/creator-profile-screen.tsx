@@ -651,14 +651,15 @@ function CreatorTopBar({ topInset }: { topInset: number }) {
       subscription.remove();
     };
   }, [glassAvailable]);
+  const backSize = 44;
   const back = (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Go back"
       onPress={leaveCreatorProfile}
       style={({ pressed }) => ({
-        width: 44,
-        height: 44,
+        width: backSize,
+        height: backSize,
         borderRadius: appTheme.radii.pill,
         alignItems: 'center',
         justifyContent: 'center',
@@ -681,7 +682,8 @@ function CreatorTopBar({ topInset }: { topInset: number }) {
         </Text>
         <View style={{ position: 'absolute', left: 16, top: 0 }}>
           {glassAvailable && !reduceTransparency ? (
-            <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive style={{ width: 44, height: 44, borderRadius: appTheme.radii.pill }}>
+            <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive // expo-glass-effect hands this radius to UIKit as given, without React Native's clamp, so it is the exact half.
+              style={{ width: backSize, height: backSize, borderRadius: backSize / 2 }}>
               {back}
             </GlassView>
           ) : back}

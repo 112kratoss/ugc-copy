@@ -1026,7 +1026,8 @@ function GuestCreationsNotice() {
       onPress={() => router.push({ pathname: '/auth', params: { mode: 'signup', returnTo: '/profile' } } as never)}
       style={({ pressed }) => ({
         minHeight: 44,
-        borderRadius: appTheme.radii.pill,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,
         backgroundColor: theme.colors.panel,
@@ -1201,7 +1202,8 @@ function ProfileHeroCard({
             style={({ pressed }) => ({
               marginTop: 10,
               minHeight: 44,
-              borderRadius: appTheme.radii.pill,
+              borderRadius: appTheme.radii.md,
+              borderCurve: 'continuous',
               borderWidth: 1,
               borderColor: theme.colors.border,
               flexDirection: 'row',
