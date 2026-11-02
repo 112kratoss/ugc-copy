@@ -6370,7 +6370,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const focus = vi.fn();
         authState.api.startGeneration.mockRejectedValue(refusal(422, 'prompt_blocked', 'This prompt was blocked by our safety checks.'));
         const tree = await openTyped({
-          createNodeMock: (element) => (String(element.type) === 'textinput' ? { focus, setNativeProps: vi.fn() } : null),
+          createNodeMock: (element) => (String(element.type) === 'textinput' ? { focus, setSelection: vi.fn() } : null),
         });
         await pressGenerate(tree);
         focus.mockClear();
@@ -6379,6 +6379,25 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
         expect(text(tree)).toContain('This prompt was blocked by our safety checks.');
         expect(focus).toHaveBeenCalled();
+      });
+
+      // The request is for the prompt on screen when the refusal is answered. A tool switch after it
+      // mounted another tool's composer, which read the same request and opened the keyboard unasked.
+      it('puts the cursor in no other tool’s prompt after a blocked prompt', async () => {
+        const focus = vi.fn();
+        authState.api.startGeneration.mockRejectedValue(refusal(422, 'prompt_blocked', 'This prompt was blocked by our safety checks.'));
+        const tree = await openTyped({
+          createNodeMock: (element) => (String(element.type) === 'textinput' ? { focus, setSelection: vi.fn() } : null),
+        });
+        await pressGenerate(tree);
+        renderer.act(() => { labelled(tree.root.findByProps({ testID: 'generation-workspace' }), 'Edit prompt').props.onPress(); });
+        expect(focus).toHaveBeenCalledTimes(1);
+
+        for (const tool of ['Video', 'Motion', 'Image']) {
+          renderer.act(() => { labelled(tree.root, tool).props.onPress(); });
+          await settle();
+        }
+        expect(focus).toHaveBeenCalledTimes(1);
       });
 
       it('reads the balance again on a refusal for credits, and opens credits from the failure', async () => {
@@ -6776,6 +6795,17 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         renderer.act(() => { labelled(tree.root, 'Video').props.onPress(); });
         expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('My video draft');
       });
+
+      // The composer mounts on the opening draft and the saved prompt arrives after it: the details
+      // sheet's insert went in front of an untouched prompt's first word.
+      it('takes a reference’s handle from its details to the end of a saved prompt the creator has not touched', async () => {
+        memory.set(ordinaryKey, savedDrafts({ image: { prompt: 'A cat on a sofa', references: [stagedMedia('flowers')] } }));
+        const tree = await open(<MediaCreationScreen initialTool="image" />);
+        renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Open details for Flowers').props.onPress(); });
+        renderer.act(() => { findPressableByText(tree.root, 'Insert @flowers').props.onPress(); });
+
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('A cat on a sofa @flowers');
+      });
     });
 
     describe('a staged upload the server has swept', () => {
@@ -7167,11 +7197,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           catalogState.catalog = parityCatalog([parityKlingO3()]);
           memory.set(ordinaryKey, heroDraft({}));
           const focus = vi.fn();
-          const setNativeProps = vi.fn();
+          const setSelection = vi.fn();
           const tree = await open(<MediaCreationScreen initialTool="video" />, {
             createNodeMock: (element) => (
               String(element.type) === 'textinput' && (element.props as { testID?: string }).testID === 'video-prompt-input'
-                ? { focus, setNativeProps }
+                ? { focus, setSelection }
                 : null
             ),
           });
@@ -7187,7 +7217,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           expect(focus).not.toHaveBeenCalled();
           await renderer.act(async () => { await vi.advanceTimersByTimeAsync(1); });
           expect(focus).toHaveBeenCalledTimes(1);
-          expect(setNativeProps).toHaveBeenCalledWith({ selection: { start: 20, end: 20 } });
+          expect(setSelection).toHaveBeenCalledWith(20, 20);
         });
 
         // A story writes its shots: the single shot's @ list goes with its field, which leaves
@@ -7202,6 +7232,33 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
           renderer.act(() => { labelled(tree.root, 'Multi-shot').props.onPress(); });
           expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).toHaveLength(0);
+        });
+
+        // Back on a single shot, the field returns unfocused: the list came back for the old @ with
+        // no field focused, and kept the unknown mention's line out of the blocker.
+        it('keep the @ list shut after a round trip through a story, until the prompt is focused again', async () => {
+          catalogState.catalog = parityCatalog([parityKlingO3()]);
+          memory.set(ordinaryKey, heroDraft({}));
+          const tree = await open(<MediaCreationScreen initialTool="video" />);
+          const prompt = () => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' });
+          renderer.act(() => prompt().props.onFocus());
+          typeAtEnd(tree, 'Walks in beside @he');
+          expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).not.toHaveLength(0);
+
+          // Each switch puts the keyboard away with the field it takes; Android kept it up for a field
+          // that was gone. Pressing the mode already on takes nothing away.
+          renderer.act(() => { labelled(tree.root, 'Multi-shot').props.onPress(); });
+          expect(keyboardState.dismiss).toHaveBeenCalledTimes(1);
+          renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+          expect(keyboardState.dismiss).toHaveBeenCalledTimes(2);
+          renderer.act(() => { labelled(tree.root, 'Single shot').props.onPress(); });
+          expect(keyboardState.dismiss).toHaveBeenCalledTimes(2);
+          await settle();
+          expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).toHaveLength(0);
+          expect(blocker(tree)).toContain('@he');
+
+          renderer.act(() => prompt().props.onFocus());
+          expect(tree.root.findAllByProps({ testID: 'reference-mention-suggestions' })).not.toHaveLength(0);
         });
 
         it('have a link that ran out renewed in the draft', async () => {

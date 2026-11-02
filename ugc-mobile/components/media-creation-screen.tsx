@@ -171,6 +171,7 @@ import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
+import { useFocusRequest } from '@/lib/use-focus-request';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useRailReveal, type RailRevealRequest } from '@/lib/use-rail-reveal';
 import { useReferenceMentionInput } from '@/lib/use-reference-mention-input';
@@ -3964,9 +3965,7 @@ function ImagePromptComposer({
     });
   }, [activeMention, draft.references, mentionHandles]);
 
-  useEffect(() => {
-    if (promptFocusRequest > 0) promptInputRef.current?.focus();
-  }, [promptFocusRequest]);
+  useFocusRequest(promptFocusRequest, promptInputRef);
 
   return (
     <>
@@ -4688,9 +4687,7 @@ function VideoCreatorComposer({
     ...subjects.map(subjectAsReference),
   ].filter((media) => media.handle && runHandles.has(media.handle) && referenceMatchesMention(media, activeMention.query));
 
-  useEffect(() => {
-    if (promptFocusRequest > 0) promptInputRef.current?.focus();
-  }, [promptFocusRequest]);
+  useFocusRequest(promptFocusRequest, promptInputRef);
 
   const draftTextNames = (handle?: string | null) => videoDraftTextNames(draft, handle);
 
@@ -4749,7 +4746,12 @@ function VideoCreatorComposer({
               accessibilityRole="button"
               accessibilityLabel={option.label}
               accessibilityState={{ selected: draft.isMultiShot === option.value }}
-              onPress={() => onChange((current) => ({ ...current, isMultiShot: option.value, referenceMode: option.value ? 'frames' : current.referenceMode }))}
+              onPress={() => {
+                // The field being typed in leaves with the switch, without a blur, and Android keeps
+                // its keyboard up for a field that is gone.
+                if (draft.isMultiShot !== option.value) Keyboard.dismiss();
+                onChange((current) => ({ ...current, isMultiShot: option.value, referenceMode: option.value ? 'frames' : current.referenceMode }));
+              }}
               hitSlop={verticalHitSlop(40)}
               style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: 14, backgroundColor: draft.isMultiShot === option.value ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? theme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
@@ -5180,9 +5182,7 @@ function MotionCreatorComposer({
 }) {
   const theme = useAppTheme();
   const promptInputRef = useRef<TextInput>(null);
-  useEffect(() => {
-    if (promptFocusRequest > 0) promptInputRef.current?.focus();
-  }, [promptFocusRequest]);
+  useFocusRequest(promptFocusRequest, promptInputRef);
   const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
   // The lines under the slots, found by what the slots are called (`catalogMotionDraftSlotLabels`):
