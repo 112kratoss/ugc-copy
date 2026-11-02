@@ -145,7 +145,7 @@ These settings are intentionally verified against the provider dashboards/adviso
 - Google Auth Platform: set Branding app name to `Magicbooklet`, add `magicbooklet.com` as an authorized domain, publish/verify the OAuth consent screen, and keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
 - Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified. Add the branded host and callback to the Apple Services ID before activation, and set the repository variable `SUPABASE_AUTH_CALLBACK_URL` to the branded callback ("Sign in with Apple on the web" below). Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
 - Apple Services ID, the Supabase Apple provider, and the repository secrets `APPLE_SIGN_IN_PRIVATE_KEY` and `SUPABASE_AUTH_CONFIG_TOKEN` that the monthly client-secret renewal reads: under "Sign in with Apple on the web" below.
-- Before this repository goes private on GitHub Free: environment secrets stop being readable there, so the `production` environment's secrets (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, `OPS_READ_SECRET`) need repository copies under the same names, and environment protection rules stop applying. Do this before the switch.
+- Before this repository goes private on GitHub Free: environment secrets stop being readable there. The `production` environment's secrets (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, `OPS_READ_SECRET`) and `mobile-production`'s `EXPO_TOKEN` need repository copies under the same names, with `vars.TESTFLIGHT_INTERNAL_GROUP` checked too, and environment protection rules stop applying. Do this before the switch.
 - RevenueCat project `proj4a602455`: send a production test webhook for integration `whintgr1689ecfb68` to `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, then verify Vercel logs show the route accepted the signed event. Current configured event types are `cancellation`, `non_renewing_purchase`, and `refund_reversed`.
 
 The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
@@ -331,10 +331,12 @@ and this one goes private after launch.
   The workflow holds the key to `APPLE_SIGN_IN_KEY_SHA256`, the SHA-256 of its
   public half, so a wrong `.p8` (APNs and App Store Connect keys are P-256 too)
   is refused before anything is minted.
-- `SUPABASE_AUTH_CONFIG_TOKEN`: a Supabase access token that can read and write
-  this project's Auth config. A scoped token is best, if the dashboard offers
-  one. Install it from the clipboard with
+- `SUPABASE_AUTH_CONFIG_TOKEN`: a Supabase access token limited to this project,
+  with Auth config read and write (the update) and read for the probe. Install it
+  from the clipboard with
   `pbpaste | gh secret set SUPABASE_AUTH_CONFIG_TOKEN --repo 112kratoss/ugc-copy`.
+  A scoped token can expire; when it does, the run fails with HTTP 401, the
+  incident issue opens, and the live secret still has about five months.
 
 Before it applies the new secret, the script checks four things, and with any of
 them wrong it leaves the live secret alone:
@@ -358,10 +360,11 @@ A failure leaves about five months before the live secret ends. The run's
 summary says when the secret it applied expires.
 
 **A green run does not prove Apple takes the secret.** Nothing can, short of a
-real sign-in (step 2 says why). After the first scheduled run, and after any
-change to the key, its pin, the ids or the script, run the workflow by hand
-(Actions → Apple web client secret → Run workflow) and sign in on the website
-with Apple.
+real sign-in (step 2 says why). Once both secrets are installed and the
+workflow is on `main`, run it by hand (Actions → Apple web client secret → Run
+workflow) and sign in on the website with Apple. That way the first scheduled
+run replaces a secret the same code has already proved. Do the same after any
+change to the key, its pin, the ids or the script.
 
 A switched-off workflow raises no alert: GitHub does it on a public repository
 after 60 days without activity, and anyone can do it by hand. Switching it back
