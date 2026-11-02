@@ -30,7 +30,7 @@ export function pushedRoute(pathname: string, params: Record<string, string>): R
 
 /** Home's tabs, with `tab` in front (Home itself by default). */
 export function homeTabs(tab: RouteFixture = { name: 'index' }): RouteFixture {
-  const tabs = ['index', 'showcase', 'creator', 'studio', 'profile'].map((name) => (name === tab.name ? tab : { name }));
+  const tabs = ['index', 'creator', 'studio', 'showcase', 'pricing', 'profile'].map((name) => (name === tab.name ? tab : { name }));
   return { name: '(tabs)', state: { index: tabs.indexOf(tab), routes: tabs } };
 }
 
