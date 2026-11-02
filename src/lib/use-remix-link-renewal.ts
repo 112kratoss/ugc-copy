@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 
-import { remixAnswerNeedsRenewal, remixLinkNeedsRenewal, renewedRemixLink } from '@/lib/remix-link-renewal';
+import { remixAnswerNeedsRenewal, renewedRemixLink } from '@/lib/remix-link-renewal';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { supabase } from '@/lib/supabase';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 
 /** A link to the same file that opens now: the link itself while it lasts. */
 export type RenewRemixLink = (link: string, options?: { result?: boolean }) => Promise<string>;
@@ -60,11 +61,11 @@ export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageTok
 
   return useCallback<RenewRemixLink>(async (link, options = {}) => {
     const read = readRef.current;
-    if (!read.remixId || !remixLinkNeedsRenewal(link, Date.now())) return link;
+    if (!read.remixId || !isSignedMediaUrlExpiring(link, Date.now())) return link;
     const key = JSON.stringify([read.remixId, read.remixPostId, read.formAccount]);
     const freshLink = (answer: RemixSourceBundle | null) => {
       const renewed = answer ? renewedRemixLink(link, answer, options) : null;
-      return renewed && !remixLinkNeedsRenewal(renewed, Date.now()) ? renewed : null;
+      return renewed && !isSignedMediaUrlExpiring(renewed, Date.now()) ? renewed : null;
     };
 
     const held = heldRef.current?.key === key ? heldRef.current : null;

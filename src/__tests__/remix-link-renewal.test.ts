@@ -2,11 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isSameRemixMedia,
-  REMIX_LINK_RENEWAL_MARGIN_MS,
   remixAnswerNeedsRenewal,
-  remixLinkNeedsRenewal,
   renewedRemixLink,
-  signedLinkExpiresAtMs,
   storedObjectOfLink,
 } from '@/lib/remix-link-renewal';
 import type { RemixSourceBundle } from '@/lib/remix-source';
@@ -43,29 +40,7 @@ function answerSignedAt(signedAt: number): RemixSourceBundle {
   };
 }
 
-describe('a remix link’s hour', () => {
-  it('reads when a signed link lapses from its token, and nothing lapses for any other link', () => {
-    const link = signedStorageLink('generated_videos/user-1/result.mp4', SIGNED_AT);
-    expect(signedLinkExpiresAtMs(link)).toBe(SIGNED_AT + HOUR_MS);
-
-    for (const other of [PUBLIC_RESULT, 'blob:https://magicbooklet.com/5d1c', '/api/media?bucket=generated_videos&path=user-1%2Fresult.mp4', 'not a link', '']) {
-      expect(signedLinkExpiresAtMs(other), other).toBeNull();
-    }
-    // A signed link whose token says nothing of its end is not read as lapsing.
-    expect(signedLinkExpiresAtMs('https://project.supabase.co/storage/v1/object/sign/generated_videos/user-1/result.mp4?token=garbled')).toBeNull();
-    expect(signedLinkExpiresAtMs('https://project.supabase.co/storage/v1/object/sign/generated_videos/user-1/result.mp4')).toBeNull();
-  });
-
-  it('renews a link once it has lapsed, and a little before', () => {
-    const link = signedStorageLink('generated_videos/user-1/result.mp4', SIGNED_AT);
-    expect(remixLinkNeedsRenewal(link, SIGNED_AT)).toBe(false);
-    expect(remixLinkNeedsRenewal(link, SIGNED_AT + HOUR_MS - REMIX_LINK_RENEWAL_MARGIN_MS - 1)).toBe(false);
-    expect(remixLinkNeedsRenewal(link, SIGNED_AT + HOUR_MS - REMIX_LINK_RENEWAL_MARGIN_MS)).toBe(true);
-    expect(remixLinkNeedsRenewal(link, SIGNED_AT + HOUR_MS + 1)).toBe(true);
-    expect(remixLinkNeedsRenewal(PUBLIC_RESULT, SIGNED_AT + 30 * HOUR_MS)).toBe(false);
-    expect(remixLinkNeedsRenewal(null, SIGNED_AT)).toBe(false);
-  });
-
+describe('a remix link renewed', () => {
   it('tells two signings of one file from links to two files', () => {
     const first = signedStorageLink('generation_inputs/user-1/gen-1/00.png', SIGNED_AT);
     const second = signedStorageLink('generation_inputs/user-1/gen-1/00.png', SIGNED_AT + HOUR_MS);

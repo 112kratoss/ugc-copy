@@ -118,7 +118,7 @@ import {
     isRemixResultReference,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
-import { remixLinkNeedsRenewal } from '@/lib/remix-link-renewal';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import {
     getPersistedImageElementRecords,
@@ -1122,7 +1122,7 @@ function ImageCreator({
         let resultUrl = remixSourceBundle.result?.url ?? null;
         // The link the remix was read with lasts an hour: past it the picture was drawn from a link
         // storage refuses. One about to lapse is renewed first.
-        if (resultUrl && remixLinkNeedsRenewal(resultUrl, Date.now())) {
+        if (resultUrl && isSignedMediaUrlExpiring(resultUrl, Date.now())) {
             resultUrl = await renewRemixLink(resultUrl, { result: true });
             if (unmountSignal.current.aborted) return;
         }

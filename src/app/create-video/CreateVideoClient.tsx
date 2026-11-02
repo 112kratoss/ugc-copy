@@ -160,7 +160,7 @@ import {
     remixSlotsInputSide,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
-import { remixLinkNeedsRenewal } from '@/lib/remix-link-renewal';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import {
     openRemixInputSlots,
@@ -3389,7 +3389,7 @@ function VideoCreator({
         if (!original || !remixId || unwanted()) return;
         // The link the remix was read with lasts an hour: past it the clip's length could not be read,
         // and the clip came in with none. One about to lapse is renewed first.
-        const url = remixLinkNeedsRenewal(original, Date.now())
+        const url = isSignedMediaUrlExpiring(original, Date.now())
             ? await renewRemixLink(original, { result: true })
             : original;
         const seeds = await readPickSeeds((async () => keptReferenceSeeds([{

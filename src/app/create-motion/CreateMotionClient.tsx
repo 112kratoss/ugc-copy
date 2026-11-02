@@ -84,7 +84,7 @@ import {
     type RemixInputSlot,
     type RemixInputSlotRole,
 } from '../../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
-import { remixLinkNeedsRenewal } from '@/lib/remix-link-renewal';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
@@ -734,7 +734,7 @@ function MotionCreator({
         let url = remixSourceBundle.result.url;
         // The link the remix was read with lasts an hour: past it the clip's length could not be
         // read, and Generate stayed held until a reload. One about to lapse is renewed first.
-        if (remixLinkNeedsRenewal(url, Date.now())) {
+        if (isSignedMediaUrlExpiring(url, Date.now())) {
             const clipAtPress = referenceVideoRef.current;
             url = await renewRemixLink(url, { result: true });
             // Gone, or another clip put in its place meanwhile: the creator's choice stands.
