@@ -147,7 +147,7 @@ import { listFilesInSentence, nameSaysNothing, readableFileName } from '@/lib/me
 import { isUploadCancelledError, runWeightedUploadQueue, type WeightedUploadQueueResult } from '@/lib/upload-file';
 import { invalidateProfileCreations } from '@/lib/profile-media-query';
 import { signedStorageUrlExpiresAt } from '@/lib/media-url-expiry';
-import type { ActiveReferenceMention } from '@/lib/reference-mentions';
+import { referenceMatchesMention, type ActiveReferenceMention } from '@/lib/reference-mentions';
 import { formatCreditAmount } from '@/lib/pricing';
 import { withCreditCost, formatCreditCost } from '@/lib/generation-action-label';
 import {
@@ -179,6 +179,10 @@ import { showActionSheet } from '@/lib/action-sheet';
 // a reveal leaves the item just added (`useRailReveal`).
 const REFERENCE_RAIL_END_INSET = 16;
 const REUSABLE_RAIL_END_INSET = 6;
+
+// How long an insert from the Reference details sheet waits to put focus and the caret back in
+// the prompt; the sheet takes 220 ms to leave (`SHEET_EXIT_DURATION` in sheet-chrome.tsx).
+const REFERENCE_SHEET_INSERT_FOCUS_DELAY = 280;
 
 const TOOL_META: Record<CreatorToolId, { title: string; accent: ToolAccent; subtitle: string }> = {
   image: {
@@ -3797,8 +3801,8 @@ function ImagePromptComposer({
     inputRef: promptInputRef,
     inputProps: promptInputProps,
     activeMention,
-    insertReferenceHandle,
-    insertReferenceHandleAtCaret,
+    insertHandleAtMention,
+    insertHandleAtCaret,
   } = useReferenceMentionInput({ prompt: draft.prompt, onPromptChange, onFocus, onBlur, onMentionStateChange });
   const selectedReference = draft.references.find((media) => media.id === referenceId) ?? null;
   const referenceLimitReached = maxReferences === null || maxReferences === 0 || draft.references.length >= maxReferences;
@@ -3813,13 +3817,11 @@ function ImagePromptComposer({
   } = useRailReveal(railRevealRequest, sentReferences.map((media) => media.id), REFERENCE_RAIL_END_INSET, !reducedMotion);
   const mentionReferences = useMemo(() => {
     if (!activeMention) return [];
-    const query = activeMention.query.toLowerCase();
     return draft.references.filter((media) => {
       if (!media.handle) return false;
       // Only what the run sends can be named: the server refuses a mention of anything else.
       if (mentionHandles && !mentionHandles.includes(media.handle)) return false;
-      const normalizedHandle = media.handle.slice(1).toLowerCase();
-      return normalizedHandle.includes(query) || media.displayName.toLowerCase().includes(query);
+      return referenceMatchesMention(media, activeMention.query);
     });
   }, [activeMention, draft.references, mentionHandles]);
 
@@ -3889,7 +3891,7 @@ function ImagePromptComposer({
             references={mentionReferences}
             prompt={draft.prompt}
             mention={activeMention}
-            onSelect={(handle) => insertReferenceHandle(handle, activeMention)}
+            onSelect={insertHandleAtMention}
           />
         ) : null}
 
@@ -3998,7 +4000,7 @@ function ImagePromptComposer({
           if (selectedReference) onRenameReference(selectedReference.id, displayName);
         }}
         onUseHandle={(handle) => {
-          insertReferenceHandleAtCaret(handle, 280);
+          insertHandleAtCaret(handle, REFERENCE_SHEET_INSERT_FOCUS_DELAY);
           setReferenceId(null);
         }}
         onReplace={() => {
@@ -4357,8 +4359,8 @@ function VideoCreatorComposer({
     inputRef: promptInputRef,
     inputProps: promptInputProps,
     activeMention,
-    insertReferenceHandle,
-    insertReferenceHandleAtCaret,
+    insertHandleAtMention,
+    insertHandleAtCaret,
   } = useReferenceMentionInput({
     prompt: draft.prompt,
     // A story's prompt is its shots: the single shot's field is not on screen.
@@ -4541,14 +4543,11 @@ function VideoCreatorComposer({
   // change what it is given. Kept, the memo made the compiler skip the whole component
   // (2026-10-22, `__tests__/compiled-screens.test.ts`). Nothing is lost: `runHandles` is a new
   // Set each render, so the memo recomputed on every render, as this does compiled or not.
-  const mentionQuery = activeMention ? activeMention.query.toLowerCase() : null;
-  const mentionReferences = mentionQuery === null ? [] : [
+  const mentionReferences = activeMention === null ? [] : [
     ...draft.references,
     ...draft.referenceVideos,
     ...subjects.map(subjectAsReference),
-  ].filter((media) => media.handle && runHandles.has(media.handle) && (
-    media.handle.slice(1).toLowerCase().includes(mentionQuery) || media.displayName.toLowerCase().includes(mentionQuery)
-  ));
+  ].filter((media) => media.handle && runHandles.has(media.handle) && referenceMatchesMention(media, activeMention.query));
 
   useEffect(() => {
     if (promptFocusRequest > 0) promptInputRef.current?.focus();
@@ -4661,7 +4660,7 @@ function VideoCreatorComposer({
       )}
 
       {activeMention ? (
-        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} mention={activeMention} onSelect={(handle) => insertReferenceHandle(handle, activeMention)} />
+        <ReferenceMentionSuggestions references={mentionReferences} prompt={draft.prompt} mention={activeMention} onSelect={insertHandleAtMention} />
       ) : null}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
@@ -4849,7 +4848,7 @@ function VideoCreatorComposer({
         // A story's prompt is its shots: the single shot's prompt an insert would write into is hidden.
         onUseHandle={selectedReference && !draft.isMultiShot && (selectedSubject !== null || Boolean(selectedReference.handle && runHandles.has(selectedReference.handle)))
           ? (handle) => {
-              insertReferenceHandleAtCaret(handle, 280);
+              insertHandleAtCaret(handle, REFERENCE_SHEET_INSERT_FOCUS_DELAY);
               setReferenceId(null);
             }
           : undefined}

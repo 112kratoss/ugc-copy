@@ -8,6 +8,11 @@ import {
   type TextSelection,
 } from '@/lib/reference-mentions';
 
+/** The text and caret a dismissed @ list stays shut for. */
+function mentionKeyFor(text: string, { start, end }: TextSelection) {
+  return `${text}:${start}:${end}`;
+}
+
 /**
  * A creator's prompt field and its @ list: where the caret is, the mention being typed at it, and
  * putting a reference's handle in. The image and video composers each kept a copy of this until
@@ -16,9 +21,10 @@ import {
  * A mention is active while the field is focused and its caret sits at the end of an @handle
  * being typed (`findActiveReferenceMention`). An insert leaves the caret right after the handle
  * it put in, which reads as a mention being typed, so the list stays shut for that text and caret
- * until the creator types or moves the caret. The caret the insert puts back on the field
- * (`setNativeProps`) comes back as a selection change of its own, which is not the creator's and
- * leaves the list shut. A blur shuts the list 160 ms later.
+ * until the creator types or moves the caret. An insert puts focus and that caret back on the
+ * field, at once from the @ list and after the caller's delay from a sheet over the field; the
+ * caret it puts back (`setNativeProps`) comes back as a selection change of its own, which is not
+ * the creator's and leaves the list shut. A blur shuts the list 160 ms later.
  *
  * An insert puts the handle in whether or not the prompt already names it: one prompt can name a
  * reference more than once ("@ali walks in, then @ali waves", #652).
@@ -59,7 +65,7 @@ export function useReferenceMentionInput({
     () => enabled && focused ? findActiveReferenceMention(prompt, selection) : null,
     [enabled, focused, prompt, selection],
   );
-  const mentionKey = detectedMention ? `${prompt}:${selection.start}:${selection.end}` : null;
+  const mentionKey = detectedMention ? mentionKeyFor(prompt, selection) : null;
   const activeMention = detectedMention && mentionKey !== dismissedMentionKey ? detectedMention : null;
 
   useEffect(() => {
@@ -95,14 +101,14 @@ export function useReferenceMentionInput({
     }, delay);
   };
 
-  const insertReferenceHandle = (handle: string, at: TextSelection, focusDelay = 0) => {
+  const insertAt = (handle: string, at: TextSelection, focusDelay: number) => {
     clearBlurTimer();
     const result = insertHandleAtSelection(promptTextRef.current, handle, at);
     promptTextRef.current = result.text;
     lastSelectionRef.current = result.selection;
     restoringSelectionRef.current = result.selection;
     setSelection(result.selection);
-    setDismissedMentionKey(`${result.text}:${result.selection.start}:${result.selection.end}`);
+    setDismissedMentionKey(mentionKeyFor(result.text, result.selection));
     setFocused(true);
     onPromptChange(result.text);
     restoreFocus(focusDelay);
@@ -124,8 +130,8 @@ export function useReferenceMentionInput({
         const restored = restoringSelectionRef.current?.start === next.start && restoringSelectionRef.current.end === next.end;
         lastSelectionRef.current = next;
         setSelection(next);
-        if (!restored) setDismissedMentionKey(null);
         if (restored) restoringSelectionRef.current = null;
+        else setDismissedMentionKey(null);
       },
       onFocus: () => {
         clearBlurTimer();
@@ -143,9 +149,11 @@ export function useReferenceMentionInput({
     },
     /** The mention being typed at the caret, while the @ list is open for it. */
     activeMention,
-    /** Puts a handle in over `at` (a row of the @ list: the mention being typed) and focuses the field again after `focusDelay` ms. */
-    insertReferenceHandle,
-    /** Puts a handle in at the field's last caret, as a reference's details sheet does from over the field. */
-    insertReferenceHandleAtCaret: (handle: string, focusDelay = 0) => insertReferenceHandle(handle, lastSelectionRef.current, focusDelay),
+    /** Puts a handle in place of the mention being typed: a row of the @ list. */
+    insertHandleAtMention: (handle: string) => {
+      if (activeMention) insertAt(handle, activeMention, 0);
+    },
+    /** Puts a handle in at the field's last caret, focusing it again after `focusDelay` ms: a sheet over the field. */
+    insertHandleAtCaret: (handle: string, focusDelay: number) => insertAt(handle, lastSelectionRef.current, focusDelay),
   };
 }
