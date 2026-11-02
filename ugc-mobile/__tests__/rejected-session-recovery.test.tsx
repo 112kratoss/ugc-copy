@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   probe: vi.fn(),
   // React Navigation's state for the screens on screen.
   rootState: undefined as StateFixture | undefined,
+  // The route a screen drawn by `showScreen` reads as its own.
+  screenRoute: { key: '', name: '' },
   queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   refreshSession: vi.fn(),
   replace: vi.fn(),
@@ -42,6 +44,8 @@ vi.mock('expo-router', () => {
     useNavigationContainerRef: () => navigationRef,
   };
 });
+
+vi.mock('@react-navigation/native', () => ({ useRoute: () => state.screenRoute }));
 
 vi.mock('react-native', () => ({
   AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
@@ -125,7 +129,8 @@ vi.mock('../lib/supabase', () => ({
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 import { APPLE_ZOOM_SOURCE_PARAM } from '../lib/apple-zoom';
 import { AuthProvider, useAuth } from '../lib/auth';
-import { AWKWARD_PROMPT, pushedRoute, stateInFront, type StateFixture } from './fixtures/navigation-state';
+import { useScreenReturn } from '../lib/use-screen-return';
+import { AWKWARD_PROMPT, homeTabs, pushedRoute, rootStateWith, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
 /** Where a refused registered session is sent: the sign-in screen, with why and where it was. */
 function signedOutNotice(returnTo: string) {
@@ -180,6 +185,20 @@ async function mountWith(session: unknown) {
   state.getSession.mockResolvedValue({ data: { session: null }, error: null });
 
   return { latest, unmount: () => renderer.act(() => tree?.unmount()) };
+}
+
+/** A screen on the route `key` that gives `path` as its own return (`useScreenReturn`) until it is taken down. */
+function showScreen(key: string, path: string) {
+  state.screenRoute = { key, name: key };
+  function Screen() {
+    useScreenReturn(path);
+    return null;
+  }
+  let screen: renderer.ReactTestRenderer | undefined;
+  renderer.act(() => {
+    screen = renderer.create(<Screen />);
+  });
+  return { takeDown: () => renderer.act(() => screen?.unmount()) };
 }
 
 async function recover(latest: { current: ReturnType<typeof useAuth> | null }) {
@@ -429,8 +448,8 @@ describe('recovering from a session ended elsewhere', () => {
     unmount();
   });
 
-  // The zoom follows the post on screen (`useAppleZoomRetarget`); the route's
-  // own `initialId` stays the post the reel opened on, and that comes back.
+  // A reel that has given no return of its own, as on the post it opened on,
+  // comes back from its route's params, without the zoom it opened with.
   it('brings the reel back on the post it was opened on, without the zoom it opened with', async () => {
     const reel = { source: 'home', initialId: 'post-9', feedSessionId: 'feed-1' };
     state.rootState = stateInFront(pushedRoute('/viewer', { ...reel, [APPLE_ZOOM_SOURCE_PARAM]: 'zoom|r1|post-14' }));
@@ -440,6 +459,54 @@ describe('recovering from a session ended elsewhere', () => {
     await recover(latest);
 
     expect(sentReturn()).toEqual({ pathname: '/viewer', params: reel });
+
+    unmount();
+  });
+
+  // The route's own `initialId` stays the post the reel opened on, so the
+  // reel gives the post in front as its return.
+  it('brings the reel back on the post the person swiped to', async () => {
+    state.rootState = stateInFront(pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1'));
+    const reel = showScreen('viewer-1', '/viewer?source=home&initialId=post-14');
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/viewer?source=home&initialId=post-14'));
+
+    reel.takeDown();
+    unmount();
+  });
+
+  it('does not use the return of a screen under the one in front', async () => {
+    // A creator's profile opened from the reel.
+    state.rootState = rootStateWith(
+      homeTabs(),
+      pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1'),
+      pushedRoute('/creators/[username]', { username: 'luna' }, 'creators/[username]-1'),
+    );
+    const reel = showScreen('viewer-1', '/viewer?source=home&initialId=post-14');
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/creators/luna'));
+
+    reel.takeDown();
+    unmount();
+  });
+
+  it('does not use a return left by a screen that has gone', async () => {
+    state.rootState = stateInFront(pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1'));
+    showScreen('viewer-1', '/viewer?source=home&initialId=post-14').takeDown();
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/viewer?source=home&initialId=post-9'));
 
     unmount();
   });

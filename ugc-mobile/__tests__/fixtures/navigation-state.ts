@@ -28,8 +28,8 @@ export type RouteFixture = NavigationStateLike['routes'][number];
 /** Everything a return can lose on the way: & and # would cut it, + turn to a space, % be read again, \ and a line break send it Home. */
 export const AWKWARD_PROMPT = 'A dancer & a drum #2 + 100% real \\ one\nline two';
 
-/** The route `router.push({ pathname, params })` puts on screen, e.g. `create/[tool]`. */
-export function pushedRoute(pathname: string, params: Record<string, string>): RouteFixture {
+/** The route `router.push({ pathname, params })` puts on screen, e.g. `create/[tool]`, with the key React Navigation gives it where a case reads one. */
+export function pushedRoute(pathname: string, params: Record<string, string>, key?: string): RouteFixture {
   // Any route's pathname, which typed routes (`.expo/types`) cannot name.
   const href = resolveHref({ pathname, params } as never);
   const written = new URL(href, 'file:').pathname.split('/');
@@ -38,7 +38,7 @@ export function pushedRoute(pathname: string, params: Record<string, string>): R
     return name ? [[name, safelyDecodeURIComponent(written[index])]] : [];
   }));
   const name = pathname.replace(/^\//, '');
-  return { name, params: { ...pathParams, ...parseQueryParams(href, { name }) } };
+  return { ...(key ? { key } : {}), name, params: { ...pathParams, ...parseQueryParams(href, { name }) } };
 }
 
 /** Home's tabs with `tab` in front (Home itself by default), and the params the tabs' own route keeps. */

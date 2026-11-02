@@ -105,7 +105,10 @@ vi.mock('expo-router', () => ({
 
 vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
 
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true }));
+// The reel's own route, whose key its forced sign-in return is given under.
+const reelRoute = vi.hoisted(() => ({ key: 'viewer-route', name: 'viewer' }));
+
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true, useRoute: () => reelRoute }));
 
 vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
@@ -294,8 +297,9 @@ vi.mock('@/lib/remix-start', async (importOriginal) => ({
 
 import ImmersivePreviewViewerScreen from '@/app/viewer';
 import type { FeedUndoNoticeModel } from '@/components/feed-undo-notice';
+import { focusedRouteReturnPath } from '@/lib/auth-navigation';
 import { haptic } from '@/lib/haptics';
-import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { immersiveViewerReturnPath, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { startShowcaseRemix } from '@/lib/remix-start';
 import {
   filterAnonymousSessionShowcaseFeedItems,
@@ -394,6 +398,15 @@ async function renderReel(initialId = 'post-b', route: Record<string, string> = 
 
 function reelIds(tree: renderer.ReactTestRenderer) {
   return (tree.root.findByType('flat-list' as never).props.data as ImmersivePreviewItem[]).map((item) => item.id);
+}
+
+/** A flick that comes to rest on the page at `index`, as the list reports it. */
+async function swipeTo(tree: renderer.ReactTestRenderer, index: number) {
+  const list = tree.root.findByType('flat-list' as never).props;
+  act(() => {
+    list.onMomentumScrollEnd({ nativeEvent: { contentOffset: { y: list.getItemLayout(null, index).offset } } });
+  });
+  await settle();
 }
 
 const activeId = () => screenState.zoomOptions?.activeItemId ?? null;
@@ -1410,5 +1423,65 @@ describe('a recipe opened from search', () => {
     const unknown = await renderReel('post-recipe', { source: 'showcase-feed', initialPage: 'details', initialSection: 'comments' });
     expect(slideProps(unknown, 'post-recipe')).toMatchObject({ pageKey: 'details' });
     expect(slideProps(unknown, 'post-recipe').initialSection).toBeUndefined();
+  });
+});
+
+describe('the return a forced sign-in comes back to', () => {
+  /** What a forced sign-in sends the person back to with this reel in front (`focusedRouteReturnPath`). */
+  const forcedReturn = () => focusedRouteReturnPath({ index: 0, routes: [{ ...reelRoute, params: routerState.params }] });
+  /** The reel on `initialId` in its lane, as its own sign-in prompts give it. */
+  const laneReturnOn = (initialId: string) => immersiveViewerReturnPath({
+    source: 'showcase-feed',
+    initialId,
+    feedSessionId: 'session-1',
+    algorithmVersion: 'for-you-rules-v4',
+    lane: LANE_ROUTE.lane,
+  });
+
+  // The route's `initialId` stays the post the reel opened on, so the reel
+  // gives the post in front as its return (`useScreenReturn`).
+  it("is the post the reader swiped to, and the route's own again once they are back on the one it opened on", async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    const routeReturn = forcedReturn();
+    expect(routeReturn).toContain('initialId=post-b');
+
+    await swipeTo(tree, 2);
+
+    expect(activeId()).toBe('post-c');
+    expect(forcedReturn()).toBe(laneReturnOn('post-c'));
+
+    await swipeTo(tree, 1);
+
+    expect(activeId()).toBe('post-b');
+    expect(forcedReturn()).toBe(routeReturn);
+  });
+
+  it("is the route's own once the reel has gone", async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    const routeReturn = forcedReturn();
+    await swipeTo(tree, 3);
+    expect(forcedReturn()).toBe(laneReturnOn('post-d'));
+
+    act(() => tree.unmount());
+
+    expect(forcedReturn()).toBe(routeReturn);
+  });
+
+  // Audit C1: a post that did not load is shown as missing, never as the
+  // first post the source sent instead, and signing in shows that again.
+  it("stays the route's own while the reel says the post it opened on is missing", async () => {
+    authState.api.getShowcaseFeed.mockResolvedValue({
+      items: [feedItem('post-a', maya, 'delivery-a')],
+      feedSessionId: 'session-1',
+      algorithmVersion: 'for-you-rules-v4',
+      nextCursor: null,
+      pageInfo: { hasMore: false, nextOffset: null },
+    });
+    const tree = await renderReel('post-gone', { source: 'showcase-feed' });
+
+    expect(tree.root.findAllByProps({ title: 'This isn’t available anymore' })).not.toHaveLength(0);
+    expect(forcedReturn()).toBe('/viewer?source=showcase-feed&initialId=post-gone');
   });
 });

@@ -123,6 +123,7 @@ vi.mock('../lib/supabase', () => ({
 import { GUEST_MERGE_PREPARE_ERROR_CODE } from '../lib/auth-error-copy';
 import { APPLE_ZOOM_SOURCE_PARAM } from '../lib/apple-zoom';
 import { AuthProvider, useAuth } from '../lib/auth';
+import { publishScreenReturn } from '../lib/auth-navigation';
 import { pushedRoute, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
 function sessionFor(user: Record<string, unknown>) {
@@ -237,6 +238,25 @@ describe('abandoning a guest session the server has merged', () => {
       params: { notice: 'session-merged', returnTo: '/viewer?source=home&initialId=post-9' },
     });
 
+    unmount();
+  });
+
+  // The reel gives the post in front as its own return (`useScreenReturn`).
+  it('carries the reel on the post the guest swiped to', async () => {
+    state.rootState = stateInFront(pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1'));
+    const takeBack = publishScreenReturn('viewer-1', '/viewer?source=home&initialId=post-14');
+    const { latest, unmount } = await mountWith(guestSession);
+
+    await renderer.act(async () => {
+      await latest.current?.abandonMergedGuestSession();
+    });
+
+    expect(state.replace).toHaveBeenCalledWith({
+      pathname: '/auth',
+      params: { notice: 'session-merged', returnTo: '/viewer?source=home&initialId=post-14' },
+    });
+
+    takeBack();
     unmount();
   });
 
