@@ -32,6 +32,9 @@ const picture: RemixOriginal = { generationId: 'gen-4', mediaType: 'image', url:
 describe("a remix's original as a reference", () => {
   it('is offered from the result the remix source hands out, and only with a link', () => {
     expect(remixOriginalOf(bundle({ mediaType: 'video', url: SHOWCASE }))).toEqual(clip);
+    // With the length its post measured, where it has one.
+    expect(remixOriginalOf(bundle({ mediaType: 'video', url: SHOWCASE, durationSeconds: 6.2 }))).toEqual({ ...clip, durationSeconds: 6.2 });
+    expect(remixOriginalOf(bundle({ mediaType: 'video', url: SHOWCASE, durationSeconds: 0 }))).toEqual(clip);
     expect(remixOriginalOf(bundle({ mediaType: 'video', url: null }))).toBeNull();
     expect(remixOriginalOf(bundle({ mediaType: 'image', url: '  ' }))).toBeNull();
     expect(remixOriginalOf(bundle(null))).toBeNull();
@@ -53,14 +56,16 @@ describe("a remix's original as a reference", () => {
       kind: 'video',
       url: SHOWCASE,
       storagePath: null,
-      fileName: 'result.mp4',
+      fileName: 'original-result.mp4',
       displayName: 'Original result',
       sourceGenerationId: 'gen-9',
       durationSeconds: 7.5,
     });
     // A picture answers to an @mention, as every picked one does.
-    expect(remixOriginalMedia(picture)).toMatchObject({ id: 'remix-result:gen-4', kind: 'image', handle: '@original_result', fileName: 'look.webp' });
-    expect(remixOriginalMedia({ ...clip, url: 'https://project.supabase.co/storage/v1/object/sign/generated_videos/owner/' }).fileName).toBe('original-result.mp4');
+    expect(remixOriginalMedia(picture)).toMatchObject({ id: 'remix-result:gen-4', kind: 'image', handle: '@original_result', fileName: 'original-result.png' });
+    // A clip carries the length its post measured, unless the phone read one of its own.
+    expect(remixOriginalMedia({ ...clip, durationSeconds: 6.2 }).durationSeconds).toBe(6.2);
+    expect(remixOriginalMedia(clip).durationSeconds).toBeNull();
   });
 
   it('is found wherever it went, and only by its own id', () => {
@@ -91,6 +96,8 @@ describe("a remix's original as a reference", () => {
   // Kept with a remix session so a resume offers it; a session from before says nothing, which is not "none".
   it('is read back from a saved session as kept, none, or not said', () => {
     expect(storedRemixOriginal(clip)).toEqual(clip);
+    expect(storedRemixOriginal({ ...clip, durationSeconds: 6.2 })).toEqual({ ...clip, durationSeconds: 6.2 });
+    expect(storedRemixOriginal({ ...clip, durationSeconds: 'long' })).toEqual(clip);
     expect(storedRemixOriginal(null)).toBeNull();
     expect(storedRemixOriginal(undefined)).toBeUndefined();
     expect(storedRemixOriginal({ ...clip, mediaType: 'audio' })).toBeUndefined();

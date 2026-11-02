@@ -1049,18 +1049,17 @@ export function CreatorSettingsFootNote({ cost, costLabel, balance, isVisitor }:
  * Under the settings while an option shown costs more than the balance: what "+N" means
  * (the least such N), and that those options can still be chosen.
  */
-export function CreatorOverBalanceLegend({ over, balance, isVisitor, offersTopUp }: {
+export function CreatorOverBalanceLegend({ over, balance, isVisitor }: {
   over: number | null;
   balance: number | null;
+  /** A visitor's options say what sign-up gives; anyone else's put Top up in Generate's place. */
   isVisitor: boolean;
-  /** Such an option puts Top up in Generate's place (not where the bar offers something else, or for a visitor). */
-  offersTopUp: boolean;
 }) {
   if (over === null || balance === null) return null;
   return (
     <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
       “+{over}” means {creditsWords(over)} more than {isVisitor ? `the ${balance} free credits` : `your balance of ${balance}`}.
-      {offersTopUp ? ' Those options stay selectable, and show Top up in place of Generate.' : ' Those options stay selectable.'}
+      {isVisitor ? ' Those options stay selectable.' : ' Those options stay selectable, and show Top up in place of Generate.'}
     </p>
   );
 }
@@ -1168,7 +1167,7 @@ const CREATOR_HANDLE_INSERT_CLASS =
  * Replace on a reference a remix brought back (the artboard Remix): a file of the creator's
  * own takes its place, and keeps its name and @handle, so the prompt still reads.
  */
-export function CreatorReplaceButton({ label, accept, onFile }: {
+function CreatorReplaceButton({ label, accept, onFile }: {
   /** Named for what it replaces: "Replace @reference_1 with your own photo". */
   label: string;
   accept: string;
@@ -1522,8 +1521,6 @@ export function creatorAddButtonClass(accent: UiAccent) {
  * and how many the run holds of it and takes.
  */
 export interface CreatorReferenceKind {
-  /** Its name, which keys its box: "Image". */
-  name: string;
   /** Its word on its box: "Images". */
   railLabel: string;
   /** What it is for, the box's tooltip and description. */
@@ -1544,16 +1541,26 @@ export interface CreatorReferenceKind {
  * kind, since three boxes ahead of the pictures left half the first one off a phone; a row for
  * each kind keeps every kind one press away and its references beside its box.
  */
-export function CreatorReferenceRow({ accent, kind, children }: {
+export function CreatorReferenceRow({ accent, kind, stripLabel, wide, children }: {
   accent: UiAccent;
   kind: CreatorReferenceKind;
-  /** The kind's references, in a strip; nothing while it has none. */
+  /** The strip's name for a reader: "Reference videos". */
+  stripLabel: string;
+  /** Wider cells, for tiles that hold a player (CreatorReferenceStrip's). */
+  wide?: boolean;
+  /** The kind's tiles, drawn in a strip; none while it has none. */
   children?: ReactNode;
 }) {
   return (
     <div className="flex items-start gap-2">
       <CreatorReferenceAddBox accent={accent} kind={kind} />
-      {children ?? <p className="min-w-0 flex-1 self-center px-1 text-sm leading-6 text-[var(--ui-text-muted)]">{kind.hint}</p>}
+      {Children.count(children) > 0 ? (
+        <CreatorReferenceStrip aria-label={stripLabel} wide={wide} className="min-w-0 flex-1">
+          {children}
+        </CreatorReferenceStrip>
+      ) : (
+        <p className="min-w-0 flex-1 self-center px-1 text-sm leading-6 text-[var(--ui-text-muted)]">{kind.hint}</p>
+      )}
     </div>
   );
 }

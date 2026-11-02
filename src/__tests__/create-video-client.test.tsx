@@ -7924,6 +7924,21 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.2] }));
       });
 
+      // A post that has measured its clip hands the length over with it: nothing is read.
+      it("takes the original clip's length from its post, without reading the clip", async () => {
+        authState.credits = 500;
+        const remix = remixOf({ duration: 5 });
+        stubRemix({ ...remix, result: { mediaType: 'video', url: 'https://example.com/intense.mp4', durationSeconds: 5.5 } });
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Use as reference' }));
+
+        const clips = await screen.findByRole('list', { name: 'Reference videos' });
+        expect(within(clips).getByText('5.5s clip')).toBeInTheDocument();
+        expect(readDurationMock).not.toHaveBeenCalledWith('https://example.com/intense.mp4');
+        await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [5.5] }));
+      });
+
       // The clip's length is read before it is added: a second press made meanwhile adds nothing more.
       it('adds the original clip once when its button is pressed twice while the clip is read', async () => {
         authState.credits = 500;

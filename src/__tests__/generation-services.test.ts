@@ -1069,6 +1069,22 @@ describe('generation services', () => {
       })).rejects.toThrow('reference runs may be at most 15 seconds');
     });
 
+    it('starts a clip on the link it was measured from, without resolving or checking it again', async () => {
+      // Someone else's result, admitted when the run was priced (resolveBillableInputDurations).
+      const original = 'generated_videos/user-2/generated_task-original.mp4';
+      const measured = 'https://project.supabase.co/storage/v1/object/sign/generated_videos/user-2/generated_task-original.mp4?token=measured';
+      const run = { model: 'wan-3.0-prime', duration: 10, resolution: '1080P', aspectRatio: '1:1', referenceMode: 'elements', referenceVideoUrls: [original] };
+      sharedImportMocks.resolveRemixResultMedia.mockClear();
+
+      const body = await providerBodyFor({ ...run, resolvedMediaSources: new Map([[original, measured]]) });
+      expect(body).toMatchObject({ input: { reference_video_urls: [measured] } });
+      expect(sharedImportMocks.resolveRemixResultMedia).not.toHaveBeenCalled();
+
+      // Not resolved before, it is asked about again, and this harness's gate refuses it.
+      await expect(providerBodyFor(run)).rejects.toThrow('Media references must belong to the authenticated user.');
+      expect(sharedImportMocks.resolveRemixResultMedia).toHaveBeenCalledWith(expect.objectContaining({ source: original }));
+    });
+
     it('routes PixVerse V6 by shape: text, start frame, frame pair, named references', async () => {
       const common = { model: 'pixverse-v6', duration: 5, resolution: '540p', aspectRatio: '16:9', sound: true };
 

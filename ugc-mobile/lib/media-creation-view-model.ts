@@ -823,7 +823,8 @@ function remixImageElementFileName(element: RemixResolvedImageElement, fallbackD
   return fileNameFromPath(element.storagePath) ?? fileNameFromLabel(fallbackDisplayName, 'image');
 }
 
-function createMediaDraftFromRemixAsset(
+/** A remix source's asset as a draft's media, under the name the run kept or else `fallbackDisplayName`; none without a link. */
+export function createMediaDraftFromRemixAsset(
   asset: RemixResolvedAsset | null | undefined,
   fallbackDisplayName: string
 ): MediaDraft | null {

@@ -49,6 +49,8 @@ interface RemixSourceGeneration {
 export interface RemixSourceResult {
   mediaType: RemixResultMediaType;
   url: string | null;
+  /** A clip's length, where its post's media row has measured the showcase copy: "Use as reference" needs no read of its own. */
+  durationSeconds?: number;
 }
 
 export interface RemixSourceBundle {

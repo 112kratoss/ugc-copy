@@ -669,6 +669,33 @@ describe('resolveRemixResultMedia', () => {
     }
   });
 
+  // The owner's outputs are indexed by owner alone, so the file's name narrows the read to the
+  // creation it names, by a unique-indexed column; any other name is read as before.
+  it("reads a private output's creation by the id its file name gives", async () => {
+    const generationId = '7d0f0b0e-5a2b-4c4b-9a43-0f8e2a1b3c4d';
+    const cases: Array<{ file: string; names: Record<string, string>; other: Record<string, string> }> = [
+      { file: 'generated_task-77.mp4', names: { prediction_id: 'task-77' }, other: { prediction_id: 'task-78' } },
+      // One of several outputs, and a prediction id that itself ends in "_<digits>".
+      { file: 'generated_task-77_0.mp4', names: { prediction_id: 'task-77' }, other: { prediction_id: 'task-78' } },
+      { file: 'generated_task_7.mp4', names: { prediction_id: 'task_7' }, other: { prediction_id: 'task-78' } },
+      { file: `restored_${generationId}_a1.mp4`, names: { id: generationId }, other: { id: 'gen-other' } },
+      // A name of no known shape is found by its owner and its output alone.
+      { file: 'legacy-output.mp4', names: {}, other: { user_id: 'creator-2' } },
+    ];
+    for (const { file, names, other } of cases) {
+      const output = `generated_videos/${CREATOR}/${file}`;
+      const row = { ...RESULT_GENERATION, showcase_asset_path: null, output_url: output, prediction_id: 'task-0' };
+      const named = resultStub({
+        generationRow: { ...row, ...names },
+        postRows: [{ ...VIDEO_POST, generation_id: names.id ?? row.id }],
+      });
+      await expect(resolveResult(named, output), file).resolves.toMatchObject({ outcome: 'resolved' });
+      // The same output on a row the name does not name is not its creation's.
+      const unnamed = resultStub({ generationRow: { ...row, ...other } });
+      await expect(resolveResult(unnamed, output), file).resolves.toEqual({ outcome: 'not-eligible' });
+    }
+  });
+
   it('rejects sources outside the result buckets without touching the database', async () => {
     const stub = resultStub();
     for (const source of [

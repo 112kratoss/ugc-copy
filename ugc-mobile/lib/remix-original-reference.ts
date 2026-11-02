@@ -1,18 +1,25 @@
-import { createMediaDraftFromUpload, type CreationDraft, type MediaDraft } from './media-creation-view-model';
+import { createMediaDraftFromRemixAsset, type CreationDraft, type MediaDraft } from './media-creation-view-model';
 import { heldDraftMedia, remixOriginalReferenceId, replaceDraftMediaUrl } from './remix-draft-recovery';
 import type { CreatorToolId, RemixSourceBundle } from './types';
 
 /**
  * A remix's original result, which its creator may use as a reference (owner, 2026-11-02: "add it,
- * on the mobile too", as the web's creators offer it). The start imports it into the creator's own
- * storage when they may remix the original (`importRemixResultMedia` on the server), since the file
- * is someone else's: the post's showcase copy, or the private output of a creation with none.
+ * on the mobile too", as the web's creators offer it). The start reads it once the server finds
+ * they may remix the original (`resolveRemixResultMedia`), since the file is someone else's: the
+ * post's showcase copy, or the private output of a creation with none.
  */
 export type RemixOriginal = {
   generationId: string;
   mediaType: 'image' | 'video';
   url: string;
+  /** A clip's length where its post has measured it, so using it needs no read of the clip. */
+  durationSeconds?: number;
 };
+
+/** A length a source or a saved session gives, kept only where it is one. */
+function measuredSeconds(value: unknown): Pick<RemixOriginal, 'durationSeconds'> {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? { durationSeconds: value } : {};
+}
 
 /** What the original's tile is called, as the web's creators call it. */
 export const REMIX_ORIGINAL_NAME = 'Original result';
@@ -20,7 +27,9 @@ export const REMIX_ORIGINAL_NAME = 'Original result';
 /** The original a remix source offers, or none where it could not hand out its result. */
 export function remixOriginalOf(bundle: RemixSourceBundle): RemixOriginal | null {
   const url = bundle.result?.url?.trim();
-  return bundle.result && url ? { generationId: bundle.generation.id, mediaType: bundle.result.mediaType, url } : null;
+  return bundle.result && url
+    ? { generationId: bundle.generation.id, mediaType: bundle.result.mediaType, url, ...measuredSeconds(bundle.result.durationSeconds) }
+    : null;
 }
 
 /**
@@ -31,9 +40,9 @@ export function remixOriginalOf(bundle: RemixSourceBundle): RemixOriginal | null
 export function storedRemixOriginal(value: unknown): RemixOriginal | null | undefined {
   if (value === null) return null;
   if (!value || typeof value !== 'object') return undefined;
-  const { generationId, mediaType, url } = value as Record<string, unknown>;
+  const { generationId, mediaType, url, durationSeconds } = value as Record<string, unknown>;
   return typeof generationId === 'string' && generationId && (mediaType === 'image' || mediaType === 'video') && typeof url === 'string' && url
-    ? { generationId, mediaType, url }
+    ? { generationId, mediaType, url, ...measuredSeconds(durationSeconds) }
     : undefined;
 }
 
@@ -73,35 +82,20 @@ export function replacedRemixOriginal(draft: CreationDraft, original: RemixOrigi
   return heldDraftMedia(draft).some((media) => media.id === id && !isRemixOriginalMedia(media, original));
 }
 
-function fileNameOf(url: string): string | null {
-  try {
-    const name = decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).at(-1) ?? '');
-    return /\.[a-z0-9]+$/i.test(name) ? name : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * The original as a reference: kept by its link and the creation it came from, under its one id.
  * Never with a storage path: the app reads one as the creator's own upload, signs it again as
  * theirs and checks it for being swept, and the server would refuse the path itself as not theirs.
- * A clip carries the length the phone read, which the quote and the slot's caps are told.
+ * A clip carries its length (its post's, or else the one the phone read), which the quote and the
+ * slot's caps are told.
  */
-export function remixOriginalMedia(original: RemixOriginal, durationSeconds: number | null = null): MediaDraft {
-  const video = original.mediaType === 'video';
-  const media = createMediaDraftFromUpload(
-    {
-      signedUrl: original.url,
-      storagePath: '',
-      mimeType: video ? 'video/mp4' : 'image/png',
-      fileName: fileNameOf(original.url) ?? (video ? 'original-result.mp4' : 'original-result.png'),
-      kind: original.mediaType,
-      durationSeconds,
-    },
-    { displayName: REMIX_ORIGINAL_NAME, kind: original.mediaType, sourceGenerationId: original.generationId },
+export function remixOriginalMedia(original: RemixOriginal, durationSeconds = original.durationSeconds ?? null): MediaDraft {
+  const media = createMediaDraftFromRemixAsset(
+    { kind: original.mediaType, url: original.url, label: REMIX_ORIGINAL_NAME, sourceGenerationId: original.generationId, durationSeconds },
+    REMIX_ORIGINAL_NAME,
   );
-  return { ...media, id: remixOriginalReferenceId(original.generationId), storagePath: null };
+  // Made from a link, which an original always has.
+  return { ...media!, id: remixOriginalReferenceId(original.generationId) };
 }
 
 /** The draft with the original on the link its source just handed out, where the draft holds it. */

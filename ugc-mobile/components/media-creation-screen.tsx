@@ -809,6 +809,20 @@ const MOTION_CLIP_MAX_BYTES = 100 * 1024 * 1024;
 /** The clip length the web creator holds a model to when its descriptor names none. */
 const MOTION_CLIP_DEFAULT_MAX_SECONDS = 30;
 
+const REFERENCE_KIND_WORDS = {
+  image: ['reference image', 'image references'],
+  video: ['reference video', 'reference videos'],
+  audio: ['audio reference', 'audio references'],
+} as const;
+
+/** What an add past a kind's limit is told: "This model supports up to 2 reference videos." */
+function referenceLimitMessage(kind: keyof typeof REFERENCE_KIND_WORDS, limit: number) {
+  const [one, unsupported] = REFERENCE_KIND_WORDS[kind];
+  return limit > 0
+    ? `This model supports up to ${limit} ${one}${limit === 1 ? '' : 's'}.`
+    : `This model does not support ${unsupported}.`;
+}
+
 /**
  * A motion clip the run would refuse, said at the pick in the web creator's words: checked after the
  * upload, a long clip cost a full upload (minutes on mobile data) before the refusal.
@@ -1944,21 +1958,58 @@ function IdentityCreationScreen({
   };
   const cancelUpload = () => uploadControllerRef.current?.abort();
 
+  /** How many pictures the image or video run's model takes: what its add button allows. */
+  const imageReferenceLimit = (tool: 'image' | 'video') => {
+    const draft = tool === 'image' ? imageDraft : videoDraft;
+    const model = catalog ? getCatalogModel(catalog, draft.model) : null;
+    return catalogInputLimit(
+      model,
+      draft,
+      'imageReferences',
+      model?.inputs.imageReferences?.max ?? 0,
+      tool === 'video' ? referenceRailShape(videoDraft, model) : 'elements',
+    );
+  };
+  /** How many clips the video run's model takes. */
+  const referenceVideoLimit = () => {
+    const model = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
+    return model?.inputModes
+      ? referenceVideoSlot(model, videoDraft, referenceRailShape(videoDraft, model))?.max ?? 0
+      : model?.inputs.videoReferences?.max ?? 0;
+  };
+  /** The motion run's clip slot, whatever the model calls it: how many clips it takes (one) and how long. */
+  const motionClipSlot = () => {
+    const model = catalog ? getCatalogModel(catalog, motionDraft.model) : null;
+    const key = catalogMotionDraftSlotKeys(motionDraft, model).video;
+    return {
+      limit: catalogInputLimit(model, motionDraft, key, 1, 'elements'),
+      maxSeconds: catalogInputSlot(model, motionDraft, key)?.maxDurationSeconds ?? MOTION_CLIP_DEFAULT_MAX_SECONDS,
+    };
+  };
+  /**
+   * Adds a clip to the video run, named as a clip the creator adds is (withCreatorClipHandle) and
+   * normalized for the model the draft is on by the time it lands, against the newest catalog. A
+   * clip the rail holds already (the original, pressed twice) is not added again.
+   */
+  const appendReferenceClip = (media: MediaDraft) => {
+    const source = latestCatalog.current;
+    setVideoDraft((draft) => {
+      if (draft.referenceVideos.some((clip) => clip.id === media.id)) return draft;
+      const model = source ? getCatalogModel(source, draft.model) : null;
+      const added = clipsTakeHandles(model, draft) ? withCreatorClipHandle(draft, media) : media;
+      return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, added] }, source);
+    });
+    revealInRail(media.id);
+  };
+
   const uploadImageReferences = async (tool: 'image' | 'video') => {
     setMessage(null);
     setPromptMessage(null);
     const selectedDraft = tool === 'image' ? imageDraft : videoDraft;
-    const selectedModel = catalog ? getCatalogModel(catalog, selectedDraft.model) : null;
-    const maxImages = catalogInputLimit(
-      selectedModel,
-      selectedDraft,
-      'imageReferences',
-      selectedModel?.inputs.imageReferences?.max ?? 0,
-      tool === 'video' ? referenceRailShape(videoDraft, selectedModel) : 'elements',
-    );
+    const maxImages = imageReferenceLimit(tool);
     const remainingSlots = Math.max(0, maxImages - selectedDraft.references.length);
     if (remainingSlots === 0) {
-      setMessage(maxImages > 0 ? `This model supports up to ${maxImages} reference images.` : 'This model does not support image references.');
+      setMessage(referenceLimitMessage('image', maxImages));
       return;
     }
     setIsUploading(true);
@@ -2135,30 +2186,21 @@ function IdentityCreationScreen({
   const uploadReferenceVideo = async (target: 'video' | 'motion') => {
     setMessage(null);
     setPromptMessage(null);
-    const selectedDraft = target === 'video' ? videoDraft : motionDraft;
-    const selectedModel = catalog ? getCatalogModel(catalog, selectedDraft.model) : null;
     const currentCount = target === 'video' ? videoDraft.referenceVideos.length : motionDraft.referenceVideo ? 1 : 0;
-    const clipSlot = target === 'video' && selectedModel?.inputModes ? referenceVideoSlot(selectedModel, videoDraft, referenceRailShape(videoDraft, selectedModel)) : null;
-    // The slot the composer draws a motion run's clip in, whatever the model calls it.
-    const motionClipSlotKey = catalogMotionDraftSlotKeys(motionDraft, selectedModel).video;
-    const maxVideos = target === 'video'
-      ? selectedModel?.inputModes ? clipSlot?.max ?? 0 : selectedModel?.inputs.videoReferences?.max ?? 0
-      : catalogInputLimit(selectedModel, selectedDraft, motionClipSlotKey, 1, 'elements');
+    const motionClip = target === 'motion' ? motionClipSlot() : null;
+    const maxVideos = motionClip ? motionClip.limit : referenceVideoLimit();
     // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
-    const replacesClip = target === 'motion' && maxVideos > 0;
+    const replacesClip = Boolean(motionClip) && maxVideos > 0;
     if (currentCount >= maxVideos && !replacesClip) {
-      setMessage(maxVideos > 0
-        ? `This model supports up to ${maxVideos} reference video${maxVideos === 1 ? '' : 's'}.`
-        : 'This model does not support reference videos.');
+      setMessage(referenceLimitMessage('video', maxVideos));
       return;
     }
     setIsUploading(true);
     try {
       const picked = await pickMedia('video');
       if (!picked) return;
-      if (target === 'motion') {
-        const motionSlot = catalogInputSlot(selectedModel, motionDraft, motionClipSlotKey);
-        const refusal = motionClipRefusal(picked, motionSlot?.maxDurationSeconds ?? MOTION_CLIP_DEFAULT_MAX_SECONDS);
+      if (motionClip) {
+        const refusal = motionClipRefusal(picked, motionClip.maxSeconds);
         if (refusal) {
           setMessage(refusal);
           return;
@@ -2188,15 +2230,8 @@ function IdentityCreationScreen({
           duration: Math.ceil(media.durationSeconds ?? draft.duration),
         }));
       } else {
-        // Named for the model the draft is on by now, as a clip the creator adds (withCreatorClipHandle), and
-        // normalized against the newest catalog: the clip may land after a pick of another model.
-        const source = latestCatalog.current;
-        setVideoDraft((draft) => {
-          const model = source ? getCatalogModel(source, draft.model) : null;
-          const added = clipsTakeHandles(model, draft) ? withCreatorClipHandle(draft, media) : media;
-          return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, added] }, source);
-        });
-        revealInRail(media.id);
+        // The clip may land after a pick of another model.
+        appendReferenceClip(media);
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Upload failed.');
@@ -2208,26 +2243,15 @@ function IdentityCreationScreen({
   const originalPlace = remixOriginal ? remixOriginalPlace(activeTool, remixOriginal) : null;
 
   /** How many of the original's kind the model takes where it goes: what that kind's pick button allows. */
-  const remixOriginalLimit = (place: RemixOriginalPlace) => {
-    if (place === 'references') {
-      const model = catalog ? getCatalogModel(catalog, imageDraft.model) : null;
-      return catalogInputLimit(model, imageDraft, 'imageReferences', model?.inputs.imageReferences?.max ?? 0, 'elements');
-    }
-    if (place === 'referenceVideos') {
-      const model = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
-      return model?.inputModes
-        ? referenceVideoSlot(model, videoDraft, referenceRailShape(videoDraft, model))?.max ?? 0
-        : model?.inputs.videoReferences?.max ?? 0;
-    }
-    const model = catalog ? getCatalogModel(catalog, motionDraft.model) : null;
-    return catalogInputLimit(model, motionDraft, catalogMotionDraftSlotKeys(motionDraft, model).video, 1, 'elements');
-  };
+  const remixOriginalLimit = (place: RemixOriginalPlace) => (
+    place === 'references' ? imageReferenceLimit('image') : place === 'referenceVideos' ? referenceVideoLimit() : motionClipSlot().limit
+  );
 
   /**
    * Adds the source's result as a reference (owner, 2026-11-02, as the web's creators offer it): a
    * picture among the image run's references, a clip among the video run's clips, or as the motion
-   * run's clip in place of the one attached. Nothing is uploaded: the start imports it into the
-   * creator's own storage.
+   * run's clip in place of the one attached. Nothing is uploaded: the start reads it where the
+   * remix source handed it out, once the server finds the creator may remix it.
    */
   const addRemixOriginalAsReference = async () => {
     if (!remixOriginal || !originalPlace || holdsRemixOriginal(currentDraft, remixOriginal) || replacedRemixOriginal(currentDraft, remixOriginal)) return;
@@ -2236,7 +2260,7 @@ function IdentityCreationScreen({
     const limit = remixOriginalLimit(originalPlace);
     if (originalPlace === 'references') {
       if (imageDraft.references.length >= limit) {
-        setMessage(limit > 0 ? `This model supports up to ${limit} reference images.` : 'This model does not support image references.');
+        setMessage(referenceLimitMessage('image', limit));
         return;
       }
       const media = remixOriginalMedia(remixOriginal);
@@ -2248,20 +2272,16 @@ function IdentityCreationScreen({
       return;
     }
     if (originalPlace === 'referenceVideos' && videoDraft.referenceVideos.length >= limit) {
-      setMessage(limit > 0
-        ? `This model supports up to ${limit} reference video${limit === 1 ? '' : 's'}.`
-        : 'This model does not support reference videos.');
+      setMessage(referenceLimitMessage('video', limit));
       return;
     }
     setIsUploading(true);
     try {
-      // Its length read as a picked clip's is, which the quote and the slot's caps are told. One the
-      // phone cannot read is left to the start, which measures the file.
-      const media = remixOriginalMedia(remixOriginal, await readMediaFileLength(remixOriginal.url));
+      // Its length, which the quote and the slot's caps are told: its post's, or else read as a
+      // picked clip's is. One the phone cannot read is left to the start, which measures the file.
+      const media = remixOriginalMedia(remixOriginal, remixOriginal.durationSeconds ?? await readMediaFileLength(remixOriginal.url));
       if (originalPlace === 'motionClip') {
-        const model = catalog ? getCatalogModel(catalog, motionDraft.model) : null;
-        const maxSeconds = catalogInputSlot(model, motionDraft, catalogMotionDraftSlotKeys(motionDraft, model).video)?.maxDurationSeconds
-          ?? MOTION_CLIP_DEFAULT_MAX_SECONDS;
+        const { maxSeconds } = motionClipSlot();
         if ((media.durationSeconds ?? 0) > maxSeconds) {
           setMessage(`The original is longer than the ${maxSeconds}s this model takes.`);
           return;
@@ -2269,15 +2289,7 @@ function IdentityCreationScreen({
         setMotionDraft((draft) => ({ ...draft, referenceVideo: media, duration: Math.ceil(media.durationSeconds ?? draft.duration) }));
         return;
       }
-      // Named and normalized as an added clip is (uploadReferenceVideo), for the model the draft is on by now.
-      const source = latestCatalog.current;
-      setVideoDraft((draft) => {
-        if (holdsRemixOriginal(draft, remixOriginal)) return draft;
-        const model = source ? getCatalogModel(source, draft.model) : null;
-        const added = clipsTakeHandles(model, draft) ? withCreatorClipHandle(draft, media) : media;
-        return normalizeCatalogDraft({ ...draft, referenceVideos: [...draft.referenceVideos, added] }, source);
-      });
-      revealInRail(media.id);
+      appendReferenceClip(media);
     } finally {
       setIsUploading(false);
     }
@@ -2295,9 +2307,7 @@ function IdentityCreationScreen({
       referenceRailShape(videoDraft, selectedModel),
     );
     if (videoDraft.referenceAudios.length >= maxAudios) {
-      setMessage(maxAudios > 0
-        ? `This model supports up to ${maxAudios} audio reference${maxAudios === 1 ? '' : 's'}.`
-        : 'This model does not support audio references.');
+      setMessage(referenceLimitMessage('audio', maxAudios));
       return;
     }
     setIsUploading(true);

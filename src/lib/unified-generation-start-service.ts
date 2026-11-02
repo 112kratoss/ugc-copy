@@ -470,7 +470,13 @@ export async function resolveBillableInputDurations({
   operation: Pick<GenerationModelOperationalConfig, 'pricingConfig' | 'validationConfig'>;
   resolveInputSource: (url: string) => Promise<string>;
   probeInputDuration: (url: string) => Promise<number | null>;
-}): Promise<{ request: UnifiedGenerationRequest; verified: VerifiedInputDuration[] }> {
+}): Promise<{
+  request: UnifiedGenerationRequest;
+  verified: VerifiedInputDuration[];
+  /** The link each measured file was resolved to, by its reference as sent: the start goes on to use it. */
+  resolvedSources: Map<string, string>;
+}> {
+  const resolvedSources = new Map<string, string>();
   const boundSlots = durationBoundInputSlots(descriptor, operation);
   const isBound = (asset: CatalogGenerationInputAsset) => (
     (asset.kind === 'video' || asset.kind === 'audio')
@@ -480,7 +486,7 @@ export async function resolveBillableInputDurations({
     )
   );
   if (!request.inputs.some(isBound)) {
-    return { request, verified: [] };
+    return { request, verified: [], resolvedSources };
   }
 
   const unverifiable = (index: number) => new UnifiedGenerationRequestError(
@@ -498,6 +504,7 @@ export async function resolveBillableInputDurations({
     if (measured === null || !Number.isFinite(measured) || measured <= 0) throw unverifiable(index);
 
     verified.push({ index, slot: asset.slot, durationSeconds: measured });
+    resolvedSources.set(asset.url, source);
     // A motion run's adapter sends its clip as given (startMotionGeneration resolves nothing), so it is
     // given the link resolved here: the file measured is then the one the provider fetches, and a link
     // the client kept past its hour (a remix's original, signed when the remix opened) is not sent on.
@@ -516,7 +523,7 @@ export async function resolveBillableInputDurations({
     }
   }
 
-  return { request: { ...request, inputs, settings }, verified };
+  return { request: { ...request, inputs, settings }, verified, resolvedSources };
 }
 
 function platformForRequest(request: Request): CatalogPlatform {
@@ -658,6 +665,7 @@ export async function dispatchCatalogGenerationAdapter({
   userId,
   clientRequestKeyHash,
   sourceGenerationId,
+  resolvedMediaSources,
   dependencies,
 }: {
   request: UnifiedGenerationRequest;
@@ -668,6 +676,8 @@ export async function dispatchCatalogGenerationAdapter({
   userId: string;
   clientRequestKeyHash: string | null;
   sourceGenerationId: string | null;
+  /** Links resolved while the run was priced (`resolveBillableInputDurations`), which its start reuses. */
+  resolvedMediaSources?: ReadonlyMap<string, string>;
   dependencies: Required<Pick<
     UnifiedGenerationDependencies,
     'startCatalog' | 'startImage' | 'startVideo' | 'startMotion'
@@ -691,6 +701,7 @@ export async function dispatchCatalogGenerationAdapter({
       shots: request.shots,
       quotedCostCredits: quote.costCredits,
       sourceGenerationId,
+      resolvedMediaSources,
     });
   }
 
@@ -845,6 +856,7 @@ export async function dispatchCatalogGenerationAdapter({
       operationalConfig: operation,
       catalogRevision: quote.catalogRevision,
       sourceGenerationId,
+      resolvedMediaSources,
     });
   }
 
@@ -988,6 +1000,7 @@ export async function startUnifiedGenerationForRoute(
         userId,
         clientRequestKeyHash,
         sourceGenerationId,
+        resolvedMediaSources: billable.resolvedSources,
         dependencies: {
           startCatalog: dependencies.startCatalog ?? startCatalogGeneration,
           startImage: dependencies.startImage ?? startImageGeneration,

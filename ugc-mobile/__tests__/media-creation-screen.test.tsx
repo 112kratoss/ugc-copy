@@ -9127,11 +9127,12 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     // The row's Use as reference: the source's own result as a reference, as the web's creators offer
-    // it (owner, 2026-11-02). Nothing is uploaded: the start imports the file into the creator's storage.
+    // it (owner, 2026-11-02). Nothing is uploaded: the start reads the file once the server finds the
+    // creator may remix it.
     describe("the source's original as a reference", () => {
       const look = 'https://project.supabase.co/storage/v1/object/public/showcase_media/showcase/gen-9/look.png';
       const dance = 'https://project.supabase.co/storage/v1/object/public/showcase_media/showcase/gen-8/dance.mp4';
-      const sourceOf = (id: string, tool: 'image' | 'motion', result: { mediaType: 'image' | 'video'; url: string | null } | null) => ({
+      const sourceOf = (id: string, tool: 'image' | 'motion', result: { mediaType: 'image' | 'video'; url: string | null; durationSeconds?: number } | null) => ({
         generation: { id, title: 'Rooftop sparring', prompt: 'Two cats sparring on a rooftop', category: tool === 'image' ? 'image' : 'video', model: tool === 'image' ? 'nano-banana-2' : 'kling-3.0' },
         result,
         inputs: tool === 'image' ? { image: { elements: [] } } : {},
@@ -9180,6 +9181,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(readMediaFileLength).toHaveBeenCalledWith(dance);
         expect(collectText(row(tree))).toContain('Using original');
         expect(collectText(tree.root.findByProps({ testID: 'motion-video-slot' }))).toContain('Original result');
+      });
+
+      // The phone's read of a remote clip could hold the press for up to three seconds.
+      it('takes a clip’s length from its post where the post measured it, and reads nothing', async () => {
+        authState.api.getRemixSourceBundle.mockResolvedValue(sourceOf('gen-8', 'motion', { mediaType: 'video', url: dance, durationSeconds: 7.2 }));
+        const tree = await open(remix('motion', 'gen-8'));
+
+        await renderer.act(async () => { await useButtons(tree)[0].props.onPress(); });
+        await settle();
+        expect(readMediaFileLength).not.toHaveBeenCalled();
+        expect(collectText(row(tree))).toContain('Using original');
+        expect(collectText(tree.root)).toContain('Detected motion length · 7.2s');
       });
 
       // A resumed session reads its source no more (its links still good), so it keeps the original it was offered.

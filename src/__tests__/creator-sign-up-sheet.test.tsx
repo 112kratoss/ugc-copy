@@ -155,6 +155,18 @@ describe('the sign-up a visitor meets at Generate', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  // A double-click on Generate brings the sheet up with its first click; its second lands on the
+  // backdrop and must not put the sheet away again, as the Top Up's backdrop already did not.
+  it('closes on a press of its backdrop, and not on the second click of a double-click', () => {
+    const { onClose } = renderSheet();
+    const backdrop = screen.getByRole('dialog').parentElement!;
+
+    fireEvent.click(backdrop, { detail: 2 });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(backdrop, { detail: 1 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('names what was pressed', () => {
     renderSheet({ reason: 'enhance', keepsImages: false });
     expect(screen.getByRole('dialog', { name: 'Continue to enhance your prompt' })).toBeInTheDocument();

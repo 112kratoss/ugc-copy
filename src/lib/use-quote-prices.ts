@@ -15,7 +15,7 @@ export type ListedPrice =
   | { status: 'unavailable' };
 
 /** A listed price's credits once read; null while it is pending, refused or not to be had. */
-export function readyCost(price: ListedPrice): number | null {
+function readyCost(price: ListedPrice): number | null {
   return price.status === 'ready' ? price.costCredits : null;
 }
 

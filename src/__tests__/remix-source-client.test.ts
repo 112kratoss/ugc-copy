@@ -7,6 +7,7 @@ import {
   getRemixRestoreWarning,
   getRemixResultReferenceLabel,
   getRemixReferenceCapWarning,
+  isRemixResultReference,
   joinRemixRestoreWarnings,
   REMIX_RESTORE_WARNING,
 } from '@/lib/remix-source-client';
@@ -173,5 +174,25 @@ describe('a remix whose model now takes fewer references', () => {
     expect(joinRemixRestoreWarnings(REMIX_RESTORE_WARNING, REMIX_RESTORE_WARNING)).toBe(REMIX_RESTORE_WARNING);
     expect(joinRemixRestoreWarnings(`${REMIX_RESTORE_WARNING} Cap.`, REMIX_RESTORE_WARNING))
       .toBe(`${REMIX_RESTORE_WARNING} Cap.`);
+  });
+});
+
+// The image, video and motion creators each said whether the run held the original their own way
+// (its name, its link, its creation), and the image creator's name test lost it on a rename.
+describe('isRemixResultReference', () => {
+  it('knows the original by the creation it came from, held by its link alone', () => {
+    expect(isRemixResultReference({ sourceGenerationId: 'gen-1', storagePath: null }, 'gen-1')).toBe(true);
+    expect(isRemixResultReference({ sourceGenerationId: 'gen-1' }, 'gen-1')).toBe(true);
+  });
+
+  it('takes nothing else for it', () => {
+    // A file of the creator's own in its place (Replace), the run's own kept inputs, another creation's result.
+    expect(isRemixResultReference({ sourceGenerationId: 'gen-1', storagePath: 'uploads/viewer-1/clip.mp4' }, 'gen-1')).toBe(false);
+    expect(isRemixResultReference({ sourceGenerationId: 'gen-1', storagePath: 'generation_inputs/owner-1/gen-1/00.png' }, 'gen-1')).toBe(false);
+    expect(isRemixResultReference({ sourceGenerationId: 'gen-7', storagePath: null }, 'gen-1')).toBe(false);
+    expect(isRemixResultReference({ sourceGenerationId: null, storagePath: null }, 'gen-1')).toBe(false);
+    // No reference, or no remix.
+    expect(isRemixResultReference(null, 'gen-1')).toBe(false);
+    expect(isRemixResultReference({ sourceGenerationId: 'gen-1', storagePath: null }, null)).toBe(false);
   });
 });

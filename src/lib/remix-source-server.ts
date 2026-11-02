@@ -153,6 +153,35 @@ async function resolveGenerationResultUrl(
   );
 }
 
+/**
+ * How long a creation's showcase clip is, as its post's media row measured the
+ * file (`media-preview-repair.ts`), so a remixer's "Use as reference" is told
+ * rather than reading the clip. None where no row has measured it yet or the
+ * read fails: the creator then reads the clip itself, as it did before.
+ */
+async function loadShowcaseClipSeconds(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  generation: Pick<ResultGenerationRow, 'id' | 'showcase_asset_path'>,
+): Promise<number | undefined> {
+  const showcasePath = generation.showcase_asset_path
+    ? parseCanonicalStorageObjectPath(generation.showcase_asset_path, { minimumSegments: 3 })
+    : null;
+  if (!showcasePath?.startsWith(`showcase/${generation.id}/`)) return undefined;
+  const { data, error } = await adminSupabase
+    .from('post_media')
+    .select('duration_seconds, posts!inner(generation_id)')
+    .eq('posts.generation_id', generation.id)
+    .eq('storage_path', showcasePath)
+    .not('duration_seconds', 'is', null)
+    .limit(1);
+  if (error) {
+    logBackendError('failed_to_load_remix_source_clip_length', { error });
+    return undefined;
+  }
+  const seconds = Number((data as Array<{ duration_seconds: number | string | null }> | null)?.[0]?.duration_seconds);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
+}
+
 async function resolveUploadsStoragePathUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
   storagePath: string,
@@ -469,10 +498,15 @@ export async function loadRemixSourceBundle(
     };
   };
 
-  const resultUrl = await resolveGenerationResultUrl(adminSupabase, typedGeneration);
+  const resultMediaType = toResultMediaType(category);
+  const [resultUrl, resultSeconds] = await Promise.all([
+    resolveGenerationResultUrl(adminSupabase, typedGeneration),
+    resultMediaType === 'video' ? loadShowcaseClipSeconds(adminSupabase, typedGeneration) : undefined,
+  ]);
   const result: RemixSourceResult | null = {
-    mediaType: toResultMediaType(category),
+    mediaType: resultMediaType,
     url: resultUrl,
+    ...(resultUrl && resultSeconds !== undefined ? { durationSeconds: resultSeconds } : {}),
   };
 
   if (!resultUrl) {

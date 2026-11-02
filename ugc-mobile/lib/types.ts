@@ -672,6 +672,8 @@ export interface RemixSourceGeneration {
 export interface RemixSourceResult {
   mediaType: 'image' | 'video';
   url: string | null;
+  /** A clip's length, where its post has measured it (servers since 2026-11-02). */
+  durationSeconds?: number;
 }
 
 export interface RemixSourceBundle {

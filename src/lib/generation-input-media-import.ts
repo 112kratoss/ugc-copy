@@ -251,6 +251,27 @@ export type RemixResultMediaResult =
 /** Postgres's answer to a uuid column compared with text that is no uuid (`invalid_text_representation`). */
 const INVALID_UUID_CODE = '22P02';
 
+const RESTORED_OUTPUT_NAME = /^restored_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_/i;
+const PROVIDER_OUTPUT_NAME = /^generated_(.+)\.[a-z0-9]+$/i;
+
+/**
+ * The creation a private output's file name names, by a unique-indexed column:
+ * a provider's result is `generated_<prediction id>.<ext>`, or one of several
+ * `generated_<prediction id>_<index>.<ext>` (`persistGeneratedOutput` and
+ * `persistGeneratedOutputList` in generation-services.ts), and a restored one
+ * `restored_<generation id>_<uuid>.<ext>` (durable-generation-media.ts). A
+ * prediction id may itself end in `_<digits>`, so the whole stem is a candidate
+ * too. Null for a name of any other shape.
+ */
+function outputFileOwnerIds(fileName: string): { generationId: string } | { predictionIds: string[] } | null {
+  const restored = RESTORED_OUTPUT_NAME.exec(fileName);
+  if (restored) return { generationId: restored[1] };
+  const stem = PROVIDER_OUTPUT_NAME.exec(fileName)?.[1];
+  if (!stem) return null;
+  const unindexed = /^(.+)_\d+$/.exec(stem)?.[1];
+  return { predictionIds: unindexed ? [stem, unindexed] : [stem] };
+}
+
 /**
  * The creation whose result `location` is, as the remix source hands a result
  * out (`resolveGenerationResultUrl` in `remix-source-server.ts`): the post's
@@ -286,13 +307,19 @@ async function loadRemixResultGeneration(
   }
 
   // Outputs are stored as `<bucket>/<owner>/<file>` (durable-generation-media.ts);
-  // a legacy output kept as a link matches nothing and stays refused.
-  const { data, error } = await adminSupabase
+  // a legacy output kept as a link matches nothing and stays refused. The file's
+  // name narrows the read to the creation it names, where the owner's outputs
+  // alone would be read through (the owner is the only index they have).
+  const [ownerUserId, fileName, ...deeper] = location.filePath.split('/');
+  const namedBy = fileName && deeper.length === 0 ? outputFileOwnerIds(fileName) : null;
+  let query = adminSupabase
     .from('generations')
     .select(REMIX_RESULT_GENERATION_SELECT)
-    .eq('user_id', location.filePath.split('/')[0])
-    .eq('output_url', `${location.bucket}/${location.filePath}`)
-    .limit(1);
+    .eq('user_id', ownerUserId)
+    .eq('output_url', `${location.bucket}/${location.filePath}`);
+  if (namedBy && 'generationId' in namedBy) query = query.eq('id', namedBy.generationId);
+  else if (namedBy) query = query.in('prediction_id', namedBy.predictionIds);
+  const { data, error } = await query.limit(1);
   if (error && namesNoCreation(error)) return null;
   const generation = ((data ?? []) as RemixResultGeneration[])[0] ?? null;
   return generation && !generation.showcase_asset_path ? generation : null;

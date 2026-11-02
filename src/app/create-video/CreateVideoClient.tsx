@@ -92,6 +92,7 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
+    StudioUseOriginalButton,
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
 import CatalogAdditionalControls, { catalogChoiceDefault, useAdditionalCatalogSettings } from '@/components/CatalogAdditionalControls';
@@ -138,7 +139,7 @@ import {
 } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
-import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle } from '@/lib/remix-source';
+import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle, RemixSourceResult } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
@@ -149,6 +150,7 @@ import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
     getRemixResultReferenceLabel,
+    isRemixResultReference,
 } from '@/lib/remix-source-client';
 import {
     getPersistedFile,
@@ -1084,6 +1086,33 @@ function referenceMediaLimits(modelId: VideoModelId): { videos: number; audios: 
  * The reference clips or tracks a remixed run kept, as seeds for their cards.
  * The Seedance 2 family builds its own, which pair each one with its prepared asset.
  */
+/**
+ * A clip tile's picture, which opens the clip in the preview: square for a reference clip,
+ * wide for a Kling video element.
+ */
+function ClipPreviewButton({ src, name, wide = false, onPreview }: {
+    src: string | null;
+    name: string;
+    wide?: boolean;
+    onPreview: (src: string, name: string) => void;
+}) {
+    return (
+        <button
+            type="button"
+            onClick={() => {
+                if (src) onPreview(src, name);
+            }}
+            aria-label={`Preview ${name}`}
+            className={`ui-focus-ring relative block ${wide ? 'aspect-video' : 'aspect-square'} w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black`}
+        >
+            {src ? (
+                <InlineMediaVideo src={src} className="pointer-events-none h-full w-full object-cover" muted playsInline preload="metadata" />
+            ) : null}
+            <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
+        </button>
+    );
+}
+
 function keptReferenceSeeds(kept: RemixResolvedAsset[] | undefined): SeedanceMediaReferenceSeed[] {
     return (kept ?? []).flatMap((item) => item.url ? [{
         displayName: item.label ?? undefined,
@@ -1373,10 +1402,12 @@ function VideoCreator({
 
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
-    const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
+    const [remixResult, setRemixResult] = useState<RemixSourceResult | null>(null);
+    const remixVideoUrl = remixResult?.mediaType === 'video' ? remixResult.url : null;
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
+    const previewClip = (src: string, name: string) => setUploadPreview({ type: 'video', src, alt: name, title: name });
     // Bumped once a start the creator pressed is confirmed: the result canvas comes into view.
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
     // The run in flight's shape, settings and prompt, which its frame and caption keep while
@@ -2433,7 +2464,7 @@ function VideoCreator({
                 }
 
                 setRemixTitle(bundle.generation.title);
-                setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
+                setRemixResult(bundle.result);
                 setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
 
                 const settings = bundle.workflowSettings as VideoWorkflowSettings | null;
@@ -3169,33 +3200,36 @@ function VideoCreator({
         return null;
     };
 
-    /**
-     * The clip a remix opens on, as one of its reference clips (owner, 2026-11-02, as the image
-     * and motion creators offer their originals): kept by its link, as the remix's own clips are,
-     * and measured as an upload is, since the quote is told each clip's length.
-     */
-    const addOriginalResultAsReferenceVideo = async () => {
-        const url = remixVideoUrl;
-        if (!url || !remixId || referenceVideosRef.current.some((reference) => reference.providerUrl === url)) return;
-        if (referenceVideosRef.current.length >= referenceVideoLimit) return;
-        const seeds = await readPickSeeds((async () => [{
-            displayName: getRemixResultReferenceLabel(remixTitle ?? ''),
-            file: null,
-            previewUrl: url,
-            providerUrl: url,
-            storagePath: null,
-            source: 'remix' as const,
-            sourceGenerationId: remixId,
-            durationSeconds: await readVideoDurationSeconds(url),
-        }])());
-        if (!seeds) return;
-        // A second press made while the clip's length was read: the first has added it by now.
-        if (referenceVideosRef.current.some((reference) => reference.providerUrl === url)) return;
-        if (referenceVideosRef.current.length >= referenceVideoLimit) return;
+    /** Clips added after those the run holds, saved with their Seedance assets. */
+    const appendReferenceVideos = async (seeds: SeedanceMediaReferenceSeed[]) => {
         const nextReferences = [...referenceVideosRef.current, ...hydrateSeedanceMediaReferences('Video', seeds)];
         commitReferenceVideos(nextReferences);
         await persistReferenceVideos(nextReferences);
         await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
+    };
+
+    /**
+     * The clip a remix opens on, as one of its reference clips (owner, 2026-11-02, as the image
+     * and motion creators offer their originals): kept by its link, as the remix's own clips are,
+     * with the length its post measured, or else measured as an upload is, since the quote is
+     * told each clip's length.
+     */
+    const addOriginalResultAsReferenceVideo = async () => {
+        const url = remixVideoUrl;
+        const unwanted = () => referenceVideosRef.current.some((reference) => isRemixResultReference(reference, remixId))
+            || referenceVideosRef.current.length >= referenceVideoLimit;
+        if (!url || !remixId || unwanted()) return;
+        const seeds = await readPickSeeds((async () => keptReferenceSeeds([{
+            kind: 'video',
+            url,
+            label: getRemixResultReferenceLabel(remixTitle ?? ''),
+            storagePath: null,
+            sourceGenerationId: remixId,
+            durationSeconds: remixResult?.durationSeconds ?? await readVideoDurationSeconds(url) ?? undefined,
+        }]))());
+        // A second press made while the clip's length was read: the first has added it by now.
+        if (!seeds || unwanted()) return;
+        await appendReferenceVideos(seeds);
     };
 
     const processReferenceVideoFiles = async (files: FileList | File[]) => {
@@ -3215,11 +3249,7 @@ function VideoCreator({
             await readVideoDurationSeconds(file),
         ))));
         if (!seeds) return;
-
-        const nextReferences = [...referenceVideosRef.current, ...hydrateSeedanceMediaReferences('Video', seeds)];
-        commitReferenceVideos(nextReferences);
-        await persistReferenceVideos(nextReferences);
-        await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
+        await appendReferenceVideos(seeds);
     };
 
     const processKlingVideoElementFiles = async (files: FileList | File[]) => {
@@ -5067,7 +5097,7 @@ function VideoCreator({
     ];
 
     // A remix's own clip as a reference, where the model takes clips and has room for it, or holds it already.
-    const usingOriginalResult = Boolean(remixVideoUrl) && referenceVideos.some((reference) => reference.providerUrl === remixVideoUrl);
+    const usingOriginalResult = referenceVideos.some((reference) => isRemixResultReference(reference, remixId));
     const offersOriginalResult = Boolean(remixId && remixVideoUrl) && referenceVideoLimit > 0
         && (usingOriginalResult || referenceVideos.length < referenceVideoLimit);
 
@@ -5075,7 +5105,6 @@ function VideoCreator({
     // and takes: pictures where the model takes image references outside a multi-shot run, then
     // clips and tracks where it takes them.
     const imageReferenceKind: CreatorReferenceKind | null = showElementEditor ? {
-        name: 'Image',
         railLabel: 'Images',
         hint: 'Pictures of people or products, used by @handle',
         accept: 'image/*',
@@ -5084,7 +5113,6 @@ function VideoCreator({
         onFiles: (files) => void processElementFiles(files),
     } : null;
     const videoReferenceKind: CreatorReferenceKind | null = referenceVideoLimit > 0 ? {
-        name: 'Video',
         railLabel: 'Video',
         hint: 'Short clips for motion and framing',
         accept: 'video/*',
@@ -5093,7 +5121,6 @@ function VideoCreator({
         onFiles: (files) => void processReferenceVideoFiles(files),
     } : null;
     const audioReferenceKind: CreatorReferenceKind | null = referenceAudioLimit > 0 ? {
-        name: 'Audio',
         railLabel: 'Audio',
         hint: 'Clips for beat, voice or dialogue timing',
         accept: 'audio/*',
@@ -5399,7 +5426,6 @@ function VideoCreator({
                 over={smallestOver}
                 balance={listBalance}
                 isVisitor={isVisitor}
-                offersTopUp={!isVisitor}
             />
 
             <CatalogAdditionalControls
@@ -5536,17 +5562,7 @@ function VideoCreator({
                                         description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={offersOriginalResult ? (
-                                            <button
-                                                type="button"
-                                                onClick={() => void addOriginalResultAsReferenceVideo()}
-                                                disabled={usingOriginalResult}
-                                                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${usingOriginalResult
-                                                    ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                                    : 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15'}`}
-                                            >
-                                                <Sparkles className="h-4 w-4" />
-                                                {usingOriginalResult ? 'Using original result' : 'Use as reference'}
-                                            </button>
+                                            <StudioUseOriginalButton using={usingOriginalResult} onUse={() => void addOriginalResultAsReferenceVideo()} />
                                         ) : undefined}
                                     />
                                 </motion.div>
@@ -5799,126 +5815,105 @@ function VideoCreator({
                                         {imageReferenceKind || videoReferenceKind || audioReferenceKind ? (
                                             <div className="space-y-2">
                                             {imageReferenceKind ? (
-                                                <CreatorReferenceRow accent="video" kind={imageReferenceKind}>
-                                                    {elements.length > 0 ? (
-                                                        <CreatorReferenceStrip aria-label="Reference images" className="min-w-0 flex-1">
-                                                            {elements.map((element) => (
-                                                                <CreatorReferenceTile
-                                                                    key={element.id}
-                                                                    accent="video"
-                                                                    preview={
-                                                                        <button
-                                                                            type="button"
-                                                                            onClick={() => setUploadPreview({
-                                                                                type: 'image',
-                                                                                src: element.previewUrl,
-                                                                                alt: element.displayName,
-                                                                                title: element.displayName,
-                                                                            })}
-                                                                            aria-label={`Preview ${element.displayName}`}
-                                                                            className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
-                                                                        >
-                                                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                                            <img
-                                                                                src={element.previewUrl}
-                                                                                alt={element.displayName}
-                                                                                className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
-                                                                            />
-                                                                        </button>
-                                                                    }
-                                                                    displayName={element.displayName}
-                                                                    nameDraft={elementNames.drafts[element.id]}
-                                                                    placeholder="Rename element"
-                                                                    onNameChange={(value) => handleElementDraftChange(element.id, value)}
-                                                                    onNameCommit={() => void commitElementDraft(element.id)}
-                                                                    onNameCancel={() => elementNames.dropDraft(element.id)}
-                                                                    onRemove={() => void handleRemoveElement(element.id)}
-                                                                    handle={element.handle}
-                                                                    handleClassName="text-sky-300"
-                                                                    onInsert={() => handleInsertElementHandle(element.handle)}
-                                                                    replace={element.restoredFromRemix ? {
-                                                                        label: `Replace ${element.handle} with your own photo`,
-                                                                        accept: 'image/*',
-                                                                        onFile: (file) => void replaceElement(element.id, file),
-                                                                    } : undefined}
-                                                                />
-                                                            ))}
-                                                        </CreatorReferenceStrip>
-                                                    ) : null}
+                                                <CreatorReferenceRow accent="video" kind={imageReferenceKind} stripLabel="Reference images">
+                                                    {elements.map((element) => (
+                                                        <CreatorReferenceTile
+                                                            key={element.id}
+                                                            accent="video"
+                                                            preview={
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setUploadPreview({
+                                                                        type: 'image',
+                                                                        src: element.previewUrl,
+                                                                        alt: element.displayName,
+                                                                        title: element.displayName,
+                                                                    })}
+                                                                    aria-label={`Preview ${element.displayName}`}
+                                                                    className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
+                                                                >
+                                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                                    <img
+                                                                        src={element.previewUrl}
+                                                                        alt={element.displayName}
+                                                                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
+                                                                    />
+                                                                </button>
+                                                            }
+                                                            displayName={element.displayName}
+                                                            nameDraft={elementNames.drafts[element.id]}
+                                                            placeholder="Rename element"
+                                                            onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                                                            onNameCommit={() => void commitElementDraft(element.id)}
+                                                            onNameCancel={() => elementNames.dropDraft(element.id)}
+                                                            onRemove={() => void handleRemoveElement(element.id)}
+                                                            handle={element.handle}
+                                                            handleClassName="text-sky-300"
+                                                            onInsert={() => handleInsertElementHandle(element.handle)}
+                                                            replace={element.restoredFromRemix ? {
+                                                                label: `Replace ${element.handle} with your own photo`,
+                                                                accept: 'image/*',
+                                                                onFile: (file) => void replaceElement(element.id, file),
+                                                            } : undefined}
+                                                        />
+                                                    ))}
                                                 </CreatorReferenceRow>
                                             ) : null}
                                             {videoReferenceKind ? (
-                                                <CreatorReferenceRow accent="video" kind={videoReferenceKind}>
-                                                    {referenceVideos.length > 0 ? (
-                                                        <CreatorReferenceStrip aria-label="Reference videos" className="min-w-0 flex-1">
-                                                            {referenceVideos.map((reference) => {
-                                                                const length = cardLength(reference.id, reference.durationSeconds, 'videoReferences', 'clip');
-                                                                const src = reference.previewUrl || reference.providerUrl;
-                                                                return (
-                                                                    <CreatorMediaReferenceTile
-                                                                        key={reference.id}
-                                                                        preview={
-                                                                            <button
-                                                                                type="button"
-                                                                                onClick={() => {
-                                                                                    if (src) setUploadPreview({ type: 'video', src, alt: reference.displayName, title: reference.displayName });
-                                                                                }}
-                                                                                aria-label={`Preview ${reference.displayName}`}
-                                                                                className="ui-focus-ring relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
-                                                                            >
-                                                                                {src ? (
-                                                                                    <InlineMediaVideo src={src} className="pointer-events-none h-full w-full object-cover" muted playsInline preload="metadata" />
-                                                                                ) : null}
-                                                                                <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
-                                                                            </button>
-                                                                        }
-                                                                        displayName={reference.displayName}
-                                                                        line={length?.text ?? 'Duration unavailable'}
-                                                                        lineHeld={Boolean(length?.held)}
-                                                                        onRemove={() => void handleRemoveReferenceVideo(reference.id)}
-                                                                        replace={reference.restoredFromRemix ? {
-                                                                            label: `Replace ${reference.displayName} with your own clip`,
-                                                                            accept: 'video/*',
-                                                                            onFile: (file) => void replaceMediaReference('video', reference.id, file),
-                                                                        } : undefined}
+                                                <CreatorReferenceRow accent="video" kind={videoReferenceKind} stripLabel="Reference videos">
+                                                    {referenceVideos.map((reference) => {
+                                                        const length = cardLength(reference.id, reference.durationSeconds, 'videoReferences', 'clip');
+                                                        return (
+                                                            <CreatorMediaReferenceTile
+                                                                key={reference.id}
+                                                                preview={(
+                                                                    <ClipPreviewButton
+                                                                        src={reference.previewUrl || reference.providerUrl}
+                                                                        name={reference.displayName}
+                                                                        onPreview={previewClip}
                                                                     />
-                                                                );
-                                                            })}
-                                                        </CreatorReferenceStrip>
-                                                    ) : null}
+                                                                )}
+                                                                displayName={reference.displayName}
+                                                                line={length?.text ?? 'Duration unavailable'}
+                                                                lineHeld={Boolean(length?.held)}
+                                                                onRemove={() => void handleRemoveReferenceVideo(reference.id)}
+                                                                replace={reference.restoredFromRemix ? {
+                                                                    label: `Replace ${reference.displayName} with your own clip`,
+                                                                    accept: 'video/*',
+                                                                    onFile: (file) => void replaceMediaReference('video', reference.id, file),
+                                                                } : undefined}
+                                                            />
+                                                        );
+                                                    })}
                                                 </CreatorReferenceRow>
                                             ) : null}
                                             {audioReferenceKind ? (
-                                                <CreatorReferenceRow accent="video" kind={audioReferenceKind}>
-                                                    {referenceAudios.length > 0 ? (
-                                                        <CreatorReferenceStrip aria-label="Reference audio" wide className="min-w-0 flex-1">
-                                                            {referenceAudios.map((reference) => {
-                                                                const length = cardLength(reference.id, reference.durationSeconds, 'audioReferences', 'track');
-                                                                const src = reference.providerUrl || reference.previewUrl;
-                                                                return (
-                                                                    <CreatorMediaReferenceTile
-                                                                        key={reference.id}
-                                                                        player={src ? <RecoverableMediaAudio src={src} className="w-full" /> : null}
-                                                                        displayName={reference.displayName}
-                                                                        // Only the Seedance 2 family prepares assets. On any other model the line says how long the
-                                                                        // track is. A held track says it is under the minimum, in place of either.
-                                                                        line={length?.held
-                                                                            ? length.text
-                                                                            : isSeedance2Family
-                                                                                ? (reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared')
-                                                                                : length?.text}
-                                                                        lineHeld={Boolean(length?.held)}
-                                                                        onRemove={() => void handleRemoveReferenceAudio(reference.id)}
-                                                                        replace={reference.restoredFromRemix ? {
-                                                                            label: `Replace ${reference.displayName} with your own track`,
-                                                                            accept: 'audio/*',
-                                                                            onFile: (file) => void replaceMediaReference('audio', reference.id, file),
-                                                                        } : undefined}
-                                                                    />
-                                                                );
-                                                            })}
-                                                        </CreatorReferenceStrip>
-                                                    ) : null}
+                                                <CreatorReferenceRow accent="video" kind={audioReferenceKind} stripLabel="Reference audio" wide>
+                                                    {referenceAudios.map((reference) => {
+                                                        const length = cardLength(reference.id, reference.durationSeconds, 'audioReferences', 'track');
+                                                        const src = reference.providerUrl || reference.previewUrl;
+                                                        return (
+                                                            <CreatorMediaReferenceTile
+                                                                key={reference.id}
+                                                                player={src ? <RecoverableMediaAudio src={src} className="w-full" /> : null}
+                                                                displayName={reference.displayName}
+                                                                // Only the Seedance 2 family prepares assets. On any other model the line says how long the
+                                                                // track is. A held track says it is under the minimum, in place of either.
+                                                                line={length?.held
+                                                                    ? length.text
+                                                                    : isSeedance2Family
+                                                                        ? (reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared')
+                                                                        : length?.text}
+                                                                lineHeld={Boolean(length?.held)}
+                                                                onRemove={() => void handleRemoveReferenceAudio(reference.id)}
+                                                                replace={reference.restoredFromRemix ? {
+                                                                    label: `Replace ${reference.displayName} with your own track`,
+                                                                    accept: 'audio/*',
+                                                                    onFile: (file) => void replaceMediaReference('audio', reference.id, file),
+                                                                } : undefined}
+                                                            />
+                                                        );
+                                                    })}
                                                 </CreatorReferenceRow>
                                             ) : null}
                                             </div>
@@ -5962,26 +5957,14 @@ function VideoCreator({
                                             <CreatorReferenceTile
                                                 key={element.id}
                                                 accent="video"
-                                                preview={
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => {
-                                                            const src = element.previewUrl || element.providerUrl;
-                                                            if (src) setUploadPreview({ type: 'video', src, alt: element.displayName, title: element.displayName });
-                                                        }}
-                                                        aria-label={`Preview ${element.displayName}`}
-                                                        className="ui-focus-ring relative block aspect-video w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black"
-                                                    >
-                                                        <InlineMediaVideo
-                                                            src={element.previewUrl || element.providerUrl || undefined}
-                                                            className="pointer-events-none h-full w-full object-cover"
-                                                            muted
-                                                            playsInline
-                                                            preload="metadata"
-                                                        />
-                                                        <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
-                                                    </button>
-                                                }
+                                                preview={(
+                                                    <ClipPreviewButton
+                                                        src={element.previewUrl || element.providerUrl}
+                                                        name={element.displayName}
+                                                        wide
+                                                        onPreview={previewClip}
+                                                    />
+                                                )}
                                                 displayName={element.displayName}
                                                 nameDraft={klingVideoNames.drafts[element.id]}
                                                 placeholder="Rename video element"

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Sparkles, Loader2, Download, Image as ImageIcon, Plus } from 'lucide-react';
+import { Loader2, Download, Image as ImageIcon, Plus } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
@@ -21,6 +21,7 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
+    StudioUseOriginalButton,
 } from '@/components/CreatorStudio';
 import {
     CreatorAddTile,
@@ -94,8 +95,8 @@ import {
     joinRemixRestoreWarnings,
     createRemixResultReferenceElement,
     getRemixRestoreWarning,
-    getRemixResultReferenceLabel,
     REMIX_RESTORE_WARNING,
+    isRemixResultReference,
 } from '@/lib/remix-source-client';
 import {
     getPersistedImageElementRecords,
@@ -1044,18 +1045,7 @@ function ImageCreator({
         }
 
         const nextElement = createRemixResultReferenceElement(remixSourceBundle);
-        if (!nextElement) {
-            return;
-        }
-
-        const resultLabel = getRemixResultReferenceLabel(remixSourceBundle.generation.title);
-        const alreadyAdded = elementRefs.current.some(
-            (element) =>
-                element.displayName === resultLabel &&
-                element.sourceGenerationId === remixSourceBundle.generation.id
-        );
-
-        if (alreadyAdded) {
+        if (!nextElement || elementRefs.current.some((element) => isRemixResultReference(element, remixSourceBundle.generation.id))) {
             return;
         }
 
@@ -1831,20 +1821,9 @@ function ImageCreator({
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
-    const remixResultReferenceLabel = remixSourceBundle
-        ? getRemixResultReferenceLabel(remixSourceBundle.generation.title)
-        : null;
     const canUseOriginalResultAsReference =
         remixSourceBundle?.result?.mediaType === 'image' && Boolean(remixSourceBundle.result.url);
-    const hasOriginalResultReference = Boolean(
-        remixResultReferenceLabel &&
-        remixSourceBundle &&
-        elements.some(
-            (element) =>
-                element.displayName === remixResultReferenceLabel &&
-                element.sourceGenerationId === remixSourceBundle.generation.id
-        )
-    );
+    const hasOriginalResultReference = elements.some((element) => isRemixResultReference(element, remixSourceBundle?.generation.id));
     const getOutputImageDownloadUrl = (imageUrl: string | null, index = 0) => {
         if (!imageUrl) {
             return null;
@@ -2045,7 +2024,7 @@ function ImageCreator({
                 />
             ) : null}
 
-            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} offersTopUp={!isVisitor} />
+            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
 
             <CatalogAdditionalControls appearance="panel" descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
         </div>
@@ -2169,21 +2148,9 @@ function ImageCreator({
                                     <StudioRemixNotice
                                         description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
-                                        action={
-                                            canUseOriginalResultAsReference ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={handleUseOriginalResultAsReference}
-                                                    disabled={hasOriginalResultReference}
-                                                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${hasOriginalResultReference
-                                                        ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                                        : 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15'}`}
-                                                >
-                                                    <Sparkles className="h-4 w-4" />
-                                                    {hasOriginalResultReference ? 'Using original result' : 'Use as reference'}
-                                                </button>
-                                            ) : undefined
-                                        }
+                                        action={canUseOriginalResultAsReference ? (
+                                            <StudioUseOriginalButton using={hasOriginalResultReference} onUse={handleUseOriginalResultAsReference} />
+                                        ) : undefined}
                                     />
                                 </motion.div>
                             )}
