@@ -1,5 +1,4 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { StrictMode, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemixSourceBundle } from '@/lib/remix-source';
@@ -65,10 +64,6 @@ type Props = { pageToken: string | null; formAccount: string | null };
 /** What the form was told when an answer landed. */
 type Taken = { bundle: RemixSourceBundle; prompt: boolean; model: boolean; aspectRatio: boolean };
 
-function strictMode({ children }: { children: ReactNode }) {
-  return <StrictMode>{children}</StrictMode>;
-}
-
 /** The hook as a creator form holds it: its prompt, and what each answer put on it. */
 function renderRead({ props = {}, prompt = '', strict = false, onSource }: {
   props?: Partial<Props>;
@@ -90,7 +85,8 @@ function renderRead({ props = {}, prompt = '', strict = false, onSource }: {
         onSource?.();
       },
     }),
-    { initialProps: { pageToken: 'page-token', formAccount: 'user-1', ...props }, wrapper: strict ? strictMode : undefined },
+    // Testing Library's own Strict Mode: a StrictMode wrapper around the hook ran its effects once here.
+    { initialProps: { pageToken: 'page-token', formAccount: 'user-1', ...props }, reactStrictMode: strict },
   );
   return { ...view, promptRef, taken };
 }
