@@ -299,6 +299,7 @@ export function StudioRemixNotice({
   source = null,
   original,
   action,
+  onRetry,
 }: {
   label?: string;
   description: string;
@@ -311,6 +312,11 @@ export function StudioRemixNotice({
   /** The source result, when the remix restored one: it takes the icon's place and opens the original. */
   original?: StudioRemixOriginal | null;
   action?: ReactNode;
+  /**
+   * The remix's read failed: Try again reads it once more (`useRemixSourceRead`), keeping what the
+   * creator has done on the page since.
+   */
+  onRetry?: () => void;
 }) {
   const naming = remixingNotice(source ? { username: source.creatorUsername, title: source.title } : null);
   return (
@@ -320,7 +326,12 @@ export function StudioRemixNotice({
       label={naming?.label ?? label}
       labelStyle={naming ? 'heading' : 'kicker'}
       description={naming ? `${naming.line} ${description}` : description}
-      action={action}
+      action={onRetry ? (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={onRetry}>Try again</Button>
+          {action}
+        </div>
+      ) : action}
     />
   );
 }

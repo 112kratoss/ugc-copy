@@ -104,7 +104,6 @@ import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixSourceBundle, RemixSourcePost } from '@/lib/remix-source';
-import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRemixElementSeeds,
@@ -114,12 +113,12 @@ import {
     createRemixResultReferenceElement,
     getRemixRestoreWarning,
     readRemixInputSlots,
-    REMIX_RESTORE_WARNING,
     isRemixResultReference,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
+import { useRemixSourceRead } from '@/lib/use-remix-source-read';
 import {
     getPersistedImageElementRecords,
     PERSISTED_MEDIA_KEYS,
@@ -205,6 +204,9 @@ import {
 import { isUploadCancelledError, UploadCancelledError } from '@/lib/upload-queue';
 
 type ModelId = ImageModelId;
+
+/** What a creator can set by hand while a remix loads, which its answer then leaves as they set it. */
+type ImageRemixField = 'model' | 'aspectRatio' | 'resolution' | 'qualityMode' | 'googleSearch';
 
 interface ImageWorkflowSettings {
     model?: ModelId;
@@ -538,7 +540,6 @@ function ImageCreator({
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
-    const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     // The post being remixed, which the notice names with its creator (owner, 2026-11-05).
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
@@ -759,109 +760,61 @@ function ImageCreator({
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
 
-    // Handle Remix Pre-fill, once for this form: the effect runs again for a renewed session token
-    // (Supabase renews it about hourly) and for a session back from a lapse, and reading the remix
-    // again put the original's prompt, model and pictures back over the creator's. Another account's
-    // form is drawn anew (`useCreatorForm`) and reads it for itself.
-    const remixReadStartedRef = useRef(false);
-    useEffect(() => {
-        if (!remixId || remixReadStartedRef.current) return;
-        if (!session?.access_token) return;
-        remixReadStartedRef.current = true;
+    // The remix's original, read once for this form (`useRemixSourceRead`), and put on the form with
+    // what the creator did while it loaded kept: words they typed, a model or setting they picked by
+    // hand, and pictures they added, beside which the original's fill the room the model has left.
+    const remixRead = useRemixSourceRead<ImageRemixField>({
+        remixId,
+        remixPostId,
+        pageToken: session?.access_token ?? null,
+        formAccount,
+        promptRef,
+        onSource: (bundle, edits) => {
+            setRemixSourceBundle(bundle);
+            setRemixTitle(bundle.generation.title);
+            setRemixSourcePost(bundle.sourcePost ?? null);
+            if (!edits.prompt) setPrompt(bundle.generation.prompt);
+            setRemixImageUrl(bundle.result?.mediaType === 'image' ? bundle.result.url : null);
+            setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
+            setRemixSlots(readRemixInputSlots(bundle));
+            setRemixSlotsNoticeDismissed(false);
 
-        // The answer is the form's while it is on the page, whichever run of this effect is the
-        // latest: development's Strict Mode mounts it twice over the one read.
-        const isCancelled = () => unmountSignal.current.aborted;
-        const promptWhenRemixStarted = promptRef.current;
-        const pageToken = session.access_token;
-
-        const fetchRemixData = async () => {
-            try {
-                // The browser's own session where it is the form's account, renewed as it nears its
-                // end: Back can draw the page again from Next's cache with the session it was first
-                // drawn with, expired since, and the one read would be refused.
-                const { data: { session: browserSession } } = await supabase.auth.getSession();
-                const accessToken = browserSession?.user.id === formAccount ? browserSession.access_token : pageToken;
-                const remixSourceParams = new URLSearchParams({ id: remixId });
-                if (remixPostId) {
-                    remixSourceParams.set('postId', remixPostId);
-                }
-
-                const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
-                    headers: {
-                        Authorization: `Bearer ${accessToken}`,
-                    },
-                });
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Failed to load remix data');
-                }
-
-                const bundle = data as RemixSourceBundle;
-                if (isCancelled()) {
-                    return;
-                }
-
-                setRemixSourceBundle(bundle);
-                setRemixTitle(bundle.generation.title);
-                setRemixSourcePost(bundle.sourcePost ?? null);
-                if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
-                    setPrompt(bundle.generation.prompt);
-                }
-                setRemixImageUrl(bundle.result?.mediaType === 'image' ? bundle.result.url : null);
-                setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
-                setRemixSlots(readRemixInputSlots(bundle));
-                setRemixSlotsNoticeDismissed(false);
-
-                const settings = bundle.workflowSettings as ImageWorkflowSettings | null;
-                const nextModelId =
-                    settings?.model && IMAGE_MODELS[settings.model] ? settings.model : 'nano-banana-2';
-
-                if (settings?.model && IMAGE_MODELS[settings.model]) {
-                    setSelectedModel(settings.model);
-                }
-                if (settings?.aspectRatio) setAspectRatio(settings.aspectRatio);
-                if (
-                    settings?.resolution &&
-                    getImageResolutionOptions(nextModelId, settings.aspectRatio).includes(settings.resolution as ImageResolution)
-                ) {
-                    setResolution(settings.resolution as ImageResolution);
-                }
-                if (settings?.qualityMode && getImageQualityModes(nextModelId).includes(settings.qualityMode)) {
-                    setQualityMode(settings.qualityMode);
-                }
-                if (settings?.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
-
-                const restoredSeeds = createRemixElementSeeds(
-                    bundle.inputs.image?.elements ?? [],
-                    IMAGE_MODELS[nextModelId].maxImages
-                );
-                // A model whose cap fell since the run gets its first references back, and says so.
-                const capWarning = getRemixReferenceCapWarning(
-                    bundle.inputs.image?.elements ?? [],
-                    IMAGE_MODELS[nextModelId].maxImages,
-                    IMAGE_MODELS[nextModelId].displayName,
-                );
-                if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
-
-                if (restoredSeeds.length > 0) {
-                    commitElements(hydrateImageElements(restoredSeeds));
-                }
-            } catch (err) {
-                console.error('Error fetching remix:', err);
-                if (!isCancelled()) {
-                    setRemixRestoreWarning(REMIX_RESTORE_WARNING);
-                }
-            } finally {
-                if (!isCancelled()) {
-                    setIsRemixLoading(false);
-                }
+            // The original's model and settings, whatever the balance (#649), but for each the creator
+            // picked by hand meanwhile: the model checks below are its.
+            const settings = bundle.workflowSettings as ImageWorkflowSettings | null;
+            const originalModelId = settings?.model && IMAGE_MODELS[settings.model] ? settings.model : null;
+            const nextModelId = edits.byHand('model') ? selectedModel : originalModelId ?? 'nano-banana-2';
+            const nextModel = IMAGE_MODELS[nextModelId] ?? IMAGE_MODELS['nano-banana-2'];
+            if (originalModelId && !edits.byHand('model')) setSelectedModel(originalModelId);
+            const nextAspectRatio = !edits.byHand('aspectRatio') && settings?.aspectRatio ? settings.aspectRatio : aspectRatio;
+            if (nextAspectRatio !== aspectRatio) setAspectRatio(nextAspectRatio);
+            if (
+                !edits.byHand('resolution')
+                && settings?.resolution
+                && getImageResolutionOptions(nextModelId, nextAspectRatio).includes(settings.resolution as ImageResolution)
+            ) {
+                setResolution(settings.resolution as ImageResolution);
             }
-        };
+            if (!edits.byHand('qualityMode') && settings?.qualityMode && getImageQualityModes(nextModelId).includes(settings.qualityMode)) {
+                setQualityMode(settings.qualityMode);
+            }
+            if (!edits.byHand('googleSearch') && settings?.googleSearch !== undefined) setGoogleSearch(settings.googleSearch);
 
-        void fetchRemixData();
-    }, [commitElements, formAccount, remixId, remixPostId, session?.access_token, unmountSignal]);
+            // The pictures the creator added stay, after the original's (whose handles the original's
+            // words name); a remix form holds no picture of anyone else's before its answer.
+            const ownPictures = elementRefs.current.filter((element) => element.source === 'upload');
+            const originalPictures = bundle.inputs.image?.elements ?? [];
+            const restoredSeeds = createRemixElementSeeds(originalPictures, Math.max(0, nextModel.maxImages - ownPictures.length));
+            // A model whose cap fell since the run, or the creator's own pictures, leave room for fewer
+            // of the original's: the first come back, and it says so.
+            const capWarning = getRemixReferenceCapWarning(originalPictures, nextModel.maxImages, nextModel.displayName, ownPictures.length);
+            if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
+
+            if (restoredSeeds.length > 0) {
+                commitElements(hydrateImageElements([...restoredSeeds, ...ownPictures]));
+            }
+        },
+    });
 
     useEffect(() => {
         elementRefs.current = elements;
@@ -1948,6 +1901,8 @@ function ImageCreator({
     const backgroundProcessingCopy = getBackgroundProcessingCopy('image');
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
+    // A read that failed, said with Try again; else what the restore could not bring back.
+    const remixWarning = remixRead.failureWarning ?? remixRestoreWarning;
     const canUseOriginalResultAsReference =
         remixSourceBundle?.result?.mediaType === 'image' && Boolean(remixSourceBundle.result.url);
     const hasOriginalResultReference = elements.some((element) => isRemixResultReference(element, remixSourceBundle?.generation.id));
@@ -2106,6 +2061,11 @@ function ImageCreator({
         };
     });
 
+    // A setting the creator chooses is theirs: a remix's original still loading leaves it.
+    const chosenByHand = <T,>(field: ImageRemixField, set: (value: T) => void) => (value: T) => {
+        remixRead.noteEdit(field);
+        set(value);
+    };
     const settingsPanel = (
         <div className="space-y-5">
             <CreatorSettingChoices
@@ -2113,7 +2073,7 @@ function ImageCreator({
                 hint={sameRatioPrice ? 'Same price for each' : undefined}
                 options={model.aspectRatios}
                 value={aspectRatio}
-                onChange={setAspectRatio}
+                onChange={chosenByHand('aspectRatio', setAspectRatio)}
                 columns={5}
                 optionMark={aspectRatioMark}
                 optionPrice={sameRatioPrice ? undefined : (value) => optionPrice('aspectRatio', value)}
@@ -2125,7 +2085,7 @@ function ImageCreator({
                     hint="Higher detail costs more credits."
                     options={availableResolutions}
                     value={resolution}
-                    onChange={setResolution}
+                    onChange={chosenByHand('resolution', setResolution)}
                     columns={3}
                     optionPrice={(value) => optionPrice('resolution', value)}
                 />
@@ -2142,7 +2102,7 @@ function ImageCreator({
                         : 'Choose faster drafts or spend more credits for final-detail output.'}
                     options={qualityModes}
                     value={qualityMode}
-                    onChange={setQualityMode}
+                    onChange={chosenByHand('qualityMode', setQualityMode)}
                     columns={qualityModes.length === 3 ? 3 : 2}
                     capitalize
                     optionPrice={(value) => optionPrice('qualityMode', value)}
@@ -2154,7 +2114,7 @@ function ImageCreator({
                     label="Google Search grounding"
                     description="Allow the model to pull in live context when it helps."
                     checked={googleSearch}
-                    onChange={setGoogleSearch}
+                    onChange={chosenByHand('googleSearch', setGoogleSearch)}
                 />
             ) : null}
 
@@ -2237,8 +2197,10 @@ function ImageCreator({
                                     onSelect={(id) => {
                                         // A notice about the previous model no longer applies.
                                         if (id !== selectedModel) setCatalogNotice(null);
-                                        // The creator's pick is the first pick: the catalog's default no longer replaces it.
+                                        // The creator's pick is the first pick: the catalog's default no longer replaces it,
+                                        // nor does a remix's original still loading.
                                         hasResolvedInitialCatalogModel.current = true;
+                                        remixRead.noteEdit('model');
                                         setSelectedModel(id as ModelId);
                                         setIsModelDropdownOpen(false);
                                         setModelSearchQuery('');
@@ -2264,7 +2226,7 @@ function ImageCreator({
                                     />
                                 </motion.div>
                             ) : null}
-                            {remixId && isRemixLoading && (
+                            {remixId && remixRead.loading && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 12 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -2273,15 +2235,16 @@ function ImageCreator({
                                     <StudioRemixHydrationNotice />
                                 </motion.div>
                             )}
-                            {remixId && !isRemixLoading && (
+                            {remixId && !remixRead.loading && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 12 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioRemixNotice
-                                        description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
+                                        description={getRemixNoticeDescription(remixTitle, remixWarning)}
                                         source={remixSourcePost}
+                                        onRetry={remixRead.failureWarning ? remixRead.retry : undefined}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={canUseOriginalResultAsReference ? (
                                             <StudioUseOriginalButton using={hasOriginalResultReference} pending={isAddingOriginal} onUse={() => void handleUseOriginalResultAsReference()} />
@@ -2289,7 +2252,7 @@ function ImageCreator({
                                     />
                                 </motion.div>
                             )}
-                            {remixId && !isRemixLoading && remixSlotsNotice ? (
+                            {remixId && !remixRead.loading && remixSlotsNotice ? (
                                 <motion.div
                                     key="remix-slots-notice"
                                     initial={{ opacity: 0, y: 12 }}

@@ -45,20 +45,42 @@ export function createRemixElementSeeds(
 }
 
 /**
+ * What a remix says when the model has room for fewer of the run's references of a kind than the
+ * run used (`usable`), so only `restored` came back: the model's cap fell since the run, or what
+ * the creator `added` while the remix loaded takes some of the room. Null when nothing was left out.
+ */
+export function getRemixRoomWarning({ modelName, limit, noun, usable, restored, added = 0 }: {
+  modelName: string;
+  limit: number;
+  /** One reference of the kind: "reference image". */
+  noun: string;
+  usable: number;
+  restored: number;
+  added?: number;
+}): string | null {
+  if (usable <= restored) return null;
+  const takes = `${modelName} takes up to ${limit} ${noun}${limit === 1 ? '' : 's'}`;
+  return added > 0
+    ? `${takes}, so with the ${added} you added, ${restored} of this run's ${usable} came back.`
+    : `${takes}, so ${restored} of this run's ${usable} came back.`;
+}
+
+/**
  * What a remix says when its model now takes fewer reference images than the run used, as
- * Nano Banana 2 (14 to 10) and MiniMax H3 (9 to 5) did on 2026-10-20. The first `limit` come
- * back (`createRemixElementSeeds`); the rest were dropped without a word before. Null when
- * nothing was left out.
+ * Nano Banana 2 (14 to 10) and MiniMax H3 (9 to 5) did on 2026-10-20, or when the pictures the
+ * creator `added` while it loaded leave less room. The first that fit come back
+ * (`createRemixElementSeeds`); the rest were dropped without a word before. Null when nothing
+ * was left out.
  */
 export function getRemixReferenceCapWarning(
   elements: RemixResolvedImageElement[],
   limit: number,
   modelName: string,
+  added = 0,
 ): string | null {
   const usable = elements.filter((element) => typeof element.url === 'string' && element.url.length > 0).length;
-  const restored = createRemixElementSeeds(elements, limit).length;
-  if (usable <= restored) return null;
-  return `${modelName} takes up to ${limit} reference image${limit === 1 ? '' : 's'}, so ${restored} of this run's ${usable} came back.`;
+  const restored = createRemixElementSeeds(elements, Math.max(0, limit - added)).length;
+  return getRemixRoomWarning({ modelName, limit, noun: 'reference image', usable, restored, added });
 }
 
 /**
@@ -130,9 +152,35 @@ export function createRemixResultReferenceElement(
   };
 }
 
-/** What a remix says when some of the run's media could not be brought back. */
+/**
+ * What a remix says when some of the run's media could not be brought back, and when its read failed
+ * (`useRemixSourceRead`), where the notice offers Try again.
+ */
 export const REMIX_RESTORE_WARNING =
   'Some source media could not be restored automatically, so you may need to re-add a few references.';
+
+/**
+ * The remix's original as `/api/remix-source` answers its reader, the account `accessToken` is a
+ * session of: the run's prompt, settings and media (the owner's own inputs, or the post's shared
+ * ones). Throws on a refusal (a revoked session, a 429, a 5xx) and on a failed network. Only
+ * `useRemixSourceRead` calls it, which reads a remix once for its form
+ * (`remix-source-read-guard.test.ts`).
+ */
+export async function fetchRemixSource(
+  remix: { id: string; postId: string | null },
+  accessToken: string,
+): Promise<RemixSourceBundle> {
+  const params = new URLSearchParams({ id: remix.id });
+  if (remix.postId) params.set('postId', remix.postId);
+  const response = await fetch(`/api/remix-source?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data = await response.json() as RemixSourceBundle & { error?: string } | null;
+  if (!response.ok || !data) {
+    throw new Error(data?.error || 'Failed to load remix data');
+  }
+  return data;
+}
 
 export function getRemixRestoreWarning(issues: string[]): string | null {
   if (issues.length === 0) {
