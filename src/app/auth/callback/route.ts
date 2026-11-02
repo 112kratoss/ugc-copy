@@ -41,7 +41,7 @@ export async function GET(request: Request) {
           if (referral.clearCookie) {
             clearReferralVisitCookie(response, requestUrl.protocol === 'https:');
           }
-          // Google and the email links finish here, never in /auth/continue.
+          // Google, Apple and the email links finish here, never in /auth/continue.
           await recordWebAuthSucceeded({ next, origin: requestUrl.origin, supabase, userId: data.user.id });
           return response;
         }

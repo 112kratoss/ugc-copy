@@ -190,6 +190,8 @@ describe('account deletion page', () => {
         // Home's top-left control is the menu glyph; there is no avatar to tap.
         expect(html).toContain('On Home, tap the menu (☰) at the top left, then Settings.');
         expect(html).toContain('Sign in again when asked; an account that uses Sign in with Apple must do this on an iPhone.');
+        // Such an account can sign in on the website now, but is still deleted in the app.
+        expect(html).toContain('An account that uses Sign in with Apple is deleted in the app on an iPhone.');
         expect(html).toContain('type DELETE');
         expect(html).toContain('What permanent deletion removes');
         expect(html).toContain('Your public posts and comments.');
@@ -452,6 +454,8 @@ describe('account deletion page', () => {
         expect(mocks.signOut).not.toHaveBeenCalled();
     });
 
+    // Such an account can sign in here since the website offers Apple, and it is still deleted in
+    // the app: the deletion revokes Apple's authorization with a native sign-in's one-time code.
     it('sends an account known to use Sign in with Apple to the app before anything is typed', async () => {
         mocks.session = signedInAs(appleUser);
         const fetchMock = answerRequests();
@@ -460,8 +464,14 @@ describe('account deletion page', () => {
         const section = await deletionSection();
 
         expect(within(section).getByRole('heading', { name: 'Delete this account in the app' })).toBeInTheDocument();
+        expect(within(section).getByRole('status')).toHaveTextContent(
+            `This account uses Sign in with Apple, so it is deleted in the ${siteConfig.name} app on an iPhone, where Apple confirms it is you and ${siteConfig.name} is disconnected from your Apple ID. Tap the menu (☰) at the top left of Home, then choose Settings and Delete account. No iPhone? Request deletion by email below.`,
+        );
+        expect(within(section).queryByText(/does not offer/)).toBeNull();
         expect(within(section).queryByLabelText('Type DELETE to confirm')).toBeNull();
         expect(deletionRequests(fetchMock)).toHaveLength(0);
+        // The email route the notice points to.
+        expect(screen.getByRole('link', { name: 'Request account deletion' })).toBeInTheDocument();
     });
 
     // A deletion already started, here or from the app.

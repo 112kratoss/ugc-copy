@@ -24,7 +24,7 @@ export default function DeleteAccountPage() {
                 <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300">
                     You can delete your account right here once you{' '}
                     <Link className="text-white underline underline-offset-4" href="/login?returnUrl=/delete-account">sign in</Link>
-                    {` on this website, or inside the ${siteConfig.name} mobile app. If you cannot sign in, send a deletion request from this page.`}
+                    {` on this website, or inside the ${siteConfig.name} mobile app. An account that uses Sign in with Apple is deleted in the app on an iPhone. If you cannot sign in, send a deletion request from this page.`}
                 </p>
 
                 <SignedInAccountDeletion />

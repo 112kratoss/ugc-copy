@@ -11,7 +11,7 @@ function authError(message: string, extra: Record<string, unknown> = {}) {
 describe('describeAuthError', () => {
   it.each([
     ['Failed to fetch', 'Could not reach the sign-in service. Check your connection and try again.'],
-    ['Invalid login credentials', 'That email and password do not match. Check both and try again, or use Google if you signed up with it.'],
+    ['Invalid login credentials', 'That email and password do not match. Check both and try again. If you created the account with Google or Apple, use that button instead.'],
     ['Email not confirmed', 'Confirm your email first: open the confirmation link we sent when the account was created, then sign in.'],
     // D2: no reset email can be sent, so the sentence offers none.
     ['User already registered', 'An account with this email already exists. Sign in instead.'],
@@ -20,14 +20,14 @@ describe('describeAuthError', () => {
     expect(describeAuthError(authError(raw), FALLBACK)).toBe(shown);
   });
 
-  // Audit 01-9: the hook's refusal names Apple, which the web does not offer.
-  it('words the sign-up hook\'s refusal for a site that offers Google only', () => {
+  // Audit 01-9: the hook's refusal named Apple when the web did not offer it; it does now.
+  it('words the sign-up hook\'s refusal with the two ways in the site offers', () => {
     const shown = describeAuthError(
       authError('Email sign-up is temporarily unavailable. Continue with Google or Apple.', { status: 403 }),
       FALLBACK,
     );
 
-    expect(shown).toBe('Email sign-up is temporarily unavailable. Continue with Google.');
+    expect(shown).toBe('Email sign-up is temporarily unavailable. Continue with Google or Apple.');
   });
 
   it('says what to do about a reused password', () => {

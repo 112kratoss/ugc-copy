@@ -308,6 +308,39 @@ rejects `provider = 'email'` sign-ups with a 403 and the message
 Keep `auth.email.enable_confirmations = false` while this policy holds; enabling
 confirmations without a sender would silently block every affected sign-in.
 
+### Sign in with Apple on the web
+
+The iPhone app signs in with Apple natively (`signInWithIdToken`, audience the
+bundle id). The website's Continue with Apple buttons (the login page's tabs and
+the creators' sign-up sheet) use Supabase's web OAuth flow, which needs its own
+Apple client, a Services ID:
+
+1. Apple Developer → Certificates, Identifiers & Profiles → Identifiers → add a
+   Services ID (an identifier of its own, such as the bundle id with `.web`).
+   Enable Sign in with Apple and configure it with the iPhone app's App ID as
+   its primary App ID, so that Apple gives the website the same user id as the
+   app and an account made on an iPhone signs in on the website as itself.
+   Domains: `ildfmhozpibwiopeavfg.supabase.co`. Return URL:
+   `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback`. If the Supabase
+   custom domain above is activated, add its host and its `/auth/v1/callback` too.
+2. Generate the OAuth client secret, a JWT signed with a Sign in with Apple key
+   (the `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves) for the Services ID; the
+   generator on Supabase's "Login with Apple" guide runs in the browser. Apple
+   caps it at six months, after which every web Apple sign-in fails: renew it
+   before then.
+3. Supabase Dashboard → Auth → Providers → Apple: Client IDs is a
+   comma-separated list with the Services ID first, then the bundle id.
+   Supabase sends the first entry to Apple for the web flow and accepts any of
+   them as the audience of a native sign-in, so the bundle id must stay listed.
+   Put the secret in the secret field.
+
+Apple returns no name through the web flow, so an account made on the website
+gets its name from the profile setup that follows. Deleting an account with an
+Apple identity stays in the iPhone app (the website's `/delete-account` says
+so): the deletion revokes the app's Apple authorization with the one-time code
+of a native sign-in (`apple-account-deletion-service.ts`), and Supabase's web
+flow exchanges Apple's code itself.
+
 ### Legacy email/password accounts
 
 Accounts created with the `email` provider *before* the hook was installed still

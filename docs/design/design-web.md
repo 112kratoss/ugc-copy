@@ -248,7 +248,7 @@ The two must look and behave like one product. A stale session falls back to the
     - the canvas has no Studio link.
   - **Generate.** It reads "Sign up to generate", with what a new account starts with and what the run takes in a line under the bar. It checks the form as Generate does, then opens the sign-up sheet (`CreatorSignUpSheet.tsx`, drawn in the confirmation dialog's style on `ModalSheet`, the shell it shares with the Top Up sheet: Escape, Close and the backdrop put it away unless a sign-in is under way, and the backdrop takes no second click of a double-click on Generate):
     - what stays: the prompt, the settings, the pictures;
-    - Continue with Google, with the agreement every Google button carries (`GoogleSignInAgreement.tsx`), and email sign-in for the older password accounts;
+    - Continue with Google and Continue with Apple (Apple's white style, its rule for a dark background), with the agreement every provider button carries (`SignInAgreement.tsx`), and email sign-in for the older password accounts;
     - nothing runs until Generate is pressed again.
   - **Other presses that need an account.** Enhance and preparing a Seedance reference open the same sheet. A remix link still signs in first, because remixing someone's post takes an account.
   - **A lapsed session is not a visitor.** A page that opened signed in and lost its session to a lapse (a refresh that failed, a refused token) saves nothing more, so the account's form never lands in the browser's visitor slot. Its Generate goes to the login page, as before.

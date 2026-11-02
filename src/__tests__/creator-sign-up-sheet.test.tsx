@@ -68,7 +68,7 @@ describe('the sign-up a visitor meets at Generate', () => {
     window.history.replaceState({}, '', '/');
   });
 
-  it('says what stays and that nothing runs until Generate is pressed again, with the agreement under Google', async () => {
+  it('says what stays and that nothing runs until Generate is pressed again, with the agreement under Google and Apple', async () => {
     renderSheet();
 
     const dialog = screen.getByRole('dialog', { name: 'Continue to generate' });
@@ -79,9 +79,12 @@ describe('the sign-up a visitor meets at Generate', () => {
     expect(screen.getByText('Your settings stay: Seedance 2 Mini · 480P · 9:16 · 5s')).toBeInTheDocument();
     expect(screen.getByText('Images you added stay')).toBeInTheDocument();
     const google = screen.getByRole('button', { name: 'Continue with Google' });
-    // What a Google sign-up agrees to is said under every Google button (audit 01-6).
+    // What a provider sign-up agrees to is said under every provider button (audit 01-6).
     expect(google).toHaveAccessibleDescription(/Prompts and media you generate are processed by the AI providers listed in the policy/);
+    expect(screen.getByRole('button', { name: 'Continue with Apple' }))
+      .toHaveAccessibleDescription(/Prompts and media you generate are processed by the AI providers listed in the policy/);
     expect(screen.getByRole('link', { name: 'listed in the policy' })).toHaveAttribute('href', '/privacy#ai-processing');
+    expect(screen.getByText('Already have an account? Google and Apple sign you in too.')).toBeInTheDocument();
     // Focus starts on the way forward.
     await waitFor(() => expect(google).toHaveFocus());
   });
@@ -102,6 +105,27 @@ describe('the sign-up a visitor meets at Generate', () => {
     expect(redirectNext()).toBe('/create-video?handover=nonce-test-1234');
   });
 
+  // An account made with Sign in with Apple on an iPhone signs in here as itself (the runbook's
+  // "Sign in with Apple on the web"), and leaves the same way Google does.
+  it('leaves for Apple the way it leaves for Google: the draft marked first, back with its nonce', async () => {
+    renderSheet();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
+    expect(mocks.calls).toEqual(['mark', 'oauth']);
+    expect(mocks.markVisitorDraftForHandover).toHaveBeenCalledWith('video');
+    expect(mocks.signInWithOAuth).toHaveBeenCalledWith({
+      provider: 'apple',
+      options: { redirectTo: expect.stringMatching(new RegExp(`^${window.location.origin}/auth/callback\\?next=`)) },
+    });
+    expect(redirectNext()).toBe('/create-video?handover=nonce-test-1234');
+    // Every way out waits while one is under way.
+    expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sign in with email and password' })).toBeDisabled();
+  });
+
   it('marks nothing for a page whose draft is an account’s, and comes back to the same link', async () => {
     renderSheet({ handsOverDraft: false });
 
@@ -120,6 +144,17 @@ describe('the sign-up a visitor meets at Generate', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/./);
     expect(screen.getByRole('button', { name: 'Continue with Google' })).toBeEnabled();
+  });
+
+  it('names Apple when Apple cannot be started, and stays open', async () => {
+    mocks.signInWithOAuth.mockImplementation(async () => ({ data: {}, error: new Error('Unsupported provider: provider is not enabled') }));
+    renderSheet();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not start Apple sign-in. Try again.');
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeEnabled();
+    expect(screen.getByRole('dialog', { name: 'Continue to generate' })).toBeInTheDocument();
   });
 
   it('is usable again on a page the browser brings back after leaving for Google', async () => {
@@ -188,7 +223,7 @@ describe('what signing up gives, in the sheet’s words', () => {
       'New here? You get 25 free credits when you pick a name and handle. Either way you come back to this page, and nothing runs until you press Generate.',
     );
     expect(creatorSignUpBody(null, 19)).toBe(
-      'Sign in with Google, or make an account with it. Either way you come back to this page, and nothing runs until you press Generate.',
+      'Sign in with Google or Apple, or make an account with either. Either way you come back to this page, and nothing runs until you press Generate.',
     );
   });
 });

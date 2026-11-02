@@ -17,7 +17,7 @@ export function describeAuthError(error: unknown, fallback: string): string {
     return 'Could not reach the sign-in service. Check your connection and try again.';
   }
   if (message.includes('invalid login credentials') || message.includes('invalid_credentials')) {
-    return 'That email and password do not match. Check both and try again, or use Google if you signed up with it.';
+    return 'That email and password do not match. Check both and try again. If you created the account with Google or Apple, use that button instead.';
   }
   if (message.includes('email not confirmed')) {
     return 'Confirm your email first: open the confirmation link we sent when the account was created, then sign in.';
@@ -29,9 +29,9 @@ export function describeAuthError(error: unknown, fallback: string): string {
   if (message.includes('too many requests') || message.includes('for security purposes') || message.includes('rate limit')) {
     return 'Too many attempts. Wait a minute before trying again.';
   }
-  // The sign-up hook's own refusal also offers Apple, which this site lacks.
+  // The sign-up hook's own refusal, which names the two ways in this site offers.
   if (message.includes('email sign-up is temporarily unavailable')) {
-    return 'Email sign-up is temporarily unavailable. Continue with Google.';
+    return 'Email sign-up is temporarily unavailable. Continue with Google or Apple.';
   }
   if (code === 'same_password' || message.includes('should be different from the old password')) {
     return 'Choose a password different from your current one.';
