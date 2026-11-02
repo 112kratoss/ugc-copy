@@ -176,6 +176,8 @@ interface OwnerPost {
         freeUnlockCount: number;
         earningsUsdCents: number;
         resourceKinds: Array<'prompt' | 'workflow' | 'files' | 'notes' | 'remix'>;
+        /** Set once its creator took it off while people had it: they keep it, the post has none. */
+        retiredAt?: string | null;
     } | null;
 }
 
@@ -232,6 +234,16 @@ function getPostCardAnchorId(postId: string): string {
  * Paid sales and earnings, with free unlocks beside them once there are any:
  * a free unlock is not a sale since 2026-10-17 (decision 6).
  */
+/**
+ * A post as Studio draws it. A recipe taken off while people had it stays for
+ * them (retired), but the post has none, as the editor and Recipe sales read
+ * it: drawn as a draft with Manage recipe, its link reopened the editor on the
+ * recipe's old mode and the removal looked undone.
+ */
+function withoutRetiredRecipe(post: OwnerPost): OwnerPost {
+    return post.bundle?.retiredAt ? { ...post, bundle: null } : post;
+}
+
 /** Sets one parameter of an internal path, keeping its other parameters and its fragment. */
 function withSearchParam(path: string, key: string, value: string): string {
     const [pathWithoutHash, hash = ''] = path.split('#');
@@ -276,7 +288,7 @@ function readCreationsWorkspaceCache(userId: string | null): CreationsWorkspaceC
         return {
             fetchedAt: parsed.fetchedAt,
             generations: Array.isArray(parsed.generations) ? parsed.generations as Generation[] : [],
-            posts: Array.isArray(parsed.posts) ? parsed.posts as OwnerPost[] : [],
+            posts: Array.isArray(parsed.posts) ? (parsed.posts as OwnerPost[]).map(withoutRetiredRecipe) : [],
             profile: isRecord(parsed.profile) ? parsed.profile as unknown as ProfileApiResponse : null,
             // A snapshot written before the flag, or by a list with pages still to load, says no.
             generationsComplete: parsed.generationsComplete === true,
@@ -1107,7 +1119,7 @@ export default function CreationsPage() {
             const postsData = await postsRes.json() as OwnerPostsApiResponse;
             let nextPosts: OwnerPost[] | null = null;
             if (postsRes.ok) {
-                const loadedPosts = (postsData.posts || []) as OwnerPost[];
+                const loadedPosts = ((postsData.posts || []) as OwnerPost[]).map(withoutRetiredRecipe);
                 const freshPostsOffset = postsData.pageInfo?.hasMore
                     ? postsData.pageInfo.nextOffset ?? null
                     : null;
@@ -1281,7 +1293,10 @@ export default function CreationsPage() {
 
                 // Onto the posts as they stand now, and with the totals as they stand now: a post
                 // archived while the page was on its way stays archived, and its move stays counted.
-                const nextPosts = mergePostAppend(postsRef.current, Array.isArray(data.posts) ? data.posts : []);
+                const nextPosts = mergePostAppend(
+                    postsRef.current,
+                    Array.isArray(data.posts) ? data.posts.map(withoutRetiredRecipe) : [],
+                );
                 const nextOffset = data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null;
                 postsRef.current = nextPosts;
                 setPosts(nextPosts);

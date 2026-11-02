@@ -576,6 +576,20 @@ describe('NewPostClient', () => {
     expect(screen.queryByText(/price field is focused/i)).not.toBeInTheDocument();
   });
 
+  // A recipe taken off while people have it is retired: the post has none,
+  // and the editor reads it so. Studio's link still named its old mode
+  // (`resourceMode=free`), which chose Free again over the saved No recipe,
+  // so the removal looked undone and the next save would bring a recipe back.
+  it('opens an edit on the recipe it has saved, whatever mode its link names', () => {
+    searchParamsState.value = new URLSearchParams('resourceMode=free&focus=price&from=creations');
+    const post = createLegacyPrivateResourcePost();
+    post.resourceBundle = { accessMode: 'none' };
+    render(<NewPostClient initialPost={post} />);
+
+    expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /free recipe/i })).not.toBeChecked();
+  });
+
   // Saving an empty card produced a row the publish gate silently discarded,
   // which read as the composer losing the resource. Mobile has always refused.
   it('refuses to save a resource card with no content', () => {
@@ -1363,8 +1377,9 @@ describe('NewPostClient', () => {
       }),
     });
 
+    // A paid recipe with nothing in it, as Studio's Manage recipe opens it.
     const post = createGenerationRecipePost();
-    post.resourceBundle = { accessMode: 'none' };
+    post.resourceBundle = { accessMode: 'paid', priceUsdCents: 500, previewText: '', resources: { items: [] } };
 
     render(<NewPostClient initialPost={post} />);
 
@@ -3198,8 +3213,12 @@ describe('NewPostClient', () => {
           mediaUrl: null,
           mediaKind: null,
           archivedAt: null,
+          // Manage recipe names the mode the recipe has.
           resourceBundle: {
-            accessMode: 'none',
+            accessMode: 'paid',
+            priceUsdCents: 500,
+            previewText: 'A private recipe preview.',
+            resources: { items: [] },
           },
           hasPaidOrders: false,
         }}

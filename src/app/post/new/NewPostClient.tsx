@@ -943,11 +943,17 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     initialPost?.category && initialPost.category !== 'text'
       ? initialPost.category
       : 'image';
-  // A creation's new post starts with a free recipe, its exact prompt in it
-  // (owner, 2026-11-03); a template result's gives way to none once the
-  // creation says so. An upload starts with none, and a link's mode wins.
+  // An edit opens on the recipe the post has. Manage recipe's `resourceMode`
+  // only repeats it, and a link from before the recipe was taken off named
+  // one the post no longer has: chosen again, it looked as if the removal had
+  // not saved, and the next save put a recipe back. A new post starts from the
+  // link's mode; without one, a creation's new post starts with a free recipe,
+  // its exact prompt in it (owner, 2026-11-03), and a template result's gives
+  // way to none once the creation says so. An upload starts with none.
   const initialResourceAccessMode = normalizePostResourceBundleAccessMode(
-    requestedResourceMode ?? (!isEditMode && generationId ? 'free' : initialBundle.accessMode),
+    isEditMode
+      ? initialBundle.accessMode
+      : requestedResourceMode ?? (generationId ? 'free' : initialBundle.accessMode),
   );
 
   const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));

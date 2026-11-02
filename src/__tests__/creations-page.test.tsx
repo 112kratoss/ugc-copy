@@ -2474,6 +2474,99 @@ describe('CreationsPage', () => {
     });
   });
 
+  // A recipe taken off while people had it is retired: they keep it, but the
+  // post has none, as the editor and Recipe sales read it. Studio drew it as
+  // a draft with Manage recipe, whose link reopened the editor on its old mode.
+  describe('a recipe taken off while people have it', () => {
+    const POSTS_PAGE_URL = '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0';
+    const postWithRetiredRecipe = {
+      id: 'post-retired',
+      generationId: 'gen-retired',
+      visibility: 'public',
+      archivedAt: null,
+      mediaUrl: null,
+      mediaKind: null,
+      title: 'A post whose recipe was taken off',
+      description: '',
+      prompt: '',
+      body: 'Its recipe was taken off after three people unlocked it.',
+      category: 'text',
+      postFormat: 'text',
+      sourceKind: 'magicbooklet',
+      sourceTool: 'magicbooklet',
+      sourceLabel: 'magicbooklet',
+      createdAt: '2026-06-01T10:00:00.000Z',
+      updatedAt: '2026-06-01T10:00:00.000Z',
+      publicPath: '/showcase/post-retired',
+      ownerPath: '/post/post-retired/edit',
+      resourcePath: '/showcase/post-retired#recipe',
+      canShare: true,
+      bundle: {
+        id: 'bundle-retired',
+        accessMode: 'free',
+        status: 'draft',
+        priceUsdCents: 0,
+        salesCount: 0,
+        freeUnlockCount: 3,
+        earningsUsdCents: 0,
+        resourceKinds: ['prompt', 'notes'],
+        retiredAt: '2026-11-03T00:00:00.000Z',
+      },
+    };
+
+    it('shows the post with no recipe, and Add recipe, in Post Library', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({ generations: [] }))
+          : url === POSTS_PAGE_URL
+            ? Promise.resolve(jsonResponse({ posts: [postWithRetiredRecipe] }))
+            : null
+      ));
+
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('post-card-post-retired');
+      expect(within(card).getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
+        'href',
+        '/post/post-retired/edit?recipe=add&from=creations&returnTo=%2Fcreations%3Fview%3Dposts#recipe',
+      );
+      expect(within(card).queryByRole('link', { name: /^manage recipe$/i })).not.toBeInTheDocument();
+      expect(within(card).queryByText('Recipe draft')).not.toBeInTheDocument();
+      expect(within(card).getByText('No recipe')).toBeInTheDocument();
+    });
+
+    it('offers Add recipe on the creation the post was made from', async () => {
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({
+            generations: [makeGeneration({
+              id: 'gen-retired',
+              title: 'A post whose recipe was taken off',
+              linked_post_id: 'post-retired',
+              linked_post_title: 'A post whose recipe was taken off',
+              linked_post_visibility: 'public',
+              linked_post_archived_at: null,
+              // The creations list still reads the retired row as a draft.
+              linked_post_bundle: { accessMode: 'free', status: 'draft', priceUsdCents: 0 },
+            })],
+          }))
+          : url === POSTS_PAGE_URL
+            ? Promise.resolve(jsonResponse({ posts: [postWithRetiredRecipe] }))
+            : null
+      ));
+
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('creation-card-gen-retired');
+      await waitFor(() => expect(within(card).getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
+        'href',
+        '/post/post-retired/edit?recipe=add&from=creations&returnTo=%2Fcreations#recipe',
+      ));
+      expect(within(card).queryByRole('link', { name: /^manage recipe$/i })).not.toBeInTheDocument();
+    });
+  });
+
   // A free unlock stopped counting as a sale on 2026-10-17 (decision 6): the
   // line counts paid sales, and free unlocks beside them once there are any.
   it("says what each recipe sold and earned, with its free unlocks beside them", async () => {
