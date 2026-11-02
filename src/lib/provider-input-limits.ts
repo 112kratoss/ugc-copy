@@ -187,9 +187,12 @@ export function referenceMediaLengthViolation(
  * all Kie reads of a track before taking it: a wan/3-0-video createTask refused any `.m4a` link
  * with "File type not supported", one with a `?token=` query and one nobody could fetch
  * included, and took a `.wav` (zero-cost probe, 2026-11-02, recorded in
- * archive/ios-audio-mime-aliases-2026-11-02). Kie's pages, read the same day, list "wav, mp3"
- * for every model here but Seedance 2.5, which adds "aac, ogg". A model with no entry sends no
- * track.
+ * archive/ios-audio-mime-aliases-2026-11-02). The rest is Kie's pages as read on 2026-11-02:
+ * "wav, mp3" for Seedance 2, 2 Fast, 2 Mini and Wan 3.0 (that record's docs-2026-11-02/), MiniMax
+ * H3's "WAV, MP3" and Wan 2.7's `reference_voice` "wav, mp3"
+ * (archive/convert-refused-tracks-2026-11-02/evidence/), and Seedance 2.5's "wav, mp3, aac, ogg".
+ * They replace the older capture's list for Seedance 2 (docs/model-api-references/bytedance/,
+ * which named audio/mp4 too). A model with no entry sends no track.
  */
 const REFERENCE_TRACK_FORMATS: Readonly<Record<string, readonly string[]>> = {
   'seedance-2': ['wav', 'mp3'],

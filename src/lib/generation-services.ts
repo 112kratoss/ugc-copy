@@ -936,50 +936,123 @@ function assertReferenceMediaLongEnough(modelId: string, media: readonly Referen
   if (violation) throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
 }
 
+/** Where a track travels in a built Kie request: a place in `reference_audio_urls`, or Wan 2.7's one `reference_voice`. */
+type ProviderTrackPlace = { field: 'reference_audio_urls'; index: number } | { field: 'reference_voice' };
+
+/** A run's track converted for its provider, with each place the track takes in the request. */
+type ConvertedProviderTrack = { wav: Buffer; places: ProviderTrackPlace[] };
+
+/** The tracks of a built Kie request that go as links, with the place each takes and which of the run's tracks it is. */
+function providerTrackLinks(input: Record<string, unknown>): Array<{ link: string; place: ProviderTrackPlace; track: number }> {
+  const links: Array<{ link: string; place: ProviderTrackPlace; track: number }> = (
+    Array.isArray(input.reference_audio_urls) ? input.reference_audio_urls : []
+  ).flatMap((link, index) => (
+    typeof link === 'string' ? [{ link, place: { field: 'reference_audio_urls' as const, index }, track: index }] : []
+  ));
+  if (typeof input.reference_voice === 'string') {
+    links.push({ link: input.reference_voice, place: { field: 'reference_voice' }, track: 0 });
+  }
+  return links;
+}
+
+function referenceTrackNotPreparedError(modelName: string): GenerationServiceError {
+  return new GenerationServiceError(
+    `We could not prepare your audio track for ${modelName}. Try again in a moment. No credits were used.`,
+    503,
+    'provider_unavailable',
+  );
+}
+
 /**
- * The tracks a run sends its provider, each as it goes: one in a format the model's provider
- * refuses (provider-input-limits) as a WAV copy, made before anything is held. Kie refused such
- * a track only after the hold, so the run failed after Generate and its credits came back. A
- * track that cannot be converted refuses the start in words that name it, and one `skip` names
- * (a prepared Seedance asset, which goes by its id) is left as it is.
+ * Converts each track of a built Kie request that is in a format the model's provider refuses
+ * (provider-input-limits) to a WAV: after every check the start makes and before the hold, since
+ * Kie refused such a track only after the hold and the run failed after Generate. A prepared
+ * Seedance asset goes by its id, which is no link. A track that cannot be converted refuses the
+ * start in words that name it, which the creators and a canvas step say as they are; a failure
+ * that is not the track's is worth retrying. The copies are stored once the run is held
+ * (`storeProviderTrackCopies`), so a start refused at the hold keeps nothing.
  */
-async function convertRefusedReferenceTracks(params: {
+async function convertRefusedProviderTracks(params: {
   supabase: SupabaseClient;
   userId: string;
   model: VideoModelId;
   modelName: string;
-  links: string[];
+  input: Record<string, unknown>;
+  /** What the creator calls each of the run's tracks, in order. */
   labels: ReadonlyArray<string | null | undefined>;
-  skip: (index: number) => boolean;
-}): Promise<string[]> {
-  const refused = params.links.flatMap((link, index) => (
-    !params.skip(index) && referenceTrackNeedsConversion(params.model, link) ? [index] : []
-  ));
-  if (refused.length === 0) return params.links;
+}): Promise<ConvertedProviderTrack[]> {
+  const refused = providerTrackLinks(params.input).filter(({ link }) => referenceTrackNeedsConversion(params.model, link));
+  if (refused.length === 0) return [];
 
   // Loaded only by a run that converts a track: it reaches ffmpeg, and sharp beside it.
   const { convertReferenceTrack, ReferenceTrackUnreadableError } = await import('@/lib/reference-track-conversion');
-  const links = [...params.links];
-  for (const index of refused) {
+  const copies = new Map<string, ConvertedProviderTrack>();
+  // One at a time, as the media sweeps run ffmpeg (media-preview-repair): concurrent encoders
+  // contend for the function's one or two cores.
+  for (const { link, place, track } of refused) {
+    const converted = copies.get(link);
+    if (converted) {
+      converted.places.push(place);
+      continue;
+    }
     try {
-      links[index] = await convertReferenceTrack({ supabase: params.supabase, userId: params.userId, link: links[index] });
+      copies.set(link, { wav: await convertReferenceTrack({ supabase: params.supabase, userId: params.userId, link }), places: [place] });
     } catch (error) {
-      if (error instanceof ReferenceTrackUnreadableError) {
-        logBackendWarning('reference_track_unreadable', { modelId: params.model, error });
-        throw new GenerationServiceError(
-          `We could not convert ${params.labels[index]?.trim() || 'one of your audio tracks'} for ${params.modelName}. Add it again as an MP3 or WAV file. No credits were used.`,
-          400,
-          'invalid_input_media',
-        );
+      if (!(error instanceof ReferenceTrackUnreadableError)) {
+        logBackendError('reference_track_conversion_failed', { modelId: params.model, error });
+        throw referenceTrackNotPreparedError(params.modelName);
       }
-      logBackendError('reference_track_conversion_failed', { modelId: params.model, error });
+      logBackendWarning('reference_track_unreadable', { modelId: params.model, error });
+      const label = params.labels[track]?.trim();
       throw new GenerationServiceError(
-        `We could not prepare your audio track for ${params.modelName}. Try again in a moment. No credits were used.`,
-        500,
+        error.tooLong
+          ? `${label || 'One of your audio tracks'} is too long for ${params.modelName}. Use a shorter track. No credits were used.`
+          : `We could not convert ${label || 'one of your audio tracks'} for ${params.modelName}. Add it again as an MP3 or WAV file. No credits were used.`,
+        400,
+        PROVIDER_INPUT_REFUSED,
       );
     }
   }
-  return links;
+  return [...copies.values()];
+}
+
+/**
+ * Stores a held run's converted tracks in its folder and points the request at them. A failure
+ * here comes after the hold, so the start returns the run's credits.
+ */
+async function storeProviderTrackCopies(params: {
+  supabase: SupabaseClient;
+  userId: string;
+  generationId: string;
+  model: VideoModelId;
+  modelName: string;
+  input: Record<string, unknown>;
+  copies: ConvertedProviderTrack[];
+}): Promise<void> {
+  if (params.copies.length === 0) return;
+  const { storeConvertedReferenceTrack } = await import('@/lib/reference-track-conversion');
+  // A new list: the request's may be the very array the run keeps its creator's tracks from.
+  const audioUrls = Array.isArray(params.input.reference_audio_urls) ? [...params.input.reference_audio_urls] : null;
+  for (const [index, copy] of params.copies.entries()) {
+    let link: string;
+    try {
+      link = await storeConvertedReferenceTrack({
+        supabase: params.supabase,
+        userId: params.userId,
+        generationId: params.generationId,
+        index,
+        wav: copy.wav,
+      });
+    } catch (error) {
+      logBackendError('reference_track_copy_not_stored', { modelId: params.model, generationId: params.generationId, error });
+      throw referenceTrackNotPreparedError(params.modelName);
+    }
+    for (const place of copy.places) {
+      if (place.field === 'reference_voice') params.input.reference_voice = link;
+      else if (audioUrls) audioUrls[place.index] = link;
+    }
+  }
+  if (audioUrls) params.input.reference_audio_urls = audioUrls;
 }
 
 export function trimPrompt(prompt: string, errorMessage: string): string {
@@ -3111,21 +3184,6 @@ export async function startVideoGeneration(params: {
     throw generationCostChangedError();
   }
 
-  // The tracks as the provider is sent them, the last thing settled before the hold: a prepared
-  // Seedance asset goes by its id, and a file in a format the model's provider refuses as a
-  // converted copy. The run keeps the creator's own tracks, in its recipe and its inputs.
-  const preparedSeedanceIds = isSeedance2Family ? preparedSeedanceAssetIds(seedanceAssets) : new Map<string, string>();
-  const referenceAudioSources = normalizeMediaUrlList(referenceAudioUrls);
-  const providerReferenceAudioUrls = await convertRefusedReferenceTracks({
-    supabase: creditSupabase,
-    userId,
-    model,
-    modelName: selectedModel.displayName,
-    links: resolvedReferenceAudioUrls,
-    labels: (referenceAudios ?? []).map((descriptor) => descriptor?.label),
-    skip: (index) => preparedSeedanceIds.has(referenceAudioSources[index] ?? ''),
-  });
-
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
@@ -3233,7 +3291,7 @@ export async function startVideoGeneration(params: {
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image_urls = providerReferenceImageUrls;
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video_urls = resolvedReferenceVideoUrls;
-        if (providerReferenceAudioUrls.length > 0) input.reference_audio_urls = providerReferenceAudioUrls;
+        if (resolvedReferenceAudioUrls.length > 0) input.reference_audio_urls = resolvedReferenceAudioUrls;
       } else if (frameImageUrls.length > 0) {
         // minimax-h3/image-to-video: "Either first_frame_url or last_frame_url must be
         // provided" — a last-only run is legal here and must keep its field.
@@ -3302,8 +3360,9 @@ export async function startVideoGeneration(params: {
         } else {
           // A file prepared as a Seedance asset goes by the asset's id. The run keeps,
           // and the unified start measured, the file's own link.
+          const preparedIds = preparedSeedanceAssetIds(seedanceAssets);
           const preferPrepared = (sources: string[], urls: string[]) => (
-            urls.map((url, index) => preparedSeedanceIds.get(sources[index] ?? '') ?? url)
+            urls.map((url, index) => preparedIds.get(sources[index] ?? '') ?? url)
           );
           if (providerReferenceImageUrls.length > 0) {
             input.reference_image_urls = preferPrepared(providerReferenceImageSources, providerReferenceImageUrls);
@@ -3311,8 +3370,8 @@ export async function startVideoGeneration(params: {
           if (resolvedReferenceVideoUrls.length > 0) {
             input.reference_video_urls = preferPrepared(normalizeMediaUrlList(referenceVideoUrls), resolvedReferenceVideoUrls);
           }
-          if (providerReferenceAudioUrls.length > 0) {
-            input.reference_audio_urls = preferPrepared(referenceAudioSources, providerReferenceAudioUrls);
+          if (resolvedReferenceAudioUrls.length > 0) {
+            input.reference_audio_urls = preferPrepared(normalizeMediaUrlList(referenceAudioUrls), resolvedReferenceAudioUrls);
           }
         }
 
@@ -3379,7 +3438,7 @@ export async function startVideoGeneration(params: {
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image = providerReferenceImageUrls;
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video = resolvedReferenceVideoUrls;
-        if (providerReferenceAudioUrls[0]) input.reference_voice = providerReferenceAudioUrls[0];
+        if (resolvedReferenceAudioUrls[0]) input.reference_voice = resolvedReferenceAudioUrls[0];
         if (frameImageUrls[0]) input.first_frame = frameImageUrls[0];
       } else if (frameImageUrls.length > 0) {
         providerModelId = resolveProviderModelId(runtimeConfig, 'image', 'wan/2-7-image-to-video');
@@ -3407,7 +3466,7 @@ export async function startVideoGeneration(params: {
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image_urls = providerReferenceImageUrls;
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video_urls = resolvedReferenceVideoUrls;
-        if (providerReferenceAudioUrls.length > 0) input.reference_audio_urls = providerReferenceAudioUrls;
+        if (resolvedReferenceAudioUrls.length > 0) input.reference_audio_urls = resolvedReferenceAudioUrls;
       } else if (frameImageUrls.length > 0) {
         input.first_frame_url = frameImageUrls[0];
         if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
@@ -3614,6 +3673,18 @@ export async function startVideoGeneration(params: {
       );
     }
 
+    // A track in a format the provider refuses is converted now, every check passed and nothing
+    // held yet; its copy is stored once the run is. The recipe and the kept inputs stay the
+    // creator's own tracks.
+    const providerInput = isRecord(body.input) ? body.input : {};
+    const trackCopies = await convertRefusedProviderTracks({
+      supabase: creditSupabase,
+      userId,
+      model,
+      modelName: selectedModel.displayName,
+      input: providerInput,
+      labels: (referenceAudios ?? []).map((descriptor) => descriptor?.label),
+    });
     // Kie fetches the pictures only after the hold; one over its documented limit is logged.
     await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: model, request: body, templateAssetScope: templateAssetScope(templateContext) });
     const reservation = await startGenerationRecord(creditSupabase, {
@@ -3721,6 +3792,15 @@ export async function startVideoGeneration(params: {
       await recordVeoJobsProviderApi(creditSupabase, generationId);
     }
 
+    await storeProviderTrackCopies({
+      supabase: creditSupabase,
+      userId,
+      generationId,
+      model,
+      modelName: selectedModel.displayName,
+      input: providerInput,
+      copies: trackCopies,
+    });
     predictionId = await createKieTask(body, endpoint, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 

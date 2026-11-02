@@ -8,6 +8,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { isMediaBucket, type MediaBucket } from '@/lib/media-urls';
+import { providerTrackFolder } from '@/lib/generation-provider-tracks';
 import {
   POST_MEDIA_PATH_COLUMNS,
   PRIVATE_POST_MEDIA_BUCKET,
@@ -123,6 +124,28 @@ function getCreationCopyPath(
   const [namespace, scopedGenerationId] = canonicalPath.split('/');
   if ((namespace !== 'showcase' && namespace !== 'private-posts') || scopedGenerationId !== generationId) return null;
   return canonicalPath;
+}
+
+/**
+ * The copies of the run's tracks converted for its provider (generation-provider-tracks), which no
+ * input row names. A failed listing leaves them for account deletion rather than failing the delete.
+ */
+async function listProviderTrackCopies(
+  adminSupabase: GenerationDeleteClient,
+  ownerUserId: string,
+  generationId: string,
+): Promise<RemovablePath[]> {
+  const folder = providerTrackFolder(ownerUserId, generationId);
+  try {
+    const { data, error } = await adminSupabase.storage.from('generation_inputs').list(folder);
+    if (error) throw error;
+    return (data ?? [])
+      .filter((entry) => entry.id && entry.name)
+      .map((entry) => ({ bucket: 'generation_inputs' as const, path: `${folder}/${entry.name}` }));
+  } catch (error) {
+    logBackendError('failed_to_list_provider_track_copies_for_delete', { error });
+    return [];
+  }
 }
 
 /** The outputs past the first that a run of several records in its settings (`persistGeneratedOutputList`). */
@@ -380,6 +403,8 @@ export async function deleteOwnerGenerationForRoute({
 
     const deleted = (deletedRows as unknown as GenerationDeleteRow[] | null)?.[0];
     if (!deleted) return { ok: false, body: { error: 'Creation not found.' }, status: 404 };
+    // A linked post never reads these, so they go whether or not one keeps the creation's copy.
+    removablePaths.push(...await listProviderTrackCopies(adminSupabase, deleted.user_id, deleted.id));
 
     // DELETE RETURNING captures a derivative that finishes after the initial
     // owner/retention read. Cleaning that old snapshot could strand its bytes.

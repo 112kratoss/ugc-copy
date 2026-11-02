@@ -23,6 +23,22 @@ describe('remote media security', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it('says which answer a refused request got, so a caller can tell a busy host from a refusal', async () => {
+    const download = (status: number) => downloadAllowlistedRemoteMedia({
+      url: 'https://media.example.test/voice.m4a',
+      kind: 'audio',
+      allowedHosts: ['media.example.test'],
+      lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+      fetcher: vi.fn(async () => new Response('nope', { status })),
+    });
+    await expect(download(503)).rejects.toMatchObject({ name: 'RemoteMediaSecurityError', status: 503 });
+    await expect(download(404)).rejects.toMatchObject({ status: 404, message: 'Remote media request failed with status 404.' });
+    // A refusal of the link or the bytes is no answer of the host's.
+    await expect(downloadAllowlistedRemoteMedia({
+      url: 'https://attacker.invalid/voice.m4a', kind: 'audio', allowedHosts: ['media.example.test'], lookup: vi.fn(), fetcher: vi.fn(),
+    })).rejects.toMatchObject({ status: null });
+  });
+
   it('rejects allowlisted hosts that resolve to private addresses', async () => {
     const fetcher = vi.fn();
     await expect(downloadAllowlistedRemoteMedia({
