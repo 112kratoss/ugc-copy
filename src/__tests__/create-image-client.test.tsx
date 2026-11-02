@@ -2331,6 +2331,20 @@ describe('CreateImageClient generation pipeline', () => {
       expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
       expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init as RequestInit))).toEqual(['Bearer fresh-token']);
     });
+
+    // Never another account's session (one signed in from another tab), and the page's own where the
+    // browser holds none (the E2E sign-in, a lapse): the remix source answers as its reader.
+    it.each([
+      ['another account', { access_token: 'token-user-2', user: { id: 'user-2' } }],
+      ['no one', null],
+    ])('reads it with the page’s session when the browser’s belongs to %s', async (_case, browserSession) => {
+      getSessionMock.mockResolvedValue({ data: { session: browserSession } });
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX });
+      render(remixPage());
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init as RequestInit))).toEqual(['Bearer test-token']);
+    });
   });
 
   describe('a reference staged by an earlier press', () => {
