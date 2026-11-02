@@ -3,10 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import {
-  STORAGE_BUCKET_ALLOWED_MIME_TYPES,
-  STORAGE_MEDIA_MIME_TYPE_ALIASES,
-} from '@/lib/storage-upload-mime-policy';
+import { STORAGE_BUCKET_ALLOWED_MIME_TYPES } from '@/lib/storage-upload-mime-policy';
 
 const migration = fs.readFileSync(
   path.resolve(process.cwd(), 'supabase/migrations/20261101213622_uploads_bucket_takes_ios_audio_names.sql'),
@@ -28,6 +25,5 @@ describe('uploads bucket takes the iPhone audio names migration', () => {
     const types = Array.from(update?.[1]?.matchAll(/'([^']+)'/g) ?? [], (match) => match[1]);
 
     expect(types).toEqual([...STORAGE_BUCKET_ALLOWED_MIME_TYPES.uploads]);
-    expect(types).toEqual(expect.arrayContaining(Object.keys(STORAGE_MEDIA_MIME_TYPE_ALIASES)));
   });
 });

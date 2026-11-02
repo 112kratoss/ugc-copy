@@ -10,10 +10,12 @@
 -- names such an upload is refused ("mime type audio/x-m4a is not supported")
 -- even though the sign step took it.
 --
--- Only uploads changes, the bucket clients stage media in: the server writes the
--- other buckets, under listed names. The list is STORAGE_BUCKET_ALLOWED_MIME_TYPES.uploads
--- in src/lib/storage-upload-mime-policy.ts, and
--- uploads-bucket-ios-audio-names-migration.test.ts holds the two equal.
+-- Only uploads changes: it is where installed apps send a track under their
+-- picker's name. Into the other buckets the server writes listed names, and
+-- clients either send the type their signer answers with (the web workflow
+-- uploader) or upload types no alias covers (profile pictures). The list is
+-- STORAGE_BUCKET_ALLOWED_MIME_TYPES.uploads in src/lib/storage-upload-mime-policy.ts,
+-- and uploads-bucket-ios-audio-names-migration.test.ts holds the two equal.
 UPDATE storage.buckets
 SET allowed_mime_types = ARRAY[
   'image/jpeg',

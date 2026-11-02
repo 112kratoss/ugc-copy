@@ -10,6 +10,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import type { PostResourceAttachment } from '@/lib/post-resource-bundles';
+import { canonicalStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
 
 const RESOURCE_FILES_BUCKET = 'post_resource_files';
 export const MAX_POST_RESOURCE_FILE_SIZE_BYTES = 50 * 1024 * 1024;
@@ -148,7 +149,8 @@ export function sanitizePostResourceFileName(fileName: string): string {
 
 export function resolveResourceFileContentType(file: Pick<File, 'name' | 'type'>): string | null {
   const extension = path.extname(file.name).toLowerCase();
-  const contentType = file.type.toLowerCase();
+  // An alias (an iPhone names a Voice Memo audio/x-m4a) is judged and kept under its listed name.
+  const contentType = canonicalStorageMediaMimeType(file.type);
 
   if (BLOCKED_RESOURCE_FILE_EXTENSIONS.has(extension)) {
     return null;

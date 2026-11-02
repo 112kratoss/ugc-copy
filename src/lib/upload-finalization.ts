@@ -167,11 +167,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeContentType(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.split(';', 1)[0]?.trim().toLowerCase() ?? '';
-  // An app installed before the sign step answered with a type stores the file
-  // under its picker's name (audio/x-m4a), which the sign step reserved under the
-  // listed one (audio/mp4). Both sides are read as the listed name, or finalize
-  // would delete that upload as a mismatch.
-  return normalized ? canonicalStorageMediaMimeType(normalized) : null;
+  return normalized || null;
+}
+
+/**
+ * An app installed before the sign step answered with a type stores the file under its
+ * picker's name (audio/x-m4a), which the sign step reserved under the listed one
+ * (audio/mp4). Storage keeps the name it was sent, so the two match as listed names; the
+ * record keeps the stored name and the answer gives the listed one.
+ */
+function sameListedType(actual: string, expected: string): boolean {
+  return canonicalStorageMediaMimeType(actual) === canonicalStorageMediaMimeType(expected);
 }
 
 function extractTrustedStorageMetadata(data: unknown): {
@@ -276,7 +282,8 @@ function trustedMetadataMatchesReservation(
   const expectedContentType = normalizeContentType(row.expected_content_type);
   const contentTypeMatches = expectedContentType === 'application/octet-stream'
     ? actual.contentType !== null
-    : actual.contentType !== null && actual.contentType === expectedContentType;
+    : actual.contentType !== null && expectedContentType !== null
+      && sameListedType(actual.contentType, expectedContentType);
   const identityPresent = actual.storageId !== null && actual.storageVersion !== null;
   const boundIdentityMatches = !options.requireBoundIdentity || (
     row.actual_storage_id !== null
@@ -452,7 +459,7 @@ async function finalizeReservationRow(
         bucket: location.bucket,
         path: location.filePath,
         storagePath: `${location.bucket}/${location.filePath}`,
-        contentType: actual.contentType as string,
+        contentType: canonicalStorageMediaMimeType(actual.contentType as string),
         sizeBytes: actual.sizeBytes as number,
       },
     };
@@ -634,7 +641,7 @@ async function finalizeReservationRow(
       bucket: location.bucket,
       path: location.filePath,
       storagePath: `${location.bucket}/${location.filePath}`,
-      contentType: actual.contentType as string,
+      contentType: canonicalStorageMediaMimeType(actual.contentType as string),
       sizeBytes: actual.sizeBytes as number,
     },
   };

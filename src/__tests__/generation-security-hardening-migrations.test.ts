@@ -61,7 +61,10 @@ describe('generation security hardening migrations', () => {
   });
 
   it('keeps signed-upload MIME policy exactly aligned with restricted storage buckets', () => {
-    // Oldest first: the last of these that sets a bucket's list is the one in force.
+    // Oldest first: the last of these that sets a bucket's list is the one the policy
+    // mirrors. Only these two are read, so the lists in force after every migration
+    // (generated_videos also takes image/webp posters, which no client may upload)
+    // are pinned by supabase/tests/database/production_data_contract.test.sql.
     const migrations = [
       '20260714100500_harden_generation_and_storage_write_boundaries.sql',
       '20261101213622_uploads_bucket_takes_ios_audio_names.sql',

@@ -7,7 +7,10 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
-import { isAllowedStorageBucketMimeType } from '@/lib/storage-upload-mime-policy';
+import {
+  canonicalStorageMediaMimeType,
+  isAllowedStorageBucketMimeType,
+} from '@/lib/storage-upload-mime-policy';
 import {
   abortUploadBytesBeforeIssue,
   markUploadBytesIssued,
@@ -76,6 +79,8 @@ export type WorkflowAssetUploadIntentResult =
       token: string;
       signedUploadUrl: string | null;
       expiresInSeconds: number;
+      /** The type the upload is kept under, for the client to send the file under. */
+      contentType: string;
     };
   }
   | {
@@ -139,7 +144,8 @@ function validateUploadMetadata(body: unknown): {
   }
 
   const bucketConfig = WORKFLOW_ASSET_BUCKETS[bucket];
-  const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim().toLowerCase() : '';
+  // Read under its listed name, as the media sign step reads it (Chrome's audio/x-m4a is audio/mp4).
+  const mimeType = typeof body.mimeType === 'string' ? canonicalStorageMediaMimeType(body.mimeType) : '';
   if (!mimeType || !isAllowedStorageBucketMimeType(bucket, mimeType)) {
     return { error: `Upload a valid ${bucketConfig.kind} file.` };
   }
@@ -292,6 +298,7 @@ export async function createWorkflowAssetUploadIntent({
       token: data.token,
       signedUploadUrl: data.signedUrl ?? null,
       expiresInSeconds: SIGNED_UPLOAD_EXPIRES_IN_SECONDS,
+      contentType: metadata.mimeType,
     },
   };
 }

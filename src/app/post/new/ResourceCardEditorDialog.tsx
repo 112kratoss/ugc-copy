@@ -16,6 +16,7 @@ import {
   type PostComposerResourceCardType,
 } from '@/lib/post-composer-resource-cards';
 import type { PostResourceAttachment, PostResourceItemType } from '@/lib/post-resource-bundles';
+import { canonicalStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
 import { isUploadCancelledError } from '@/lib/upload-queue';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
@@ -97,8 +98,9 @@ function inferResourceAttachmentType(contentType: string | null): PostResourceIt
   return 'source_file';
 }
 
-function isReferenceMediaFile(file: File) {
-  const contentType = file.type.trim().toLowerCase();
+export function isReferenceMediaFile(file: File) {
+  // Judged as the sign step judges it: Chrome's audio/x-m4a reads as audio/mp4.
+  const contentType = canonicalStorageMediaMimeType(file.type);
   const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
   const extensionFamily = REFERENCE_MEDIA_EXTENSION_FAMILY.get(extension);
   if (!extensionFamily) return false;

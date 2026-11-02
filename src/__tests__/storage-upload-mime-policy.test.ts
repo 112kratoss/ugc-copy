@@ -28,17 +28,11 @@ describe('storage upload MIME aliases', () => {
     expect(canonicalStorageMediaMimeType('constructor')).toBe('constructor');
   });
 
-  it('names each alias after an audio type the lists keep, never one of them', () => {
-    for (const [alias, canonical] of Object.entries(STORAGE_MEDIA_MIME_TYPE_ALIASES)) {
-      expect(STORAGE_MEDIA_MIME_TYPES.audio as readonly string[], alias).toContain(canonical);
-      expect(Object.values(STORAGE_MEDIA_MIME_TYPES).flat() as string[], alias).not.toContain(alias);
-    }
-  });
-
   // Storage judges the content-type header of the upload itself, and an installed
   // app takes that header from its picker, so the uploads bucket has to take the
-  // alias for the file to arrive. Every other bucket only ever receives a canonical
-  // name: the server writes them, and the workflow asset signer refuses an alias.
+  // alias for the file to arrive. Every other bucket only ever receives a listed
+  // name: the server writes them, and the web workflow uploader sends the type its
+  // signer answers with.
   it('lets only the uploads bucket take an alias', () => {
     for (const alias of Object.keys(STORAGE_MEDIA_MIME_TYPE_ALIASES)) {
       for (const [bucket, types] of Object.entries(STORAGE_BUCKET_ALLOWED_MIME_TYPES)) {

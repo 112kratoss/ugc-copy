@@ -71,6 +71,25 @@ describe('remote media security', () => {
     expect(result.blob.type).toBe('image/png');
   });
 
+  // A staged track an installed iPhone app sent under its picker's name is served
+  // under that name; it is read, checked and kept under the listed one.
+  it.each([
+    { served: 'audio/x-m4a', listed: 'audio/mp4', bytes: [0, 0, 0, 0x1c, ...Array.from('ftypM4A ', (c) => c.charCodeAt(0))] },
+    { served: 'audio/vnd.wave', listed: 'audio/wav', bytes: Array.from('RIFF\u0000\u0000\u0000\u0000WAVE', (c) => c.charCodeAt(0)) },
+  ])('takes audio served as $served under $listed', async ({ served, listed, bytes }) => {
+    const result = await downloadAllowlistedRemoteMedia({
+      url: 'https://media.example.test/voice-memo',
+      kind: 'audio',
+      allowedHosts: ['media.example.test'],
+      lookup: async () => [{ address: '8.8.8.8', family: 4 }],
+      fetcher: vi.fn(async () => new Response(new Uint8Array(bytes), {
+        status: 200,
+        headers: { 'content-type': served },
+      })),
+    });
+    expect(result.blob.type).toBe(listed);
+  });
+
   it('rejects content that does not match its declared media type', async () => {
     await expect(downloadAllowlistedRemoteMedia({
       url: 'https://media.example.test/not-really-an-image.png',

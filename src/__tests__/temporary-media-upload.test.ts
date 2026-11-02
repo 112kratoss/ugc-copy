@@ -22,6 +22,18 @@ async function signStepTakes(kind: StorageMediaKind, mimeType: string): Promise<
   }
 }
 
+/** What the sign step answers in these tests. */
+const SIGNED_INTENT = {
+  success: true,
+  uploadId: '11111111-1111-4111-8111-111111111111',
+  bucket: 'uploads',
+  path: 'user-1/reference.png',
+  storagePath: 'uploads/user-1/reference.png',
+  token: 'upload-token',
+  signedUploadUrl: 'https://storage.example.test/upload',
+  expiresInSeconds: 7200,
+};
+
 const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   from: vi.fn(),
@@ -115,19 +127,7 @@ describe('uploadMediaToTemporaryStorage', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/uploads/media/sign') {
-        return {
-          ok: true,
-          json: async () => ({
-            success: true,
-            uploadId: '11111111-1111-4111-8111-111111111111',
-            bucket: 'uploads',
-            path: 'user-1/reference.png',
-            storagePath: 'uploads/user-1/reference.png',
-            token: 'upload-token',
-            signedUploadUrl: 'https://storage.example.test/upload',
-            expiresInSeconds: 7200,
-          }),
-        };
+        return { ok: true, json: async () => SIGNED_INTENT };
       }
 
       if (url === '/api/uploads/finalize') {
@@ -256,13 +256,10 @@ describe('uploadMediaToTemporaryStorage', () => {
   // answers with that name, so the file is stored under the type Kie lists.
   it('sends the file under the type the sign step answers with', async () => {
     const sent = stubXhr();
-    const answer = vi.mocked(fetch).getMockImplementation()!;
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const response = await answer(input, init);
-      if (String(input) !== '/api/uploads/media/sign') return response;
-      const body = await response.json();
-      return { ok: true, json: async () => ({ ...body, contentType: 'audio/mp4' }) } as Response;
-    }));
+    // The sign request is the first call.
+    vi.mocked(fetch).mockImplementationOnce(async () => (
+      { ok: true, json: async () => ({ ...SIGNED_INTENT, contentType: 'audio/mp4' }) } as Response
+    ));
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
     const file = new File(['voice'], 'Voice Memo.m4a', { type: 'audio/x-m4a' });
 

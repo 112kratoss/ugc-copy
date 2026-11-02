@@ -131,6 +131,24 @@ describe('post resource direct uploads', () => {
     });
   });
 
+  // A recipe's reference media or source file picked on an iPhone carries the picker's
+  // name for the format, and the app uploads under the type this answers with.
+  it.each([
+    { fileName: 'Voice Memo.m4a', claimed: 'audio/x-m4a', listed: 'audio/mp4' },
+    { fileName: 'Take 1.wav', claimed: 'audio/vnd.wave', listed: 'audio/wav' },
+  ])('signs a recipe file named $claimed under $listed', async ({ fileName, claimed, listed }) => {
+    const mock = createClient();
+
+    const result = await createPostResourceFileUploadIntent({
+      body: { fileName, contentType: claimed, sizeBytes: 5 },
+      client: mock.client,
+      createUploadId: () => '11111111-1111-4111-8111-111111111111',
+      userId: 'user-1',
+    });
+
+    expect(result).toMatchObject({ ok: true, body: { expected: { fileName, contentType: listed, sizeBytes: 5 } } });
+  });
+
   it('will not finalize a path owned by another user', async () => {
     const mock = createClient();
 

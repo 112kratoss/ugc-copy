@@ -12,6 +12,8 @@ type WorkflowAssetUploadIntent = {
   token: string;
   signedUploadUrl: string | null;
   expiresInSeconds: number;
+  /** The type the upload is kept under: an .m4a Chrome names audio/x-m4a is kept as audio/mp4. */
+  contentType?: string;
 };
 
 type WorkflowAssetReadUrlResponse = {
@@ -59,11 +61,14 @@ export async function uploadWorkflowAssetWithSignedIntent(
     throw new Error('Workflow asset upload response was invalid.');
   }
 
+  // supabase-js sends a File as form data under the File's own type and ignores
+  // contentType, so a file the signer names otherwise is re-typed before it goes.
+  const contentType = uploadIntent.contentType || mimeType;
   const { error: uploadError } = await supabase.storage.from(uploadIntent.bucket).uploadToSignedUrl(
     uploadIntent.path,
     uploadIntent.token,
-    file,
-    { contentType: mimeType }
+    contentType === file.type ? file : new File([file], file.name, { type: contentType }),
+    { contentType }
   );
 
   if (uploadError) {

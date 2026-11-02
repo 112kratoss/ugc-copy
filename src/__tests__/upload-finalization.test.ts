@@ -251,8 +251,9 @@ describe('generic upload finalization', () => {
         contentType: 'audio/mp4',
       },
     });
+    // The record keeps the type Storage holds; the answer names the listed type.
     expect(fake.row).toMatchObject({
-      actual_content_type: 'audio/mp4',
+      actual_content_type: 'audio/x-m4a',
       finalization_status: 'finalized',
     });
     expect(fake.remove).not.toHaveBeenCalled();

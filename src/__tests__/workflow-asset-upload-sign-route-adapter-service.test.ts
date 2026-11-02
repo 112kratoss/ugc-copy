@@ -82,6 +82,7 @@ describe('workflow asset upload-sign route adapter service', () => {
         token: 'workflow-upload-token',
         signedUploadUrl: 'https://storage.example.test/workflow-upload',
         expiresInSeconds: 7200,
+        contentType: 'image/png',
       },
     }));
     const body = {
