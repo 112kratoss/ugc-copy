@@ -19,11 +19,14 @@ describe('the Apple web client secret renewal', () => {
   /** The workflow without its comment lines: what runs. */
   const steps = workflow.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n');
 
-  it('runs monthly, and on demand with a rotate switch', () => {
+  it('runs monthly, and on demand with a rotate switch, one run at a time, from main only', () => {
     expect(workflow).toContain("- cron: '17 3 1 * *'");
     expect(workflow).toMatch(/workflow_dispatch:\n {4}inputs:\n {6}rotate:\n/);
     expect(workflow).toContain("ROTATE_FLAG: ${{ inputs.rotate && '--rotate' || '' }}");
     expect(workflow).toMatch(/permissions:\n {2}contents: read\n {2}issues: write\n/);
+    expect(workflow).toMatch(/concurrency:\n {2}group: apple-web-client-secret\n {2}cancel-in-progress: false\n/);
+    // A dispatch from another branch would run that branch's script with the production key.
+    expect(workflow).toMatch(/ {2}renew:\n(?: {4}.*\n)*? {4}if: github\.ref == 'refs\/heads\/main'\n/);
   });
 
   // On GitHub Free a private repository cannot read environment secrets, and the owner will

@@ -84,6 +84,25 @@ describe('Apple web client secret helper', () => {
     expect(fs.existsSync(out)).toBe(false);
   });
 
+  // A typo would otherwise drop its check without a word, and writing to production needs the pin.
+  it('refuses an unknown option, and an apply to Supabase without the key pin', () => {
+    const dir = tempDir();
+    const key = throwawayKey(dir);
+    const base = ['--p8', key.p8, '--key-id', 'KEY1234567', '--team-id', 'TEAM123456', '--client-id', 'com.example.app.web'];
+
+    const typo = mint([...base, '--key-sha', key.fingerprint, '--out', path.join(dir, 'a.jwt')]);
+    expect(typo.status).toBe(1);
+    expect(typo.stderr).toContain('Unknown argument: --key-sha');
+
+    const unpinned = spawnSync(process.execPath, [scriptPath, ...base, '--apply-supabase'], {
+      encoding: 'utf8',
+      env: { ...process.env, SUPABASE_MANAGEMENT_API_TOKEN: 'not-used' },
+    });
+    expect(unpinned.status).toBe(1);
+    expect(unpinned.stderr).toContain(`--apply-supabase needs --key-sha256 (this key's is ${key.fingerprint})`);
+    expect(unpinned.stdout).toBe('');
+  });
+
   it('names a missing argument and mints nothing', () => {
     const result = mint(['--p8', 'AuthKey.p8', '--key-id', 'K', '--team-id', 'T']);
 

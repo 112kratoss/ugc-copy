@@ -120,31 +120,36 @@ async function applyToSupabase({
   rotate = false,
   projectRef = PROJECT_REF,
   fetcher = fetch,
+  /** Told the moment Supabase accepts the update, before the read-back. */
+  onApplied,
 }) {
   const url = `https://api.supabase.com/v1/projects/${projectRef}/config/auth`;
   const headers = { Authorization: `Bearer ${token}` };
-  const readConfig = async (failure) => {
-    const response = await fetcher(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-    if (!response.ok) throw new Error(`Could not read the Supabase Auth config: HTTP ${response.status}. ${failure}`);
-    return response.json();
+  /** A request, its failure named by which call it was and what it left behind. */
+  const request = async (what, consequence, init = {}) => {
+    let response;
+    try {
+      response = await fetcher(url, { ...init, headers: { ...headers, ...init.headers }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    } catch (error) {
+      throw new Error(`${what} failed (${error instanceof Error ? error.message : 'no answer'}). ${consequence}`);
+    }
+    if (!response.ok) throw new Error(`${what} failed: HTTP ${response.status}. ${consequence}`);
+    return response;
   };
-  const before = await readConfig('Nothing was installed.');
+  const before = await (await request('Reading the Supabase Auth config', 'Nothing was installed.')).json();
   assertAppleProviderFits(before, { clientId });
   const liveSecretRead = rotate
     ? false
     : assertContinuesLiveSecret(before.external_apple_secret, { publicKey, keyId, teamId, clientId });
-  const patched = await fetcher(url, {
-    method: 'PATCH',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ external_apple_secret: secret }),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
   // The answer echoes the whole Auth config, secrets included: only its status is read.
-  if (!patched.ok) {
-    throw new Error(`Supabase refused the new Apple client secret: HTTP ${patched.status}. The old one stays.`);
-  }
+  await request('The update of the Apple client secret', 'The new secret may or may not be in place.', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ external_apple_secret: secret }),
+  });
+  onApplied?.();
   // Read back: a 2xx alone does not prove the field changed. A masked field cannot be compared.
-  const after = await readConfig('The new secret may or may not be in place.');
+  const after = await (await request('Reading the config back', 'Supabase accepted the new secret; whether it holds it is unknown.')).json();
   const stored = readJwt(after.external_apple_secret);
   if (stored && after.external_apple_secret !== secret) {
     throw new Error('Supabase answered the update but does not hold the new secret.');
@@ -152,16 +157,19 @@ async function applyToSupabase({
   return { liveSecretRead, storedSecretRead: Boolean(stored) };
 }
 
+// A mistyped option would drop its check without a word (say --key-sha for --key-sha256), so only these pass.
+const FLAGS = { '--self-test': 'selfTest', '--apply-supabase': 'applySupabase', '--rotate': 'rotate' };
+const OPTIONS = new Set(['--p8', '--key-id', '--key-sha256', '--team-id', '--client-id', '--out']);
+
 function readArgs(argv) {
-  const flags = { '--self-test': 'selfTest', '--apply-supabase': 'applySupabase', '--rotate': 'rotate' };
   const values = {};
   for (let index = 0; index < argv.length; index += 1) {
     const name = argv[index];
-    if (!name.startsWith('--')) throw new Error(`Unexpected argument: ${name}`);
-    if (flags[name]) {
-      values[flags[name]] = true;
+    if (FLAGS[name]) {
+      values[FLAGS[name]] = true;
       continue;
     }
+    if (!OPTIONS.has(name)) throw new Error(`Unknown argument: ${name}. See the comment at the top of this script.`);
     const value = argv[index + 1];
     if (!value || value.startsWith('--')) throw new Error(`${name} needs a value.`);
     values[name.slice(2)] = value;
@@ -272,8 +280,28 @@ async function selfTest() {
 
   const unreadable = scriptedFetch([{ status: 401, json: {} }]);
   await assert.rejects(() => apply(unreadable.fetcher), /HTTP 401\. Nothing was installed/);
+  const offline = async () => {
+    throw new Error('fetch failed');
+  };
+  await assert.rejects(() => apply(offline), /Reading the Supabase Auth config failed \(fetch failed\)\. Nothing was installed/);
+  // Supabase took the update, then the read-back was lost: the notice has already said so once.
+  let notices = 0;
+  const lostReadBack = scriptedFetch([
+    { status: 200, json: { ...provider, external_apple_secret: live } },
+    { status: 200, json: {} },
+    { status: 503, json: {} },
+  ]);
+  await assert.rejects(
+    () => apply(lostReadBack.fetcher, { onApplied: () => { notices += 1; } }),
+    /Reading the config back failed: HTTP 503\. Supabase accepted the new secret/,
+  );
+  assert.equal(notices, 1);
   const refusedPatch = scriptedFetch([{ status: 200, json: { ...provider, external_apple_secret: live } }, { status: 500, json: { external_apple_secret: secret } }]);
-  await assert.rejects(() => apply(refusedPatch.fetcher), (error) => /HTTP 500/.test(error.message) && !error.message.includes(secret));
+  await assert.rejects(
+    () => apply(refusedPatch.fetcher, { onApplied: () => { notices += 1; } }),
+    (error) => /HTTP 500/.test(error.message) && !error.message.includes(secret),
+  );
+  assert.equal(notices, 1);
   const notKept = scriptedFetch([
     { status: 200, json: { ...provider, external_apple_secret: live } },
     { status: 200, json: {} },
@@ -297,6 +325,10 @@ async function main() {
     throw new Error('Pass --p8 <key file>, or set APPLE_SIGN_IN_PRIVATE_KEY.');
   }
   const { key, publicKey, fingerprint } = loadKey(privateKeyPem);
+  // Writing to production is held to the key's pin: APNs and App Store Connect keys are P-256 too.
+  if (args.applySupabase && !args['key-sha256']) {
+    throw new Error(`--apply-supabase needs --key-sha256 (this key's is ${fingerprint}). Nothing was minted.`);
+  }
   if (args['key-sha256'] && args['key-sha256'].toLowerCase() !== fingerprint) {
     throw new Error(`The key's public SHA-256 is ${fingerprint}, not the pinned ${args['key-sha256']}: this is not the key for ${args['key-id']}. Nothing was minted.`);
   }
@@ -307,6 +339,8 @@ async function main() {
     if (!token) throw new Error('Set SUPABASE_MANAGEMENT_API_TOKEN to apply the secret to Supabase.');
     const { liveSecretRead } = await applyToSupabase({
       secret, publicKey, keyId: args['key-id'], teamId: args['team-id'], clientId, token, rotate: args.rotate === true,
+      // Printed at once, so the run's summary records it even if the read-back then fails.
+      onApplied: () => console.log(`Supabase accepted a new Apple client secret for ${clientId}, expiring ${expiresAt.toISOString()}.`),
     });
     const continuity = args.rotate ? 'installed over the old key’s secret (--rotate)' : liveSecretRead ? 'the live one was this key’s' : 'Supabase masks the live one';
     console.log(`Applied a new Apple client secret for ${clientId} to Supabase project ${PROJECT_REF}, expiring ${expiresAt.toISOString()}; ${continuity}. Key SHA-256 ${fingerprint}.`);
