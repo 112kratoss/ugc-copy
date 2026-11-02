@@ -36,15 +36,9 @@ vi.mock('expo-constants', () => ({
 
 // One stable object, never a fresh literal per render: an unstable router mock
 // re-runs the provider's effects forever and hangs the suite.
-vi.mock('expo-router', async () => {
-  const { findFocusedRoute } = await import('@react-navigation/core');
+vi.mock('expo-router', () => {
   // expo-router's store keeps one container ref for the app's life.
-  const navigationRef = {
-    isReady: () => true,
-    getRootState: () => state.rootState,
-    // As the container finds it: the route in front at the deepest level.
-    getCurrentRoute: () => (state.rootState ? findFocusedRoute(state.rootState as never) : undefined),
-  };
+  const navigationRef = { isReady: () => true, getRootState: () => state.rootState };
   return {
     router: { replace: state.replace },
     useNavigationContainerRef: () => navigationRef,
@@ -472,7 +466,7 @@ describe('recovering from a session ended elsewhere', () => {
   // The route's own `initialId` stays the post the reel opened on, so the
   // reel gives the post in front as its return.
   it('brings the reel back on the post the person swiped to', async () => {
-    state.rootState = stateInFront({ ...pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }), key: 'viewer-1' });
+    state.rootState = stateInFront(pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1'));
     const reel = showScreen('viewer-1', '/viewer?source=home&initialId=post-14');
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
@@ -489,8 +483,8 @@ describe('recovering from a session ended elsewhere', () => {
     // A creator's profile opened from the reel.
     state.rootState = rootStateWith(
       homeTabs(),
-      { ...pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }), key: 'viewer-1' },
-      { ...pushedRoute('/creators/[username]', { username: 'luna' }), key: 'creators/[username]-1' },
+      pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1'),
+      pushedRoute('/creators/[username]', { username: 'luna' }, 'creators/[username]-1'),
     );
     const reel = showScreen('viewer-1', '/viewer?source=home&initialId=post-14');
     const { latest, unmount } = await mountWith(registeredSession);
@@ -505,7 +499,7 @@ describe('recovering from a session ended elsewhere', () => {
   });
 
   it('does not use a return left by a screen that has gone', async () => {
-    state.rootState = stateInFront({ ...pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }), key: 'viewer-1' });
+    state.rootState = stateInFront(pushedRoute('/viewer', { source: 'home', initialId: 'post-9' }, 'viewer-1'));
     showScreen('viewer-1', '/viewer?source=home&initialId=post-14').takeDown();
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');

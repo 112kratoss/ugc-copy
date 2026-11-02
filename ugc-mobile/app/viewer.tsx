@@ -657,9 +657,10 @@ function ImmersivePreviewViewer() {
   // A forced sign-in (the session ended elsewhere) brings the reel back on the
   // post the person is on. The route's `initialId` stays the post it opened on:
   // `setParams` would refetch the reel, `initialId` being in its source's key.
-  // On that post the route's own params still say it all, a Details page it
-  // opened on included.
-  useScreenReturn(activeItem && activeItem.id !== initialId ? returnPathFor(activeItem) : null);
+  // On that post the route's own params stand, and so they do until the reel
+  // lands on it: behind the notice that it is missing (C1), the active post is
+  // only the first the source sent.
+  useScreenReturn(initialPositionReady && activeItem && activeItem.id !== initialId ? returnPathFor(activeItem) : null);
   // Read as each event is sent rather than captured: a new session gave
   // `submitViewerFeedEvent` a new identity, which restarted the attention
   // effect and filed a skip or a dwell for the post on screen (audit 03-2).

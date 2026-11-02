@@ -12,7 +12,7 @@ type AuthRouter<Href> = {
 /** A React Navigation state, as far as `focusedRouteReturnPath` reads it. */
 export type NavigationStateLike = {
   index?: number;
-  routes: readonly { name: string; params?: object; state?: NavigationStateLike }[];
+  routes: readonly { key?: string; name: string; params?: object; state?: NavigationStateLike }[];
 };
 
 /** React Navigation's words for steering a nested navigator: never a screen's own params. */
@@ -24,6 +24,23 @@ const NAVIGATION_PARAM_KEYS = new Set(['screen', 'params', 'initial', 'state', '
  * page's own sign-in return included.
  */
 const SHARE_SURFACE_PARAM = 's';
+
+/** The returns screens gave for themselves, by the key of their route (`publishScreenReturn`). */
+const screenReturns = new Map<string, string>();
+
+/**
+ * Gives the path a forced sign-in comes back to while the route `routeKey` is
+ * in front, in place of the one `focusedRouteReturnPath` builds from its
+ * params: for a screen whose params say where it opened, not where the person
+ * has moved since, as the reel's `initialId` names the post it opened on. The
+ * function returned takes it back, unless a later one has replaced it.
+ */
+export function publishScreenReturn(routeKey: string, path: string) {
+  screenReturns.set(routeKey, path);
+  return () => {
+    if (screenReturns.get(routeKey) === path) screenReturns.delete(routeKey);
+  };
+}
 
 /**
  * The screen in front as a path to come back to, for the sign-ins nothing on
@@ -38,16 +55,19 @@ const SHARE_SURFACE_PARAM = 's';
  * of the screen it was last sent to, whichever is in front now, and a link's on
  * the `__root` slot. Expo Router's own params, such as the zoom a screen opened
  * with, stay out, as they do from its paths. Null with no screen in front, or
- * on a page the app does not have.
+ * on a page the app does not have. A screen that gave its own return for its
+ * route (`publishScreenReturn`) comes back on that instead.
  */
 export function focusedRouteReturnPath(state: NavigationStateLike | null | undefined): string | null {
   const names: string[] = [];
   let route = state?.routes[state.index ?? 0];
   let params: Record<string, unknown> = {};
+  let routeKey: string | undefined;
   if (!route) return null;
   while (route) {
     if (route.name !== INTERNAL_SLOT_NAME) names.push(...route.name.replace(/^\//, '').split('/'));
     params = (route.params ?? {}) as Record<string, unknown>;
+    routeKey = route.key;
     if (route.state) {
       route = route.state.routes[route.state.index ?? 0];
     } else if (typeof params.screen === 'string') {
@@ -58,6 +78,8 @@ export function focusedRouteReturnPath(state: NavigationStateLike | null | undef
       route = undefined;
     }
   }
+  const given = routeKey === undefined ? undefined : screenReturns.get(routeKey);
+  if (given) return given;
   if (names.at(-1) === 'index') names.pop();
 
   const own = removeInternalExpoRouterParams(params) as Record<string, unknown>;
@@ -87,28 +109,6 @@ function paramValues(value: unknown): string[] {
   return (Array.isArray(value) ? value : [value]).flatMap((item) => (
     typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean' ? [String(item)] : []
   ));
-}
-
-/** The returns screens gave for themselves, by the key of their route (`publishScreenReturn`). */
-const screenReturns = new Map<string, string>();
-
-/**
- * Gives the path a forced sign-in comes back to while the route `routeKey` is
- * in front, in place of the one `focusedRouteReturnPath` builds from its
- * params: for a screen whose params say where it opened, not where the person
- * has moved since, as the reel's `initialId` names the post it opened on. The
- * function returned takes it back, unless a later one has replaced it.
- */
-export function publishScreenReturn(routeKey: string, path: string) {
-  screenReturns.set(routeKey, path);
-  return () => {
-    if (screenReturns.get(routeKey) === path) screenReturns.delete(routeKey);
-  };
-}
-
-/** The return the screen of route `routeKey` gave for itself, if it gave one. */
-export function publishedScreenReturn(routeKey: string | undefined) {
-  return routeKey === undefined ? undefined : screenReturns.get(routeKey);
 }
 
 export function normalizeAuthReturnTo(value: string | string[] | null | undefined) {

@@ -297,7 +297,7 @@ vi.mock('@/lib/remix-start', async (importOriginal) => ({
 
 import ImmersivePreviewViewerScreen from '@/app/viewer';
 import type { FeedUndoNoticeModel } from '@/components/feed-undo-notice';
-import { publishedScreenReturn } from '@/lib/auth-navigation';
+import { focusedRouteReturnPath } from '@/lib/auth-navigation';
 import { haptic } from '@/lib/haptics';
 import { immersiveViewerReturnPath, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { startShowcaseRemix } from '@/lib/remix-start';
@@ -402,8 +402,9 @@ function reelIds(tree: renderer.ReactTestRenderer) {
 
 /** A flick that comes to rest on the page at `index`, as the list reports it. */
 async function swipeTo(tree: renderer.ReactTestRenderer, index: number) {
+  const list = tree.root.findByType('flat-list' as never).props;
   act(() => {
-    tree.root.findByType('flat-list' as never).props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { y: 844 * index } } });
+    list.onMomentumScrollEnd({ nativeEvent: { contentOffset: { y: list.getItemLayout(null, index).offset } } });
   });
   await settle();
 }
@@ -1426,41 +1427,61 @@ describe('a recipe opened from search', () => {
 });
 
 describe('the return a forced sign-in comes back to', () => {
-  // The route's `initialId` stays the post the reel opened on; a session
-  // ended elsewhere reads the return the reel gives (`useScreenReturn`).
-  it('is the post the reader swiped to, and the route again once they are back on the one it opened on', async () => {
+  /** What a forced sign-in sends the person back to with this reel in front (`focusedRouteReturnPath`). */
+  const forcedReturn = () => focusedRouteReturnPath({ index: 0, routes: [{ ...reelRoute, params: routerState.params }] });
+  /** The reel on `initialId` in its lane, as its own sign-in prompts give it. */
+  const laneReturnOn = (initialId: string) => immersiveViewerReturnPath({
+    source: 'showcase-feed',
+    initialId,
+    feedSessionId: 'session-1',
+    algorithmVersion: 'for-you-rules-v4',
+    lane: LANE_ROUTE.lane,
+  });
+
+  // The route's `initialId` stays the post the reel opened on, so the reel
+  // gives the post in front as its return (`useScreenReturn`).
+  it("is the post the reader swiped to, and the route's own again once they are back on the one it opened on", async () => {
     seedLane('viewer-1', lanePosts());
     const tree = await renderReel('post-b');
-    expect(publishedScreenReturn(reelRoute.key)).toBeUndefined();
+    const routeReturn = forcedReturn();
+    expect(routeReturn).toContain('initialId=post-b');
 
     await swipeTo(tree, 2);
 
     expect(activeId()).toBe('post-c');
-    expect(publishedScreenReturn(reelRoute.key)).toBe(immersiveViewerReturnPath({
-      source: 'showcase-feed',
-      initialId: 'post-c',
-      feedSessionId: 'session-1',
-      algorithmVersion: 'for-you-rules-v4',
-      lane: LANE_ROUTE.lane,
-    }));
+    expect(forcedReturn()).toBe(laneReturnOn('post-c'));
 
     await swipeTo(tree, 1);
 
     expect(activeId()).toBe('post-b');
-    expect(publishedScreenReturn(reelRoute.key)).toBeUndefined();
+    expect(forcedReturn()).toBe(routeReturn);
   });
 
-  it('is taken back when the reel goes', async () => {
+  it("is the route's own once the reel has gone", async () => {
     seedLane('viewer-1', lanePosts());
     const tree = await renderReel('post-b');
+    const routeReturn = forcedReturn();
     await swipeTo(tree, 3);
-    expect(publishedScreenReturn(reelRoute.key)).toContain('initialId=post-d');
+    expect(forcedReturn()).toBe(laneReturnOn('post-d'));
 
-    act(() => {
-      trees.splice(trees.indexOf(tree), 1);
-      tree.unmount();
+    act(() => tree.unmount());
+
+    expect(forcedReturn()).toBe(routeReturn);
+  });
+
+  // Audit C1: a post that did not load is shown as missing, never as the
+  // first post the source sent instead, and signing in shows that again.
+  it("stays the route's own while the reel says the post it opened on is missing", async () => {
+    authState.api.getShowcaseFeed.mockResolvedValue({
+      items: [feedItem('post-a', maya, 'delivery-a')],
+      feedSessionId: 'session-1',
+      algorithmVersion: 'for-you-rules-v4',
+      nextCursor: null,
+      pageInfo: { hasMore: false, nextOffset: null },
     });
+    const tree = await renderReel('post-gone', { source: 'showcase-feed' });
 
-    expect(publishedScreenReturn(reelRoute.key)).toBeUndefined();
+    expect(tree.root.findAllByProps({ title: 'This isn’t available anymore' })).not.toHaveLength(0);
+    expect(forcedReturn()).toBe('/viewer?source=showcase-feed&initialId=post-gone');
   });
 });
