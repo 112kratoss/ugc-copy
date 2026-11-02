@@ -613,13 +613,15 @@ describe('CreateVideoClient Kling video elements', () => {
 
   /** Answers the page's remix request with this bundle, and every other request as the page's own answers do. */
   /** The remix source answers `bundle`: after `hold` settles, and refusing `refusedToken` (401) as one expired. */
-  function stubRemix(bundle: RemixSourceBundle, { hold = null, refusedToken = null }: { hold?: Promise<unknown> | null; refusedToken?: string | null } = {}) {
+  /** `bundle` may be a function: each read then answers it as it is then (links signed as it answers). */
+  function stubRemix(bundle: RemixSourceBundle | (() => RemixSourceBundle), { hold = null, refusedToken = null }: { hold?: Promise<unknown> | null; refusedToken?: string | null } = {}) {
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (!String(input).includes('/api/remix-source')) return defaultResponse(input, init);
       if (hold) await hold;
+      const answer = typeof bundle === 'function' ? bundle() : bundle;
       return (init?.headers as Record<string, string> | undefined)?.Authorization === `Bearer ${refusedToken}`
         ? { ok: false, status: 401, json: async () => ({ error: 'Unauthorized' }) } as Response
-        : { ok: true, status: 200, json: async () => bundle } as Response;
+        : { ok: true, status: 200, json: async () => answer } as Response;
     });
   }
 
@@ -8461,14 +8463,6 @@ describe('CreateVideoClient Kling video elements', () => {
         restoreIssues: [],
       } as unknown as RemixSourceBundle;
     }
-    /** The remix source answers each read with `remix()` as it is then, and every other request as the page's own answers do. */
-    function stubRemixReads(remix: () => RemixSourceBundle) {
-      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => (
-        String(input).includes('/api/remix-source')
-          ? { ok: true, status: 200, json: async () => remix() } as Response
-          : defaultResponse(input, init)
-      ));
-    }
     const promptBox = () => screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
 
     beforeEach(() => {
@@ -8488,7 +8482,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('measures the original’s clip by a link that opens when “Use as reference” is pressed past the hour, keeping the creator’s edits', async () => {
       movePageClock(OPENED_AT);
-      stubRemixReads(() => ownRunRemix());
+      stubRemix(() => ownRunRemix());
       render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
       const use = await screen.findByRole('button', { name: 'Use as reference' });
       fireEvent.change(promptBox(), { target: { value: 'Two figures circle, then strike.' } });
@@ -8513,7 +8507,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('plays the original past the hour by a link that opens', async () => {
       movePageClock(OPENED_AT);
-      stubRemixReads(() => ownRunRemix());
+      stubRemix(() => ownRunRemix());
       render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
       const original = await screen.findByRole('button', { name: 'View original' });
 
@@ -8527,7 +8521,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('plays a restored reference clip past the hour by a link that opens', async () => {
       movePageClock(OPENED_AT);
-      stubRemixReads(() => ownRunRemix({ referenceClip: true }));
+      stubRemix(() => ownRunRemix({ referenceClip: true }));
       render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
       const clips = await screen.findByRole('list', { name: 'Reference videos' });
 
