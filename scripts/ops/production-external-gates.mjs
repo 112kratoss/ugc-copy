@@ -368,7 +368,7 @@ export function buildAppleDeletionAuthorizeUrl(clientId, returnUrl = SITE_APPLE_
 }
 
 async function fetchAppleAuthorizePage(url) {
-  const response = await fetch(url, { redirect: 'manual' });
+  const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
   return readAppleAuthorizePage({ status: response.status, html: await response.text(), url });
 }
 
