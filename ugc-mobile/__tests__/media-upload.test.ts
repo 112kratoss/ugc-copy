@@ -351,6 +351,53 @@ describe('mobile media uploads', () => {
     });
   });
 
+  // An iPhone's document picker names an .m4a track audio/x-m4a. The sign step keeps
+  // it as audio/mp4 and answers with that name; the file goes up under it, so storage
+  // holds the type Kie lists. Before the server answered with a type, the picker's
+  // name went up, which is why the uploads bucket also takes the alias.
+  it('sends a track under the type the sign step answers with', async () => {
+    uploadState.inspectUriUpload.mockResolvedValueOnce({ mimeType: 'audio/x-m4a', sizeBytes: 5 });
+    const createMediaUpload = vi.fn(async () => ({
+      success: true,
+      uploadId: '44444444-4444-4444-8444-444444444444',
+      bucket: 'uploads' as const,
+      path: 'user-1/voice-memo.m4a',
+      storagePath: 'uploads/user-1/voice-memo.m4a',
+      token: 'upload-token',
+      signedUploadUrl: 'https://storage.example.com/storage/v1/object/upload/sign/uploads/user-1/voice-memo.m4a?token=upload-token',
+      expiresInSeconds: 7200,
+      contentType: 'audio/mp4',
+    }));
+    const finalizeUpload = vi.fn(async () => ({
+      bucket: 'uploads',
+      path: 'user-1/voice-memo.m4a',
+      storagePath: 'uploads/user-1/voice-memo.m4a',
+      contentType: 'audio/mp4',
+      sizeBytes: 5,
+    }));
+    const createMediaReadUrl = vi.fn(async () => ({
+      success: true,
+      signedUrl: 'https://storage.example.com/read',
+      expiresInSeconds: 3600,
+    }));
+    const { uploadPickedMedia } = await import('../lib/media');
+
+    await expect(uploadPickedMedia('file:///Voice%20Memo.m4a', {
+      api: { createMediaUpload, finalizeUpload, createMediaReadUrl },
+      fileName: 'Voice Memo.m4a',
+      mimeType: 'audio/x-m4a',
+      kind: 'audio',
+      sizeBytes: 5,
+    })).resolves.toMatchObject({ mimeType: 'audio/mp4', kind: 'audio' });
+
+    expect(createMediaUpload).toHaveBeenCalledWith(expect.objectContaining({ mimeType: 'audio/x-m4a', kind: 'audio' }));
+    expect(uploadState.uploadUriToSignedUrl).toHaveBeenCalledWith(
+      'file:///Voice%20Memo.m4a',
+      expect.any(String),
+      expect.objectContaining({ mimeType: 'audio/mp4' }),
+    );
+  });
+
   it('constructs a scoped signed target when an older API omits its redundant URL', async () => {
     const createMediaUpload = vi.fn(async () => ({
       success: true,

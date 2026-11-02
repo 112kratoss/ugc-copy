@@ -6,6 +6,7 @@ import { logBackendWarning } from '@/lib/backend-logger';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import { MEDIA_UPLOAD_INTENTS_TABLE } from '@/lib/media-upload-staging-paths';
+import { canonicalStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
 import {
   abortUploadBytesBeforeIssue,
   claimUploadBytesForConsumption,
@@ -166,7 +167,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeContentType(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.split(';', 1)[0]?.trim().toLowerCase() ?? '';
-  return normalized || null;
+  // An app installed before the sign step answered with a type stores the file
+  // under its picker's name (audio/x-m4a), which the sign step reserved under the
+  // listed one (audio/mp4). Both sides are read as the listed name, or finalize
+  // would delete that upload as a mismatch.
+  return normalized ? canonicalStorageMediaMimeType(normalized) : null;
 }
 
 function extractTrustedStorageMetadata(data: unknown): {

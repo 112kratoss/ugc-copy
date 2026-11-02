@@ -684,9 +684,13 @@ select is(
     "mimes": [
       "image/jpeg","image/png","image/webp","image/gif","image/avif","image/heic","image/heif",
       "video/mp4","video/quicktime","video/webm","video/x-m4v",
-      "audio/mpeg","audio/mp4","audio/wav","audio/x-wav","audio/aac","audio/ogg","audio/webm"
+      "audio/mpeg","audio/mp4","audio/wav","audio/x-wav","audio/aac","audio/ogg","audio/webm",
+      "audio/x-m4a","audio/vnd.wave"
     ]
   }'::jsonb,
+  -- audio/x-m4a and audio/vnd.wave are what an iPhone's document picker names an
+  -- .m4a and a .wav track; an app installed before the sign step answered with a
+  -- type sends its file under them (20261101213622).
   'uploads bucket is reproducible and restricted'
 );
 select is(

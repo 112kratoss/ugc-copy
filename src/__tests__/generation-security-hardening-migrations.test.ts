@@ -61,12 +61,18 @@ describe('generation security hardening migrations', () => {
   });
 
   it('keeps signed-upload MIME policy exactly aligned with restricted storage buckets', () => {
-    const migration = readMigration(
+    // Oldest first: the last of these that sets a bucket's list is the one in force.
+    const migrations = [
       '20260714100500_harden_generation_and_storage_write_boundaries.sql',
-    );
+      '20261101213622_uploads_bucket_takes_ios_audio_names.sql',
+    ].map(readMigration);
 
     for (const [bucket, mimeTypes] of Object.entries(STORAGE_BUCKET_ALLOWED_MIME_TYPES)) {
-      expect(readBucketMimeTypes(migration, bucket), bucket).toEqual([...mimeTypes]);
+      const inForce = migrations
+        .map((migration) => readBucketMimeTypes(migration, bucket))
+        .filter((types) => types.length > 0)
+        .at(-1);
+      expect(inForce, bucket).toEqual([...mimeTypes]);
     }
   });
 

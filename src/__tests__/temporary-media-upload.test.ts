@@ -1,8 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { STORAGE_MEDIA_MIME_TYPES, isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
+import { STORAGE_MEDIA_MIME_TYPES, type StorageMediaKind } from '@/lib/storage-upload-mime-policy';
 import { MEDIA_OBJECT_NOT_FOUND_CODE } from '@/lib/temporary-media-read-url';
-import { MAX_UPLOAD_BYTES_BY_KIND } from '@/lib/temporary-media-upload-sign';
+import { MAX_UPLOAD_BYTES_BY_KIND, createTemporaryMediaUploadIntent } from '@/lib/temporary-media-upload-sign';
+
+/** Whether the sign step itself takes this kind and type: it judges the type before any database work. */
+async function signStepTakes(kind: StorageMediaKind, mimeType: string): Promise<boolean> {
+  const accepted = new Error('the sign step took the type');
+  try {
+    const result = await createTemporaryMediaUploadIntent({
+      body: { kind, mimeType, fileName: 'reference', sizeBytes: 1 },
+      userId: 'user-1',
+      client: () => {
+        throw accepted;
+      },
+    });
+    return result.ok;
+  } catch (error) {
+    if (error === accepted) return true;
+    throw error;
+  }
+}
 
 const supabaseMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -234,6 +252,34 @@ describe('uploadMediaToTemporaryStorage', () => {
     expect(supabaseMocks.upload).not.toHaveBeenCalled();
   });
 
+  // Chrome names an .m4a file audio/x-m4a; the sign step keeps it as audio/mp4 and
+  // answers with that name, so the file is stored under the type Kie lists.
+  it('sends the file under the type the sign step answers with', async () => {
+    const sent = stubXhr();
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await answer(input, init);
+      if (String(input) !== '/api/uploads/media/sign') return response;
+      const body = await response.json();
+      return { ok: true, json: async () => ({ ...body, contentType: 'audio/mp4' }) } as Response;
+    }));
+    const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
+    const file = new File(['voice'], 'Voice Memo.m4a', { type: 'audio/x-m4a' });
+
+    await uploadMediaToTemporaryStorage(file);
+
+    expect(fetch).toHaveBeenCalledWith('/api/uploads/media/sign', expect.objectContaining({
+      body: JSON.stringify({
+        fileName: 'Voice Memo.m4a',
+        mimeType: 'audio/x-m4a',
+        kind: 'audio',
+        sizeBytes: file.size,
+      }),
+    }));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.headers['content-type']).toBe('audio/mp4');
+  });
+
   it('takes its options second, with no owner id it never read', async () => {
     const sent = stubXhr();
     const { uploadMediaToTemporaryStorage } = await import('@/lib/temporary-media-upload');
@@ -344,6 +390,7 @@ describe('TEMPORARY_MEDIA_UPLOAD_LIMITS', () => {
     const candidates = [
       ...Object.values(STORAGE_MEDIA_MIME_TYPES).flat(),
       'audio/x-m4a',
+      'audio/vnd.wave',
       'audio/flac',
       'video/x-matroska',
       'image/bmp',
@@ -355,10 +402,13 @@ describe('TEMPORARY_MEDIA_UPLOAD_LIMITS', () => {
     for (const kind of ['image', 'video', 'audio'] as const) {
       for (const type of candidates) {
         expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType(kind, type), `${kind} ${type}`)
-          .toBe(isAllowedStorageMediaMimeType(kind, type));
+          .toBe(await signStepTakes(kind, type));
       }
     }
-    expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('audio', 'audio/x-m4a')).toBe(false);
+    // Chrome names an .m4a file audio/x-m4a, and Apple's type database names a .wav audio/vnd.wave.
+    expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('audio', 'audio/x-m4a')).toBe(true);
+    expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('audio', 'audio/vnd.wave')).toBe(true);
+    expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('video', 'audio/x-m4a')).toBe(false);
     expect(TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('video', 'video/quicktime')).toBe(true);
   });
 });

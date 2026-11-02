@@ -160,6 +160,7 @@ describe('/api/uploads/media/sign route', () => {
       token: mobileApiContract.endpoints.mediaUploadIntent.response.token,
       signedUploadUrl: mobileApiContract.endpoints.mediaUploadIntent.response.signedUploadUrl,
       expiresInSeconds: mobileApiContract.endpoints.mediaUploadIntent.response.expiresInSeconds,
+      contentType: mobileApiContract.endpoints.mediaUploadIntent.response.contentType,
     });
     expect(rpcMock).toHaveBeenCalledWith('check_backend_rate_limit', {
       p_scope: 'temporary-media-upload:sign',
@@ -171,6 +172,47 @@ describe('/api/uploads/media/sign route', () => {
     expect(createSignedUploadUrlMock).toHaveBeenCalledWith(
       expect.stringMatching(/^user-1\/[0-9a-f-]+-launch-reference\.png$/)
     );
+  });
+
+  // What an iPhone's document picker sends for an .m4a (Voice Memos) and a .wav track:
+  // the route answered both 400 "Upload a valid audio file." until 2026-11.
+  it.each([
+    { claimed: 'audio/x-m4a', fileName: 'Voice Memo.m4a', canonical: 'audio/mp4' },
+    { claimed: 'audio/vnd.wave', fileName: 'Take 1.wav', canonical: 'audio/wav' },
+  ])('signs an iPhone $claimed track and names its type $canonical', async ({ claimed, fileName, canonical }) => {
+    requireIdentityMock.mockResolvedValueOnce({
+      ok: true,
+      identity: {
+        user: { id: 'user-1', is_anonymous: false },
+        userId: 'user-1',
+        kind: 'registered',
+        isGuest: false,
+      },
+    });
+    createUserClientMock.mockReturnValueOnce({
+      auth: {
+        getUser: vi.fn(async () => ({
+          data: { user: { id: 'user-1' } },
+          error: null,
+        })),
+      },
+    });
+
+    const { POST } = await import('@/app/api/uploads/media/sign/route');
+    const response = await POST(
+      new Request('http://localhost/api/uploads/media/sign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileName, mimeType: claimed, kind: 'audio', sizeBytes: 1234 }),
+      }) as never
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ success: true, bucket: 'uploads', contentType: canonical });
+    expect(rpcMock).toHaveBeenCalledWith('reserve_upload_bytes_v2', expect.objectContaining({
+      p_expected_content_type: canonical,
+    }));
+    expect(intentInsertMock).toHaveBeenCalledWith(expect.objectContaining({ content_type: canonical }));
   });
 
   it('rate limits upload token creation before storage signing work', async () => {

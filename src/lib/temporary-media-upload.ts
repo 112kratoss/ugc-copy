@@ -5,6 +5,7 @@ import {
   type SignedUrlUploadProgress,
 } from '@/lib/signed-url-upload';
 import {
+  canonicalStorageMediaMimeType,
   isAllowedStorageMediaMimeType,
   type StorageMediaKind,
 } from '@/lib/storage-upload-mime-policy';
@@ -20,6 +21,8 @@ type TemporaryMediaUploadIntent = {
   token: string;
   signedUploadUrl: string | null;
   expiresInSeconds: number;
+  /** The type the upload is kept under: an .m4a Chrome names audio/x-m4a is kept as audio/mp4. */
+  contentType?: string;
 };
 
 type TemporaryMediaReadUrlResponse = {
@@ -45,7 +48,8 @@ export type TemporaryMediaUpload = { signedUrl: string; storagePath: string };
  * rather than after the creator presses Generate. The byte caps copy
  * MAX_UPLOAD_BYTES_BY_KIND in temporary-media-upload-sign.ts, which is server
  * code a client bundle cannot import; a test holds the two equal. The type
- * check is the sign step's own allow-list.
+ * check is the sign step's own: an alias reads as the type it names, which the
+ * allow-list then judges.
  */
 export const TEMPORARY_MEDIA_UPLOAD_LIMITS = {
   maxBytesByKind: {
@@ -53,7 +57,9 @@ export const TEMPORARY_MEDIA_UPLOAD_LIMITS = {
     video: 250 * 1024 * 1024,
     audio: 50 * 1024 * 1024,
   } as const satisfies Record<StorageMediaKind, number>,
-  isAllowedMimeType: (kind: StorageMediaKind, type: string): boolean => isAllowedStorageMediaMimeType(kind, type),
+  isAllowedMimeType: (kind: StorageMediaKind, type: string): boolean => (
+    isAllowedStorageMediaMimeType(kind, canonicalStorageMediaMimeType(type))
+  ),
 };
 
 /**
@@ -183,7 +189,12 @@ export async function uploadMediaToTemporaryStorage(
       token: uploadIntent.token,
       signedUploadUrl: uploadIntent.signedUploadUrl,
     }),
-    { mimeType, onProgress: options.onProgress, signal: options.signal },
+    {
+      // Sent under the type the sign step keeps, which finalize checks the stored object against.
+      mimeType: uploadIntent.contentType || mimeType,
+      onProgress: options.onProgress,
+      signal: options.signal,
+    },
   );
 
   const finalized = await finalizeSignedUpload(

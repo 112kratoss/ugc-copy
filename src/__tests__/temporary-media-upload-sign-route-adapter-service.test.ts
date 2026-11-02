@@ -79,6 +79,7 @@ describe('temporary media upload-sign route adapter service', () => {
         token: 'upload-token',
         signedUploadUrl: 'https://storage.example.test/signed-upload',
         expiresInSeconds: 7200,
+        contentType: 'image/png',
       },
     }));
     const body = {
@@ -113,6 +114,7 @@ describe('temporary media upload-sign route adapter service', () => {
       success: true,
       bucket: 'uploads',
       token: 'upload-token',
+      contentType: 'image/png',
     });
     expect(createServiceClient).not.toHaveBeenCalled();
     expect(createTemporaryMediaUploadIntent).toHaveBeenCalledWith({
