@@ -132,9 +132,14 @@ import { AuthProvider, useAuth } from '../lib/auth';
 import { useScreenReturn } from '../lib/use-screen-return';
 import { AWKWARD_PROMPT, homeTabs, pushedRoute, rootStateWith, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
-/** Where a refused registered session is sent: the sign-in screen, with why and where it was. */
-function signedOutNotice(returnTo: string) {
-  return { pathname: '/auth', params: { notice: 'signed-out', returnTo } };
+/**
+ * Where a refused registered session is sent: the sign-in screen, with why and, when known, where
+ * it was, and whether sign-in took that screen's place.
+ */
+function signedOutNotice(returnTo?: string, { inPlace = true } = {}) {
+  if (!returnTo) return { pathname: '/auth', params: { notice: 'signed-out' } };
+  const params = { notice: 'signed-out', returnTo };
+  return { pathname: '/auth', params: inPlace ? { ...params, inPlace: '1' } : params };
 }
 
 /** The return the sign-in screen was sent, read back as expo-router reads a path: its pathname and its query's params. */
@@ -424,13 +429,35 @@ describe('recovering from a session ended elsewhere', () => {
 
   // Audit 01-12: signed in again, the person is back where they were.
   it('sends the person back, once signed in again, to the route they were on', async () => {
-    state.rootState = stateInFront(pushedRoute('/post/[id]', { id: 'post-9' }));
+    state.rootState = rootStateWith({ key: 'tabs', ...homeTabs() }, { key: 'post', ...pushedRoute('/post/[id]', { id: 'post-9' }) });
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
     await recover(latest);
 
-    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/post-9'));
+    // Nothing came in front during the teardown: sign-in took the post's place.
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/post-9', { inPlace: true }));
+
+    unmount();
+  });
+
+  // The teardown waits on the network (the sign-out asks the server too): a page opened meanwhile
+  // is the one sign-in replaces, and the post to come back to is still below it.
+  it('does not put the return in sign-in\'s place when another screen came in front meanwhile', async () => {
+    const tabs = { key: 'tabs', ...homeTabs() };
+    const post = { key: 'post', ...pushedRoute('/post/[id]', { id: 'post-9' }) };
+    state.rootState = rootStateWith(tabs, post);
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+    state.signOut.mockImplementationOnce(async () => {
+      state.rootState = rootStateWith(tabs, post, { key: 'creator', ...pushedRoute('/creators/[username]', { username: 'luna' }) });
+      state.authCallback?.('SIGNED_OUT', null);
+      return { error: null };
+    });
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/post-9', { inPlace: false }));
 
     unmount();
   });
@@ -512,30 +539,34 @@ describe('recovering from a session ended elsewhere', () => {
   });
 
   // The composer answers a sign-out by redirecting to sign-in itself: the
-  // screen to come back to is the one in front when the session ended.
+  // screen to come back to is the one in front when the session ended. Its
+  // redirect is a replace, a route of its own, so sign-in is not put in the
+  // composer's place, and goes back to the return with `dismissTo`, which
+  // rebuilds it there unless a composer is lower in the stack.
   it('returns to the screen the session ended on, not where a screen moved during the sign-out', async () => {
-    state.rootState = stateInFront(pushedRoute('/post/new', { generationId: 'gen-9' }));
+    const tabs = { key: 'tabs', ...homeTabs() };
+    state.rootState = rootStateWith(tabs, { key: 'composer', ...pushedRoute('/post/new', { generationId: 'gen-9' }) });
     state.clearPersistedSession.mockImplementation(async () => {
-      state.rootState = stateInFront(pushedRoute('/auth', { returnTo: '/post/new?generationId=gen-9' }));
+      state.rootState = rootStateWith(tabs, { key: 'sign-in', ...pushedRoute('/auth', { returnTo: '/post/new?generationId=gen-9' }) });
     });
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
     await recover(latest);
 
-    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/new?generationId=gen-9'));
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/new?generationId=gen-9', { inPlace: false }));
 
     unmount();
   });
 
-  it('falls back to Home when the route on screen is the sign-in screen itself', async () => {
+  it('gives no return when the route on screen is the sign-in screen itself', async () => {
     state.rootState = stateInFront(pushedRoute('/auth', { returnTo: '/post/post-9' }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
     await recover(latest);
 
-    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/(tabs)'));
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice());
 
     unmount();
   });
