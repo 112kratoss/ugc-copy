@@ -24,6 +24,9 @@ const SCREENS = [
   // The video tool's composer, re-rendered the same way (2026-10-22: a useMemo over `subjects`,
   // an array the compiler could not hold still past the memo, was a memo it could not keep).
   ['components/media-creation-screen.tsx', 'VideoCreatorComposer'],
+  // The prompt field and @ list both composers run on (2026-11-02): skipped, it would hand them
+  // new handlers on every keystroke.
+  ['lib/use-reference-mention-input.ts', 'useReferenceMentionInput'],
   // Home's "Make this" shelf, drawn again at every rest of its row, its cards,
   // and the tile they and every feed card play in (2026-10-27).
   ['components/home-shelf.tsx', 'HomeShelf'],
