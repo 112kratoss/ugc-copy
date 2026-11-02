@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useReferenceMentionInput } from '../lib/use-reference-mention-input';
 
 // The prompt field and @ list both app creators run on (#655). Their screen tests drive it through
-// the whole screen, where the test renderer gives the field no native view and no time passes:
-// what an insert puts back on the field, the caret change that comes back from it, and a blur's
-// 160 ms are pinned here.
+// the whole screen, where the field mostly has no native view and the timers are rarely run: what
+// an insert puts back on the field, the caret change that comes back from it, and a blur's 160 ms
+// are pinned here.
 describe('useReferenceMentionInput', () => {
   type Field = ReturnType<typeof useReferenceMentionInput>;
   const caret = (start: number, end = start) => ({ nativeEvent: { selection: { start, end } } }) as never;
@@ -139,8 +139,9 @@ describe('useReferenceMentionInput', () => {
   it('tells the composer the list is shut when it goes, and puts no focus back after that', () => {
     const composer = mount();
     composer.focusField();
-    composer.type('Walk to @');
+    composer.type('Walk to ');
     composer.act(() => { composer.field.insertHandleAtCaret('@hero', 280); });
+    expect(composer.prompt).toBe('Walk to @hero');
     composer.type('Walk to @hero, then @');
     expect(composer.onMentionStateChange).toHaveBeenLastCalledWith(true);
 
