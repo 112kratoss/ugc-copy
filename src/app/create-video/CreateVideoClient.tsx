@@ -29,8 +29,10 @@ import {
     CreatorPendingStartNotice,
     CreatorMediaReferenceTile,
     CreatorReferenceRow,
+    CreatorReferencePreview,
     CreatorReferenceStrip,
     CreatorReferenceTile,
+    type CreatorReferencePreviewTarget,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -1086,33 +1088,6 @@ function referenceMediaLimits(modelId: VideoModelId): { videos: number; audios: 
  * The reference clips or tracks a remixed run kept, as seeds for their cards.
  * The Seedance 2 family builds its own, which pair each one with its prepared asset.
  */
-/**
- * A clip tile's picture, which opens the clip in the preview: square for a reference clip,
- * wide for a Kling video element.
- */
-function ClipPreviewButton({ src, name, wide = false, onPreview }: {
-    src: string | null;
-    name: string;
-    wide?: boolean;
-    onPreview: (src: string, name: string) => void;
-}) {
-    return (
-        <button
-            type="button"
-            onClick={() => {
-                if (src) onPreview(src, name);
-            }}
-            aria-label={`Preview ${name}`}
-            className={`ui-focus-ring relative block ${wide ? 'aspect-video' : 'aspect-square'} w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-black`}
-        >
-            {src ? (
-                <InlineMediaVideo src={src} className="pointer-events-none h-full w-full object-cover" muted playsInline preload="metadata" />
-            ) : null}
-            <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
-        </button>
-    );
-}
-
 function keptReferenceSeeds(kept: RemixResolvedAsset[] | undefined): SeedanceMediaReferenceSeed[] {
     return (kept ?? []).flatMap((item) => item.url ? [{
         displayName: item.label ?? undefined,
@@ -1407,7 +1382,7 @@ function VideoCreator({
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
-    const previewClip = (src: string, name: string) => setUploadPreview({ type: 'video', src, alt: name, title: name });
+    const openReferencePreview = ({ kind, src, name }: CreatorReferencePreviewTarget) => setUploadPreview({ type: kind, src, alt: name, title: name });
     // Bumped once a start the creator pressed is confirmed: the result canvas comes into view.
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
     // The run in flight's shape, settings and prompt, which its frame and caption keep while
@@ -3200,13 +3175,23 @@ function VideoCreator({
         return null;
     };
 
-    /** Clips added after those the run holds, saved with their Seedance assets. */
-    const appendReferenceVideos = async (seeds: SeedanceMediaReferenceSeed[]) => {
-        const nextReferences = [...referenceVideosRef.current, ...hydrateSeedanceMediaReferences('Video', seeds)];
-        commitReferenceVideos(nextReferences);
-        await persistReferenceVideos(nextReferences);
-        await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
+    /** Puts the run's clips or tracks on the form and saves them, with the Seedance assets of both kinds. */
+    const saveMediaReferences = async (kind: 'video' | 'audio', nextReferences: SeedanceMediaReferenceDraft[]) => {
+        if (kind === 'video') {
+            commitReferenceVideos(nextReferences);
+            await persistReferenceVideos(nextReferences);
+            await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
+        } else {
+            commitReferenceAudios(nextReferences);
+            await persistReferenceAudios(nextReferences);
+            await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
+        }
     };
+    /** Clips or tracks added after those the run holds. */
+    const appendMediaReferences = (kind: 'video' | 'audio', seeds: SeedanceMediaReferenceSeed[]) => saveMediaReferences(kind, [
+        ...(kind === 'video' ? referenceVideosRef : referenceAudiosRef).current,
+        ...hydrateSeedanceMediaReferences(kind === 'video' ? 'Video' : 'Audio', seeds),
+    ]);
 
     /**
      * The clip a remix opens on, as one of its reference clips (owner, 2026-11-02, as the image
@@ -3229,7 +3214,7 @@ function VideoCreator({
         }]))());
         // A second press made while the clip's length was read: the first has added it by now.
         if (!seeds || unwanted()) return;
-        await appendReferenceVideos(seeds);
+        await appendMediaReferences('video', seeds);
     };
 
     const processReferenceVideoFiles = async (files: FileList | File[]) => {
@@ -3249,7 +3234,7 @@ function VideoCreator({
             await readVideoDurationSeconds(file),
         ))));
         if (!seeds) return;
-        await appendReferenceVideos(seeds);
+        await appendMediaReferences('video', seeds);
     };
 
     const processKlingVideoElementFiles = async (files: FileList | File[]) => {
@@ -3300,11 +3285,7 @@ function VideoCreator({
             await readVideoDurationSeconds(file),
         ))));
         if (!seeds) return;
-
-        const nextReferences = [...referenceAudiosRef.current, ...hydrateSeedanceMediaReferences('Audio', seeds)];
-        commitReferenceAudios(nextReferences);
-        await persistReferenceAudios(nextReferences);
-        await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
+        await appendMediaReferences('audio', seeds);
     };
 
     const handleKlingVideoElementUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -3596,16 +3577,7 @@ function VideoCreator({
             restoredFromRemix: target.restoredFromRemix,
         }]);
         revokeObjectUrl(target.previewUrl);
-        const nextReferences = current.map((reference) => (reference.id === referenceId ? replaced : reference));
-        if (kind === 'video') {
-            commitReferenceVideos(nextReferences);
-            await persistReferenceVideos(nextReferences);
-            await persistSeedanceAssets(elementsRef.current, nextReferences, referenceAudiosRef.current);
-        } else {
-            commitReferenceAudios(nextReferences);
-            await persistReferenceAudios(nextReferences);
-            await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
-        }
+        await saveMediaReferences(kind, current.map((reference) => (reference.id === referenceId ? replaced : reference)));
     };
 
     const addPreparedReferenceId = (kind: 'audio' | 'character') => {
@@ -5820,26 +5792,9 @@ function VideoCreator({
                                                         <CreatorReferenceTile
                                                             key={element.id}
                                                             accent="video"
-                                                            preview={
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => setUploadPreview({
-                                                                        type: 'image',
-                                                                        src: element.previewUrl,
-                                                                        alt: element.displayName,
-                                                                        title: element.displayName,
-                                                                    })}
-                                                                    aria-label={`Preview ${element.displayName}`}
-                                                                    className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
-                                                                >
-                                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                                    <img
-                                                                        src={element.previewUrl}
-                                                                        alt={element.displayName}
-                                                                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
-                                                                    />
-                                                                </button>
-                                                            }
+                                                            preview={(
+                                                                <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
+                                                            )}
                                                             displayName={element.displayName}
                                                             nameDraft={elementNames.drafts[element.id]}
                                                             placeholder="Rename element"
@@ -5867,10 +5822,11 @@ function VideoCreator({
                                                             <CreatorMediaReferenceTile
                                                                 key={reference.id}
                                                                 preview={(
-                                                                    <ClipPreviewButton
+                                                                    <CreatorReferencePreview
+                                                                        kind="video"
                                                                         src={reference.previewUrl || reference.providerUrl}
                                                                         name={reference.displayName}
-                                                                        onPreview={previewClip}
+                                                                        onPreview={openReferencePreview}
                                                                     />
                                                                 )}
                                                                 displayName={reference.displayName}
@@ -5958,11 +5914,12 @@ function VideoCreator({
                                                 key={element.id}
                                                 accent="video"
                                                 preview={(
-                                                    <ClipPreviewButton
+                                                    <CreatorReferencePreview
+                                                        kind="video"
                                                         src={element.previewUrl || element.providerUrl}
                                                         name={element.displayName}
                                                         wide
-                                                        onPreview={previewClip}
+                                                        onPreview={openReferencePreview}
                                                     />
                                                 )}
                                                 displayName={element.displayName}

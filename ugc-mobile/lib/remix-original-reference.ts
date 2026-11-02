@@ -1,4 +1,4 @@
-import { createMediaDraftFromRemixAsset, type CreationDraft, type MediaDraft } from './media-creation-view-model';
+import { mediaDraftFromRemixAsset, type CreationDraft, type MediaDraft } from './media-creation-view-model';
 import { heldDraftMedia, remixOriginalReferenceId, replaceDraftMediaUrl } from './remix-draft-recovery';
 import type { CreatorToolId, RemixSourceBundle } from './types';
 
@@ -86,16 +86,15 @@ export function replacedRemixOriginal(draft: CreationDraft, original: RemixOrigi
  * The original as a reference: kept by its link and the creation it came from, under its one id.
  * Never with a storage path: the app reads one as the creator's own upload, signs it again as
  * theirs and checks it for being swept, and the server would refuse the path itself as not theirs.
- * A clip carries its length (its post's, or else the one the phone read), which the quote and the
- * slot's caps are told.
+ * A clip carries the length it is given (its post's, or else the one the phone read), which the
+ * quote and the slot's caps are told.
  */
-export function remixOriginalMedia(original: RemixOriginal, durationSeconds = original.durationSeconds ?? null): MediaDraft {
-  const media = createMediaDraftFromRemixAsset(
+export function remixOriginalMedia(original: RemixOriginal, durationSeconds: number | null = null): MediaDraft {
+  const media = mediaDraftFromRemixAsset(
     { kind: original.mediaType, url: original.url, label: REMIX_ORIGINAL_NAME, sourceGenerationId: original.generationId, durationSeconds },
     REMIX_ORIGINAL_NAME,
   );
-  // Made from a link, which an original always has.
-  return { ...media!, id: remixOriginalReferenceId(original.generationId) };
+  return { ...media, id: remixOriginalReferenceId(original.generationId) };
 }
 
 /** The draft with the original on the link its source just handed out, where the draft holds it. */

@@ -4,10 +4,11 @@ import Link from 'next/link';
 import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref, RefObject } from 'react';
 import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Play, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import clsx from 'clsx';
 
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 import {
   MEDIA_TOOL_IDS,
   StudioElementChip,
@@ -1303,6 +1304,59 @@ export function CreatorReferenceStrip({ className, children, wide = false, ...pr
   );
 }
 
+/** What a reference tile's preview opens: its file, by kind, under the reference's name. */
+export interface CreatorReferencePreviewTarget {
+  kind: 'image' | 'video';
+  src: string;
+  name: string;
+}
+
+/**
+ * A reference tile's picture (`CreatorReferenceTile`'s `preview`), which opens the file in the
+ * creator's preview: the picture itself, or a clip's first frame under a play mark, square or
+ * wide (a Kling video element). A clip with no link yet draws the frame empty and opens nothing.
+ */
+export function CreatorReferencePreview({ kind, src, name, wide = false, onPreview }: {
+  kind: 'image' | 'video';
+  src: string | null;
+  name: string;
+  wide?: boolean;
+  onPreview: (target: CreatorReferencePreviewTarget) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (src) onPreview({ kind, src, name });
+      }}
+      aria-label={`Preview ${name}`}
+      className={clsx(
+        'ui-focus-ring relative block w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)]',
+        wide ? 'aspect-video' : 'aspect-square',
+        kind === 'image' ? 'group bg-[var(--ui-surface-inset)]' : 'bg-black',
+      )}
+    >
+      {kind === 'image' ? (
+        src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={name}
+            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
+          />
+        ) : null
+      ) : (
+        <>
+          {src ? (
+            <InlineMediaVideo src={src} className="pointer-events-none h-full w-full object-cover" muted playsInline preload="metadata" />
+          ) : null}
+          <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
+        </>
+      )}
+    </button>
+  );
+}
+
 /**
  * A reference in a creator's column, as a tile in its strip: its picture or
  * clip (which opens a preview) with Remove on it, its name to rename it by, and
@@ -1554,7 +1608,8 @@ export function CreatorReferenceRow({ accent, kind, stripLabel, wide, children }
   return (
     <div className="flex items-start gap-2">
       <CreatorReferenceAddBox accent={accent} kind={kind} />
-      {Children.count(children) > 0 ? (
+      {/* Counted as drawn: `Children.count` counts a `false` or `null` child as one. */}
+      {Children.toArray(children).length > 0 ? (
         <CreatorReferenceStrip aria-label={stripLabel} wide={wide} className="min-w-0 flex-1">
           {children}
         </CreatorReferenceStrip>

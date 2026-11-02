@@ -1107,15 +1107,18 @@ describe('the references rows', () => {
       <>
         <CreatorReferenceRow accent="video" kind={video()} stripLabel="Reference videos">{[]}</CreatorReferenceRow>
         <CreatorReferenceRow accent="video" kind={audio()} stripLabel="Reference audio" />
+        <CreatorReferenceRow accent="video" kind={kind('Voice', 'Voices', 'audio/*')} stripLabel="Voices">{false}</CreatorReferenceRow>
         <CreatorReferenceRow accent="video" kind={image(1)} stripLabel="Reference images">
           {['Hero'].map((name) => <li key={name}>{name}</li>)}
         </CreatorReferenceRow>
       </>
     );
 
-    // A kind with no tiles, given none or an empty list of them.
+    // A kind with no tiles, given none, an empty list of them, or a `false` left by a condition.
     expect(screen.getByText('Video hint', { selector: 'p' })).toBeVisible();
     expect(screen.getByText('Audio hint', { selector: 'p' })).toBeVisible();
+    expect(screen.getByText('Voice hint', { selector: 'p' })).toBeVisible();
+    expect(screen.queryByRole('list', { name: 'Voices' })).toBeNull();
     expect(screen.queryByRole('list', { name: 'Reference videos' })).toBeNull();
     expect(within(screen.getByRole('list', { name: 'Reference images' })).getByText('Hero')).toBeInTheDocument();
     expect(screen.queryByText('Image hint', { selector: 'p' })).toBeNull();

@@ -25,6 +25,10 @@ const adminClient = {
         filters.push(['eq', ...filter]);
         return builder;
       },
+      is: (...filter: unknown[]) => {
+        filters.push(['is', ...filter]);
+        return builder;
+      },
       not: (...filter: unknown[]) => {
         filters.push(['not', ...filter]);
         return builder;
@@ -1165,7 +1169,8 @@ describe('a Kling 3.0 run with clips under handles', () => {
 });
 
 // "Use as reference" is told the original clip's length rather than reading the clip: the post's
-// media row measured the showcase copy the remix source hands out.
+// media row measured the showcase copy the remix source hands out. Once the feed's rendition is
+// built the row holds the rendition's length, a re-timed encode, so such a row is not read.
 describe("the original clip's length", () => {
   const SHOWCASE_CLIP = 'showcase/gen-1/result.4f2a9c1b7e3d.mp4';
   const PUBLIC_ACCESS = { allowed: true, basis: 'public', post: EXPOSED_POST, includeSharedInputMedia: false, recipeEntitled: false };
@@ -1181,7 +1186,7 @@ describe("the original clip's length", () => {
     mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
   });
 
-  it('comes with the result, as the media row of the showcase copy measured it', async () => {
+  it('comes with the result, as the media row measured the showcase copy itself', async () => {
     mocks.postMedia = { data: [{ duration_seconds: '7.48' }], error: null };
 
     const bundle = await loadRemixSourceBundle(request(), 'gen-1');
@@ -1194,6 +1199,8 @@ describe("the original clip's length", () => {
     expect(mocks.postMediaReads).toEqual([[
       ['eq', 'posts.generation_id', 'gen-1'],
       ['eq', 'storage_path', SHOWCASE_CLIP],
+      // Not a row whose length is the feed rendition's.
+      ['is', 'rendition_storage_path', null],
       ['not', 'duration_seconds', 'is', null],
     ]]);
   });

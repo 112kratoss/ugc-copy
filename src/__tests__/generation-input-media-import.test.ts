@@ -670,30 +670,39 @@ describe('resolveRemixResultMedia', () => {
   });
 
   // The owner's outputs are indexed by owner alone, so the file's name narrows the read to the
-  // creation it names, by a unique-indexed column; any other name is read as before.
-  it("reads a private output's creation by the id its file name gives", async () => {
+  // creation it names, by a unique-indexed column. The narrowing never decides: a name its writer
+  // did not give from its creation's id, or one a list filter cannot carry, is read in full.
+  it("reads a private output's creation by the id its file name gives, and in full otherwise", async () => {
     const generationId = '7d0f0b0e-5a2b-4c4b-9a43-0f8e2a1b3c4d';
-    const cases: Array<{ file: string; names: Record<string, string>; other: Record<string, string> }> = [
-      { file: 'generated_task-77.mp4', names: { prediction_id: 'task-77' }, other: { prediction_id: 'task-78' } },
+    const generationReads = (stub: ReturnType<typeof resultStub>) => (
+      stub.from.mock.calls.filter(([table]) => table === 'generations').length
+    );
+    const cases: Array<{ file: string; row: Record<string, string>; reads: number }> = [
+      // Named by the row's own ids: one narrowed read.
+      { file: 'generated_task-77.mp4', row: { prediction_id: 'task-77' }, reads: 1 },
       // One of several outputs, and a prediction id that itself ends in "_<digits>".
-      { file: 'generated_task-77_0.mp4', names: { prediction_id: 'task-77' }, other: { prediction_id: 'task-78' } },
-      { file: 'generated_task_7.mp4', names: { prediction_id: 'task_7' }, other: { prediction_id: 'task-78' } },
-      { file: `restored_${generationId}_a1.mp4`, names: { id: generationId }, other: { id: 'gen-other' } },
-      // A name of no known shape is found by its owner and its output alone.
-      { file: 'legacy-output.mp4', names: {}, other: { user_id: 'creator-2' } },
+      { file: 'generated_task-77_0.mp4', row: { prediction_id: 'task-77' }, reads: 1 },
+      { file: 'generated_task_7.mp4', row: { prediction_id: 'task_7' }, reads: 1 },
+      { file: `restored_${generationId}_a1.mp4`, row: { id: generationId }, reads: 1 },
+      // A stem that is not the row's prediction id, as a writer naming it otherwise would leave.
+      { file: 'generated_task-77-v2.mp4', row: { prediction_id: 'task-77' }, reads: 2 },
+      // No known shape, or characters a PostgREST list cannot carry (`"`): read in full at once.
+      { file: 'legacy-output.mp4', row: {}, reads: 1 },
+      { file: 'generated_x",y).mp4', row: {}, reads: 1 },
     ];
-    for (const { file, names, other } of cases) {
+    for (const { file, row, reads } of cases) {
       const output = `generated_videos/${CREATOR}/${file}`;
-      const row = { ...RESULT_GENERATION, showcase_asset_path: null, output_url: output, prediction_id: 'task-0' };
-      const named = resultStub({
-        generationRow: { ...row, ...names },
-        postRows: [{ ...VIDEO_POST, generation_id: names.id ?? row.id }],
-      });
-      await expect(resolveResult(named, output), file).resolves.toMatchObject({ outcome: 'resolved' });
-      // The same output on a row the name does not name is not its creation's.
-      const unnamed = resultStub({ generationRow: { ...row, ...other } });
-      await expect(resolveResult(unnamed, output), file).resolves.toEqual({ outcome: 'not-eligible' });
+      const generation = { ...RESULT_GENERATION, showcase_asset_path: null, output_url: output, prediction_id: 'task-0', ...row };
+      const stub = resultStub({ generationRow: generation, postRows: [{ ...VIDEO_POST, generation_id: generation.id }] });
+      await expect(resolveResult(stub, output), file).resolves.toMatchObject({ outcome: 'resolved' });
+      expect(generationReads(stub), file).toBe(reads);
     }
+    // The same name in another owner's folder is still not this creation's output.
+    const output = `generated_videos/${CREATOR}/generated_task-77.mp4`;
+    const elsewhere = resultStub({
+      generationRow: { ...RESULT_GENERATION, showcase_asset_path: null, output_url: output, prediction_id: 'task-77', user_id: 'creator-2' },
+    });
+    await expect(resolveResult(elsewhere, output)).resolves.toEqual({ outcome: 'not-eligible' });
   });
 
   it('rejects sources outside the result buckets without touching the database', async () => {

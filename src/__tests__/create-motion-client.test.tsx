@@ -9,6 +9,7 @@ import { loadPendingWebStart, savePendingWebStart, type PendingWebStart } from '
 import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from '@/lib/unified-generation-start-service';
 import { buildGenerationModelCatalog, type CatalogInputMode } from '@/lib/generation-model-catalog';
 import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
+import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import { MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { PRODUCTION_KLING_3_MOTION_MODES, ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
@@ -788,6 +789,21 @@ describe('CreateMotionClient price of the run it sends', () => {
     await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     // The build it left, so the page that loads next can tell if the same one came back.
     expect(window.sessionStorage.getItem('magicbooklet:deployment-refresh:reloaded-from-build-id')).toBe('build-7');
+  });
+
+  // A post that has measured its clip hands the length over with the remix: nothing is read.
+  it("takes the original clip's length from its post, without reading the clip", async () => {
+    remixSourceBody = { ...ROOFTOP_REMIX, result: { ...ROOFTOP_REMIX.result, durationSeconds: 5.4 } };
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    // The run's own clip, which the remix restores, is read as ever.
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    vi.mocked(readVideoDurationSeconds).mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
+
+    expect(await screen.findByText('Reference length: 5.4s')).toBeInTheDocument();
+    expect(readVideoDurationSeconds).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
   });
 
   it("shows the remix's original in its notice, opening it in the page's own preview", async () => {

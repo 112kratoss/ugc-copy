@@ -63,8 +63,8 @@ describe("a remix's original as a reference", () => {
     });
     // A picture answers to an @mention, as every picked one does.
     expect(remixOriginalMedia(picture)).toMatchObject({ id: 'remix-result:gen-4', kind: 'image', handle: '@original_result', fileName: 'original-result.png' });
-    // A clip carries the length its post measured, unless the phone read one of its own.
-    expect(remixOriginalMedia({ ...clip, durationSeconds: 6.2 }).durationSeconds).toBe(6.2);
+    // A clip carries the length it is given, and none without one.
+    expect(remixOriginalMedia({ ...clip, durationSeconds: 6.2 }, 6.2).durationSeconds).toBe(6.2);
     expect(remixOriginalMedia(clip).durationSeconds).toBeNull();
   });
 

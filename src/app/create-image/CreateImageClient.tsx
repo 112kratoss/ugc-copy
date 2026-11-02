@@ -38,8 +38,10 @@ import {
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
+    CreatorReferencePreview,
     CreatorReferenceStrip,
     CreatorReferenceTile,
+    type CreatorReferencePreviewTarget,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -508,6 +510,8 @@ function ImageCreator({
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [isResultPreviewOpen, setIsResultPreviewOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
+    // This creator's references are all pictures.
+    const openReferencePreview = ({ src, name }: CreatorReferencePreviewTarget) => setUploadPreview({ type: 'image', src, alt: name, title: name });
     const elementNames = useNameDrafts();
     const [resultPreviewImage, setResultPreviewImage] = useState<string | null>(null);
     const nowMs = useTicker(isGenerating) ?? undefined;
@@ -2262,26 +2266,9 @@ function ImageCreator({
                                             <CreatorReferenceTile
                                                 key={element.id}
                                                 accent="image"
-                                                preview={
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setUploadPreview({
-                                                            type: 'image',
-                                                            src: element.previewUrl,
-                                                            alt: element.displayName,
-                                                            title: element.displayName,
-                                                        })}
-                                                        aria-label={`Preview ${element.displayName}`}
-                                                        className="ui-focus-ring group relative block aspect-square w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)]"
-                                                    >
-                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                                        <img
-                                                            src={element.previewUrl}
-                                                            alt={element.displayName}
-                                                            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
-                                                        />
-                                                    </button>
-                                                }
+                                                preview={(
+                                                    <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
+                                                )}
                                                 displayName={element.displayName}
                                                 nameDraft={elementNames.drafts[element.id]}
                                                 placeholder="Rename element"

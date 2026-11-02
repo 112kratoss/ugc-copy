@@ -823,12 +823,18 @@ function remixImageElementFileName(element: RemixResolvedImageElement, fallbackD
   return fileNameFromPath(element.storagePath) ?? fileNameFromLabel(fallbackDisplayName, 'image');
 }
 
-/** A remix source's asset as a draft's media, under the name the run kept or else `fallbackDisplayName`; none without a link. */
-export function createMediaDraftFromRemixAsset(
+function createMediaDraftFromRemixAsset(
   asset: RemixResolvedAsset | null | undefined,
   fallbackDisplayName: string
 ): MediaDraft | null {
-  if (!asset?.url) return null;
+  return asset?.url ? mediaDraftFromRemixAsset({ ...asset, url: asset.url }, fallbackDisplayName) : null;
+}
+
+/** A remix source's asset, which has a link, as a draft's media, under the name the run kept or else `fallbackDisplayName`. */
+export function mediaDraftFromRemixAsset(
+  asset: RemixResolvedAsset & { url: string },
+  fallbackDisplayName: string
+): MediaDraft {
   const displayName = normalizeDisplayName(asset.label ?? undefined, fallbackDisplayName);
   const draft = createMediaDraftFromUpload(
     {

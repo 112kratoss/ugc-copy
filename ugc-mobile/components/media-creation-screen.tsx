@@ -492,6 +492,20 @@ function referenceVideoSlot(model: CreatorCatalogModel | null, draft: VideoCreat
 }
 
 /**
+ * How many of a kind a model takes on a draft, read as the run's shape reads its slots: what the
+ * kind's add button allows, what "Use as reference" allows, and the count its rail shows.
+ */
+function imageReferenceLimitOf(model: CreatorCatalogModel | null, draft: CreationDraft, mode?: ReferenceMode) {
+  return catalogInputLimit(model, draft, 'imageReferences', model?.inputs.imageReferences?.max ?? 0, mode);
+}
+function referenceVideoLimitOf(model: CreatorCatalogModel | null, draft: VideoCreationDraft, shape: ReferenceMode) {
+  return model?.inputModes ? referenceVideoSlot(model, draft, shape)?.max ?? 0 : model?.inputs.videoReferences?.max ?? 0;
+}
+function audioReferenceLimitOf(model: CreatorCatalogModel | null, draft: CreationDraft, shape: ReferenceMode) {
+  return catalogInputLimit(model, draft, 'audioReferences', model?.inputs.audioReferences?.max ?? 0, shape);
+}
+
+/**
  * Whether a video draft's clips answer to an @handle on this model (`takesNamedClips`), and on Kling 3.0
  * before its descriptor is in. A clip the creator adds or renames is named by one rule
  * (`withCreatorClipHandle`); the catalog normalization names any other clip (`withClipHandles`).
@@ -816,7 +830,7 @@ const REFERENCE_KIND_WORDS = {
 } as const;
 
 /** What an add past a kind's limit is told: "This model supports up to 2 reference videos." */
-function referenceLimitMessage(kind: keyof typeof REFERENCE_KIND_WORDS, limit: number) {
+function addLimitMessage(kind: keyof typeof REFERENCE_KIND_WORDS, limit: number) {
   const [one, unsupported] = REFERENCE_KIND_WORDS[kind];
   return limit > 0
     ? `This model supports up to ${limit} ${one}${limit === 1 ? '' : 's'}.`
@@ -1958,24 +1972,16 @@ function IdentityCreationScreen({
   };
   const cancelUpload = () => uploadControllerRef.current?.abort();
 
-  /** How many pictures the image or video run's model takes: what its add button allows. */
+  /** How many pictures the image or video run's model takes. */
   const imageReferenceLimit = (tool: 'image' | 'video') => {
-    const draft = tool === 'image' ? imageDraft : videoDraft;
-    const model = catalog ? getCatalogModel(catalog, draft.model) : null;
-    return catalogInputLimit(
-      model,
-      draft,
-      'imageReferences',
-      model?.inputs.imageReferences?.max ?? 0,
-      tool === 'video' ? referenceRailShape(videoDraft, model) : 'elements',
-    );
+    if (tool === 'image') return imageReferenceLimitOf(catalog ? getCatalogModel(catalog, imageDraft.model) : null, imageDraft, 'elements');
+    const model = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
+    return imageReferenceLimitOf(model, videoDraft, referenceRailShape(videoDraft, model));
   };
   /** How many clips the video run's model takes. */
   const referenceVideoLimit = () => {
     const model = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
-    return model?.inputModes
-      ? referenceVideoSlot(model, videoDraft, referenceRailShape(videoDraft, model))?.max ?? 0
-      : model?.inputs.videoReferences?.max ?? 0;
+    return referenceVideoLimitOf(model, videoDraft, referenceRailShape(videoDraft, model));
   };
   /** The motion run's clip slot, whatever the model calls it: how many clips it takes (one) and how long. */
   const motionClipSlot = () => {
@@ -2009,7 +2015,7 @@ function IdentityCreationScreen({
     const maxImages = imageReferenceLimit(tool);
     const remainingSlots = Math.max(0, maxImages - selectedDraft.references.length);
     if (remainingSlots === 0) {
-      setMessage(referenceLimitMessage('image', maxImages));
+      setMessage(addLimitMessage('image', maxImages));
       return;
     }
     setIsUploading(true);
@@ -2192,7 +2198,7 @@ function IdentityCreationScreen({
     // A motion run takes one clip, so a new pick takes the place of the one attached, as Replace does.
     const replacesClip = Boolean(motionClip) && maxVideos > 0;
     if (currentCount >= maxVideos && !replacesClip) {
-      setMessage(referenceLimitMessage('video', maxVideos));
+      setMessage(addLimitMessage('video', maxVideos));
       return;
     }
     setIsUploading(true);
@@ -2260,7 +2266,7 @@ function IdentityCreationScreen({
     const limit = remixOriginalLimit(originalPlace);
     if (originalPlace === 'references') {
       if (imageDraft.references.length >= limit) {
-        setMessage(referenceLimitMessage('image', limit));
+        setMessage(addLimitMessage('image', limit));
         return;
       }
       const media = remixOriginalMedia(remixOriginal);
@@ -2272,7 +2278,7 @@ function IdentityCreationScreen({
       return;
     }
     if (originalPlace === 'referenceVideos' && videoDraft.referenceVideos.length >= limit) {
-      setMessage(referenceLimitMessage('video', limit));
+      setMessage(addLimitMessage('video', limit));
       return;
     }
     setIsUploading(true);
@@ -2299,15 +2305,9 @@ function IdentityCreationScreen({
     setMessage(null);
     setPromptMessage(null);
     const selectedModel = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
-    const maxAudios = catalogInputLimit(
-      selectedModel,
-      videoDraft,
-      'audioReferences',
-      selectedModel?.inputs.audioReferences?.max ?? 0,
-      referenceRailShape(videoDraft, selectedModel),
-    );
+    const maxAudios = audioReferenceLimitOf(selectedModel, videoDraft, referenceRailShape(videoDraft, selectedModel));
     if (videoDraft.referenceAudios.length >= maxAudios) {
-      setMessage(referenceLimitMessage('audio', maxAudios));
+      setMessage(addLimitMessage('audio', maxAudios));
       return;
     }
     setIsUploading(true);
@@ -3437,12 +3437,7 @@ function IdentityCreationScreen({
       : isGenerating || activeGenerationStatus || (pollingInterrupted && generationTool === 'image')
         ? 'progress'
         : 'generate';
-    const maxImageReferences = catalogInputLimit(
-      selectedImageModel,
-      imageDraft,
-      'imageReferences',
-      selectedImageModel?.inputs.imageReferences?.max ?? 0,
-    );
+    const maxImageReferences = imageReferenceLimitOf(selectedImageModel, imageDraft);
 
     return withReferenceLinkRenewal(
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -4578,16 +4573,8 @@ function VideoCreatorComposer({
   const subjectModeLabel = model?.inputModes?.find((mode) => (
     mode.slots.some((slot) => slot.key === subjectSlot?.key)
   ))?.label ?? 'Named subjects';
-  const imageLimit = catalogInputLimit(
-    model,
-    draft,
-    'imageReferences',
-    model?.inputs.imageReferences?.max ?? 0,
-    railShape,
-  );
-  const videoLimit = model?.inputModes
-    ? referenceVideoSlot(model, draft, railShape)?.max ?? 0
-    : model?.inputs.videoReferences?.max ?? 0;
+  const imageLimit = imageReferenceLimitOf(model, draft, railShape);
+  const videoLimit = referenceVideoLimitOf(model, draft, railShape);
   // Held for another model, or past a slot's max: drawn apart, each with its own Remove.
   const standbyReferences = standbyVideoReferences(draft, model);
   const standbyIds = new Set(standbyReferences.map((media) => media.id));
@@ -4602,13 +4589,7 @@ function VideoCreatorComposer({
   const runHandles = new Set(model
     ? catalogDraftRunHandles({ ...draft, referenceMode }, model)
     : videoDraftHandles(draft));
-  const audioLimit = catalogInputLimit(
-    model,
-    draft,
-    'audioReferences',
-    model?.inputs.audioReferences?.max ?? 0,
-    railShape,
-  );
+  const audioLimit = audioReferenceLimitOf(model, draft, railShape);
   // The kinds the references rail adds, each with its count. One add tile leads the rail: a
   // model that takes one kind adds it at once, and one that takes several asks which, as three
   // tiles ahead of the pictures left about half of the first in view on a phone (2026-10-21).

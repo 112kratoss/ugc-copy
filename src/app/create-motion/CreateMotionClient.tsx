@@ -379,6 +379,8 @@ function MotionCreator({
     // The longest length known for the attached clip, so a reread of the same
     // clip keeps what the server measured for it.
     const measuredClipFloorRef = useRef<{ url: string; seconds: number } | null>(null);
+    // A clip's length known without reading it: a remix's original, as its post measured it.
+    const knownClipLengthRef = useRef<{ url: string; seconds: number } | null>(null);
     const latestRunCostRef = useRef<number | null>(null);
     const pendingDraftSaveRef = useRef<{ owner: string; draft: MotionTextDraft } | null>(null);
 
@@ -587,6 +589,7 @@ function MotionCreator({
         setReferenceVideoDescriptor(null);
         setDuration(0); setVideoError(null); setVideoPickError(null);
         measuredClipFloorRef.current = null;
+        knownClipLengthRef.current = null;
     };
 
     const handleClearImage = async () => {
@@ -694,8 +697,10 @@ function MotionCreator({
             return;
         }
 
+        const { url, durationSeconds } = remixSourceBundle.result;
+        knownClipLengthRef.current = typeof durationSeconds === 'number' ? { url, seconds: durationSeconds } : null;
         setReferenceVideoFile(null);
-        setReferenceVideo(remixSourceBundle.result.url);
+        setReferenceVideo(url);
         setReferenceVideoDescriptor({
             kind: 'video',
             label: 'Original result video',
@@ -713,7 +718,12 @@ function MotionCreator({
         }
 
         const controller = new AbortController();
-        void readVideoDurationSeconds(referenceVideo, controller.signal).then(readSeconds => {
+        // A length its post measured is the file's own: nothing to read.
+        const known = knownClipLengthRef.current;
+        const length = known?.url === referenceVideo
+            ? Promise.resolve(known.seconds)
+            : readVideoDurationSeconds(referenceVideo, controller.signal);
+        void length.then(readSeconds => {
             if (controller.signal.aborted) return;
             if (readSeconds === null) {
                 setVideoError('We could not read the reference video. Please try another clip.');

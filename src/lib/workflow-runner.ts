@@ -389,13 +389,15 @@ type BillableInputDurationsParams = Parameters<typeof resolveBillableInputDurati
  * A step's request with the lengths of the clips and tracks its price or its
  * model's limits read, measured as POST /api/generations measures them, so a
  * length the canvas recorded, or none, never sets a price. The error is the
- * public refusal for a file whose length could not be read.
+ * public refusal for a file whose length could not be read. With the request
+ * come the links each measured file was resolved to, which the step's start
+ * reuses (`resolvedMediaSources`).
  */
 async function measureStepReferenceMedia(params: Pick<BillableInputDurationsParams, 'request' | 'descriptor' | 'operation'> & {
   supabase: SupabaseClient;
   userId: string;
   templateContext?: TemplateGenerationContext;
-}): Promise<UnifiedGenerationRequest | UnifiedGenerationRequestError> {
+}): Promise<{ request: UnifiedGenerationRequest; resolvedSources: ReadonlyMap<string, string> } | UnifiedGenerationRequestError> {
   const { supabase, userId, templateContext, request, descriptor, operation } = params;
   try {
     const billable = await resolveBillableInputDurations({
@@ -410,7 +412,7 @@ async function measureStepReferenceMedia(params: Pick<BillableInputDurationsPara
       ),
       probeInputDuration: (url) => probeMediaDurationSeconds(url),
     });
-    return billable.request;
+    return { request: billable.request, resolvedSources: billable.resolvedSources };
   } catch (error) {
     if (error instanceof UnifiedGenerationRequestError) return error;
     throw error;
@@ -998,7 +1000,7 @@ export async function executeWorkflowRunnableNode(params: {
           if (typeof source?.data.durationSeconds === 'number') asset.durationSeconds = source.data.durationSeconds;
         }
       }
-      const request = await measureStepReferenceMedia({
+      const measured = await measureStepReferenceMedia({
         supabase, userId, templateContext, descriptor, operation,
         request: {
           kind: descriptor.kind, modelId: descriptor.id, catalogRevision, settings,
@@ -1007,7 +1009,8 @@ export async function executeWorkflowRunnableNode(params: {
             ? (node.data as VideoGenerateNodeData).multiPrompts.map(shot => ({ prompt: shot.prompt, duration: shot.duration })) : [],
         },
       });
-      if (request instanceof UnifiedGenerationRequestError) return buildBlockedError(request.message);
+      if (measured instanceof UnifiedGenerationRequestError) return buildBlockedError(measured.message);
+      const { request } = measured;
       // Normal runs still compare with the active revision. Only the trusted
       // template engine may use quoteAtPinnedRevision.
       const quote = await quoteRunnableNode(buildUnifiedGenerationQuoteInput(request));
@@ -1015,6 +1018,7 @@ export async function executeWorkflowRunnableNode(params: {
         supabase, creditSupabase, userId, operation, catalogRevision: quote.catalogRevision,
         prompt: request.prompt, settings: quote.normalizedSettings, inputs: request.inputs, shots: request.shots,
         quotedCostCredits: quote.costCredits, clientRequestKeyHash, persistInputMedia, privateRecipe, templateContext,
+        resolvedMediaSources: measured.resolvedSources,
       });
       return { status: 'processing', generation_id: result.generationId ?? null,
         output_snapshot: { predictionId: result.predictionId, cost: result.cost }, input_snapshot: inputs, error_message: null };
@@ -1106,6 +1110,7 @@ export async function executeWorkflowRunnableNode(params: {
       : [];
     let referenceVideoDurationsSeconds: number[] = [];
     let referenceAudio: StepReferenceAudio | null = null;
+    let resolvedMediaSources: ReadonlyMap<string, string> | undefined;
     if (referenceMedia.length > 0 || elementMedia.length > 0) {
       if (!catalogRevision) return buildBlockedError('Refresh model settings before running this workflow.');
       const { catalog, operation } = await loadGenerationModelOperationByRevision({
@@ -1120,12 +1125,14 @@ export async function executeWorkflowRunnableNode(params: {
         },
       });
       if (measured instanceof UnifiedGenerationRequestError) return buildBlockedError(measured.message);
-      referenceVideoDurationsSeconds = measured.inputs.flatMap((asset) => (
+      resolvedMediaSources = measured.resolvedSources;
+      const measuredInputs = measured.request.inputs;
+      referenceVideoDurationsSeconds = measuredInputs.flatMap((asset) => (
         asset.slot === 'videoReferences' && typeof asset.durationSeconds === 'number' ? [asset.durationSeconds] : []
       ));
       // What Kie would refuse after the hold, said on the step before anything is quoted
       // or held, as POST /api/generations says it (provider-input-limits).
-      const tooShort = referenceMediaLengthViolation(data.model, measured.inputs.flatMap((asset) => (
+      const tooShort = referenceMediaLengthViolation(data.model, measuredInputs.flatMap((asset) => (
         asset.kind === 'video' || asset.kind === 'audio'
           ? [{
               role: asset.slot === 'videoElements' ? 'element' as const : asset.kind,
@@ -1135,7 +1142,7 @@ export async function executeWorkflowRunnableNode(params: {
           : []
       )));
       if (tooShort) throw providerInputRefusal(tooShort);
-      const audioDurationsSeconds = measured.inputs.flatMap((asset) => (
+      const audioDurationsSeconds = measuredInputs.flatMap((asset) => (
         asset.slot === 'audioReferences' && typeof asset.durationSeconds === 'number' ? [asset.durationSeconds] : []
       ));
       if (audioDurationsSeconds.length > 0) {
@@ -1200,6 +1207,7 @@ export async function executeWorkflowRunnableNode(params: {
       persistInputMedia,
       privateRecipe,
       templateContext,
+      resolvedMediaSources,
     });
 
     return {

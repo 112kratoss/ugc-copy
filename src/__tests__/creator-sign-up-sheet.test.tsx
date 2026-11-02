@@ -155,8 +155,8 @@ describe('the sign-up a visitor meets at Generate', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  // A double-click on Generate brings the sheet up with its first click; its second lands on the
-  // backdrop and must not put the sheet away again, as the Top Up's backdrop already did not.
+  // The shell it shares with the Top Up sheet (ModalSheet): the backdrop takes no second click of a
+  // double-click, which would put away a sheet a double-click brought up under the pointer.
   it('closes on a press of its backdrop, and not on the second click of a double-click', () => {
     const { onClose } = renderSheet();
     const backdrop = screen.getByRole('dialog').parentElement!;

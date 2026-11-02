@@ -252,24 +252,28 @@ export type RemixResultMediaResult =
 const INVALID_UUID_CODE = '22P02';
 
 const RESTORED_OUTPUT_NAME = /^restored_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_/i;
-const PROVIDER_OUTPUT_NAME = /^generated_(.+)\.[a-z0-9]+$/i;
+// Plain characters only: a PostgREST list filter quotes `,` and parentheses but no `"`, so another
+// stem could fail the read (a 500) where the plain read answers that it names no creation.
+const PROVIDER_OUTPUT_NAME = /^generated_([A-Za-z0-9._-]+)\.[a-z0-9]+$/i;
+const OUTPUT_INDEX_SUFFIX = /^(.+)_\d+$/;
 
 /**
- * The creation a private output's file name names, by a unique-indexed column:
- * a provider's result is `generated_<prediction id>.<ext>`, or one of several
- * `generated_<prediction id>_<index>.<ext>` (`persistGeneratedOutput` and
- * `persistGeneratedOutputList` in generation-services.ts), and a restored one
- * `restored_<generation id>_<uuid>.<ext>` (durable-generation-media.ts). A
- * prediction id may itself end in `_<digits>`, so the whole stem is a candidate
- * too. Null for a name of any other shape.
+ * The creation a private output's file name names, as a unique-indexed column
+ * and its candidate values: a provider's result is `generated_<prediction
+ * id>.<ext>`, or one of several `generated_<prediction id>_<index>.<ext>`
+ * (`persistGeneratedOutput` and `persistGeneratedOutputList` in
+ * generation-services.ts), and a restored one `restored_<generation
+ * id>_<uuid>.<ext>` (durable-generation-media.ts). A prediction id may itself
+ * end in `_<digits>`, so the whole stem is a candidate too. Null for a name of
+ * any other shape.
  */
-function outputFileOwnerIds(fileName: string): { generationId: string } | { predictionIds: string[] } | null {
+function outputFileCreation(fileName: string): { column: 'id' | 'prediction_id'; values: string[] } | null {
   const restored = RESTORED_OUTPUT_NAME.exec(fileName);
-  if (restored) return { generationId: restored[1] };
+  if (restored) return { column: 'id', values: [restored[1]] };
   const stem = PROVIDER_OUTPUT_NAME.exec(fileName)?.[1];
   if (!stem) return null;
-  const unindexed = /^(.+)_\d+$/.exec(stem)?.[1];
-  return { predictionIds: unindexed ? [stem, unindexed] : [stem] };
+  const unindexed = OUTPUT_INDEX_SUFFIX.exec(stem)?.[1];
+  return { column: 'prediction_id', values: unindexed ? [stem, unindexed] : [stem] };
 }
 
 /**
@@ -307,21 +311,25 @@ async function loadRemixResultGeneration(
   }
 
   // Outputs are stored as `<bucket>/<owner>/<file>` (durable-generation-media.ts);
-  // a legacy output kept as a link matches nothing and stays refused. The file's
-  // name narrows the read to the creation it names, where the owner's outputs
-  // alone would be read through (the owner is the only index they have).
+  // a legacy output kept as a link matches nothing and stays refused.
   const [ownerUserId, fileName, ...deeper] = location.filePath.split('/');
-  const namedBy = fileName && deeper.length === 0 ? outputFileOwnerIds(fileName) : null;
-  let query = adminSupabase
-    .from('generations')
-    .select(REMIX_RESULT_GENERATION_SELECT)
-    .eq('user_id', ownerUserId)
-    .eq('output_url', `${location.bucket}/${location.filePath}`);
-  if (namedBy && 'generationId' in namedBy) query = query.eq('id', namedBy.generationId);
-  else if (namedBy) query = query.in('prediction_id', namedBy.predictionIds);
-  const { data, error } = await query.limit(1);
-  if (error && namesNoCreation(error)) return null;
-  const generation = ((data ?? []) as RemixResultGeneration[])[0] ?? null;
+  const readOutput = async (narrowedTo: ReturnType<typeof outputFileCreation>) => {
+    let query = adminSupabase
+      .from('generations')
+      .select(REMIX_RESULT_GENERATION_SELECT)
+      .eq('user_id', ownerUserId)
+      .eq('output_url', `${location.bucket}/${location.filePath}`);
+    if (narrowedTo) query = query.in(narrowedTo.column, narrowedTo.values);
+    const { data, error } = await query.limit(1);
+    if (error && namesNoCreation(error)) return null;
+    return ((data ?? []) as RemixResultGeneration[])[0] ?? null;
+  };
+  // The file's name narrows the read to the creation it names, where the owner's
+  // outputs alone would be read through (the owner is the only index they have).
+  // A name its writer did not give from its creation's own id is read in full, so
+  // the narrowing never refuses an output the plain read finds.
+  const named = fileName && deeper.length === 0 ? outputFileCreation(fileName) : null;
+  const generation = (named ? await readOutput(named) : null) ?? await readOutput(null);
   return generation && !generation.showcase_asset_path ? generation : null;
 }
 
