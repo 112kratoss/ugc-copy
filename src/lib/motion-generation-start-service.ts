@@ -188,6 +188,9 @@ export async function startMotionGenerationForRoute({
       const normalizedSettings = billableQuote.normalizedSettings;
       const characterOrientation = String(normalizedSettings.characterOrientation);
       const mode = String(normalizedSettings.resolution);
+      // The picture resolved as the clip is, once the price stands: the adapter sends it as given, and
+      // a remix's restored picture is the link the remix was read with, which lasts an hour.
+      const characterImageSource = await resolveGenerationMediaSource(supabase, characterImageUrl, userId, { recipeCopyReads });
       return startMotionGeneration({
         supabase,
         creditSupabase: adminSupabase,
@@ -197,8 +200,7 @@ export async function startMotionGenerationForRoute({
         // The clip as resolved to measure it: the file measured is the one the provider fetches, and a
         // link the client kept past its hour (a remix's original) is not sent on.
         referenceVideoUrl: measured.source,
-        // Sent as given, but where a remix restored it from a recipe's copy: imported first, as the clip was.
-        characterImageUrl: await resolveRecipeFileReference(supabase, characterImageUrl, userId, { recipeCopyReads }),
+        characterImageUrl: characterImageSource,
         duration: Number(normalizedSettings.duration),
         referenceVideoSeconds: measuredSeconds,
         characterOrientation: characterOrientation === 'image' ? 'image' : 'video',

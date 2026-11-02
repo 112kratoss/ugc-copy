@@ -160,6 +160,8 @@ import {
     remixSlotsInputSide,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
+import { remixLinkNeedsRenewal } from '@/lib/remix-link-renewal';
+import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import {
     openRemixInputSlots,
     readRemixSlotMentions,
@@ -1294,6 +1296,8 @@ function VideoCreator({
     const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
+    // The remix's links last an hour: each is renewed where it is used past that.
+    const renewRemixLink = useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken: session?.access_token ?? null });
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
     const prefillAspectRatio = prefill.aspectRatio ?? null;
@@ -3367,6 +3371,11 @@ function VideoCreator({
         ...hydrateSeedanceMediaReferences(kind === 'video' ? 'Video' : 'Audio', seeds),
     ]);
 
+    // A preview opens the remix's media by a link that opens: the original by the remix's result
+    // (posted since, it is its post's copy), a restored picture or clip by the file its link opens.
+    const renewPreviewLink = useCallback((src: string) => renewRemixLink(src), [renewRemixLink]);
+    const renewOriginalLink = useCallback((src: string) => renewRemixLink(src, { result: true }), [renewRemixLink]);
+
     /**
      * The clip a remix opens on, as one of its reference clips (owner, 2026-11-02, as the image
      * and motion creators offer their originals): kept by its link, as the remix's own clips are,
@@ -3374,10 +3383,15 @@ function VideoCreator({
      * told each clip's length.
      */
     const addOriginalResultAsReferenceVideo = async () => {
-        const url = remixVideoUrl;
+        const original = remixVideoUrl;
         const unwanted = () => referenceVideosRef.current.some((reference) => isRemixResultReference(reference, remixId))
             || referenceVideosRef.current.length >= referenceVideoLimit;
-        if (!url || !remixId || unwanted()) return;
+        if (!original || !remixId || unwanted()) return;
+        // The link the remix was read with lasts an hour: past it the clip's length could not be read,
+        // and the clip came in with none. One about to lapse is renewed first.
+        const url = remixLinkNeedsRenewal(original, Date.now())
+            ? await renewRemixLink(original, { result: true })
+            : original;
         const seeds = await readPickSeeds((async () => keptReferenceSeeds([{
             kind: 'video',
             url,
@@ -6667,6 +6681,7 @@ function VideoCreator({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Uploaded preview'}
                 title={uploadPreview?.title ?? 'Media Preview'}
+                renewSrc={remixId ? renewPreviewLink : undefined}
             />
 
             <StudioMediaPreviewModal
@@ -6676,6 +6691,7 @@ function VideoCreator({
                 src={remixVideoUrl}
                 alt="Original creation"
                 title="Original Creation"
+                renewSrc={remixId ? renewOriginalLink : undefined}
                 footer={
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>

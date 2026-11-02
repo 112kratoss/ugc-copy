@@ -2499,6 +2499,7 @@ describe('CreateMotionClient a remix kept open past its links’ hour', () => {
   beforeEach(() => {
     remixSourceBody = ownRunRemix;
     // The browser reads a clip's length only by a link storage still opens.
+    vi.mocked(readVideoDurationSeconds).mockClear();
     vi.mocked(readVideoDurationSeconds).mockImplementation(async (source) => (
       typeof source === 'string' && !storageOpens(source) ? null : probeState.seconds
     ));

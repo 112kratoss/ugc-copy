@@ -118,6 +118,8 @@ import {
     isRemixResultReference,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
+import { remixLinkNeedsRenewal } from '@/lib/remix-link-renewal';
+import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import {
     getPersistedImageElementRecords,
     PERSISTED_MEDIA_KEYS,
@@ -524,6 +526,8 @@ function ImageCreator({
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
+    // The remix's links last an hour: each is renewed where it is used past that.
+    const renewRemixLink = useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken: session?.access_token ?? null });
     // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
     // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
     const canvasPublish = useCreatorPublish({
@@ -1106,9 +1110,21 @@ function ImageCreator({
         updateMentionState(prompt);
     };
 
-    const handleUseOriginalResultAsReference = () => {
+    // A preview opens the remix's media by a link that opens: the original by the remix's result
+    // (posted since, it is its post's copy), a restored picture by the file its link opens.
+    const renewPreviewLink = useCallback((src: string) => renewRemixLink(src), [renewRemixLink]);
+    const renewOriginalLink = useCallback((src: string) => renewRemixLink(src, { result: true }), [renewRemixLink]);
+
+    const handleUseOriginalResultAsReference = async () => {
         if (!remixSourceBundle) {
             return;
+        }
+        let resultUrl = remixSourceBundle.result?.url ?? null;
+        // The link the remix was read with lasts an hour: past it the picture was drawn from a link
+        // storage refuses. One about to lapse is renewed first.
+        if (resultUrl && remixLinkNeedsRenewal(resultUrl, Date.now())) {
+            resultUrl = await renewRemixLink(resultUrl, { result: true });
+            if (unmountSignal.current.aborted) return;
         }
 
         if (elementRefs.current.length >= model.maxImages) {
@@ -1116,7 +1132,7 @@ function ImageCreator({
             return;
         }
 
-        const nextElement = createRemixResultReferenceElement(remixSourceBundle);
+        const nextElement = createRemixResultReferenceElement(remixSourceBundle, resultUrl);
         if (!nextElement || elementRefs.current.some((element) => isRemixResultReference(element, remixSourceBundle.generation.id))) {
             return;
         }
@@ -2247,7 +2263,7 @@ function ImageCreator({
                                         source={remixSourcePost}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={canUseOriginalResultAsReference ? (
-                                            <StudioUseOriginalButton using={hasOriginalResultReference} onUse={handleUseOriginalResultAsReference} />
+                                            <StudioUseOriginalButton using={hasOriginalResultReference} onUse={() => void handleUseOriginalResultAsReference()} />
                                         ) : undefined}
                                     />
                                 </motion.div>
@@ -2589,6 +2605,7 @@ function ImageCreator({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Reference image'}
                 title={uploadPreview?.title ?? 'Reference Preview'}
+                renewSrc={remixId ? renewPreviewLink : undefined}
             />
 
             <StudioMediaPreviewModal
@@ -2615,6 +2632,7 @@ function ImageCreator({
                 src={remixImageUrl}
                 alt="Original creation"
                 title="Original Creation"
+                renewSrc={remixId ? renewOriginalLink : undefined}
                 footer={
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>

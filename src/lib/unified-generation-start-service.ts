@@ -528,6 +528,27 @@ export async function resolveBillableInputDurations({
   return { request: { ...request, inputs, settings }, verified, resolvedSources };
 }
 
+/**
+ * A motion run's picture as its provider is to fetch it. The motion adapter sends both inputs as
+ * it is given them (startMotionGeneration resolves nothing): the clip comes resolved from its
+ * measuring (resolveBillableInputDurations), and the picture, the input the adapter takes for it,
+ * is resolved here as every other adapter resolves its inputs. So a link the client kept past
+ * its hour (a remix's restored picture, signed when the remix opened) is signed again from the
+ * object it names, and another creator's kept picture a remix restored is copied in under the
+ * remix gate, as their clip is, rather than sent on.
+ */
+export async function resolveMotionPictureInput(
+  request: UnifiedGenerationRequest,
+  resolveInputSource: (url: string) => Promise<string>,
+): Promise<UnifiedGenerationRequest> {
+  if (request.kind !== 'motion') return request;
+  const index = request.inputs.findIndex((asset) => asset.kind === 'image' || asset.kind === 'character');
+  const picture = index >= 0 ? request.inputs[index] : null;
+  if (!picture?.url) return request;
+  const url = await resolveInputSource(picture.url);
+  return { ...request, inputs: request.inputs.map((asset, at) => (at === index ? { ...asset, url } : asset)) };
+}
+
 function platformForRequest(request: Request): CatalogPlatform {
   return request.headers.get('x-magicbooklet-client') === 'mobile'
     ? 'mobile'
@@ -1009,8 +1030,13 @@ export async function startUnifiedGenerationForRoute(
           : generationCostChangedError();
       }
 
+      // After the price checks, so a run refused its price copies nothing in. Only for the motion
+      // adapter: the catalog adapter resolves every input itself, after its replay check.
+      const runRequest = operation.adapterKey === 'motion-v1'
+        ? await resolveMotionPictureInput(billable.request, (url) => resolveInputSource(supabase, url, userId))
+        : billable.request;
       return dispatchCatalogGenerationAdapter({
-        request: billable.request,
+        request: runRequest,
         quote: billableQuote,
         operation,
         supabase,
