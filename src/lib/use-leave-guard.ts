@@ -320,7 +320,15 @@ export function useLeaveGuard({
       if (afterPop) {
         afterLeaveGuardPopRef.current = null;
         leaveGuardEntryRef.current = false;
-        afterPop();
+        // A task later, once every listener of this popstate has run. Next's
+        // router restores the page for it in a listener of its own, and the
+        // last navigation or restore asked for wins: a navigation started
+        // here, before that restore, was dropped for it, and the page stayed.
+        // The router's listener comes after this one on a page that was the
+        // document's first load (opened by its address, or reloaded): React
+        // runs a child's effects before its parent's, and the router adds its
+        // listener in an effect (archive/leave-guard-first-page-2026-11-03).
+        window.setTimeout(afterPop, 0);
         return;
       }
       const guardId = readLeaveGuardId(event.state, historyKey);

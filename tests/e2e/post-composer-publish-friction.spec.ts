@@ -69,6 +69,12 @@ async function answerTheComposer(page: Page, profile: Record<string, unknown>, o
       resourceBundleStatus: null,
     });
   });
+  // Where the composer goes once the post is out: these tests read the address, not the post page.
+  await page.route('**/showcase/post-e2e-friction**', (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/html',
+    body: '<!doctype html><title>Post</title><h1>The new post</h1>',
+  }));
 }
 
 test.describe('post composer: fewer reasons to stop before posting', () => {
@@ -156,7 +162,9 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
 
     // Saved before the post; "Product demo …" used to be refused as a placeholder title.
     await expect.poll(() => order).toEqual(['profile', 'post']);
-    await expect(page.getByText('Your post is live.')).toBeVisible();
+    // The post takes the composer's place. Opened by its address with work typed, the composer
+    // used to stay on its published panel instead (post-composer-leave-first-load.spec.ts).
+    await expect(page).toHaveURL('/showcase/post-e2e-friction?returnTo=%2Fshowcase', COLD_PAGE);
   });
 
   // Chrome's implicit submission skips the composer's disabled first submit
