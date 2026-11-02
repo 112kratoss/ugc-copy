@@ -54,8 +54,9 @@ type ReadState = { attempt: number; status: 'loading' | 'failed' | 'done' };
  * - **Its answer** is the form's while the form is on the page (`useUnmountSignal`, read when the
  *   answer lands), whichever run of the effect is the latest. An answer gated on an effect cleanup
  *   never fills the form under Strict Mode, which unmounts the first run before the read is back.
- * - **A failed read** (a 5xx, a 429, the network, a revoked session) is final until the creator asks
- *   again (`retry`): main's token-driven re-read put the original over their work, up to an hour later.
+ * - **A failed read** (a 5xx, a 429, the network, a revoked session, or an answer the form could not
+ *   take) is final until the creator asks again (`retry`): the token-driven re-read that #664 ended
+ *   put the original over their work, up to an hour later.
  *
  * `onSource` puts the source on the form, each creator its own way, with what the creator changed
  * before the answer landed (`RemixEditsBeforeAnswer`), and runs once, for the read that answers.
