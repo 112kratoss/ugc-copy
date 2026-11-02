@@ -147,7 +147,7 @@ function ResetPasswordContent() {
                 <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-200" aria-hidden />
                 <p>This recovery link is missing, expired, or already used. New reset links can’t be sent by email.</p>
               </div>
-              {/* The sign-in page's recovery notice names Google and the support address. */}
+              {/* The sign-in page's recovery notice names Google, Apple and the support address. */}
               <Link
                 href={recoveryHref}
                 className="ui-focus-ring mt-4 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"

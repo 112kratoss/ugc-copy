@@ -6,6 +6,12 @@ const PROJECT_REF = process.env.SUPABASE_PROJECT_REF || 'ildfmhozpibwiopeavfg';
 const REVENUECAT_WEBHOOK_URL = process.env.REVENUECAT_WEBHOOK_URL
   || 'https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook';
 const DEFAULT_AUTH_DB_POOL_PERCENT = Number(process.env.SUPABASE_AUTH_DB_POOL_PERCENT || 17);
+// The iPhone app's bundle id (ugc-mobile/app.json): Apple refuses the web flow with it as client.
+const IOS_BUNDLE_ID = process.env.IOS_BUNDLE_ID || 'com.magicbooklet.mobile';
+const SITE_AUTH_CALLBACK_URL = 'https://magicbooklet.com/auth/callback';
+// Where Supabase asks Apple to return: its own callback, or a custom domain's once one is active.
+const SUPABASE_AUTH_CALLBACK_URL = process.env.SUPABASE_AUTH_CALLBACK_URL
+  || `https://${PROJECT_REF}.supabase.co/auth/v1/callback`;
 const TARGET_LINTS = new Set([
   'auth_leaked_password_protection',
   'auth_db_connections_absolute',
@@ -129,6 +135,8 @@ async function fetchAuthConfig(token) {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    // The monthly Apple secret workflow runs this unattended; a hung read must not eat its job.
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
@@ -233,12 +241,86 @@ async function probeRevenueCatWebhook() {
   }, null, 2));
 }
 
+/**
+ * What Supabase answers the website's Continue with Apple with, read without a
+ * token: a redirect to Apple's authorize page for the Services ID, the first
+ * of the Apple provider's Client IDs, back to Supabase's own callback. Returns
+ * that client id. Anything else is a step of the runbook's "Sign in with Apple
+ * on the web" left undone (a JSON 400 "missing OAuth secret": no secret saved;
+ * the bundle id as client: the Services ID not first in Client IDs). It cannot
+ * see an expired secret, which fails only at the code exchange.
+ */
+function assertAppleWebAuthorizeRedirect({
+  status,
+  location,
+  body,
+  expectedCallback = SUPABASE_AUTH_CALLBACK_URL,
+  bundleId = IOS_BUNDLE_ID,
+}) {
+  if (status < 300 || status > 399 || !location) {
+    throw new Error(`Apple web sign-in probe failed: expected a redirect to Apple, got HTTP ${status}${body ? `: ${String(body).slice(0, 200)}` : ''}.`);
+  }
+  const target = new URL(location);
+  if (target.origin !== 'https://appleid.apple.com' || target.pathname !== '/auth/authorize') {
+    throw new Error(`Apple web sign-in probe failed: redirected to ${target.origin}${target.pathname}, not Apple's authorize page.`);
+  }
+  const clientId = target.searchParams.get('client_id') || '';
+  if (!clientId) {
+    throw new Error('Apple web sign-in probe failed: the redirect names no client_id.');
+  }
+  if (clientId === bundleId) {
+    throw new Error(`Apple web sign-in probe failed: the client is the bundle id ${bundleId}; put the Services ID first in the Apple provider's Client IDs.`);
+  }
+  if (target.searchParams.get('redirect_uri') !== expectedCallback) {
+    throw new Error(`Apple web sign-in probe failed: Apple is asked to return to ${target.searchParams.get('redirect_uri')}, not ${expectedCallback} (set SUPABASE_AUTH_CALLBACK_URL once a custom domain is active).`);
+  }
+  return clientId;
+}
+
+/**
+ * The Apple provider's Client IDs, read from the Auth config: the web client
+ * first, and the bundle id still among them, or every native iPhone sign-in
+ * fails Supabase's audience check. The redirect alone cannot show the second.
+ */
+function assertAppleClientIdsKeepNative({ config, webClientId, bundleId = IOS_BUNDLE_ID }) {
+  const listed = [config.external_apple_client_id, config.external_apple_additional_client_ids]
+    .flatMap((value) => String(value || '').split(','))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (listed[0] !== webClientId) {
+    throw new Error(`Apple provider check failed: Client IDs start with ${listed[0] || 'nothing'}, not ${webClientId}.`);
+  }
+  if (!listed.includes(bundleId)) {
+    throw new Error(`Apple provider check failed: the bundle id ${bundleId} is missing from Client IDs, so the iPhone app's Sign in with Apple fails.`);
+  }
+}
+
+async function probeAppleWebSignIn() {
+  const url = new URL(`https://${PROJECT_REF}.supabase.co/auth/v1/authorize`);
+  url.searchParams.set('provider', 'apple');
+  url.searchParams.set('redirect_to', SITE_AUTH_CALLBACK_URL);
+  const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
+  const location = response.headers.get('location');
+  const body = location ? '' : await response.text();
+  const clientId = assertAppleWebAuthorizeRedirect({ status: response.status, location, body });
+  console.log(`Apple web sign-in probe: Supabase sends Continue with Apple to Apple as ${clientId}`);
+
+  const token = process.env.SUPABASE_MANAGEMENT_API_TOKEN || process.env.SUPABASE_ACCESS_TOKEN;
+  if (!token) {
+    console.log(`Not checked without SUPABASE_MANAGEMENT_API_TOKEN: that ${IOS_BUNDLE_ID} is still in the Apple provider's Client IDs. Sign in with Apple in the iPhone app to check it.`);
+    return;
+  }
+  assertAppleClientIdsKeepNative({ config: await fetchAuthConfig(token), webClientId: clientId });
+  console.log(`Apple provider check: ${IOS_BUNDLE_ID} is still listed for the iPhone's native sign-in`);
+}
+
 function printUsage() {
   console.log(`Usage:
   node scripts/ops/production-external-gates.mjs [--check]
   node scripts/ops/production-external-gates.mjs --print-supabase-auth-patch
   SUPABASE_MANAGEMENT_API_TOKEN=... node scripts/ops/production-external-gates.mjs --apply-supabase-auth
   REVENUECAT_WEBHOOK_AUTH_TOKEN='Bearer ...' node scripts/ops/production-external-gates.mjs --probe-revenuecat-webhook
+  node scripts/ops/production-external-gates.mjs --probe-apple-web-sign-in
 
 Default: --check
 
@@ -302,6 +384,56 @@ function selfTest() {
     cacheControl: 'private, no-store',
     status: 401,
   }), /expected HTTP 200/);
+  const appleAuthorize = (clientId, redirectUri = 'https://ref.supabase.co/auth/v1/callback') => (
+    `https://appleid.apple.com/auth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_mode=form_post&response_type=code&scope=email+name&state=x`
+  );
+  const appleProbe = { expectedCallback: 'https://ref.supabase.co/auth/v1/callback', bundleId: 'com.example.app' };
+  assert.equal(assertAppleWebAuthorizeRedirect({
+    ...appleProbe,
+    status: 302,
+    location: appleAuthorize('com.example.app.web'),
+  }), 'com.example.app.web');
+  // Production before the runbook's steps: the Apple provider serves only the app's native sign-in.
+  assert.throws(() => assertAppleWebAuthorizeRedirect({
+    ...appleProbe,
+    status: 400,
+    location: null,
+    body: '{"code":400,"error_code":"validation_failed","msg":"Unsupported provider: missing OAuth secret"}',
+  }), /got HTTP 400: .*missing OAuth secret/);
+  assert.throws(() => assertAppleWebAuthorizeRedirect({
+    ...appleProbe,
+    status: 302,
+    location: appleAuthorize('com.example.app'),
+  }), /Services ID first/);
+  assert.throws(() => assertAppleWebAuthorizeRedirect({
+    ...appleProbe,
+    status: 302,
+    location: appleAuthorize('com.example.app.web', 'https://auth.example.com/auth/v1/callback'),
+  }), /not https:\/\/ref\.supabase\.co\/auth\/v1\/callback/);
+  assert.throws(() => assertAppleWebAuthorizeRedirect({
+    ...appleProbe,
+    status: 302,
+    location: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x',
+  }), /not Apple's authorize page/);
+  // A custom domain, once active, is what Supabase sends Apple back to.
+  assert.equal(assertAppleWebAuthorizeRedirect({
+    ...appleProbe,
+    expectedCallback: 'https://auth.example.com/auth/v1/callback',
+    status: 302,
+    location: appleAuthorize('com.example.app.web', 'https://auth.example.com/auth/v1/callback'),
+  }), 'com.example.app.web');
+  const clientIds = (external_apple_client_id, extra = {}) => ({
+    config: { external_apple_client_id, ...extra },
+    webClientId: 'com.example.app.web',
+    bundleId: 'com.example.app',
+  });
+  assert.doesNotThrow(() => assertAppleClientIdsKeepNative(clientIds('com.example.app.web, com.example.app')));
+  assert.doesNotThrow(() => assertAppleClientIdsKeepNative(clientIds('com.example.app.web', {
+    external_apple_additional_client_ids: 'com.example.app',
+  })));
+  // The bundle id replaced by the Services ID: the redirect still looks right, the app's sign-in does not.
+  assert.throws(() => assertAppleClientIdsKeepNative(clientIds('com.example.app.web')), /bundle id com\.example\.app is missing/);
+  assert.throws(() => assertAppleClientIdsKeepNative(clientIds('com.example.app,com.example.app.web')), /start with com\.example\.app,? not/);
   console.log('production-external-gates self-test passed');
 }
 
@@ -327,6 +459,10 @@ async function main() {
   }
   if (args.has('--probe-revenuecat-webhook')) {
     await probeRevenueCatWebhook();
+    return;
+  }
+  if (args.has('--probe-apple-web-sign-in')) {
+    await probeAppleWebSignIn();
     return;
   }
 

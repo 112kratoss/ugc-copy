@@ -969,7 +969,7 @@ export function CreatorVisitorNote({ welcomeCredits, cost }: { welcomeCredits: n
       <span>
         {welcomeCredits !== null
           ? <>New accounts get <strong className={strong}>{welcomeCredits} free credits</strong></>
-          : 'Sign in with Google to generate'}
+          : 'Sign in with Google or Apple to generate'}
       </span>
       {cost !== null ? (
         <span>

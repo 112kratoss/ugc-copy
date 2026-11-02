@@ -51,7 +51,7 @@ export default async function AuthCodeErrorPage({ searchParams }: AuthCodeErrorP
           </p>
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-            {/* For a recovery link, the sign-in page's recovery notice names Google and the support address. */}
+            {/* For a recovery link, the sign-in page's recovery notice names Google, Apple and the support address. */}
             <Link
               href={retryHref}
               className="ui-focus-ring inline-flex min-h-12 flex-1 items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"

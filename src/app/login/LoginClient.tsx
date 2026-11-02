@@ -9,8 +9,9 @@ import { supabase } from '@/lib/supabase';
 import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 import { ArrowLeft, Loader2, Mail, Lock, AlertCircle, Eye, EyeOff, Info, WandSparkles } from 'lucide-react';
 import { buildAuthContinuePath } from '@/lib/auth-onboarding';
-import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
-import GoogleSignInAgreement from '@/components/GoogleSignInAgreement';
+import { startProviderSignIn, type SignInProvider } from '@/lib/provider-sign-in';
+import AppleLogo from '@/components/AppleLogo';
+import SignInAgreement from '@/components/SignInAgreement';
 
 const SUPPORT_MAILTO = `mailto:${siteConfig.supportEmail}`;
 
@@ -22,13 +23,13 @@ export interface LoginClientProps {
 }
 
 /**
- * Sign-in and sign-up on the web. New accounts are made with Google only: in
- * production the before-user-created hook refuses every email sign-up, and with
- * no mail sender nothing can deliver a reset or confirmation link
+ * Sign-in and sign-up on the web. New accounts are made with Google or Apple
+ * only: in production the before-user-created hook refuses every email sign-up,
+ * and with no mail sender nothing can deliver a reset or confirmation link
  * (docs/production-deployment-runbook.md, "Identity Policy: OAuth Only"). So the
- * Sign-up tab is Google alone, and the Sign-in tab keeps email and password for
- * the few accounts made before that rule, whose way back in when locked out is
- * the support address. The app's sign-in screen says the same.
+ * Sign-up tab is the two providers alone, and the Sign-in tab keeps email and
+ * password for the few accounts made before that rule, whose way back in when
+ * locked out is the support address. The app's sign-in screen says the same.
  */
 export default function LoginClient({
     initialMode,
@@ -69,6 +70,16 @@ export default function LoginClient({
         };
     }, [redirectTo, router]);
 
+    // A page the browser restores after leaving for Google or Apple (Back from its
+    // sign-in page) comes back as it was left, every button waiting; it is usable again.
+    useEffect(() => {
+        const onPageShow = (event: PageTransitionEvent) => {
+            if (event.persisted) setLoading(false);
+        };
+        window.addEventListener('pageshow', onPageShow);
+        return () => window.removeEventListener('pageshow', onPageShow);
+    }, []);
+
     const handleSignIn = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
@@ -89,19 +100,12 @@ export default function LoginClient({
         }
     };
 
-    const handleSocialLogin = async () => {
+    const handleProviderSignIn = async (provider: SignInProvider) => {
         setLoading(true);
         setError(null);
-        try {
-            const { error } = await supabase.auth.signInWithOAuth({
-                provider: 'google',
-                options: {
-                    redirectTo: getAuthCallbackUrl(redirectTo),
-                },
-            });
-            if (error) throw error;
-        } catch (err: unknown) {
-            setError(describeAuthError(err, 'Could not start Google sign-in. Try again.'));
+        const failure = await startProviderSignIn(provider, redirectTo);
+        if (failure) {
+            setError(failure);
             setLoading(false);
         }
     };
@@ -112,7 +116,7 @@ export default function LoginClient({
     };
 
     // One alert. The Sign-in tab draws it in its form above Sign in, as before;
-    // the Sign-up tab has no form and draws it above Google, its only action.
+    // the Sign-up tab has no form and draws it above Google and Apple, its only actions.
     const errorAlert = error ? (
         <div id="auth-error" role="alert" aria-live="assertive" className="flex items-start gap-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
             <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
@@ -148,7 +152,7 @@ export default function LoginClient({
                         <p className="text-sm leading-6 text-[var(--ui-text-muted)]">
                             {isLogin
                                 ? 'Sign in to continue to your creator workspace.'
-                                : 'New accounts are created with Google. Your creator profile comes next.'}
+                                : 'New accounts are created with Google or Apple. Your creator profile comes next.'}
                         </p>
                     </div>
 
@@ -188,7 +192,7 @@ export default function LoginClient({
                                     <div role="status" className="mb-6 flex items-start gap-3 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] p-3 text-sm leading-6 text-[var(--ui-text-secondary)]">
                                         <Info className="mt-0.5 h-5 w-5 shrink-0 text-[var(--ui-primary)]" aria-hidden />
                                         <p>
-                                            Password reset emails aren’t available. Signed up with Google? Use Continue with Google. Otherwise, email{' '}
+                                            Password reset emails aren’t available. Signed up with Google or Apple? Continue with it below. Otherwise, email{' '}
                                             <a href={SUPPORT_MAILTO} className="font-bold text-[var(--ui-text-primary)] underline underline-offset-2 hover:text-[var(--ui-primary)]">{siteConfig.supportEmail}</a>
                                             {' '}and we’ll help you sign in.
                                         </p>
@@ -296,9 +300,9 @@ export default function LoginClient({
                         <div>
                             <button
                                 type="button"
-                                onClick={() => void handleSocialLogin()}
+                                onClick={() => void handleProviderSignIn('google')}
                                 disabled={loading}
-                                aria-describedby="google-agreement"
+                                aria-describedby="sign-in-agreement"
                                 className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
                             >
                                 <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
@@ -321,8 +325,20 @@ export default function LoginClient({
                                 </svg>
                                 Continue with Google
                             </button>
-                            {/* Google creates an account from either tab, so the agreement sits under it in both; the app shows it in both modes too. */}
-                            <GoogleSignInAgreement id="google-agreement" />
+                            {/* Apple's white style, the one its guidelines give a dark background,
+                                and no smaller than Google's button. */}
+                            <button
+                                type="button"
+                                onClick={() => void handleProviderSignIn('apple')}
+                                disabled={loading}
+                                aria-describedby="sign-in-agreement"
+                                className="ui-focus-ring mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-white px-4 font-bold text-black transition hover:bg-zinc-200 disabled:opacity-50"
+                            >
+                                <AppleLogo className="h-5 w-5" />
+                                Continue with Apple
+                            </button>
+                            {/* Either button creates an account from either tab, so the agreement sits under them in both; the app shows it in both modes too. */}
+                            <SignInAgreement id="sign-in-agreement" />
                         </div>
                     </div>
                 </div>

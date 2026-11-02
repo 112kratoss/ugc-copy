@@ -281,12 +281,21 @@ function EarningsWarning({ earnings }: { earnings: Earnings }) {
   );
 }
 
+/**
+ * An account with an Apple identity is deleted in the iPhone app only, though
+ * it can sign in here: one made here, or one Supabase linked an Apple sign-in
+ * to by its email, too. The deletion has Apple confirm the person and revokes
+ * the app's Apple authorization with Apple's one-time code, which the app gets
+ * from its native sheet (`apple-account-deletion-service.ts`). Supabase's web
+ * sign-in exchanges Apple's code itself, so this page has none to send, and
+ * without an iPhone the email request is the way.
+ */
 function AppleAccountNotice() {
   return (
     <div role="status" className="mt-6 rounded-2xl border border-amber-300/25 bg-amber-300/[0.06] p-5">
       <h3 className="text-lg font-semibold text-white">Delete this account in the app</h3>
       <p className="mt-2 leading-7 text-zinc-300">
-        {`This account uses Sign in with Apple, which this website does not offer. Open the ${siteConfig.name} app on an iPhone, tap the menu (☰) at the top left of Home, then choose Settings and Delete account.`}
+        {`This account uses Sign in with Apple, so it is deleted in the ${siteConfig.name} app on an iPhone, where Apple confirms it is you and ${siteConfig.name} is disconnected from your Apple ID. Tap the menu (☰) at the top left of Home, then choose Settings and Delete account. No iPhone? Request deletion by email below.`}
       </p>
     </div>
   );

@@ -25,6 +25,7 @@ import {
   CreatorToolTabs,
   CreatorTopUpNotice,
   CreatorUploadSlot,
+  CreatorVisitorNote,
   CreatorRunFailed,
   CreatorRunFailedLine,
   CreatorRunWaitLines,
@@ -1294,3 +1295,19 @@ describe('the creator column layout', () => {
   });
 });
 
+
+// The line under a signed-out visitor's bar. The sheet Generate opens offers Google and
+// Apple, so the line names both: an Apple account that pressed Google would make a second one.
+describe('the visitor note under the bar', () => {
+  it('names both ways in when the welcome credits are not known', () => {
+    render(<CreatorVisitorNote welcomeCredits={null} cost={19} />);
+    expect(screen.getByText('Sign in with Google or Apple to generate')).toBeInTheDocument();
+    expect(screen.getByText(/This run/)).toHaveTextContent('This run 19');
+  });
+
+  it('says what a new account starts with when they are', () => {
+    render(<CreatorVisitorNote welcomeCredits={25} cost={19} />);
+    expect(screen.getByText(/New accounts get/)).toHaveTextContent('New accounts get 25 free credits');
+    expect(screen.queryByText(/Sign in with/)).toBeNull();
+  });
+});

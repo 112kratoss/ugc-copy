@@ -6,15 +6,14 @@ import { createPortal } from 'react-dom';
 import { Check, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 
+import AppleLogo from '@/components/AppleLogo';
 import { getAccentClasses } from '@/components/DesignSystem';
-import GoogleSignInAgreement from '@/components/GoogleSignInAgreement';
 import { ModalSheet } from '@/components/ModalSheet';
-import { describeAuthError } from '@/lib/auth-error-copy';
-import { getAuthCallbackUrl } from '@/lib/auth-callback-url';
+import SignInAgreement from '@/components/SignInAgreement';
 import { creatorSignUpReturnPath } from '@/lib/auth-onboarding';
 import { markVisitorDraftForHandover } from '@/lib/creator-visitor-draft';
 import type { CreatorDraftTool } from '@/lib/persisted-media';
-import { supabase } from '@/lib/supabase';
+import { startProviderSignIn, type SignInProvider } from '@/lib/provider-sign-in';
 
 /** What a signed-out visitor pressed that needs an account. */
 export type CreatorSignUpReason = 'generate' | 'enhance' | 'prepare';
@@ -34,7 +33,7 @@ const TITLES: Record<CreatorSignUpReason, string> = {
 export function creatorSignUpBody(welcomeCredits: number | null, runCost: number | null): string {
   const back = 'Either way you come back to this page, and nothing runs until you press Generate.';
   if (welcomeCredits === null) {
-    return `Sign in with Google, or make an account with it. ${back}`;
+    return `Sign in with Google or Apple, or make an account with either. ${back}`;
   }
   const enough = runCost !== null && runCost <= welcomeCredits ? `, enough for this ${runCost}-credit run` : '';
   return `New here? You get ${welcomeCredits} free credits when you pick a name and handle${enough}. ${back}`;
@@ -66,9 +65,9 @@ type CreatorSignUpSheetProps = {
  * pressed again. Leaving for sign-in marks this creator's draft for the account
  * with a one-time nonce that the way back carries (`creator-visitor-draft.ts`).
  *
- * New accounts are made with Google only on the web (the login page says why);
- * the few password accounts sign in on the login page and come back the same
- * way. Apple on the web is a later task.
+ * New accounts are made with Google or Apple only on the web (the login page
+ * says why); the few password accounts sign in on the login page and come back
+ * the same way.
  */
 export default function CreatorSignUpSheet(props: CreatorSignUpSheetProps) {
   if (props.reason === null || typeof document === 'undefined') return null;
@@ -90,11 +89,11 @@ function CreatorSignUpPanel({
   const router = useRouter();
   const agreementId = useId();
   const googleRef = useRef<HTMLButtonElement>(null);
-  const [leaving, setLeaving] = useState<'google' | 'email' | null>(null);
+  const [leaving, setLeaving] = useState<SignInProvider | 'email' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // A page the browser restores after leaving for Google (Back from its account
-  // chooser) comes back with the sheet as it was left; it is usable again.
+  // A page the browser restores after leaving for Google or Apple (Back from its
+  // sign-in page) comes back with the sheet as it was left; it is usable again.
   useEffect(() => {
     const onPageShow = (event: PageTransitionEvent) => {
       if (event.persisted) setLeaving(null);
@@ -109,17 +108,12 @@ function CreatorSignUpPanel({
     handsOverDraft ? markVisitorDraftForHandover(tool) : null,
   );
 
-  const continueWithGoogle = async () => {
-    setLeaving('google');
+  const continueWith = async (provider: SignInProvider) => {
+    setLeaving(provider);
     setError(null);
-    try {
-      const { error: signInError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: { redirectTo: getAuthCallbackUrl(returnPath()) },
-      });
-      if (signInError) throw signInError;
-    } catch (signInError) {
-      setError(describeAuthError(signInError, 'Could not start Google sign-in. Try again.'));
+    const failure = await startProviderSignIn(provider, returnPath());
+    if (failure) {
+      setError(failure);
       setLeaving(null);
     }
   };
@@ -156,13 +150,26 @@ function CreatorSignUpPanel({
         <button
           ref={googleRef}
           type="button"
-          onClick={() => void continueWithGoogle()}
+          onClick={() => void continueWith('google')}
           disabled={leaving !== null}
           aria-describedby={agreementId}
           className="ui-button ui-button-primary ui-focus-ring w-full"
         >
           {leaving === 'google' ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" /> : null}
           Continue with Google
+        </button>
+        {/* Apple's white style, the one its guidelines give a dark background, with its logo. */}
+        <button
+          type="button"
+          onClick={() => void continueWith('apple')}
+          disabled={leaving !== null}
+          aria-describedby={agreementId}
+          className="ui-button ui-focus-ring w-full border border-transparent bg-white text-black hover:bg-zinc-200"
+        >
+          {leaving === 'apple'
+            ? <Loader2 aria-hidden className="h-4 w-4 animate-spin" />
+            : <AppleLogo className="h-4 w-4" />}
+          Continue with Apple
         </button>
         <button
           type="button"
@@ -175,9 +182,9 @@ function CreatorSignUpPanel({
         </button>
       </div>
       <p className="mt-4 text-xs leading-5 text-[var(--ui-text-muted)]">
-        Already have an account? Google signs you in too.
+        Already have an account? Google and Apple sign you in too.
       </p>
-      <GoogleSignInAgreement id={agreementId} className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]" />
+      <SignInAgreement id={agreementId} className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]" />
     </ModalSheet>
   );
 }
