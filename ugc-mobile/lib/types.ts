@@ -409,6 +409,12 @@ export interface MediaUploadIntentResponse {
   token: string;
   signedUploadUrl: string | null;
   expiresInSeconds: number;
+  /**
+   * The type the server keeps the upload under, which the file is sent under: an
+   * iPhone names an .m4a audio/x-m4a, kept as audio/mp4. Absent from a server
+   * older than 2026-11.
+   */
+  contentType?: string;
 }
 
 export interface MediaReadUrlRequest {

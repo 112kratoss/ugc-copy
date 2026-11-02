@@ -445,7 +445,9 @@ export async function uploadPickedMedia(
   assertClientUploadBucket(uploadIntent.bucket);
 
   await uploadUriToSignedUrl(uri, resolveSignedUploadUrl(uploadIntent), {
-    mimeType,
+    // The server names the type it keeps the file under (an .m4a the picker calls
+    // audio/x-m4a is kept as audio/mp4), and storage holds that name.
+    mimeType: uploadIntent.contentType ?? mimeType,
     onProgress: options.onProgress,
     signal: options.signal,
     sizeBytes: upload.sizeBytes,

@@ -174,6 +174,8 @@ function inferExtension(source: string | null | undefined, contentType: string |
   if (normalizedContentType.includes('jpeg') || normalizedContentType.includes('jpg')) return 'jpg';
   if (normalizedContentType.includes('webp')) return 'webp';
   if (normalizedContentType.includes('gif')) return 'gif';
+  // MPEG-4 audio keeps the name its players and readers know it by, not a video's .mp4.
+  if (normalizedContentType === 'audio/mp4') return 'm4a';
   if (normalizedContentType.includes('mp4')) return 'mp4';
   if (normalizedContentType.includes('quicktime')) return 'mov';
   if (normalizedContentType.includes('webm')) return 'webm';
@@ -241,6 +243,9 @@ function inferCandidateContentType(
   if (extension === 'mov') return 'video/quicktime';
   if (extension === 'webm') return mediaType === 'audio' ? 'audio/webm' : 'video/webm';
   if (extension === 'mp4' || extension === 'm4v') return mediaType === 'audio' ? 'audio/mp4' : 'video/mp4';
+  // An iPhone Voice Memo; it was kept as audio/mpeg, an .mp3 holding MPEG-4 audio.
+  if (extension === 'm4a') return 'audio/mp4';
+  if (extension === 'aac') return 'audio/aac';
   if (extension === 'mp3') return 'audio/mpeg';
   if (extension === 'wav') return 'audio/wav';
   if (extension === 'ogg') return 'audio/ogg';

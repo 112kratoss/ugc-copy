@@ -158,8 +158,30 @@ describe('createWorkflowAssetUploadIntent', () => {
         token: 'workflow-upload-token',
         signedUploadUrl: 'https://storage.example.test/workflow-upload',
         expiresInSeconds: 7200,
+        contentType: 'image/png',
       },
     });
+  });
+
+  // Chrome names an .m4a file audio/x-m4a, which generated_audio does not list: the
+  // signer keeps it as audio/mp4 and answers with that name for the upload to use.
+  it.each([
+    { claimed: 'audio/x-m4a', fileName: 'Voice Memo.m4a', listed: 'audio/mp4' },
+    { claimed: 'audio/vnd.wave', fileName: 'Take 1.wav', listed: 'audio/wav' },
+  ])('signs a workflow track named $claimed as $listed', async ({ claimed, fileName, listed }) => {
+    const client = createClient();
+
+    const result = await createWorkflowAssetUploadIntent({
+      body: { bucket: 'generated_audio', mimeType: claimed, fileName, sizeBytes: 1234 },
+      userId: 'user-1',
+      client: client.client,
+      createUploadId: () => 'upload-id-1',
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { bucket: 'generated_audio', contentType: listed } });
+    expect(client.rpc).toHaveBeenCalledWith('reserve_upload_bytes_v2', expect.objectContaining({
+      p_expected_content_type: listed,
+    }));
   });
 
   it('returns stable rate-limit and storage failures', async () => {

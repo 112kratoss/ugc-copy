@@ -353,6 +353,8 @@ describe('shared mobile API v1 contract fixture', () => {
       success: true,
       bucket: 'uploads',
       expiresInSeconds: 7200,
+      // The type the server keeps the upload under, which the app sends the file under.
+      contentType: 'image/png',
     });
     expect(readUrl).toEqual({
       success: true,

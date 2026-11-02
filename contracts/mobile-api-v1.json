@@ -1649,7 +1649,8 @@
         "storagePath": "uploads/user-1/reference.png",
         "token": "upload-token",
         "signedUploadUrl": "https://storage.example.test/signed-upload",
-        "expiresInSeconds": 7200
+        "expiresInSeconds": 7200,
+        "contentType": "image/png"
       }
     },
     "finalizeUpload": {

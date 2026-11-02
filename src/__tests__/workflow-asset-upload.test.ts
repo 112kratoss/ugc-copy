@@ -149,6 +149,42 @@ describe('uploadWorkflowAssetWithSignedIntent', () => {
     expect(supabaseMocks.upload).not.toHaveBeenCalled();
   });
 
+  // supabase-js sends a File as multipart form data under the File's own type, not the
+  // contentType option, so the file is re-typed to the type the signer answers with.
+  it('sends a track under the type the signer answers with', async () => {
+    const path = 'user-1/workflow-input-voice-memo.m4a';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const answer = url === '/api/uploads/workflow-asset/sign'
+        ? {
+            success: true,
+            uploadId: '10000000-0000-4000-8000-000000000002',
+            bucket: 'generated_audio',
+            path,
+            storagePath: `generated_audio/${path}`,
+            token: 'workflow-token',
+            signedUploadUrl: null,
+            expiresInSeconds: 7200,
+            contentType: 'audio/mp4',
+          }
+        : url === '/api/uploads/finalize'
+          ? { bucket: 'generated_audio', path, storagePath: `generated_audio/${path}`, contentType: 'audio/mp4', sizeBytes: 5 }
+          : { success: true, signedUrl: 'https://storage.example.test/signed/voice-memo.m4a', expiresInSeconds: 3600 };
+      return { ok: true, json: async () => answer };
+    }));
+    const { uploadWorkflowAssetWithSignedIntent } = await import('@/lib/workflow-asset-upload');
+    const file = new File(['voice'], 'Voice Memo.m4a', { type: 'audio/x-m4a' });
+
+    await expect(uploadWorkflowAssetWithSignedIntent(file, 'generated_audio')).resolves.toMatchObject({
+      storagePath: `generated_audio/${path}`,
+    });
+
+    const [, , sent, options] = supabaseMocks.uploadToSignedUrl.mock.calls[0] ?? [];
+    expect(sent).toBeInstanceOf(File);
+    expect(sent).toMatchObject({ name: 'Voice Memo.m4a', type: 'audio/mp4', size: file.size });
+    expect(options).toEqual({ contentType: 'audio/mp4' });
+  });
+
   it('rejects a finalizer descriptor that does not match the signed target', async () => {
     finalizedPath = 'user-2/workflow-input-reference.png';
     const { uploadWorkflowAssetWithSignedIntent } = await import('@/lib/workflow-asset-upload');

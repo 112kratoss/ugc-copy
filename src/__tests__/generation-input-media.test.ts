@@ -110,6 +110,44 @@ describe('generation input media persistence', () => {
     }));
   });
 
+  // A streamed read carries no type, so the copy is typed from the file's extension: an
+  // .m4a (an iPhone Voice Memo) was kept as an .mp3 named audio/mpeg holding MP4 bytes.
+  it.each([
+    { file: '00-reference_audio.m4a', kept: '00-reference_audio.m4a', type: 'audio/mp4' },
+    { file: '00-reference_audio.aac', kept: '00-reference_audio.aac', type: 'audio/aac' },
+    { file: '00-reference_audio.wav', kept: '00-reference_audio.wav', type: 'audio/wav' },
+    { file: '00-reference_audio.mp3', kept: '00-reference_audio.mp3', type: 'audio/mpeg' },
+  ])('keeps a streamed $file as $kept typed $type', async ({ file, kept, type }) => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+
+    // Only handed on to the upload, so any stream stands in.
+    const stream = { locked: false };
+    const download = vi.fn(() => ({
+      asStream: async () => ({ data: stream, error: null }),
+    }));
+    const upload = vi.fn(async () => ({ error: null }));
+    const insert = vi.fn(async () => ({ error: null }));
+    const supabase = {
+      storage: { from: vi.fn(() => ({ download, upload })) },
+      from: vi.fn(() => ({ insert })),
+    };
+
+    await persistGenerationInputMedia({
+      supabase: supabase as never,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      candidates: [{
+        mediaType: 'audio',
+        role: 'reference_audio',
+        label: 'Reference audio',
+        sourceStoragePath: `generation_inputs/creator-1/gen-9/${file}`,
+        sourceUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/remix-imports/gen-9/${file}?token=copy`,
+      }],
+    });
+
+    expect(upload).toHaveBeenCalledWith(`user-1/gen-1/${kept}`, expect.anything(), expect.objectContaining({ contentType: type }));
+  });
+
   it('does not read a storage path outside the authenticated user prefix', async () => {
     const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
     const download = vi.fn();

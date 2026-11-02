@@ -4,6 +4,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
 import {
+  canonicalStorageMediaMimeType,
   isAllowedStorageMediaMimeType,
   type StorageMediaKind,
 } from '@/lib/storage-upload-mime-policy';
@@ -204,7 +205,11 @@ async function assertPublicDns(
 }
 
 function validateContentType(response: Response, kind: RemoteMediaKind): string {
-  const contentType = (readResponseHeader(response, 'content-type') ?? '').split(';')[0].trim().toLowerCase();
+  // Read under its listed name: a staged track an installed app sent as audio/x-m4a
+  // is served that way, and its bytes are checked and kept as audio/mp4.
+  const contentType = canonicalStorageMediaMimeType(
+    (readResponseHeader(response, 'content-type') ?? '').split(';')[0],
+  );
   if (!isAllowedStorageMediaMimeType(kind, contentType)) {
     throw new RemoteMediaSecurityError(`Remote response is not valid ${kind} media.`);
   }

@@ -8,7 +8,10 @@ import {
 } from '@/lib/backend-rate-limit';
 import { canUserCreateDurableUpload } from '@/lib/account-deletion-guard';
 import { recordMediaUploadIntent } from '@/lib/media-upload-intents';
-import { isAllowedStorageMediaMimeType } from '@/lib/storage-upload-mime-policy';
+import {
+  canonicalStorageMediaMimeType,
+  isAllowedStorageMediaMimeType,
+} from '@/lib/storage-upload-mime-policy';
 import {
   abortUploadBytesBeforeIssue,
   markUploadBytesIssued,
@@ -46,6 +49,8 @@ export type TemporaryMediaUploadIntentResult =
       token: string;
       signedUploadUrl: string | null;
       expiresInSeconds: number;
+      /** The type the upload is kept under, for the client to send the file under. */
+      contentType: string;
     };
   }
   | {
@@ -155,7 +160,9 @@ function validateUploadMetadata(body: unknown): {
     return { error: 'Choose image, video, or audio media to upload.' };
   }
 
-  const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim().toLowerCase() : '';
+  // A picker's alias (an iPhone names an .m4a audio/x-m4a) is judged, recorded and
+  // answered under the name the lists keep.
+  const mimeType = typeof body.mimeType === 'string' ? canonicalStorageMediaMimeType(body.mimeType) : '';
   if (!mimeType || !isAllowedStorageMediaMimeType(kind, mimeType)) {
     return { error: `Upload a valid ${kind} file.` };
   }
@@ -335,6 +342,7 @@ export async function createTemporaryMediaUploadIntent({
       token: data.token,
       signedUploadUrl: data.signedUrl ?? null,
       expiresInSeconds: SIGNED_UPLOAD_EXPIRES_IN_SECONDS,
+      contentType: metadata.mimeType,
     },
   };
 }

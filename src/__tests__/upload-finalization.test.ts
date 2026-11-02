@@ -225,6 +225,63 @@ describe('generic upload finalization', () => {
     expect(fake.remove).not.toHaveBeenCalled();
   });
 
+  // An app installed before the sign step answered with a type sends an iPhone .m4a
+  // under its picker's name, audio/x-m4a, which the uploads bucket takes so the file
+  // arrives; the sign step reserved it as audio/mp4. Without reading the two as one
+  // type, finalize deleted the track as a mismatch.
+  it('takes an object stored under an alias of the type it was signed for', async () => {
+    const fake = createClient({
+      row: reservation({ storage_path: 'user-1/voice-memo.m4a', expected_content_type: 'audio/mp4' }),
+      info: {
+        id: 'storage-object-1',
+        version: 'storage-version-1',
+        bucketId: 'uploads',
+        contentType: 'audio/x-m4a',
+        size: 1,
+      },
+    });
+
+    await expect(finalizeUploadRequest(fake.client, {
+      body: { uploadId: UPLOAD_ID },
+      userId: 'user-1',
+    })).resolves.toMatchObject({
+      ok: true,
+      descriptor: {
+        storagePath: 'uploads/user-1/voice-memo.m4a',
+        contentType: 'audio/mp4',
+      },
+    });
+    // The record keeps the type Storage holds; the answer names the listed type.
+    expect(fake.row).toMatchObject({
+      actual_content_type: 'audio/x-m4a',
+      finalization_status: 'finalized',
+    });
+    expect(fake.remove).not.toHaveBeenCalled();
+  });
+
+  it('still deletes an object stored as another format than it was signed for', async () => {
+    const fake = createClient({
+      row: reservation({ storage_path: 'user-1/take.wav', expected_content_type: 'audio/wav' }),
+      info: {
+        id: 'storage-object-1',
+        version: 'storage-version-1',
+        bucketId: 'uploads',
+        contentType: 'audio/x-m4a',
+        size: 1,
+      },
+    });
+
+    await expect(finalizeUploadRequest(fake.client, {
+      body: { uploadId: UPLOAD_ID },
+      userId: 'user-1',
+    })).resolves.toMatchObject({
+      ok: false,
+      status: 400,
+      code: 'UPLOAD_METADATA_MISMATCH',
+    });
+    expect(fake.remove).toHaveBeenCalledWith(['user-1/take.wav']);
+  });
+
   it('deletes a dishonest larger upload even though its worst-case bytes were reserved', async () => {
     const fake = createClient({
       info: {

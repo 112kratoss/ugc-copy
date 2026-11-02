@@ -143,8 +143,44 @@ describe('createTemporaryMediaUploadIntent', () => {
         token: 'upload-token',
         signedUploadUrl: 'https://storage.example.test/signed-upload',
         expiresInSeconds: 7200,
+        contentType: 'image/png',
       },
     });
+  });
+
+  // An iPhone's document picker names an .m4a track audio/x-m4a and a .wav one
+  // audio/vnd.wave. The sign step keeps each under the name the lists hold and
+  // answers with it, for the client to send the file under.
+  it.each([
+    { claimed: 'audio/x-m4a', fileName: 'Voice Memo.m4a', canonical: 'audio/mp4', path: 'user-1/upload-id-1-voice-memo.m4a' },
+    { claimed: 'audio/vnd.wave', fileName: 'Take 1.wav', canonical: 'audio/wav', path: 'user-1/upload-id-1-take-1.wav' },
+  ])('signs an iPhone track named $claimed as $canonical', async ({ claimed, fileName, canonical, path }) => {
+    const client = createClient();
+
+    const result = await createTemporaryMediaUploadIntent({
+      body: { kind: 'audio', mimeType: claimed, fileName, sizeBytes: 1234 },
+      userId: 'user-1',
+      client: client.client,
+      createUploadId: () => 'upload-id-1',
+    });
+
+    expect(result).toMatchObject({ ok: true, response: { path, contentType: canonical } });
+    expect(client.rpc).toHaveBeenCalledWith('reserve_upload_bytes_v2', expect.objectContaining({
+      p_expected_content_type: canonical,
+    }));
+    expect(client.insert).toHaveBeenCalledWith(expect.objectContaining({ content_type: canonical }));
+  });
+
+  it('still refuses an alias for another kind than it names', async () => {
+    const clientFactory = vi.fn(() => createClient().client);
+
+    await expect(createTemporaryMediaUploadIntent({
+      body: { kind: 'video', mimeType: 'audio/x-m4a', fileName: 'Voice Memo.m4a', sizeBytes: 1234 },
+      userId: 'user-1',
+      client: clientFactory,
+      createUploadId: () => 'upload-id-1',
+    })).resolves.toEqual({ ok: false, status: 400, error: 'Upload a valid video file.' });
+    expect(clientFactory).not.toHaveBeenCalled();
   });
 
   it('returns stable rate-limit and storage failures', async () => {
