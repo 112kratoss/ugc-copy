@@ -80,6 +80,7 @@ import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
+  getRefundedStartGenerationId,
   markGenerationStartInProgress,
   markGenerationStartRefusal,
   markHeldProviderSubmission,
@@ -1017,17 +1018,33 @@ async function convertRefusedProviderTracks(params: {
 }
 
 /**
- * Stores a held run's converted tracks in its folder and points the request at them. A failure
- * here comes after the hold, so the start returns the run's credits.
+ * A held run's converted track that could not be stored. Not a GenerationServiceError, whose words
+ * reach the creator as they are: after the hold, the start's settlement decides what they are told,
+ * and they hear that no credits were used only once it has returned the hold. Its status reads as a
+ * provider outage, worth retrying (getPublicGenerationStartFailure). Never a network error, which
+ * the settlement would take for a request Kie may have received.
+ */
+class ProviderTrackCopyError extends Error {
+  readonly status = 503;
+
+  constructor(cause: unknown) {
+    super(`A converted track could not be stored for the provider: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'ProviderTrackCopyError';
+  }
+}
+
+/**
+ * Stores a held run's converted tracks in its folder and points the request at them, telling
+ * `stored` each file's path. A failure here comes after the hold, so the start returns it.
  */
 async function storeProviderTrackCopies(params: {
   supabase: SupabaseClient;
   userId: string;
   generationId: string;
   model: VideoModelId;
-  modelName: string;
   input: Record<string, unknown>;
   copies: ConvertedProviderTrack[];
+  stored: string[];
 }): Promise<void> {
   if (params.copies.length === 0) return;
   const { storeConvertedReferenceTrack } = await import('@/lib/reference-track-conversion');
@@ -1042,10 +1059,11 @@ async function storeProviderTrackCopies(params: {
         generationId: params.generationId,
         index,
         wav: copy.wav,
+        onStored: (filePath) => params.stored.push(filePath),
       });
     } catch (error) {
       logBackendError('reference_track_copy_not_stored', { modelId: params.model, generationId: params.generationId, error });
-      throw referenceTrackNotPreparedError(params.modelName);
+      throw new ProviderTrackCopyError(error);
     }
     for (const place of copy.places) {
       if (place.field === 'reference_voice') params.input.reference_voice = link;
@@ -3186,6 +3204,8 @@ export async function startVideoGeneration(params: {
 
   let generationId: string | null = null;
   let predictionId: string | null = null;
+  // The copies of its tracks the held run stored for the provider, by path.
+  const storedTrackCopies: string[] = [];
   try {
     // Every video model, Veo 3.1 included since its move, starts on the jobs API.
     const endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
@@ -3797,9 +3817,9 @@ export async function startVideoGeneration(params: {
       userId,
       generationId,
       model,
-      modelName: selectedModel.displayName,
       input: providerInput,
       copies: trackCopies,
+      stored: storedTrackCopies,
     });
     predictionId = await createKieTask(body, endpoint, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
@@ -3951,6 +3971,12 @@ export async function startVideoGeneration(params: {
           userId,
           cost,
         });
+      }
+      // Refunded, the run reached no provider, so the copies it stored for one go too. A
+      // submission held as possibly received keeps them: Kie may yet fetch them.
+      if (storedTrackCopies.length > 0 && getRefundedStartGenerationId(error) === generationId) {
+        const { removeConvertedReferenceTracks } = await import('@/lib/reference-track-conversion');
+        await removeConvertedReferenceTracks({ supabase: creditSupabase, filePaths: storedTrackCopies });
       }
     }
     throw error;

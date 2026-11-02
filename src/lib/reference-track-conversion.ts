@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendError } from '@/lib/backend-logger';
 import { providerTrackFolder } from '@/lib/generation-provider-tracks';
 import { mediaEncoderCommand, MediaOutputLimitError } from '@/lib/media-encoder-limit';
 import { MAX_REMOTE_MEDIA_BYTES, RemoteMediaSecurityError } from '@/lib/remote-media-security';
@@ -41,8 +42,11 @@ const TRACK_DEMUXERS = 'mp3,mov,mp4,m4a,3gp,3g2,mj2,wav,aac,ogg,matroska,webm,fl
 
 /** Exit codes of the encoder's limit wrapper (media-encoder-limit): it could not set the limit, or start ffmpeg. */
 const ENCODER_START_EXIT_CODES = new Set([125, 126, 127]);
-/** What ffmpeg says when the machine, not the track, failed it. */
-const HOST_FAULT = /No space left on device|Cannot allocate memory|Too many open files|Permission denied/;
+/**
+ * What ffmpeg says when the machine, not the track, failed it. Not "Cannot allocate memory":
+ * ffmpeg says that of a damaged file too, one whose header asks for an impossible allocation.
+ */
+const HOST_FAULT = /No space left on device|Too many open files|Permission denied/;
 
 /**
  * A track that cannot be made into a copy its provider takes: one ffmpeg cannot read as audio,
@@ -185,8 +189,8 @@ export async function convertReferenceTrack(params: {
 
 /**
  * Keeps a converted track in its held run's folder (generation-provider-tracks) and answers the
- * link the provider is sent. The run keeps the creator's own track as its input; this copy is the
- * provider's, and goes with the run.
+ * link the provider is sent, with the file's path in `generation_inputs`. The run keeps the
+ * creator's own track as its input; this copy is the provider's, and goes with the run.
  */
 export async function storeConvertedReferenceTrack(params: {
   supabase: SupabaseClient;
@@ -195,6 +199,8 @@ export async function storeConvertedReferenceTrack(params: {
   /** Its place among the run's converted tracks, which names the file. */
   index: number;
   wav: Buffer;
+  /** Told the file's path once it is stored, so a start refused after this can remove it. */
+  onStored: (filePath: string) => void;
 }): Promise<string> {
   const { supabase } = params;
   const filePath = `${providerTrackFolder(params.userId, params.generationId)}/${String(params.index).padStart(2, '0')}.wav`;
@@ -202,6 +208,7 @@ export async function storeConvertedReferenceTrack(params: {
     .from(GENERATION_INPUTS_BUCKET)
     .upload(filePath, toStorageUploadBody(params.wav, 'audio/wav'), { contentType: 'audio/wav', upsert: false });
   if (upload.error) throw new Error(`The converted track could not be stored: ${upload.error.message}`);
+  params.onStored(filePath);
 
   const signed = await supabase.storage
     .from(GENERATION_INPUTS_BUCKET)
@@ -210,4 +217,17 @@ export async function storeConvertedReferenceTrack(params: {
     throw new Error(`The converted track could not be signed: ${signed.error?.message ?? 'no link'}`);
   }
   return signed.data.signedUrl;
+}
+
+/** Removes the copies a run stored for a provider that never took the run. A failure is logged, not thrown. */
+export async function removeConvertedReferenceTracks(params: {
+  supabase: SupabaseClient;
+  filePaths: string[];
+}): Promise<void> {
+  try {
+    const { error } = await params.supabase.storage.from(GENERATION_INPUTS_BUCKET).remove(params.filePaths);
+    if (error) throw error;
+  } catch (error) {
+    logBackendError('failed_to_remove_unsent_reference_track_copies', { count: params.filePaths.length, error });
+  }
 }

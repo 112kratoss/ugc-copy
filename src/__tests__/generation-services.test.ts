@@ -55,6 +55,7 @@ const trackConversionMocks = vi.hoisted(() => ({
   },
   convertReferenceTrack: vi.fn(),
   storeConvertedReferenceTrack: vi.fn(),
+  removeConvertedReferenceTracks: vi.fn(),
 }));
 
 vi.mock('@/lib/reference-track-conversion', () => trackConversionMocks);
@@ -6739,14 +6740,20 @@ describe('generation services', () => {
     const VOICE_MEMO = 'https://cdn.example.com/voice-memo.m4a';
     const VOICE_MEMO_TRACK = { kind: 'audio' as const, label: 'Voice Memo', storagePath: 'uploads/user-1/voice-memo.m4a', sourceGenerationId: null };
 
+    const storedTrackPath = (generationId: string, index: number) => `user-1/${generationId}/provider-tracks/${String(index).padStart(2, '0')}.wav`;
+
     beforeEach(() => {
-      const { convertReferenceTrack, storeConvertedReferenceTrack } = trackConversionMocks;
+      const { convertReferenceTrack, storeConvertedReferenceTrack, removeConvertedReferenceTracks } = trackConversionMocks;
       convertReferenceTrack.mockReset();
       convertReferenceTrack.mockImplementation(async ({ link }: { link: string }) => Buffer.from(`wav of ${link}`));
       storeConvertedReferenceTrack.mockReset();
-      storeConvertedReferenceTrack.mockImplementation(async ({ generationId, index }: { generationId: string; index: number }) => (
-        storedTrackLink(generationId, index)
-      ));
+      storeConvertedReferenceTrack.mockImplementation(async ({ generationId, index, onStored }: {
+        generationId: string; index: number; onStored: (filePath: string) => void;
+      }) => {
+        onStored(storedTrackPath(generationId, index));
+        return storedTrackLink(generationId, index);
+      });
+      removeConvertedReferenceTracks.mockReset();
     });
 
     function recordKieBodies() {
@@ -6924,20 +6931,53 @@ describe('generation services', () => {
       expect(logError.mock.calls.flat().map(String).join('\n')).toContain('reference_track_conversion_failed');
     });
 
-    it('returns the hold when the copy cannot be stored, and asks Kie nothing', async () => {
+    it('returns the hold when a copy cannot be stored, asks Kie nothing, and removes the copies already stored', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-services');
+      const { getPublicGenerationStartFailure, getRefundedStartGenerationId } = await import('@/lib/generation-public-failure');
       const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      trackConversionMocks.storeConvertedReferenceTrack.mockRejectedValue(new Error('The converted track could not be stored: storage is down'));
+      const { storeConvertedReferenceTrack, removeConvertedReferenceTracks } = trackConversionMocks;
+      const storeOne = storeConvertedReferenceTrack.getMockImplementation()!;
+      storeConvertedReferenceTrack
+        .mockImplementationOnce(storeOne)
+        .mockRejectedValueOnce(new Error('The converted track could not be stored: storage is down'));
 
-      const { start, rpcCalls, generations } = await startWithTracks('wan-3.0', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
-      await expect(start).rejects.toMatchObject({
-        status: 503,
-        failureCode: 'provider_unavailable',
-        message: 'We could not prepare your audio track for Wan 3.0. Try again in a moment. No credits were used.',
-      });
+      const { start, rpcCalls, generations } = await startWithTracks('wan-3.0', [VOICE_MEMO, 'https://cdn.example.com/beat.webm']);
+      const error = await start.catch((thrown: unknown) => thrown);
+
       expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation', 'settle_generation_start_failed']);
       expect(generations[0]).toMatchObject({ status: 'failed', refunded: true });
       expect(fetch).not.toHaveBeenCalled();
       expect(logError.mock.calls.flat().map(String).join('\n')).toContain('reference_track_copy_not_stored');
+      // After the hold the settlement words the refusal: the route says no credits were used only
+      // once the hold is back (it marks the error), so this is no GenerationServiceError with words.
+      expect(error).not.toBeInstanceOf(GenerationServiceError);
+      expect(getRefundedStartGenerationId(error)).toBe(generations[0].id);
+      expect(getPublicGenerationStartFailure(error).code).toBe('provider_unavailable');
+      expect(removeConvertedReferenceTracks.mock.calls).toEqual([[expect.objectContaining({
+        filePaths: [storedTrackPath(generations[0].id, 0)],
+      })]]);
+    });
+
+    it('removes the copies when Kie refuses the run, and keeps them while Kie may have taken it', async () => {
+      const { removeConvertedReferenceTracks } = trackConversionMocks;
+      vi.mocked(fetch).mockImplementation(async () => ({
+        ok: true,
+        json: async () => ({ code: 422, msg: 'File type not supported' }),
+      }) as Response);
+      const refused = await startWithTracks('wan-3.0', [VOICE_MEMO]);
+      await expect(refused.start).rejects.toThrow();
+      expect(refused.generations[0]).toMatchObject({ status: 'failed', refunded: true });
+      expect(removeConvertedReferenceTracks.mock.calls).toEqual([[expect.objectContaining({
+        filePaths: [storedTrackPath(refused.generations[0].id, 0)],
+      })]]);
+
+      removeConvertedReferenceTracks.mockClear();
+      // A connection that dropped after the request went out: the run is held as possibly taken.
+      vi.mocked(fetch).mockImplementation(async () => { throw new TypeError('fetch failed'); });
+      const unknown = await startWithTracks('wan-3.0', [VOICE_MEMO]);
+      await expect(unknown.start).rejects.toThrow();
+      expect(unknown.generations[0].refunded).not.toBe(true);
+      expect(removeConvertedReferenceTracks).not.toHaveBeenCalled();
     });
   });
 

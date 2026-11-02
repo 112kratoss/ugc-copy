@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import {
   convertReferenceTrack,
   ReferenceTrackUnreadableError,
+  removeConvertedReferenceTracks,
   storeConvertedReferenceTrack,
 } from '@/lib/reference-track-conversion';
 import { RemoteMediaSecurityError } from '@/lib/remote-media-security';
@@ -154,6 +155,19 @@ describe('convertReferenceTrack', () => {
     await expect(conversion).rejects.toMatchObject({ tooLong: false, message: expect.stringMatching(/^ffmpeg exited with code/) });
   });
 
+  it('refuses a memo with a damaged header as unreadable, though ffmpeg says it could not allocate memory', async () => {
+    // A chunk-offset table claiming 2^31 entries: ffmpeg refuses the allocation on any machine.
+    const damaged = new Uint8Array(fixtures.memo);
+    const stco = Buffer.from(damaged).indexOf('stco');
+    expect(stco).toBeGreaterThan(0);
+    new DataView(damaged.buffer).setUint32(stco + 8, 0x7fffffff);
+    const { supabase } = storageMock({ [UPLOADED_OBJECT]: damaged });
+
+    const conversion = convertReferenceTrack({ supabase, userId: 'user-1', link: UPLOADED });
+    await expect(conversion).rejects.toBeInstanceOf(ReferenceTrackUnreadableError);
+    await expect(conversion).rejects.toThrow(/Cannot allocate memory/);
+  });
+
   it('opens nothing a playlist named .m4a points at', async () => {
     const playlist = new TextEncoder().encode('#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nfile:///etc/hosts\n#EXT-X-ENDLIST\n');
     const { supabase } = storageMock({ [UPLOADED_OBJECT]: playlist });
@@ -245,9 +259,11 @@ describe('storeConvertedReferenceTrack', () => {
 
   it('keeps the copy in the held run’s own folder and answers a link to it', async () => {
     const { supabase, calls, uploads } = storageMock({});
+    const onStored = vi.fn();
 
-    const link = await storeConvertedReferenceTrack({ supabase, userId: 'user-1', generationId: 'gen-1', index: 3, wav });
+    const link = await storeConvertedReferenceTrack({ supabase, userId: 'user-1', generationId: 'gen-1', index: 3, wav, onStored });
 
+    expect(onStored.mock.calls).toEqual([['user-1/gen-1/provider-tracks/03.wav']]);
     expect(uploads).toHaveLength(1);
     const [upload] = uploads;
     expect(upload).toMatchObject({ bucket: 'generation_inputs', filePath: 'user-1/gen-1/provider-tracks/03.wav' });
@@ -259,10 +275,37 @@ describe('storeConvertedReferenceTrack', () => {
     expect(link).toBe('https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-1/provider-tracks/03.wav?token=s');
   });
 
-  it('throws when storage refuses the copy, an object already there included', async () => {
+  it('throws when storage refuses the copy, an object already there included, and names no file stored', async () => {
     const { supabase } = storageMock({}, { uploadError: { statusCode: '409', error: 'Duplicate', message: 'The resource already exists' } });
+    const onStored = vi.fn();
 
-    await expect(storeConvertedReferenceTrack({ supabase, userId: 'user-1', generationId: 'gen-1', index: 0, wav }))
+    await expect(storeConvertedReferenceTrack({ supabase, userId: 'user-1', generationId: 'gen-1', index: 0, wav, onStored }))
       .rejects.toThrow('The converted track could not be stored: The resource already exists');
+    expect(onStored).not.toHaveBeenCalled();
+  });
+});
+
+describe('removeConvertedReferenceTracks', () => {
+  it('removes the copies it is given, and logs a failure rather than throwing it', async () => {
+    const removals: Array<{ bucket: string; paths: string[] }> = [];
+    const client = (error: { message: string } | null) => ({
+      storage: {
+        from: (bucket: string) => ({
+          remove: async (paths: string[]) => {
+            removals.push({ bucket, paths });
+            return { data: null, error };
+          },
+        }),
+      },
+    }) as unknown as SupabaseClient;
+    const filePaths = ['user-1/gen-1/provider-tracks/00.wav', 'user-1/gen-1/provider-tracks/01.wav'];
+
+    await removeConvertedReferenceTracks({ supabase: client(null), filePaths });
+    expect(removals).toEqual([{ bucket: 'generation_inputs', paths: filePaths }]);
+
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await expect(removeConvertedReferenceTracks({ supabase: client({ message: 'storage is down' }), filePaths })).resolves.toBeUndefined();
+    expect(logError.mock.calls.flat().map(String).join('\n')).toContain('failed_to_remove_unsent_reference_track_copies');
+    logError.mockRestore();
   });
 });
