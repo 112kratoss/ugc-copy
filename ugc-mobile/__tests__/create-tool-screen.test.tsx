@@ -7,9 +7,31 @@ import path from 'node:path';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+// expo-router's own code for both ends of a push: `resolveHref` writes the href, and
+// `parseQueryParams` is how `getStateFromPath` reads its query into the route's params.
+import { resolveHref } from 'expo-router/build/link/href';
+import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 
 const routeState = vi.hoisted(() => ({
   params: {} as Record<string, string | string[] | undefined>,
+  /**
+   * What expo-router 55's `useLocalSearchParams` (build/hooks.js) returns for these
+   * params: each one through `decodeURIComponent` again, one it cannot decode as it is
+   * (`auth-screen-return-to.test.tsx` checks the installed hook still does).
+   */
+  localSearchParams(params: Record<string, string | string[] | undefined>) {
+    const decode = (value: string) => {
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return value;
+      }
+    };
+    return Object.fromEntries(Object.entries(params).map(([key, value]) => [
+      key,
+      value === undefined ? value : Array.isArray(value) ? value.map(decode) : decode(value),
+    ]));
+  },
 }));
 
 const mediaCreationState = vi.hoisted(() => ({
@@ -33,11 +55,15 @@ vi.mock('@/components/ai-data-consent-on-open', () => ({
   },
 }));
 
-vi.mock('@react-navigation/native', () => ({ useNavigation: () => ({ dispatch: navigationState.dispatch }), usePreventRemove: navigationState.prevent }));
+vi.mock('@react-navigation/native', () => ({
+  useNavigation: () => ({ dispatch: navigationState.dispatch }),
+  usePreventRemove: navigationState.prevent,
+  useRoute: () => ({ key: 'create-1', name: 'create/[tool]', params: routeState.params }),
+}));
 
 const stackState = vi.hoisted(() => ({ options: null as Record<string, unknown> | null }));
 vi.mock('expo-router', () => ({
-  useLocalSearchParams: () => routeState.params,
+  useLocalSearchParams: () => routeState.localSearchParams(routeState.params),
   router: { replace: vi.fn(), back: vi.fn(), canGoBack: () => true },
   Stack: { Screen: (props: { options?: Record<string, unknown> }) => { stackState.options = props.options ?? null; return null; } },
 }));
@@ -57,6 +83,16 @@ vi.mock('@/components/ui', () => ({
 }));
 
 import CreateToolScreen from '../app/create/[tool]';
+import { getNativeRemixCreateHref } from '../lib/viewer-actions';
+
+/** The creator route's params after `router.push(href)`: its `[tool]` segment and its query. */
+function creatorRoute(href: string) {
+  const tool = href.split('?', 1)[0].split('/').pop()!;
+  return { tool, ...parseQueryParams(resolveHref(href), { name: 'create/[tool]', params: { tool } }) };
+}
+
+/** Text a decode once too many alters: a valid %XX, as in a pasted link. */
+const PROMPT = 'Split it 50%50, logo from example.com/brand%20kit';
 
 describe('create tool route', () => {
   beforeEach(() => {
@@ -89,6 +125,17 @@ describe('create tool route', () => {
     });
 
     expect(aiDataConsentState.mounted).toBe(0);
+    expect(mediaCreationState.props).toBeNull();
+  });
+
+  // React Navigation gives a route opened with no params no params object at all.
+  it('reads a route with no params as no mode', () => {
+    routeState.params = undefined as unknown as Record<string, string>;
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
     expect(mediaCreationState.props).toBeNull();
   });
 
@@ -133,6 +180,46 @@ describe('create tool route', () => {
       title: 'Night run & co',
       creatorLabel: '@ana',
       thumbnailUrl: 'https://cdn.example.com/t.jpg?x=1&y=2',
+    });
+  });
+
+  // The links encode their text once (a Recreate's prompt with `encodeURIComponent`, a remix's
+  // with `URLSearchParams`) and the URL parse decodes it once. A second decode turned every valid
+  // %XX in the text into another character on every open: "50%50" became "50P".
+  it('opens a Recreate prompt exactly as its link carried it', () => {
+    routeState.params = creatorRoute(getNativeRemixCreateHref({ recreateTool: 'image', prompt: PROMPT, context: null })!);
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
+    expect(mediaCreationState.props).toMatchObject({ initialTool: 'image', initialPrompt: PROMPT });
+  });
+
+  it("draws a remix's source row exactly as its link carried it", () => {
+    const context = {
+      postId: 'post-1',
+      title: 'Split it 50%50',
+      creatorLabel: '@ana',
+      thumbnailUrl: 'https://cdn.example.com/posters/a%20b.jpg?path=x%2Fy',
+    };
+    routeState.params = creatorRoute(getNativeRemixCreateHref({ generationId: 'gen-1', recreateTool: 'video', prompt: PROMPT, context })!);
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
+    const { initialTool, initialPrompt, remixSource } = mediaCreationState.props!;
+    expect({ initialTool, initialPrompt, remixSource }).toEqual({
+      initialTool: 'video',
+      initialPrompt: PROMPT,
+      remixSource: {
+        generationId: 'gen-1',
+        postId: 'post-1',
+        title: context.title,
+        creatorLabel: context.creatorLabel,
+        thumbnailUrl: context.thumbnailUrl,
+      },
     });
   });
 
