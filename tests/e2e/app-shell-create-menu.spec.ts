@@ -25,7 +25,7 @@ async function openExplore(page: Page) {
 }
 
 test.describe('the Create menu', () => {
-  test("opens under the top bar's Create, offers Create and Post, and closes on a choice", async ({ page }) => {
+  test("opens under the top bar's Create, offers Generate and Post, and closes on a choice", async ({ page }) => {
     await page.setViewportSize(DESKTOP);
     await openExplore(page);
     const create = page.locator('header.app-shell-header').getByRole('button', { name: 'Create' });
@@ -34,7 +34,7 @@ test.describe('the Create menu', () => {
 
     await create.click();
     await expect(menu).toBeVisible(COLD_PAGE);
-    await expect(menu.getByRole('link', { name: 'Create' })).toHaveAttribute('href', '/create');
+    await expect(menu.getByRole('link', { name: 'Generate' })).toHaveAttribute('href', '/create');
     // Started on Explore, the composer's Back goes to Explore.
     await expect(menu.getByRole('link', { name: 'Post' })).toHaveAttribute('href', '/post/new?from=community');
     // Hung under its button, right edges level.
@@ -46,7 +46,7 @@ test.describe('the Create menu', () => {
     // The creators hub compiles on its first request: warm it, so the wait below holds only
     // the navigation (`.claude/rules/e2e.md`).
     await page.request.get('/create', { timeout: 0 });
-    await menu.getByRole('link', { name: 'Create' }).click();
+    await menu.getByRole('link', { name: 'Generate' }).click();
     await expect(page).toHaveURL(/\/create$/, COLD_PAGE);
     await expect(menu).toBeHidden();
   });
@@ -70,7 +70,7 @@ test.describe('the Create menu', () => {
     await create.focus();
     await page.keyboard.press('Enter');
     await expect(menu).toBeVisible(COLD_PAGE);
-    await expect(menu.getByRole('link', { name: 'Create' })).toBeFocused();
+    await expect(menu.getByRole('link', { name: 'Generate' })).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(menu.getByRole('link', { name: 'Post' })).toBeFocused();
 

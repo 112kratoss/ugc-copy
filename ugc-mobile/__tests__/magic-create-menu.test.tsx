@@ -60,9 +60,9 @@ import { MagicCreateMenu } from '../components/magic-create-menu';
 import { CREATE_MENU_ACTIONS, getCreateMenuActionHref } from '../lib/create-menu-view-model';
 
 describe('create menu view model', () => {
-  it('exposes exactly Create and Post actions in create-first order', () => {
+  it('exposes exactly Generate and Post actions in generate-first order', () => {
     expect(CREATE_MENU_ACTIONS.map((action) => action.id)).toEqual(['create', 'post']);
-    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Create', 'Post']);
+    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Generate', 'Post']);
     expect(CREATE_MENU_ACTIONS.find((action) => action.id === 'post')?.body).toBe('Share finished media');
   });
 
@@ -92,7 +92,7 @@ describe('MagicCreateMenu', () => {
       tree = renderer.create(<MagicCreateMenu visible onClose={onClose} onAction={onAction} />);
     });
 
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Create' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Generate' })).toBeTruthy();
     expect(tree!.root.findByProps({ accessibilityLabel: 'Post' })).toBeTruthy();
 
     renderer.act(() => {
