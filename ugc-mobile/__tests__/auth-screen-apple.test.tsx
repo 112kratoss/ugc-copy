@@ -60,8 +60,12 @@ vi.mock('expo-router', () => ({
     dismissTo: vi.fn(),
     replace: vi.fn(),
   },
-  useLocalSearchParams: () => paramsState.params,
   useNavigation: () => ({ addListener: navigationState.addListener }),
+}));
+
+// The screen reads its params from the route itself (auth-screen-return-to.test.tsx says why).
+vi.mock('@react-navigation/native', () => ({
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: paramsState.params }),
 }));
 
 vi.mock('expo-apple-authentication', () => ({

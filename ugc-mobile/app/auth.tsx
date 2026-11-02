@@ -1,4 +1,5 @@
-import { router, useLocalSearchParams, useNavigation } from 'expo-router';
+import { useRoute } from '@react-navigation/native';
+import { router, useNavigation } from 'expo-router';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { Image } from 'expo-image';
@@ -60,11 +61,14 @@ function authAnalyticsStep(returnTo: string | string[] | undefined) {
 
 export default function AuthScreen() {
   const theme = useAppTheme();
-  const { returnTo, mode: requestedMode, notice: requestedNotice } = useLocalSearchParams<{
+  // The route's own params: the URL parse has decoded them once, as every caller encoded its
+  // return once. expo-router's `useLocalSearchParams` decodes them again, which cut a prompt in a
+  // return at & or #, turned its + into a space, and sent one with a backslash or a line break Home.
+  const { returnTo, mode: requestedMode, notice: requestedNotice } = (useRoute().params ?? {}) as {
     returnTo?: string | string[];
     mode?: string | string[];
     notice?: string | string[];
-  }>();
+  };
   const { api, user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
   const navigation = useNavigation();
   // The buttons this platform draws, and so the only ones the copy may name.

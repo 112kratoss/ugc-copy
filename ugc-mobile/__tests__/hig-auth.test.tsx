@@ -33,9 +33,12 @@ const authState = vi.hoisted(() => ({
 
 vi.mock('expo-router', () => ({
   router: { canGoBack: vi.fn(() => false), back: vi.fn(), dismissTo: vi.fn(), replace: vi.fn() },
-  useLocalSearchParams: () => ({}),
   useNavigation: () => ({ addListener: () => () => undefined }),
   Link: (props: MockProps) => React.createElement('link', props),
+}));
+
+vi.mock('@react-navigation/native', () => ({
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: {} }),
 }));
 
 vi.mock('expo-apple-authentication', () => ({

@@ -5,6 +5,8 @@ import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+// How expo-router reads a path's query into a route's params (`getStateFromPath`).
+import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -301,6 +303,7 @@ import type { ModelCatalogKind, ModelCatalogSummary } from '../lib/model-catalog
 import { PrimaryButton, SecondaryButton } from '../components/ui';
 import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
 import { ApiError } from '../lib/api-client';
+import { normalizeAuthReturnTo } from '../lib/auth-navigation';
 import { appTheme } from '../lib/theme';
 import whatsNewContract from '../../contracts/whats-new-models-v1.json';
 import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.json';
@@ -8985,26 +8988,54 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.identityUserId = null;
       });
 
-      // The source's ids and never its row's words: a sign-in's returnTo comes back decoded
-      // once more than it was encoded, so a title with &, # or + arrived cut and one with a
-      // backslash sent the person Home. The creator reads its row again from the post.
-      it('returns to this creator with its remix and its prompt', async () => {
+      /** The return sign-in was sent off with. */
+      const pushedReturnTo = () => {
+        expect(routerState.push).toHaveBeenCalledTimes(1);
+        const [{ pathname, params }] = routerState.push.mock.calls[0] as [{ pathname: string; params: { returnTo: string } }];
+        expect(pathname).toBe('/auth');
+        return params.returnTo;
+      };
+      /** The creator's params once sign-in has gone back to `returnTo`, read as expo-router reads them. */
+      const paramsAfterReturn = (returnTo: string) => parseQueryParams(returnTo, { name: 'create/[tool]' });
+
+      // Sign-in goes back by giving the creator these params in place of its own (`router.dismissTo`),
+      // so the screen comes back with everything it was opened with, the source row's words too.
+      it('returns to this creator with its remix, its row and its prompt', async () => {
+        const prompt = 'A dancer & a drum #2 + 100% real \\ one\nline two';
         const tree = await open(
           <MediaCreationScreen
             initialTool="video"
-            initialPrompt="A dancer & a drum"
+            initialPrompt={prompt}
             guided
-            remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Night run', creatorLabel: 'Ana', thumbnailUrl: 'https://cdn.example.com/t.jpg?x=1' }}
+            remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Night run & co', creatorLabel: '@ana', thumbnailUrl: 'https://cdn.example.com/t.jpg?x=1&y=2' }}
           />,
         );
         await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
 
-        expect(routerState.push).toHaveBeenCalledWith({
-          pathname: '/auth',
-          params: {
-            returnTo: '/create/video?remix=gen-9&remixPost=post-9&prompt=A%20dancer%20%26%20a%20drum&guided=1',
-          },
+        const returnTo = pushedReturnTo();
+        expect(returnTo.split('?')[0]).toBe('/create/video');
+        // The sign-in screen goes back to it as it is: its guard leaves it whole.
+        expect(normalizeAuthReturnTo(returnTo)).toBe(returnTo);
+        expect(paramsAfterReturn(returnTo)).toEqual({
+          remix: 'gen-9',
+          remixPost: 'post-9',
+          sourceTitle: 'Night run & co',
+          sourceCreator: '@ana',
+          sourceThumbnail: 'https://cdn.example.com/t.jpg?x=1&y=2',
+          prompt,
+          guided: '1',
         });
+      });
+
+      // A creation never posted has no post for the row to read again: its words are all the row has.
+      it('returns a remix with no post to its row', async () => {
+        const tree = await open(
+          <MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-9', title: 'Night run', creatorLabel: '@ana' }} />,
+        );
+        await typePrompt(tree, 'A night run');
+        await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
+
+        expect(paramsAfterReturn(pushedReturnTo())).toEqual({ remix: 'gen-9', sourceTitle: 'Night run', sourceCreator: '@ana' });
       });
 
       it('returns to the Create tab on the tool it was opened on', async () => {

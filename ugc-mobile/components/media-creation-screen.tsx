@@ -827,10 +827,10 @@ function motionClipRefusal(picked: { fileName?: string | null; fileSize?: number
  * under the sign-in is the one shown again. A return without them was a different route, which
  * opened a creator without the remix or the prompt. Inside the Create tab, the tab itself.
  *
- * The source goes by its ids, never its row's words: a sign-in's returnTo comes back decoded once
- * more than it was encoded, so a title with &, # or + arrived cut and one with a backslash sent
- * the person Home. The row reads the post again (`RemixSourceRow`). `prompt` still goes as text, as
- * a prompt-only Recreate has nowhere else to come back from, and meets the same decoding.
+ * The source row's words go too. Sign-in goes back by giving the creator these params in place of
+ * its own (`router.dismissTo`), and a remix of a creation never posted has no post for its row to
+ * read again (`RemixSourceRow`). The sign-in screen hands this on exactly as it was built
+ * (`app/auth.tsx`), so a prompt or a title with &, # or + comes back whole.
  */
 function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource }: {
   insideTab: boolean;
@@ -844,6 +844,9 @@ function creatorReturnPath({ insideTab, tool, guided, initialPrompt, remixSource
     : [
         ['remix', remixSource?.generationId],
         ['remixPost', remixSource?.postId],
+        ['sourceTitle', remixSource?.title],
+        ['sourceCreator', remixSource?.creatorLabel],
+        ['sourceThumbnail', remixSource?.thumbnailUrl],
         ['prompt', initialPrompt],
         ['guided', guided ? '1' : null],
       ];
