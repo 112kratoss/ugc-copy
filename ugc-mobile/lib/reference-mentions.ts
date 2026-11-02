@@ -16,6 +16,28 @@ export function normalizeTextSelection(text: string, selection: TextSelection): 
   return { start, end };
 }
 
+/**
+ * Where a caret in `before` stands once the text is `after`, for a change the field did not type (a
+ * saved draft arriving, Enhance, Undo, a rename): before or after the run of text that changed, it
+ * keeps its place among the words around it; in that run or at its edge, it goes to the run's end,
+ * as a caret moves past text typed at it. An empty field that fills puts it at the end, as both
+ * platforms' fields put theirs.
+ */
+export function selectionAfterTextChange(before: string, after: string, selection: TextSelection): TextSelection {
+  const shorter = Math.min(before.length, after.length);
+  let head = 0;
+  while (head < shorter && before[head] === after[head]) head += 1;
+  let tail = 0;
+  while (tail < shorter - head && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail += 1;
+  const place = (offset: number) => {
+    if (offset < head) return offset;
+    if (offset > before.length - tail) return after.length - (before.length - offset);
+    return after.length - tail;
+  };
+  const caret = normalizeTextSelection(before, selection);
+  return normalizeTextSelection(after, { start: place(caret.start), end: place(caret.end) });
+}
+
 export function findActiveReferenceMention(text: string, selection: TextSelection): ActiveReferenceMention | null {
   const normalized = normalizeTextSelection(text, selection);
   if (normalized.start !== normalized.end) return null;

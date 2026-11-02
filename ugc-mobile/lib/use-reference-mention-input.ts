@@ -5,12 +5,17 @@ import {
   findActiveReferenceMention,
   insertHandleAtSelection,
   normalizeTextSelection,
+  selectionAfterTextChange,
   type TextSelection,
 } from '@/lib/reference-mentions';
 
 /** The text and caret a dismissed @ list stays shut for. */
 function mentionKeyFor(text: string, { start, end }: TextSelection) {
   return `${text}:${start}:${end}`;
+}
+
+function sameSelection(a: TextSelection | null, b: TextSelection) {
+  return a !== null && a.start === b.start && a.end === b.end;
 }
 
 /**
@@ -22,9 +27,21 @@ function mentionKeyFor(text: string, { start, end }: TextSelection) {
  * being typed (`findActiveReferenceMention`). An insert leaves the caret right after the handle
  * it put in, which reads as a mention being typed, so the list stays shut for that text and caret
  * until the creator types or moves the caret. An insert puts focus and that caret back on the
- * field, at once from the @ list and after the caller's delay from a sheet over the field; the
- * caret it puts back (`setNativeProps`) comes back as a selection change of its own, which is not
- * the creator's and leaves the list shut. A blur shuts the list 160 ms later.
+ * field, at once from the @ list and after the caller's delay from a sheet over the field, with the
+ * field's own `setSelection`: `setNativeProps({ selection })` moved neither platform's caret
+ * (Android's field has no such prop, and iOS's reads it only as the field joins a window), so on
+ * Android the caret stayed where the text replacement left it, inside the handle. The caret put
+ * back comes back as a selection change, which is not the creator's: Android reports the one its
+ * replacement left first, which clears the list's dismissal, and the one put back sets it again.
+ * A blur shuts the list 160 ms later.
+ *
+ * A prompt the field did not type (a saved draft arriving after the composer mounted, Enhance,
+ * Undo, a rename) moves the caret with the words around it (`selectionAfterTextChange`), as neither
+ * platform's field says where its caret went. React can run an older prompt's effect after the
+ * field has typed on, so a prompt the field typed itself is never taken for one.
+ *
+ * The field leaves without a blur when it stops being the prompt in use (`enabled`): it comes back
+ * unfocused, with nothing of its own pending.
  *
  * An insert puts the handle in whether or not the prompt already names it: one prompt can name a
  * reference more than once ("@ali walks in, then @ali waves", #652).
@@ -57,6 +74,8 @@ export function useReferenceMentionInput({
   const [dismissedMentionKey, setDismissedMentionKey] = useState<string | null>(null);
   const inputRef = useRef<TextInput>(null);
   const promptTextRef = useRef(prompt);
+  // What the field typed and the inserts put in since the prompt last caught up with the field.
+  const fieldTextsRef = useRef<string[]>([]);
   const lastSelectionRef = useRef<TextSelection>(initialSelection);
   const restoringSelectionRef = useRef<TextSelection | null>(null);
   const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,18 +87,35 @@ export function useReferenceMentionInput({
   const mentionKey = detectedMention ? mentionKeyFor(prompt, selection) : null;
   const activeMention = detectedMention && mentionKey !== dismissedMentionKey ? detectedMention : null;
 
-  useEffect(() => {
-    promptTextRef.current = prompt;
-    const normalized = normalizeTextSelection(prompt, lastSelectionRef.current);
-    if (normalized.start === lastSelectionRef.current.start && normalized.end === lastSelectionRef.current.end) return;
-    lastSelectionRef.current = normalized;
-    setSelection(normalized);
-  }, [prompt]);
-
-  useEffect(() => () => {
+  const clearTimers = () => {
     if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
     if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
-  }, []);
+    blurTimerRef.current = null;
+    focusTimerRef.current = null;
+  };
+
+  useEffect(() => {
+    const fieldText = promptTextRef.current;
+    // An older text of the field's own, its effect run after the field typed on: a later prompt catches up.
+    if (prompt !== fieldText && fieldTextsRef.current.includes(prompt)) return;
+    fieldTextsRef.current = [];
+    promptTextRef.current = prompt;
+    const next = prompt === fieldText
+      ? normalizeTextSelection(prompt, lastSelectionRef.current)
+      : selectionAfterTextChange(fieldText, prompt, lastSelectionRef.current);
+    if (sameSelection(lastSelectionRef.current, next)) return;
+    lastSelectionRef.current = next;
+    setSelection(next);
+  }, [prompt]);
+
+  useEffect(() => {
+    if (enabled) return;
+    clearTimers();
+    restoringSelectionRef.current = null;
+    setFocused(false);
+  }, [enabled]);
+
+  useEffect(() => clearTimers, []);
 
   useEffect(() => {
     onMentionStateChange(Boolean(activeMention));
@@ -95,9 +131,11 @@ export function useReferenceMentionInput({
   const restoreFocus = (delay: number) => {
     if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
     focusTimerRef.current = setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setNativeProps({ selection: lastSelectionRef.current });
       focusTimerRef.current = null;
+      const field = inputRef.current;
+      const caret = restoringSelectionRef.current;
+      field?.focus();
+      if (caret) field?.setSelection(caret.start, caret.end);
     }, delay);
   };
 
@@ -105,6 +143,7 @@ export function useReferenceMentionInput({
     clearBlurTimer();
     const result = insertHandleAtSelection(promptTextRef.current, handle, at);
     promptTextRef.current = result.text;
+    fieldTextsRef.current.push(result.text);
     lastSelectionRef.current = result.selection;
     restoringSelectionRef.current = result.selection;
     setSelection(result.selection);
@@ -122,16 +161,22 @@ export function useReferenceMentionInput({
         clearBlurTimer();
         setFocused(true);
         setDismissedMentionKey(null);
+        // Typed over, a caret still on its way back is no longer the one to keep.
+        restoringSelectionRef.current = null;
         promptTextRef.current = text;
+        fieldTextsRef.current.push(text);
         onPromptChange(text);
       },
       onSelectionChange: (event: TextInputSelectionChangeEvent) => {
         const next = normalizeTextSelection(promptTextRef.current, event.nativeEvent.selection);
-        const restored = restoringSelectionRef.current?.start === next.start && restoringSelectionRef.current.end === next.end;
         lastSelectionRef.current = next;
         setSelection(next);
-        if (restored) restoringSelectionRef.current = null;
-        else setDismissedMentionKey(null);
+        if (sameSelection(restoringSelectionRef.current, next)) {
+          restoringSelectionRef.current = null;
+          setDismissedMentionKey(mentionKeyFor(promptTextRef.current, next));
+        } else {
+          setDismissedMentionKey(null);
+        }
       },
       onFocus: () => {
         clearBlurTimer();

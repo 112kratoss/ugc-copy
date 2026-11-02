@@ -5,6 +5,7 @@ import {
   insertHandleAtSelection,
   normalizeTextSelection,
   referenceMatchesMention,
+  selectionAfterTextChange,
 } from '../lib/reference-mentions';
 
 describe('reference mentions', () => {
@@ -57,5 +58,24 @@ describe('reference mentions', () => {
 
   it('clamps stale or reversed selections to the current prompt', () => {
     expect(normalizeTextSelection('short', { start: 99, end: 2 })).toEqual({ start: 2, end: 5 });
+  });
+
+  it('moves a caret with the words around it when the prompt changes from outside the field', () => {
+    const caret = (at: number) => ({ start: at, end: at });
+    // A saved draft filling the empty field the composer mounted on.
+    expect(selectionAfterTextChange('', 'A cat on a sofa', caret(0))).toEqual(caret(15));
+    // A rename before the caret, and one after it.
+    expect(selectionAfterTextChange('Place @flowers beside the vase', 'Place @roses beside the vase', caret(22))).toEqual(caret(20));
+    expect(selectionAfterTextChange('Place beside @flowers', 'Place beside @roses', caret(6))).toEqual(caret(6));
+    // A caret right after the renamed handle stays right after it.
+    expect(selectionAfterTextChange('Use @flowers for color', 'Use @roses for color', caret(12))).toEqual(caret(10));
+    // A removed handle before the caret.
+    expect(selectionAfterTextChange('Place @flowers beside the vase', 'Place beside the vase', caret(22))).toEqual(caret(13));
+    // Enhance and Undo rewrite the words the caret ended: it ends the new ones.
+    expect(selectionAfterTextChange('A cat', 'A fluffy cat sitting on a sofa', caret(5))).toEqual(caret(30));
+    expect(selectionAfterTextChange('A fluffy cat sitting on a sofa', 'A cat', caret(30))).toEqual(caret(5));
+    // Unchanged text keeps its caret, and a selection keeps both of its ends.
+    expect(selectionAfterTextChange('Same words', 'Same words', caret(4))).toEqual(caret(4));
+    expect(selectionAfterTextChange('Place @flowers beside the vase', 'Place @roses beside the vase', { start: 0, end: 5 })).toEqual({ start: 0, end: 5 });
   });
 });

@@ -170,6 +170,7 @@ import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
+import { useFocusRequest } from '@/lib/use-focus-request';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useRailReveal, type RailRevealRequest } from '@/lib/use-rail-reveal';
 import { useReferenceMentionInput } from '@/lib/use-reference-mention-input';
@@ -3825,9 +3826,7 @@ function ImagePromptComposer({
     });
   }, [activeMention, draft.references, mentionHandles]);
 
-  useEffect(() => {
-    if (promptFocusRequest > 0) promptInputRef.current?.focus();
-  }, [promptFocusRequest]);
+  useFocusRequest(promptFocusRequest, promptInputRef);
 
   return (
     <>
@@ -4549,9 +4548,7 @@ function VideoCreatorComposer({
     ...subjects.map(subjectAsReference),
   ].filter((media) => media.handle && runHandles.has(media.handle) && referenceMatchesMention(media, activeMention.query));
 
-  useEffect(() => {
-    if (promptFocusRequest > 0) promptInputRef.current?.focus();
-  }, [promptFocusRequest]);
+  useFocusRequest(promptFocusRequest, promptInputRef);
 
   const draftTextNames = (handle?: string | null) => videoDraftTextNames(draft, handle);
 
@@ -5041,9 +5038,7 @@ function MotionCreatorComposer({
 }) {
   const theme = useAppTheme();
   const promptInputRef = useRef<TextInput>(null);
-  useEffect(() => {
-    if (promptFocusRequest > 0) promptInputRef.current?.focus();
-  }, [promptFocusRequest]);
+  useFocusRequest(promptFocusRequest, promptInputRef);
   const [selectedRole, setSelectedRole] = useState<'character' | 'motion' | null>(null);
   const selectedMedia = selectedRole === 'character' ? draft.characterImage : selectedRole === 'motion' ? draft.referenceVideo : null;
   // The lines under the slots, found by what the slots are called (`catalogMotionDraftSlotLabels`):
