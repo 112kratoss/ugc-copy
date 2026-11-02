@@ -299,7 +299,7 @@ export interface CreateMenuItem {
 export const CREATE_MENU_TITLE = 'Create or publish';
 export const CREATE_MENU_SUBTITLE = 'Start with AI, or share work you already have.';
 export const CREATE_MENU_ITEMS: readonly CreateMenuItem[] = [
-  { id: 'create', label: 'Create', body: 'Image, Video, and Motion' },
+  { id: 'create', label: 'Generate', body: 'Image, Video, and Motion' },
   { id: 'post', label: 'Post', body: 'Share finished media' },
 ];
 
