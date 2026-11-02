@@ -135,6 +135,8 @@ async function fetchAuthConfig(token) {
     headers: {
       Authorization: `Bearer ${token}`,
     },
+    // The monthly Apple secret workflow runs this unattended; a hung read must not eat its job.
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
@@ -297,7 +299,7 @@ async function probeAppleWebSignIn() {
   const url = new URL(`https://${PROJECT_REF}.supabase.co/auth/v1/authorize`);
   url.searchParams.set('provider', 'apple');
   url.searchParams.set('redirect_to', SITE_AUTH_CALLBACK_URL);
-  const response = await fetch(url, { redirect: 'manual' });
+  const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
   const location = response.headers.get('location');
   const body = location ? '' : await response.text();
   const clientId = assertAppleWebAuthorizeRedirect({ status: response.status, location, body });

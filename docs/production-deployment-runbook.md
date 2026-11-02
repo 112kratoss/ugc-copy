@@ -143,8 +143,9 @@ These settings are intentionally verified against the provider dashboards/adviso
 - Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
 - Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
 - Google Auth Platform: set Branding app name to `Magicbooklet`, add `magicbooklet.com` as an authorized domain, publish/verify the OAuth consent screen, and keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
-- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified, and add the branded host and callback to the Apple Services ID before activation ("Sign in with Apple on the web" below). Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
-- Apple Services ID and the Supabase Apple provider for the website's Continue with Apple: the steps, the six-month client secret and `--probe-apple-web-sign-in` are under "Sign in with Apple on the web" below.
+- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified. Add the branded host and callback to the Apple Services ID before activation, and set the repository variable `SUPABASE_AUTH_CALLBACK_URL` to the branded callback ("Sign in with Apple on the web" below). Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
+- Apple Services ID, the Supabase Apple provider, and the repository secrets `APPLE_SIGN_IN_PRIVATE_KEY` and `SUPABASE_AUTH_CONFIG_TOKEN` that the monthly client-secret renewal reads: under "Sign in with Apple on the web" below.
+- Before this repository goes private on GitHub Free: environment secrets stop being readable there, so the `production` environment's secrets (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, `OPS_READ_SECRET`) need repository copies under the same names, and environment protection rules stop applying. Do this before the switch.
 - RevenueCat project `proj4a602455`: send a production test webhook for integration `whintgr1689ecfb68` to `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, then verify Vercel logs show the route accepted the signed event. Current configured event types are `cancellation`, `non_renewing_purchase`, and `refund_reversed`.
 
 The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
@@ -315,28 +316,79 @@ Set up on 2026-11-02: Services ID `com.magicbooklet.mobile.web` ("Magicbooklet
 Web", primary App ID `5HNNML93ST.com.magicbooklet.mobile`), its client secret
 signed with the Sign in with Apple key `6924Q753C6` of team `5HNNML93ST`, and
 Client IDs `com.magicbooklet.mobile.web,com.magicbooklet.mobile`. The secret
-minted by hand that day expires 2027-05-01.
+minted by hand that day expires 2027-05-01, unless the workflow below replaces
+it first.
 
-Renewal is automatic. On the 1st of every month
+**Renewal is automatic.** On the 1st of every month,
 `.github/workflows/apple-web-client-secret.yml` mints a fresh 180-day secret and
-installs it in the Supabase Apple provider through the Management API, so the
-live one is never more than about a month old. The workflow's settings:
+applies it to the Supabase Apple provider through the Management API, so the
+live secret is never more than about a month old. It reads two **repository**
+secrets: on GitHub Free a private repository cannot read environment secrets,
+and this one goes private after launch.
 
-- Environment: `production`.
-- Key: the `APPLE_SIGN_IN_PRIVATE_KEY` environment secret, the same `.p8` as
-  Vercel's.
-- Supabase access: the environment's `SUPABASE_ACCESS_TOKEN`.
+- `APPLE_SIGN_IN_PRIVATE_KEY`: the same `.p8` as Vercel's. Install it with
+  `gh secret set APPLE_SIGN_IN_PRIVATE_KEY --repo 112kratoss/ugc-copy < AuthKey_6924Q753C6.p8`.
+  The workflow holds the key to `APPLE_SIGN_IN_KEY_SHA256`, the SHA-256 of its
+  public half, so a wrong `.p8` (APNs and App Store Connect keys are P-256 too)
+  is refused before anything is minted.
+- `SUPABASE_AUTH_CONFIG_TOKEN`: a Supabase access token that can read and write
+  this project's Auth config. A scoped token is best, if the dashboard offers
+  one. Install it from the clipboard with
+  `pbpaste | gh secret set SUPABASE_AUTH_CONFIG_TOKEN --repo 112kratoss/ugc-copy`.
 
-Before installing, the script checks that the provider is on, that the Services
-ID is first in Client IDs and that the bundle id is still listed; it then probes
-the result. A failed run emails whoever last edited its schedule and opens the
-issue "Apple web client secret renewal is failing", and a failure leaves about
-five months before the live secret ends. To renew at once, run the workflow by
-hand from Actions (`workflow_dispatch`), or do step 2 below. While the
-repository is public, GitHub switches scheduled workflows off after 60 days
-without activity, and switching one back on restarts it. Once the repository is
-private, each run costs under a minute of the Actions allowance: it installs
-nothing, because the script signs with Node's own crypto.
+Before it applies the new secret, the script checks four things, and with any of
+them wrong it leaves the live secret alone:
+
+- the provider is on;
+- the Services ID is first in Client IDs;
+- the key matches its pin;
+- when Supabase shows the live secret, that secret was signed by the same key
+  for the same key id, team and Services ID.
+
+After the update it reads the config back, then the probe checks the redirect
+and that the bundle id is still listed.
+
+A failed or timed-out run does two things:
+
+- it emails whoever last edited the schedule;
+- it opens the issue "Apple web client secret renewal is failing", which closes
+  on the next good run.
+
+A failure leaves about five months before the live secret ends. The run's
+summary says when the secret it applied expires.
+
+**A green run does not prove Apple takes the secret.** Nothing can, short of a
+real sign-in (step 2 says why). After the first scheduled run, and after any
+change to the key, its pin, the ids or the script, run the workflow by hand
+(Actions → Apple web client secret → Run workflow) and sign in on the website
+with Apple.
+
+A switched-off workflow raises no alert: GitHub does it on a public repository
+after 60 days without activity, and anyone can do it by hand. Switching it back
+on restarts it.
+
+On a private repository each run bills about one Actions minute. It installs
+no packages: the script signs with Node's own crypto, so no third-party code
+runs beside the key.
+
+**Rotating the key** (a leak, or a key revoked by mistake): revoking
+`6924Q753C6` ends the live secret and the account deletion's revocation at
+once, so do the steps in this order:
+
+1. Make a new Sign in with Apple key for the primary App ID in Apple Developer
+   → Keys.
+2. Run step 2 with the new key. It prints the key's SHA-256, the new pin.
+3. In this repository, change `APPLE_SIGN_IN_KEY_ID` and
+   `APPLE_SIGN_IN_KEY_SHA256` in the workflow and in
+   `src/__tests__/apple-web-client-secret-workflow.test.ts` if it names them,
+   then merge.
+4. Replace the repository secret `APPLE_SIGN_IN_PRIVATE_KEY`.
+5. Run the workflow by hand with **rotate** ticked. It applies over the old
+   key's secret, which a normal run refuses to do. Then sign in on the website
+   with Apple.
+6. Set Vercel's `APPLE_SIGN_IN_PRIVATE_KEY` and `APPLE_SIGN_IN_KEY_ID`, then do
+   a configuration-only redeploy, for the account deletion.
+7. Revoke the old key last.
 
 The iPhone app signs in with Apple natively (`signInWithIdToken`, audience the
 bundle id). The website's Continue with Apple buttons (the login page's tabs and
@@ -361,18 +413,17 @@ Apple's invalid_client page.
    the key never goes into a web page:
    `node scripts/ops/apple-web-client-secret.mjs --p8 <AuthKey_….p8> --key-id <key id> --team-id <APPLE_TEAM_ID> --client-id <Services ID>`.
    It puts the secret on the clipboard (or in a new file with `--out`), never on
-   the screen, and prints its expiry. The key file can be Apple's download or the
-   one-line form `.env` files keep. With `--install-supabase` and
-   `SUPABASE_ACCESS_TOKEN` it installs the secret in Supabase itself instead, as
-   the monthly workflow does. The `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves.
-   Revoking or rotating that key therefore ends this secret and the
-   account-deletion revocation, which signs with it; put the new key in Vercel
-   and in the workflow's environment secret. The secret lives 180 days (Apple's
-   ceiling is six months), and every web Apple sign-in fails from that day.
-   Nothing can check a secret before a real web sign-in, because Apple answers a
-   made-up code the same way whoever signed it. So a wrong key id, team or
-   Services ID shows only then, in production logs as
-   `auth_callback_provider_error` from `/auth/callback`, as a lapse does.
+   the screen, and prints its expiry and the key's public SHA-256. The key file
+   can be Apple's download or the one-line form `.env` files keep.
+   With `--apply-supabase` (plus `--key-sha256`, and `SUPABASE_MANAGEMENT_API_TOKEN`
+   in the environment) it applies the secret to Supabase itself, the way the
+   monthly workflow does, and `--rotate` lets it apply over a secret from another
+   key. The `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves; rotating it is above.
+   The secret lives 180 days (Apple's ceiling is six months), and every web
+   Apple sign-in fails from that day. Nothing can check a secret before a real
+   web sign-in, because Apple answers a made-up code the same way whoever signed
+   it. So a wrong key id, team or Services ID shows only then, in production logs
+   as `auth_callback_provider_error` from `/auth/callback`, as a lapse does.
 3. Supabase Dashboard → Authentication → Providers → Apple: Client IDs is a
    comma-separated list with the Services ID first, then the bundle id.
    Supabase sends the first entry to Apple for the web flow and accepts any of
@@ -383,8 +434,9 @@ Apple's invalid_client page.
    `npm run ops:external-gates -- --probe-apple-web-sign-in` reads where
    Supabase sends a press of Continue with Apple, with no token, and fails
    unless it is Apple's authorize page for a client other than the bundle id,
-   returning to the project's callback (set `SUPABASE_AUTH_CALLBACK_URL` to the
-   custom domain's once one is active). With `SUPABASE_MANAGEMENT_API_TOKEN` it
+   returning to the project's callback. Once a custom domain is active, set
+   `SUPABASE_AUTH_CALLBACK_URL` to its callback: locally in the environment, and
+   for the monthly workflow as a repository variable. With `SUPABASE_MANAGEMENT_API_TOKEN` it
    also checks that the bundle id is still in Client IDs; without one, sign in
    with Apple in the iPhone app. It cannot see the secret. After the deploy, sign
    in on the website with the Apple ID of an iPhone account and check that it is
