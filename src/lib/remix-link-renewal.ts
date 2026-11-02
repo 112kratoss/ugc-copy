@@ -70,9 +70,9 @@ export function isSameRemixMedia(first: string | null | undefined, second: strin
 }
 
 /**
- * The links a remix's answer opens its media by, as it signed them: the original's result and
- * each input it restores. Never its settings', which name the links the run read long ago, nor
- * what a kept input records of its source (`metadata`).
+ * The links a remix's answer opens its media by, as it signed them: each `url` of the original's
+ * result and of the inputs it restores. Never its settings', which name the links the run read
+ * long ago, nor what a kept input records of its source (`sourceUrl`, the link its run read).
  */
 function remixAnswerLinks(answer: RemixSourceBundle): string[] {
   const links: string[] = [];
@@ -85,7 +85,7 @@ function remixAnswerLinks(answer: RemixSourceBundle): string[] {
     for (const [key, entry] of Object.entries(value)) {
       if (key === 'url') {
         if (typeof entry === 'string' && entry) links.push(entry);
-      } else if (key !== 'metadata') {
+      } else {
         collect(entry);
       }
     }

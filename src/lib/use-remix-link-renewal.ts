@@ -76,11 +76,9 @@ export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageTok
       if (answer && !remixAnswerNeedsRenewal(answer, Date.now())) return link;
     }
 
+    // A read that fails leaves the link as it was, and the next use reads again.
     const next: HeldAnswer = { key, answer: readRemixAnswer(read) };
     heldRef.current = next;
-    const answer = await next.answer;
-    // A read that failed is not kept: the next use reads again.
-    if (!answer && heldRef.current === next) heldRef.current = null;
-    return freshLink(answer) ?? link;
+    return freshLink(await next.answer) ?? link;
   }, []);
 }
