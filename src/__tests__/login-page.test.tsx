@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import LoginClient from '@/app/login/LoginClient';
@@ -383,5 +384,79 @@ describe('LoginPage onboarding redirects', () => {
     expect(provider).toBe('google');
     expect(redirectTo.origin).toBe('https://www.magicbooklet.com');
     expect(redirectTo.pathname).toBe('/auth/callback');
+  });
+});
+
+// The server's HTML draws the form before the page's script runs, and what goes into it then
+// reaches no React: React hydrated the fields without reading them back, and a sign-in sent an
+// empty email and password (2026-11-01; tests/e2e/login-typed-before-script.spec.ts).
+describe('a sign-in form the browser filled before the page’s script ran', () => {
+  const EMAIL = 'early-visitor@example.com';
+  const PASSWORD = 'typed-before-the-script-5150';
+  const recoverableErrors: unknown[] = [];
+
+  beforeEach(() => {
+    mocks.getSession.mockReset();
+    mocks.signInWithPassword.mockReset();
+    mocks.getSession.mockResolvedValue({ data: { session: null } });
+    mocks.signInWithPassword.mockResolvedValue({ error: new Error('Invalid login credentials') });
+  });
+
+  afterEach(() => {
+    // The form hydrated: React never drew it again on the client, which would drop the text.
+    expect(recoverableErrors.splice(0)).toEqual([]);
+  });
+
+  /** Typing into the server's HTML: an input event no React hears. */
+  function typeInto(field: HTMLInputElement, text: string) {
+    field.value = text;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  /**
+   * The page's server HTML, filled by `fill` before any script runs, then hydrated. Testing
+   * Library's cleanup unmounts the root and removes the container.
+   */
+  function hydrateAfter(fill: (email: HTMLInputElement, password: HTMLInputElement) => void) {
+    const page = <LoginClient initialMode="login" recoveryRequested={false} redirectTo="/create-image" />;
+    const container = document.createElement('div');
+    container.innerHTML = renderToString(page);
+    document.body.appendChild(container);
+    fill(container.querySelector('#login-email')!, container.querySelector('#login-password')!);
+    render(page, { container, hydrate: true, onRecoverableError: (error) => recoverableErrors.push(error) });
+    return {
+      email: container.querySelector<HTMLInputElement>('#login-email')!,
+      password: container.querySelector<HTMLInputElement>('#login-password')!,
+      submit: () => act(async () => {
+        fireEvent.submit(container.querySelector('form')!);
+      }),
+    };
+  }
+
+  it('signs in with what was typed, and the fields keep it', async () => {
+    const form = hydrateAfter((email, password) => {
+      typeInto(email, EMAIL);
+      typeInto(password, PASSWORD);
+    });
+
+    await form.submit();
+
+    expect(mocks.signInWithPassword).toHaveBeenCalledTimes(1);
+    expect(mocks.signInWithPassword).toHaveBeenCalledWith({ email: EMAIL, password: PASSWORD });
+    expect(screen.getByRole('alert')).toHaveTextContent('That email and password do not match.');
+    expect(form.email.value).toBe(EMAIL);
+    expect(form.password.value).toBe(PASSWORD);
+  });
+
+  it('signs in with an email put in with no input event before the script, and a password typed after it', async () => {
+    const form = hydrateAfter((email) => {
+      email.value = EMAIL;
+    });
+    fireEvent.change(form.password, { target: { value: PASSWORD } });
+
+    await form.submit();
+
+    expect(mocks.signInWithPassword).toHaveBeenCalledWith({ email: EMAIL, password: PASSWORD });
+    expect(form.email.value).toBe(EMAIL);
   });
 });
