@@ -17,6 +17,7 @@ import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import { buildCreatorProfilePath, getCreatorDisplayName } from '@/lib/profile';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 import { buildShowcaseDetailPath } from '@/lib/share';
+import { openCreditTopUp } from '@/lib/credit-top-up';
 
 /**
  * Publishing on the canvas (the artboards Result and Posted, owner 2026-10-28): when a run is
@@ -624,17 +625,17 @@ function CreatorPosted({
 }
 
 /**
- * Under Posted: the balance and the next thing it buys, "3 credits left: make an image or top
- * up", or "22 credits left: make another or top up" where it covers this run again.
+ * Under Posted: the balance and the next thing it buys, "22 credits left: make another or top
+ * up" where it covers this run again, and "3 credits left: top up" where it does not. Top up
+ * sells credits on the page (`CreditTopUpSheet`); a short balance is offered no picture
+ * instead (owner, 2026-11-02).
  */
-export function CreatorPostedNext({ balance, runCost, imageHref, onMakeAnother, topUpHref = '/pricing' }: {
+export function CreatorPostedNext({ balance, runCost, onMakeAnother, topUpHref = '/pricing' }: {
   balance: number;
   /** What this run cost; null where it is not known. */
   runCost: number | null;
-  /** The image creator, for a balance short of another video. */
-  imageHref?: string | null;
   onMakeAnother: () => void;
-  /** Where "top up" leads: Pricing, told on a remix to bring the creator back to it, as the bar's Top up is. */
+  /** The pricing page the sheet offers beside its packs: told on a remix the way back to it, as the bar's Top up is. */
   topUpHref?: string;
 }) {
   const coversAnother = runCost !== null && balance >= runCost;
@@ -642,12 +643,18 @@ export function CreatorPostedNext({ balance, runCost, imageHref, onMakeAnother, 
     <p className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
       <span>{creditsWords(balance)} left:</span>
       {coversAnother ? (
-        <button type="button" onClick={onMakeAnother} className={CREATOR_NOTE_LINK_CLASS}>make another</button>
-      ) : imageHref ? (
-        <Link href={imageHref} className={CREATOR_NOTE_LINK_CLASS}>make an image</Link>
+        <>
+          <button type="button" onClick={onMakeAnother} className={CREATOR_NOTE_LINK_CLASS}>make another</button>
+          <span>or</span>
+        </>
       ) : null}
-      {coversAnother || imageHref ? <span>or</span> : null}
-      <Link href={topUpHref} className={CREATOR_NOTE_LINK_CLASS}>top up</Link>
+      <button
+        type="button"
+        onClick={() => openCreditTopUp(runCost !== null ? { cost: runCost, balance } : null, topUpHref)}
+        className={CREATOR_NOTE_LINK_CLASS}
+      >
+        top up
+      </button>
     </p>
   );
 }

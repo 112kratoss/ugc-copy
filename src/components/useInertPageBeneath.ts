@@ -16,13 +16,13 @@ let bodyOverflow = '';
  * The page beneath a modal: everything in <body> but the modal and what stays live, which keeps
  * the elements on its way down from <body> (they are not made inert, only what is beside them).
  */
-function pageBeneath(overlay: HTMLElement, keepLive: HTMLElement | null): HTMLElement[] {
+function pageBeneath(overlay: HTMLElement, keepLive: HTMLElement | null, spare?: (element: HTMLElement) => boolean): HTMLElement[] {
   const way = new Set<Element>();
   for (let node = keepLive?.parentElement ?? null; node && node !== document.body; node = node.parentElement) way.add(node);
   const beneath: HTMLElement[] = [];
   const collect = (parent: Element) => {
     for (const child of Array.from(parent.children)) {
-      if (child === overlay || child === keepLive || !(child instanceof HTMLElement)) continue;
+      if (child === overlay || child === keepLive || !(child instanceof HTMLElement) || spare?.(child)) continue;
       if (way.has(child)) collect(child);
       else beneath.push(child);
     }
@@ -38,8 +38,11 @@ function pageBeneath(overlay: HTMLElement, keepLive: HTMLElement | null): HTMLEl
  * All of it is put back as the last modal holding it goes.
  *
  * `keepLive` is drawn above the modal and stays live (the toasts over the shared
- * confirmation). `lockScroll: false` leaves the page's scroll to the overlays
- * that lock it (the shared confirmation, which is asked from inside them).
+ * confirmation). `spare` names other children of <body> that stay live, which
+ * something else draws over the modal (Razorpay's checkout over the top-up sheet);
+ * pass a function made once, as it is an effect dependency. `lockScroll: false`
+ * leaves the page's scroll to the overlays that lock it (the shared confirmation,
+ * which is asked from inside them).
  *
  * Call it before `useModalQuestion` in the same component: effects are undone in
  * the order they were declared, and the focus that hook gives back on the way
@@ -47,7 +50,11 @@ function pageBeneath(overlay: HTMLElement, keepLive: HTMLElement | null): HTMLEl
  */
 export function useInertPageBeneath(
   overlayRef: RefObject<HTMLElement | null>,
-  { lockScroll = true, keepLive }: { lockScroll?: boolean; keepLive?: RefObject<HTMLElement | null> } = {},
+  { lockScroll = true, keepLive, spare }: {
+    lockScroll?: boolean;
+    keepLive?: RefObject<HTMLElement | null>;
+    spare?: (element: HTMLElement) => boolean;
+  } = {},
 ) {
   useEffect(() => {
     const overlay = overlayRef.current;
@@ -57,7 +64,7 @@ export function useInertPageBeneath(
       bodyHolds += 1;
       document.body.style.overflow = 'hidden';
     }
-    const beneath = pageBeneath(overlay, keepLive?.current ?? null);
+    const beneath = pageBeneath(overlay, keepLive?.current ?? null, spare);
     beneath.forEach((element) => {
       const held = heldElements.get(element);
       if (held) {
@@ -89,5 +96,5 @@ export function useInertPageBeneath(
         }
       });
     };
-  }, [overlayRef, lockScroll, keepLive]);
+  }, [overlayRef, lockScroll, keepLive, spare]);
 }

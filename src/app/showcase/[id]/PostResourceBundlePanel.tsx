@@ -69,13 +69,14 @@ import {
 } from '@/app/showcase/recipe-reading';
 import RecipeMediaGallery from './RecipeMediaGallery';
 import {
-  RECIPE_PAYMENT_RECEIVED_MESSAGE,
   clearRazorpayCheckoutIntentKey,
   getOrCreateRazorpayCheckoutIntentKey,
+  loadRazorpayCheckout,
   pollBundleUntilUnlocked,
-  readCheckoutAccessToken,
-  verifyRazorpayCheckoutUntilSettled,
   type RazorpayCheckoutVerificationResult,
+  readCheckoutAccessToken,
+  RECIPE_PAYMENT_RECEIVED_MESSAGE,
+  verifyRazorpayCheckoutUntilSettled,
 } from '@/lib/razorpay-checkout-client';
 
 declare global {
@@ -104,35 +105,6 @@ const RECIPE_GROUP_ICONS: Record<RecipeGroupKind, LucideIcon> = {
 };
 
 type RecipeGroup = RecipeReadingGroup<PostResourceItem, PostResourceSection>;
-
-/**
- * checkout.js is fetched when a buyer presses Pay, not on every view of a
- * locked recipe. A press while it is still loading waits on the same script;
- * one that failed is removed, so the next press fetches it again.
- */
-function loadRazorpayCheckout(): Promise<void> {
-  if (window.Razorpay) {
-    return Promise.resolve();
-  }
-
-  let script = document.getElementById(RAZORPAY_CHECKOUT_SCRIPT_ID) as HTMLScriptElement | null;
-  if (!script) {
-    script = document.createElement('script');
-    script.id = RAZORPAY_CHECKOUT_SCRIPT_ID;
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.async = true;
-    document.head.appendChild(script);
-  }
-
-  const pending = script;
-  return new Promise<void>((resolve, reject) => {
-    pending.addEventListener('load', () => resolve(), { once: true });
-    pending.addEventListener('error', () => {
-      pending.remove();
-      reject(new Error('Razorpay checkout could not load. Check your connection and try again.'));
-    }, { once: true });
-  });
-}
 
 export interface PostResourceBundlePanelProps {
   postId: string;
@@ -691,7 +663,7 @@ export default function PostResourceBundlePanel({
 
       // Fetched while the order is created; a failed load surfaces where it
       // is awaited, below, and not as an unhandled rejection before that.
-      const checkoutScript = loadRazorpayCheckout();
+      const checkoutScript = loadRazorpayCheckout(RAZORPAY_CHECKOUT_SCRIPT_ID);
       checkoutScript.catch(() => undefined);
 
       const checkoutIntentScope = `post-resource:${postId}`;

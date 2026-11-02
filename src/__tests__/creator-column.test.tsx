@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Image as ImageIcon, Plus } from 'lucide-react';
 
+import { onCreditTopUpOpen } from '@/lib/credit-top-up';
+
 import {
   CANVAS_FRAME_RATIO_LIMITS,
   CreatorAddTile,
@@ -26,10 +28,14 @@ import {
   CreatorRunFailed,
   CreatorRunFailedLine,
   CreatorRunWaitLines,
+  CreatorMediaReferenceTile,
+  CreatorReferenceRow,
   aspectRatioMark,
+  columnWidthBounds,
   creatorRunChip,
   describeRunFailure,
   parseAspectRatio,
+  type CreatorReferenceKind,
 } from '@/components/CreatorColumn';
 
 vi.mock('next/link', () => ({
@@ -717,24 +723,32 @@ describe('the bar\'s action', () => {
     render(<CreatorBarAction {...ready} awaitingCheck showTopUp onCheckAgain={onCheckAgain} />);
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     expect(onCheckAgain).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('link', { name: 'Top Up Credits' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Top Up Credits' })).toBeNull();
   });
 
-  it('offers a top-up for a short balance, but never in place of a run under way', () => {
-    const view = render(<CreatorBarAction {...ready} showTopUp />);
-    expect(screen.getByRole('link', { name: 'Top Up Credits' })).toHaveAttribute('href', '/pricing');
+  it('offers a top-up for a short balance, which opens the packs on the page, but never in place of a run under way', () => {
+    const opened: unknown[] = [];
+    const stop = onCreditTopUpOpen((request) => opened.push(request));
+    const view = render(<CreatorBarAction {...ready} showTopUp topUpNeed={{ cost: 140, balance: 10 }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Top Up Credits' }));
+    expect(opened).toEqual([{ need: { cost: 140, balance: 10 }, pricingHref: '/pricing' }]);
+    stop();
 
     // The run spent the balance below the next run's price; the place is still the run's.
     view.rerender(<CreatorBarAction {...ready} showTopUp isGenerating />);
-    expect(screen.queryByRole('link', { name: 'Top Up Credits' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Top Up Credits' })).toBeNull();
     expect(screen.getByRole('button', { name: /Generating/ })).toBeDisabled();
   });
 
-  // A remix keeps no draft, so its top-up tells Pricing the way back to it.
-  it('leads the top-up where the page says', () => {
+  // A remix keeps no draft, so the pricing page its packs offer is told the way back to it.
+  it('tells the packs the pricing page the page says', () => {
     const toRemix = `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-1&remixPost=post-1')}`;
+    const opened: unknown[] = [];
+    const stop = onCreditTopUpOpen((request) => opened.push(request));
     render(<CreatorBarAction {...ready} showTopUp topUpHref={toRemix} />);
-    expect(screen.getByRole('link', { name: 'Top Up Credits' })).toHaveAttribute('href', toRemix);
+    fireEvent.click(screen.getByRole('button', { name: 'Top Up Credits' }));
+    stop();
+    expect(opened).toEqual([{ need: null, pricingHref: toRemix }]);
   });
 });
 
@@ -746,6 +760,94 @@ describe('the top-up notice', () => {
     view.rerender(<CreatorTopUpNotice cost={24} balance={40} message="Your balance changed since the price was read." />);
     expect(screen.getByText('Your balance changed since the price was read.')).toBeInTheDocument();
     expect(screen.queryByText(/This run costs/)).toBeNull();
+  });
+});
+
+// A mouse drags a strip sideways, as a finger swipes it (owner, 2026-11-02).
+describe('a reference strip under a mouse', () => {
+  function strip(onPress = vi.fn()) {
+    render(
+      <CreatorReferenceStrip aria-label="Reference images">
+        {['Hero', 'Villain', 'Sidekick', 'Mentor'].map((name) => (
+          <li key={name}>
+            <button type="button" onClick={onPress}>Preview {name}</button>
+            <input aria-label={`Name of ${name}`} defaultValue={name} />
+            <audio aria-label={`Track of ${name}`} controls />
+          </li>
+        ))}
+      </CreatorReferenceStrip>
+    );
+    const list = screen.getByRole('list', { name: 'Reference images' });
+    // jsdom lays nothing out: the strip is given a row twice as wide as it shows.
+    let left = 0;
+    Object.defineProperty(list, 'scrollWidth', { configurable: true, value: 800 });
+    Object.defineProperty(list, 'clientWidth', { configurable: true, value: 400 });
+    Object.defineProperty(list, 'scrollLeft', { configurable: true, get: () => left, set: (value: number) => { left = value; } });
+    return { list, scrolled: () => left, onPress };
+  }
+  // The primary button held, as it is through a drag (`buttons` says which buttons are down).
+  const mouse = (clientX: number, buttons = 1) => ({ pointerType: 'mouse', button: 0, buttons, pointerId: 1, clientX });
+
+  it('scrolls under a drag that moves past 6px, and the click that ends the drag presses nothing', () => {
+    const { list, scrolled, onPress } = strip();
+    const preview = screen.getByRole('button', { name: 'Preview Villain' });
+
+    fireEvent.pointerDown(preview, mouse(300));
+    fireEvent.pointerMove(preview, mouse(296));
+    expect(scrolled()).toBe(0);
+    fireEvent.pointerMove(preview, mouse(180));
+    expect(scrolled()).toBe(120);
+    // Snapping would pull the row back at every step.
+    expect(list.style.getPropertyValue('scroll-snap-type')).toBe('none');
+    fireEvent.pointerUp(preview, mouse(180));
+    fireEvent.click(preview);
+
+    expect(onPress).not.toHaveBeenCalled();
+    expect(list.style.getPropertyValue('scroll-snap-type')).toBe('');
+
+    // A press that does not move is a press.
+    fireEvent.pointerDown(preview, mouse(180));
+    fireEvent.pointerUp(preview, mouse(180));
+    fireEvent.click(preview);
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a finger, and a press in a field, to the browser', () => {
+    const { scrolled } = strip();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Preview Hero' }), { ...mouse(300), pointerType: 'touch' });
+    fireEvent.pointerMove(screen.getByRole('button', { name: 'Preview Hero' }), { ...mouse(150), pointerType: 'touch' });
+    expect(scrolled()).toBe(0);
+
+    const name = screen.getByRole('textbox', { name: 'Name of Hero' });
+    fireEvent.pointerDown(name, mouse(300));
+    fireEvent.pointerMove(name, mouse(150));
+    expect(scrolled()).toBe(0);
+  });
+
+  // A track's seek bar lives in the player's own shadow tree, so its press reaches the row as the player's.
+  it("leaves a player's own controls to it", () => {
+    const { scrolled } = strip();
+    const track = screen.getByLabelText('Track of Villain');
+    fireEvent.pointerDown(track, mouse(300));
+    fireEvent.pointerMove(track, mouse(150));
+    expect(scrolled()).toBe(0);
+  });
+
+  // A press let go outside the row before it moved: the row heard no release, and the mouse
+  // passing over it afterwards, no button held, is no drag.
+  it('drops a press let go outside the row before it moved', () => {
+    const { list, scrolled, onPress } = strip();
+    const preview = screen.getByRole('button', { name: 'Preview Villain' });
+    fireEvent.pointerDown(preview, mouse(300));
+    fireEvent.pointerMove(preview, mouse(298));
+    fireEvent.pointerMove(preview, mouse(150, 0));
+    fireEvent.pointerMove(preview, mouse(100, 0));
+    expect(scrolled()).toBe(0);
+    expect(list.style.getPropertyValue('cursor')).toBe('');
+
+    fireEvent.click(preview);
+    expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -968,6 +1070,208 @@ describe('an upload slot', () => {
   it('keeps a locked slot out of reach of the keyboard', () => {
     const view = render(slot({ src: null, disabled: true }));
     expect(view.container.querySelector('#character-input')).toBeDisabled();
+  });
+});
+
+// A row for each kind of reference a model takes, each led by its add box, after the app's box (2026-11-01).
+describe('the references rows', () => {
+  const kind = (name: string, railLabel: string, accept: string, count = 0, limit = 3): CreatorReferenceKind => ({
+    name,
+    railLabel,
+    hint: `${name} hint`,
+    accept,
+    count,
+    limit,
+    onFiles: vi.fn(),
+  });
+  const image = (count = 0) => kind('Image', 'Images', 'image/*', count, 5);
+  const video = (count = 0) => kind('Video', 'Video', 'video/*', count);
+  const audio = (count = 0) => kind('Audio', 'Audio', 'audio/*', count);
+  const rows = (kinds: CreatorReferenceKind[]) => (
+    <>
+      {kinds.map((each) => <CreatorReferenceRow key={each.name} accent="video" kind={each} />)}
+    </>
+  );
+
+  it('gives each kind a box of its own, with its count and what it is for', () => {
+    render(rows([image(2), video(), audio(1)]));
+    const boxes = screen.getAllByRole('button');
+
+    expect(boxes.map((box) => box.getAttribute('aria-label'))).toEqual(['Add images, 2 of 5', 'Add video, 0 of 3', 'Add audio, 1 of 3']);
+    expect(boxes[0]).toHaveTextContent('Images');
+    expect(boxes[0]).toHaveTextContent('2/5');
+    expect(boxes[1]).toHaveAccessibleDescription('Video hint');
+  });
+
+  it('says what an empty kind is for beside its box, and shows its references there once it has some', () => {
+    render(
+      <>
+        <CreatorReferenceRow accent="video" kind={video()} />
+        <CreatorReferenceRow accent="video" kind={image(1)}>
+          <ul aria-label="Pictures" />
+        </CreatorReferenceRow>
+      </>
+    );
+
+    expect(screen.getByText('Video hint', { selector: 'p' })).toBeVisible();
+    expect(screen.getByRole('list', { name: 'Pictures' })).toBeInTheDocument();
+    expect(screen.queryByText('Image hint', { selector: 'p' })).toBeNull();
+  });
+
+  it('opens the picker of the box pressed, and no other', () => {
+    render(rows([image(), video()]));
+    const clipPicker = vi.spyOn(screen.getByLabelText('Add video'), 'click');
+    const picturePicker = vi.spyOn(screen.getByLabelText('Add images'), 'click');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add video, 0 of 3' }));
+
+    expect(clipPicker).toHaveBeenCalledTimes(1);
+    expect(picturePicker).not.toHaveBeenCalled();
+  });
+
+  it('hands picked files to their kind', () => {
+    const kinds = [image(), video()];
+    render(rows(kinds));
+    const clip = new File(['clip'], 'walk.mp4', { type: 'video/mp4' });
+
+    fireEvent.change(screen.getByLabelText('Add video'), { target: { files: [clip] } });
+
+    expect(kinds[1].onFiles).toHaveBeenCalledWith([clip]);
+    expect(kinds[0].onFiles).not.toHaveBeenCalled();
+  });
+
+  it('hands a drop on a box to its kind, whose check refuses a file of another kind', () => {
+    const kinds = [image(), video()];
+    render(rows(kinds));
+    const clip = new File(['clip'], 'walk.mov', { type: 'video/quicktime' });
+    const photo = new File(['photo'], 'face.png', { type: 'image/png' });
+
+    fireEvent.drop(screen.getByRole('button', { name: 'Add video, 0 of 3' }), { dataTransfer: { files: [clip, photo] } });
+
+    expect(kinds[1].onFiles).toHaveBeenCalledWith([clip, photo]);
+    expect(kinds[0].onFiles).not.toHaveBeenCalled();
+  });
+
+  it('says a drop is welcome while a file is over a box', () => {
+    render(rows([image()]));
+    const box = screen.getByRole('button', { name: 'Add images, 0 of 5' });
+
+    fireEvent.dragOver(box);
+    expect(box).toHaveTextContent('Drop here');
+    fireEvent.dragLeave(box);
+    expect(box).toHaveTextContent('Images');
+  });
+
+  it('dims a full kind\'s box and leaves the others', () => {
+    render(rows([image(5), video(), audio(3)]));
+
+    expect(screen.getByRole('button', { name: 'Add images, 5 of 5' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add video, 0 of 3' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add audio, 3 of 3' })).toBeDisabled();
+  });
+});
+
+describe('a clip or track tile', () => {
+  it('puts Remove on a clip\'s frame, and says in red why the run holds it back', () => {
+    const onRemove = vi.fn();
+    render(
+      <ul>
+        <CreatorMediaReferenceTile
+          preview={<button type="button" aria-label="Preview Walk" />}
+          displayName="Walk"
+          line="1.0s clip, under the 2s minimum"
+          lineHeld
+          onRemove={onRemove}
+        />
+      </ul>
+    );
+
+    expect(screen.getByRole('button', { name: 'Preview Walk' })).toBeInTheDocument();
+    expect(screen.getByText('1.0s clip, under the 2s minimum')).toHaveClass('text-red-400');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Walk' }));
+    expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts Remove beside a track\'s name, its player under it, and Replace on one a remix brought back', () => {
+    render(
+      <ul>
+        <CreatorMediaReferenceTile
+          player={<audio aria-label="Audio preview" />}
+          displayName="Voice"
+          line="6.5s track"
+          onRemove={() => {}}
+          replace={{ label: 'Replace Voice with your own track', accept: 'audio/*', onFile: () => {} }}
+        />
+      </ul>
+    );
+
+    expect(screen.getByText('6.5s track')).not.toHaveClass('text-red-400');
+    expect(screen.getByRole('button', { name: 'Remove Voice' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Audio preview')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Replace Voice with your own track' })).toBeInTheDocument();
+  });
+});
+
+// The bar between the column and the result drags the column (owner, 2026-11-02). jsdom lays nothing
+// out, so the drag itself is `tests/e2e/creator-column-resize.spec.ts`; here, its bounds, keys and memory.
+describe('the column resizer', () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  const layout = () => render(
+    <CreatorColumnLayout title="Video creator" column={<div>Column</div>} canvas={<section aria-label="Result" />} />
+  );
+
+  it('reaches from the layout\'s floor to what leaves the result its 440px, and never past 720px', () => {
+    expect(columnWidthBounds(1131)).toEqual({ min: 340, max: 671 });
+    expect(columnWidthBounds(2000)).toEqual({ min: 340, max: 720 });
+    expect(columnWidthBounds(600)).toEqual({ min: 340, max: 340 });
+  });
+
+  it('is a separator for the column, which the arrow keys move, kept until a double-click resets it', () => {
+    const clientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 1200 });
+    try {
+      const { container } = layout();
+      const grid = container.firstElementChild as HTMLElement;
+      const grip = screen.getByRole('separator', { name: 'Column width' });
+      expect(grip).toHaveAttribute('aria-controls', screen.getByText('Column').parentElement?.id);
+      expect(grip).toHaveAttribute('aria-valuemin', '340');
+      expect(grid).not.toHaveAttribute('data-resized');
+
+      fireEvent.keyDown(grip, { key: 'ArrowRight' });
+      expect(window.localStorage.getItem('creator-column-width')).toBe('356');
+      expect(grid).toHaveAttribute('data-resized');
+      expect(grid.style.getPropertyValue('--creator-column-width')).toBe('356px');
+
+      fireEvent.keyDown(grip, { key: 'End' });
+      expect(window.localStorage.getItem('creator-column-width')).toBe('720');
+
+      fireEvent.doubleClick(grip);
+      expect(window.localStorage.getItem('creator-column-width')).toBeNull();
+      expect(grid).not.toHaveAttribute('data-resized');
+      expect(grid.style.getPropertyValue('--creator-column-width')).toBe('');
+
+      // Enter is the keyboard's way back to the layout's own width.
+      fireEvent.keyDown(grip, { key: 'End' });
+      expect(grid).toHaveAttribute('data-resized');
+      fireEvent.keyDown(grip, { key: 'Enter' });
+      expect(window.localStorage.getItem('creator-column-width')).toBeNull();
+      expect(grid).not.toHaveAttribute('data-resized');
+    } finally {
+      // jsdom keeps clientWidth on Element.prototype: the stub above is HTMLElement's own, so it goes.
+      if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+    }
+  });
+
+  it('draws the width kept in this browser', () => {
+    window.localStorage.setItem('creator-column-width', '500');
+    const grid = layout().container.firstElementChild as HTMLElement;
+
+    expect(grid).toHaveAttribute('data-resized');
+    expect(grid.style.getPropertyValue('--creator-column-width')).toBe('500px');
   });
 });
 

@@ -186,6 +186,34 @@ describe('AppShellClient', () => {
     });
   });
 
+  it('hides and shows the sidebar from the top bar\'s start, and keeps the choice in this browser', () => {
+    try {
+      render(
+        <AppShellClient>
+          <div>Page content</div>
+        </AppShellClient>
+      );
+      const toggle = screen.getByRole('button', { name: 'Hide sidebar' });
+      expect(toggle).toHaveAttribute('aria-controls', 'app-shell-sidebar');
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(document.getElementById('app-shell-sidebar')).toHaveAttribute('aria-label', 'Primary navigation');
+
+      fireEvent.click(toggle);
+      expect(document.documentElement.dataset.sidebar).toBe('hidden');
+      expect(window.localStorage.getItem('app-shell-sidebar')).toBe('hidden');
+      expect(toggle).toHaveAccessibleName('Show sidebar');
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+      fireEvent.click(toggle);
+      expect(document.documentElement.dataset.sidebar).toBeUndefined();
+      expect(window.localStorage.getItem('app-shell-sidebar')).toBeNull();
+      expect(toggle).toHaveAccessibleName('Hide sidebar');
+    } finally {
+      delete document.documentElement.dataset.sidebar;
+      window.localStorage.removeItem('app-shell-sidebar');
+    }
+  });
+
   it('uses the home shell title after mounting when the pathname is empty', () => {
     mockedPathname = '';
 

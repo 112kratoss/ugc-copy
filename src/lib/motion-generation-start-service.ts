@@ -80,7 +80,7 @@ async function measureReferenceVideoSeconds(
   supabase: MotionGenerationStartRouteClient,
   referenceVideoUrl: string,
   userId: string,
-): Promise<number> {
+): Promise<{ source: string; seconds: number }> {
   const source = await resolveGenerationMediaSource(supabase, referenceVideoUrl, userId);
   const measured = /^https:\/\//i.test(source) ? await probeMediaDurationSeconds(source) : null;
   if (measured === null || !Number.isFinite(measured) || measured <= 0) {
@@ -89,7 +89,7 @@ async function measureReferenceVideoSeconds(
       422,
     );
   }
-  return measured;
+  return { source, seconds: measured };
 }
 
 export async function startMotionGenerationForRoute({
@@ -157,7 +157,8 @@ export async function startMotionGenerationForRoute({
     // Measured once the key is claimed: a start already accepted replays
     // without reading its clip again.
     start: async (clientRequestKeyHash) => {
-      const measuredSeconds = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId);
+      const measured = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId);
+      const measuredSeconds = measured.seconds;
       // Kie's motion control takes a clip of 3 to 30 seconds; a shorter one was priced
       // at 3, held, and refused by the provider.
       const tooShort = referenceMediaLengthViolation(selectedModel, [
@@ -188,7 +189,9 @@ export async function startMotionGenerationForRoute({
         userId,
         clientRequestKeyHash,
         model: selectedModel as MotionModelId,
-        referenceVideoUrl,
+        // The clip as resolved to measure it: the file measured is the one the provider fetches, and a
+        // link the client kept past its hour (a remix's original) is not sent on.
+        referenceVideoUrl: measured.source,
         characterImageUrl,
         duration: Number(normalizedSettings.duration),
         referenceVideoSeconds: measuredSeconds,

@@ -17,6 +17,7 @@ import {
 } from '@/components/CreatorPublish';
 import type { CreationPublishDetails } from '@/lib/creation-publish-details';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
+import { onCreditTopUpOpen } from '@/lib/credit-top-up';
 
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({ user: { email: 'athul@example.com', user_metadata: { full_name: 'Athul S' } } }),
@@ -624,31 +625,36 @@ describe('CreatorPublishPanel: Posted', () => {
 });
 
 describe('CreatorPostedNext', () => {
-  it('offers another run where the balance covers it', () => {
+  it('offers another run where the balance covers it, or a top-up', () => {
     const onMakeAnother = vi.fn();
-    render(<CreatorPostedNext balance={22} runCost={19} imageHref="/create-image" onMakeAnother={onMakeAnother} />);
+    render(<CreatorPostedNext balance={22} runCost={19} onMakeAnother={onMakeAnother} />);
     fireEvent.click(screen.getByRole('button', { name: 'make another' }));
     expect(onMakeAnother).toHaveBeenCalled();
     expect(screen.getByText('22 credits left:')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'top up' })).toHaveAttribute('href', '/pricing');
+    expect(screen.getByRole('button', { name: 'top up' })).toBeInTheDocument();
   });
 
-  it('offers an image where it does not, or only a top-up', () => {
-    const { unmount } = render(<CreatorPostedNext balance={3} runCost={19} imageHref="/create-image?model=z-image" onMakeAnother={vi.fn()} />);
-    expect(screen.getByRole('link', { name: 'make an image' })).toHaveAttribute('href', '/create-image?model=z-image');
-    unmount();
-
-    render(<CreatorPostedNext balance={0} runCost={19} imageHref={null} onMakeAnother={vi.fn()} />);
-    expect(screen.queryByRole('link', { name: 'make an image' })).toBeNull();
+  // Owner, 2026-11-02: a balance short of another run is sold credits on the page, not a picture instead.
+  it('offers only a top-up where it does not, which opens the packs with the run\'s need', () => {
+    const opened: unknown[] = [];
+    const stop = onCreditTopUpOpen((request) => opened.push(request));
+    render(<CreatorPostedNext balance={3} runCost={19} onMakeAnother={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'make another' })).toBeNull();
     expect(screen.queryByText('or')).toBeNull();
-    expect(screen.getByRole('link', { name: 'top up' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'top up' }));
+    expect(opened).toEqual([{ need: { cost: 19, balance: 3 }, pricingHref: '/pricing' }]);
+    stop();
   });
 
-  // A remix keeps no draft, so its top-up after Posted tells Pricing the way back too, as the bar's does.
-  it('leads the top-up where the page says', () => {
+  // A remix keeps no draft, so the pricing page its packs offer after Posted is told the way back too, as the bar's is.
+  it('tells the packs the pricing page the page says', () => {
     const toRemix = `/pricing?returnTo=${encodeURIComponent('/create-video?remix=gen-1&remixPost=post-1')}`;
+    const opened: unknown[] = [];
+    const stop = onCreditTopUpOpen((request) => opened.push(request));
     render(<CreatorPostedNext balance={3} runCost={19} onMakeAnother={vi.fn()} topUpHref={toRemix} />);
-    expect(screen.getByRole('link', { name: 'top up' })).toHaveAttribute('href', toRemix);
+    fireEvent.click(screen.getByRole('button', { name: 'top up' }));
+    stop();
+    expect(opened).toEqual([{ need: { cost: 19, balance: 3 }, pricingHref: toRemix }]);
   });
 });
 

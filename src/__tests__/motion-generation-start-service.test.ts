@@ -236,7 +236,8 @@ describe('startMotionGenerationForRoute', () => {
       userId: 'user-1',
       model: 'kling-3.0',
       prompt: 'Transfer the performance naturally.',
-      referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+      // The clip as resolved to measure it, not the caller's link, which may have run out.
+      referenceVideoUrl: resolvedReference,
       characterImageUrl: 'https://signed.example.com/character.png',
       duration: 6,
       characterOrientation: 'image',

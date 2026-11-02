@@ -859,14 +859,17 @@ describe('CreateMotionClient price of the run it sends', () => {
     expect(uploadMocks.uploadMediaToTemporaryStorage).not.toHaveBeenCalled();
   });
 
-  // A remix keeps no draft: its top-up tells Pricing the remix, which offers it back once the credits are in.
-  it('sends a remix short of its price to Pricing with the way back to it', async () => {
+  // A remix keeps no draft: the pricing page its packs offer is told the remix, and offers it back once the credits are in.
+  it('sells a remix short of its price credits on the page, with Pricing\'s way back to it', async () => {
     authState.credits = 10;
     remixSourceBody = ROOFTOP_REMIX;
     render(<CreateMotionClient prefill={{ remixId: 'generation-source', remixPostId: 'post-1' }} />);
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
 
-    expect(await screen.findByRole('link', { name: /Top Up Credits/ }))
+    // The packs open over the remix; the pricing page they offer is told the way back to it.
+    fireEvent.click(await screen.findByRole('button', { name: /Top Up Credits/ }));
+    const sheet = await screen.findByRole('dialog', { name: 'Top up credits' });
+    expect(within(sheet).getByRole('link', { name: 'See every pack' }))
       .toHaveAttribute('href', `/pricing?returnTo=${encodeURIComponent('/create-motion?remix=generation-source&remixPost=post-1')}`);
     expect(screen.queryByRole('button', { name: /^Generate · / })).toBeNull();
   });
@@ -1162,7 +1165,7 @@ describe('CreateMotionClient start', () => {
     await pressGenerate();
 
     expect(await screen.findByText('Insufficient credits. This action costs 20 credits.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Top Up Credits/ })).toHaveAttribute('href', '/pricing');
+    expect(screen.getByRole('button', { name: /Top Up Credits/ })).toBeInTheDocument();
     expect(creditsUpdated).toHaveBeenCalled();
     expect(loadPendingWebStart('motion', 'user-1')).toBeNull();
     window.removeEventListener('credits_updated', creditsUpdated);
@@ -1902,7 +1905,7 @@ describe('CreateMotionClient drafts and media', () => {
       await settle();
 
       expect(screen.queryByText('Insufficient credits. This action costs 20 credits.')).toBeNull();
-      expect(screen.queryByRole('link', { name: /Top Up Credits/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /Top Up Credits/ })).toBeNull();
     });
 
     it('drops the earlier account’s remix inputs and its own, and reads the remix again for the next', async () => {

@@ -498,7 +498,10 @@ export async function resolveBillableInputDurations({
     if (measured === null || !Number.isFinite(measured) || measured <= 0) throw unverifiable(index);
 
     verified.push({ index, slot: asset.slot, durationSeconds: measured });
-    return { ...asset, durationSeconds: measured };
+    // A motion run's adapter sends its clip as given (startMotionGeneration resolves nothing), so it is
+    // given the link resolved here: the file measured is then the one the provider fetches, and a link
+    // the client kept past its hour (a remix's original, signed when the remix opened) is not sent on.
+    return { ...asset, ...(request.kind === 'motion' ? { url: source } : {}), durationSeconds: measured };
   }));
   verified.sort((first, second) => first.index - second.index);
 

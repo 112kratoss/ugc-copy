@@ -70,9 +70,10 @@ test('a .mov reference clip gives Seedance 2 its length to price', async ({ page
   await page.goto('/create-video?model=seedance-2', COLD_PAGE);
   await pageAsked(asked);
   await page.getByRole('group', { name: 'Inputs' }).getByText('References', { exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Reference videos' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Add video, 0 of \d+$/ })).toBeVisible();
 
   await page.locator('input[type="file"][accept="video/*"][multiple]').setInputFiles(CLIP);
+  await expect(page.getByRole('list', { name: 'Reference videos' })).toBeVisible();
 
   // Unread, the card said "Duration unavailable" and the quote refused the run: "Reference videos
   // requires duration metadata for every asset." The clip's name shows twice (its card and the

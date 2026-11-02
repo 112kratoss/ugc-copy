@@ -2,6 +2,55 @@ export type RazorpayCheckoutVerificationResult =
   | { state: 'settled'; body: Record<string, unknown> }
   | { state: 'pending'; body: Record<string, unknown> };
 
+const RAZORPAY_CHECKOUT_SRC = 'https://checkout.razorpay.com/v1/checkout.js';
+/** How long a press waits for checkout.js before it says so and gives the buttons back. */
+export const RAZORPAY_CHECKOUT_LOAD_TIMEOUT_MS = 20_000;
+const checkoutLoads = new Map<string, { script: HTMLScriptElement; load: Promise<void> }>();
+
+/**
+ * checkout.js, fetched once and awaited by the press that needs it: a press while it is still
+ * loading waits on the same fetch. One that fails, or sends nothing for 20 s, is removed, so the
+ * next press fetches it again. This loader owns the tag: a tag of that id it is not waiting on has
+ * finished one way or the other and fires nothing more (next/script's, which keeps a failed tag and
+ * never asks again), so it is replaced rather than waited on for good.
+ */
+export function loadRazorpayCheckout(scriptId: string): Promise<void> {
+  if (window.Razorpay) {
+    return Promise.resolve();
+  }
+  // A load still in flight is waited on while its tag is in the page; one whose tag was taken out
+  // would fire nothing more.
+  const inFlight = checkoutLoads.get(scriptId);
+  if (inFlight?.script.isConnected) {
+    return inFlight.load;
+  }
+
+  document.getElementById(scriptId)?.remove();
+  const script = document.createElement('script');
+  script.id = scriptId;
+  script.src = RAZORPAY_CHECKOUT_SRC;
+  script.async = true;
+
+  const load = new Promise<void>((resolve, reject) => {
+    const fail = () => {
+      window.clearTimeout(timer);
+      script.remove();
+      if (checkoutLoads.get(scriptId)?.script === script) checkoutLoads.delete(scriptId);
+      reject(new Error('Razorpay checkout could not load. Check your connection and try again.'));
+    };
+    const timer = window.setTimeout(fail, RAZORPAY_CHECKOUT_LOAD_TIMEOUT_MS);
+    script.addEventListener('load', () => {
+      window.clearTimeout(timer);
+      if (checkoutLoads.get(scriptId)?.script === script) checkoutLoads.delete(scriptId);
+      resolve();
+    }, { once: true });
+    script.addEventListener('error', fail, { once: true });
+  });
+  checkoutLoads.set(scriptId, { script, load });
+  document.head.appendChild(script);
+  return load;
+}
+
 const fallbackIntentKeys = new Map<string, string>();
 
 function checkoutIntentStorageKey(scope: string) {

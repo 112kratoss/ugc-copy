@@ -4,6 +4,7 @@ import {
   Bell,
   HelpCircle,
   Menu,
+  PanelLeft,
   Plus,
   Search,
   WandSparkles,
@@ -36,6 +37,7 @@ import {
   isNotFoundRouteSegment,
   type AppNavItem,
 } from './app-shell-nav';
+import { setAppShellSidebarHidden, useAppShellSidebarHidden } from '@/lib/app-shell-sidebar';
 import AppShellCreateMenu, {
   APP_SHELL_CREATE_MENU_ID,
   CREATE_MENU_ICONS,
@@ -73,6 +75,32 @@ const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
 
 /** A place the drawer links to: one of the shell's places, or the Create menu's Post. */
 type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavItem['id'] | 'post' };
+
+const APP_SHELL_SIDEBAR_ID = 'app-shell-sidebar';
+
+/**
+ * Hides or shows the sidebar where it stands beside the page (768px and wider), from the top
+ * bar's start, where a phone has its menu button instead (`src/lib/app-shell-sidebar.ts`). One
+ * button that stays put, as the Claude app's does, drawn in the same icon either way so the
+ * server's HTML is right before the page's script has read the choice.
+ */
+function SidebarToggle() {
+  const hidden = useAppShellSidebarHidden();
+  const label = hidden ? 'Show sidebar' : 'Hide sidebar';
+  return (
+    <button
+      type="button"
+      className="app-shell-sidebar-toggle ui-focus-ring relative h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
+      onClick={() => setAppShellSidebarHidden(!hidden)}
+      aria-label={label}
+      title={label}
+      aria-controls={APP_SHELL_SIDEBAR_ID}
+      aria-expanded={!hidden}
+    >
+      <PanelLeft className="h-5 w-5" aria-hidden />
+    </button>
+  );
+}
 
 /**
  * The top bar's menu button, hidden from 768px in px, as the side navigation shows
@@ -454,7 +482,7 @@ const AppShellFrame = memo(function AppShellFrame({
     // The stylesheet hides the bottom navigation, and the room kept for it, on a page that holds
     // the bottom edge itself (`.app-shell-root[data-bottom-nav='hidden']` in globals.css).
     <div className="app-shell-root" data-bottom-nav={bottomNavHidden ? 'hidden' : undefined}>
-      <aside className="app-shell-sidebar" aria-label="Primary navigation">
+      <aside id={APP_SHELL_SIDEBAR_ID} className="app-shell-sidebar" aria-label="Primary navigation">
         <div className="px-4 pt-5">
           <Brand />
         </div>
@@ -502,6 +530,7 @@ const AppShellFrame = memo(function AppShellFrame({
               onOpen={() => setMobileOpen(true)}
               carriesAlerts={bottomNavHidden}
             />
+            <SidebarToggle />
             {title !== null ? (
               <div className="min-w-0">
                 <div className="truncate text-[15px] font-extrabold text-[var(--ui-text-primary)]">{title}</div>

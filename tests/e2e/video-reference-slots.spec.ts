@@ -50,9 +50,10 @@ test.describe('video reference slots', () => {
 
     await inputs(page).getByText('References', { exact: true }).click();
     await expect(inputs(page).getByRole('radio', { name: 'References' })).toBeChecked();
-    await expect(page.getByRole('heading', { name: 'Reference images' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Reference videos' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Reference audio' })).toBeVisible();
+    // A box for each group, each with its count.
+    await expect(inputs(page).getByRole('button', { name: /^Add images, 0 of \d+$/ })).toBeVisible();
+    await expect(inputs(page).getByRole('button', { name: /^Add video, 0 of \d+$/ })).toBeVisible();
+    await expect(inputs(page).getByRole('button', { name: /^Add audio, 0 of \d+$/ })).toBeVisible();
     // The old locked card and its notes are gone.
     await expect(page.getByText(/cannot combine|takes either frames or references/i)).toHaveCount(0);
   });
@@ -69,7 +70,7 @@ test.describe('video reference slots', () => {
 
     await expect(question).toHaveCount(0);
     await expect(inputs(page).getByRole('radio', { name: 'Frames' })).toBeChecked();
-    await expect(page.getByRole('heading', { name: 'Reference videos' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Add video, / })).toHaveCount(0);
   });
 
   test('Wan 2.7 keeps its start image beside its references, because its r2v endpoint takes both', async ({ page }) => {
@@ -82,6 +83,6 @@ test.describe('video reference slots', () => {
     await expect(page.getByRole('alertdialog')).toHaveCount(0);
     await expect(inputs(page).getByRole('radio', { name: 'References' })).toBeChecked();
     await expect(page.getByAltText('Start image', { exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Reference images' })).toBeVisible();
+    await expect(inputs(page).getByRole('button', { name: /^Add images, 0 of \d+$/ })).toBeVisible();
   });
 });
