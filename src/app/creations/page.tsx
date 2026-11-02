@@ -1786,7 +1786,7 @@ export default function CreationsPage() {
                 onChange={(event) => void handlePreviewRestoreFile(event)}
             />
             <div className="studio-shell relative z-10 py-8">
-                {/* Header. Create and Post are the top bar's Create menu, and
+                {/* Header. Generate and Post are the top bar's Create menu, and
                     Profile is in the navigation. */}
                 <div className="mb-8">
                     <h1 className="text-3xl font-extrabold tracking-tight text-[var(--ui-text-primary)]">

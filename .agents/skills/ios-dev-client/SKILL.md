@@ -26,7 +26,7 @@ Proof: one `iOS Bundled …ms` line in `preview_logs` with `search: "Bundled"` (
 
 ## 4. Looking, pressing, recording
 
-- Screenshots: the simulator MCP `screenshot`, or `scripts/sim.sh shot <file.png>` (`xcrun simctl io <udid> screenshot`). Before every tap, a fresh look; the dev client holds a real signed-in account, so never press Generate, Post, Approve, Retry or Start workflow unless the owner asked for that exact action.
+- Screenshots: the simulator MCP `screenshot`, or `scripts/sim.sh shot <file.png>` (`xcrun simctl io <udid> screenshot`). Before every tap, a fresh look; the dev client holds a real signed-in account, so never press Generate (the creators' run button, which spends credits; the Create menu's Generate choice only opens the creators), Post, Approve, Retry or Start workflow unless the owner asked for that exact action.
 - Fast Refresh carries JS edits; prove each with a visible marker string and relaunch between the two captures of any before/after comparison.
 - Drags: the MCP `touch_path` and `swipe` scroll a `ScrollView` and drag a sheet but have failed to scroll Home's `FlashList`; when they fail, the XCUITest runner kept in the parent folder's `archive/` is the fallback.
 - Recording: `simctl recordVideo` fails here; use `screencapture -v -l<windowid>` of the simulator window. Mute the simulator before comparing video frames with a clock: with sound on, playback lags.

@@ -278,7 +278,15 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
         <Icon size={appTheme.icon.feature} color={foreground} />
       </View>
       <View style={{ gap: 4 }}>
-        <Text style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}>
+        {/* One line that shrinks to fit: the label is a single word in a tile of fixed width, and at
+            large text sizes a word wider than the tile was broken in two ("Generat" over "e"). */}
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+          maxFontSizeMultiplier={appTheme.typeScale.control}
+          style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}
+        >
           {action.label}
         </Text>
         <Text numberOfLines={2} style={{ color: isCreate ? hexWithAlpha(theme.colors.onPrimary, 0.72) : theme.colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>

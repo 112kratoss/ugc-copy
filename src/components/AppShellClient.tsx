@@ -71,9 +71,8 @@ const NAV_GROUPS_WITHOUT_BOTTOM_NAV = NAV_GROUPS.map((group) => ({
 }));
 
 const ALERTS_NAV_ITEM = APP_NAV_ITEMS.find((item) => item.id === 'alerts')!;
-const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
 
-/** A place the drawer links to: one of the shell's places, or the Create menu's Post. */
+/** A place the drawer links to: one of the shell's places, or one of the Create menu's two choices in its words. */
 type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavItem['id'] | 'post' };
 
 const APP_SHELL_SIDEBAR_ID = 'app-shell-sidebar';
@@ -129,8 +128,9 @@ function NavigationMenuButton({ open, onOpen, carriesAlerts }: { open: boolean; 
 }
 
 function drawerPlace(id: DrawerPlace['id'], pathname: string): DrawerPlace | null {
-  if (id === 'post') {
-    return { id, label: POST_MENU_ITEM.label, href: getCreateMenuHref('post', pathname), icon: CREATE_MENU_ICONS.post };
+  const choice = CREATE_MENU_ITEMS.find((item) => item.id === id);
+  if (choice) {
+    return { id, label: choice.label, href: getCreateMenuHref(choice.id, pathname), icon: CREATE_MENU_ICONS[choice.id] };
   }
   return APP_NAV_ITEMS.find((item) => item.id === id) ?? null;
 }
@@ -678,7 +678,7 @@ const AppShellFrame = memo(function AppShellFrame({
                         <DrawerNavItem
                           key={item.id}
                           item={item}
-                          // Create opens the launchpad: a way in, as the bottom bar's + was,
+                          // Generate opens the launchpad: a way in, as the bottom bar's + was,
                           // never the page open, though its section claims the creators.
                           active={item.id !== 'create' && activeItem?.id === item.id}
                           onClick={() => setMobileOpen(false)}

@@ -338,7 +338,7 @@ Use `lucide-react-native`. A Babel plugin rewrites each import to that icon's ow
 ### Create menu
 
 The disc opens two choices, each with its description (`lib/create-menu-view-model.ts`):
-- **Create**: "Image, Video, and Motion".
+- **Generate**: "Image, Video, and Motion" (Create until 2026-11-02, when the owner chose Generate: under the Create disc it read as the same word twice).
 - **Post**: "Share finished media".
 
 Keep generating and publishing visibly different.
