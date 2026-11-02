@@ -8,6 +8,7 @@ import {
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { BackendLogRecord } from '@/lib/backend-logger';
 import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
+import type { VideoModelId } from '@/lib/models';
 import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 
 // Foreign references stay rejected by default; individual tests opt into an
@@ -40,6 +41,19 @@ const seedanceProvenanceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/seedance-asset-provenance', () => seedanceProvenanceMocks);
+
+// A track's conversion is reference-track-conversion.test.ts's, run with ffmpeg. Here it
+// answers the link of a copy named after the track, unless a test refuses it.
+const convertedTrackLink = (track: string) => {
+  const name = new URL(track).pathname.split('/').pop()!.replace(/\.[^.]*$/, '');
+  return `https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/converted-tracks/${name}.wav?token=s`;
+};
+const trackConversionMocks = vi.hoisted(() => ({
+  ReferenceTrackUnreadableError: class ReferenceTrackUnreadableError extends Error {},
+  convertReferenceTrack: vi.fn(),
+}));
+
+vi.mock('@/lib/reference-track-conversion', () => trackConversionMocks);
 
 // The generations rows every mock held in the current test.
 const mockedGenerationRows: GenerationRow[][] = [];
@@ -6711,6 +6725,170 @@ describe('generation services', () => {
     // Nothing was held and nothing sent.
     expect(refused.generations).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // Kie judges a track by its link's extension before it fetches anything, and lists only
+  // "wav, mp3" for every model but Seedance 2.5, which adds "aac, ogg": a wan/3-0-video
+  // createTask refused an .m4a link outright (zero-cost probe, 2026-11-02). Such a run used
+  // to fail after Generate, its credits held and then refunded.
+  describe('a track the model’s provider refuses', () => {
+    const VOICE_MEMO = 'https://cdn.example.com/voice-memo.m4a';
+    const VOICE_MEMO_TRACK = { kind: 'audio' as const, label: 'Voice Memo', storagePath: 'uploads/user-1/voice-memo.m4a', sourceGenerationId: null };
+
+    beforeEach(() => {
+      trackConversionMocks.convertReferenceTrack.mockReset();
+      trackConversionMocks.convertReferenceTrack.mockImplementation(async ({ link }: { link: string }) => convertedTrackLink(link));
+    });
+
+    function recordKieBodies() {
+      const bodies: Array<{ model: string; input: Record<string, unknown> }> = [];
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return { ok: true, json: async () => ({ code: 200, data: { taskId: `task-track-${bodies.length}` } }) } as Response;
+      });
+      return bodies;
+    }
+
+    async function startWithTracks(
+      model: VideoModelId,
+      tracks: string[],
+      extra: Partial<Parameters<typeof import('@/lib/generation-services')['startVideoGeneration']>[0]> = {},
+    ) {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const { VIDEO_MODELS } = await import('@/lib/models');
+      const mock = createSupabaseMock();
+      const start = startVideoGeneration({
+        supabase: mock.supabase,
+        creditSupabase: mock.supabase,
+        userId: 'user-1',
+        prompt: 'Lip-sync the presenter to the voice track.',
+        model,
+        duration: 5,
+        aspectRatio: '16:9',
+        resolution: VIDEO_MODELS[model].resolutions[0],
+        referenceMode: 'elements',
+        referenceAudioUrls: tracks,
+        ...extra,
+      });
+      return { start, ...mock };
+    }
+
+    // Every model that takes a track, by the field its provider reads them from.
+    const TRACK_FIELDS: Array<[VideoModelId, 'reference_audio_urls' | 'reference_voice']> = [
+      ['seedance-2', 'reference_audio_urls'],
+      ['seedance-2-fast', 'reference_audio_urls'],
+      ['seedance-2-mini', 'reference_audio_urls'],
+      ['seedance-2-5', 'reference_audio_urls'],
+      ['minimax-h3', 'reference_audio_urls'],
+      ['wan-2.7', 'reference_voice'],
+      ['wan-3.0', 'reference_audio_urls'],
+      ['wan-3.0-prime', 'reference_audio_urls'],
+    ];
+
+    it.each(TRACK_FIELDS)('converts an iPhone .m4a for %s before the hold and sends Kie the copy in %s', async (model, field) => {
+      const bodies = recordKieBodies();
+      const { start, supabase, rpcCalls, generations, inputMediaRows } = await startWithTracks(model, [VOICE_MEMO], {
+        referenceAudios: [VOICE_MEMO_TRACK],
+      });
+      await start;
+
+      const { convertReferenceTrack } = trackConversionMocks;
+      expect(convertReferenceTrack).toHaveBeenCalledTimes(1);
+      expect(convertReferenceTrack).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', link: VOICE_MEMO }));
+      const hold = rpcCalls.findIndex((call) => call.fn === 'start_generation');
+      expect(hold).toBeGreaterThanOrEqual(0);
+      expect(convertReferenceTrack.mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(supabase.rpc).mock.invocationCallOrder[hold]);
+
+      const copy = convertedTrackLink(VOICE_MEMO);
+      expect(bodies[0].input[field]).toEqual(field === 'reference_voice' ? copy : [copy]);
+      // The run keeps the creator's own track: its recipe and its kept input are the .m4a.
+      expect(generations[0].workflow_settings?.referenceAudioUrls).toEqual([VOICE_MEMO]);
+      expect(inputMediaRows.find((row) => row.role === 'reference_audio')).toMatchObject({
+        label: 'Voice Memo',
+        metadata: expect.objectContaining({ sourceStoragePath: 'uploads/user-1/voice-memo.m4a', sourceUrl: VOICE_MEMO }),
+      });
+    });
+
+    it('sends a WAV or MP3 track as it is, converting nothing', async () => {
+      const bodies = recordKieBodies();
+      const tracks = ['https://cdn.example.com/take-1.wav', 'https://cdn.example.com/beat.mp3'];
+      const { start } = await startWithTracks('wan-3.0', tracks);
+      await start;
+
+      expect(trackConversionMocks.convertReferenceTrack).not.toHaveBeenCalled();
+      expect(bodies[0].input.reference_audio_urls).toEqual(tracks);
+    });
+
+    it('sends Seedance 2.5 its AAC and OGG tracks as they are, and converts only the .m4a', async () => {
+      const bodies = recordKieBodies();
+      const aac = 'https://cdn.example.com/beat.aac';
+      const ogg = 'https://cdn.example.com/rain.ogg';
+      const { start } = await startWithTracks('seedance-2-5', [aac, ogg, VOICE_MEMO]);
+      await start;
+
+      expect(trackConversionMocks.convertReferenceTrack.mock.calls.map(([call]) => call.link)).toEqual([VOICE_MEMO]);
+      expect(bodies[0].input.reference_audio_urls).toEqual([aac, ogg, convertedTrackLink(VOICE_MEMO)]);
+    });
+
+    it('sends a prepared Seedance track by its asset id, without converting its file', async () => {
+      const bodies = recordKieBodies();
+      const { start } = await startWithTracks('seedance-2', [VOICE_MEMO], {
+        referenceAudios: [VOICE_MEMO_TRACK],
+        seedanceAssets: {
+          images: [],
+          videos: [],
+          audios: [{ assetId: 'asset-voice-1', assetType: 'Audio', status: 'active', sourceUrl: VOICE_MEMO, error: null, lastCheckedAt: null }],
+        },
+      });
+      await start;
+
+      expect(trackConversionMocks.convertReferenceTrack).not.toHaveBeenCalled();
+      expect(bodies[0].input.reference_audio_urls).toEqual(['asset-voice-1']);
+    });
+
+    it('refuses the start before any hold when a track cannot be converted, in words that name it', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-services');
+      const { convertReferenceTrack, ReferenceTrackUnreadableError } = trackConversionMocks;
+      convertReferenceTrack.mockRejectedValue(new ReferenceTrackUnreadableError('Invalid data found when processing input'));
+
+      const named = await startWithTracks('wan-3.0', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
+      await expect(named.start).rejects.toMatchObject({
+        name: GenerationServiceError.name,
+        status: 400,
+        failureCode: 'invalid_input_media',
+        message: 'We could not convert Voice Memo for Wan 3.0. Add it again as an MP3 or WAV file. No credits were used.',
+      });
+      expect(named.rpcCalls).toEqual([]);
+      expect(named.generations).toEqual([]);
+
+      // A workflow step or a template run says nothing of its tracks but their links.
+      const unnamed = await startWithTracks('seedance-2-mini', [VOICE_MEMO]);
+      await expect(unnamed.start).rejects.toMatchObject({
+        status: 400,
+        failureCode: 'invalid_input_media',
+        message: 'We could not convert one of your audio tracks for Seedance 2 Mini. Add it again as an MP3 or WAV file. No credits were used.',
+      });
+      expect(unnamed.rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('answers a copy that could not be stored as worth retrying, still before any hold', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-services');
+      const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      trackConversionMocks.convertReferenceTrack.mockRejectedValue(new Error('storage is down'));
+
+      const { start, rpcCalls } = await startWithTracks('minimax-h3', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
+      await expect(start).rejects.toMatchObject({
+        name: GenerationServiceError.name,
+        status: 500,
+        message: 'We could not prepare your audio track for MiniMax H3. Try again in a moment. No credits were used.',
+      });
+      await expect(start).rejects.not.toMatchObject({ failureCode: 'invalid_input_media' });
+      expect(rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(logError.mock.calls.flat().map(String).join('\n')).toContain('reference_track_conversion_failed');
+    });
   });
 
   // The catalog adapter kept the compiled prompt as the run's prompt, so a remix of a

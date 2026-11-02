@@ -181,3 +181,50 @@ export function referenceMediaLengthViolation(
   }
   return null;
 }
+
+/**
+ * The track formats each model's provider takes, by the extension of the link's path, which is
+ * all Kie reads of a track before taking it: a wan/3-0-video createTask refused any `.m4a` link
+ * with "File type not supported", one with a `?token=` query and one nobody could fetch
+ * included, and took a `.wav` (zero-cost probe, 2026-11-02, recorded in
+ * archive/ios-audio-mime-aliases-2026-11-02). Kie's pages, read the same day, list "wav, mp3"
+ * for every model here but Seedance 2.5, which adds "aac, ogg". A model with no entry sends no
+ * track.
+ */
+const REFERENCE_TRACK_FORMATS: Readonly<Record<string, readonly string[]>> = {
+  'seedance-2': ['wav', 'mp3'],
+  'seedance-2-fast': ['wav', 'mp3'],
+  'seedance-2-mini': ['wav', 'mp3'],
+  'seedance-2-5': ['wav', 'mp3', 'aac', 'ogg'],
+  'minimax-h3': ['wav', 'mp3'],
+  // wan/2-7-r2v's one `reference_voice`.
+  'wan-2.7': ['wav', 'mp3'],
+  'wan-3.0': ['wav', 'mp3'],
+  'wan-3.0-prime': ['wav', 'mp3'],
+};
+
+/** The extensions of the tracks the model's provider takes, or undefined where it sends none. */
+export function providerReferenceTrackFormats(modelId: string): readonly string[] | undefined {
+  return hasRule(REFERENCE_TRACK_FORMATS, modelId) ? REFERENCE_TRACK_FORMATS[modelId] : undefined;
+}
+
+/**
+ * Whether a track the model is sent must be converted first: its link's path ends in an
+ * extension the provider does not take as written, or in none. A prepared provider asset goes
+ * by its id, which is no link, and a model that sends no track converts nothing.
+ */
+export function referenceTrackNeedsConversion(modelId: string, link: string): boolean {
+  const formats = providerReferenceTrackFormats(modelId);
+  if (!formats) return false;
+  let pathname: string;
+  try {
+    const url = new URL(link);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+    pathname = url.pathname;
+  } catch {
+    return false;
+  }
+  const fileName = pathname.slice(pathname.lastIndexOf('/') + 1);
+  const dot = fileName.lastIndexOf('.');
+  return dot < 0 || !formats.includes(fileName.slice(dot + 1));
+}

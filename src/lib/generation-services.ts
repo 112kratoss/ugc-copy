@@ -149,6 +149,7 @@ import {
   providerPromptViolation,
   referenceMediaLengthViolation,
   referenceMediaRole,
+  referenceTrackNeedsConversion,
   type ProviderPromptRun,
   type ReferenceMediaLength,
 } from '@/lib/provider-input-limits';
@@ -933,6 +934,52 @@ function assertProviderPromptAccepted(modelId: string, run: ProviderPromptRun): 
 function assertReferenceMediaLongEnough(modelId: string, media: readonly ReferenceMediaLength[]): void {
   const violation = referenceMediaLengthViolation(modelId, media);
   if (violation) throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
+}
+
+/**
+ * The tracks a run sends its provider, each as it goes: one in a format the model's provider
+ * refuses (provider-input-limits) as a WAV copy, made before anything is held. Kie refused such
+ * a track only after the hold, so the run failed after Generate and its credits came back. A
+ * track that cannot be converted refuses the start in words that name it, and one `skip` names
+ * (a prepared Seedance asset, which goes by its id) is left as it is.
+ */
+async function convertRefusedReferenceTracks(params: {
+  supabase: SupabaseClient;
+  userId: string;
+  model: VideoModelId;
+  modelName: string;
+  links: string[];
+  labels: ReadonlyArray<string | null | undefined>;
+  skip: (index: number) => boolean;
+}): Promise<string[]> {
+  const refused = params.links.flatMap((link, index) => (
+    !params.skip(index) && referenceTrackNeedsConversion(params.model, link) ? [index] : []
+  ));
+  if (refused.length === 0) return params.links;
+
+  // Loaded only by a run that converts a track: it reaches ffmpeg, and sharp beside it.
+  const { convertReferenceTrack, ReferenceTrackUnreadableError } = await import('@/lib/reference-track-conversion');
+  const links = [...params.links];
+  for (const index of refused) {
+    try {
+      links[index] = await convertReferenceTrack({ supabase: params.supabase, userId: params.userId, link: links[index] });
+    } catch (error) {
+      if (error instanceof ReferenceTrackUnreadableError) {
+        logBackendWarning('reference_track_unreadable', { modelId: params.model, error });
+        throw new GenerationServiceError(
+          `We could not convert ${params.labels[index]?.trim() || 'one of your audio tracks'} for ${params.modelName}. Add it again as an MP3 or WAV file. No credits were used.`,
+          400,
+          'invalid_input_media',
+        );
+      }
+      logBackendError('reference_track_conversion_failed', { modelId: params.model, error });
+      throw new GenerationServiceError(
+        `We could not prepare your audio track for ${params.modelName}. Try again in a moment. No credits were used.`,
+        500,
+      );
+    }
+  }
+  return links;
 }
 
 export function trimPrompt(prompt: string, errorMessage: string): string {
@@ -3064,6 +3111,21 @@ export async function startVideoGeneration(params: {
     throw generationCostChangedError();
   }
 
+  // The tracks as the provider is sent them, the last thing settled before the hold: a prepared
+  // Seedance asset goes by its id, and a file in a format the model's provider refuses as a
+  // converted copy. The run keeps the creator's own tracks, in its recipe and its inputs.
+  const preparedSeedanceIds = isSeedance2Family ? preparedSeedanceAssetIds(seedanceAssets) : new Map<string, string>();
+  const referenceAudioSources = normalizeMediaUrlList(referenceAudioUrls);
+  const providerReferenceAudioUrls = await convertRefusedReferenceTracks({
+    supabase: creditSupabase,
+    userId,
+    model,
+    modelName: selectedModel.displayName,
+    links: resolvedReferenceAudioUrls,
+    labels: (referenceAudios ?? []).map((descriptor) => descriptor?.label),
+    skip: (index) => preparedSeedanceIds.has(referenceAudioSources[index] ?? ''),
+  });
+
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
@@ -3171,7 +3233,7 @@ export async function startVideoGeneration(params: {
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image_urls = providerReferenceImageUrls;
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video_urls = resolvedReferenceVideoUrls;
-        if (resolvedReferenceAudioUrls.length > 0) input.reference_audio_urls = resolvedReferenceAudioUrls;
+        if (providerReferenceAudioUrls.length > 0) input.reference_audio_urls = providerReferenceAudioUrls;
       } else if (frameImageUrls.length > 0) {
         // minimax-h3/image-to-video: "Either first_frame_url or last_frame_url must be
         // provided" — a last-only run is legal here and must keep its field.
@@ -3240,9 +3302,8 @@ export async function startVideoGeneration(params: {
         } else {
           // A file prepared as a Seedance asset goes by the asset's id. The run keeps,
           // and the unified start measured, the file's own link.
-          const preparedIds = preparedSeedanceAssetIds(seedanceAssets);
           const preferPrepared = (sources: string[], urls: string[]) => (
-            urls.map((url, index) => preparedIds.get(sources[index] ?? '') ?? url)
+            urls.map((url, index) => preparedSeedanceIds.get(sources[index] ?? '') ?? url)
           );
           if (providerReferenceImageUrls.length > 0) {
             input.reference_image_urls = preferPrepared(providerReferenceImageSources, providerReferenceImageUrls);
@@ -3250,8 +3311,8 @@ export async function startVideoGeneration(params: {
           if (resolvedReferenceVideoUrls.length > 0) {
             input.reference_video_urls = preferPrepared(normalizeMediaUrlList(referenceVideoUrls), resolvedReferenceVideoUrls);
           }
-          if (resolvedReferenceAudioUrls.length > 0) {
-            input.reference_audio_urls = preferPrepared(normalizeMediaUrlList(referenceAudioUrls), resolvedReferenceAudioUrls);
+          if (providerReferenceAudioUrls.length > 0) {
+            input.reference_audio_urls = preferPrepared(referenceAudioSources, providerReferenceAudioUrls);
           }
         }
 
@@ -3318,7 +3379,7 @@ export async function startVideoGeneration(params: {
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image = providerReferenceImageUrls;
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video = resolvedReferenceVideoUrls;
-        if (resolvedReferenceAudioUrls[0]) input.reference_voice = resolvedReferenceAudioUrls[0];
+        if (providerReferenceAudioUrls[0]) input.reference_voice = providerReferenceAudioUrls[0];
         if (frameImageUrls[0]) input.first_frame = frameImageUrls[0];
       } else if (frameImageUrls.length > 0) {
         providerModelId = resolveProviderModelId(runtimeConfig, 'image', 'wan/2-7-image-to-video');
@@ -3346,7 +3407,7 @@ export async function startVideoGeneration(params: {
         input.aspect_ratio = aspectRatio;
         if (providerReferenceImageUrls.length > 0) input.reference_image_urls = providerReferenceImageUrls;
         if (resolvedReferenceVideoUrls.length > 0) input.reference_video_urls = resolvedReferenceVideoUrls;
-        if (resolvedReferenceAudioUrls.length > 0) input.reference_audio_urls = resolvedReferenceAudioUrls;
+        if (providerReferenceAudioUrls.length > 0) input.reference_audio_urls = providerReferenceAudioUrls;
       } else if (frameImageUrls.length > 0) {
         input.first_frame_url = frameImageUrls[0];
         if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];

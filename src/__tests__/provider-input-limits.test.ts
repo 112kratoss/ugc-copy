@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { GENERATION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
-import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
+import { getVideoInputLimits } from '@/lib/generation-model-catalog';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS, type VideoModelId } from '@/lib/models';
 import {
   providerPromptMaxLength,
   providerPromptViolation,
+  providerReferenceTrackFormats,
   referenceMediaLengthViolation,
+  referenceTrackNeedsConversion,
 } from '@/lib/provider-input-limits';
 
 // Kie's documented prompt caps, read 2026-10-20 for the model check-up
@@ -137,6 +140,50 @@ describe('provider input limits', () => {
       // Wan 2.7 documents no minimum for its reference clips, only for its voice.
       expect(referenceMediaLengthViolation('wan-2.7', [{ role: 'video', durationSeconds: 0.5 }])).toBeNull();
       expect(referenceMediaLengthViolation('gemini-omni-video', [{ role: 'video', durationSeconds: 0.5 }])).toBeNull();
+    });
+  });
+
+  describe('reference track formats', () => {
+    const signed = (fileName: string) =>
+      `https://project.supabase.co/storage/v1/object/sign/uploads/user-1/1-${fileName}?token=t`;
+
+    it('has a rule for every model that takes a track, and none for a model that takes none', () => {
+      for (const modelId of Object.keys(VIDEO_MODELS) as VideoModelId[]) {
+        const takesTracks = getVideoInputLimits(modelId).audios > 0;
+        expect(providerReferenceTrackFormats(modelId) !== undefined, modelId).toBe(takesTracks);
+      }
+    });
+
+    it('converts a track whose link names a format the model’s provider refuses', () => {
+      // wan/3-0-video refused any .m4a link by its extension alone, before fetching it, and took a
+      // .wav (zero-cost probe, 2026-11-02). Kie lists "wav, mp3" for every model but Seedance 2.5.
+      for (const modelId of ['seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'minimax-h3', 'wan-2.7', 'wan-3.0', 'wan-3.0-prime']) {
+        expect(referenceTrackNeedsConversion(modelId, signed('voice-memo.m4a')), modelId).toBe(true);
+        for (const fileName of ['beat.aac', 'beat.ogg', 'beat.webm', 'beat.opus', 'beat.flac', 'beat.mp4', 'media.bin']) {
+          expect(referenceTrackNeedsConversion(modelId, signed(fileName)), `${modelId} ${fileName}`).toBe(true);
+        }
+        expect(referenceTrackNeedsConversion(modelId, signed('take-1.wav')), modelId).toBe(false);
+        expect(referenceTrackNeedsConversion(modelId, signed('beat.mp3')), modelId).toBe(false);
+      }
+      // Seedance 2.5 adds "aac, ogg", and still no .m4a.
+      expect(referenceTrackNeedsConversion('seedance-2-5', signed('beat.aac'))).toBe(false);
+      expect(referenceTrackNeedsConversion('seedance-2-5', signed('beat.ogg'))).toBe(false);
+      expect(referenceTrackNeedsConversion('seedance-2-5', signed('voice-memo.m4a'))).toBe(true);
+      expect(referenceTrackNeedsConversion('seedance-2-5', signed('beat.webm'))).toBe(true);
+    });
+
+    it('reads the link’s path as Kie does: not its query, and no extension or another case is not one it takes', () => {
+      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/voice.m4a?name=take.wav')).toBe(true);
+      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/take.wav?token=voice.m4a')).toBe(false);
+      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/tracks/42')).toBe(true);
+      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/take.WAV')).toBe(true);
+    });
+
+    it('sends a prepared provider asset as it is, and converts nothing for a model that sends no track', () => {
+      expect(referenceTrackNeedsConversion('seedance-2', 'asset-audio-1')).toBe(false);
+      expect(referenceTrackNeedsConversion('seedance-2', 'asset://asset-audio-1')).toBe(false);
+      expect(referenceTrackNeedsConversion('gemini-omni-video', signed('voice-memo.m4a'))).toBe(false);
+      expect(referenceTrackNeedsConversion('kling-3.0-video', signed('voice-memo.m4a'))).toBe(false);
     });
   });
 });
