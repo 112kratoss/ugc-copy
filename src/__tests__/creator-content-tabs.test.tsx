@@ -455,7 +455,7 @@ describe('CreatorContentTabs', () => {
       await landNextPage();
       expect(reads).toHaveLength(1);
       expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('Linked post: failed');
-    }, 15_000);
+    });
 
     it('leaves the read out while a page without the post lands, and opens the post when it comes', async () => {
       linkTo('item-late');
@@ -489,7 +489,7 @@ describe('CreatorContentTabs', () => {
       });
       expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-late');
       expect(reads).toHaveLength(1);
-    }, 15_000);
+    });
 
     // A post read on its own is added to the list, and the read is not asked
     // again while its post is in the URL. A refresh of the page's data (a
@@ -522,7 +522,7 @@ describe('CreatorContentTabs', () => {
         expect(screen.getByRole('dialog', { name: /creator immersive viewer/i })).not.toHaveTextContent('Linked post:');
       });
       expect(reads).toHaveLength(2);
-    }, 15_000);
+    });
 
     // A page that brings the linked post in ends its read: the post opens from
     // the page. Cut short while its answer was still arriving, the read must
@@ -552,7 +552,7 @@ describe('CreatorContentTabs', () => {
       const reel = screen.getByRole('dialog', { name: /creator immersive viewer/i });
       expect(reel).not.toHaveTextContent('Linked post:');
       expect(reel).toHaveTextContent('item-late');
-    }, 15_000);
+    });
   });
 
   // The reel opened from a creator's page had no ⋯ at all. It carries the three

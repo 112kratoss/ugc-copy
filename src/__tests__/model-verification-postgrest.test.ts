@@ -196,7 +196,7 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
     expect(Date.now() - started).toBeGreaterThanOrEqual(7500);
     expect(Date.now() - started).toBeLessThan(11500);
     expect((await checks()).map(row => row.sanitized_details)).toEqual([{ reason: 'timeout' }, { reason: 'timeout' }]);
-  }, 15000);
+  });
   it('records a managed history outage then a successful retry', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(managedNow);
     historyFailure = true;
@@ -259,5 +259,5 @@ describe.skipIf(!configPath || !connectionString)('catalog verification with rea
         const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited;
       }
     }
-  }, 15000);
+  });
 });

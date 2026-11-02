@@ -754,7 +754,7 @@ describe('/api/generate-image route', () => {
         },
       ],
     });
-  }, 15_000);
+  });
 
   it('returns provider-backed timing for waiting image generations', async () => {
     const timeoutSignal = AbortSignal.abort();

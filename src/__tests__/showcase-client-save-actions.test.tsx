@@ -1656,7 +1656,7 @@ describe('ShowcaseClient save actions', () => {
     });
     expect(await screen.findByRole('dialog', { name: 'Explore reel viewer' })).toBeInTheDocument();
     // Room as #457 gave, so a wait above that never passes fails on its own assertion.
-  }, 15_000);
+  });
 
   // A page landing no longer runs the URL effect, but a refreshed token does: in that window it
   // reads the URL that still names the post Explore just closed.
@@ -1701,7 +1701,7 @@ describe('ShowcaseClient save actions', () => {
       finishBack();
     });
     expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
-  }, 15_000);
+  });
 
   it('preserves the selected carousel slide when opening the reel', async () => {
     renderShowcase(createShowcaseItem({
@@ -1854,7 +1854,7 @@ describe('ShowcaseClient save actions', () => {
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       expect(reads.length).toBeGreaterThan(readsBeforeRetry);
       // Room as #457 gave, so a wait above that never passes fails on its own assertion.
-    }, 15_000);
+    });
 
     // The URL effect follows whether the post the URL names is in the list, not the list: keyed
     // on the list, every page that landed ran it again, which cut the read short and asked again
@@ -1883,7 +1883,7 @@ describe('ShowcaseClient save actions', () => {
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       expect(reads).toHaveLength(1);
       // Room as #457 gave, so a wait above that never passes fails on its own assertion.
-    }, 15_000);
+    });
 
     // A read can be cut short after its answer's headers came, while the body is still on its
     // way: a browser's `fetch` has resolved by then, and `json()` rejects with the AbortError.
@@ -1927,7 +1927,7 @@ describe('ShowcaseClient save actions', () => {
       expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       // Room as #457 gave, so a wait above that never passes fails on its own assertion.
-    }, 15_000);
+    });
   });
 
   // A failed page left `hasMore` true and loading ended, and the reel asked for
@@ -2045,7 +2045,7 @@ describe('ShowcaseClient save actions', () => {
     expect(await within(reopened).findByRole('button', { name: 'Show comments on Campaign Frame (3)' })).toBeInTheDocument();
     // Opens the reel twice and a comment thread once: 5,016 ms at the start of a PR run's web
     // suite on a GitHub runner (#459), about 360 ms here, as on main before it. Room as #457 gave.
-  }, 15_000);
+  });
 
   it('closes the reel when Explore is pressed before the render that drew the count has run its effects', async () => {
     // As above, popstate fires inside `back()`. That order is half of the race this test was
@@ -2101,7 +2101,7 @@ describe('ShowcaseClient save actions', () => {
       expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
     });
     // The same work as the test above, which needed this room on a GitHub runner (#459).
-  }, 15_000);
+  });
 
   it('automatically loads the next showcase page when the feed sentinel enters view', async () => {
     const firstItem = createShowcaseItem({ id: 'post-1', title: 'Campaign Frame', generationId: 'gen-1' });
@@ -2402,7 +2402,7 @@ describe('ShowcaseClient save actions', () => {
     // About 200 ms here, as long as the comment-count test that took 5,016 ms on a GitHub
     // runner (#459). Room as #457 gave, so a wait above that never passes fails on its own
     // assertion, not on the test's timeout.
-  }, 15_000);
+  });
 
   it('keeps the anonymous fallback idle until interaction establishes a feed session', async () => {
     vi.useFakeTimers();
