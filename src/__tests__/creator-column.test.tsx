@@ -772,6 +772,7 @@ describe('a reference strip under a mouse', () => {
           <li key={name}>
             <button type="button" onClick={onPress}>Preview {name}</button>
             <input aria-label={`Name of ${name}`} defaultValue={name} />
+            <audio aria-label={`Track of ${name}`} controls />
           </li>
         ))}
       </CreatorReferenceStrip>
@@ -784,7 +785,8 @@ describe('a reference strip under a mouse', () => {
     Object.defineProperty(list, 'scrollLeft', { configurable: true, get: () => left, set: (value: number) => { left = value; } });
     return { list, scrolled: () => left, onPress };
   }
-  const mouse = (clientX: number) => ({ pointerType: 'mouse', button: 0, pointerId: 1, clientX });
+  // The primary button held, as it is through a drag (`buttons` says which buttons are down).
+  const mouse = (clientX: number, buttons = 1) => ({ pointerType: 'mouse', button: 0, buttons, pointerId: 1, clientX });
 
   it('scrolls under a drag that moves past 6px, and the click that ends the drag presses nothing', () => {
     const { list, scrolled, onPress } = strip();
@@ -821,6 +823,31 @@ describe('a reference strip under a mouse', () => {
     fireEvent.pointerDown(name, mouse(300));
     fireEvent.pointerMove(name, mouse(150));
     expect(scrolled()).toBe(0);
+  });
+
+  // A track's seek bar lives in the player's own shadow tree, so its press reaches the row as the player's.
+  it("leaves a player's own controls to it", () => {
+    const { scrolled } = strip();
+    const track = screen.getByLabelText('Track of Villain');
+    fireEvent.pointerDown(track, mouse(300));
+    fireEvent.pointerMove(track, mouse(150));
+    expect(scrolled()).toBe(0);
+  });
+
+  // A press let go outside the row before it moved: the row heard no release, and the mouse
+  // passing over it afterwards, no button held, is no drag.
+  it('drops a press let go outside the row before it moved', () => {
+    const { list, scrolled, onPress } = strip();
+    const preview = screen.getByRole('button', { name: 'Preview Villain' });
+    fireEvent.pointerDown(preview, mouse(300));
+    fireEvent.pointerMove(preview, mouse(298));
+    fireEvent.pointerMove(preview, mouse(150, 0));
+    fireEvent.pointerMove(preview, mouse(100, 0));
+    expect(scrolled()).toBe(0);
+    expect(list.style.getPropertyValue('cursor')).toBe('');
+
+    fireEvent.click(preview);
+    expect(onPress).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1225,8 +1252,17 @@ describe('the column resizer', () => {
       expect(window.localStorage.getItem('creator-column-width')).toBeNull();
       expect(grid).not.toHaveAttribute('data-resized');
       expect(grid.style.getPropertyValue('--creator-column-width')).toBe('');
+
+      // Enter is the keyboard's way back to the layout's own width.
+      fireEvent.keyDown(grip, { key: 'End' });
+      expect(grid).toHaveAttribute('data-resized');
+      fireEvent.keyDown(grip, { key: 'Enter' });
+      expect(window.localStorage.getItem('creator-column-width')).toBeNull();
+      expect(grid).not.toHaveAttribute('data-resized');
     } finally {
+      // jsdom keeps clientWidth on Element.prototype: the stub above is HTMLElement's own, so it goes.
       if (clientWidth) Object.defineProperty(HTMLElement.prototype, 'clientWidth', clientWidth);
+      else delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
     }
   });
 

@@ -149,8 +149,12 @@ type CardHandles = {
 async function readCardHandles(page: Page, title: string): Promise<CardHandles | null> {
   try {
     return await page.evaluate((panelTitle) => {
+      // A card named by its heading, or (the video creator's references since 2026-11-02, a row
+      // per kind) by its list's own name.
       const heading = Array.from(document.querySelectorAll<HTMLElement>('h2, h3'))
-        .find((candidate) => candidate.textContent === panelTitle);
+        .find((candidate) => candidate.textContent === panelTitle)
+        ?? Array.from(document.querySelectorAll<HTMLElement>('[aria-label]'))
+          .find((candidate) => candidate.getAttribute('aria-label') === panelTitle);
       // The panel is the heading's nearest ancestor that holds a card's Insert button: the
       // handle itself, on every tile since 2026-10-31 (on the video creator's pictures since PR 4).
       let panel = heading?.parentElement ?? null;
@@ -213,7 +217,7 @@ async function readCardHandles(page: Page, title: string): Promise<CardHandles |
 }
 
 async function expectWholeHandles(page: Page, title: string, handles: string[]) {
-  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: title, exact: true }).or(page.getByRole('list', { name: title, exact: true }))).toBeVisible();
 
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize(viewport);

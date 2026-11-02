@@ -76,14 +76,6 @@ const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
 /** A place the drawer links to: one of the shell's places, or the Create menu's Post. */
 type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavItem['id'] | 'post' };
 
-/**
- * The top bar's menu button, hidden from 768px in px, as the side navigation shows
- * (globals.css): a rem breakpoint moved with the browser's text size and, on a creator, left a
- * small-text window with no navigation at all. Where the page hides the bottom navigation (the
- * creators), the Alerts count that only the navigation held below 640px shows here, in the
- * button's name too; from 640px the bell shows it. Its own component, so the count's changes
- * redraw this button and not the frame.
- */
 const APP_SHELL_SIDEBAR_ID = 'app-shell-sidebar';
 
 /**
@@ -110,6 +102,14 @@ function SidebarToggle() {
   );
 }
 
+/**
+ * The top bar's menu button, hidden from 768px in px, as the side navigation shows
+ * (globals.css): a rem breakpoint moved with the browser's text size and, on a creator, left a
+ * small-text window with no navigation at all. Where the page hides the bottom navigation (the
+ * creators), the Alerts count that only the navigation held below 640px shows here, in the
+ * button's name too; from 640px the bell shows it. Its own component, so the count's changes
+ * redraw this button and not the frame.
+ */
 function NavigationMenuButton({ open, onOpen, carriesAlerts }: { open: boolean; onOpen: () => void; carriesAlerts: boolean }) {
   const unread = useUnreadAlertsCount();
   const label = carriesAlerts && unread > 0 ? `Open navigation, ${unread} unread alerts` : 'Open navigation';

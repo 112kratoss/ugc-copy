@@ -2265,6 +2265,23 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       await renderer.act(async () => { tree.update(editor()); });
       await settle();
       expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+
+      // Kept with the session once read, with nothing edited: the next resume asks the source nothing.
+      const resaved = draftStorage.setItem.mock.calls
+        .map(([, value]) => JSON.parse(value as string) as { remixOriginal?: unknown; video?: { prompt?: string } })
+        .find((session) => session.remixOriginal);
+      expect(resaved).toMatchObject({
+        remixOriginal: { generationId: 'gen-girl', mediaType: 'video', url: expect.stringContaining('cry.mp4') },
+        video: { prompt: 'My edited scene: @girl is crying' },
+      });
+      tree.unmount();
+      draftStorage.getItem.mockResolvedValue(JSON.stringify(resaved));
+      authState.api.getRemixSourceBundle.mockClear();
+      let again!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { again = renderer.create(editor()); });
+      await settle();
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(again.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Use as reference')).toHaveLength(1);
     });
 
     it('keeps the restore on screen while a catalog refresh starts it again', async () => {

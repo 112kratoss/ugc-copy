@@ -3186,6 +3186,9 @@ function VideoCreator({
             durationSeconds: await readVideoDurationSeconds(url),
         }])());
         if (!seeds) return;
+        // A second press made while the clip's length was read: the first has added it by now.
+        if (referenceVideosRef.current.some((reference) => reference.providerUrl === url)) return;
+        if (referenceVideosRef.current.length >= referenceVideoLimit) return;
         const nextReferences = [...referenceVideosRef.current, ...hydrateSeedanceMediaReferences('Video', seeds)];
         commitReferenceVideos(nextReferences);
         await persistReferenceVideos(nextReferences);

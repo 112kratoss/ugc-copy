@@ -150,7 +150,7 @@ function gridColumnBounds(grid: HTMLElement | null) {
  * the two stand side by side (the owner's ask, 2026-11-02: "make this bar move sideways so we
  * can expand a little"). It is the window splitter of ARIA: a focusable separator that the
  * arrow keys move too (Shift for bigger steps, Home and End for the ends), and a double-click
- * gives the column back the layout's own width. A drag sets the grid's width variable straight
+ * or Enter gives the column back the layout's own width. A drag sets the grid's width variable straight
  * on the element, so the creator under it does not render again at every step; the width is
  * kept once the drag ends. It stands in the gap at the column's right edge, as tall as the row,
  * with its grip held in the middle of the window.
@@ -212,7 +212,7 @@ function CreatorColumnResizer({ gridRef, columnRef, columnId }: {
     // it pushed the column into the second track); both lines are named, since an absolute item's
     // auto end line is the grid's edge.
     <div
-      title="Drag to resize. Double-click to reset."
+      title="Drag to resize. Double-click, or Enter on the grip, to reset."
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         event.preventDefault();
@@ -254,6 +254,12 @@ function CreatorColumnResizer({ gridRef, columnRef, columnId }: {
         aria-valuemax={measure?.max ?? COLUMN_MAX_WIDTH}
         tabIndex={0}
         onKeyDown={(event) => {
+          // The keyboard's way to the layout's own width, which a double-click gives a mouse.
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            reset();
+            return;
+          }
           const step = event.shiftKey ? COLUMN_KEY_STEP * 4 : COLUMN_KEY_STEP;
           const target = event.key === 'ArrowLeft' ? columnWidth() - step
             : event.key === 'ArrowRight' ? columnWidth() + step
@@ -644,7 +650,6 @@ export function CreatorColumnBar({
   narrowStatus,
   action,
   note,
-  stacked = false,
   holdsFootUnderColumn = true,
 }: {
   settingsSummary: string;
@@ -664,8 +669,6 @@ export function CreatorColumnBar({
   action: ReactNode;
   /** A quiet line under the buttons: the balance and what the run leaves of it, or what signing up gives a visitor. */
   note?: ReactNode;
-  /** The action's words need the bar's width ("Make an image instead · from 1 credit"): the chip goes above it at every width. */
-  stacked?: boolean;
   /**
    * Under the column's width the bar keeps to the window's foot. Off while a done run's
    * publish bar holds it there (the artboard Result at 390): the bar then waits at the
@@ -766,7 +769,7 @@ export function CreatorColumnBar({
         {/* Beside the result (two panes) the chip has a row of its own, so the whole
             summary fits; in one column it shares the row with Generate, and on a
             phone it keeps the resolution and length. */}
-        <div className={clsx('flex items-stretch gap-2 p-2', stacked ? 'flex-col' : 'min-[1120px]:flex-col')}>
+        <div className={'flex items-stretch gap-2 p-2 min-[1120px]:flex-col'}>
           {settings !== null ? (
             <button
               ref={chipRef}
@@ -778,7 +781,7 @@ export function CreatorColumnBar({
               aria-label={`Generation settings: ${settingsSummary}`}
               className={clsx(
                 'ui-focus-ring flex min-h-12 min-w-0 flex-[0.9] items-center justify-center gap-2 rounded-full px-3 text-xs font-extrabold text-[var(--ui-text-primary)] transition-[background-color,transform] duration-150 hover:bg-[var(--ui-surface-3)] active:scale-[0.98]',
-                stacked ? 'flex-none' : 'min-[1120px]:flex-none',
+                'min-[1120px]:flex-none',
                 showsSettings ? 'bg-[var(--ui-surface-3)]' : 'bg-[var(--ui-surface-2)]',
               )}
             >
@@ -798,7 +801,7 @@ export function CreatorColumnBar({
               />
             </button>
           ) : null}
-          <div className={clsx('flex min-w-0 flex-[1.2]', stacked ? 'flex-none' : 'min-[1120px]:flex-none')}>{action}</div>
+          <div className={'flex min-w-0 flex-[1.2] min-[1120px]:flex-none'}>{action}</div>
         </div>
         {note ? (
           <div data-creator-bar-note className="px-4 pb-3 text-xs leading-5 text-[var(--ui-text-muted)]">
@@ -1257,13 +1260,19 @@ export function CreatorReferenceStrip({ className, children, wide = false, ...pr
         const list = listRef.current;
         // A finger or a pen scrolls the row itself; a row that fits has nowhere to go.
         if (event.pointerType !== 'mouse' || event.button !== 0 || !list || list.scrollWidth <= list.clientWidth) return;
-        if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+        // A press in a field, or on a player's own controls (a track's seek bar), is that control's.
+        if (event.target instanceof Element && event.target.closest('input, textarea, select, audio, video, [contenteditable="true"]')) return;
         pan.current = { pointerId: event.pointerId, x: event.clientX, scrollLeft: list.scrollLeft, moved: false };
       }}
       onPointerMove={(event) => {
         const current = pan.current;
         const list = listRef.current;
         if (!current || !list || event.pointerId !== current.pointerId) return;
+        // A press let go outside the row before it moved has ended: the row heard no release.
+        if ((event.buttons & 1) === 0) {
+          endPan();
+          return;
+        }
         const dx = event.clientX - current.x;
         if (!current.moved) {
           if (Math.abs(dx) < STRIP_DRAG_THRESHOLD) return;

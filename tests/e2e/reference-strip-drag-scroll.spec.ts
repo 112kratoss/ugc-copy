@@ -58,7 +58,14 @@ test('a mouse drags the references row sideways, and a drag presses no picture a
   );
   const row = page.getByRole('list', { name: 'Reference images' });
   await expect(row.getByRole('listitem')).toHaveCount(5);
-  // Added pictures scroll into view at the row's end; the drags start from its start.
+  // The column at its narrowest (Home on its width's grip), so the five pictures run well past the
+  // row whatever width the layout gives the column: the drags below have room to scroll.
+  await page.getByRole('separator', { name: 'Column width' }).press('Home');
+  await expect.poll(() => row.evaluate((list) => list.scrollWidth - list.clientWidth)).toBeGreaterThan(220);
+  // In the middle of the window, where a press lands on it (low in the column, the pictures sat under
+  // the window's foot and the mouse pressed nothing). Added pictures scroll into view at the row's end;
+  // the drags start from its start.
+  await row.evaluate((list) => list.scrollIntoView({ block: 'center', behavior: 'instant' }));
   await row.evaluate((list) => list.scrollTo({ left: 0, behavior: 'instant' }));
   await expect.poll(() => row.evaluate((list) => list.scrollLeft)).toBeLessThan(8);
 
@@ -67,8 +74,19 @@ test('a mouse drags the references row sideways, and a drag presses no picture a
   await expect.poll(() => row.evaluate((list) => list.scrollLeft)).toBeGreaterThan(100);
   await expect(page.getByRole('dialog', { name: 'Element 2' })).toHaveCount(0);
 
-  // A drag that starts on a Remove scrolls back and removes nothing.
-  await dragFrom(page, (await row.getByRole('button', { name: 'Remove Element 4' }).boundingBox())!, 200);
+  // A drag that starts on a Remove scrolls back and removes nothing: one the row shows, since a tile
+  // past its edge is clipped and a press there lands on something else.
+  const rowBox = (await row.boundingBox())!;
+  let removeBox: { x: number; y: number; width: number; height: number } | null = null;
+  for (const remove of await row.getByRole('button', { name: /^Remove Element/ }).all()) {
+    const box = await remove.boundingBox();
+    if (box && box.x >= rowBox.x && box.x + box.width <= rowBox.x + rowBox.width) {
+      removeBox = box;
+      break;
+    }
+  }
+  expect(removeBox).not.toBeNull();
+  await dragFrom(page, removeBox!, 200);
   await expect.poll(() => row.evaluate((list) => list.scrollLeft)).toBeLessThan(50);
   await expect(row.getByRole('listitem')).toHaveCount(5);
 

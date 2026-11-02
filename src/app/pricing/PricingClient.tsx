@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Script from "next/script";
 import { ArrowLeft, ArrowRight, Check, Crown, Gift, History, Loader2, Sparkles, Wallet, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -300,10 +299,6 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
     return (
         <div className="ui-page ui-page-ambient min-h-screen">
             <JsonLd data={[faqSchema, pricingSchema]} />
-            <Script
-                id="razorpay-checkout-js"
-                src="https://checkout.razorpay.com/v1/checkout.js"
-            />
 
             <div className="studio-shell py-10 sm:py-14">
                 <Link

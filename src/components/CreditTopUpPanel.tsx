@@ -2,13 +2,12 @@
 
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Script from 'next/script';
 import { useId, useRef } from 'react';
 import { Check, Loader2, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { getAccentClasses } from '@/components/DesignSystem';
-import { useCreditPackCheckout, CREDIT_CHECKOUT_STATUS_COPY } from '@/components/useCreditPackCheckout';
+import { CREDIT_CHECKOUT_STATUS_COPY, useCreditPackCheckout } from '@/components/useCreditPackCheckout';
 import { useInertPageBeneath } from '@/components/useInertPageBeneath';
 import { useModalQuestion } from '@/components/useModalQuestion';
 import { packCoveringNeed, type CreditTopUpNeed } from '@/lib/credit-top-up';
@@ -17,6 +16,15 @@ import { PRICING_PLANS } from '@/lib/pricing';
 const FOCUSABLE = 'a[href], button:not([disabled])';
 
 const priceWords = (priceInr: number) => `₹${priceInr.toLocaleString('en-IN')}`;
+
+/**
+ * Razorpay's checkout, which checkout.js draws in a container of its own under <body> and keeps
+ * there between opens: made inert with the page beneath the sheet, a second sheet's checkout
+ * would take no press or key.
+ */
+const isRazorpayCheckout = (element: HTMLElement) => (
+  Array.from(element.classList).some((name) => name.startsWith('razorpay'))
+);
 
 /**
  * The packs the pricing page sells (`contracts/credit-packs-v1.json`), sold through the same
@@ -36,13 +44,16 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
   const { buy, loadingPlan, status } = useCreditPackCheckout({
     onSignedOut: () => router.push(`/login?returnUrl=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`),
   });
-  // From the sheet's word that the money is taken, the checkout must be left to finish.
+  // From the sheet's word that the money is taken, the checkout must be left to finish: nothing
+  // closes the sheet or leads away from it until it says how the payment went.
   const confirming = status?.kind === 'confirming';
+  // A payment made: the balance the sheet was opened with is no longer the account's.
+  const paying = status !== null && status.kind !== 'failed';
   const covering = packCoveringNeed(PRICING_PLANS, need);
 
   // First: the focus useModalQuestion gives back as the sheet goes does nothing
   // while the page beneath is still inert, and effects are undone in order.
-  useInertPageBeneath(overlayRef);
+  useInertPageBeneath(overlayRef, { spare: isRazorpayCheckout });
   useModalQuestion({
     questionId: 1,
     dialogRef: panelRef,
@@ -53,7 +64,7 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
     },
   });
 
-  const body = need && need.balance < need.cost
+  const body = need && need.balance < need.cost && !paying
     ? `This run costs ${need.cost.toLocaleString('en-IN')} credits and you have ${need.balance.toLocaleString('en-IN')}. Everything you set up stays on this page.`
     : 'Everything you set up stays on this page.';
 
@@ -62,10 +73,10 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
       ref={overlayRef}
       className="ui-confirm-backdrop"
       onClick={(event) => {
-        if (event.target === event.currentTarget && !confirming) onClose();
+        // Not the second click of a double-click on Top Up: its first brought the sheet up under the pointer.
+        if (event.target === event.currentTarget && event.detail < 2 && !confirming) onClose();
       }}
     >
-      <Script id="razorpay-checkout-js" src="https://checkout.razorpay.com/v1/checkout.js" />
       <div
         ref={panelRef}
         role="dialog"
@@ -97,7 +108,9 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
                 <button
                   ref={index === 0 ? firstPackRef : undefined}
                   type="button"
-                  onClick={() => void buy(plan.id)}
+                  onClick={(event) => {
+                    if (event.detail < 2) void buy(plan.id);
+                  }}
                   disabled={loadingPlan !== null || confirming}
                   aria-label={`Buy ${plan.credits.toLocaleString('en-IN')} credits for ${priceWords(plan.priceInr)}${covers ? ', covers this run' : ''}`}
                   className={clsx(
@@ -111,9 +124,9 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
                       <span className="text-sm font-bold text-[var(--ui-text-primary)]">{plan.credits.toLocaleString('en-IN')} credits</span>
                       {covers ? (
-                        <span className="rounded-full bg-[var(--ui-primary)] px-2 py-0.5 text-[11px] font-bold text-[var(--ui-primary-on)]">Covers this run</span>
+                        <span className="rounded-full bg-[var(--ui-primary)] px-2 py-0.5 text-xs font-bold text-[var(--ui-primary-on)]">Covers this run</span>
                       ) : plan.badge ? (
-                        <span className="rounded-full border border-[var(--ui-border-default)] px-2 py-0.5 text-[11px] font-bold text-[var(--ui-text-secondary)]">{plan.badge}</span>
+                        <span className="rounded-full border border-[var(--ui-border-default)] px-2 py-0.5 text-xs font-bold text-[var(--ui-text-secondary)]">{plan.badge}</span>
                       ) : null}
                     </span>
                     <span className="mt-0.5 block text-xs text-[var(--ui-text-muted)]">{plan.name}</span>
@@ -148,10 +161,15 @@ export function CreditTopUpPanel({ need, pricingHref, onClose }: { need: CreditT
           </button>
         ) : (
           <p className="mt-5 text-xs leading-5 text-[var(--ui-text-muted)]">
-            Paid in INR through Razorpay: cards, UPI, net banking and wallets.{' '}
-            <Link href={pricingHref} className="font-semibold text-[var(--ui-text-secondary)] underline-offset-2 hover:underline">
-              See every pack
-            </Link>
+            Paid in INR through Razorpay: cards, UPI, net banking and wallets.
+            {confirming ? null : (
+              <>
+                {' '}
+                <Link href={pricingHref} className="font-semibold text-[var(--ui-text-secondary)] underline-offset-2 hover:underline">
+                  See every pack
+                </Link>
+              </>
+            )}
           </p>
         )}
       </div>

@@ -7917,6 +7917,24 @@ describe('CreateVideoClient Kling video elements', () => {
         await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.2] }));
       });
 
+      // The clip's length is read before it is added: a second press made meanwhile adds nothing more.
+      it('adds the original clip once when its button is pressed twice while the clip is read', async () => {
+        authState.credits = 500;
+        const pendingLengths: Array<(seconds: number) => void> = [];
+        readDurationMock.mockImplementation(() => new Promise<number>((resolve) => { pendingLengths.push(resolve); }));
+        stubRemix(remixOf({ duration: 5 }));
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+        const use = await screen.findByRole('button', { name: 'Use as reference' });
+        fireEvent.click(use);
+        fireEvent.click(use);
+        await waitFor(() => expect(pendingLengths).toHaveLength(2));
+        await act(async () => { pendingLengths.forEach((release) => release(4.2)); });
+
+        const clips = await screen.findByRole('list', { name: 'Reference videos' });
+        expect(within(clips).getAllByText('Original result · intense')).toHaveLength(1);
+      });
+
       it('offers no original clip on a model that takes no clips', async () => {
         authState.credits = 500;
         stubRemix({ ...remixOf({ duration: 5 }), workflowSettings: { model: 'kling-3.0-video', aspectRatio: '9:16', duration: 5 } } as RemixSourceBundle);

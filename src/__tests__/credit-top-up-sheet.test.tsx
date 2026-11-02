@@ -117,6 +117,8 @@ describe('the top-up sheet', () => {
       });
 
       expect(within(dialog).getByRole('status')).toHaveTextContent('Payment successful! Credits added to your account.');
+      // The balance the sheet opened with is the account's no longer.
+      expect(dialog).not.toHaveTextContent('you have 3');
       expect(balanceEvents).toHaveLength(1);
       fireEvent.click(within(dialog).getByRole('button', { name: 'Back to your run' }));
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -153,6 +155,8 @@ describe('the top-up sheet', () => {
     });
     expect(await within(dialog).findByText('Confirming your payment…')).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    // Nor led away to Pricing, which would offer the packs again with no word of this payment.
+    expect(within(dialog).queryByRole('link', { name: 'See every pack' })).toBeNull();
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.getByRole('dialog', { name: 'Top up credits' })).toBeInTheDocument();
 
@@ -161,6 +165,123 @@ describe('the top-up sheet', () => {
       await settled;
     });
     expect(within(dialog).getByRole('button', { name: 'Close' })).toBeEnabled();
+  });
+
+  // The webhook settles a payment the page could not see settle, and the balance is read again
+  // for a minute: the sheet is put away long before that minute is out.
+  it('keeps reading the balance after the sheet is put away on a payment that went through', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/razorpay/order') return json({ orderId: 'order_123', amount: 41500, currency: 'INR' });
+      if (url === '/api/razorpay/verify') return json({ error: 'Unauthorized' }, 401);
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const dialog = await openSheet();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Buy 500 credits/ }));
+    await waitFor(() => expect(sheet.opened).toBe(1));
+    const balanceEvents: Event[] = [];
+    const onCreditsUpdated = (event: Event) => balanceEvents.push(event);
+    window.addEventListener('credits_updated', onCreditsUpdated);
+    vi.useFakeTimers();
+
+    try {
+      await act(async () => {
+        await (sheet.options?.handler as RazorpayHandler)({ razorpay_payment_id: 'pay_1', razorpay_order_id: 'order_123', razorpay_signature: 'sig' });
+      });
+      expect(within(dialog).getByRole('status')).toHaveTextContent('You do not need to pay again.');
+      expect(balanceEvents).toHaveLength(1);
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Back to your run' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      act(() => { vi.advanceTimersByTime(5_000); });
+      expect(balanceEvents).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+      window.removeEventListener('credits_updated', onCreditsUpdated);
+    }
+  });
+
+  // checkout.js draws its sheet in a container of its own, kept in <body> between opens.
+  it("leaves Razorpay's checkout live while the page beneath it is put out of reach", async () => {
+    const page = document.body.appendChild(document.createElement('div'));
+    const checkout = document.body.appendChild(document.createElement('div'));
+    checkout.className = 'razorpay-container';
+    try {
+      await openSheet();
+      expect(page.getAttribute('aria-hidden')).toBe('true');
+      expect(checkout.getAttribute('aria-hidden')).toBeNull();
+      expect(checkout.inert).toBeFalsy();
+    } finally {
+      page.remove();
+      checkout.remove();
+    }
+  });
+
+  // A pack pressed before checkout.js has arrived (it loads as the sheet opens) waits for it.
+  it('waits for the checkout script a pack is pressed before, instead of failing', async () => {
+    vi.stubGlobal('Razorpay', undefined);
+    const dialog = await openSheet();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Buy 500 credits/ }));
+    const script = await waitFor(() => {
+      const element = document.getElementById('razorpay-checkout-js');
+      expect(element).not.toBeNull();
+      return element!;
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.stubGlobal('Razorpay', RazorpayStub);
+    act(() => { script.dispatchEvent(new Event('load')); });
+    await waitFor(() => expect(sheet.opened).toBe(1));
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    script.remove();
+  });
+
+  // next/script keeps a tag whose load failed and never asks again: waited on, it fired nothing more
+  // and the press spun for good. The loader replaces any tag of that id it is not itself waiting on.
+  it('fetches checkout.js afresh over a tag of the same id that has already finished', async () => {
+    vi.stubGlobal('Razorpay', undefined);
+    const stale = document.head.appendChild(document.createElement('script'));
+    stale.id = 'razorpay-checkout-js';
+    const dialog = await openSheet();
+    const fresh = document.getElementById('razorpay-checkout-js');
+    expect(fresh).not.toBeNull();
+    expect(fresh).not.toBe(stale);
+    expect(stale.isConnected).toBe(false);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Buy 500 credits/ }));
+    vi.stubGlobal('Razorpay', RazorpayStub);
+    act(() => { fresh!.dispatchEvent(new Event('load')); });
+    await waitFor(() => expect(sheet.opened).toBe(1));
+    fresh!.remove();
+  });
+
+  // A network that sends nothing: the press says so and gives the packs back, rather than spinning.
+  it('gives the packs back when checkout.js sends nothing for 20 seconds', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.stubGlobal('Razorpay', undefined);
+      const dialog = await openSheet();
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Buy 500 credits/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('Razorpay checkout could not load. Check your connection and try again.');
+      expect(within(dialog).getByRole('button', { name: /^Buy 500 credits/ })).toBeEnabled();
+      expect(document.getElementById('razorpay-checkout-js')).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The second click of a double-click on Top Up lands on what its first brought up.
+  it('takes no second click of a double-click as a press on the backdrop or a pack', async () => {
+    const dialog = await openSheet();
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Buy 500 credits/ }), { detail: 2 });
+    fireEvent.click(dialog.parentElement!, { detail: 2 });
+    expect(screen.getByRole('dialog', { name: 'Top up credits' })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.click(dialog.parentElement!, { detail: 1 });
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('closes on Escape and on Close, leaving the page as it was', async () => {

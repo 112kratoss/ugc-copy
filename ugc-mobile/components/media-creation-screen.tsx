@@ -1101,6 +1101,9 @@ function IdentityCreationScreen({
   // it was read for. None read for this source is not "none offered", so a session never saves it so.
   const [remixOriginalRead, setRemixOriginalRead] = useState<{ sourceId: string; original: RemixOriginal | null } | null>(null);
   const remixOriginalAskedRef = useRef<string | null>(null);
+  // The source whose original the saved session holds, so a session saved before sessions kept it
+  // is saved again once its original is read, and its next resume reads nothing.
+  const remixOriginalSavedFor = useRef<string | null>(null);
   const remixSourceId = remixSource?.generationId?.trim() || null;
   const remixOriginalKnown = Boolean(remixSourceId && remixOriginalRead?.sourceId === remixSourceId);
   const remixOriginal = remixOriginalKnown ? remixOriginalRead!.original : null;
@@ -1254,6 +1257,7 @@ function IdentityCreationScreen({
         remixResolvedRef.current = resumedRemixRef.current;
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
         const storedOriginal = remixScope && remixSourceId ? storedRemixOriginal(persisted.remixOriginal) : undefined;
+        remixOriginalSavedFor.current = storedOriginal !== undefined ? remixSourceId : null;
         if (storedOriginal !== undefined) setRemixOriginalRead({ sourceId: remixSourceId!, original: storedOriginal });
       }
       // Typed while there was no identity, by the person this one belongs to
@@ -1288,7 +1292,10 @@ function IdentityCreationScreen({
     do {
       saved = latestDrafts.current;
       const fingerprint = JSON.stringify(saved);
-      if (fingerprint === lastSavedFingerprint.current) return;
+      // A resumed session whose original was only now read is saved for it, edits or none.
+      const keepsOriginal = Boolean(remixScope && remixOriginalKnown && resumedRemixRef.current
+        && remixOriginalSavedFor.current !== remixSourceId);
+      if (fingerprint === lastSavedFingerprint.current && !keepsOriginal) return;
       const remixEditedKeys = Object.fromEntries((['image', 'video', 'motion'] as const).map((tool) => {
         // Compare with the baseline as the catalog leaves it, so the screen's own
         // normalization is never saved as something the creator changed.
@@ -1308,6 +1315,7 @@ function IdentityCreationScreen({
         ...(remixScope && remixOriginalKnown ? { remixOriginal } : {}),
       });
       lastSavedFingerprint.current = fingerprint;
+      if (remixScope && remixOriginalKnown) remixOriginalSavedFor.current = remixSourceId;
     } while (saved.image !== latestDrafts.current.image || saved.video !== latestDrafts.current.video || saved.motion !== latestDrafts.current.motion);
   };
   const saveLatestDraftRef = useRef(saveLatestDraft);
@@ -1853,6 +1861,13 @@ function IdentityCreationScreen({
     );
     return () => { active = false; };
   }, [api, draftsHydrated, identityUserId, remixOriginalKnown, remixSource?.generationId, remixSource?.postId]);
+
+  // That read kept with the session, once: its next resume asks the source nothing.
+  useEffect(() => {
+    if (!draftsHydrated || !remixScope || !remixOriginalKnown || !resumedRemixRef.current) return;
+    if (remixOriginalSavedFor.current === remixSourceId) return;
+    void saveLatestDraftRef.current();
+  }, [draftsHydrated, remixScope, remixOriginalKnown, remixSourceId]);
 
   const updatePrompt = (prompt: string) => {
     if (activeTool === 'image') setImageDraft((draft) => ({ ...draft, prompt }));
@@ -2889,8 +2904,6 @@ function IdentityCreationScreen({
     };
   }, [draftsHydrated, identityUserId]);
 
-  // New models in the Create tab only (D9), from the catalog pages this screen has read. A first
-  // creation, opened from onboarding, keeps to its starters: every model is new to its creator.
   // Offered where the model takes the original's kind there, or while the draft holds it; not while a
   // tile under its id holds a file the creator put in its place.
   const originalUsed = Boolean(remixOriginal && holdsRemixOriginal(currentDraft, remixOriginal));
@@ -2903,6 +2916,8 @@ function IdentityCreationScreen({
       original={offersOriginal ? { using: originalUsed, busy: isUploading, onUse: () => void addRemixOriginalAsReference() } : null}
     />
   ) : null;
+  // New models in the Create tab only (D9), from the catalog pages this screen has read. A first
+  // creation, opened from onboarding, keeps to its starters: every model is new to its creator.
   const whatsNewStrip = insideTab && !guided ? (
     <WhatsNewModelsStrip models={catalogQuery.summaries} selectedModelId={rawDraft.model} pick={modelPick} onSelect={pickWhatsNewModel} />
   ) : null;

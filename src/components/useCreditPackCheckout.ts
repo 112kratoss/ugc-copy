@@ -4,11 +4,16 @@ import type { PricingPlanId } from '@/lib/pricing';
 import {
   clearRazorpayCheckoutIntentKey,
   getOrCreateRazorpayCheckoutIntentKey,
+  loadRazorpayCheckout,
   pollCreditBalanceAfterPayment,
+  readCheckoutAccessToken,
   verifyRazorpayCheckoutUntilSettled,
   type RazorpayCheckoutVerificationResult,
 } from '@/lib/razorpay-checkout-client';
 import { supabase } from '@/lib/supabase';
+
+/** The id checkout.js is loaded under where packs are sold (`loadRazorpayCheckout` owns the tag). */
+const CREDIT_CHECKOUT_SCRIPT_ID = 'razorpay-checkout-js';
 
 /**
  * What a checkout says, under the pack that started it. After the sheet reports a payment the
@@ -41,7 +46,7 @@ function paymentFailureDescription(payload: unknown) {
  * the creators came to sell packs in place. The server prices the order from the pack's id and
  * settles it on verify, or by its webhook when this page cannot; the page only asks.
  *
- * The checkout script (`https://checkout.razorpay.com/v1/checkout.js`) is the caller's to load.
+ * checkout.js is fetched as the checkout mounts, and a press made before it has arrived waits for it.
  */
 export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
   /** No session at the press: the caller sends the visitor to sign in. */
@@ -53,24 +58,18 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
   const [status, setStatus] = useState<CreditCheckoutStatus | null>(null);
   const stopBalanceRefreshRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => () => {
-    stopBalanceRefreshRef.current?.();
-    stopBalanceRefreshRef.current = null;
+  // Fetched as the packs show, so a press seldom waits; one that fails is fetched again by the press.
+  useEffect(() => {
+    void loadRazorpayCheckout(CREDIT_CHECKOUT_SCRIPT_ID).catch(() => undefined);
   }, []);
 
+  // The poll outlives whatever drew the checkout, and stops itself after its minute: it only
+  // asks the page to read the balance again. The creators' sheet goes as soon as the buyer is
+  // done with it ("Back to your run"), which is when a payment still capturing settles; stopped
+  // with the sheet, the bar kept "Not enough credits" over a balance the webhook had raised.
   const refreshBalanceForAMinute = () => {
     stopBalanceRefreshRef.current?.();
     stopBalanceRefreshRef.current = pollCreditBalanceAfterPayment();
-  };
-
-  // Read right before each verify attempt, not at the click: the buyer can
-  // spend minutes in the sheet, long enough for that token to expire.
-  const readAccessToken = async () => {
-    const { data: { session: current } } = await supabase.auth.getSession();
-    if (!current?.access_token) {
-      throw new Error('The session ended while the payment was being made.');
-    }
-    return current.access_token;
   };
 
   const buy = async (planId: PricingPlanId) => {
@@ -86,6 +85,8 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
 
     try {
       setLoadingPlan(planId);
+      // Before the order, so a script that cannot load leaves no order behind.
+      await loadRazorpayCheckout(CREDIT_CHECKOUT_SCRIPT_ID);
 
       const token = session.access_token;
 
@@ -126,7 +127,9 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
           try {
             verification = await verifyRazorpayCheckoutUntilSettled({
               url: '/api/razorpay/verify',
-              token: readAccessToken,
+              // Read right before each verify attempt, not at the click: the buyer can
+              // spend minutes in the sheet, long enough for that token to expire.
+              token: readCheckoutAccessToken,
               body: {
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_order_id: response.razorpay_order_id,
@@ -167,7 +170,7 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
 
       const Razorpay = window.Razorpay;
       if (typeof Razorpay !== 'function') {
-        throw new Error('Checkout is still loading. Try again in a moment.');
+        throw new Error('Razorpay checkout could not load. Check your connection and try again.');
       }
       const rzp = new Razorpay(options);
 

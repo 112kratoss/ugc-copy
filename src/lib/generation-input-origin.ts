@@ -14,12 +14,6 @@ import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
  */
 export type GenerationInputOrigin = 'own' | 'others';
 
-/**
- * The folder of `generation_inputs/<remixer>/` a generation start copies a remix's references
- * into, when they are its original's (`generation-input-media-import.ts`).
- */
-export const REMIX_IMPORT_FOLDER = 'remix-imports';
-
 /** What an input says of its source: a stored row of `generation_input_media`, or a legacy reading of one. */
 export type GenerationInputOriginSource = {
   /** `sourceStoragePath` and `sourceUrl`, which `persistGenerationInputMedia` keeps; `legacy` on a legacy reading. */
@@ -48,16 +42,6 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-/**
- * The account a source path names: none for a remix's imported copy, whose folder is the
- * remixer's and whose media is its original's, so only the source generation says whose it is.
- */
-function sourcePathOwnerId(path: string | null): string | null {
-  const location = path ? getCanonicalStoredMediaLocation(path, { allowedBuckets: ['generation_inputs'] }) : null;
-  if (location?.filePath.split('/')[1] === REMIX_IMPORT_FOLDER) return null;
-  return storedMediaOwnerId(path);
-}
-
 /** Where an input says it came from: a stored row's own path is always the creator's copy, so its source; a legacy reading's path. */
 function sourcePaths(input: GenerationInputOriginSource): Array<string | null> {
   const metadata = input.metadata ?? {};
@@ -68,7 +52,7 @@ function sourcePaths(input: GenerationInputOriginSource): Array<string | null> {
 
 /** Whose an input is rests on its source generation's owner: it names one, and no source path names an owner. */
 export function needsSourceGenerationOwner(input: GenerationInputOriginSource): boolean {
-  return Boolean(input.sourceGenerationId) && sourcePaths(input).every((path) => !sourcePathOwnerId(path));
+  return Boolean(input.sourceGenerationId) && sourcePaths(input).every((path) => !storedMediaOwnerId(path));
 }
 
 export function generationInputOrigin(
@@ -76,7 +60,7 @@ export function generationInputOrigin(
   context: GenerationInputOriginContext,
 ): GenerationInputOrigin {
   for (const path of sourcePaths(input)) {
-    const owner = sourcePathOwnerId(path);
+    const owner = storedMediaOwnerId(path);
     if (owner) return context.ownerIds.has(owner) ? 'own' : 'others';
   }
   if (input.sourceGenerationId) {

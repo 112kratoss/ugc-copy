@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isGuestUser, isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
-import { REMIX_IMPORT_FOLDER } from '@/lib/generation-input-origin';
+import { SHOWCASE_MEDIA_BUCKET } from '@/lib/generation-post-media';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
 import { resolveRemixAccess, type RemixAccessGeneration } from '@/lib/remix-access';
@@ -10,13 +10,12 @@ import { createServiceClient } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation, parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 
 const GENERATION_INPUTS_BUCKET = 'generation_inputs';
+const REMIX_IMPORT_FOLDER = 'remix-imports';
 const SIGNED_URL_TTL_SECONDS = 3600;
 const MAX_POSTS_PER_GENERATION = 5;
 
-const SHOWCASE_BUCKET = 'showcase_media';
 /** Where a creation's result can live: its post's public copy, or the creator's private output. */
-const REMIX_RESULT_BUCKETS = [SHOWCASE_BUCKET, 'generated_images', 'generated_videos'];
-const REMIX_RESULT_FOLDER = 'result';
+const REMIX_RESULT_BUCKETS = [SHOWCASE_MEDIA_BUCKET, 'generated_images', 'generated_videos'];
 const REMIX_RESULT_GENERATION_SELECT =
   'id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id, showcase_asset_path, output_url';
 
@@ -241,19 +240,36 @@ export async function importSharedGenerationInputMedia(params: {
   };
 }
 
+export type RemixResultMediaResult =
+  /** Not the result of a creation the viewer may remix: the caller's ownership error stands. */
+  | { outcome: 'not-eligible' }
+  /** Retryable: a read or the signing failed. A check that fails closed answers `not-eligible`. */
+  | { outcome: 'failed' }
+  /** A link the start can read, built from the checked location: never the client's link. */
+  | { outcome: 'resolved'; url: string };
+
+/** Postgres's answer to a uuid column compared with text that is no uuid (`invalid_text_representation`). */
+const INVALID_UUID_CODE = '22P02';
+
 /**
  * The creation whose result `location` is, as the remix source hands a result
  * out (`resolveGenerationResultUrl` in `remix-source-server.ts`): the post's
  * showcase copy where the creation has one, otherwise the creator's private
  * output. Any other file names none: another file of the showcase folder, or
- * the private output of a creation whose post shows a copy. Throws when the
+ * the private output of a creation whose post shows a copy. A path segment that
+ * is no uuid names none either, rather than failing the read. Throws when the
  * read fails.
  */
 async function loadRemixResultGeneration(
   adminSupabase: SupabaseClient,
   location: { bucket: string; filePath: string },
 ): Promise<RemixResultGeneration | null> {
-  if (location.bucket === SHOWCASE_BUCKET) {
+  // A path segment that is no uuid names no creation; any other failed read throws.
+  const namesNoCreation = (error: { code?: string }) => {
+    if (error.code === INVALID_UUID_CODE) return true;
+    throw error;
+  };
+  if (location.bucket === SHOWCASE_MEDIA_BUCKET) {
     const [namespace, generationId] = location.filePath.split('/');
     if (namespace !== 'showcase' || !generationId) return null;
     const { data, error } = await adminSupabase
@@ -261,7 +277,7 @@ async function loadRemixResultGeneration(
       .select(REMIX_RESULT_GENERATION_SELECT)
       .eq('id', generationId)
       .maybeSingle();
-    if (error) throw error;
+    if (error && namesNoCreation(error)) return null;
     const generation = data as RemixResultGeneration | null;
     const showcaseAsset = generation?.showcase_asset_path
       ? parseCanonicalStorageObjectPath(generation.showcase_asset_path, { minimumSegments: 3 })
@@ -277,15 +293,15 @@ async function loadRemixResultGeneration(
     .eq('user_id', location.filePath.split('/')[0])
     .eq('output_url', `${location.bucket}/${location.filePath}`)
     .limit(1);
-  if (error) throw error;
+  if (error && namesNoCreation(error)) return null;
   const generation = ((data ?? []) as RemixResultGeneration[])[0] ?? null;
   return generation && !generation.showcase_asset_path ? generation : null;
 }
 
 /**
- * Copies a remix's original result into the caller's own storage, so the remix
- * can hand it to the model as a reference ("Use as reference" in the image,
- * video and motion creators, on the web and in the app).
+ * A remix's original result, handed to a generation start as a reference ("Use
+ * as reference" in the image, video and motion creators, on the web and in the
+ * app).
  *
  * The remix source gives a remixer the original's result to show and to offer
  * as a reference, and neither form of it is under the caller's `<userId>/…`
@@ -294,24 +310,26 @@ async function loadRemixResultGeneration(
  * viewer may remix the creation right now (`resolveRemixAccess`, the gate the
  * remix source applies: an account for anyone else's creation, the post
  * showing it, no block, no recipe locked to them, not a template's result),
- * copy it into `generation_inputs/<viewer>/remix-imports/<generationId>/result/<file>`.
- * A result needs no sharing switch, unlike an input: its post shows it to
- * everyone who may remix it. As with inputs, the deterministic destination
- * makes retries and repeated remixes reuse one copy, decided from the storage
- * path, never from the client's link.
+ * answer a link to it built here from the checked location: the showcase
+ * copy's public link, or a signed link to the private output, which the remix
+ * source hands this viewer too. Nothing is copied: the run keeps its own copy
+ * of what it reads (`persistGenerationInputMedia`, which reads the project's
+ * storage host as an allowlisted one), so a copy here would only leave a
+ * second file per remixer that nothing reclaims. A result needs no sharing
+ * switch, unlike an input: its post shows it to everyone who may remix it.
  */
-export async function importRemixResultMedia(params: {
+export async function resolveRemixResultMedia(params: {
   /** The reference exactly as submitted — a storage path or storage-object URL. */
   source: string;
   viewerUserId: string;
   dependencies?: SharedInputMediaImportDependencies;
-}): Promise<SharedInputMediaImportResult> {
+}): Promise<RemixResultMediaResult> {
   const location = getCanonicalStoredMediaLocation(params.source, {
     allowedBuckets: REMIX_RESULT_BUCKETS,
   });
   if (!location) return { outcome: 'not-eligible' };
-  // The caller's own output resolved before any import was asked.
-  if (location.bucket !== SHOWCASE_BUCKET && location.filePath.split('/')[0] === params.viewerUserId) {
+  // The caller's own output resolved before this was asked.
+  if (location.bucket !== SHOWCASE_MEDIA_BUCKET && location.filePath.split('/')[0] === params.viewerUserId) {
     return { outcome: 'not-eligible' };
   }
 
@@ -321,7 +339,7 @@ export async function importRemixResultMedia(params: {
   try {
     generation = await loadRemixResultGeneration(adminSupabase, location);
   } catch (error) {
-    logBackendError('failed_to_load_generation_for_remix_result_import', { error });
+    logBackendError('failed_to_load_generation_for_remix_result', { error });
     return { outcome: 'failed' };
   }
   if (!generation?.user_id) return { outcome: 'not-eligible' };
@@ -345,33 +363,20 @@ export async function importRemixResultMedia(params: {
     });
     if (!access.allowed) return { outcome: 'not-eligible' };
   } catch (error) {
-    logBackendError('failed_to_resolve_remix_access_for_remix_result_import', { error });
+    logBackendError('failed_to_resolve_remix_access_for_remix_result', { error });
     return { outcome: 'failed' };
   }
 
-  const fileName = location.filePath.split('/').pop() ?? REMIX_RESULT_FOLDER;
-  const destinationFilePath =
-    `${params.viewerUserId}/${REMIX_IMPORT_FOLDER}/${generation.id}/${REMIX_RESULT_FOLDER}/${fileName}`;
-
-  const copyResult = await adminSupabase.storage
+  if (location.bucket === SHOWCASE_MEDIA_BUCKET) {
+    const { data } = adminSupabase.storage.from(SHOWCASE_MEDIA_BUCKET).getPublicUrl(location.filePath);
+    return data?.publicUrl ? { outcome: 'resolved', url: data.publicUrl } : { outcome: 'failed' };
+  }
+  const signed = await adminSupabase.storage
     .from(location.bucket)
-    .copy(location.filePath, destinationFilePath, { destinationBucket: GENERATION_INPUTS_BUCKET });
-  if (copyResult.error && !isAlreadyExistsStorageError(copyResult.error)) {
-    logBackendError('failed_to_copy_remix_result_media_for_import', { error: copyResult.error });
+    .createSignedUrl(location.filePath, SIGNED_URL_TTL_SECONDS);
+  if (signed.error || !signed.data?.signedUrl) {
+    logBackendError('failed_to_sign_remix_result_media', { error: signed.error });
     return { outcome: 'failed' };
   }
-
-  const signedResult = await adminSupabase.storage
-    .from(GENERATION_INPUTS_BUCKET)
-    .createSignedUrl(destinationFilePath, SIGNED_URL_TTL_SECONDS);
-  if (signedResult.error || !signedResult.data?.signedUrl) {
-    logBackendError('failed_to_sign_imported_remix_result_media', { error: signedResult.error });
-    return { outcome: 'failed' };
-  }
-
-  return {
-    outcome: 'imported',
-    storagePath: `${GENERATION_INPUTS_BUCKET}/${destinationFilePath}`,
-    signedUrl: signedResult.data.signedUrl,
-  };
+  return { outcome: 'resolved', url: signed.data.signedUrl };
 }
