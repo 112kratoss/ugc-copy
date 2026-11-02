@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
-import { useNavigation, usePreventRemove } from '@react-navigation/native';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useNavigation, usePreventRemove, useRoute } from '@react-navigation/native';
+import { router, Stack } from 'expo-router';
 
 import { AiDataConsentOnOpen } from '@/components/ai-data-consent-on-open';
 import { ContentPolicyGate } from '@/components/content-policy-gate';
@@ -17,7 +17,10 @@ function firstParam(value: string | string[] | undefined) {
 }
 
 export default function CreateToolScreen() {
-  const params = useLocalSearchParams<{
+  // The route's own params: the URL parse has decoded them once, as every link encoded its text
+  // once. expo-router's `useLocalSearchParams` decodes them again, which turned each valid %XX in
+  // a prompt, a source title or a poster URL into another character ("50%50" read "50P").
+  const params = (useRoute().params ?? {}) as {
     tool?: string | string[];
     prompt?: string | string[];
     remix?: string | string[];
@@ -26,7 +29,7 @@ export default function CreateToolScreen() {
     sourceTitle?: string | string[];
     sourceCreator?: string | string[];
     sourceThumbnail?: string | string[];
-  }>();
+  };
   const beforeClose = useRef<(() => Promise<boolean>) | null>(null);
   const navigation = useNavigation();
   const [dirty, setDirty] = useState(false);
