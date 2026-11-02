@@ -28,6 +28,7 @@ describe.skipIf(!connectionString)('interest refresh progress with actual SQL', 
     } finally { await db.query('rollback'); }
     expect((await db.query('select id from auth.users where id=any($1::uuid[])', [ids])).rows).toEqual([]);
   });
+  // "Promptly" is the 5 s bound below: under the 20 s default in vitest.config.ts, a refresh that waited on the lock would pass.
   it('returns promptly without changing progress when another refresh holds the advisory lock', async () => {
     const holder = new Client({ connectionString, statement_timeout: 10000 }); await holder.connect();
     try {
@@ -38,5 +39,5 @@ describe.skipIf(!connectionString)('interest refresh progress with actual SQL', 
       expect(result.rows[0].count).toBe(0);
       expect((await db.query('select count(*)::int n from public.user_interest_refresh_state')).rows).toEqual(before);
     } finally { await holder.query('rollback'); await holder.end(); }
-  });
+  }, 5_000);
 });

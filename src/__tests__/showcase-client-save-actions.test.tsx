@@ -1655,7 +1655,7 @@ describe('ShowcaseClient save actions', () => {
       window.dispatchEvent(new PopStateEvent('popstate'));
     });
     expect(await screen.findByRole('dialog', { name: 'Explore reel viewer' })).toBeInTheDocument();
-    // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+    // The 20 s default in vitest.config.ts gives the room, so a wait that never passes fails on its own assertion.
   });
 
   // A page landing no longer runs the URL effect, but a refreshed token does: in that window it
@@ -1853,7 +1853,7 @@ describe('ShowcaseClient save actions', () => {
 
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       expect(reads.length).toBeGreaterThan(readsBeforeRetry);
-      // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+      // The 20 s default in vitest.config.ts gives the room, so a wait that never passes fails on its own assertion.
     });
 
     // The URL effect follows whether the post the URL names is in the list, not the list: keyed
@@ -1882,7 +1882,7 @@ describe('ShowcaseClient save actions', () => {
       answerRead();
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
       expect(reads).toHaveLength(1);
-      // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+      // The 20 s default in vitest.config.ts gives the room, so a wait that never passes fails on its own assertion.
     });
 
     // A read can be cut short after its answer's headers came, while the body is still on its
@@ -1926,7 +1926,7 @@ describe('ShowcaseClient save actions', () => {
       expect(heldReads[0].signal?.aborted).toBe(true);
       expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
       expect((await screen.findAllByRole('heading', { name: 'Shared Campaign' })).length).toBeGreaterThan(1);
-      // Room as #457 gave, so a wait above that never passes fails on its own assertion.
+      // The 20 s default in vitest.config.ts gives the room, so a wait that never passes fails on its own assertion.
     });
   });
 
@@ -2044,7 +2044,7 @@ describe('ShowcaseClient save actions', () => {
     const reopened = await screen.findByRole('dialog', { name: 'Explore reel viewer' });
     expect(await within(reopened).findByRole('button', { name: 'Show comments on Campaign Frame (3)' })).toBeInTheDocument();
     // Opens the reel twice and a comment thread once: 5,016 ms at the start of a PR run's web
-    // suite on a GitHub runner (#459), about 360 ms here, as on main before it. Room as #457 gave.
+    // suite on a GitHub runner (#459), about 360 ms here, as on main before it. The 20 s default in vitest.config.ts gives it room.
   });
 
   it('closes the reel when Explore is pressed before the render that drew the count has run its effects', async () => {
@@ -2100,7 +2100,7 @@ describe('ShowcaseClient save actions', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: 'Explore reel viewer' })).not.toBeInTheDocument();
     });
-    // The same work as the test above, which needed this room on a GitHub runner (#459).
+    // The same work as the test above, which needed room on a GitHub runner (#459); the 20 s default gives it.
   });
 
   it('automatically loads the next showcase page when the feed sentinel enters view', async () => {
@@ -2400,8 +2400,8 @@ describe('ShowcaseClient save actions', () => {
     expect(await screen.findByText('More for you')).toBeInTheDocument();
     expect(feedFetch).toHaveBeenCalledWith(expect.stringContaining('cursor=cursor-1'));
     // About 200 ms here, as long as the comment-count test that took 5,016 ms on a GitHub
-    // runner (#459). Room as #457 gave, so a wait above that never passes fails on its own
-    // assertion, not on the test's timeout.
+    // runner (#459). The 20 s default in vitest.config.ts gives the room, so a wait that never
+    // passes fails on its own assertion, not on the test's timeout.
   });
 
   it('keeps the anonymous fallback idle until interaction establishes a feed session', async () => {
