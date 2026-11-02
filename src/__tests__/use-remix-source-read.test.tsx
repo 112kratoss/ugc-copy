@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { REMIX_RESTORE_WARNING } from '@/lib/remix-source-client';
-import { useRemixSourceRead } from '@/lib/use-remix-source-read';
+import { readRemixSource, useRemixSourceRead } from '@/lib/use-remix-source-read';
 
 type BrowserSession = { access_token: string; user: { id: string } } | null;
 
@@ -351,5 +351,66 @@ describe('useRemixSourceRead', () => {
       await waitFor(() => expect(taken).toHaveLength(1));
       expect(taken[0]).toMatchObject({ model: false, aspectRatio: true });
     });
+  });
+});
+
+// The session rule and the fetch both of a remix page's readers go through: the form's one read and
+// the renewal of its links (`useRemixLinkRenewal`).
+describe('readRemixSource', () => {
+  beforeEach(() => {
+    browser.session = { access_token: 'browser-token', user: { id: 'user-1' } };
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const read = (pageToken: string | null, formAccount: string | null = 'user-1') => (
+    readRemixSource({ id: 'gen-1', postId: 'post-1' }, { formAccount, pageToken })
+  );
+
+  it('reads with the browser’s own session where it is the form’s account', async () => {
+    const fetchMock = stubSource();
+    await expect(read('page-token')).resolves.toEqual(BUNDLE);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual(['/api/remix-source?id=gen-1&postId=post-1']);
+    expect(tokensOf(fetchMock)).toEqual(['Bearer browser-token']);
+  });
+
+  it.each([
+    ['another account', { access_token: 'token-user-2', user: { id: 'user-2' } }],
+    ['no one', null],
+  ])('reads with the page’s session where the browser’s belongs to %s', async (_case, session) => {
+    browser.session = session;
+    const fetchMock = stubSource();
+    await read('page-token');
+    expect(tokensOf(fetchMock)).toEqual(['Bearer page-token']);
+  });
+
+  it('reads nothing where there is no session of the form’s account to read with', async () => {
+    browser.session = { access_token: 'token-user-2', user: { id: 'user-2' } };
+    const fetchMock = stubSource();
+    await expect(read(null)).rejects.toThrow();
+    // A page with no account of its own is no reader either.
+    await expect(read(null, null)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('throws on a refusal', async () => {
+    stubSource({ failures: [{ status: 401, body: { error: 'Unauthorized' } }] });
+    await expect(read('page-token')).rejects.toThrow('Unauthorized');
+  });
+
+  // The renewal gives a read up after its timeout; one given up while the session was read asks nothing.
+  it('asks nothing once its signal has given the read up, and hands the signal to the request', async () => {
+    const fetchMock = stubSource();
+    const givenUp = new AbortController();
+    givenUp.abort();
+    await expect(readRemixSource({ id: 'gen-1', postId: null }, { formAccount: 'user-1', pageToken: 'page-token' }, givenUp.signal))
+      .rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const live = new AbortController();
+    await readRemixSource({ id: 'gen-1', postId: null }, { formAccount: 'user-1', pageToken: 'page-token' }, live.signal);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(live.signal);
   });
 });

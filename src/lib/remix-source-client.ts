@@ -163,17 +163,20 @@ export const REMIX_RESTORE_WARNING =
  * The remix's original as `/api/remix-source` answers its reader, the account `accessToken` is a
  * session of: the run's prompt, settings and media (the owner's own inputs, or the post's shared
  * ones). Throws on a refusal (a revoked session, a 429, a 5xx) and on a failed network. Only
- * `useRemixSourceRead` calls it, which reads a remix once for its form
- * (`remix-source-read-guard.test.ts`).
+ * `readRemixSource` calls it, which picks the session a remix page reads with, for the form's one
+ * read and the renewal of its links (`remix-source-read-guard.test.ts`). `signal`, where given, aborts
+ * the request.
  */
 export async function fetchRemixSource(
   remix: { id: string; postId: string | null },
   accessToken: string,
+  signal?: AbortSignal,
 ): Promise<RemixSourceBundle> {
   const params = new URLSearchParams({ id: remix.id });
   if (remix.postId) params.set('postId', remix.postId);
   const response = await fetch(`/api/remix-source?${params.toString()}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    ...(signal ? { signal } : {}),
   });
   const data = await response.json() as RemixSourceBundle & { error?: string } | null;
   if (!response.ok || !data) {

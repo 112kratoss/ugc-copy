@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import { renewedRemixLink } from '@/lib/remix-link-renewal';
 import type { RemixSourceBundle } from '@/lib/remix-source';
-import { supabase } from '@/lib/supabase';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
+import { readRemixSource, type RemixReader } from '@/lib/use-remix-source-read';
 
 /**
  * A link that opens now to what `link` opened: the same file, or for a link to the original, the
@@ -13,13 +13,9 @@ import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
  */
 export type RenewRemixLink = (link: string) => Promise<string>;
 
-type RemixRead = {
+type RemixRead = RemixReader & {
   remixId: string | null;
   remixPostId: string | null;
-  /** The account whose form this is: the browser's own session is used for it alone. */
-  formAccount: string | null;
-  /** The page's session token, used where the browser's session is another account's or none. */
-  pageToken: string | null;
   /** The form's link to the original's result, by whose file a link to the original is known. */
   originalResult: string | null;
 };
@@ -34,31 +30,26 @@ type ReadOut = { key: string; answer: Promise<RemixSourceBundle | null> };
  */
 export const REMIX_LINK_READ_TIMEOUT_MS = 12_000;
 
+/**
+ * Reads the remix again, as the form's own read reads it (`readRemixSource`: the same session rule and
+ * the same fetch), for the links its answer signs. Null where it cannot be read, or once `signal` gave
+ * the read up.
+ */
 async function fetchRemixAnswer(
   { remixId, remixPostId, formAccount, pageToken }: RemixRead,
   signal: AbortSignal,
 ): Promise<RemixSourceBundle | null> {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const accessToken = session && session.user.id === formAccount ? session.access_token : pageToken;
-    if (!accessToken || signal.aborted) return null;
-    const params = new URLSearchParams({ id: remixId ?? '' });
-    if (remixPostId) params.set('postId', remixPostId);
-    const response = await fetch(`/api/remix-source?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal,
-    });
-    return response.ok ? await response.json() as RemixSourceBundle : null;
+    return await readRemixSource({ id: remixId ?? '', postId: remixPostId }, { formAccount, pageToken }, signal);
   } catch {
     return null;
   }
 }
 
 /**
- * Reads the remix again, as the form's own read reads it (the browser's session where it is the
- * form's account, which auth-js renews as it nears its end, else the page's), for the links its
- * answer signs. Null where it cannot be read, or by the timeout: the request is aborted then, and
- * a session read still waiting (on the auth lock, say) is left to finish unwatched.
+ * `fetchRemixAnswer` given up by the timeout: the request is aborted then, and a session read still
+ * waiting (on the auth lock, say) is left to finish unwatched, then asks nothing. Null where the read
+ * fails or is given up.
  */
 async function readRemixAnswer(read: RemixRead): Promise<RemixSourceBundle | null> {
   const controller = new AbortController();

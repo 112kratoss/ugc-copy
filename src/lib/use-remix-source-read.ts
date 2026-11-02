@@ -39,6 +39,36 @@ export type RemixSourceRead<Field extends string> = {
 
 type ReadState = { attempt: number; status: 'loading' | 'failed' | 'done' };
 
+/** Whom a remix page reads its remix as. */
+export type RemixReader = {
+  /** The account whose form this is: the browser's own session is used for it alone. */
+  formAccount: string | null;
+  /** The page's session token (`useAuth`), used where the browser's session is another account's or none. */
+  pageToken: string | null;
+};
+
+/**
+ * The remix's original as the form's account reads it (`fetchRemixSource`): with the browser client's
+ * own session where it is that account, renewed as it nears its end, else with the page's. Back can draw
+ * the page again from Next's cache with the session it was first drawn with, expired since; and never
+ * another account's session, one signed in from another tab. Throws where neither session is there, and
+ * on any refusal. A remix page's two readers read through it alone: its form's one read
+ * (`useRemixSourceRead`) and the renewal of its links (`useRemixLinkRenewal`), which uses the answer for
+ * its links only (`remix-source-read-guard.test.ts`). `signal` gives the read up: the renewal's after
+ * its timeout. Given up while the session was read (the auth lock can hold that), it asks nothing.
+ */
+export async function readRemixSource(
+  remix: { id: string; postId: string | null },
+  { formAccount, pageToken }: RemixReader,
+  signal?: AbortSignal,
+): Promise<RemixSourceBundle> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const accessToken = session && session.user.id === formAccount ? session.access_token : pageToken;
+  if (!accessToken) throw new Error('No session to read the remix with');
+  if (signal?.aborted) throw new Error('The read was given up');
+  return fetchRemixSource(remix, accessToken, signal);
+}
+
 /**
  * A web creator's read of the remix it opened on (`/api/remix-source`), once for its form.
  *
@@ -47,10 +77,8 @@ type ReadState = { attempt: number; status: 'loading' | 'failed' | 'done' };
  *   reader, and a second read put the original back over the creator's work. Another account's form
  *   is drawn anew (`useCreatorForm`) and so reads for itself; another remix is a new client (each
  *   page keys it by `remix|remixPost`).
- * - **Its token.** The browser client's own session where it is the form's account (`formAccount`),
- *   renewed as it nears its end, else the page's: Back can draw the page again from Next's cache with
- *   the session it was first drawn with, expired since. Never another account's session, one signed
- *   in from another tab.
+ * - **Its token** is `readRemixSource`'s: the browser client's own session where it is the form's
+ *   account (`formAccount`), else the page's, and never another account's.
  * - **Its answer** is the form's while the form is on the page (`useUnmountSignal`, read when the
  *   answer lands), whichever run of the effect is the latest. An answer gated on an effect cleanup
  *   never fills the form under Strict Mode, which unmounts the first run before the read is back.
@@ -106,9 +134,7 @@ export function useRemixSourceRead<Field extends string>({
     void (async () => {
       let answered = false;
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        const accessToken = session?.user.id === formAccount ? session.access_token : pageToken;
-        const bundle = await fetchRemixSource({ id: remixId, postId: remixPostId }, accessToken);
+        const bundle = await readRemixSource({ id: remixId, postId: remixPostId }, { formAccount, pageToken });
         if (isGone()) return;
         takeSource(bundle, promptAtFirstRead);
         answered = true;
