@@ -3,6 +3,13 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { buildAppleWebAuthorizationUrl, getAppleWebReturnUrl } from '@/lib/apple-web-reauthentication';
+
+import {
+  buildAppleDeletionAuthorizeUrl,
+  SITE_APPLE_DELETION_RETURN_URL,
+} from '../../scripts/ops/production-external-gates.mjs';
+
 const scriptPath = path.join(process.cwd(), 'scripts', 'ops', 'production-external-gates.mjs');
 
 describe('production external gates helper', () => {
@@ -13,5 +20,15 @@ describe('production external gates helper', () => {
     });
 
     expect(output).toContain('production-external-gates self-test passed');
+  });
+
+  // The deletion probe asks Apple about the request the deletion page sends, on production's site.
+  it("probes Apple with the deletion page's own request", () => {
+    expect(SITE_APPLE_DELETION_RETURN_URL).toBe(getAppleWebReturnUrl('https://magicbooklet.com'));
+    expect(buildAppleDeletionAuthorizeUrl('com.example.app.web')).toBe(buildAppleWebAuthorizationUrl({
+      clientId: 'com.example.app.web',
+      returnUrl: SITE_APPLE_DELETION_RETURN_URL,
+      state: 'external-gates-probe',
+    }));
   });
 });

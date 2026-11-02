@@ -7,6 +7,8 @@ import {
   SignJWT,
 } from 'jose';
 
+import { getAppleWebReturnUrl } from '@/lib/apple-web-reauthentication';
+
 const APPLE_AUDIENCE = 'https://appleid.apple.com';
 const APPLE_TOKEN_URL = 'https://appleid.apple.com/auth/token';
 const APPLE_REVOKE_URL = 'https://appleid.apple.com/auth/revoke';
@@ -21,20 +23,35 @@ export type AppleAccountDeletionErrorCode =
   | 'APPLE_REVOCATION_UNAVAILABLE';
 
 export class AppleAccountDeletionError extends Error {
+  /**
+   * `detail`: for the server log only, what failed without anything secret
+   * (`token endpoint 400 invalid_client`, `missing NEXT_PUBLIC_APPLE_SERVICES_ID`).
+   * The answer carries `message` and `code`.
+   */
   constructor(
     message: string,
     public readonly code: AppleAccountDeletionErrorCode,
     public readonly status: 403 | 503,
     public readonly reauthenticate: boolean,
+    public readonly detail?: string,
   ) {
     super(message);
     this.name = 'AppleAccountDeletionError';
   }
 }
 
+/**
+ * Which Apple client the one-time code was issued to: the iPhone app's native
+ * sheet (the bundle id) or the website's Continue with Apple (the Services ID,
+ * `apple-web-reauthentication.ts`). Apple redeems and revokes a code only as
+ * the client that asked for it, and a website code only with its return URL.
+ */
+export type AppleAuthorizationClient = 'native' | 'web';
+
 type AppleAccountDeletionEnvironmentKey =
   | 'APPLE_TEAM_ID'
   | 'IOS_BUNDLE_ID'
+  | 'NEXT_PUBLIC_APPLE_SERVICES_ID'
   | 'APPLE_SIGN_IN_KEY_ID'
   | 'APPLE_SIGN_IN_PRIVATE_KEY';
 type AppleAccountDeletionEnvironment = Partial<
@@ -66,6 +83,7 @@ function requiredEnvironmentValue(
       'APPLE_REVOCATION_UNAVAILABLE',
       503,
       false,
+      `missing ${key}`,
     );
   }
   return value;
@@ -117,6 +135,7 @@ export async function createAppleClientSecret({
       'APPLE_REVOCATION_UNAVAILABLE',
       503,
       false,
+      'unreadable APPLE_SIGN_IN_PRIVATE_KEY',
     );
   }
 
@@ -149,20 +168,23 @@ function reauthenticationFailure() {
   );
 }
 
-function upstreamFailure() {
+function upstreamFailure(detail: string) {
   return new AppleAccountDeletionError(
     'Apple account verification is temporarily unavailable. Your account is still active; please try again later.',
     'APPLE_REVOCATION_UNAVAILABLE',
     503,
     false,
+    detail,
   );
 }
 
 export async function authorizeAppleAccountDeletion({
   authorizationCode,
+  client = 'native',
   expectedAppleSubject,
 }: {
   authorizationCode: string;
+  client?: AppleAuthorizationClient;
   expectedAppleSubject: string;
 }, dependencies: AppleAccountDeletionDependencies = {}) {
   const trimmedCode = authorizationCode.trim();
@@ -183,8 +205,12 @@ export async function authorizeAppleAccountDeletion({
     APPLE_SIGN_IN_PRIVATE_KEY: process.env.APPLE_SIGN_IN_PRIVATE_KEY,
     APPLE_TEAM_ID: process.env.APPLE_TEAM_ID,
     IOS_BUNDLE_ID: process.env.IOS_BUNDLE_ID,
+    NEXT_PUBLIC_APPLE_SERVICES_ID: process.env.NEXT_PUBLIC_APPLE_SERVICES_ID,
   };
-  const clientId = requiredEnvironmentValue(environment, 'IOS_BUNDLE_ID');
+  const clientId = requiredEnvironmentValue(
+    environment,
+    client === 'web' ? 'NEXT_PUBLIC_APPLE_SERVICES_ID' : 'IOS_BUNDLE_ID',
+  );
   const teamId = requiredEnvironmentValue(environment, 'APPLE_TEAM_ID');
   const keyId = requiredEnvironmentValue(environment, 'APPLE_SIGN_IN_KEY_ID');
   const privateKey = requiredEnvironmentValue(environment, 'APPLE_SIGN_IN_PRIVATE_KEY');
@@ -201,9 +227,10 @@ export async function authorizeAppleAccountDeletion({
       client_secret: clientSecret,
       code: trimmedCode,
       grant_type: 'authorization_code',
+      ...(client === 'web' ? { redirect_uri: getAppleWebReturnUrl() } : {}),
     }));
   } catch {
-    throw upstreamFailure();
+    throw upstreamFailure('token request failed');
   }
 
   if (!tokenResponse.ok) {
@@ -211,27 +238,28 @@ export async function authorizeAppleAccountDeletion({
     // expired, consumed, malformed, or belongs to another client. Other Apple
     // errors (especially `invalid_client`) indicate server configuration or an
     // upstream failure and must not send the user through a reauth loop.
-    if (tokenResponse.status === 400) {
-      try {
-        const errorPayload = await tokenResponse.json() as { error?: unknown };
-        if (errorPayload.error === 'invalid_grant') throw reauthenticationFailure();
-      } catch (error) {
-        if (error instanceof AppleAccountDeletionError) throw error;
-      }
+    let appleError: unknown;
+    try {
+      appleError = (await tokenResponse.json() as { error?: unknown }).error;
+    } catch {
+      // No JSON body: an upstream failure all the same.
     }
-    throw upstreamFailure();
+    if (tokenResponse.status === 400 && appleError === 'invalid_grant') throw reauthenticationFailure();
+    throw upstreamFailure(
+      `token endpoint ${tokenResponse.status}${typeof appleError === 'string' ? ` ${appleError}` : ''}`,
+    );
   }
 
   let tokenPayload: AppleTokenResponse;
   try {
     tokenPayload = await tokenResponse.json() as AppleTokenResponse;
   } catch {
-    throw upstreamFailure();
+    throw upstreamFailure('token response unreadable');
   }
   const idToken = stringField(tokenPayload.id_token);
   const refreshToken = stringField(tokenPayload.refresh_token);
   const accessToken = stringField(tokenPayload.access_token);
-  if (!idToken || (!refreshToken && !accessToken)) throw upstreamFailure();
+  if (!idToken || (!refreshToken && !accessToken)) throw upstreamFailure('token response incomplete');
 
   let appleSubject: string | null;
   try {
@@ -259,9 +287,9 @@ export async function authorizeAppleAccountDeletion({
       token_type_hint: tokenTypeHint,
     }));
   } catch {
-    throw upstreamFailure();
+    throw upstreamFailure('revoke request failed');
   }
-  if (!revokeResponse.ok) throw upstreamFailure();
+  if (!revokeResponse.ok) throw upstreamFailure(`revoke endpoint ${revokeResponse.status}`);
 }
 
 export const APPLE_ACCOUNT_DELETION_ENDPOINTS = {

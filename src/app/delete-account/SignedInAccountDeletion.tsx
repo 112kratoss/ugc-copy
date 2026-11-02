@@ -5,6 +5,19 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 
+import AppleLogo from '@/components/AppleLogo';
+import {
+  buildAppleWebAuthorizationUrl,
+  forgetAppleWebAuthorizationStart,
+  getAppleWebAuthorization,
+  judgeAppleWebAuthorizationAnswer,
+  readAppleWebAuthorizationAnswer,
+  readAppleWebAuthorizationStart,
+  rememberAppleWebAuthorizationStart,
+  type AppleWebAuthorizationAnswer,
+  type AppleWebAuthorizationRefusal,
+  type AppleWebAuthorizationStart,
+} from '@/lib/apple-web-reauthentication';
 import { describeAuthError } from '@/lib/auth-error-copy';
 import { forgetBrowserSignOut, markBrowserSignOut } from '@/lib/browser-sign-out';
 import { siteConfig } from '@/lib/seo';
@@ -42,6 +55,14 @@ const NOT_SENT_COPY = 'Your account was not deleted. Check the connection and tr
 const STILL_ACTIVE_COPY = 'The deletion did not go through. Your account is still active.';
 /** Supabase's words for a session, or an account, that no longer exists. */
 const ENDED_SESSION_CODES = new Set(['session_not_found', 'user_not_found']);
+/** What the page says when Apple's answer brings no code to use. */
+const APPLE_REFUSAL_COPY: Record<AppleWebAuthorizationRefusal, string> = {
+  elsewhere: 'That Apple confirmation was not started on this page, so nothing was deleted. Continue with Apple here to delete this account.',
+  cancelled: 'You cancelled Continue with Apple. Your account was not deleted.',
+  'not-confirmed': 'Apple did not confirm it is you. Your account was not deleted.',
+};
+const APPLE_NOT_STARTED_COPY = 'Continue with Apple could not start in this browser. Try another browser, or request deletion by email below.';
+const APPLE_MISMATCH_COPY = 'You continued with a different Apple ID. Continue with the Apple ID this account uses.';
 
 type Earnings =
   | { status: 'loading' }
@@ -59,7 +80,8 @@ type DeletionOutcome =
   | { kind: 'scheduled' }
   | { kind: 'deleted' }
   | { kind: 'reauthenticate' }
-  | { kind: 'apple' }
+  /** `message`: why Apple's code was refused, when one was sent. */
+  | { kind: 'apple'; message: string | null }
   | { kind: 'refused'; message: string }
   /** Neither the answer nor Supabase could say whether the deletion started. */
   | { kind: 'unconfirmed' };
@@ -98,7 +120,13 @@ async function readDeletionOutcome(response: Response): Promise<DeletionAnswer> 
   // A deletion already under way, from this page or the app.
   if (response.status === 409 && code === 'ACCOUNT_DELETING') return { kind: 'scheduled' };
   if (response.status === 403 && body?.reason === 'reauthentication_required') {
-    return code && APPLE_REAUTH_CODES.has(code) ? { kind: 'apple' } : { kind: 'reauthenticate' };
+    if (!code || !APPLE_REAUTH_CODES.has(code)) return { kind: 'reauthenticate' };
+    return { kind: 'apple', message: code === 'APPLE_REAUTH_FAILED' ? message : null };
+  }
+  // Apple confirmed someone else, so the right Apple ID is asked for. The
+  // server's sentence names the brand its own way.
+  if (response.status === 403 && code === 'ACCOUNT_REAUTH_MISMATCH') {
+    return { kind: 'apple', message: APPLE_MISMATCH_COPY };
   }
   // The route's own 500 says whether the account was touched.
   if (response.status === 500 && body) {
@@ -137,7 +165,8 @@ async function probeDeletion(accessToken: string): Promise<DeletionOutcome> {
   return { kind: 'unconfirmed' };
 }
 
-async function sendDeletion(accessToken: string): Promise<DeletionOutcome> {
+/** `appleAuthorizationCode`: the one-time code Apple's answer brought this page, for an account with an Apple identity. */
+async function sendDeletion(accessToken: string, appleAuthorizationCode: string | null): Promise<DeletionOutcome> {
   let response: Response;
   try {
     response = await fetch('/api/account', {
@@ -146,7 +175,9 @@ async function sendDeletion(accessToken: string): Promise<DeletionOutcome> {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ confirmation: 'DELETE' }),
+      body: JSON.stringify(appleAuthorizationCode
+        ? { confirmation: 'DELETE', appleAuthorizationCode, appleAuthorizationClient: 'web' }
+        : { confirmation: 'DELETE' }),
     });
   } catch {
     // The connection failed: the request may or may not have arrived.
@@ -165,12 +196,19 @@ async function sendDeletion(accessToken: string): Promise<DeletionOutcome> {
  * this page held before a fresh sign-in, which a tab may still hold. An answer
  * that leaves the session as it was takes the marks back; one that cannot say
  * keeps them, since the account may be on its way out.
+ * `appleAuthorizationCode`: the code Apple's answer brought this page.
  */
-async function requestDeletion(accessToken: string, alsoEnding: string | null = null): Promise<DeletionOutcome> {
+async function requestDeletion(
+  accessToken: string,
+  { alsoEnding = null, appleAuthorizationCode = null }: {
+    alsoEnding?: string | null;
+    appleAuthorizationCode?: string | null;
+  } = {},
+): Promise<DeletionOutcome> {
   markBrowserSignOut(accessToken, alsoEnding);
   let outcome: DeletionOutcome | null = null;
   try {
-    outcome = await sendDeletion(accessToken);
+    outcome = await sendDeletion(accessToken, appleAuthorizationCode);
     return outcome;
   } finally {
     if (!outcome || outcome.kind === 'refused' || outcome.kind === 'reauthenticate' || outcome.kind === 'apple') {
@@ -217,6 +255,16 @@ async function clearCreatorDataHere(userId: string) {
   } catch {
     // The keys are per account: whatever is left stays out of the next account's reach.
   }
+}
+
+/**
+ * Apple's answer in this page's address and the start it answers, read once as
+ * the page opens; the tab's storage only when there is an answer.
+ */
+function readAppleReturnHere(): { answer: AppleWebAuthorizationAnswer; start: AppleWebAuthorizationStart | null } | null {
+  if (typeof window === 'undefined') return null;
+  const answer = readAppleWebAuthorizationAnswer(window.location.hash);
+  return answer ? { answer, start: readAppleWebAuthorizationStart() } : null;
 }
 
 function describePasswordCheckError(error: unknown): string {
@@ -282,13 +330,61 @@ function EarningsWarning({ earnings }: { earnings: Earnings }) {
 }
 
 /**
- * An account with an Apple identity is deleted in the iPhone app only, though
- * it can sign in here: one made here, or one Supabase linked an Apple sign-in
- * to by its email, too. The deletion has Apple confirm the person and revokes
- * the app's Apple authorization with Apple's one-time code, which the app gets
- * from its native sheet (`apple-account-deletion-service.ts`). Supabase's web
- * sign-in exchanges Apple's code itself, so this page has none to send, and
- * without an iPhone the email request is the way.
+ * An account with an Apple identity confirms its deletion with Apple: the
+ * deletion revokes Apple's authorization with a one-time code from Apple
+ * (`apple-account-deletion-service.ts`). Here Continue with Apple leaves for
+ * Apple's page and comes back with the code (`apple-web-reauthentication.ts`),
+ * for any such account: one made in the app, one made here, or one Supabase
+ * linked an Apple sign-in to by its email.
+ */
+function AppleDeletionStep({ onContinue }: { onContinue: () => void }) {
+  return (
+    <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-5">
+      <h3 className="text-lg font-semibold text-white">Confirm with Apple</h3>
+      <p className="mt-2 leading-7 text-zinc-300">
+        {`This account uses Sign in with Apple. Continue with Apple to confirm it is you, and Apple brings you back here to finish. ${siteConfig.name} is disconnected from your Apple ID as the account is deleted.`}
+      </p>
+      {/* Apple's white style, the one its guidelines give a dark background. */}
+      <button
+        type="button"
+        onClick={onContinue}
+        className="mt-4 inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-white px-5 py-3 font-semibold text-black transition hover:bg-zinc-200"
+      >
+        <AppleLogo className="h-5 w-5" />
+        Continue with Apple
+      </button>
+      <p className="mt-4 text-sm leading-6 text-zinc-400">No longer use that Apple ID? Request deletion by email below.</p>
+    </div>
+  );
+}
+
+/**
+ * Continue with Apple on another origin of the site (the www host, a preview):
+ * Apple returns only to the registered address, so the deletion goes on there,
+ * after a sign-in, since a session stays on its own host.
+ */
+function AppleElsewhereNotice({ returnUrl }: { returnUrl: string }) {
+  const host = new URL(returnUrl).host;
+  return (
+    <div role="status" className="mt-6 rounded-2xl border border-amber-300/25 bg-amber-300/[0.06] p-5">
+      <h3 className="text-lg font-semibold text-white">{`Continue on ${host}`}</h3>
+      <p className="mt-2 leading-7 text-zinc-300">
+        {`This account uses Sign in with Apple, and Apple confirms it is you only on ${host}. Open this page there, sign in, and continue with Apple to delete the account.`}
+      </p>
+      <a
+        href={returnUrl}
+        className="mt-4 inline-flex min-h-12 items-center justify-center rounded-full bg-white px-5 py-3 font-semibold text-black transition hover:bg-zinc-200"
+      >
+        {`Open ${host}`}
+      </a>
+    </div>
+  );
+}
+
+/**
+ * Where the website has no Services ID, an account with an Apple identity is
+ * deleted in the iPhone app, whose native sheet gives the code, or by the
+ * email request.
  */
 function AppleAccountNotice() {
   return (
@@ -315,12 +411,34 @@ export default function SignedInAccountDeletion() {
   const [isWorking, setIsWorking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [earningsRead, setEarningsRead] = useState<{ userId: string; earnings: Earnings } | null>(null);
+  const [appleReturn] = useState(readAppleReturnHere);
+  // Set once the server sends the person back to Apple: the code is no use then.
+  const [isAppleCodeSpent, setIsAppleCodeSpent] = useState(false);
   const user = session?.user ?? null;
   const userId = user?.id ?? null;
   const earnings: Earnings = earningsRead && earningsRead.userId === userId
     ? earningsRead.earnings
     : { status: 'loading' };
   const isConfirmed = confirmation.trim().toUpperCase() === 'DELETE';
+  const appleJudgement = judgeAppleWebAuthorizationAnswer(appleReturn?.answer ?? null, appleReturn?.start ?? null, userId);
+  // Kept through answers that leave the form up (one that could not say, a
+  // refusal before Apple was asked), so a retry sends it again.
+  const appleCode = appleJudgement && 'code' in appleJudgement && !isAppleCodeSpent ? appleJudgement.code : null;
+
+  // The answer leaves the address at once, so neither a reload nor the history
+  // brings the code back, and the start it answered is used up. The first
+  // replace keeps Next's history state, since this runs before Next's router
+  // has patched history (a child's effects run first). The later one, through
+  // that patch, gives the router the clean address too: with Next's own state
+  // it skips the router, which would write the code back at its next commit.
+  useEffect(() => {
+    if (!appleReturn) return;
+    const here = () => `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(window.history.state, '', here());
+    forgetAppleWebAuthorizationStart();
+    const routerSync = window.setTimeout(() => window.history.replaceState(null, '', here()), 0);
+    return () => window.clearTimeout(routerSync);
+  }, [appleReturn]);
 
   useEffect(() => {
     let isActive = true;
@@ -397,6 +515,8 @@ export default function SignedInAccountDeletion() {
         return;
       case 'apple':
         setStage({ kind: 'apple' });
+        setIsAppleCodeSpent(true);
+        if (outcome.message) setError(`Your account was not deleted. ${outcome.message}`);
         return;
       case 'refused':
         setError(`Your account was not deleted. ${outcome.message}`);
@@ -421,7 +541,7 @@ export default function SignedInAccountDeletion() {
         setStage({ kind: 'session-ended' });
         return;
       }
-      await applyOutcome(await requestDeletion(token));
+      await applyOutcome(await requestDeletion(token, { appleAuthorizationCode: appleCode }));
     } catch {
       // requestDeletion settles every answer, a lost one included, so this is
       // a failure before the request left.
@@ -429,6 +549,17 @@ export default function SignedInAccountDeletion() {
     } finally {
       setIsWorking(false);
     }
+  };
+
+  // Apple's answer comes back in a new load of this page, so this tab keeps
+  // the start for it.
+  const handleContinueWithApple = (apple: { clientId: string; returnUrl: string }, accountId: string) => {
+    const state = crypto.randomUUID();
+    if (!rememberAppleWebAuthorizationStart({ state, userId: accountId })) {
+      setError(APPLE_NOT_STARTED_COPY);
+      return;
+    }
+    window.location.assign(buildAppleWebAuthorizationUrl({ clientId: apple.clientId, returnUrl: apple.returnUrl, state }));
   };
 
   // A password sign-in refreshes the account's last sign-in, which is what the
@@ -452,7 +583,7 @@ export default function SignedInAccountDeletion() {
         return;
       }
       // A tab that has not taken the new session yet still holds the one this page had.
-      const outcome = await requestDeletion(data.session.access_token, session?.access_token ?? null);
+      const outcome = await requestDeletion(data.session.access_token, { alsoEnding: session?.access_token ?? null });
       if (outcome.kind === 'reauthenticate') {
         // Left as it was, the card would look as if nothing had happened.
         setError('Your account was not deleted. The new sign-in was not accepted yet; try again in a moment.');
@@ -488,8 +619,13 @@ export default function SignedInAccountDeletion() {
 
   const providers = signInProviders(user);
   const isAppleLinked = stage.kind === 'apple' || providers.has('apple');
+  const appleWeb = isAppleLinked ? getAppleWebAuthorization(window.location.origin) : null;
   const canUsePassword = Boolean(user.email) && (providers.has('email') || providers.size === 0);
   const canUseGoogle = providers.has('google');
+  const appleRefusal = appleWeb?.returnsHere && appleJudgement && 'refusal' in appleJudgement
+    ? APPLE_REFUSAL_COPY[appleJudgement.refusal]
+    : null;
+  const shownError = error ?? appleRefusal;
 
   return (
     <section
@@ -508,19 +644,23 @@ export default function SignedInAccountDeletion() {
         <li>People who bought your recipes keep them.</li>
       </ul>
 
-      {error ? (
+      {shownError ? (
         <p role="alert" className="mt-6 rounded-2xl border border-rose-300/30 bg-rose-400/10 px-4 py-3 text-sm leading-6 text-rose-100">
-          {error}
+          {shownError}
         </p>
       ) : null}
 
-      {isAppleLinked ? (
-        <AppleAccountNotice />
-      ) : stage.kind === 'session-ended' ? (
+      {stage.kind === 'session-ended' ? (
         <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-5">
           <p className="leading-7 text-zinc-300">Your session has ended. Sign in again, then confirm the deletion here.</p>
           <SignInAgainLink>Sign in again to continue</SignInAgainLink>
         </div>
+      ) : isAppleLinked && !appleWeb ? (
+        <AppleAccountNotice />
+      ) : appleWeb && !appleWeb.returnsHere ? (
+        <AppleElsewhereNotice returnUrl={appleWeb.returnUrl} />
+      ) : appleWeb && !appleCode ? (
+        <AppleDeletionStep onContinue={() => handleContinueWithApple(appleWeb, user.id)} />
       ) : stage.kind === 'reauthenticate' ? (
         <div className="mt-6 rounded-2xl border border-white/10 bg-black/30 p-5">
           <h3 className="text-lg font-semibold text-white">Confirm it is you</h3>
@@ -563,6 +703,11 @@ export default function SignedInAccountDeletion() {
         </div>
       ) : (
         <form onSubmit={(event) => void handleDelete(event)} className="mt-6 space-y-3">
+          {appleCode ? (
+            <p role="status" className="leading-7 text-zinc-300">
+              Apple confirmed it is you. Type DELETE to finish deleting the account.
+            </p>
+          ) : null}
           <label htmlFor="delete-account-confirmation" className="block text-sm font-semibold text-zinc-200">
             Type DELETE to confirm
           </label>

@@ -23,6 +23,8 @@ const PLACEHOLDER_ENV = {
   RAZORPAY_WEBHOOK_SECRET: 'ci-placeholder-razorpay-webhook-secret',
   REVENUECAT_REST_API_KEY: 'ci-placeholder-revenuecat-key',
   REVENUECAT_WEBHOOK_AUTH_TOKEN: 'ci-placeholder-revenuecat-webhook-token',
+  // /delete-account's Continue with Apple (delete-account-apple.spec.ts answers Apple's page).
+  NEXT_PUBLIC_APPLE_SERVICES_ID: 'ci-placeholder-apple-services-id',
 };
 
 // Every variable the app reads is listed in .env.example. The dev server gets none of them from the

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { getAppleWebClientId, getAppleWebReturnUrl } from '@/lib/apple-web-reauthentication';
 import { createMetadata, siteConfig } from '@/lib/seo';
 
 import SignedInAccountDeletion from './SignedInAccountDeletion';
@@ -16,6 +17,10 @@ const deletionEmailBody = encodeURIComponent(
 );
 
 export default function DeleteAccountPage() {
+    // Where an account that uses Sign in with Apple can continue with Apple: the
+    // site's own host, the one Apple returns to, once the website has a Services
+    // ID. Named, because the page is also served on hosts Apple does not return to.
+    const appleHost = getAppleWebClientId() ? new URL(getAppleWebReturnUrl()).host : null;
     return (
         <main className="min-h-screen bg-black px-6 py-16 text-white">
             <div className="mx-auto max-w-4xl">
@@ -24,7 +29,9 @@ export default function DeleteAccountPage() {
                 <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300">
                     You can delete your account right here once you{' '}
                     <Link className="text-white underline underline-offset-4" href="/login?returnUrl=/delete-account">sign in</Link>
-                    {` on this website, or inside the ${siteConfig.name} mobile app. An account that uses Sign in with Apple is deleted in the app on an iPhone. If you cannot sign in, send a deletion request from this page.`}
+                    {` on this website, or inside the ${siteConfig.name} mobile app. ${appleHost
+                        ? `An account that uses Sign in with Apple confirms it with Apple, on ${appleHost} or in the app on an iPhone.`
+                        : 'An account that uses Sign in with Apple is deleted in the app on an iPhone.'} If you cannot sign in, send a deletion request from this page.`}
                 </p>
 
                 <SignedInAccountDeletion />
@@ -37,7 +44,11 @@ export default function DeleteAccountPage() {
                             <li>On Home, tap the menu (☰) at the top left, then Settings.</li>
                             <li>Select <strong className="text-white">Delete account</strong>.</li>
                             <li>Review what will be removed, type DELETE, and confirm permanent deletion.</li>
-                            <li>Sign in again when asked; an account that uses Sign in with Apple must do this on an iPhone.</li>
+                            <li>
+                                {appleHost
+                                    ? `Sign in again when asked; an account that uses Sign in with Apple does this on an iPhone, or is deleted on ${appleHost} instead.`
+                                    : 'Sign in again when asked; an account that uses Sign in with Apple must do this on an iPhone.'}
+                            </li>
                         </ol>
                     </section>
 

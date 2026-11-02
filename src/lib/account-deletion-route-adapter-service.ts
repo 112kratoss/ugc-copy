@@ -69,10 +69,16 @@ function hasRecentAuthentication(lastSignInAt: string | undefined, now: Date) {
 async function parseDeletionRequest(request: Request) {
   try {
     const body = await request.json() as {
+      appleAuthorizationClient?: unknown;
       appleAuthorizationCode?: unknown;
       confirmation?: unknown;
     };
+    const client = body.appleAuthorizationClient ?? 'native';
     return {
+      // The website's Continue with Apple names its client; the app's native
+      // sheet sends none, as installed apps always have. Any other name is
+      // refused before Apple is asked, so a code is not spent on it.
+      appleAuthorizationClient: client === 'web' ? 'web' as const : client === 'native' ? undefined : 'unknown' as const,
       appleAuthorizationCode:
         typeof body.appleAuthorizationCode === 'string'
           ? body.appleAuthorizationCode
@@ -80,7 +86,7 @@ async function parseDeletionRequest(request: Request) {
       confirmed: body.confirmation === 'DELETE',
     };
   } catch {
-    return { appleAuthorizationCode: undefined, confirmed: false };
+    return { appleAuthorizationClient: undefined, appleAuthorizationCode: undefined, confirmed: false };
   }
 }
 
@@ -140,7 +146,9 @@ function deletionFailureResponse(request: Request, deletionScheduled: boolean) {
  * (2026-10-15) a guest's deletion of its own data.
  *
  * An account proves it is still its owner first: Apple's one-time code for an
- * account with an Apple identity, otherwise a sign-in in the last 15 minutes.
+ * account with an Apple identity, from the iPhone app's native sheet or the
+ * website's Continue with Apple (`appleAuthorizationClient: 'web'`), otherwise
+ * a sign-in in the last 15 minutes.
  * A guest has no provider identity and no password, so there is nothing it
  * could sign in again with; its token is the whole identity, and admission has
  * just verified it as an active guest. What a guest has to show instead is
@@ -224,6 +232,12 @@ export async function deleteAccountRouteResponse({
       request,
     );
   }
+  if (deletionRequest.appleAuthorizationClient === 'unknown') {
+    return applyPrivateNoStoreApiResponseHeaders(
+      NextResponse.json({ error: 'Unknown Apple client for this deletion request.' }, { status: 400 }),
+      request,
+    );
+  }
 
   // Read from the fresh Auth record, not the admission assertion: an identity
   // linked to a provider since its token was minted is an account.
@@ -278,12 +292,19 @@ export async function deleteAccountRouteResponse({
     try {
       await resolved.authorizeAppleAccountDeletion({
         authorizationCode: deletionRequest.appleAuthorizationCode as string,
+        client: deletionRequest.appleAuthorizationClient,
         expectedAppleSubject: appleIdentity.subject,
       });
     } catch (error) {
       if (error instanceof AppleAccountDeletionError) {
         if (error.status >= 500) {
-          resolved.logError('Apple account deletion authorization failed:', error);
+          // Which client, and what Apple or the configuration refused: a website
+          // failure with a working app is the Services ID's setup.
+          const client = deletionRequest.appleAuthorizationClient ?? 'native';
+          resolved.logError(
+            `Apple account deletion authorization failed (${client}${error.detail ? `: ${error.detail}` : ''}):`,
+            error,
+          );
         }
         return applyPrivateNoStoreApiResponseHeaders(
           NextResponse.json({
