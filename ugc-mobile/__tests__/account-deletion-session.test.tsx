@@ -47,10 +47,14 @@ vi.mock('expo-constants', () => ({
 
 // One stable object, never a fresh literal per render: an unstable router mock
 // re-runs the provider's effects forever and hangs the suite.
-vi.mock('expo-router', () => ({
-  router: { replace: state.replace, dismissTo: state.dismissTo },
-  usePathname: () => '/settings',
-}));
+vi.mock('expo-router', () => {
+  // No screen in front: nothing these cases send to sign-in reads one.
+  const navigationRef = { isReady: () => false };
+  return {
+    router: { replace: state.replace, dismissTo: state.dismissTo },
+    useNavigationContainerRef: () => navigationRef,
+  };
+});
 
 vi.mock('react-native', () => ({
   AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },

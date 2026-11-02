@@ -12,9 +12,9 @@ const state = vi.hoisted(() => ({
   clearLocalPush: vi.fn(),
   clearPersistedSession: vi.fn(),
   getSession: vi.fn(),
-  // What expo-router reports as the route on screen.
-  pathname: '/',
   probe: vi.fn(),
+  // React Navigation's state for the screens on screen.
+  rootState: undefined as StateFixture | undefined,
   queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
   refreshSession: vi.fn(),
   replace: vi.fn(),
@@ -34,10 +34,14 @@ vi.mock('expo-constants', () => ({
 
 // One stable object, never a fresh literal per render: an unstable router mock
 // re-runs the provider's effects forever and hangs the suite.
-vi.mock('expo-router', () => ({
-  router: { replace: state.replace },
-  usePathname: () => state.pathname,
-}));
+vi.mock('expo-router', () => {
+  // expo-router's store keeps one container ref for the app's life.
+  const navigationRef = { isReady: () => true, getRootState: () => state.rootState };
+  return {
+    router: { replace: state.replace },
+    useNavigationContainerRef: () => navigationRef,
+  };
+});
 
 vi.mock('react-native', () => ({
   AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
@@ -118,11 +122,21 @@ vi.mock('../lib/supabase', () => ({
   },
 }));
 
+import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
+import { APPLE_ZOOM_SOURCE_PARAM } from '../lib/apple-zoom';
 import { AuthProvider, useAuth } from '../lib/auth';
+import { AWKWARD_PROMPT, pushedRoute, stateInFront, type StateFixture } from './fixtures/navigation-state';
 
 /** Where a refused registered session is sent: the sign-in screen, with why and where it was. */
 function signedOutNotice(returnTo: string) {
   return { pathname: '/auth', params: { notice: 'signed-out', returnTo } };
+}
+
+/** The return the sign-in screen was sent, read back as expo-router reads a path: its pathname and its query's params. */
+function sentReturn() {
+  const [[route]] = state.replace.mock.calls as [[{ params: { returnTo: string } }]];
+  const { returnTo } = route.params;
+  return { pathname: new URL(returnTo, 'file:').pathname, params: parseQueryParams(returnTo, { name: 'return' }) ?? {} };
 }
 
 type RemoveQueriesFilter = { predicate: (query: { queryKey: readonly unknown[] }) => boolean };
@@ -195,7 +209,7 @@ describe('recovering from a session ended elsewhere', () => {
     state.queryClient.fetchQuery.mockReset().mockResolvedValue({ credits: 0 });
     state.queryClient.clear.mockReset();
     state.queryClient.removeQueries.mockReset();
-    state.pathname = '/';
+    state.rootState = stateInFront();
     state.clearPersistedSession.mockReset().mockResolvedValue(undefined);
     state.clearLocalPush.mockReset().mockResolvedValue(undefined);
     state.probe.mockReset();
@@ -391,7 +405,7 @@ describe('recovering from a session ended elsewhere', () => {
 
   // Audit 01-12: signed in again, the person is back where they were.
   it('sends the person back, once signed in again, to the route they were on', async () => {
-    state.pathname = '/post/post-9';
+    state.rootState = stateInFront(pushedRoute('/post/[id]', { id: 'post-9' }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
@@ -402,8 +416,53 @@ describe('recovering from a session ended elsewhere', () => {
     unmount();
   });
 
+  it('brings a remix creator back with its remix and its prompt', async () => {
+    const remix = { remix: 'gen-9', remixPost: 'post-9', prompt: AWKWARD_PROMPT, guided: '1' };
+    state.rootState = stateInFront(pushedRoute('/create/[tool]', { tool: 'video', ...remix }));
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(sentReturn()).toEqual({ pathname: '/create/video', params: remix });
+
+    unmount();
+  });
+
+  // The zoom follows the post on screen (`useAppleZoomRetarget`); the route's
+  // own `initialId` stays the post the reel opened on, and that comes back.
+  it('brings the reel back on the post it was opened on, without the zoom it opened with', async () => {
+    const reel = { source: 'home', initialId: 'post-9', feedSessionId: 'feed-1' };
+    state.rootState = stateInFront(pushedRoute('/viewer', { ...reel, [APPLE_ZOOM_SOURCE_PARAM]: 'zoom|r1|post-14' }));
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(sentReturn()).toEqual({ pathname: '/viewer', params: reel });
+
+    unmount();
+  });
+
+  // The composer answers a sign-out by redirecting to sign-in itself: the
+  // screen to come back to is the one in front when the session ended.
+  it('returns to the screen the session ended on, not where a screen moved during the sign-out', async () => {
+    state.rootState = stateInFront(pushedRoute('/post/new', { generationId: 'gen-9' }));
+    state.clearPersistedSession.mockImplementation(async () => {
+      state.rootState = stateInFront(pushedRoute('/auth', { returnTo: '/post/new?generationId=gen-9' }));
+    });
+    const { latest, unmount } = await mountWith(registeredSession);
+    state.probe.mockResolvedValue('ended');
+
+    await recover(latest);
+
+    expect(state.replace).toHaveBeenCalledWith(signedOutNotice('/post/new?generationId=gen-9'));
+
+    unmount();
+  });
+
   it('falls back to Home when the route on screen is the sign-in screen itself', async () => {
-    state.pathname = '/auth';
+    state.rootState = stateInFront(pushedRoute('/auth', { returnTo: '/post/post-9' }));
     const { latest, unmount } = await mountWith(registeredSession);
     state.probe.mockResolvedValue('ended');
 
