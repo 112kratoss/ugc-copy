@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createRemixElementSeeds,
@@ -8,9 +8,11 @@ import {
   getRemixRestoreWarning,
   getRemixResultReferenceLabel,
   getRemixReferenceCapWarning,
+  getRemixRoomWarning,
   isRemixResultReference,
   joinRemixRestoreWarnings,
   readRemixInputSlots,
+  fetchRemixSource,
   REMIX_RESTORE_WARNING,
   remixSlotsInputSide,
   withoutRemixInputSlot,
@@ -165,6 +167,25 @@ describe('a remix whose model now takes fewer references', () => {
       .toBe("Nano Banana 2.0 takes up to 10 reference images, so 10 of this run's 11 came back.");
   });
 
+  // Pictures the creator added while the remix loaded stay, and take room the original's would have had.
+  it('counts the pictures the creator added against the model’s room, and says so', () => {
+    const ten = Array.from({ length: 10 }, (_, index) => element(index + 1));
+    expect(getRemixReferenceCapWarning(ten, 10, 'Nano Banana 2.0', 1))
+      .toBe("Nano Banana 2.0 takes up to 10 reference images, so with the 1 you added, 9 of this run's 10 came back.");
+    expect(getRemixReferenceCapWarning(ten.slice(0, 2), 2, 'Seedance 1.5 Pro', 2))
+      .toBe("Seedance 1.5 Pro takes up to 2 reference images, so with the 2 you added, 0 of this run's 2 came back.");
+    // Room enough beside them: nothing to say.
+    expect(getRemixReferenceCapWarning(ten.slice(0, 3), 10, 'Nano Banana 2.0', 7)).toBeNull();
+  });
+
+  it('says the same of any kind of reference', () => {
+    expect(getRemixRoomWarning({ modelName: 'Kling 3.0', limit: 3, noun: 'video element', usable: 2, restored: 1, added: 2 }))
+      .toBe("Kling 3.0 takes up to 3 video elements, so with the 2 you added, 1 of this run's 2 came back.");
+    expect(getRemixRoomWarning({ modelName: 'Kling O3', limit: 1, noun: 'named subject', usable: 2, restored: 1 }))
+      .toBe("Kling O3 takes up to 1 named subject, so 1 of this run's 2 came back.");
+    expect(getRemixRoomWarning({ modelName: 'Kling 3.0', limit: 3, noun: 'video element', usable: 1, restored: 1, added: 2 })).toBeNull();
+  });
+
   it('puts a cap notice after a restore problem', () => {
     expect(joinRemixRestoreWarnings(null, 'Cap.')).toBe('Cap.');
     expect(joinRemixRestoreWarnings('Restore.', 'Cap.')).toBe('Restore. Cap.');
@@ -241,5 +262,39 @@ describe('a remix’s empty slots in the web creators', () => {
     expect(remixSlotsInputSide([], { clipsBesideSides: false })).toBeNull();
     // A clip the prompt names has no place on a model whose clips take no handle: it opens no side.
     expect(remixSlotsInputSide([{ role: 'reference_video', handle: '@dance' }, start], { clipsBesideSides: false })).toBe('frames');
+  });
+});
+
+describe('the read of a remix’s original', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const bundle: RemixSourceBundle = {
+    generation: { id: 'gen-1', title: 'Harbour', prompt: 'Prompt', category: 'image', model: 'nano-banana-2' },
+    result: null,
+    inputs: {},
+    workflowSettings: {},
+    restoreIssues: [],
+  };
+
+  it('asks for the remix and its post as the session’s account', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => bundle }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchRemixSource({ id: 'gen-1', postId: 'post-1' }, 'token-1')).resolves.toEqual(bundle);
+    await expect(fetchRemixSource({ id: 'gen-1', postId: null }, 'token-1')).resolves.toEqual(bundle);
+    expect(fetchMock.mock.calls).toEqual([
+      ['/api/remix-source?id=gen-1&postId=post-1', { headers: { Authorization: 'Bearer token-1' } }],
+      ['/api/remix-source?id=gen-1', { headers: { Authorization: 'Bearer token-1' } }],
+    ]);
+  });
+
+  it('throws on a refusal, with the server’s reason where it gave one', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 429, json: async () => ({ error: 'Too many requests' }) }) as Response));
+    await expect(fetchRemixSource({ id: 'gen-1', postId: null }, 'token-1')).rejects.toThrow('Too many requests');
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) }) as Response));
+    await expect(fetchRemixSource({ id: 'gen-1', postId: null }, 'token-1')).rejects.toThrow('Failed to load remix data');
   });
 });
