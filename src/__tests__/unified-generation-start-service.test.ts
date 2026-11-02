@@ -621,6 +621,7 @@ describe('reference lengths a caller reports', () => {
     quote = referencePricedQuote,
     existingGeneration = null,
     resolveLink = (url: string) => url,
+    resolveInputSource = vi.fn(async (_client: unknown, url: string) => resolveLink(url)),
   }: {
     body: Record<string, unknown>;
     measuredSeconds: number;
@@ -629,6 +630,8 @@ describe('reference lengths a caller reports', () => {
     existingGeneration?: Record<string, unknown> | null;
     /** The link a reference resolves to. */
     resolveLink?: (url: string) => string;
+    /** How a reference is resolved, where a test needs more than `resolveLink`: a held or refused resolve. */
+    resolveInputSource?: (client: unknown, url: string, userId: string) => Promise<string>;
   }) {
     const started = { predictionId: 'provider-task', generationId: 'generation-1', remainingCredits: 50, cost: 0 };
     const startVideo = vi.fn(async () => started);
@@ -868,51 +871,21 @@ describe('reference lengths a caller reports', () => {
   it("hands a motion run the picture's resolved link too, not the client's", async () => {
     const freshPicture = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/character.png?token=fresh';
     const freshClip = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/reference.mp4?token=fresh';
-    const resolveInputSource = vi.fn(async (_client: unknown, url: string) => (
-      url === CHARACTER_URL ? freshPicture : url === REFERENCE_URL ? freshClip : url
-    ));
-    const startMotion = vi.fn(async () => ({ predictionId: 'provider-task', generationId: 'generation-1', remainingCredits: 50, cost: 50 }));
+    const run = start({
+      body: motionBody(5, 5),
+      measuredSeconds: 5,
+      operation: MOTION_OPERATION,
+      quote: durationPricedQuote,
+      resolveLink: (url) => (url === CHARACTER_URL ? freshPicture : url === REFERENCE_URL ? freshClip : url),
+    });
 
-    await expect(startUnifiedGenerationForRoute(
-      {
-        request: new Request('http://localhost/api/generations', {
-          method: 'POST',
-          headers: { 'Idempotency-Key': 'motion-picture-key' },
-        }),
-        body: motionBody(5, 5),
-        userId: 'user-1',
-        callerIsGuest: false,
-        supabase: { label: 'user-client' } as never,
-        adminSupabase: createAdminClient(null) as never,
-      },
-      {
-        loadCatalog: vi.fn(async () => ({
-          catalog: {
-            schemaVersion: 2,
-            revision: 'catalog-v2',
-            defaults: { image: null, video: 'seedance-2', motion: 'kling-2.6' },
-            models: [],
-          },
-          operations: new Map([[MOTION_OPERATION.modelId, MOTION_OPERATION]]),
-          source: 'database' as const,
-          releaseId: 'release-v2',
-          releaseSchemaVersion: 2,
-        })) as never,
-        quoteModel: vi.fn(durationPricedQuote) as never,
-        resolveSource: vi.fn(async () => null) as never,
-        enforceRateLimit: vi.fn(async () => undefined) as never,
-        startMotion: startMotion as never,
-        resolveInputSource,
-        probeInputDuration: vi.fn(async () => 5),
-      },
-    )).resolves.toMatchObject({ success: true });
-
-    expect(startMotion).toHaveBeenCalledWith(expect.objectContaining({
+    await expect(run.outcome).resolves.toMatchObject({ success: true });
+    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({
       characterImageUrl: freshPicture,
       referenceVideoUrl: freshClip,
     }));
     // Resolved as the user it starts for, with the client it starts under.
-    expect(resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, CHARACTER_URL, 'user-1');
+    expect(run.resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, CHARACTER_URL, 'user-1');
   });
 
   it('refuses a reference whose length cannot be read, or that is not an HTTPS object', async () => {
