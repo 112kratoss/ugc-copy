@@ -272,5 +272,5 @@ describe.skipIf(!configPath || !connectionString)('referral notification recover
         const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited;
       }
     }
-  });
+  }, 12000);
 });

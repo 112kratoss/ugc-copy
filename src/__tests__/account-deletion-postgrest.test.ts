@@ -666,7 +666,7 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
     await new Promise(resolve => setTimeout(resolve, Math.max(0, claims.exp * 1000 - Date.now()) + 2000));
     expect((await fetch(url)).status).not.toBe(200);
     await buyerFile();
-  });
+  }, 12000);
   it('retains actual legacy generation inputs in the purchased revision supplement', async () => {
     await sold({ legacy: true });
     const source = 'generation_inputs/' + owners[0] + '/' + generationIds[0] + '/reference.png';
@@ -774,5 +774,5 @@ describe.skipIf(!configPath || !connectionString)('account deletion with actual 
         const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited;
       }
     }
-  });
+  }, 15000);
 });

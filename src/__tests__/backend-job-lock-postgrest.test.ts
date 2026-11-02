@@ -114,5 +114,5 @@ describe.skipIf(!configPath || !connectionString)('job leases through actual Pos
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       await exit;
     }
-  });
+  }, 10000);
 });

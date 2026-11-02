@@ -119,7 +119,7 @@ describe.skipIf(!configPath || !connectionString)('feed maintenance interruption
         const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited;
       }
     }
-  });
+  }, 12000);
   it('recovers a committed rollup whose acknowledgement was lost without doubling counts', async () => {
     fail = 'refresh_feed_delivery_fact_daily'; afterCommit = true;
     await expect(run()).rejects.toThrow('Feed maintenance RPC refresh_feed_delivery_fact_daily failed');
@@ -194,6 +194,6 @@ describe.skipIf(!configPath || !connectionString)('feed maintenance interruption
         const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited;
       }
     }
-  });
+  }, 15000);
 
 });

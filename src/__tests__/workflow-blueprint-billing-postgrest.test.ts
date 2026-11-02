@@ -107,7 +107,7 @@ describe.skipIf(!configPath || !connectionString)('workflow blueprint billing wi
       expect(await plan()).toMatchObject({ ok: true, body: { idempotentReplay: true } });
       expect(provider).toHaveBeenCalledTimes(1); expect(await events()).toHaveLength(1);
     } finally { clearTimeout(timer); release(); await first; }
-  });
+  }, 15000);
 
   it('refunds failed submission once and requires a new key for another paid attempt', async () => {
     provider.mockResolvedValueOnce(new Response('controlled provider failure', { status: 503 }));

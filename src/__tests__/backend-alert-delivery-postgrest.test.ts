@@ -131,7 +131,7 @@ describe.skipIf(!configPath || !connectionString)('alert dispatch with actual HT
         const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGKILL'); await exited;
       }
     }
-  });
+  }, 15000);
   it('records unconfigured dispatch without collecting or sending', async () => {
     vi.stubEnv('BACKEND_ALERT_DELIVERY_URL', '');
     expect(await run()).toMatchObject({ success: true, status: 'skipped', summary: { configured: false, delivered: false } });
@@ -173,7 +173,7 @@ describe.skipIf(!configPath || !connectionString)('alert dispatch with actual HT
     expect(Date.now() - started).toBeLessThan(9000);
     expect(requests).toHaveLength(1);
     expect((await runs())[0].error_message).toContain('timed out');
-  });
+  }, 12000);
   it('suppresses overlapping dispatch while the first HTTP acknowledgement is pending', async () => {
     mode = 'hold'; const boundary = new Promise<void>(resolve => { received = resolve; });
     const first = run();

@@ -208,7 +208,7 @@ describe.skipIf(!configPath || !connectionString)('template publication with act
       const responses = await Promise.all([publish(), publish()]); for (const response of responses) await json(response);
       expect(entered).toBe(2); expect(await versions()).toHaveLength(1); expect(await objects()).toHaveLength(1);
     } finally { clearTimeout(timer); release(); activationBarrier = null; }
-  });
+  }, 15000);
 
   it('disables public discovery while preserving the immutable version and owned view', async () => {
     await json(await publish()); const version = (await versions())[0], beforeObjects = await objects();

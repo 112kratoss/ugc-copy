@@ -12,6 +12,8 @@ export default defineConfig({
         // more than 5 s in all on CI's shared runner. At vitest's 5 s default, create-workflow-page's
         // "shows save discard cancel" (1.2–1.6 s on an idle Mac, 4.1–5.4 s at background CPU priority)
         // failed main's Quality and skipped releases. Give a test its own timeout only above this one.
+        // The database-backed files run on CI under their own vitest.*-postgrest configs, which keep
+        // vitest's 5 s default, so their per-test timeouts stay whatever their value.
         testTimeout: 20_000,
         hookTimeout: 20_000,
     },
