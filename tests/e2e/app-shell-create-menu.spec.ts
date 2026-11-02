@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 // The shell's Create menu (src/components/AppShellCreateMenu.tsx), the app's centre + on the
-// web: the top bar's Create and the phone layout's + open the same two choices, Create and
+// web: the top bar's Create and the phone layout's + open the same two choices, Generate and
 // Post. Before it, both went straight to /create, and a post could only be started from
 // buttons inside a few pages. It is a native popover, so these run in a real browser: jsdom
 // has none.

@@ -58,6 +58,7 @@ vi.mock('@/lib/safe-area', () => ({
 
 import { MagicCreateMenu } from '../components/magic-create-menu';
 import { CREATE_MENU_ACTIONS, getCreateMenuActionHref } from '../lib/create-menu-view-model';
+import { appTheme } from '../lib/theme';
 
 describe('create menu view model', () => {
   it('exposes exactly Generate and Post actions in generate-first order', () => {
@@ -100,6 +101,25 @@ describe('MagicCreateMenu', () => {
     });
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps each choice on one line that shrinks to fit its tile at large text sizes', () => {
+    let tree: ReturnType<typeof renderer.create> | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(<MagicCreateMenu visible onClose={vi.fn()} onAction={vi.fn()} />);
+    });
+
+    // A single word in a tile of fixed width: at large text sizes "Generate" was broken in two.
+    for (const label of ['Generate', 'Post']) {
+      const matches = tree!.root.findAll((node) => node.type === 'text' && node.props.children === label);
+      expect(matches).toHaveLength(1);
+      expect(matches[0].props).toMatchObject({
+        numberOfLines: 1,
+        adjustsFontSizeToFit: true,
+        maxFontSizeMultiplier: appTheme.typeScale.control,
+      });
+    }
   });
 
   it('emits the selected action', () => {

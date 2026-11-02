@@ -31,7 +31,7 @@ describe('the Create menu', () => {
     expect(sheet).toContain(CREATE_MENU_SUBTITLE);
   });
 
-  it('opens the creators hub for Create, from any page', () => {
+  it('opens the creators hub for Generate, from any page', () => {
     expect(getCreateMenuHref('create', '/')).toBe('/create');
     expect(getCreateMenuHref('create', '/post/new')).toBe('/create');
   });
