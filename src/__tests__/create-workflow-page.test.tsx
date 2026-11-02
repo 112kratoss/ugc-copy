@@ -853,7 +853,7 @@ describe('CreateWorkflowPage', () => {
       expect(screen.queryByRole('dialog', { name: /build your graph/i })).not.toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: /open nodes and workflows/i })).toBeInTheDocument();
-  }, 10_000);
+  });
 
   it('adds a node from the mobile drawer and returns directly to the canvas', async () => {
     await renderLoadedPage();
@@ -1313,7 +1313,7 @@ describe('CreateWorkflowPage', () => {
       });
       // The canvas's models were read from the new release before the run started.
       expect(catalogReads('details', RELEASED_REVISION).length).toBeGreaterThan(0);
-    }, 15_000);
+    });
 
     it('does not start a run when the release took away a model the canvas uses', async () => {
       await renderPageHoldingRevision(workflowCatalog.revision);
@@ -1332,7 +1332,7 @@ describe('CreateWorkflowPage', () => {
       expect(screen.getByText(
         `Unavailable models: ${imageModel}. Choose replacements before running; your workflow has been preserved.`,
       )).toBeInTheDocument();
-    }, 15_000);
+    });
 
     it('does not start a run while the current revision cannot be read, and starts it once it can', async () => {
       await renderPageHoldingRevision(workflowCatalog.revision);
@@ -1355,7 +1355,7 @@ describe('CreateWorkflowPage', () => {
         expect(lastRunRequest?.catalogRevision).toBe(workflowCatalog.revision);
       }, { timeout: 5_000 });
       expect(screen.queryByText(/could not check model settings/i)).not.toBeInTheDocument();
-    }, 15_000);
+    });
 
     it('repeats an unanswered run under the same key when a release lands before the retry', async () => {
       await renderPageHoldingRevision(workflowCatalog.revision);
@@ -1389,7 +1389,7 @@ describe('CreateWorkflowPage', () => {
       expect(JSON.parse(String(repeated[1]?.body)).catalogRevision).toBe(RELEASED_REVISION);
       expect(new Headers(repeated[1]?.headers).get('Idempotency-Key'))
         .toBe(new Headers(unanswered[1]?.headers).get('Idempotency-Key'));
-    }, 15_000);
+    });
   });
 
   it('prices Run this step and Run from here before anything is spent', async () => {
@@ -1548,7 +1548,7 @@ describe('CreateWorkflowPage', () => {
     expect(fetchMock.mock.calls.some(([url, init]) => (
       String(url).startsWith('/api/templates/template-for-canvas-1') && init?.method === 'PATCH'
     ))).toBe(false);
-  }, 10_000);
+  });
 
   it('can create a new workflow from the left rail', async () => {
     await renderLoadedPage();

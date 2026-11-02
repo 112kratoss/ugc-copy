@@ -261,7 +261,7 @@ describe('CreatorContentTabs with the reel', () => {
       expect(window.location.search).toBe('');
       expect(window.location.hash).toBe('#creator-creations');
       expect(window.history.length).toBe(entries);
-    }, 15_000);
+    });
 
     it('closes a post opened from its tile by going back to the grid, as Close does', async () => {
       renderCreatorPage();
@@ -279,7 +279,7 @@ describe('CreatorContentTabs with the reel', () => {
       expect(window.history.length).toBe(entries + 1);
       window.history.forward();
       expect(await screen.findByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
-    }, 15_000);
+    });
 
     it("closes the reel from the creator's own comment", async () => {
       threadComments = [creatorsComment];
@@ -294,7 +294,7 @@ describe('CreatorContentTabs with the reel', () => {
       await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
       expect(window.location.search).toBe('');
       expect(window.history.length).toBe(entries);
-    }, 15_000);
+    });
 
     it('leaves a click that opens a new tab to the browser', async () => {
       window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
@@ -305,7 +305,7 @@ describe('CreatorContentTabs with the reel', () => {
 
       expect(queryReel()).toBeInTheDocument();
       expect(window.location.search).toBe('?post=item-1');
-    }, 15_000);
+    });
   });
 
   // Back and Forward close and open the reel through the page's popstate
@@ -321,7 +321,7 @@ describe('CreatorContentTabs with the reel', () => {
     });
 
     await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
-  }, 15_000);
+  });
 
   it('closes a linked post on the first Close when an effect from before Close selects it again', async () => {
     window.history.replaceState(null, '', '/creators/creator-name?post=item-1');
@@ -335,7 +335,7 @@ describe('CreatorContentTabs with the reel', () => {
     expect(window.location.search).toBe('');
     // Closed once, never drawn again on the way.
     expect(reelInsertions()).toBe(0);
-  }, 15_000);
+  });
 
   it('closes a post opened from its tile on the first Close in the same slot', async () => {
     renderCreatorPage();
@@ -353,7 +353,7 @@ describe('CreatorContentTabs with the reel', () => {
       expect(window.location.search).toBe('');
     });
     expect(reelInsertions()).toBe(0);
-  }, 15_000);
+  });
 
   // Close goes Back, and the address keeps the post until Back's popstate comes. A page of
   // posts that landed in between ran the URL effect on that address (the effect followed the
@@ -421,7 +421,7 @@ describe('CreatorContentTabs with the reel', () => {
       window.dispatchEvent(new PopStateEvent('popstate', { state: createReelEntryState('post') }));
     });
     expect(await screen.findByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
-  }, 15_000);
+  });
 
   it('closes an opened post with Back, opens it again with Forward, and closes it with Creator', async () => {
     renderCreatorPage();
@@ -455,7 +455,7 @@ describe('CreatorContentTabs with the reel', () => {
     // The reel's entry is ahead again: Forward opens the post once more.
     window.history.forward();
     expect(await screen.findByRole('dialog', { name: 'Creator reel viewer' })).toBeInTheDocument();
-  }, 15_000);
+  });
 
   // Next post replaces the reel's entry, which stays the reel's own.
   it('goes Back after Forward from a reel that had moved on to another post', async () => {
@@ -481,7 +481,7 @@ describe('CreatorContentTabs with the reel', () => {
     fireEvent.click(within(reel).getByRole('button', { name: 'Creator' }));
     await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
     expect(back).toHaveBeenCalledTimes(1);
-  }, 15_000);
+  });
 
   // The page mounts on the reel's own entry: a reload, or a Back from a page the reel
   // linked to ("Post details", a commenter's page), where the page mounts again.
@@ -496,7 +496,7 @@ describe('CreatorContentTabs with the reel', () => {
     await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
     expect(back).toHaveBeenCalledTimes(1);
     expect(replaceState).not.toHaveBeenCalled();
-  }, 15_000);
+  });
 
   // A linked post's entry (a shared link), and every entry from before the reel marked
   // its own: opened by address, so Close replaces it, also once Back has reached it.
@@ -515,5 +515,5 @@ describe('CreatorContentTabs with the reel', () => {
     await waitFor(() => expect(queryReel()).not.toBeInTheDocument());
     expect(back).not.toHaveBeenCalled();
     expect(replaceState).toHaveBeenLastCalledWith(null, '', '/creators/creator-name#creator-creations');
-  }, 15_000);
+  });
 });
