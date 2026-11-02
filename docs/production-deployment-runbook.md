@@ -311,6 +311,14 @@ confirmations without a sender would silently block every affected sign-in.
 
 ### Sign in with Apple on the web
 
+Set up on 2026-11-02: Services ID `com.magicbooklet.mobile.web` ("Magicbooklet
+Web", primary App ID `5HNNML93ST.com.magicbooklet.mobile`), its client secret
+signed with the Sign in with Apple key `6924Q753C6` of team `5HNNML93ST`, and
+Client IDs `com.magicbooklet.mobile.web,com.magicbooklet.mobile`. **That secret
+expires 2027-05-01.** Renew it before then with step 2 below
+(`--key-id 6924Q753C6 --team-id 5HNNML93ST --client-id com.magicbooklet.mobile.web`)
+and paste it over the old one.
+
 The iPhone app signs in with Apple natively (`signInWithIdToken`, audience the
 bundle id). The website's Continue with Apple buttons (the login page's tabs and
 the creators' sign-up sheet) use Supabase's web OAuth flow, which needs its own
