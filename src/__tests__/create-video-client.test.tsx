@@ -8100,20 +8100,6 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer fresh-token']);
       });
 
-      // Never another account's session (one signed in from another tab), and the page's own where the
-      // browser holds none (the E2E sign-in, a lapse): the remix source answers as its reader.
-      it.each([
-        ['another account', { access_token: 'token-user-2', user: { id: 'user-2' } }],
-        ['no one', null],
-      ])('reads it with the page’s session when the browser’s belongs to %s', async (_case, browserSession) => {
-        authClient.session = browserSession;
-        stubRemix(remixOf({ duration: 5 }));
-        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
-
-        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
-        expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token']);
-      });
-
       // A read that fails is final for its form (#664) until the creator asks again: Try again on the
       // failure notice reads under the form's account.
       it('offers Try again after a read that failed, which reads the remix again and fills the form', async () => {

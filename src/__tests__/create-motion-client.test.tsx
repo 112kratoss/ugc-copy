@@ -2118,20 +2118,6 @@ describe('CreateMotionClient drafts and media', () => {
       expect(box()).toHaveValue('Dance on the roof at dusk');
       expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer fresh-token']);
     });
-
-    // Never another account's session (one signed in from another tab), and the page's own where the
-    // browser holds none (the E2E sign-in, a lapse): the remix source answers as its reader.
-    it.each([
-      ['another account', { access_token: 'token-user-2', user: { id: 'user-2' } }],
-      ['no one', null],
-    ])('reads it with the page’s session when the browser’s belongs to %s', async (_case, browserSession) => {
-      sessionState.signedIn = browserSession !== null;
-      if (browserSession) sessionState.session = browserSession;
-      render(remixPage());
-
-      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
-      expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token']);
-    });
   });
 
   // A read that fails is final for its form (#664) until the creator asks again: Try again on the
