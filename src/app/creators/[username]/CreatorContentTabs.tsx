@@ -487,7 +487,7 @@ export function CreatorContentTabs({
 
   return (
     <section className="mt-7" aria-label="Creator portfolio" onClickCapture={closeOnLinkToThisPage}>
-      <div className="sticky top-16 z-20 -mx-1 rounded-[20px] border border-white/8 bg-black/80 p-1.5 shadow-lg backdrop-blur-xl sm:top-20 sm:mx-0">
+      <div className="sticky top-16 z-20 -mx-1 rounded-full border border-white/8 bg-black/80 p-1.5 shadow-lg backdrop-blur-xl sm:top-20 sm:mx-0">
         <div className="grid grid-cols-3 gap-1" role="tablist" aria-label="Creator profile sections">
           {tabs.map((tab) => {
             const selected = activeTab === tab.id;
@@ -502,7 +502,7 @@ export function CreatorContentTabs({
                 tabIndex={selected ? 0 : -1}
                 onClick={() => handleTabSelect(tab.id)}
                 onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
-                className={`ui-focus-ring min-h-11 rounded-[15px] px-2 text-sm font-bold transition ${
+                className={`ui-focus-ring min-h-11 rounded-full px-2 text-sm font-bold transition ${
                   selected ? 'bg-white text-black' : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'
                 }`}
               >
@@ -619,7 +619,7 @@ function CreatorCard({
   const unlockLabel = item.asset ? getAssetAccessLabel(item.asset, { isOwner }) : null;
 
   return (
-    <article className="group min-w-0 overflow-hidden rounded-[20px] border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">
+    <article className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">
       <div className="relative aspect-[4/5] overflow-hidden bg-black">
         {isText ? (
           <button
@@ -682,7 +682,7 @@ function ToolsGrid({ tools }: { tools: CreatorProfilePageData['stats']['toolsUse
         <Link
           key={tool.slug}
           href={`/showcase?tool=${encodeURIComponent(tool.slug)}`}
-          className="ui-focus-ring flex min-h-20 items-center gap-3 rounded-[18px] border border-white/8 bg-[#111215] px-4 transition hover:border-sky-300/25 hover:bg-[#15161a]"
+          className="ui-focus-ring flex min-h-20 items-center gap-3 rounded-2xl border border-white/8 bg-[#111215] px-4 transition hover:border-sky-300/25 hover:bg-[#15161a]"
         >
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-400/10 text-sky-300">
             <Layers3 className="h-5 w-5" />

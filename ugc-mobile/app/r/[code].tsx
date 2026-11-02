@@ -14,6 +14,7 @@ import {
   getRecentReferralClaimRecord,
   normalizeReferralCode,
 } from '@/lib/referral-attribution';
+import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ReferralProgramSummary } from '@/lib/types';
 
@@ -113,7 +114,7 @@ export default function ReferralLandingScreen() {
 
       <Card accent="commerce" padding="lg">
         <View style={{ alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-          <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
+          <View style={{ width: 72, height: 72, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.commerce}1f` }}>
             <Gift size={34} color={theme.colors.commerce} />
           </View>
           <AppText variant="sectionTitle" style={{ textAlign: 'center' }}>
@@ -206,7 +207,7 @@ function Rule({ icon, text }: { icon: React.ReactNode; text: string }) {
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-      <View style={{ width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>{icon}</View>
+      <View style={{ width: 34, height: 34, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>{icon}</View>
       <AppText variant="bodySm" color="textSecondary" style={{ flex: 1, paddingTop: 6 }}>{text}</AppText>
     </View>
   );

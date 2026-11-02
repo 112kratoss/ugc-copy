@@ -408,7 +408,7 @@ export default function GenerationNotifications() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 12, scale: 0.98 }}
               transition={{ duration: 0.2 }}
-              className="pointer-events-auto w-full overflow-hidden rounded-[24px] border border-white/10 bg-zinc-950/92 p-4 shadow-[0_22px_80px_-28px_rgba(0,0,0,0.8)] backdrop-blur-xl"
+              className="pointer-events-auto w-full overflow-hidden rounded-3xl border border-white/10 bg-zinc-950/92 p-4 shadow-[0_22px_80px_-28px_rgba(0,0,0,0.8)] backdrop-blur-xl"
             >
               <div className="flex items-start gap-3">
                 <div

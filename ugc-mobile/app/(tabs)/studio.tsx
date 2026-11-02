@@ -443,7 +443,7 @@ function CaughtUpState() {
   const theme = useAppTheme();
   return (
     <Card accent="workflow" variant="soft" style={{ minHeight: 156, justifyContent: 'center' }}>
-      <View style={{ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.success, 0.13), borderWidth: 1, borderColor: hexWithAlpha(theme.colors.success, 0.28) }}>
+      <View style={{ width: 48, height: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(theme.colors.success, 0.13), borderWidth: 1, borderColor: hexWithAlpha(theme.colors.success, 0.28) }}>
         <CheckCircle2 size={appTheme.icon.feature} color={theme.colors.success} />
       </View>
       <View style={{ gap: 6 }}>
@@ -657,7 +657,7 @@ function PushControlCard({
         gap: 12,
       }}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${iconColor}1f`, borderWidth: 1, borderColor: `${iconColor}55` }}>
+      <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${iconColor}1f`, borderWidth: 1, borderColor: `${iconColor}55` }}>
         <BellRing size={appTheme.icon.default} color={iconColor} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
@@ -762,7 +762,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: 12,
-        borderRadius: 22,
+        borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: notification.isRead ? theme.colors.borderSubtle : `${toneColor}66`,
@@ -771,7 +771,7 @@ function NotificationRow({ notification, onPress }: { notification: MobileNotifi
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${toneColor}1c`, borderWidth: 1, borderColor: `${toneColor}4a` }}>
+      <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${toneColor}1c`, borderWidth: 1, borderColor: `${toneColor}4a` }}>
         <Icon size={appTheme.icon.default} color={toneColor} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
@@ -802,7 +802,7 @@ function UnreadDot({ color }: { color: string }) {
       style={{
         width: 9,
         height: 9,
-        borderRadius: 5,
+        borderRadius: appTheme.radii.pill,
         backgroundColor: color,
       }}
     />
@@ -814,7 +814,7 @@ function Badge({ label, color }: { label: string; color: string }) {
     <View
       style={{
         minHeight: 24,
-        borderRadius: 12,
+        borderRadius: appTheme.radii.pill,
         paddingHorizontal: 9,
         alignItems: 'center',
         justifyContent: 'center',
@@ -852,7 +852,7 @@ function NotificationCategoryList() {
               gap: 12,
             }}
           >
-            <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors[item.tone]}1c`, borderWidth: 1, borderColor: `${theme.colors[item.tone]}4a` }}>
+            <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors[item.tone]}1c`, borderWidth: 1, borderColor: `${theme.colors[item.tone]}4a` }}>
               <Icon size={appTheme.icon.default} color={theme.colors[item.tone]} />
             </View>
             <View style={{ flex: 1, minWidth: 0, gap: 5 }}>

@@ -49,7 +49,7 @@ export default async function OpengraphImage({ params }: { params: Promise<{ slu
                         style={{
                             width: 14,
                             height: 14,
-                            borderRadius: 7,
+                            borderRadius: 999,
                             backgroundColor: '#ff7a59',
                         }}
                     />

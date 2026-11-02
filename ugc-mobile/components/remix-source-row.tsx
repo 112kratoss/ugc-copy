@@ -34,7 +34,7 @@ export type RemixOriginalAction = {
 
 const ROW_STYLE = { flexDirection: 'row', alignItems: 'center', gap: 10 } as const;
 const POSTER_SIZE = 40;
-const POSTER_RADIUS = 10;
+const POSTER_RADIUS = appTheme.radii.sm;
 
 /**
  * A post id as a link carries one. Any app or page can open the app's link, and
@@ -87,10 +87,10 @@ export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; 
         <View style={{ flex: 1, gap: 2 }}>
           {/* The lines' own heights at the phone's text size, which the row's text scales by. */}
           <View style={{ height: appTheme.type.bodySm.lineHeight * fontScale, justifyContent: 'center' }}>
-            <SkeletonBone width="62%" height={13} radius={6} strong />
+            <SkeletonBone width="62%" height={13} radius={appTheme.radii.pill} strong />
           </View>
           <View style={{ height: appTheme.type.caption.lineHeight * fontScale, justifyContent: 'center' }}>
-            <SkeletonBone width="34%" height={10} radius={5} />
+            <SkeletonBone width="34%" height={10} radius={appTheme.radii.pill} />
           </View>
         </View>
       </View>

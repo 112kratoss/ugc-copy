@@ -24,6 +24,9 @@ import { useCreatorPayoutState } from '@/lib/use-creator-payout-state';
 
 type DeletionFailure = { tone: 'danger' | 'warning'; title: string; body: string };
 
+// A capsule, as auth.tsx draws the same button: the native view takes its corner as given.
+const APPLE_BUTTON_HEIGHT = 50;
+
 /**
  * The answer to the deletion was lost and Supabase could not say whether it
  * started (audit 04-3). The web's own sentence, so both say the same thing.
@@ -224,11 +227,11 @@ export default function DeleteAccountScreen() {
               accessibilityLabel="Continue with Apple and delete"
               buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
               buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
-              cornerRadius={appTheme.radii.md}
+              cornerRadius={APPLE_BUTTON_HEIGHT / 2}
               onPress={() => {
                 if (!isDeleting) void removeAccount({ method: 'apple' });
               }}
-              style={{ height: 50, width: '100%', opacity: isDeleting ? appTheme.opacity.disabled : 1 }}
+              style={{ height: APPLE_BUTTON_HEIGHT, width: '100%', opacity: isDeleting ? appTheme.opacity.disabled : 1 }}
             />
           ) : null}
 

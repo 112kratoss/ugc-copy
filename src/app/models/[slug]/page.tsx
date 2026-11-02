@@ -321,7 +321,7 @@ export default async function ModelPage({ params }: ModelPageProps) {
                                         {index > 0 ? ', ' : ''}
                                         <Link
                                             href={`/models/${toModelSlug(peer.model.id)}`}
-                                            className="ui-focus-ring rounded-sm text-[var(--ui-primary)] hover:underline"
+                                            className="ui-focus-ring rounded-lg text-[var(--ui-primary)] hover:underline"
                                         >
                                             {peer.model.displayName}
                                         </Link>

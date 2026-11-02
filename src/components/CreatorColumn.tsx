@@ -401,8 +401,10 @@ const CHOICE_COLUMNS = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4
  * `.ui-surface` is a page panel's, 94% opaque, and with no blur behind it the
  * column's words showed through the settings.
  */
-const FLOATING_SURFACE_CLASS =
-  'rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-ui-panel';
+const FLOATING_SURFACE_FILL = 'border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-ui-panel';
+const FLOATING_SURFACE_CLASS = `rounded-ui-2xl ${FLOATING_SURFACE_FILL}`;
+/** The bar holds its capsules 8px in, so its corners are concentric with theirs: 24 + 8. */
+const FLOATING_BAR_CLASS = `rounded-4xl ${FLOATING_SURFACE_FILL}`;
 
 /** How a choice's options sit: a grid of equal cells, or a pill sized to their words. */
 type CreatorChoiceLayout =
@@ -755,7 +757,7 @@ export function CreatorColumnBar({
     >
       {/* One surface for the line and the bar, so nothing scrolling under the
           bar shows between them, and opaque, so nothing needs blurring behind it. */}
-      <div className={clsx(FLOATING_SURFACE_CLASS, 'overflow-hidden', holdsFootUnderColumn && 'max-[768px]:pb-[env(safe-area-inset-bottom)]')}>
+      <div className={clsx(FLOATING_BAR_CLASS, 'overflow-hidden', holdsFootUnderColumn && 'max-[768px]:pb-[env(safe-area-inset-bottom)]')}>
         {status ? (
           <div data-creator-bar-status className="border-b border-[var(--ui-border-subtle)] px-4 py-3 text-sm">
             {status}
@@ -1007,7 +1009,7 @@ const NOTE_STRONG_CLASS = 'font-bold text-[var(--ui-text-secondary)]';
 
 /** A link in the line under the bar: the words' size, its press area the 44px of a control. */
 export const CREATOR_NOTE_LINK_CLASS =
-  "ui-focus-ring relative rounded-sm font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 after:absolute after:inset-x-0 after:-inset-y-3 after:content-[''] hover:text-[var(--ui-text-primary)]";
+  "ui-focus-ring relative rounded-lg font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 after:absolute after:inset-x-0 after:-inset-y-3 after:content-[''] hover:text-[var(--ui-text-primary)]";
 
 /** Under a signed-in creator's bar: the balance, and what this run leaves of it ("Balance 22 · leaves 3"). */
 export function CreatorBalanceNote({ balance, cost }: { balance: number; cost: number | null }) {
@@ -1899,7 +1901,7 @@ export function CreatorCanvas({
         <h2
           ref={headingRef}
           tabIndex={-1}
-          className="ui-focus-ring rounded-sm text-base font-bold leading-6 text-[var(--ui-text-primary)] outline-none sm:text-lg"
+          className="ui-focus-ring rounded-lg text-base font-bold leading-6 text-[var(--ui-text-primary)] outline-none sm:text-lg"
         >
           {title}
         </h2>

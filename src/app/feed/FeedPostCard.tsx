@@ -189,7 +189,7 @@ function FeedPostCardView({
 
     return (
         <article
-            className="cursor-pointer overflow-hidden rounded-[1.5rem] border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)] [content-visibility:auto] [contain-intrinsic-size:auto_640px]"
+            className="cursor-pointer overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)] [content-visibility:auto] [contain-intrinsic-size:auto_640px]"
             // Pointing at a card is the earliest honest signal that it is about
             // to be opened. Warming here is why the click feels instant; the
             // post links stay `prefetch={false}` so nothing is fetched for
@@ -275,7 +275,7 @@ function FeedPostCardView({
                     <Link
                         href={detailHref}
                         prefetch={false}
-                        className="ui-focus-ring rounded-sm hover:text-white"
+                        className="ui-focus-ring rounded-lg hover:text-white"
                         // The link navigates, or opens a tab or window, by
                         // itself; the ranker hears of it here. Alt-click
                         // downloads the page rather than opening the post.

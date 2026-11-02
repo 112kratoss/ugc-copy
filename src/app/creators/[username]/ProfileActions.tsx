@@ -460,7 +460,7 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="relative flex h-full max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-[32px] border border-white/10 bg-zinc-950 shadow-2xl outline-none"
+              className="relative flex h-full max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-white/10 bg-zinc-950 shadow-2xl outline-none"
             >
               {/* Fixed Header */}
               <div className="flex shrink-0 items-center justify-between border-b border-white/5 bg-zinc-900/50 px-6 py-4">
@@ -514,8 +514,8 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
                   </div>
                 ) : (
                   <div role="status" aria-label="Loading your profile" className="rounded-3xl border border-white/5 p-6">
-                    <div className="h-6 w-48 animate-pulse rounded bg-white/10" />
-                    <div className="mt-3 h-4 w-80 max-w-full animate-pulse rounded bg-white/5" />
+                    <div className="h-6 w-48 animate-pulse rounded-full bg-white/10" />
+                    <div className="mt-3 h-4 w-80 max-w-full animate-pulse rounded-full bg-white/5" />
                     <div className="mt-6 grid gap-4 md:grid-cols-2">
                       <div className="h-12 animate-pulse rounded-2xl bg-black/40" />
                       <div className="h-12 animate-pulse rounded-2xl bg-black/40" />

@@ -230,7 +230,7 @@ function ShowcaseMediaCarousel({
           flexDirection: 'row',
           alignItems: 'center',
           gap: 4,
-          borderRadius: 12,
+          borderRadius: appTheme.radii.pill,
           borderWidth: 1,
           borderColor: hexWithAlpha(mediaColors.onMedia, 0.1),
           backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.68),
@@ -262,7 +262,7 @@ function ShowcaseMediaCarousel({
             style={{
               height: 5,
               width: index === currentIndex ? 12 : 5,
-              borderRadius: 2.5,
+              borderRadius: appTheme.radii.pill,
               backgroundColor: index === currentIndex ? mediaColors.onMedia : hexWithAlpha(mediaColors.onMedia, 0.45),
             }}
           />
@@ -323,7 +323,7 @@ function ShowcaseMediaSlide({
     return (
       <View
         testID="showcase-media-unavailable"
-        style={{ width, height, borderRadius: radius, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', padding: 16 }}
+        style={{ width, height, borderRadius: radius, borderCurve: 'continuous', overflow: 'hidden', backgroundColor: theme.colors.surfaceInset, alignItems: 'center', justifyContent: 'center', padding: 16 }}
       >
         <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '800', textAlign: 'center' }}>This file is no longer available</Text>
         <Text style={{ color: theme.colors.muted, fontSize: 12, marginTop: 6, textAlign: 'center' }}>Its only copy expired at the provider before it could be saved.</Text>

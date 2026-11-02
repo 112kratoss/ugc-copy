@@ -156,7 +156,7 @@ test('on a creator the top bar\'s menu reaches every page the bottom navigation 
     await expectPressable(link, `the menu's ${(await link.textContent())?.trim()}`);
   }
   // A way in, never the page open.
-  await expect(drawer.getByRole('link', { name: 'Create', exact: true })).not.toHaveAttribute('aria-current');
+  await expect(drawer.getByRole('link', { name: 'Generate', exact: true })).not.toHaveAttribute('aria-current');
 
   // And a place only the navigation held, followed from the creator: Alerts, where it is back.
   await drawer.getByRole('link', { name: 'Alerts' }).click();

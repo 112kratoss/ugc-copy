@@ -277,7 +277,7 @@ function AuthHeader() {
         style={({ pressed }) => ({
           width: 48,
           height: 48,
-          borderRadius: 24,
+          borderRadius: appTheme.radii.pill,
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: theme.colors.panelSoft,
@@ -635,7 +635,7 @@ function SignInSupportLink() {
 function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mode: 'login' | 'signup') => void }) {
   const theme = useAppTheme();
   return (
-    <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: 18, backgroundColor: theme.colors.surfaceInset, borderWidth: 1, borderColor: theme.colors.border }}>
+    <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceInset, borderWidth: 1, borderColor: theme.colors.border }}>
       {(['login', 'signup'] as const).map((item) => {
         const active = item === mode;
         return (
@@ -648,7 +648,7 @@ function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mod
             style={({ pressed }) => ({
               flex: 1,
               minHeight: appTheme.touch.compact,
-              borderRadius: 14,
+              borderRadius: appTheme.radii.pill,
               alignItems: 'center',
               justifyContent: 'center',
               backgroundColor: active ? theme.colors.primaryFill : 'transparent',
@@ -712,7 +712,7 @@ function WorkspaceInput({
       <View
         style={{
           minHeight: 56,
-          borderRadius: 18,
+          borderRadius: appTheme.radii.md,
           borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: theme.colors.borderStrong,
@@ -724,7 +724,7 @@ function WorkspaceInput({
           gap: 10,
         }}
       >
-        <View style={{ width: 32, height: 32, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
+        <View style={{ width: 32, height: 32, borderRadius: appTheme.radii.xs, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
           {icon}
         </View>
         <TextInput
@@ -770,7 +770,7 @@ function InlineNotice({ title, body, tone = 'danger' }: {
       accessibilityRole={tone === 'info' ? 'summary' : 'alert'}
       accessibilityLiveRegion={tone === 'info' ? 'polite' : 'assertive'}
       style={{
-        borderRadius: 18,
+        borderRadius: appTheme.radii.md,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: palette.border,

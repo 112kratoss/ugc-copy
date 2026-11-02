@@ -136,7 +136,7 @@ export default function LoginClient({
                     Back home
                 </Link>
                 <Link href="/" prefetch={false} className="ui-focus-ring flex items-center gap-2 rounded-xl text-[var(--ui-text-primary)]">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-[13px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
                         <WandSparkles className="h-4 w-4" aria-hidden />
                     </span>
                     <span className="hidden text-sm font-extrabold sm:inline">magicbooklet</span>
@@ -156,13 +156,13 @@ export default function LoginClient({
                         </p>
                     </div>
 
-                    <div className="rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
-                        <div className="mb-6 grid grid-cols-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] p-1" role="group" aria-label="Choose authentication mode">
+                    <div className="rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
+                        <div className="mb-6 grid grid-cols-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] p-1" role="group" aria-label="Choose authentication mode">
                             <button
                                 type="button"
                                 aria-pressed={isLogin}
                                 onClick={() => chooseMode(true)}
-                                className={`ui-focus-ring min-h-11 rounded-xl px-3 text-sm font-extrabold transition ${
+                                className={`ui-focus-ring min-h-11 rounded-full px-3 text-sm font-extrabold transition ${
                                     isLogin
                                         ? 'bg-[var(--ui-surface-3)] text-[var(--ui-text-primary)] shadow-sm'
                                         : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
@@ -174,7 +174,7 @@ export default function LoginClient({
                                 type="button"
                                 aria-pressed={!isLogin}
                                 onClick={() => chooseMode(false)}
-                                className={`ui-focus-ring min-h-11 rounded-xl px-3 text-sm font-extrabold transition ${
+                                className={`ui-focus-ring min-h-11 rounded-full px-3 text-sm font-extrabold transition ${
                                     !isLogin
                                         ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-sm'
                                         : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
@@ -303,7 +303,7 @@ export default function LoginClient({
                                 onClick={() => void handleProviderSignIn('google')}
                                 disabled={loading}
                                 aria-describedby="sign-in-agreement"
-                                className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
+                                className="ui-focus-ring flex min-h-12 w-full items-center justify-center gap-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-2)] disabled:opacity-50"
                             >
                                 <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
                                     <path
@@ -332,7 +332,7 @@ export default function LoginClient({
                                 onClick={() => void handleProviderSignIn('apple')}
                                 disabled={loading}
                                 aria-describedby="sign-in-agreement"
-                                className="ui-focus-ring mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 font-bold text-black transition hover:bg-zinc-200 disabled:opacity-50"
+                                className="ui-focus-ring mt-3 flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-white px-4 font-bold text-black transition hover:bg-zinc-200 disabled:opacity-50"
                             >
                                 <AppleLogo className="h-5 w-5" />
                                 Continue with Apple

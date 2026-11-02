@@ -19,7 +19,8 @@ export function ComposerFieldShell({ children }: { children: ReactNode }) {
     <View
       style={{
         gap: 8,
-        borderRadius: 18,
+        borderRadius: appTheme.radii.lg,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.borderSubtle,
         backgroundColor: theme.colors.surface,
@@ -92,7 +93,7 @@ export function ComposerInput({
       editable={editable}
       style={{
         minHeight: multiline ? minHeight ?? 112 : appTheme.touch.compact,
-        borderRadius: 14,
+        borderRadius: appTheme.radii.sm,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.border,

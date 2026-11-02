@@ -14,7 +14,7 @@ export function SearchStateBlock({
   const Icon = tone === 'error' ? AlertCircle : tone === 'initial' ? Sparkles : Search;
   return (
     <div
-      className="flex min-h-72 flex-col items-center justify-center rounded-[32px] border border-white/8 bg-white/[0.025] px-6 py-14 text-center"
+      className="flex min-h-72 flex-col items-center justify-center rounded-3xl border border-white/8 bg-white/[0.025] px-6 py-14 text-center"
       role={tone === 'error' ? 'alert' : 'status'}
     >
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.05] text-[var(--ui-primary)]">

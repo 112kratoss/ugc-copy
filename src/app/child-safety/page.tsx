@@ -49,7 +49,7 @@ export default function ChildSafetyPage() {
           parent&apos;s or guardian&apos;s consent.
         </p>
 
-        <section className="mt-10 rounded-[28px] border border-rose-400/25 bg-rose-400/[0.07] p-6 sm:p-8">
+        <section className="mt-10 rounded-3xl border border-rose-400/25 bg-rose-400/[0.07] p-6 sm:p-8">
           <h2 className="text-2xl font-bold text-rose-100">Report a child-safety concern</h2>
           <p className="mt-4 max-w-3xl leading-7 text-[var(--ui-text-secondary)]">
             Use the in-app report control when it is available. For urgent child-safety

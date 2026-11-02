@@ -85,7 +85,7 @@ export default function ReferralLandingClient({
           magicbooklet
         </Link>
 
-        <section className="mt-8 overflow-hidden rounded-[32px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-[var(--ui-shadow-panel)]">
+        <section className="mt-8 overflow-hidden rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-[var(--ui-shadow-panel)]">
           <div className="bg-[linear-gradient(135deg,var(--ui-primary-soft),var(--ui-surface-1)_58%,rgba(242,185,94,0.12))] px-6 py-10 text-center sm:px-12 sm:py-14">
             <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--ui-accent-commerce)] text-zinc-950 shadow-lg">
               <Gift className="h-8 w-8" aria-hidden />

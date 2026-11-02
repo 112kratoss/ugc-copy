@@ -119,7 +119,7 @@ export function UnlockRemixPrompt({
               style={({ pressed }) => ({
                 width: 48,
                 height: 48,
-                borderRadius: 24,
+                borderRadius: appTheme.radii.pill,
                 alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: theme.colors.surfaceStrong,
@@ -132,7 +132,7 @@ export function UnlockRemixPrompt({
 
           <View style={{ borderRadius: appTheme.radii.xl, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceStrong, padding: appTheme.spacing.card, gap: appTheme.spacing.gap }}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-              <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accentValue}22` }}>
+              <View style={{ width: 40, height: 40, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${accentValue}22` }}>
                 <Lock size={20} color={accentValue} />
               </View>
               <View style={{ flex: 1, gap: 5 }}>

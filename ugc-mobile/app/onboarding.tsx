@@ -615,7 +615,7 @@ function OnboardingFlow() {
             <View style={{ flex: 1, justifyContent: 'center', gap: 18, paddingVertical: 24 }}>
               <Animated.View style={{ transform: [{ scale: rewardScale }] }}>
                 <Card accent="primary" padding="lg" style={{ alignItems: 'center', paddingVertical: 34, gap: 16 }}>
-                  <View style={{ width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
+                  <View style={{ width: 72, height: 72, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
                     <Sparkles size={appTheme.icon.hero} color={theme.colors.primary} />
                   </View>
                   <View style={{ alignItems: 'center', gap: 8 }}>

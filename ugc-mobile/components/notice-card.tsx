@@ -131,7 +131,7 @@ export const NoticeCard = forwardRef<Text, {
           paddingHorizontal: appTheme.spacing.gap,
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: appTheme.radii.sm,
+          borderRadius: appTheme.radii.pill,
           backgroundColor: pressed ? theme.colors.pressed : 'transparent',
         })}
       >

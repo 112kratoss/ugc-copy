@@ -176,7 +176,7 @@ export default function WelcomeRewardClient({ nextPath }: { nextPath: string }) 
   return (
     <main className="ui-page ui-page-ambient min-h-screen py-10 sm:py-16">
       <div className="studio-shell relative z-10 flex min-h-[72vh] items-center justify-center">
-        <section className="w-full max-w-2xl rounded-[32px] border border-[rgba(255,122,89,0.28)] bg-[var(--ui-surface-1)] p-6 text-center shadow-[var(--ui-shadow-panel)] sm:p-10">
+        <section className="w-full max-w-2xl rounded-3xl border border-[rgba(255,122,89,0.28)] bg-[var(--ui-surface-1)] p-6 text-center shadow-[var(--ui-shadow-panel)] sm:p-10">
           <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]">
             <Sparkles className="h-9 w-9" aria-hidden />
           </div>

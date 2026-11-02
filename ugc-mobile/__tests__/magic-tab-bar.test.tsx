@@ -241,7 +241,7 @@ describe('MagicTabBar', () => {
     renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress());
     expect(navigation.jumpTo).not.toHaveBeenCalled();
     expect(tree.root.findByProps({ accessibilityLabel: 'Post' })).toBeTruthy();
-    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress());
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Generate' }).props.onPress());
     expect(navigation.emit).toHaveBeenLastCalledWith({ type: 'tabPress', target: 'creator-key', canPreventDefault: true });
     expect(navigation.jumpTo).toHaveBeenCalledWith('creator');
   });
@@ -314,7 +314,7 @@ describe('MagicTabBar', () => {
     renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Profile' }).props.onPress());
     expect(navigation.navigate).not.toHaveBeenCalled();
     renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress());
-    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress());
+    renderer.act(() => tree.root.findByProps({ accessibilityLabel: 'Generate' }).props.onPress());
     expect(navigation.jumpTo).not.toHaveBeenCalled();
   });
 
@@ -582,24 +582,24 @@ function findBadgeOvals(tree: ReturnType<typeof renderer.create>) {
       tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress();
     });
 
-    expect(tree.root.findByProps({ accessibilityLabel: 'Create' })).toBeTruthy();
+    expect(tree.root.findByProps({ accessibilityLabel: 'Generate' })).toBeTruthy();
     expect(tree.root.findByProps({ accessibilityLabel: 'Post' })).toBeTruthy();
 
     renderer.act(() => {
       tree.root.findByProps({ accessibilityLabel: 'Close create menu' }).props.onPress();
     });
 
-    expect(() => tree.root.findByProps({ accessibilityLabel: 'Create' })).toThrow();
+    expect(() => tree.root.findByProps({ accessibilityLabel: 'Generate' })).toThrow();
   });
 
-  it('keeps Create routed to the existing creator tab', () => {
+  it('keeps Generate routed to the existing creator tab', () => {
     const { tree, navigation } = renderTabBar();
 
     renderer.act(() => {
       tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress();
     });
     renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Create' }).props.onPress();
+      tree.root.findByProps({ accessibilityLabel: 'Generate' }).props.onPress();
     });
 
     expect(navigation.jumpTo).toHaveBeenCalledWith('creator');

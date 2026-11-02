@@ -424,6 +424,11 @@ const lightTabBar: TabBarTokens = {
  * `appTheme`, anywhere — module scope included.
  */
 const staticTokens = {
+  // Three shapes (docs/design/design-mobile.md → Radius): a control on one row is a
+  // capsule (`pill`); the outermost container takes a fixed step by its size; and a
+  // shape nested close inside a container is concentric with it, the container's
+  // radius less the gap between their edges. `hig-corner-radius.test.ts` holds every
+  // radius in the app to these steps.
   radii: {
     xs: 8,
     sm: 12,

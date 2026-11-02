@@ -84,11 +84,11 @@ export default async function AlternativePage({ params }: AlternativePageProps) 
                             href={entry.pricingUrl}
                             rel="nofollow noopener"
                             target="_blank"
-                            className="ui-focus-ring rounded-sm text-[var(--ui-primary)] hover:underline"
+                            className="ui-focus-ring rounded-lg text-[var(--ui-primary)] hover:underline"
                         >
                             {entry.competitor}&apos;s own pricing page
                         </a>{' '}
-                        and <Link href="/pricing" className="ui-focus-ring rounded-sm text-[var(--ui-primary)] hover:underline">ours</Link> for current numbers.
+                        and <Link href="/pricing" className="ui-focus-ring rounded-lg text-[var(--ui-primary)] hover:underline">ours</Link> for current numbers.
                     </Text>
                 </section>
 

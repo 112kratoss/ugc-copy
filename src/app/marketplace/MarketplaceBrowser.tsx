@@ -207,7 +207,7 @@ export default function MarketplaceBrowser({
           stacking context, so the tool dropdown's own z-index is scoped inside
           it and the card grid below would otherwise paint straight over the
           open menu. */}
-      <div className="relative z-20 mt-8 rounded-[28px] border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5">
+      <div className="relative z-20 mt-8 rounded-3xl border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
@@ -393,7 +393,7 @@ function ResultsMessage({
   actionHref: string;
 }) {
   return (
-    <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
+    <div className="mt-10 rounded-3xl border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
       {icon}
       <h2 className="mt-4 text-2xl font-semibold text-white">{title}</h2>
       <p className="mt-3 mx-auto max-w-xl text-sm leading-7 text-zinc-400">{body}</p>

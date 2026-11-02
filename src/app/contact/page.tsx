@@ -135,7 +135,7 @@ export default function Contact() {
                     </div>
 
                     {/* Contact Form */}
-                    <div className="rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-8 shadow-[var(--ui-shadow-panel)]">
+                    <div className="rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-8 shadow-[var(--ui-shadow-panel)]">
                         <ContactForm />
                     </div>
                 </div>

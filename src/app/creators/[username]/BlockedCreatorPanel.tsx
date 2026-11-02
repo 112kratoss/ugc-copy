@@ -43,7 +43,7 @@ export function BlockedCreatorPanel({ creatorId, username }: { creatorId: string
   return (
     <section
       aria-labelledby="blocked-creator-title"
-      className="mt-7 flex min-h-56 flex-col items-center justify-center rounded-[24px] border border-white/8 bg-[#111215] px-6 py-10 text-center"
+      className="mt-7 flex min-h-56 flex-col items-center justify-center rounded-3xl border border-white/8 bg-[#111215] px-6 py-10 text-center"
     >
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.06] text-zinc-400">
         <Ban className="h-5 w-5" aria-hidden />

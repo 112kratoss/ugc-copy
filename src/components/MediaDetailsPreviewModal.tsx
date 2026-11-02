@@ -285,7 +285,7 @@ function MediaDetailsPreviewDialog({
 
     if (preview.mediaType === 'audio') {
       return (
-        <div className="w-full max-w-xl rounded-[24px] border border-white/10 bg-zinc-950 p-5">
+        <div className="w-full max-w-xl rounded-3xl border border-white/10 bg-zinc-950 p-5">
           <div className="mb-4 flex items-center gap-3 text-sm font-semibold text-white">
             <Volume2 className="h-4 w-4 text-emerald-200" />
             {preview.title}
@@ -311,7 +311,7 @@ function MediaDetailsPreviewDialog({
       if (mediaType === 'text') {
         return (
           <div className="w-full max-w-2xl px-2 py-2">
-            <div className="rounded-[24px] border border-white/8 bg-zinc-950/80 p-6 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
+            <div className="rounded-3xl border border-white/8 bg-zinc-950/80 p-6 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
               <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Text</div>
               <div className="mt-4 whitespace-pre-wrap text-base leading-8 text-zinc-100">
                 {hasBody ? trimmedBody : 'No note content available.'}
@@ -344,7 +344,7 @@ function MediaDetailsPreviewDialog({
 
     if (mediaType === 'audio') {
       return (
-        <div className="flex w-full max-w-xl flex-col gap-5 rounded-[24px] border border-white/5 bg-zinc-950/80 p-6">
+        <div className="flex w-full max-w-xl flex-col gap-5 rounded-3xl border border-white/5 bg-zinc-950/80 p-6">
           <div>
             <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Audio preview</div>
             <p className="mt-2 text-sm text-zinc-400">Listen to the saved generation and copy the prompt below if you want to reuse it.</p>
@@ -449,7 +449,7 @@ function MediaDetailsPreviewDialog({
         aria-labelledby={titleId}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] min-w-0 w-[calc(100vw-1.5rem)] max-w-4xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-[28px] border border-white/10 bg-zinc-950 p-4 shadow-2xl shadow-black/70 outline-none sm:max-h-[90dvh] sm:gap-5 sm:rounded-[30px] sm:p-6"
+        className="preview-modal-panel relative flex max-h-[calc(100dvh-1.5rem)] min-w-0 w-[calc(100vw-1.5rem)] max-w-4xl flex-col gap-4 overflow-y-auto overscroll-contain rounded-3xl border border-white/10 bg-zinc-950 p-4 shadow-2xl shadow-black/70 outline-none sm:max-h-[90dvh] sm:gap-5 sm:p-6"
       >
         <button
           type="button"
@@ -484,7 +484,7 @@ function MediaDetailsPreviewDialog({
           ) : null}
         </div>
 
-        <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-[22px] border border-white/8 bg-black/70 shadow-inner sm:min-h-[320px] sm:flex-1 sm:rounded-[24px]">
+        <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-ui-xl border border-white/8 bg-black/70 shadow-inner sm:min-h-[320px] sm:flex-1">
           {renderMedia()}
         </div>
 
@@ -496,7 +496,7 @@ function MediaDetailsPreviewDialog({
 
         <details
           open
-          className="group rounded-[22px] border border-white/8 bg-black/45 p-4 sm:rounded-[24px] sm:p-5"
+          className="group rounded-2xl border border-white/8 bg-black/45 p-4 sm:p-5"
         >
           <summary className="flex cursor-pointer list-none items-center justify-between gap-4">
             <div>
@@ -520,7 +520,7 @@ function MediaDetailsPreviewDialog({
                       key={item.id}
                       type="button"
                       onClick={() => openMediaPreview(item)}
-                      className="group w-[calc(50%-0.375rem)] min-w-0 rounded-[18px] border border-white/8 bg-white/[0.03] p-2 text-left transition hover:border-white/18 hover:bg-white/[0.06] sm:w-36"
+                      className="group w-[calc(50%-0.375rem)] min-w-0 rounded-xl border border-white/8 bg-white/[0.03] p-2 text-left transition hover:border-white/18 hover:bg-white/[0.06] sm:w-36"
                       aria-label={`Open ${item.title}`}
                     >
                       {renderAdditionalMediaPreview(item)}
@@ -554,7 +554,7 @@ function MediaDetailsPreviewDialog({
                           alt: item.label,
                         });
                       }}
-                      className="group w-[calc(50%-0.375rem)] min-w-0 rounded-[18px] border border-white/8 bg-white/[0.03] p-2 text-left transition hover:border-white/18 hover:bg-white/[0.06] sm:w-36"
+                      className="group w-[calc(50%-0.375rem)] min-w-0 rounded-xl border border-white/8 bg-white/[0.03] p-2 text-left transition hover:border-white/18 hover:bg-white/[0.06] sm:w-36"
                     >
                       {renderInputMediaPreview(item)}
                       <div className="mt-2 flex min-w-0 items-center gap-2 px-1 text-xs font-semibold text-zinc-200">
@@ -569,7 +569,7 @@ function MediaDetailsPreviewDialog({
             ) : null}
 
             {mediaType !== 'text' && hasBody ? (
-              <div className="rounded-[20px] border border-white/5 bg-black/40 p-4 sm:rounded-[22px]">
+              <div className="rounded-2xl border border-white/5 bg-black/40 p-4">
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">Notes</div>
                 <p className="mt-3 max-h-40 overflow-y-auto whitespace-pre-wrap pr-2 text-sm leading-relaxed text-zinc-300 custom-scrollbar">
                   {trimmedBody}
@@ -577,7 +577,7 @@ function MediaDetailsPreviewDialog({
               </div>
             ) : null}
 
-            <div className="rounded-[20px] border border-white/5 bg-black/40 p-4 sm:rounded-[22px]">
+            <div className="rounded-2xl border border-white/5 bg-black/40 p-4">
               <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div className="text-xs font-bold uppercase tracking-[0.18em] text-zinc-500">
                   {mediaType === 'text' ? 'Workflow notes' : 'Prompt'}
@@ -618,7 +618,7 @@ function MediaDetailsPreviewDialog({
               >
                 <X className="h-5 w-5" />
               </button>
-              <div className="flex min-h-[220px] w-full items-center justify-center rounded-[24px] border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
+              <div className="flex min-h-[220px] w-full items-center justify-center rounded-3xl border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
                 {renderExpandedMedia(activeMediaPreview)}
               </div>
             </div>

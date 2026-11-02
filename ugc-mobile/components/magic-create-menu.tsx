@@ -161,8 +161,8 @@ export function MagicCreateMenu({
             width: panelWidth,
             alignSelf: 'center',
             overflow: 'hidden',
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
+            borderTopLeftRadius: appTheme.radii.xl,
+            borderTopRightRadius: appTheme.radii.xl,
             borderCurve: 'continuous',
             borderWidth: 1,
             borderBottomWidth: 0,
@@ -222,7 +222,7 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
       style={({ pressed }) => ({
         width: 48,
         height: 48,
-        borderRadius: 24,
+        borderRadius: appTheme.radii.pill,
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
@@ -254,7 +254,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
         alignItems: 'flex-start',
         justifyContent: 'space-between',
         gap: 16,
-        borderRadius: 20,
+        borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: isCreate ? theme.colors.primaryFill : theme.colors.border,
@@ -269,7 +269,7 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
         style={{
           width: 48,
           height: 48,
-          borderRadius: 24,
+          borderRadius: appTheme.radii.pill,
           alignItems: 'center',
           justifyContent: 'center',
           backgroundColor: isCreate ? hexWithAlpha(theme.colors.onPrimary, 0.12) : theme.colors.surfaceStrong,
@@ -278,7 +278,15 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
         <Icon size={appTheme.icon.feature} color={foreground} />
       </View>
       <View style={{ gap: 4 }}>
-        <Text style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}>
+        {/* One line that shrinks to fit: the label is a single word in a tile of fixed width, and at
+            large text sizes a word wider than the tile was broken in two ("Generat" over "e"). */}
+        <Text
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+          maxFontSizeMultiplier={appTheme.typeScale.control}
+          style={{ color: foreground, fontSize: 17, lineHeight: 22, fontWeight: '800' }}
+        >
           {action.label}
         </Text>
         <Text numberOfLines={2} style={{ color: isCreate ? hexWithAlpha(theme.colors.onPrimary, 0.72) : theme.colors.muted, fontSize: 12, lineHeight: 17, fontWeight: '600' }}>

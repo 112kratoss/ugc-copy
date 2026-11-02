@@ -1429,7 +1429,7 @@ export default function ShowcaseReelViewer({
     }
 
     return (
-      <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
+      <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-500/10 p-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Recipe</div>
@@ -1653,7 +1653,7 @@ export default function ShowcaseReelViewer({
         pinned at 390px — below xl it keeps the original fixed width.
       */}
       <div className="relative z-10 grid h-[calc(100dvh-3.5rem)] min-h-0 grid-rows-[minmax(0,1fr)_auto_minmax(180px,0.45fr)] gap-3 px-3 pb-3 pt-3 lg:grid-cols-[minmax(0,1fr)_78px_390px] lg:grid-rows-none lg:px-5 xl:grid-cols-[minmax(0,1fr)_78px_clamp(390px,27vw,520px)]">
-        <section className="relative min-h-0 overflow-hidden rounded-[28px] border border-white/10 bg-black shadow-[0_26px_90px_rgba(0,0,0,0.5)]">
+        <section className="relative min-h-0 overflow-hidden rounded-3xl border border-white/10 bg-black shadow-[0_26px_90px_rgba(0,0,0,0.5)]">
           <div className="absolute left-4 top-4 z-10 flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-xs font-semibold text-zinc-100 backdrop-blur-md">
               {mediaTypeLabel}
@@ -1719,19 +1719,19 @@ export default function ShowcaseReelViewer({
 
         </section>
 
-        <aside className="flex min-w-0 items-center justify-center gap-2 overflow-x-auto rounded-[24px] border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:overflow-visible lg:border-0 lg:bg-transparent lg:p-0">
+        <aside className="flex min-w-0 items-center justify-center gap-2 overflow-x-auto rounded-3xl border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:overflow-visible lg:border-0 lg:bg-transparent lg:p-0">
           <div
             role="group"
             aria-label="Browse posts"
             data-showcase-post-navigation
-            className="hidden shrink-0 items-center gap-1 rounded-[20px] border border-white/10 bg-white/[0.035] p-1 sm:flex lg:flex-col"
+            className="hidden shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.035] p-1 sm:flex lg:flex-col"
           >
             <button
               type="button"
               onClick={goPrevious}
               disabled={!previousItem}
               aria-label="Previous post"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
               <ArrowUp size={16} className="h-4 w-4 shrink-0" />
             </button>
@@ -1741,7 +1741,7 @@ export default function ShowcaseReelViewer({
               disabled={!nextItem && !hasMoreItems}
               aria-busy={!nextItem && hasMoreItems && isLoadingMoreItems}
               aria-label="Next post"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
             >
               {!nextItem && hasMoreItems && isLoadingMoreItems ? (
                 <Loader2 size={16} className="h-4 w-4 shrink-0 animate-spin" />
@@ -1881,7 +1881,7 @@ export default function ShowcaseReelViewer({
 
         <section
           data-reel-scroll-region="details"
-          className="flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.92),rgba(8,8,10,0.94))] shadow-[0_24px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl"
+          className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-white/10 bg-[linear-gradient(180deg,rgba(24,24,27,0.92),rgba(8,8,10,0.94))] shadow-[0_24px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl"
         >
           <div className="shrink-0 flex items-center justify-between border-b border-white/8 px-5 py-4">
             <div className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
@@ -1972,7 +1972,7 @@ export default function ShowcaseReelViewer({
                 ) : null}
 
                 {item.asset && !isUnlockCheckoutOpen && !hasReelUnlockAccess ? (
-                  <div className="mt-5 rounded-[22px] border border-emerald-300/20 bg-emerald-500/10 p-4">
+                  <div className="mt-5 rounded-2xl border border-emerald-300/20 bg-emerald-500/10 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">Recipe</div>
@@ -2020,7 +2020,7 @@ export default function ShowcaseReelViewer({
                   // to open and save, links to follow, settings as keys and
                   // values. The partial card it replaces showed the first
                   // prompt and note alone.
-                  <div ref={recipePanelRef} className="mt-5 scroll-mt-4 rounded-[22px] border border-emerald-300/20 bg-black/30 p-4">
+                  <div ref={recipePanelRef} className="mt-5 scroll-mt-4 rounded-2xl border border-emerald-300/20 bg-black/30 p-4">
                     <PostResourceBundlePanel
                       key={item.id}
                       {...buildRecipePanelProps(toReelRecipeSource(item.asset, unlockedBundle), {
@@ -2036,7 +2036,7 @@ export default function ShowcaseReelViewer({
                 ) : null}
 
                 {item.body.trim() ? (
-                  <div className="mt-5 rounded-[20px] border border-white/8 bg-black/30 p-4">
+                  <div className="mt-5 rounded-2xl border border-white/8 bg-black/30 p-4">
                     <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Note</div>
                     <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-zinc-300">
                       {item.body}
@@ -2045,7 +2045,7 @@ export default function ShowcaseReelViewer({
                 ) : null}
 
                 {item.prompt.trim() ? (
-                  <div className="mt-5 rounded-[20px] border border-white/8 bg-black/30 p-4">
+                  <div className="mt-5 rounded-2xl border border-white/8 bg-black/30 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">
                         {item.postFormat === 'text' ? 'Workflow notes' : 'Prompt'}

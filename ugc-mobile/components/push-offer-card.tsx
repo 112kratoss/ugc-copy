@@ -72,7 +72,7 @@ export function PushOfferCard({
           style={{
             width: 42,
             height: 42,
-            borderRadius: 21,
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: hexWithAlpha(theme.colors.primary, 0.12),

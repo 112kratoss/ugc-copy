@@ -61,7 +61,7 @@ function HelpCard({ icon, title, body, onPress }: { icon: React.ReactNode; title
   const content = (
     <Card style={{ minHeight: 112 }}>
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-        <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
+        <View style={{ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center' }}>
           {icon}
         </View>
         <View style={{ flex: 1, gap: 5 }}>

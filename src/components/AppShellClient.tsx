@@ -71,9 +71,8 @@ const NAV_GROUPS_WITHOUT_BOTTOM_NAV = NAV_GROUPS.map((group) => ({
 }));
 
 const ALERTS_NAV_ITEM = APP_NAV_ITEMS.find((item) => item.id === 'alerts')!;
-const POST_MENU_ITEM = CREATE_MENU_ITEMS.find((item) => item.id === 'post')!;
 
-/** A place the drawer links to: one of the shell's places, or the Create menu's Post. */
+/** A place the drawer links to: one of the shell's places, or one of the Create menu's two choices in its words. */
 type DrawerPlace = Pick<AppNavItem, 'label' | 'href' | 'icon'> & { id: AppNavItem['id'] | 'post' };
 
 const APP_SHELL_SIDEBAR_ID = 'app-shell-sidebar';
@@ -129,8 +128,9 @@ function NavigationMenuButton({ open, onOpen, carriesAlerts }: { open: boolean; 
 }
 
 function drawerPlace(id: DrawerPlace['id'], pathname: string): DrawerPlace | null {
-  if (id === 'post') {
-    return { id, label: POST_MENU_ITEM.label, href: getCreateMenuHref('post', pathname), icon: CREATE_MENU_ICONS.post };
+  const choice = CREATE_MENU_ITEMS.find((item) => item.id === id);
+  if (choice) {
+    return { id, label: choice.label, href: getCreateMenuHref(choice.id, pathname), icon: CREATE_MENU_ICONS[choice.id] };
   }
   return APP_NAV_ITEMS.find((item) => item.id === id) ?? null;
 }
@@ -199,7 +199,7 @@ function DesktopNavItem({
       // while the tab is open, it goes nowhere (getReselectableTabId).
       data-app-nav-tab={item.id}
       onClick={(event) => onNavigate(event, item)}
-      className={`ui-focus-ring group relative flex min-h-11 items-center gap-3 rounded-[14px] border px-3 py-2 text-[13px] font-semibold transition ${
+      className={`ui-focus-ring group relative flex min-h-11 items-center gap-3 rounded-2xl border px-3 py-2 text-[13px] font-semibold transition ${
         active
           ? 'border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] text-[var(--ui-text-primary)]'
           : 'border-transparent text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
@@ -293,7 +293,7 @@ function BottomNavItem({
       aria-current={active ? 'page' : undefined}
       data-app-nav-tab={item.id}
       onClick={(event) => onNavigate(event, item)}
-      className={`ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-[18px] px-1 py-2 text-[11px] font-bold transition ${
+      className={`ui-focus-ring relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 rounded-full px-1 py-2 text-[11px] font-bold transition ${
         active
           ? 'bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]'
           : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
@@ -310,7 +310,7 @@ function BottomNavItem({
 function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <Link href="/" prefetch={false} className="ui-focus-ring flex items-center gap-3 rounded-2xl text-[var(--ui-text-primary)]">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[14px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_10px_24px_rgba(255,122,89,0.18)]">
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_10px_24px_rgba(255,122,89,0.18)]">
         <WandSparkles className="h-5 w-5" strokeWidth={2.4} aria-hidden />
       </span>
       <span className="min-w-0">
@@ -513,7 +513,7 @@ const AppShellFrame = memo(function AppShellFrame({
         <Link
           href="/contact"
           prefetch={false}
-          className="ui-focus-ring mx-3 mb-4 flex min-h-12 items-center gap-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 py-2 text-[13px] font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-default)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
+          className="ui-focus-ring mx-3 mb-4 flex min-h-12 items-center gap-3 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] pl-2 pr-4 py-2 text-[13px] font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-default)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--ui-surface-inset)] text-[var(--ui-text-secondary)]">
             <HelpCircle className="h-4 w-4" aria-hidden />
@@ -678,7 +678,7 @@ const AppShellFrame = memo(function AppShellFrame({
                         <DrawerNavItem
                           key={item.id}
                           item={item}
-                          // Create opens the launchpad: a way in, as the bottom bar's + was,
+                          // Generate opens the launchpad: a way in, as the bottom bar's + was,
                           // never the page open, though its section claims the creators.
                           active={item.id !== 'create' && activeItem?.id === item.id}
                           onClick={() => setMobileOpen(false)}
@@ -695,7 +695,7 @@ const AppShellFrame = memo(function AppShellFrame({
               href="/contact"
               prefetch={false}
               onClick={() => setMobileOpen(false)}
-              className="ui-focus-ring mt-8 flex min-h-12 items-center gap-3 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 text-sm font-bold text-[var(--ui-text-secondary)]"
+              className="ui-focus-ring mt-8 flex min-h-12 items-center gap-3 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 text-sm font-bold text-[var(--ui-text-secondary)]"
             >
               <HelpCircle className="h-[18px] w-[18px]" aria-hidden />
               Help & feedback
