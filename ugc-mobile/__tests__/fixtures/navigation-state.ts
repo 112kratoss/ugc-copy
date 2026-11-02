@@ -18,7 +18,8 @@ export type StateFixture = { index?: number; routes: RouteFixture[] };
 
 /** The route `router.push({ pathname, params })` puts on screen, e.g. `create/[tool]`. */
 export function pushedRoute(pathname: string, params: Record<string, string>): RouteFixture {
-  const href = resolveHref({ pathname, params });
+  // Any route's pathname, which typed routes (`.expo/types`) cannot name.
+  const href = resolveHref({ pathname, params } as never);
   const written = new URL(href, 'file:').pathname.split('/');
   const pathParams = Object.fromEntries(pathname.split('/').flatMap((segment, index) => {
     const name = /^\[(.+)\]$/.exec(segment)?.[1];
