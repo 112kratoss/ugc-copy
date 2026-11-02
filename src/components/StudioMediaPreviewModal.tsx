@@ -7,13 +7,15 @@ import { createPortal } from 'react-dom';
 import type { StudioMediaPreviewType } from '@/components/CreatorStudio';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 import { getFocusableElements } from '@/lib/focusable-elements';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 
 const PREVIEW_VISUAL_CLASS = 'preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]';
 
 /**
- * The picture or clip itself. With `renewSrc` it is drawn from the link that gives once it
- * answers, which is `src` itself while that lasts: a remix's links are signed for an hour, and a
- * new player on a lapsed one stayed blank. It is mounted with the preview, so each opening asks.
+ * The picture or clip itself. A link with five minutes or less to live (a remix's are signed for
+ * an hour, and a new player on a lapsed one stayed blank) waits for the one `renewSrc` gives for
+ * it; any other, a blob, a public link or a fresh one, is drawn at once. Mounted for each link as
+ * the preview opens it (keyed by `src`), so each opening decides again.
  */
 function StudioPreviewMedia({
   mediaType,
@@ -26,25 +28,27 @@ function StudioPreviewMedia({
   alt: string;
   renewSrc?: (src: string) => Promise<string>;
 }) {
-  const [renewal, setRenewal] = useState<{ src: string; shown: string } | null>(null);
+  // Read once, as it opens: null while a lapsing link waits for its renewal.
+  const [shown, setShown] = useState<string | null>(() => (
+    renewSrc && isSignedMediaUrlExpiring(src, Date.now()) ? null : src
+  ));
   useEffect(() => {
-    if (!renewSrc) return;
+    if (shown !== null || !renewSrc) return;
     let live = true;
     renewSrc(src).then(
-      (shown) => {
-        if (live) setRenewal({ src, shown });
+      (renewed) => {
+        if (live) setShown(renewed);
       },
       () => {
-        if (live) setRenewal({ src, shown: src });
+        if (live) setShown(src);
       },
     );
     return () => {
       live = false;
     };
-  }, [renewSrc, src]);
+  }, [renewSrc, shown, src]);
 
-  const shown = !renewSrc ? src : renewal?.src === src ? renewal.shown : null;
-  if (!shown) {
+  if (shown === null) {
     return <Loader2 aria-label="Loading preview" className="h-8 w-8 animate-spin text-zinc-500" />;
   }
   return mediaType === 'image' ? (
@@ -78,7 +82,7 @@ export function StudioMediaPreviewModal({
   alt: string;
   title: string;
   footer?: ReactNode;
-  /** A link to `src`'s file that opens now (a remix page's, whose links last an hour). */
+  /** A link to `src`'s file that opens now, asked only for a link about to lapse (a remix page's last an hour). */
   renewSrc?: (src: string) => Promise<string>;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -158,7 +162,7 @@ export function StudioMediaPreviewModal({
         <h2 id={titleId} className="pr-10 text-lg font-bold tracking-tight text-white sm:pr-12 sm:text-xl">{title}</h2>
 
         <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-ui-xl border border-white/5 bg-black/50 sm:min-h-[320px] sm:flex-1">
-          <StudioPreviewMedia mediaType={mediaType} src={src} alt={alt} renewSrc={renewSrc} />
+          <StudioPreviewMedia key={src} mediaType={mediaType} src={src} alt={alt} renewSrc={renewSrc} />
         </div>
 
         {footer ? (
