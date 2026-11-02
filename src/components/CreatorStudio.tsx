@@ -305,6 +305,44 @@ export function StudioRemixNotice({
   );
 }
 
+const USE_ORIGINAL_TONES = {
+  blue: 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15',
+  coral: 'border border-[#ff7a59]/25 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/45 hover:bg-[#ff7a59]/15',
+} as const;
+
+/**
+ * A remix notice's offer of the original result as a reference (StudioRemixNotice's `action`),
+ * which reads "Using original result" and stands down while the run holds it.
+ */
+export function StudioUseOriginalButton({
+  using,
+  onUse,
+  label = 'Use as reference',
+  icon: Icon = Sparkles,
+  tone = 'blue',
+}: {
+  using: boolean;
+  onUse: () => void;
+  label?: string;
+  icon?: LucideIcon;
+  tone?: keyof typeof USE_ORIGINAL_TONES;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onUse}
+      disabled={using}
+      className={clsx(
+        'inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition',
+        using ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100' : USE_ORIGINAL_TONES[tone]
+      )}
+    >
+      <Icon className="h-4 w-4" />
+      {using ? 'Using original result' : label}
+    </button>
+  );
+}
+
 /**
  * The creators' model notices: the selected model was retired or replaced,
  * unsupported settings were reset, or the model list failed to load. Same card

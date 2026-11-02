@@ -1076,7 +1076,6 @@ describe('an upload slot', () => {
 // A row for each kind of reference a model takes, each led by its add box, after the app's box (2026-11-01).
 describe('the references rows', () => {
   const kind = (name: string, railLabel: string, accept: string, count = 0, limit = 3): CreatorReferenceKind => ({
-    name,
     railLabel,
     hint: `${name} hint`,
     accept,
@@ -1089,7 +1088,7 @@ describe('the references rows', () => {
   const audio = (count = 0) => kind('Audio', 'Audio', 'audio/*', count);
   const rows = (kinds: CreatorReferenceKind[]) => (
     <>
-      {kinds.map((each) => <CreatorReferenceRow key={each.name} accent="video" kind={each} />)}
+      {kinds.map((each) => <CreatorReferenceRow key={each.railLabel} accent="video" kind={each} stripLabel={`Reference ${each.railLabel}`} />)}
     </>
   );
 
@@ -1106,15 +1105,22 @@ describe('the references rows', () => {
   it('says what an empty kind is for beside its box, and shows its references there once it has some', () => {
     render(
       <>
-        <CreatorReferenceRow accent="video" kind={video()} />
-        <CreatorReferenceRow accent="video" kind={image(1)}>
-          <ul aria-label="Pictures" />
+        <CreatorReferenceRow accent="video" kind={video()} stripLabel="Reference videos">{[]}</CreatorReferenceRow>
+        <CreatorReferenceRow accent="video" kind={audio()} stripLabel="Reference audio" />
+        <CreatorReferenceRow accent="video" kind={kind('Voice', 'Voices', 'audio/*')} stripLabel="Voices">{false}</CreatorReferenceRow>
+        <CreatorReferenceRow accent="video" kind={image(1)} stripLabel="Reference images">
+          {['Hero'].map((name) => <li key={name}>{name}</li>)}
         </CreatorReferenceRow>
       </>
     );
 
+    // A kind with no tiles, given none, an empty list of them, or a `false` left by a condition.
     expect(screen.getByText('Video hint', { selector: 'p' })).toBeVisible();
-    expect(screen.getByRole('list', { name: 'Pictures' })).toBeInTheDocument();
+    expect(screen.getByText('Audio hint', { selector: 'p' })).toBeVisible();
+    expect(screen.getByText('Voice hint', { selector: 'p' })).toBeVisible();
+    expect(screen.queryByRole('list', { name: 'Voices' })).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Reference videos' })).toBeNull();
+    expect(within(screen.getByRole('list', { name: 'Reference images' })).getByText('Hero')).toBeInTheDocument();
     expect(screen.queryByText('Image hint', { selector: 'p' })).toBeNull();
   });
 

@@ -155,6 +155,18 @@ describe('the sign-up a visitor meets at Generate', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
+  // The shell it shares with the Top Up sheet (ModalSheet): the backdrop takes no second click of a
+  // double-click, which would put away a sheet a double-click brought up under the pointer.
+  it('closes on a press of its backdrop, and not on the second click of a double-click', () => {
+    const { onClose } = renderSheet();
+    const backdrop = screen.getByRole('dialog').parentElement!;
+
+    fireEvent.click(backdrop, { detail: 2 });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(backdrop, { detail: 1 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('names what was pressed', () => {
     renderSheet({ reason: 'enhance', keepsImages: false });
     expect(screen.getByRole('dialog', { name: 'Continue to enhance your prompt' })).toBeInTheDocument();

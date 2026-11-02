@@ -273,6 +273,7 @@ describe('unified generation start service', () => {
       userId: 'user-1',
       clientRequestKeyHash: 'request-hash',
       sourceGenerationId: null,
+      resolvedMediaSources: new Map([['https://cdn.example.com/clip.mp4', 'https://cdn.example.com/clip.mp4?token=measured']]),
       dependencies: {
         startCatalog,
         startImage,
@@ -291,6 +292,8 @@ describe('unified generation start service', () => {
         adapterKey: 'kie-task-v1',
       }),
       quotedCostCredits: 10,
+      // The links the run was priced on, which the start reuses.
+      resolvedMediaSources: new Map([['https://cdn.example.com/clip.mp4', 'https://cdn.example.com/clip.mp4?token=measured']]),
     }));
     expect(startImage).not.toHaveBeenCalled();
     expect(startVideo).not.toHaveBeenCalled();
@@ -611,12 +614,15 @@ describe('reference lengths a caller reports', () => {
     operation = SEEDANCE_OPERATION,
     quote = referencePricedQuote,
     existingGeneration = null,
+    resolveLink = (url: string) => url,
   }: {
     body: Record<string, unknown>;
     measuredSeconds: number;
     operation?: typeof SEEDANCE_OPERATION | typeof MOTION_OPERATION;
     quote?: (input: GenerationModelQuoteInput) => ReturnType<typeof referencePricedQuote>;
     existingGeneration?: Record<string, unknown> | null;
+    /** The link a reference resolves to. */
+    resolveLink?: (url: string) => string;
   }) {
     const started = { predictionId: 'provider-task', generationId: 'generation-1', remainingCredits: 50, cost: 0 };
     const startVideo = vi.fn(async () => started);
@@ -652,12 +658,24 @@ describe('reference lengths a caller reports', () => {
         enforceRateLimit: vi.fn(async () => undefined) as never,
         startVideo: startVideo as never,
         startMotion: startMotion as never,
-        resolveInputSource: vi.fn(async (_client: unknown, url: string) => url),
+        resolveInputSource: vi.fn(async (_client: unknown, url: string) => resolveLink(url)),
         probeInputDuration,
       },
     );
     return { outcome, startVideo, startMotion, probeInputDuration };
   }
+
+  it('starts the run on the links its references were measured from', async () => {
+    const signed = `${REFERENCE_URL}?token=measured`;
+    const run = start({ body: seedanceBody(10), measuredSeconds: 10, resolveLink: (url) => `${url}?token=measured` });
+
+    await expect(run.outcome).resolves.toMatchObject({ success: true });
+    expect(run.probeInputDuration).toHaveBeenCalledWith(signed);
+    expect(run.startVideo).toHaveBeenCalledWith(expect.objectContaining({
+      referenceVideoUrls: [REFERENCE_URL],
+      resolvedMediaSources: new Map([[REFERENCE_URL, signed]]),
+    }));
+  });
 
   // Audit A2, counterexample 2: the same reference file cost less when its
   // length was reported as zero seconds instead of ten.
@@ -831,7 +849,7 @@ describe('reference lengths a caller reports', () => {
       probeInputDuration: probe,
     });
 
-    expect(result).toEqual({ request, verified: [] });
+    expect(result).toEqual({ request, verified: [], resolvedSources: new Map() });
     expect(probe).not.toHaveBeenCalled();
   });
 

@@ -118,13 +118,21 @@ function toResultMediaType(category: ShowcaseItemCategory): RemixSourceResult['m
   return category === 'image' ? 'image' : 'video';
 }
 
+/** The creation's public showcase copy, as its stored path names it: a file of its own showcase folder, or none. */
+function canonicalShowcasePath(generationId: string, showcaseAssetPath: string | null): string | null {
+  const canonicalPath = showcaseAssetPath
+    ? parseCanonicalStorageObjectPath(showcaseAssetPath, { minimumSegments: 3 })
+    : null;
+  return canonicalPath?.startsWith(`showcase/${generationId}/`) ? canonicalPath : null;
+}
+
 function getShowcaseAssetUrl(
   adminSupabase: ReturnType<typeof createServiceClient>,
   generationId: string,
   showcaseAssetPath: string
 ): string | null {
-  const canonicalPath = parseCanonicalStorageObjectPath(showcaseAssetPath, { minimumSegments: 3 });
-  if (!canonicalPath || !canonicalPath.startsWith(`showcase/${generationId}/`)) return null;
+  const canonicalPath = canonicalShowcasePath(generationId, showcaseAssetPath);
+  if (!canonicalPath) return null;
   const { data } = adminSupabase.storage.from('showcase_media').getPublicUrl(canonicalPath);
   return data.publicUrl;
 }
@@ -151,6 +159,37 @@ async function resolveGenerationResultUrl(
     generation.output_url,
     generation.user_id,
   );
+}
+
+/**
+ * How long a creation's showcase clip is, as its post's media row measured that
+ * very file (`media-preview-repair.ts`), so a remixer's "Use as reference" is
+ * told rather than reading the clip. Once the feed's rendition of the clip is
+ * built the row holds the rendition's length instead, a re-timed encode that
+ * can end a frame off the file the start measures, so a row with a rendition
+ * gives none. None either where no row has measured it yet or the read fails:
+ * the creator then reads the clip itself, as it did before.
+ */
+async function loadShowcaseClipSeconds(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  generation: Pick<ResultGenerationRow, 'id' | 'showcase_asset_path'>,
+): Promise<number | undefined> {
+  const showcasePath = canonicalShowcasePath(generation.id, generation.showcase_asset_path);
+  if (!showcasePath) return undefined;
+  const { data, error } = await adminSupabase
+    .from('post_media')
+    .select('duration_seconds, posts!inner(generation_id)')
+    .eq('posts.generation_id', generation.id)
+    .eq('storage_path', showcasePath)
+    .is('rendition_storage_path', null)
+    .not('duration_seconds', 'is', null)
+    .limit(1);
+  if (error) {
+    logBackendError('failed_to_load_remix_source_clip_length', { error });
+    return undefined;
+  }
+  const seconds = Number((data as Array<{ duration_seconds: number | string | null }> | null)?.[0]?.duration_seconds);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
 }
 
 async function resolveUploadsStoragePathUrl(
@@ -311,6 +350,13 @@ export async function loadRemixSourceBundle(
   if (!category) {
     throw new RemixSourceError('This creation type does not support remix media restoration', 400);
   }
+  // Read beside the run's inputs below, which it needs nothing from. It answers a
+  // failure with no length, and the catch keeps a refusal thrown meanwhile from
+  // leaving it unhandled.
+  const resultMediaType = toResultMediaType(category);
+  const resultSecondsRead = resultMediaType === 'video'
+    ? loadShowcaseClipSeconds(adminSupabase, typedGeneration).catch(() => undefined)
+    : Promise.resolve(undefined);
 
   const workflowSettings =
     typedGeneration.workflow_settings && typeof typedGeneration.workflow_settings === 'object'
@@ -469,10 +515,14 @@ export async function loadRemixSourceBundle(
     };
   };
 
-  const resultUrl = await resolveGenerationResultUrl(adminSupabase, typedGeneration);
+  const [resultUrl, resultSeconds] = await Promise.all([
+    resolveGenerationResultUrl(adminSupabase, typedGeneration),
+    resultSecondsRead,
+  ]);
   const result: RemixSourceResult | null = {
-    mediaType: toResultMediaType(category),
+    mediaType: resultMediaType,
     url: resultUrl,
+    ...(resultUrl && resultSeconds !== undefined ? { durationSeconds: resultSeconds } : {}),
   };
 
   if (!resultUrl) {

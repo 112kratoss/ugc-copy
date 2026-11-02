@@ -1221,17 +1221,28 @@ async function isMissingOwnUpload(
   }
 }
 
+export interface GenerationMediaSourceOptions {
+  templateAssetScope?: {
+    templateId: string;
+    templateVersionId: string | null;
+  };
+  /**
+   * Links this start already resolved for the same caller, by the reference as
+   * sent: a clip or track a run is priced by was resolved to measure it
+   * (`resolveBillableInputDurations`), and is started on that same link rather
+   * than resolved, and for someone else's result checked, a second time.
+   */
+  resolved?: ReadonlyMap<string, string>;
+}
+
 export async function resolveGenerationMediaSource(
   supabase: SupabaseClient,
   url: string,
   userId: string,
-  options: {
-    templateAssetScope?: {
-      templateId: string;
-      templateVersionId: string | null;
-    };
-  } = {},
+  options: GenerationMediaSourceOptions = {},
 ): Promise<string> {
+  const alreadyResolved = options.resolved?.get(url);
+  if (alreadyResolved) return alreadyResolved;
   const source = assertAllowedGenerationMediaSource(url);
 
   // Provider asset handles are opaque identifiers, not storage paths or URLs.
@@ -1312,12 +1323,7 @@ async function resolveMediaUrls(
   supabase: SupabaseClient,
   urls: string[],
   userId: string,
-  options: {
-    templateAssetScope?: {
-      templateId: string;
-      templateVersionId: string | null;
-    };
-  } = {},
+  options: GenerationMediaSourceOptions = {},
 ): Promise<string[]> {
   return Promise.all(urls.map((url) => resolveGenerationMediaSource(
     supabase,
@@ -2352,6 +2358,8 @@ export async function startVideoGeneration(params: {
   persistInputMedia?: boolean;
   privateRecipe?: boolean;
   templateContext?: TemplateGenerationContext;
+  /** Links the start resolved already, by reference (`GenerationMediaSourceOptions.resolved`). */
+  resolvedMediaSources?: ReadonlyMap<string, string>;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
@@ -2394,11 +2402,16 @@ export async function startVideoGeneration(params: {
     persistInputMedia = true,
     privateRecipe = false,
     templateContext,
+    resolvedMediaSources,
   } = params;
 
   if (templateContext && !privateRecipe) {
     throw new GenerationServiceError('Template generations must keep their recipe private.', 500);
   }
+  const mediaSourceOptions: GenerationMediaSourceOptions = {
+    templateAssetScope: templateAssetScope(templateContext),
+    resolved: resolvedMediaSources,
+  };
 
   const selectedModel = VIDEO_MODELS[model];
   if (!selectedModel) {
@@ -2494,7 +2507,7 @@ export async function startVideoGeneration(params: {
         supabase,
         normalizedReferences.map((reference) => reference.url),
         userId,
-        { templateAssetScope: templateAssetScope(templateContext) },
+        mediaSourceOptions,
       )
     : useLegacyFrameUrls
       ? []
@@ -2502,14 +2515,14 @@ export async function startVideoGeneration(params: {
           supabase,
           normalizeMediaUrlList(imageUrls),
           userId,
-          { templateAssetScope: templateAssetScope(templateContext) },
+          mediaSourceOptions,
         );
   const resolvedReferenceVideoUrls = supportsMultimodalReferences
     ? await resolveMediaUrls(
         supabase,
         normalizeMediaUrlList(referenceVideoUrls),
         userId,
-        { templateAssetScope: templateAssetScope(templateContext) },
+        mediaSourceOptions,
       )
     : [];
   const resolvedReferenceAudioUrls = supportsMultimodalReferences
@@ -2517,7 +2530,7 @@ export async function startVideoGeneration(params: {
         supabase,
         normalizeMediaUrlList(referenceAudioUrls),
         userId,
-        { templateAssetScope: templateAssetScope(templateContext) },
+        mediaSourceOptions,
       )
     : [];
   const normalizedPreparedAudioIds = model === 'gemini-omni-video'
@@ -2533,7 +2546,7 @@ export async function startVideoGeneration(params: {
           supabase,
           element.url,
           userId,
-          { templateAssetScope: templateAssetScope(templateContext) },
+          mediaSourceOptions,
         ),
       })))
     : [];
@@ -2544,7 +2557,7 @@ export async function startVideoGeneration(params: {
           supabase,
           image.url,
           userId,
-          { templateAssetScope: templateAssetScope(templateContext) },
+          mediaSourceOptions,
         ))),
       })))
     : [];
@@ -2554,7 +2567,7 @@ export async function startVideoGeneration(params: {
         supabase,
         normalizeMediaUrlList(elementImageUrls),
         userId,
-        { templateAssetScope: templateAssetScope(templateContext) },
+        mediaSourceOptions,
       );
   const resolvedLegacyImageUrls = normalizedReferences.length > 0
     ? []
@@ -2563,7 +2576,7 @@ export async function startVideoGeneration(params: {
           supabase,
           normalizeMediaUrlList(imageUrls),
           userId,
-          { templateAssetScope: templateAssetScope(templateContext) },
+          mediaSourceOptions,
         )
       : [];
   // The reference pictures the provider is sent. They arrive as one list (`references`,
@@ -2692,7 +2705,7 @@ export async function startVideoGeneration(params: {
         supabase,
         startImageUrl,
         userId,
-        { templateAssetScope: templateAssetScope(templateContext) },
+        mediaSourceOptions,
       )
     : null;
   const resolvedEndImageUrl = endImageUrl
@@ -2700,7 +2713,7 @@ export async function startVideoGeneration(params: {
         supabase,
         endImageUrl,
         userId,
-        { templateAssetScope: templateAssetScope(templateContext) },
+        mediaSourceOptions,
       )
     : null;
 
@@ -3884,6 +3897,8 @@ export async function startCatalogGeneration(params: {
    * avoid a second resolve — re-signing an already-signed URL is wasted work.
    */
   inputsPreResolved?: boolean;
+  /** Links the start resolved already, by reference (`GenerationMediaSourceOptions.resolved`). */
+  resolvedMediaSources?: ReadonlyMap<string, string>;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
@@ -3904,6 +3919,7 @@ export async function startCatalogGeneration(params: {
     privateRecipe = false,
     templateContext,
     inputsPreResolved = false,
+    resolvedMediaSources,
   } = params;
 
   if (templateContext && !privateRecipe) {
@@ -4040,7 +4056,7 @@ export async function startCatalogGeneration(params: {
                 supabase,
                 asset.url,
                 userId,
-                { templateAssetScope: templateAssetScope(templateContext) },
+                { templateAssetScope: templateAssetScope(templateContext), resolved: resolvedMediaSources },
               )
             : null,
         })));

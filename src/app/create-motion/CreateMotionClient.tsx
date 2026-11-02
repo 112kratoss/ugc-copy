@@ -16,6 +16,7 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
+    StudioUseOriginalButton,
 } from '@/components/CreatorStudio';
 import {
     CreatorBackgroundRunLine,
@@ -71,6 +72,7 @@ import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
     REMIX_RESTORE_WARNING,
+    isRemixResultReference,
 } from '@/lib/remix-source-client';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
@@ -377,6 +379,8 @@ function MotionCreator({
     // The longest length known for the attached clip, so a reread of the same
     // clip keeps what the server measured for it.
     const measuredClipFloorRef = useRef<{ url: string; seconds: number } | null>(null);
+    // A clip's length known without reading it: a remix's original, as its post measured it.
+    const knownClipLengthRef = useRef<{ url: string; seconds: number } | null>(null);
     const latestRunCostRef = useRef<number | null>(null);
     const pendingDraftSaveRef = useRef<{ owner: string; draft: MotionTextDraft } | null>(null);
 
@@ -585,6 +589,7 @@ function MotionCreator({
         setReferenceVideoDescriptor(null);
         setDuration(0); setVideoError(null); setVideoPickError(null);
         measuredClipFloorRef.current = null;
+        knownClipLengthRef.current = null;
     };
 
     const handleClearImage = async () => {
@@ -692,8 +697,10 @@ function MotionCreator({
             return;
         }
 
+        const { url, durationSeconds } = remixSourceBundle.result;
+        knownClipLengthRef.current = typeof durationSeconds === 'number' ? { url, seconds: durationSeconds } : null;
         setReferenceVideoFile(null);
-        setReferenceVideo(remixSourceBundle.result.url);
+        setReferenceVideo(url);
         setReferenceVideoDescriptor({
             kind: 'video',
             label: 'Original result video',
@@ -711,7 +718,12 @@ function MotionCreator({
         }
 
         const controller = new AbortController();
-        void readVideoDurationSeconds(referenceVideo, controller.signal).then(readSeconds => {
+        // A length its post measured is the file's own: nothing to read.
+        const known = knownClipLengthRef.current;
+        const length = known?.url === referenceVideo
+            ? Promise.resolve(known.seconds)
+            : readVideoDurationSeconds(referenceVideo, controller.signal);
+        void length.then(readSeconds => {
             if (controller.signal.aborted) return;
             if (readSeconds === null) {
                 setVideoError('We could not read the reference video. Please try another clip.');
@@ -1534,10 +1546,7 @@ function MotionCreator({
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
     const canUseOriginalResultAsReferenceVideo =
         remixSourceBundle?.result?.mediaType === 'video' && Boolean(remixSourceBundle.result.url);
-    const isUsingOriginalResultAsReferenceVideo = Boolean(
-        remixSourceBundle &&
-        referenceVideoDescriptor?.sourceGenerationId === remixSourceBundle.generation.id
-    );
+    const isUsingOriginalResultAsReferenceVideo = isRemixResultReference(referenceVideoDescriptor, remixSourceBundle?.generation.id);
 
     // The canvas says where the run is (the artboards Main, Generating, Failed and Result),
     // and its chip what the run is and holds.
@@ -1642,7 +1651,7 @@ function MotionCreator({
                 accent="motion"
                 optionPrice={(quality) => optionPrice('resolution', quality)}
             />
-            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} offersTopUp={!isVisitor} />
+            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
             <CatalogAdditionalControls
                 appearance="panel"
                 descriptor={catalogDescriptor}
@@ -1796,21 +1805,15 @@ function MotionCreator({
                                             src: remixVideoUrl,
                                             onOpen: () => setUploadPreview({ type: 'video', src: remixVideoUrl, alt: 'Original creation', title: 'Original Creation' }),
                                         } : null}
-                                        action={
-                                            canUseOriginalResultAsReferenceVideo ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={handleUseOriginalResultAsReferenceVideo}
-                                                    disabled={isUsingOriginalResultAsReferenceVideo}
-                                                    className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition ${isUsingOriginalResultAsReferenceVideo
-                                                        ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100'
-                                                        : 'border border-[#ff7a59]/25 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/45 hover:bg-[#ff7a59]/15'}`}
-                                                >
-                                                    <Play className="h-4 w-4" />
-                                                    {isUsingOriginalResultAsReferenceVideo ? 'Using original result' : 'Use as reference video'}
-                                                </button>
-                                            ) : undefined
-                                        }
+                                        action={canUseOriginalResultAsReferenceVideo ? (
+                                            <StudioUseOriginalButton
+                                                using={isUsingOriginalResultAsReferenceVideo}
+                                                onUse={handleUseOriginalResultAsReferenceVideo}
+                                                label="Use as reference video"
+                                                icon={Play}
+                                                tone="coral"
+                                            />
+                                        ) : undefined}
                                     />
                                 </motion.div>
                             )}

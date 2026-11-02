@@ -627,6 +627,21 @@ describe('CreateImageClient element handles', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    // The original is known by where it came from, not by its name, which its card renames: renamed,
+    // it is still the original, and its button does not add it a second time.
+    it('keeps the original result as the original once its card is renamed', async () => {
+      const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+      await waitFor(() => expect(cardHandles(view.container)).toEqual(['@lead', '@prop']));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+      await waitFor(() => expect(cardHandles(view.container)).toHaveLength(3));
+      expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
+
+      renameCard(view.container, 2, 'Base frame');
+      await waitFor(() => expect(cardHandles(view.container)).toEqual(['@lead', '@prop', '@base_frame']));
+      expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
+    });
+
     it('says so when the model now takes fewer references than the run used', async () => {
       // Nano Banana 2 takes 10 since 2026-10-20; a run from before could hold 14.
       const twelve = Array.from({ length: 12 }, (_, index) => ({

@@ -4,10 +4,11 @@ import Link from 'next/link';
 import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref, RefObject } from 'react';
 import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Play, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import clsx from 'clsx';
 
+import InlineMediaVideo from '@/components/InlineMediaVideo';
 import {
   MEDIA_TOOL_IDS,
   StudioElementChip,
@@ -1049,18 +1050,17 @@ export function CreatorSettingsFootNote({ cost, costLabel, balance, isVisitor }:
  * Under the settings while an option shown costs more than the balance: what "+N" means
  * (the least such N), and that those options can still be chosen.
  */
-export function CreatorOverBalanceLegend({ over, balance, isVisitor, offersTopUp }: {
+export function CreatorOverBalanceLegend({ over, balance, isVisitor }: {
   over: number | null;
   balance: number | null;
+  /** A visitor's options say what sign-up gives; anyone else's put Top up in Generate's place. */
   isVisitor: boolean;
-  /** Such an option puts Top up in Generate's place (not where the bar offers something else, or for a visitor). */
-  offersTopUp: boolean;
 }) {
   if (over === null || balance === null) return null;
   return (
     <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
       “+{over}” means {creditsWords(over)} more than {isVisitor ? `the ${balance} free credits` : `your balance of ${balance}`}.
-      {offersTopUp ? ' Those options stay selectable, and show Top up in place of Generate.' : ' Those options stay selectable.'}
+      {isVisitor ? ' Those options stay selectable.' : ' Those options stay selectable, and show Top up in place of Generate.'}
     </p>
   );
 }
@@ -1168,7 +1168,7 @@ const CREATOR_HANDLE_INSERT_CLASS =
  * Replace on a reference a remix brought back (the artboard Remix): a file of the creator's
  * own takes its place, and keeps its name and @handle, so the prompt still reads.
  */
-export function CreatorReplaceButton({ label, accept, onFile }: {
+function CreatorReplaceButton({ label, accept, onFile }: {
   /** Named for what it replaces: "Replace @reference_1 with your own photo". */
   label: string;
   accept: string;
@@ -1301,6 +1301,59 @@ export function CreatorReferenceStrip({ className, children, wide = false, ...pr
     >
       {children}
     </ul>
+  );
+}
+
+/** What a reference tile's preview opens: its file, by kind, under the reference's name. */
+export interface CreatorReferencePreviewTarget {
+  kind: 'image' | 'video';
+  src: string;
+  name: string;
+}
+
+/**
+ * A reference tile's picture (`CreatorReferenceTile`'s `preview`), which opens the file in the
+ * creator's preview: the picture itself, or a clip's first frame under a play mark, square or
+ * wide (a Kling video element). A clip with no link yet draws the frame empty and opens nothing.
+ */
+export function CreatorReferencePreview({ kind, src, name, wide = false, onPreview }: {
+  kind: 'image' | 'video';
+  src: string | null;
+  name: string;
+  wide?: boolean;
+  onPreview: (target: CreatorReferencePreviewTarget) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (src) onPreview({ kind, src, name });
+      }}
+      aria-label={`Preview ${name}`}
+      className={clsx(
+        'ui-focus-ring relative block w-full overflow-hidden rounded-ui-md border border-[var(--ui-border-default)]',
+        wide ? 'aspect-video' : 'aspect-square',
+        kind === 'image' ? 'group bg-[var(--ui-surface-inset)]' : 'bg-black',
+      )}
+    >
+      {kind === 'image' ? (
+        src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={src}
+            alt={name}
+            className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.04]"
+          />
+        ) : null
+      ) : (
+        <>
+          {src ? (
+            <InlineMediaVideo src={src} className="pointer-events-none h-full w-full object-cover" muted playsInline preload="metadata" />
+          ) : null}
+          <Play aria-hidden className="absolute bottom-1 right-1 h-3.5 w-3.5 text-white/90" />
+        </>
+      )}
+    </button>
   );
 }
 
@@ -1522,8 +1575,6 @@ export function creatorAddButtonClass(accent: UiAccent) {
  * and how many the run holds of it and takes.
  */
 export interface CreatorReferenceKind {
-  /** Its name, which keys its box: "Image". */
-  name: string;
   /** Its word on its box: "Images". */
   railLabel: string;
   /** What it is for, the box's tooltip and description. */
@@ -1544,16 +1595,27 @@ export interface CreatorReferenceKind {
  * kind, since three boxes ahead of the pictures left half the first one off a phone; a row for
  * each kind keeps every kind one press away and its references beside its box.
  */
-export function CreatorReferenceRow({ accent, kind, children }: {
+export function CreatorReferenceRow({ accent, kind, stripLabel, wide, children }: {
   accent: UiAccent;
   kind: CreatorReferenceKind;
-  /** The kind's references, in a strip; nothing while it has none. */
+  /** The strip's name for a reader: "Reference videos". */
+  stripLabel: string;
+  /** Wider cells, for tiles that hold a player (CreatorReferenceStrip's). */
+  wide?: boolean;
+  /** The kind's tiles, drawn in a strip; none while it has none. */
   children?: ReactNode;
 }) {
   return (
     <div className="flex items-start gap-2">
       <CreatorReferenceAddBox accent={accent} kind={kind} />
-      {children ?? <p className="min-w-0 flex-1 self-center px-1 text-sm leading-6 text-[var(--ui-text-muted)]">{kind.hint}</p>}
+      {/* Counted as drawn: `Children.count` counts a `false` or `null` child as one. */}
+      {Children.toArray(children).length > 0 ? (
+        <CreatorReferenceStrip aria-label={stripLabel} wide={wide} className="min-w-0 flex-1">
+          {children}
+        </CreatorReferenceStrip>
+      ) : (
+        <p className="min-w-0 flex-1 self-center px-1 text-sm leading-6 text-[var(--ui-text-muted)]">{kind.hint}</p>
+      )}
     </div>
   );
 }

@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   generation: null as Record<string, unknown> | null,
   selectedColumns: [] as string[],
+  // The post media rows a read of `post_media` answers, and the filters each read sent.
+  postMedia: { data: [], error: null } as { data: Array<Record<string, unknown>> | null; error: { message: string } | null },
+  postMediaReads: [] as unknown[][][],
   resolveRemixAccess: vi.fn(),
   loadGenerationInputMediaMap: vi.fn(),
   buildLegacyGenerationInputMedia: vi.fn(),
@@ -11,14 +14,31 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const adminClient = {
-  from: vi.fn(() => {
+  from: vi.fn((table: string) => {
+    const filters: unknown[][] = [];
     const builder = {
       select: (columns: string) => {
         mocks.selectedColumns.push(columns);
         return builder;
       },
-      eq: () => builder,
+      eq: (...filter: unknown[]) => {
+        filters.push(['eq', ...filter]);
+        return builder;
+      },
+      is: (...filter: unknown[]) => {
+        filters.push(['is', ...filter]);
+        return builder;
+      },
+      not: (...filter: unknown[]) => {
+        filters.push(['not', ...filter]);
+        return builder;
+      },
       maybeSingle: async () => ({ data: mocks.generation, error: null }),
+      limit: async () => {
+        if (table !== 'post_media') throw new Error(`Unexpected list read of ${table}`);
+        mocks.postMediaReads.push(filters);
+        return mocks.postMedia;
+      },
     };
     return builder;
   }),
@@ -106,6 +126,8 @@ beforeEach(() => {
     },
   };
   mocks.selectedColumns.length = 0;
+  mocks.postMedia = { data: [], error: null };
+  mocks.postMediaReads.length = 0;
   mocks.resolveRemixAccess.mockReset();
   mocks.loadGenerationInputMediaMap.mockReset().mockResolvedValue(new Map());
   mocks.buildLegacyGenerationInputMedia.mockReset().mockResolvedValue([]);
@@ -1143,5 +1165,62 @@ describe('a Kling 3.0 run with clips under handles', () => {
 
     expect(bundle.inputs.video?.referenceVideos?.map((clip) => clip.handle)).toEqual(['@reference_video_2', '@reference_video_3']);
     expect(JSON.stringify(bundle)).not.toMatch(/holiday/);
+  });
+});
+
+// "Use as reference" is told the original clip's length rather than reading the clip: the post's
+// media row measured the showcase copy the remix source hands out. Once the feed's rendition is
+// built the row holds the rendition's length, a re-timed encode, so such a row is not read.
+describe("the original clip's length", () => {
+  const SHOWCASE_CLIP = 'showcase/gen-1/result.4f2a9c1b7e3d.mp4';
+  const PUBLIC_ACCESS = { allowed: true, basis: 'public', post: EXPOSED_POST, includeSharedInputMedia: false, recipeEntitled: false };
+
+  beforeEach(() => {
+    mocks.generation = {
+      ...mocks.generation,
+      category: 'video',
+      model: 'kling-3.0-video',
+      showcase_asset_path: SHOWCASE_CLIP,
+      workflow_settings: { model: 'kling-3.0-video' },
+    };
+    mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
+  });
+
+  it('comes with the result, as the media row measured the showcase copy itself', async () => {
+    mocks.postMedia = { data: [{ duration_seconds: '7.48' }], error: null };
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.result).toEqual({
+      mediaType: 'video',
+      url: `https://public.example/${SHOWCASE_CLIP}`,
+      durationSeconds: 7.48,
+    });
+    expect(mocks.postMediaReads).toEqual([[
+      ['eq', 'posts.generation_id', 'gen-1'],
+      ['eq', 'storage_path', SHOWCASE_CLIP],
+      // Not a row whose length is the feed rendition's.
+      ['is', 'rendition_storage_path', null],
+      ['not', 'duration_seconds', 'is', null],
+    ]]);
+  });
+
+  it('is left out where no row has measured it, or the read fails', async () => {
+    const unmeasured = await loadRemixSourceBundle(request(), 'gen-1');
+    expect(unmeasured.result).toEqual({ mediaType: 'video', url: `https://public.example/${SHOWCASE_CLIP}` });
+
+    mocks.postMedia = { data: null, error: { message: 'post_media unavailable' } };
+    const failed = await loadRemixSourceBundle(request(), 'gen-1');
+    expect(failed.result).toEqual({ mediaType: 'video', url: `https://public.example/${SHOWCASE_CLIP}` });
+  });
+
+  it('is not read for a picture, or for a result with no showcase copy', async () => {
+    mocks.generation = { ...mocks.generation, showcase_asset_path: null };
+    await loadRemixSourceBundle(request(), 'gen-1');
+
+    mocks.generation = { ...mocks.generation, category: 'image', model: 'nano-banana-2', showcase_asset_path: 'showcase/gen-1/result.png' };
+    await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(mocks.postMediaReads).toEqual([]);
   });
 });

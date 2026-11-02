@@ -804,7 +804,10 @@ describe('workflow-runner recovery', () => {
         model: 'minimax-h3',
         referenceVideoUrls: ['https://cdn.example.com/clip.mp4'],
         quotedCostCredits: 77,
+        // The start reuses the link the clip was measured from, rather than resolving it again.
+        resolvedMediaSources: new Map([['https://cdn.example.com/clip.mp4', 'https://cdn.example.com/clip.mp4']]),
       }));
+      expect(resolveGenerationMediaSourceMock).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ status: 'processing', generation_id: 'gen-video' });
     });
 

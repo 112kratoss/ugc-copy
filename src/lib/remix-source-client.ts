@@ -89,6 +89,19 @@ export function getRemixResultReferenceLabel(title: string): string {
   return `Original result${trimmedTitle ? ` · ${trimmedTitle}` : ''}`;
 }
 
+/**
+ * Whether a reference is the remix's original result as "Use as reference" adds it, in any of
+ * the creators: kept by its link under the creation it came from, never a file of the creator's
+ * own (a Replace puts their upload in its place). Not by its name, which the image creator's
+ * tiles rename in place, nor by its link, which is signed anew.
+ */
+export function isRemixResultReference(
+  reference: { sourceGenerationId?: string | null; storagePath?: string | null } | null | undefined,
+  generationId: string | null | undefined,
+): boolean {
+  return Boolean(generationId && reference?.sourceGenerationId === generationId && !reference.storagePath);
+}
+
 export function createRemixResultReferenceElement(bundle: RemixSourceBundle): RemixElementSeed | null {
   if (bundle.result?.mediaType !== 'image' || !bundle.result.url) {
     return null;
