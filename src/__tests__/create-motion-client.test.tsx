@@ -2050,7 +2050,7 @@ describe('CreateMotionClient drafts and media', () => {
       await settle();
 
       expect(box()).toHaveValue('Moonwalk across the roof');
-      expect(modelChip(view.container)).toHaveTextContent('Kling 3.0 Motion');
+      expect(modelChip(view.container)).toHaveTextContent('Kling 3.0');
       expect(screen.getByAltText('Character image')).toHaveAttribute('src', selfie);
       expect(remixReads()).toHaveLength(1);
     });
@@ -2077,6 +2077,15 @@ describe('CreateMotionClient drafts and media', () => {
 
       expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
       expect(box()).toHaveValue('Spin slowly on the spot');
+      expect(remixReads()).toHaveLength(1);
+    });
+
+    // Development's Strict Mode mounts the form twice over its one read.
+    it('fills the form from its one read in development’s Strict Mode', async () => {
+      render(<StrictMode>{remixPage()}</StrictMode>);
+
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(box()).toHaveValue('Dance on the roof at dusk');
       expect(remixReads()).toHaveLength(1);
     });
   });

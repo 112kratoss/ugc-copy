@@ -8028,6 +8028,16 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(remixReads()).toHaveLength(1);
       });
 
+      // Development's Strict Mode mounts the form twice over its one read.
+      it('fills the form from its one read in development’s Strict Mode', async () => {
+        stubRemix(remixOf({ duration: 5 }));
+        render(<StrictMode><CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} /></StrictMode>);
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(remixPromptBox()).toHaveValue('Two figures face off in a dim hall.');
+        expect(remixReads()).toHaveLength(1);
+      });
+
       it('opens on its original while the balance covers it', async () => {
         stubRemix(remixOf({ duration: 5 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);

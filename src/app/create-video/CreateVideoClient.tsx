@@ -2387,16 +2387,20 @@ function VideoCreator({
         ? `This model supports ${videoElementSupport.maxElements} reference image${videoElementSupport.maxElements === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
         : null;
 
-    // A remix is loaded once: a refreshed session token (Supabase renews it about hourly)
-    // loaded it again and put the original's model and settings back over the creator's.
-    const loadedRemixRef = useRef<string | null>(null);
+    // A remix is read once for this form: the effect runs again for a renewed session token (Supabase
+    // renews it about hourly) and for a session back from a lapse. Reading it again put the original's
+    // model and settings back over the creator's, and a read still out was read twice, the second
+    // putting the original's prompt over words typed meanwhile. Another account's form is drawn anew
+    // (`useCreatorForm`) and reads it for itself.
+    const remixReadStartedRef = useRef(false);
     useEffect(() => {
-        if (!remixId) return;
+        if (!remixId || remixReadStartedRef.current) return;
         if (!session?.access_token) return;
-        const remixKey = `${remixId}\n${remixPostId ?? ''}`;
-        if (loadedRemixRef.current === remixKey) return;
+        remixReadStartedRef.current = true;
 
-        let isCancelled = false;
+        // The answer is the form's while it is on the page, whichever run of this effect is the
+        // latest: development's Strict Mode mounts it twice over the one read.
+        const isCancelled = () => unmountSignal.current.aborted;
         const promptWhenRemixStarted = promptRef.current;
 
         const fetchRemixData = async () => {
@@ -2418,10 +2422,9 @@ function VideoCreator({
                 }
 
                 const bundle = data as RemixSourceBundle;
-                if (isCancelled) {
+                if (isCancelled()) {
                     return;
                 }
-                loadedRemixRef.current = remixKey;
 
                 setRemixTitle(bundle.generation.title);
                 setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
@@ -2690,24 +2693,20 @@ function VideoCreator({
                 setEndFrameDescriptor(keptEndFrame?.descriptor ?? null);
             } catch (fetchError) {
                 console.error('Error fetching remix:', fetchError);
-                if (!isCancelled) {
+                if (!isCancelled()) {
                     setRemixRestoreWarning(
                         'Some source media could not be restored automatically, so you may need to re-add a few references.'
                     );
                 }
             } finally {
-                if (!isCancelled) {
+                if (!isCancelled()) {
                     setIsRemixLoading(false);
                 }
             }
         };
 
         void fetchRemixData();
-
-        return () => {
-            isCancelled = true;
-        };
-    }, [remixId, remixPostId, session?.access_token]);
+    }, [remixId, remixPostId, session?.access_token, unmountSignal]);
 
     useEffect(() => {
         // What the browser held before media was saved per account belongs to nobody in

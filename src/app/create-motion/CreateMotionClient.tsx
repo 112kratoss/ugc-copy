@@ -598,12 +598,19 @@ function MotionCreator({
         if (persistedKey) await removePersistedMedia(persistedKey);
     };
 
-    // Handle Remix Pre-fill
+    // Handle Remix Pre-fill, once for this form: the effect runs again for a renewed session token
+    // (Supabase renews it about hourly) and for a session back from a lapse, and reading the remix
+    // again put the original's prompt, model, picture and clip back over the creator's. Another
+    // account's form is drawn anew (`useCreatorForm`) and reads it for itself.
+    const remixReadStartedRef = useRef(false);
     useEffect(() => {
-        if (!remixId) return;
+        if (!remixId || remixReadStartedRef.current) return;
         if (!session?.access_token) return;
+        remixReadStartedRef.current = true;
 
-        let isCancelled = false;
+        // The answer is the form's while it is on the page, whichever run of this effect is the
+        // latest: development's Strict Mode mounts it twice over the one read.
+        const isCancelled = () => unmountSignal.current.aborted;
         const promptWhenRemixStarted = promptRef.current;
 
         const fetchRemixData = async () => {
@@ -625,7 +632,7 @@ function MotionCreator({
                 }
 
                 const bundle = data as RemixSourceBundle;
-                if (isCancelled) {
+                if (isCancelled()) {
                     return;
                 }
 
@@ -660,24 +667,20 @@ function MotionCreator({
                 setReferenceVideoDescriptor(restoredReferenceVideo?.descriptor ?? null);
             } catch (err) {
                 console.error('Error fetching remix:', err);
-                if (!isCancelled) {
+                if (!isCancelled()) {
                     setRemixRestoreWarning(
                         'Some source media could not be restored automatically, so you may need to re-add a few references.'
                     );
                 }
             } finally {
-                if (!isCancelled) {
+                if (!isCancelled()) {
                     setIsRemixLoading(false);
                 }
             }
         };
 
         void fetchRemixData();
-
-        return () => {
-            isCancelled = true;
-        };
-    }, [remixId, remixPostId, session?.access_token]);
+    }, [remixId, remixPostId, session?.access_token, unmountSignal]);
 
     const handleUseOriginalResultAsReferenceVideo = () => {
         if (remixSourceBundle?.result?.mediaType !== 'video' || !remixSourceBundle.result.url) {

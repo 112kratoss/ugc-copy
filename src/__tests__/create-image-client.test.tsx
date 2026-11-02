@@ -2307,6 +2307,16 @@ describe('CreateImageClient generation pipeline', () => {
       expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('A rowing boat at dawn');
       expect(remixReads(fetchMock)).toHaveLength(1);
     });
+
+    // Development's Strict Mode mounts the form twice over its one read.
+    it('fills the form from its one read in development’s Strict Mode', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX });
+      render(<StrictMode>{remixPage()}</StrictMode>);
+
+      expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
+      expect(remixReads(fetchMock)).toHaveLength(1);
+    });
   });
 
   describe('a reference staged by an earlier press', () => {
