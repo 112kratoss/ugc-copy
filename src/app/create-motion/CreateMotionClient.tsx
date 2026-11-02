@@ -70,6 +70,7 @@ import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRestoredRemixAssetState,
     getRemixRestoreWarning,
+    REMIX_RESTORE_WARNING,
 } from '@/lib/remix-source-client';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
@@ -612,9 +613,15 @@ function MotionCreator({
         // latest: development's Strict Mode mounts it twice over the one read.
         const isCancelled = () => unmountSignal.current.aborted;
         const promptWhenRemixStarted = promptRef.current;
+        const pageToken = session.access_token;
 
         const fetchRemixData = async () => {
             try {
+                // The browser's own session where it is the form's account, renewed as it nears its
+                // end: Back can draw the page again from Next's cache with the session it was first
+                // drawn with, expired since, and the one read would be refused.
+                const { data: { session: browserSession } } = await supabase.auth.getSession();
+                const accessToken = browserSession?.user.id === formAccount ? browserSession.access_token : pageToken;
                 const remixSourceParams = new URLSearchParams({ id: remixId });
                 if (remixPostId) {
                     remixSourceParams.set('postId', remixPostId);
@@ -622,7 +629,7 @@ function MotionCreator({
 
                 const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
                     headers: {
-                        Authorization: `Bearer ${session.access_token}`,
+                        Authorization: `Bearer ${accessToken}`,
                     },
                 });
                 const data = await response.json();
@@ -668,9 +675,7 @@ function MotionCreator({
             } catch (err) {
                 console.error('Error fetching remix:', err);
                 if (!isCancelled()) {
-                    setRemixRestoreWarning(
-                        'Some source media could not be restored automatically, so you may need to re-add a few references.'
-                    );
+                    setRemixRestoreWarning(REMIX_RESTORE_WARNING);
                 }
             } finally {
                 if (!isCancelled()) {
@@ -680,7 +685,7 @@ function MotionCreator({
         };
 
         void fetchRemixData();
-    }, [remixId, remixPostId, session?.access_token, unmountSignal]);
+    }, [formAccount, remixId, remixPostId, session?.access_token, unmountSignal]);
 
     const handleUseOriginalResultAsReferenceVideo = () => {
         if (remixSourceBundle?.result?.mediaType !== 'video' || !remixSourceBundle.result.url) {

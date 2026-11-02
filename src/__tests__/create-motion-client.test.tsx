@@ -235,10 +235,27 @@ const motionModelSummaries = [
   { id: 'kling-2.6', kind: 'motion', displayName: 'Kling 2.6', description: 'Test stable motion model' },
 ];
 
+const ROOFTOP_REMIX = {
+  generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
+  result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
+  inputs: {
+    motion: {
+      characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
+      referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
+    },
+  },
+  workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
+  restoreIssues: [],
+};
+
 type StartAnswer = Response | Error | (() => Response | Promise<Response>);
 let startAnswers: StartAnswer[] = [];
 let generationLookupBody: unknown = { generations: [] };
 let remixSourceBody: unknown = null;
+/** Holds each remix read until it settles. */
+let remixSourceHold: Promise<unknown> | null = null;
+/** A token the remix source refuses (401), as one expired. */
+let refusedRemixToken: string | null = null;
 /** The motion run already at work as the page opens, as the API describes it. */
 let activeRun: Record<string, unknown> | null = null;
 /** Answers the look in place of `activeRun`, when the test resolves it. */
@@ -270,7 +287,10 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
     return typeof answer === 'function' ? answer() : answer;
   }
   if (url.startsWith('/api/remix-source?') && remixSourceBody) {
-    return jsonResponse(remixSourceBody);
+    if (remixSourceHold) await remixSourceHold;
+    return new Headers(init?.headers).get('Authorization') === `Bearer ${refusedRemixToken}`
+      ? jsonResponse({ error: 'Unauthorized' }, 401)
+      : jsonResponse(remixSourceBody);
   }
   if (url.startsWith('/api/generations?')) {
     return jsonResponse(generationLookupBody);
@@ -283,6 +303,10 @@ const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => 
 
 function activeRunReads() {
   return fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/generations/active'));
+}
+
+function remixReads() {
+  return fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/remix-source?'));
 }
 
 function startPosts() {
@@ -316,6 +340,8 @@ function chooseModel(container: HTMLElement, displayName: string) {
   fireEvent.click(picker!);
   fireEvent.click(screen.getByRole('option', { name: new RegExp(displayName) }));
 }
+
+const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
 
 function pickFile(container: HTMLElement, inputId: string, file: File) {
   const input = container.querySelector<HTMLInputElement>(`#${inputId}`);
@@ -399,6 +425,8 @@ beforeEach(() => {
   startAnswers = [];
   generationLookupBody = { generations: [] };
   remixSourceBody = null;
+  remixSourceHold = null;
+  refusedRemixToken = null;
   activeRun = null;
   activeRunAnswer = null;
   fetchMock.mockClear();
@@ -547,18 +575,6 @@ describe('CreateMotionClient prices', () => {
  */
 describe('CreateMotionClient price of the run it sends', () => {
   const COST_CHANGED = 'The price of this run changed. Check the updated cost and generate again.';
-  const ROOFTOP_REMIX = {
-    generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
-    result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
-    inputs: {
-      motion: {
-        characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
-        referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
-      },
-    },
-    workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
-    restoreIssues: [],
-  };
 
   it.each([
     ['a fresh draft', async () => undefined, { modelId: 'kling-3.0', settings: { resolution: '720p', characterOrientation: 'video' } }],
@@ -1940,8 +1956,7 @@ describe('CreateMotionClient drafts and media', () => {
       await waitFor(() => expect(vi.mocked(URL.createObjectURL).mock.calls.at(-1)?.[0]).toMatchObject({ name: 'selfie.png' }));
 
       signInAs('user-2', () => view.rerender(remixPage()));
-      await waitFor(() => expect(fetchMock.mock.calls
-        .filter(([input]) => String(input).startsWith('/api/remix-source?'))
+      await waitFor(() => expect(remixReads()
         .map(([, init]) => authorizationOf(init))).toEqual(['Bearer token-user-1', 'Bearer token-user-2']));
       await settle();
 
@@ -1997,13 +2012,11 @@ describe('CreateMotionClient drafts and media', () => {
   });
 
   // Supabase renews the session token about hourly, and a session back from a lapse comes with a new
-  // one. Neither is another reader: the remix was read again and put its prompt, model, picture and
-  // clip back over the creator's.
+  // one. Neither is another reader: the remix was read again and put its prompt, model and inputs
+  // back over the creator's.
   describe('a remix through a renewed session', () => {
     const remixPage = () => <CreateMotionClient prefill={{ remixId: 'generation-source' }} />;
     const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
-    const modelChip = (container: HTMLElement) => container.querySelector('button[aria-haspopup="listbox"]');
-    const remixReads = () => fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/remix-source?'));
     /** The page's session as AuthProvider passes it on: a new token, or none while it has lapsed. */
     function sessionBecomes(accessToken: string | null, redraw: () => void) {
       authState.session = accessToken ? { access_token: accessToken, user: { id: 'user-1' } } : null;
@@ -2017,18 +2030,7 @@ describe('CreateMotionClient drafts and media', () => {
 
     beforeEach(() => {
       modelCatalogState.summaries = motionModelSummaries;
-      remixSourceBody = {
-        generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
-        result: { mediaType: 'video', url: 'https://cdn.example/source-result.mp4' },
-        inputs: {
-          motion: {
-            characterImage: { kind: 'image', url: 'https://cdn.example/hero.png', label: 'Hero still', storagePath: 'uploads/user-1/hero.png', sourceGenerationId: null },
-            referenceVideo: { kind: 'video', url: 'https://cdn.example/dance.mp4', label: 'Original result video', storagePath: null, sourceGenerationId: 'generation-older' },
-          },
-        },
-        workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
-        restoreIssues: [],
-      };
+      remixSourceBody = ROOFTOP_REMIX;
     });
 
     it('keeps the creator’s prompt, model and picture through a renewed token and a lapse’s return', async () => {
@@ -2056,17 +2058,8 @@ describe('CreateMotionClient drafts and media', () => {
     });
 
     it('reads it once though the token is renewed while it loads, keeping words typed meanwhile', async () => {
-      const answerOthers = fetchMock.getMockImplementation()!;
-      onTestFinished(() => {
-        fetchMock.mockImplementation(answerOthers);
-      });
       let release: () => void = () => undefined;
-      const released = new Promise<void>((resolve) => { release = resolve; });
-      // Each read is answered once the test lets the remix through.
-      fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (String(input).startsWith('/api/remix-source?')) await released;
-        return answerOthers(input, init);
-      });
+      remixSourceHold = new Promise<void>((resolve) => { release = resolve; });
       const view = render(remixPage());
       await waitFor(() => expect(remixReads()).toHaveLength(1));
 
@@ -2087,6 +2080,20 @@ describe('CreateMotionClient drafts and media', () => {
       expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
       expect(box()).toHaveValue('Dance on the roof at dusk');
       expect(remixReads()).toHaveLength(1);
+    });
+
+    // Back can draw the page again from Next's cache with the session it was first drawn with, expired
+    // since; the one read would be refused. The browser's own session, renewed as it nears its end, is
+    // the account's too.
+    it('reads it with the browser’s own session when the page’s has expired', async () => {
+      authState.session = { access_token: 'expired-token', user: { id: 'user-1' } };
+      sessionState.session = { access_token: 'fresh-token', user: { id: 'user-1' } };
+      refusedRemixToken = 'expired-token';
+      render(remixPage());
+
+      expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+      expect(box()).toHaveValue('Dance on the roof at dusk');
+      expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer fresh-token']);
     });
   });
 
