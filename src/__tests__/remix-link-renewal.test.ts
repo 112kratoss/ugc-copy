@@ -35,7 +35,10 @@ function answerSignedAt(signedAt: number): RemixSourceBundle {
       metadata: { sourceUrl: signedStorageLink('uploads/user-1/hero.png', signedAt - 30 * HOUR_MS) },
     }],
     // The links the run read, long lapsed: never a link to renew with.
-    workflowSettings: { referenceVideoUrls: [signedStorageLink('uploads/user-1/old-clip.mp4', signedAt - 30 * HOUR_MS)] },
+    workflowSettings: {
+      referenceVideoUrls: [signedStorageLink('uploads/user-1/old-clip.mp4', signedAt - 30 * HOUR_MS)],
+      klingVideoElements: [{ handle: '@move', url: signedStorageLink('uploads/user-1/old-clip.mp4', signedAt - 30 * HOUR_MS) }],
+    },
     restoreIssues: [],
   };
 }
