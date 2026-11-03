@@ -5,8 +5,7 @@
  * ("Invalid login credentials", "For security purposes, you can only request
  * this after 42 seconds"). Anything not recognised gets the caller's own
  * sentence: Supabase's text is written for a developer, and some of it (the
- * sign-up hook's refusal, the default mail sender's) names things this site
- * does not have.
+ * default mail sender's) names things this site does not have.
  */
 export function describeAuthError(error: unknown, fallback: string): string {
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
@@ -17,7 +16,7 @@ export function describeAuthError(error: unknown, fallback: string): string {
     return 'Could not reach the sign-in service. Check your connection and try again.';
   }
   if (message.includes('invalid login credentials') || message.includes('invalid_credentials')) {
-    return 'That email and password do not match. Check both and try again, or use Google if you signed up with it.';
+    return 'That email and password do not match. Check both and try again. If you created the account with Google or Apple, use that button instead.';
   }
   if (message.includes('email not confirmed')) {
     return 'Confirm your email first: open the confirmation link we sent when the account was created, then sign in.';
@@ -28,10 +27,6 @@ export function describeAuthError(error: unknown, fallback: string): string {
   }
   if (message.includes('too many requests') || message.includes('for security purposes') || message.includes('rate limit')) {
     return 'Too many attempts. Wait a minute before trying again.';
-  }
-  // The sign-up hook's own refusal also offers Apple, which this site lacks.
-  if (message.includes('email sign-up is temporarily unavailable')) {
-    return 'Email sign-up is temporarily unavailable. Continue with Google.';
   }
   if (code === 'same_password' || message.includes('should be different from the old password')) {
     return 'Choose a password different from your current one.';

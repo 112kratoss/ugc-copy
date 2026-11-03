@@ -42,7 +42,7 @@ vi.mock('@/lib/supabase', () => ({
 }));
 
 const AGREEMENT = 'By continuing you agree to the Terms and the Privacy Policy. Prompts and media you generate are processed by the AI providers listed in the policy.';
-const RECOVERY_NOTICE = 'Password reset emails aren’t available. Signed up with Google? Use Continue with Google. Otherwise, email info@magicbooklet.com and we’ll help you sign in.';
+const RECOVERY_NOTICE = 'Password reset emails aren’t available. Signed up with Google or Apple? Continue with it below. Otherwise, email info@magicbooklet.com and we’ll help you sign in.';
 
 describe('LoginPage onboarding redirects', () => {
   const originalAuthRedirectOrigin = process.env.NEXT_PUBLIC_AUTH_REDIRECT_ORIGIN;
@@ -119,7 +119,7 @@ describe('LoginPage onboarding redirects', () => {
     }));
   }
 
-  function googleRedirect(callIndex = 0) {
+  function providerRedirect(callIndex = 0) {
     const payload = mocks.signInWithOAuth.mock.calls[callIndex][0];
     return { provider: payload.provider, redirectTo: new URL(payload.options.redirectTo) };
   }
@@ -169,14 +169,14 @@ describe('LoginPage onboarding redirects', () => {
   });
 
   // D2 (OAuth-first): production refuses every email sign-up, so the form that
-  // ended in that refusal is gone; new accounts are made with Google.
-  it('has no email sign-up: the Sign-up tab is Google, the agreement and a sentence saying so', () => {
+  // ended in that refusal is gone; new accounts are made with Google or Apple.
+  it('has no email sign-up: the Sign-up tab is Google and Apple, the agreement and a sentence saying so', () => {
     const { container } = renderLogin();
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
 
     expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
-    expect(screen.getByText('New accounts are created with Google. Your creator profile comes next.')).toBeInTheDocument();
+    expect(screen.getByText('New accounts are created with Google or Apple. Your creator profile comes next.')).toBeInTheDocument();
     expect(container.querySelector('form')).toBeNull();
     expect(container.querySelectorAll('input')).toHaveLength(0);
     expect(screen.queryByRole('button', { name: /create account/i })).toBeNull();
@@ -184,10 +184,12 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.queryByText(/your password needs/i)).toBeNull();
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /continue with google/i })).toHaveAccessibleDescription(AGREEMENT);
+    expect(screen.getByRole('button', { name: /continue with apple/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /continue with apple/i })).toHaveAccessibleDescription(AGREEMENT);
     expect(mocks.signUp).not.toHaveBeenCalled();
 
     // The Sign-in tab keeps email and password for the accounts made before.
-    fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign in$/i }));
     expect(screen.getByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
     expect(screen.getByLabelText(/email address/i)).toHaveAttribute('autocomplete', 'email');
     expect(screen.getByLabelText(/^password$/i)).toHaveAttribute('autocomplete', 'current-password');
@@ -200,12 +202,12 @@ describe('LoginPage onboarding redirects', () => {
   it('keeps the invite landing link working: the Sign-up tab, then Google with its destination', async () => {
     await renderPageAt('mode=signup&next=%2Fcreate');
 
-    expect(screen.getByRole('button', { name: /^sign up$/i })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('tab', { name: /^sign up$/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
-    const { provider, redirectTo } = googleRedirect();
+    const { provider, redirectTo } = providerRedirect();
     expect(provider).toBe('google');
     expect(redirectTo.origin).toBe('https://magicbooklet.com');
     expect(redirectTo.pathname).toBe('/auth/callback');
@@ -219,11 +221,11 @@ describe('LoginPage onboarding redirects', () => {
     const welcomeRewardLink = `returnUrl=${encodeURIComponent('/welcome-reward?next=%2Fcreate')}`;
     const google = await renderPageAt(welcomeRewardLink);
 
-    expect(screen.getByRole('button', { name: /^sign in$/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^sign in$/i, selected: true })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
-    expect(googleRedirect().redirectTo.searchParams.get('next')).toBe('/welcome-reward?next=%2Fcreate');
+    expect(providerRedirect().redirectTo.searchParams.get('next')).toBe('/welcome-reward?next=%2Fcreate');
 
     // A started Google sign-in leaves the page, so the password path is its own visit.
     google.unmount();
@@ -239,11 +241,11 @@ describe('LoginPage onboarding redirects', () => {
     mocks.searchParams = new URLSearchParams('returnUrl=/create');
     renderLogin();
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
     fireEvent.click(screen.getByRole('button', { name: /google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
-    const { provider, redirectTo } = googleRedirect();
+    const { provider, redirectTo } = providerRedirect();
 
     expect(provider).toBe('google');
     expect(redirectTo.origin).toBe('https://magicbooklet.com');
@@ -282,7 +284,7 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.queryByRole('button', { name: /forgot password/i })).toBeNull();
 
     // It opens on the Sign-in tab with the form, and Google keeps the return path.
-    expect(screen.getByRole('button', { name: /^sign in$/i, pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^sign in$/i, selected: true })).toBeInTheDocument();
     expect(screen.getByLabelText(/email address/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
     expect(mocks.resetPasswordForEmail).not.toHaveBeenCalled();
@@ -304,23 +306,26 @@ describe('LoginPage onboarding redirects', () => {
 
   // Audit 01-6: Google creates accounts from the Sign-in tab too, where no
   // agreement line was shown, so most new web accounts never saw one. With the
-  // email form gone, Google is the only way to make an account, in either tab.
-  it('puts the terms and the AI-processing sentence under the Google button in both tabs', () => {
+  // email form gone, Google and Apple are the only ways to make an account, in
+  // either tab, and one agreement line describes both buttons.
+  it('puts the terms and the AI-processing sentence under the Google and Apple buttons in both tabs', () => {
     renderLogin();
 
     const signInAgreements = screen.getAllByText(/By continuing you agree to the/);
     expect(signInAgreements).toHaveLength(1);
-    expect(signInAgreements[0]).toHaveAttribute('id', 'google-agreement');
+    expect(signInAgreements[0]).toHaveAttribute('id', 'sign-in-agreement');
     expectAgreementLinks(signInAgreements[0]);
     expect(screen.getByRole('button', { name: /continue with google/i })).toHaveAccessibleDescription(AGREEMENT);
+    expect(screen.getByRole('button', { name: /continue with apple/i })).toHaveAccessibleDescription(AGREEMENT);
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
 
     const signUpAgreements = screen.getAllByText(/By continuing you agree to the/);
     expect(signUpAgreements).toHaveLength(1);
-    expect(signUpAgreements[0]).toHaveAttribute('id', 'google-agreement');
+    expect(signUpAgreements[0]).toHaveAttribute('id', 'sign-in-agreement');
     expectAgreementLinks(signUpAgreements[0]);
     expect(screen.getByRole('button', { name: /continue with google/i })).toHaveAccessibleDescription(AGREEMENT);
+    expect(screen.getByRole('button', { name: /continue with apple/i })).toHaveAccessibleDescription(AGREEMENT);
   });
 
   // Audit 01-9: anything unrecognised printed Supabase's own text.
@@ -331,7 +336,7 @@ describe('LoginPage onboarding redirects', () => {
     fireEvent.click(signInSubmitButton());
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'That email and password do not match. Check both and try again, or use Google if you signed up with it.',
+      'That email and password do not match. Check both and try again. If you created the account with Google or Apple, use that button instead.',
     );
     expect(mocks.replace).not.toHaveBeenCalled();
 
@@ -347,7 +352,7 @@ describe('LoginPage onboarding redirects', () => {
   // is said there rather than inside a form that tab no longer draws.
   it('shows a failed Google start on the Sign-up tab and lets it be tried again', async () => {
     renderLogin();
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
     mocks.signInWithOAuth.mockResolvedValueOnce({ error: new Error('Unsupported provider: provider is not enabled') });
 
     fireEvent.click(screen.getByRole('button', { name: /continue with google/i }));
@@ -357,19 +362,90 @@ describe('LoginPage onboarding redirects', () => {
     expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
 
     // Switching tabs clears it.
-    fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /^sign in$/i }));
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('does not advertise Apple while the provider is unavailable', () => {
+  // Apple is Supabase's web flow, finished by /auth/callback like Google's (the
+  // runbook's "Sign in with Apple on the web").
+  it('starts Apple from either tab, through the callback, with the destination kept', async () => {
+    const signIn = await renderPageAt('returnUrl=%2Fcreate');
+
+    expect(screen.getByRole('tab', { name: /^sign in$/i, selected: true })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
+    const first = providerRedirect();
+    expect(first.provider).toBe('apple');
+    expect(first.redirectTo.origin).toBe('https://magicbooklet.com');
+    expect(first.redirectTo.pathname).toBe('/auth/callback');
+    expect(first.redirectTo.searchParams.get('next')).toBe('/create');
+    expect(mocks.signInWithPassword).not.toHaveBeenCalled();
+
+    // A started sign-in leaves the page, so the Sign-up tab is its own visit.
+    signIn.unmount();
+    await renderPageAt('mode=signup&next=%2Fcreate');
+    expect(screen.getByRole('tab', { name: /^sign up$/i, selected: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Create your account' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(2));
+    const second = providerRedirect(1);
+    expect(second.provider).toBe('apple');
+    expect(second.redirectTo.pathname).toBe('/auth/callback');
+    expect(second.redirectTo.searchParams.get('next')).toBe('/create');
+    expect(mocks.signUp).not.toHaveBeenCalled();
+  });
+
+  it('holds every way in while one provider sign-in is starting', async () => {
+    mocks.signInWithOAuth.mockReturnValueOnce(new Promise(() => undefined));
     renderLogin();
 
-    expect(screen.queryByRole('button', { name: /apple/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
 
-    fireEvent.click(screen.getByRole('button', { name: /^sign up$/i }));
-    expect(screen.queryByRole('button', { name: /apple/i })).not.toBeInTheDocument();
-    expect(screen.queryByText(/apple/i)).toBeNull();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeDisabled());
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeDisabled();
+    // The form's submit reads "Processing..." meanwhile.
+    expect(screen.getByRole('button', { name: /processing/i })).toHaveAttribute('type', 'submit');
+    expect(screen.getByRole('button', { name: /processing/i })).toBeDisabled();
+  });
+
+  // auth-js builds the address and navigates, so a provider that is off shows its own
+  // error page; what fails here is the start in this browser, such as storing the
+  // PKCE verifier.
+  it('names Apple when its sign-in cannot be started, and lets it be tried again', async () => {
+    renderLogin();
+    fireEvent.click(screen.getByRole('tab', { name: /^sign up$/i }));
+    mocks.signInWithOAuth.mockRejectedValueOnce(new Error('The operation is insecure.'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not start Apple sign-in. Try again.');
+    expect(screen.queryByText(/insecure/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
+  });
+
+  it('is usable again on a page the browser brings back after leaving for Apple', async () => {
+    renderLogin();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Apple' }));
+    await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalledTimes(1));
+    // A started sign-in leaves the page with every way in waiting.
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeDisabled();
+
+    // Back from Apple's page: an ordinary pageshow changes nothing, a restored one does.
+    act(() => {
+      window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: false }));
+    });
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeDisabled();
+    act(() => {
+      window.dispatchEvent(Object.assign(new Event('pageshow'), { persisted: true }));
+    });
+
+    expect(screen.getByRole('button', { name: 'Continue with Apple' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeEnabled();
+    expect(signInSubmitButton()).toBeEnabled();
   });
 
   it('allows an explicit auth redirect origin to override the public site URL', async () => {
@@ -379,7 +455,7 @@ describe('LoginPage onboarding redirects', () => {
     fireEvent.click(screen.getByRole('button', { name: /google/i }));
 
     await waitFor(() => expect(mocks.signInWithOAuth).toHaveBeenCalled());
-    const { provider, redirectTo } = googleRedirect();
+    const { provider, redirectTo } = providerRedirect();
 
     expect(provider).toBe('google');
     expect(redirectTo.origin).toBe('https://www.magicbooklet.com');

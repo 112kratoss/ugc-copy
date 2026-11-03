@@ -66,6 +66,12 @@ const traverse = (delta: number) => act(async () => {
   expect(state === null || state.__NA === true, 'an entry Next would reload the page on').toBe(true);
 });
 const pressBack = () => traverse(-1);
+// Back onto the page's entry: the guard goes Forward onto its own entry again
+// while its question is up. A Leave waits for it: jsdom picks the entry a
+// traversal goes to in one task and moves in a later one, so a Leave pressed in
+// between lost a Back, the page never went, and the test waited out its 5 s
+// (main, 2026-10-28; archive/leave-guard-forward-race-2026-11-01).
+const guardEntryAgain = () => waitFor(() => expect(window.history.state).toHaveProperty('draftLeaveGuard'));
 
 const pageLinks: HTMLAnchorElement[] = [];
 /** A plain link elsewhere in the document, as the app shell's are, naming its tab as theirs do. */
@@ -177,7 +183,7 @@ describe('useLeaveGuard', () => {
     const question = await screen.findByRole('alertdialog', { name: 'Leave this draft?' });
     expect(question).toHaveAccessibleDescription('Your draft will be lost.');
     // Forward onto its guard entry again while the question is up.
-    await waitFor(() => expect(window.history.state).toHaveProperty('draftLeaveGuard'));
+    await guardEntryAgain();
     fireEvent.click(within(question).getByRole('button', { name: 'Stay' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
 
@@ -186,6 +192,7 @@ describe('useLeaveGuard', () => {
     expect(screen.getByLabelText('Draft')).toHaveValue('A first line');
 
     await pressBack();
+    await guardEntryAgain();
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave' }));
 
     // Off the guard entry, then the Back that was asked for.

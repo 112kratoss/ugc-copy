@@ -118,14 +118,14 @@ function ResetPasswordContent() {
   return (
     <div className="ui-page ui-page-ambient flex min-h-screen flex-col p-4 sm:p-6">
       <Link href="/" className="ui-focus-ring flex w-fit items-center gap-2 rounded-2xl text-[var(--ui-text-primary)]">
-        <span className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
           <WandSparkles className="h-5 w-5" aria-hidden />
         </span>
         <span className="text-sm font-extrabold">magicbooklet</span>
       </Link>
 
       <div className="flex flex-1 items-center justify-center py-10">
-        <main className="w-full max-w-md rounded-[28px] border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
+        <main className="w-full max-w-md rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]">
             <LockKeyhole className="h-5 w-5" aria-hidden />
           </span>
@@ -147,7 +147,7 @@ function ResetPasswordContent() {
                 <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-200" aria-hidden />
                 <p>This recovery link is missing, expired, or already used. New reset links can’t be sent by email.</p>
               </div>
-              {/* The sign-in page's recovery notice names Google and the support address. */}
+              {/* The sign-in page's recovery notice names Google, Apple and the support address. */}
               <Link
                 href={recoveryHref}
                 className="ui-focus-ring mt-4 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-full bg-[var(--ui-primary)] px-5 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)]"

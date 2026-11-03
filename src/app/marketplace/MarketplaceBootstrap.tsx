@@ -150,7 +150,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
         aria-labelledby="marketplace-filter-heading"
         // `relative z-20`: backdrop-blur makes this a stacking context, so the
         // tool dropdown would paint under the card grid without it.
-        className="relative z-20 mt-8 rounded-[28px] border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5"
+        className="relative z-20 mt-8 rounded-3xl border border-white/8 bg-zinc-950/70 p-4 backdrop-blur-sm sm:p-5"
       >
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -337,7 +337,7 @@ function BootstrapResultsMessage({
   actionHref: string;
 }) {
   return (
-    <div className="mt-10 rounded-[30px] border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+    <div className="mt-10 rounded-3xl border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
       <h2 className="text-2xl font-semibold text-white">{title}</h2>
       <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-zinc-400">{body}</p>
       <a

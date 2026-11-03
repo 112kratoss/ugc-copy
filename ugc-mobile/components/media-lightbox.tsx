@@ -158,7 +158,7 @@ function MediaLightboxContent({
             style={({ pressed }) => ({
               width: 38,
               height: 38,
-              borderRadius: 19,
+              borderRadius: appTheme.radii.pill,
               borderWidth: 1,
               borderColor: theme.colors.border,
               backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
@@ -173,7 +173,8 @@ function MediaLightboxContent({
         <View
           style={{
             height: stageHeight,
-            borderRadius: 20,
+            borderRadius: appTheme.radii.lg,
+            borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: theme.colors.border,
             backgroundColor: '#050506',
@@ -250,7 +251,7 @@ function LightboxArrow({
         [side]: 12,
         width: 44,
         height: 44,
-        borderRadius: 22,
+        borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderColor: theme.colors.border,
         backgroundColor: pressed ? theme.colors.surfaceStrong : 'rgba(0,0,0,0.65)',

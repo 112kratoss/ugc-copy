@@ -468,7 +468,7 @@ describe('OwnerProfileMediaHub', () => {
 
     // An old address that named the Creations tab opens Posts.
     await screen.findByRole('button', { name: /open public post/i });
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Posts2', 'Saved1']);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Posts 2', 'Saved 1']);
     expect(screen.getByRole('tab', { name: 'Posts 2' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('link', { name: /new post/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /manage in studio/i })).not.toBeInTheDocument();

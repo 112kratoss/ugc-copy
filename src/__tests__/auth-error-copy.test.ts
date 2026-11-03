@@ -11,23 +11,13 @@ function authError(message: string, extra: Record<string, unknown> = {}) {
 describe('describeAuthError', () => {
   it.each([
     ['Failed to fetch', 'Could not reach the sign-in service. Check your connection and try again.'],
-    ['Invalid login credentials', 'That email and password do not match. Check both and try again, or use Google if you signed up with it.'],
+    ['Invalid login credentials', 'That email and password do not match. Check both and try again. If you created the account with Google or Apple, use that button instead.'],
     ['Email not confirmed', 'Confirm your email first: open the confirmation link we sent when the account was created, then sign in.'],
     // D2: no reset email can be sent, so the sentence offers none.
     ['User already registered', 'An account with this email already exists. Sign in instead.'],
     ['For security purposes, you can only request this after 42 seconds.', 'Too many attempts. Wait a minute before trying again.'],
   ])('keeps the plain wording for "%s"', (raw, shown) => {
     expect(describeAuthError(authError(raw), FALLBACK)).toBe(shown);
-  });
-
-  // Audit 01-9: the hook's refusal names Apple, which the web does not offer.
-  it('words the sign-up hook\'s refusal for a site that offers Google only', () => {
-    const shown = describeAuthError(
-      authError('Email sign-up is temporarily unavailable. Continue with Google or Apple.', { status: 403 }),
-      FALLBACK,
-    );
-
-    expect(shown).toBe('Email sign-up is temporarily unavailable. Continue with Google.');
   });
 
   it('says what to do about a reused password', () => {
@@ -39,6 +29,8 @@ describe('describeAuthError', () => {
   it.each([
     authError('Error sending confirmation email', { status: 500 }),
     authError('Signups not allowed for this instance', { status: 422 }),
+    // The sign-up hook's refusal: the web makes no email sign-up that could meet it.
+    authError('Email sign-up is temporarily unavailable. Continue with Google or Apple.', { status: 403 }),
     'Database error saving new user',
     { message: 'Unexpected failure, please check server logs for more information' },
     null,

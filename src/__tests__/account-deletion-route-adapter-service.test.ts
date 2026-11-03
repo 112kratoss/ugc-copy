@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { deleteAccountRouteResponse } from '@/lib/account-deletion-route-adapter-service';
-import { AppleAccountDeletionError } from '@/lib/apple-account-deletion-service';
+import {
+  APPLE_ACCOUNT_DELETION_ENDPOINTS,
+  AppleAccountDeletionError,
+  authorizeAppleAccountDeletion,
+} from '@/lib/apple-account-deletion-service';
 import {
   registerIdentityAdmissionContext,
   signIdentityAdmission,
@@ -766,6 +770,337 @@ describe('account deletion route', () => {
     // Signing in again with the same mismatched account cannot clear this one.
     expect(body).not.toHaveProperty('reason');
     expect(rpc).not.toHaveBeenCalled();
+  });
+
+  // The website's Continue with Apple, end to end through the real Apple service with
+  // Apple's endpoints faked: any account with an Apple identity, wherever it was made.
+  describe('a code from the website’s Continue with Apple', () => {
+    const SERVICES_ID = 'com.magicbooklet.mobile.web';
+    const appleEnvironment = {
+      APPLE_TEAM_ID: 'TEAM123456',
+      IOS_BUNDLE_ID: 'com.magicbooklet.mobile',
+      NEXT_PUBLIC_APPLE_SERVICES_ID: SERVICES_ID,
+      APPLE_SIGN_IN_KEY_ID: 'KEY1234567',
+      APPLE_SIGN_IN_PRIVATE_KEY: 'unused-by-test-double',
+    };
+
+    function websiteDeletion(identities: unknown[], appleSubject = 'apple-user-1') {
+      const appleRequests: Array<{ url: string; body: Record<string, string> }> = [];
+      const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+        appleRequests.push({ url, body: Object.fromEntries(new URLSearchParams(String(init.body))) });
+        return url === APPLE_ACCOUNT_DELETION_ENDPOINTS.token
+          ? new Response(JSON.stringify({
+              access_token: 'apple-access-token',
+              refresh_token: 'apple-refresh-token',
+              id_token: 'apple-id-token',
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+          : new Response(null, { status: 200 });
+      });
+      const verifyIdentityToken = vi.fn(async () => appleSubject);
+      const rpc = vi.fn(async (name: string) => {
+        if (name !== 'prepare_account_deletion') throw new Error(`Unexpected rpc: ${name}`);
+        return { data: { status: 'already_completed', storage_manifest: {} }, error: null };
+      });
+      const respond = () => deleteAccountRouteResponse({
+        request: request({
+          confirmation: 'DELETE',
+          appleAuthorizationCode: 'website-one-time-code',
+          appleAuthorizationClient: 'web',
+        }),
+        dependencies: {
+          authorizeAppleAccountDeletion: (input) => authorizeAppleAccountDeletion(input, {
+            createClientSecret: async ({ clientId }) => `client-secret-for-${clientId}`,
+            environment: appleEnvironment,
+            fetcher: fetcher as never,
+            now: () => NOW,
+            verifyIdentityToken,
+          }),
+          requireIdentity: requireIdentityForRouteTest as never,
+          createUserClient: (() => ({
+            auth: {
+              getUser: vi.fn(async () => ({
+                // A stale sign-in: Apple's code is the fresh proof.
+                data: { user: { ...authenticatedUser('2026-07-14T10:00:00.000Z'), identities } },
+                error: null,
+              })),
+            },
+          })) as never,
+          createServiceClient: (() => ({ rpc })) as never,
+          enforceBackendRateLimit: allowRateLimit(),
+          invalidateShowcaseFeedCache: vi.fn(),
+          now: () => NOW,
+        },
+      });
+      return { appleRequests, respond, rpc, verifyIdentityToken };
+    }
+
+    it.each([
+      ['an account made with Apple on the website', [
+        { id: 'apple-user-1', provider: 'apple', identity_data: { sub: 'apple-user-1' } },
+      ]],
+      ['a Google account that Supabase linked an Apple sign-in to by its email', [
+        { id: 'google-user-1', provider: 'google', identity_data: { sub: 'google-user-1' } },
+        { id: 'apple-user-1', provider: 'apple', identity_data: { sub: 'apple-user-1' } },
+      ]],
+    ])('deletes %s, redeeming and revoking the code as the Services ID', async (_label, identities) => {
+      const deletion = websiteDeletion(identities);
+
+      const response = await deletion.respond();
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ success: true, deleted: true });
+      expect(deletion.appleRequests).toEqual([
+        {
+          url: APPLE_ACCOUNT_DELETION_ENDPOINTS.token,
+          body: {
+            client_id: SERVICES_ID,
+            client_secret: `client-secret-for-${SERVICES_ID}`,
+            code: 'website-one-time-code',
+            grant_type: 'authorization_code',
+            redirect_uri: 'https://magicbooklet.com/delete-account',
+          },
+        },
+        {
+          url: APPLE_ACCOUNT_DELETION_ENDPOINTS.revoke,
+          body: {
+            client_id: SERVICES_ID,
+            client_secret: `client-secret-for-${SERVICES_ID}`,
+            token: 'apple-refresh-token',
+            token_type_hint: 'refresh_token',
+          },
+        },
+      ]);
+      expect(deletion.verifyIdentityToken).toHaveBeenCalledWith('apple-id-token', SERVICES_ID);
+      expect(deletion.rpc).toHaveBeenCalledWith('prepare_account_deletion', { p_user_id: USER_ID });
+    });
+
+    it('keeps a linked Google account when the website code names another Apple user', async () => {
+      const deletion = websiteDeletion([
+        { id: 'google-user-1', provider: 'google', identity_data: { sub: 'google-user-1' } },
+        { id: 'apple-user-1', provider: 'apple', identity_data: { sub: 'apple-user-1' } },
+      ], 'apple-user-2');
+
+      const response = await deletion.respond();
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: 'ACCOUNT_REAUTH_MISMATCH' });
+      // Redeemed to read its user, never revoked.
+      expect(deletion.appleRequests.map(({ url }) => url)).toEqual([APPLE_ACCOUNT_DELETION_ENDPOINTS.token]);
+      expect(deletion.rpc).not.toHaveBeenCalled();
+    });
+  });
+
+  // Installed apps name no client; the website names its own. Any other name is refused before
+  // Apple is asked, so no code is spent on a client the server would redeem it as by mistake.
+  it("redeems a code as the app's native client unless the request names the website, and refuses other names", async () => {
+    const authorizeAppleAccountDeletion = vi.fn();
+    const logError = vi.fn();
+    const respond = (body: Record<string, unknown>) => deleteAccountRouteResponse({
+      request: request({ confirmation: 'DELETE', appleAuthorizationCode: 'fresh-one-time-apple-code', ...body }),
+      dependencies: {
+        authorizeAppleAccountDeletion,
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: (() => ({
+          auth: {
+            getUser: vi.fn(async () => ({
+              data: { user: { ...authenticatedUser(), identities: [{ provider: 'apple', provider_id: 'apple-user-1' }] } },
+              error: null,
+            })),
+          },
+        })) as never,
+        createServiceClient: (() => ({
+          rpc: vi.fn(async () => ({ data: { status: 'already_completed', storage_manifest: {} }, error: null })),
+        })) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        invalidateShowcaseFeedCache: vi.fn(),
+        logError,
+        now: () => NOW,
+      },
+    });
+
+    expect((await respond({})).status).toBe(200);
+    expect((await respond({ appleAuthorizationClient: 'native' })).status).toBe(200);
+    expect((await respond({ appleAuthorizationClient: 'web' })).status).toBe(200);
+    const refused = await respond({ appleAuthorizationClient: 'android' });
+
+    expect(refused.status).toBe(400);
+    await expect(refused.json()).resolves.toEqual({ error: 'Unknown Apple client for this deletion request.' });
+    expect(authorizeAppleAccountDeletion.mock.calls.map(([input]) => input.client)).toEqual([undefined, undefined, 'web']);
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  // A website failure while the app's work is the Services ID's setup: the log says which client,
+  // and what Apple or the configuration refused, never the code.
+  it("logs which client Apple's failure came from, and what failed", async () => {
+    const logError = vi.fn();
+    const response = await deleteAccountRouteResponse({
+      request: request({
+        confirmation: 'DELETE',
+        appleAuthorizationCode: 'website-one-time-code',
+        appleAuthorizationClient: 'web',
+      }),
+      dependencies: {
+        authorizeAppleAccountDeletion: vi.fn(async () => {
+          throw new AppleAccountDeletionError(
+            'Apple account verification is temporarily unavailable. Your account is still active; please try again later.',
+            'APPLE_REVOCATION_UNAVAILABLE',
+            503,
+            false,
+            'token endpoint 400 invalid_client',
+          );
+        }),
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: (() => ({
+          auth: {
+            getUser: vi.fn(async () => ({
+              data: { user: { ...authenticatedUser(), identities: [{ provider: 'apple', provider_id: 'apple-user-1' }] } },
+              error: null,
+            })),
+          },
+        })) as never,
+        createServiceClient: (() => ({ rpc: vi.fn() })) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        logError,
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Apple account verification is temporarily unavailable. Your account is still active; please try again later.',
+      code: 'APPLE_REVOCATION_UNAVAILABLE',
+    });
+    expect(logError).toHaveBeenCalledWith(
+      'Apple account deletion authorization failed (web: token endpoint 400 invalid_client):',
+      expect.any(AppleAccountDeletionError),
+    );
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('website-one-time-code');
+  });
+
+  const appleUserClient = () => (() => ({
+    auth: {
+      getUser: vi.fn(async () => ({
+        data: { user: { ...authenticatedUser(), identities: [{ provider: 'apple', provider_id: 'apple-user-1' }] } },
+        error: null,
+      })),
+    },
+  })) as never;
+
+  // The website asks Apple for a fresh code only when this one is no use: a refusal after
+  // Apple took it says so, since sending it again would only spend one of the hour's attempts.
+  it.each([
+    ['after Apple took the code', true],
+    ['before Apple took the code', false],
+  ])("says whether Apple's code is spent when Apple fails %s", async (_label, codeSpent) => {
+    const response = await deleteAccountRouteResponse({
+      request: request({
+        confirmation: 'DELETE',
+        appleAuthorizationCode: 'website-one-time-code',
+        appleAuthorizationClient: 'web',
+      }),
+      dependencies: {
+        authorizeAppleAccountDeletion: vi.fn(async () => {
+          throw new AppleAccountDeletionError(
+            'Apple account verification is temporarily unavailable. Your account is still active; please try again later.',
+            'APPLE_REVOCATION_UNAVAILABLE',
+            503,
+            false,
+            codeSpent ? 'revoke endpoint 500' : 'token endpoint 502',
+            codeSpent,
+          );
+        }),
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: appleUserClient(),
+        createServiceClient: (() => ({ rpc: vi.fn() })) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        logError: vi.fn(),
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Apple account verification is temporarily unavailable. Your account is still active; please try again later.',
+      code: 'APPLE_REVOCATION_UNAVAILABLE',
+      ...(codeSpent ? { appleCodeSpent: true } : {}),
+    });
+  });
+
+  // A refusal that sends the person back to Apple is logged too: a Services ID whose
+  // tokens never verify would otherwise loop people through Apple without a trace.
+  it('logs a refusal that sends the person back to Apple, with what failed', async () => {
+    const logError = vi.fn();
+    const response = await deleteAccountRouteResponse({
+      request: request({
+        confirmation: 'DELETE',
+        appleAuthorizationCode: 'website-one-time-code',
+        appleAuthorizationClient: 'web',
+      }),
+      dependencies: {
+        authorizeAppleAccountDeletion: vi.fn(async () => {
+          throw new AppleAccountDeletionError(
+            'Apple could not verify this deletion request. Continue with Apple again and retry.',
+            'APPLE_REAUTH_FAILED',
+            403,
+            true,
+            'id token unverifiable (ERR_JWS_SIGNATURE_VERIFICATION_FAILED)',
+            true,
+          );
+        }),
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: appleUserClient(),
+        createServiceClient: (() => ({ rpc: vi.fn() })) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        logError,
+        now: () => NOW,
+      },
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Apple could not verify this deletion request. Continue with Apple again and retry.',
+      code: 'APPLE_REAUTH_FAILED',
+      reason: 'reauthentication_required',
+      reauthenticate: true,
+      appleCodeSpent: true,
+    });
+    expect(logError).toHaveBeenCalledWith(
+      'Apple account deletion authorization failed (web: id token unverifiable (ERR_JWS_SIGNATURE_VERIFICATION_FAILED)):',
+      expect.any(AppleAccountDeletionError),
+    );
+    expect(JSON.stringify(logError.mock.calls)).not.toContain('website-one-time-code');
+  });
+
+  // Apple's step went through, so its authorization is already revoked: a retry needs a new code.
+  it('says the Apple code is spent when the deletion does not start after Apple', async () => {
+    const deletion = deletionServiceClient({
+      prepare: { data: null, error: { message: 'prepare unavailable' } },
+    });
+    const response = await deleteAccountRouteResponse({
+      request: request({
+        confirmation: 'DELETE',
+        appleAuthorizationCode: 'website-one-time-code',
+        appleAuthorizationClient: 'web',
+      }),
+      dependencies: {
+        authorizeAppleAccountDeletion: vi.fn(async () => undefined),
+        requireIdentity: requireIdentityForRouteTest as never,
+        createUserClient: appleUserClient(),
+        createServiceClient: (() => deletion.client) as never,
+        enforceBackendRateLimit: allowRateLimit(),
+        logError: vi.fn(),
+        now: () => NOW,
+        runAfterResponse: deferredWork().runAfterResponse,
+      },
+    });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Account deletion could not be completed. Please try again.',
+      code: 'ACCOUNT_DELETION_NOT_STARTED',
+      deletionScheduled: false,
+      appleCodeSpent: true,
+    });
   });
 
   it('answers 200 deleted only for a deletion that had already completed', async () => {

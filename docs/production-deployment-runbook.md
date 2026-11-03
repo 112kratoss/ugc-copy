@@ -66,6 +66,14 @@ and applies a 15-second timeout to the signed Vercel forward.
   bind it to the authenticated Apple identity, and revoke Apple authorization
   before deleting account data. Never expose the private key through a
   `NEXT_PUBLIC_` or Expo variable.
+- Sign in with Apple account deletion on the website:
+  `NEXT_PUBLIC_APPLE_SERVICES_ID`, the website's Services ID (public, it is in
+  every Apple authorize URL). The deletion page sends an account with an Apple
+  identity through Apple with it, and the backend redeems and revokes that
+  code with it, signed by the same key. Unset, `/delete-account` sends such an
+  account to the iPhone app. Set it only once Apple takes the page's return
+  URL (`--probe-apple-web-deletion`, "Sign in with Apple on the web" below);
+  the page reads it at build, so a change needs a deploy.
 - Verified Android links: `ANDROID_APP_SHA256_FINGERPRINTS` and `ANDROID_PACKAGE_NAME`.
 - Release identity: `RELEASE_GIT_SHA` is injected by the production release
   workflow. Do not configure it manually in Vercel.
@@ -143,7 +151,9 @@ These settings are intentionally verified against the provider dashboards/adviso
 - Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
 - Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
 - Google Auth Platform: set Branding app name to `Magicbooklet`, add `magicbooklet.com` as an authorized domain, publish/verify the OAuth consent screen, and keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
-- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified. Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
+- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified. Add the branded host and callback to the Apple Services ID before activation, and set the repository variable `SUPABASE_AUTH_CALLBACK_URL` to the branded callback ("Sign in with Apple on the web" below). Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
+- Apple Services ID, the Supabase Apple provider, and the repository secrets `APPLE_SIGN_IN_PRIVATE_KEY` and `SUPABASE_AUTH_CONFIG_TOKEN` that the monthly client-secret renewal reads: under "Sign in with Apple on the web" below.
+- Before this repository goes private on GitHub Free: environment secrets stop being readable there. The `production` environment's secrets (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, `OPS_READ_SECRET`) and `mobile-production`'s `EXPO_TOKEN` need repository copies under the same names, with `vars.TESTFLIGHT_INTERNAL_GROUP` checked too, and environment protection rules stop applying. Do this before the switch.
 - RevenueCat project `proj4a602455`: send a production test webhook for integration `whintgr1689ecfb68` to `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, then verify Vercel logs show the route accepted the signed event. Current configured event types are `cancellation`, `non_renewing_purchase`, and `refund_reversed`.
 
 The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
@@ -307,6 +317,219 @@ rejects `provider = 'email'` sign-ups with a 403 and the message
 
 Keep `auth.email.enable_confirmations = false` while this policy holds; enabling
 confirmations without a sender would silently block every affected sign-in.
+
+### Sign in with Apple on the web
+
+Set up on 2026-11-02: Services ID `com.magicbooklet.mobile.web` ("Magicbooklet
+Web", primary App ID `5HNNML93ST.com.magicbooklet.mobile`), its client secret
+signed with the Sign in with Apple key `6924Q753C6` of team `5HNNML93ST`, and
+Client IDs `com.magicbooklet.mobile.web,com.magicbooklet.mobile`. The secret
+minted by hand that day expires 2027-05-01, unless the workflow below replaces
+it first.
+
+**Renewal is automatic.** On the 1st of every month,
+`.github/workflows/apple-web-client-secret.yml` mints a fresh 180-day secret and
+applies it to the Supabase Apple provider through the Management API, so the
+live secret is never more than about a month old. It reads two **repository**
+secrets: on GitHub Free a private repository cannot read environment secrets,
+and this one goes private after launch.
+
+- `APPLE_SIGN_IN_PRIVATE_KEY`: the same `.p8` as Vercel's. Install it with
+  `gh secret set APPLE_SIGN_IN_PRIVATE_KEY --repo 112kratoss/ugc-copy < AuthKey_6924Q753C6.p8`.
+  The workflow holds the key to `APPLE_SIGN_IN_KEY_SHA256`, the SHA-256 of its
+  public half, so a wrong `.p8` (APNs and App Store Connect keys are P-256 too)
+  is refused before anything is minted.
+- `SUPABASE_AUTH_CONFIG_TOKEN`: a scoped Supabase access token for `ugc-app`
+  only, with **Auth Config** and **Project Settings** both at read-write.
+  Supabase grants the Auth config update only with both. With Project Settings
+  at read, the token reads the config (enough for the probe) but not the update.
+  Project Settings read-write also covers pausing, restarting, changing and
+  deleting the project, so the token lives nowhere but this secret. Install it
+  from the clipboard with
+  `pbpaste | gh secret set SUPABASE_AUTH_CONFIG_TOKEN --repo 112kratoss/ugc-copy`.
+  A token with an expiry fails the run with HTTP 401 once it ends; the
+  incident issue opens, and the live secret still has about five months.
+
+Both were installed on 2026-11-03. The token, "GitHub Actions: Apple client
+secret renewal" in Supabase's Access Tokens, never expires (the owner's choice).
+
+Before it applies the new secret, the script checks four things, and with any of
+them wrong it leaves the live secret alone:
+
+- the provider is on;
+- the Services ID is first in Client IDs;
+- the key matches its pin;
+- when Supabase shows the live secret, that secret was signed by the same key
+  for the same key id, team and Services ID.
+
+After the update it reads the config back, then the probe checks the redirect
+and that the bundle id is still listed.
+
+A failed or timed-out run does two things:
+
+- it emails whoever last edited the schedule;
+- it opens the issue "Apple web client secret renewal is failing", which closes
+  on the next good run.
+
+A failure leaves about five months before the live secret ends. The run's
+summary says when the secret it applied expires.
+
+**A green run does not prove Apple takes the secret.** Nothing can, short of a
+real sign-in (step 2 says why). Once both secrets are installed and the
+workflow is on `main`, run it by hand (Actions → Apple web client secret → Run
+workflow) and sign in on the website with Apple. That way the first scheduled
+run replaces a secret the same code has already proved. Do the same after any
+change to the key, its pin, the ids or the script.
+
+A switched-off workflow raises no alert: GitHub does it on a public repository
+after 60 days without activity, and anyone can do it by hand. Switching it back
+on restarts it.
+
+On a private repository each run bills about one Actions minute. It installs
+no packages: the script signs with Node's own crypto, so no third-party code
+runs beside the key.
+
+**Rotating the key** (a leak, or a key revoked by mistake): revoking
+`6924Q753C6` ends the live secret and the account deletion's revocation at
+once, so do the steps in this order:
+
+1. Make a new Sign in with Apple key for the primary App ID in Apple Developer
+   → Keys.
+2. Run step 2 with the new key. It prints the key's SHA-256, the new pin.
+3. In this repository, change `APPLE_SIGN_IN_KEY_ID` and
+   `APPLE_SIGN_IN_KEY_SHA256` in the workflow and in
+   `src/__tests__/apple-web-client-secret-workflow.test.ts` if it names them,
+   then merge.
+4. Replace the repository secret `APPLE_SIGN_IN_PRIVATE_KEY`.
+5. Run the workflow by hand with **rotate** ticked. It applies over the old
+   key's secret, which a normal run refuses to do. Then sign in on the website
+   with Apple.
+6. Set Vercel's `APPLE_SIGN_IN_PRIVATE_KEY` and `APPLE_SIGN_IN_KEY_ID`, then do
+   a configuration-only redeploy, for the account deletion.
+7. Revoke the old key last.
+
+The iPhone app signs in with Apple natively (`signInWithIdToken`, audience the
+bundle id). The website's Continue with Apple buttons (the login page's tabs and
+the creators' sign-up sheet) use Supabase's web OAuth flow, which needs its own
+Apple client, a Services ID. The buttons are drawn whatever the dashboard holds,
+so these steps come before the deploy that brings them: until then a press ends
+on Supabase's JSON 400 ("Unsupported provider: missing OAuth secret") or on
+Apple's invalid_client page.
+
+1. Apple Developer → Certificates, Identifiers & Profiles → Identifiers → add a
+   Services ID (an identifier of its own, such as the bundle id with `.web`).
+   Enable Sign in with Apple and configure it with the iPhone app's App ID as
+   its primary App ID, so the website and the app are one entry in a person's
+   Apple ID settings. Apple's user id is the same for every app of the team,
+   which is what makes an account made on an iPhone sign in on the website as
+   itself. Domains: `ildfmhozpibwiopeavfg.supabase.co`. Return URL:
+   `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback`. Before a
+   Supabase custom domain is activated (the dashboard gates above), add its host
+   and its `/auth/v1/callback` here as well: Supabase sends Apple the custom
+   callback from activation on, and Apple refuses a return URL it was not given.
+   For deleting an account on the website, also add the domain
+   `magicbooklet.com` and the return URL `https://magicbooklet.com/delete-account`
+   (the deletion page's own Continue with Apple, below).
+2. Mint the client secret on the Mac that holds the Sign in with Apple key, so
+   the key never goes into a web page:
+   `node scripts/ops/apple-web-client-secret.mjs --p8 <AuthKey_….p8> --key-id <key id> --team-id <APPLE_TEAM_ID> --client-id <Services ID>`.
+   It puts the secret on the clipboard (or in a new file with `--out`), never on
+   the screen, and prints its expiry and the key's public SHA-256. The key file
+   can be Apple's download or the one-line form `.env` files keep.
+   With `--apply-supabase` (plus `--key-sha256`, and `SUPABASE_MANAGEMENT_API_TOKEN`
+   in the environment) it applies the secret to Supabase itself, the way the
+   monthly workflow does, and `--rotate` lets it apply over a secret from another
+   key. The `.p8` behind `APPLE_SIGN_IN_KEY_ID` serves; rotating it is above.
+   The secret lives 180 days (Apple's ceiling is six months), and every web
+   Apple sign-in fails from that day. Nothing can check a secret before a real
+   web sign-in, because Apple answers a made-up code the same way whoever signed
+   it. So a wrong key id, team or Services ID shows only then, in production logs
+   as `auth_callback_provider_error` from `/auth/callback`, as a lapse does.
+3. Supabase Dashboard → Authentication → Providers → Apple: Client IDs is a
+   comma-separated list with the Services ID first, then the bundle id.
+   Supabase sends the first entry to Apple for the web flow and accepts any of
+   them as the audience of a native sign-in, so the bundle id must stay listed:
+   without it every Sign in with Apple in the iPhone app fails at once. Paste
+   the secret into the secret field and save.
+4. Check before the deploy, and after any change to these settings:
+   `npm run ops:external-gates -- --probe-apple-web-sign-in` reads where
+   Supabase sends a press of Continue with Apple, with no token, and fails
+   unless it is Apple's authorize page for a client other than the bundle id,
+   returning to the project's callback. Once a custom domain is active, set
+   `SUPABASE_AUTH_CALLBACK_URL` to its callback: locally in the environment, and
+   for the monthly workflow as a repository variable. With `SUPABASE_MANAGEMENT_API_TOKEN` it
+   also checks that the bundle id is still in Client IDs; without one, sign in
+   with Apple in the iPhone app. It cannot see the secret. After the deploy, sign
+   in on the website with the Apple ID of an iPhone account and check that it is
+   the same account (handle and credits): that sign-in is the secret's check.
+5. Deletion on the website (below): run
+   `NEXT_PUBLIC_APPLE_SERVICES_ID=<Services ID> NEXT_PUBLIC_SITE_URL=<Vercel's value> npm run ops:external-gates -- --probe-apple-web-deletion`.
+   It reads Apple's own authorize page, which carries Apple's verdict in its
+   `boot_args`, for three requests: Supabase's sign-in request, which Apple must
+   take; a return URL nobody registered on the site's host, which Apple must
+   refuse (the two controls); and the deletion page's request, back to
+   `/delete-account` on `NEXT_PUBLIC_SITE_URL` (`https://magicbooklet.com` when
+   unset, which the probe says it did not check). Until step 1's deletion return
+   URL is in, it fails on Apple's `Invalid web redirect url. (invalid_request)`
+   (2026-11-02). The Services ID must be Supabase's. Once it passes, set
+   `NEXT_PUBLIC_APPLE_SERVICES_ID` to that Services ID in Vercel's production
+   environment and deploy: the deletion page reads it at build. Then check three
+   accounts, each deleted on `/delete-account`, against the Apple ID's list of
+   apps using Sign in with Apple (account.apple.com, Sign-In and Security),
+   which must no longer show the app afterwards: one made with Continue with
+   Apple on the website; a Google account that has signed in with Apple on the
+   website by the same email; and one made with Sign in with Apple in the iPhone
+   app. The last is the one that shows the cross-client revoke: its
+   authorization was issued to the bundle id, and the website revokes as the
+   Services ID. If the app is still listed after it, unset the variable and
+   redeploy, which sends such accounts back to the iPhone app, until the
+   website can revoke them too.
+
+Apple sends a person's name only the first time they authorize Magicbooklet,
+web or app, and Supabase keeps it then; an account made on the website without
+one gets it from the profile setup that follows.
+
+Deleting an account with an Apple identity needs a one-time code from Apple:
+the deletion redeems it, checks that Apple's user id (`sub`) is the account's
+Apple identity, and revokes Apple's authorization before anything is deleted
+(`apple-account-deletion-service.ts`). Supabase's web sign-in redeems its own
+code, so the website asks Apple for one of its own
+(`src/lib/apple-web-reauthentication.ts`): `/delete-account`'s Continue with
+Apple sends the person to Apple's authorize page as the Services ID, with no
+scope, and Apple returns them to `/delete-account` with the code in the
+address's fragment. The page uses it only with the state its tab kept when the
+person pressed the button, for the same signed-in account, so a link to
+Apple's page from anywhere else cannot bring a deletion; the person then types
+DELETE, and `DELETE /api/account` sends the code with
+`appleAuthorizationClient: 'web'`. The backend redeems it as the Services ID
+with the return URL Apple requires again and revokes as the Services ID, the
+client Apple issued the code to. The website and the app are one group in
+Apple's configuration, which should disconnect the app's authorization with
+it; step 5's iPhone-made account is the check. This serves every account with an Apple identity: one
+made in the app, one made with Apple on the website, and a Google account that
+Supabase linked an Apple sign-in to because both carry the same verified
+email. The iPhone app keeps its native path (no client named, the bundle id).
+Apple returns only to that registered address, so on another origin of the site
+(`www.magicbooklet.com`, which serves the site without redirecting, or a
+preview) the page links to `magicbooklet.com/delete-account` instead, where the
+person signs in again. Before leaving for Apple, the page asks Supabase whether
+its session is still live: auth-js keeps using a stored session that a
+deletion elsewhere has ended, and Apple would confirm for a request refused
+before its code is used, leaving a new authorization that nothing revokes. The
+start stays in the tab for ten minutes, so going Back to Apple's page and
+confirming again still lands. The code is kept through an answer that leaves
+the form up from before Apple was asked (one that could not say whether the
+deletion started, or Apple's service unavailable), so the retry sends it again:
+a deletion that did start answers it as under way. A refusal after the backend
+redeemed it says so (`appleCodeSpent: true`), and the page asks for Apple
+again, as it does for a code older than Apple's five minutes, rather than spend
+one of the hour's three attempts on a code Apple will refuse. Without `NEXT_PUBLIC_APPLE_SERVICES_ID` the page sends
+such an account to the iPhone app, and the email request remains for anyone who
+cannot use their Apple ID. A website failure logs its client and what Apple or
+the configuration refused (`Apple account deletion authorization failed (web:
+token endpoint 400 invalid_client)`), never the code. The Android app still
+offers such an account no way to delete it
+(`ugc-mobile/lib/account-reauthentication.ts`): the website is that way.
 
 ### Legacy email/password accounts
 

@@ -22,7 +22,7 @@ describe('S8 — the create menu', () => {
   // phrase"; "use title-style capitalization"; "remove articles like a, an,
   // and the"; "prefer listing important or frequently used menu items first".
   it('labels both items with a bare verb, most important first', () => {
-    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Create', 'Post']);
+    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Generate', 'Post']);
     for (const action of CREATE_MENU_ACTIONS) {
       expect(action.label).toMatch(/^[A-Z][a-z]+$/);
       expect(action.label).not.toMatch(/\b(a|an|the)\b/i);
@@ -47,7 +47,7 @@ describe('S8 — the create menu', () => {
     expect(menu).toContain('useSheetDismissDrag({ onDismiss: onClose, visible })');
     expect(menu).toContain('{...drag.contentPanHandlers}');
     expect(menu).toContain('<SheetGrabber drag={drag} />');
-    expect(menu).toContain('accessibilityLabel="Close create menu"');
+    expect(menu).toContain('<IconButton icon={CloseGlyph} label="Close create menu"');
     expect(menu).toContain("BackHandler.addEventListener('hardwareBackPress'");
   });
 });

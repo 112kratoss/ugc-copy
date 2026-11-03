@@ -76,7 +76,6 @@ export function WhatsNewModelsStrip({
                 gap: appTheme.spacing.compact,
                 paddingHorizontal: 14,
                 borderRadius: appTheme.radii.pill,
-                borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: selected ? hexWithAlpha(accent, 0.58) : theme.colors.border,
                 backgroundColor: selected ? hexWithAlpha(accent, 0.12) : pressed ? theme.colors.pressed : theme.colors.surfaceStrong,

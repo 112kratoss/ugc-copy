@@ -105,6 +105,8 @@ The guards below fail the mobile suite, so a red guard is a real violation: fix 
 | `hig-type-and-contrast.test.ts` | 11pt minimum type, 4.5:1 contrast for text on every panel in both schemes, 44pt hit regions, no `fontWeight` on a display variant |
 | `hig-dynamic-type.test.tsx` | Text always follows the OS text size, within each tier's cap |
 | `hig-icon-size.test.ts`, `hig-icon-weight.test.tsx` | Icon sizes come from the ramp; one stroke weight app-wide |
+| `hig-corner-radius.test.ts` | Radii come from the token scale (Radius below); rounded rectangles draw the continuous corner, capsules and circles do not |
+| `hig-shared-controls.test.tsx` | The segmented control and the button slots behave as [Segmented control and buttons](#segmented-control-and-buttons) says; no screen draws a segmented control of its own (read through TypeScript's parser: a capsule tab or radio, or a capsule track of choices whose role, state or fill follows the choice) |
 | `theme-color-literals.test.ts` | No raw colour outside the `EXEMPT` list |
 | `theme-palette-parity.test.ts` | The light and dark palettes carry the same names |
 | `motion-token-compliance.test.ts` | Press opacity and springs come from the theme; every timing names its easing |
@@ -228,16 +230,27 @@ Rules:
 
 ### Radius
 
+Three shapes on one scale, the web's too (`design-web.md` → Radius), drawn as Apple draws them (the HIG's Buttons chapter; SwiftUI's `Capsule` and `RoundedRectangle`, and iOS 26's `ConcentricRectangle`). Until November 2026 the app drew 36 radii, 263 of them as bare numbers.
+
+- **Capsule** (`pill`): anything pressed on one row (buttons, chips, segmented controls and their thumbs, toggles, search fields, the creator bar with its settings chip and Generate, Templates and Enhance, the dock's tabs) and every circle (icon buttons, avatars, badges, dots, progress tracks). Rows in a vertical stack (menu and drawer rows, list rows, a grid of options) are rounded rectangles, as the HIG prefers for a stack.
+- **Fixed**, the outermost container's own step, by its size (table below).
+- **Concentric**, a shape nested 12pt or less inside a rounded container: the container's radius less the gap, snapped to a step and never under 8, so the two curves share a centre. Write it from the tokens: the Android menu's rows are `MENU_RADIUS - MENU_PADDING`, 20 less 4. A bar of capsules on one row, such as the creator's, is a capsule itself.
+- **A capsule whose label can wrap** takes half its minimum height as a fixed radius instead of `pill` (`xl` on a 48pt control), so it is a capsule on one line and grows into a rounded rectangle, not a stadium that cuts its words, when a large text size wraps the label. Templates and Enhance do; their labels are also capped at the control tier.
+
 | Token | Value | Use |
 | --- | --- | --- |
-| `xs` | 8 | Tiny tags, thumbnails |
-| `sm` | 12 | Compact controls |
-| `md` | 16 | Inputs, buttons, small cards |
-| `lg` | 20 | Feed and standard cards |
-| `xl` | 24 | Panels, media cards, the top corners of sheets |
-| `pill` | 999 | Pills, chips, round buttons |
+| `xs` | 8 | Tiny thumbnails, icon wells inside a field |
+| `sm` | 12 | Compact rows and fields, thumbnails, option cells, a field inside a section |
+| `md` | 16 | Inputs, notices, list rows, tiles, feed and Explore media |
+| `lg` | 20 | Sections, standard cards and large tiles, media frames |
+| `xl` | 24 | Panels and cards that stand alone, dialogs, the top corners of sheets |
+| `pill` | 999 | Capsules and circles |
 
-Use `borderCurve: 'continuous'` on rounded rectangles, and nothing off this scale unless a component owns the value.
+The web's 32 step (its bars of capsules held 8px in) has no app token yet: add `xxl` with the first app surface that needs it.
+
+Every uniformly rounded rectangle declares iOS's continuous corner (`borderCurve: 'continuous'`, which Android ignores). Capsules and circles keep circular ends, so a capsule matches the circles beside it and a placeholder the avatar it stands in for (`SkeletonBone` chooses by its radius). SwiftUI's own `Capsule` defaults to continuous ends; the app keeps them circular. React Native puts the continuous corner on the fill; a visible border on a view that does not clip is stroked circular, within a fraction of a point at these radii, and per-corner radii (a sheet's top corners) are drawn circular whatever `borderCurve` says, so they need none (`RCTViewComponentView.mm`).
+
+A radius is a token, the `/ 2` of a size (never of a token), or an expression of tokens, never a number. `__tests__/hig-corner-radius.test.ts` reads `app/`, `components/` and `lib/` through TypeScript's parser and holds every `border*Radius` (logical corners included), every `radius`, `mediaRadius` and `cornerRadius` handed to a component, and every `*_RADIUS` constant to that, every uniform rounded rectangle to its curve and every capsule or circle to no continuous one. Its counted exceptions: the aspect-ratio mark; the Android zoom flight's animated clip; `MediaPreview`'s picture with its fallback and its player's frame (expo-image takes no `borderCurve`, so the three keep one circular corner and no state changes shape); the unlock page's player frame, which takes the still's place; and the remix row's poster.
 
 ### Elevation
 
@@ -279,8 +292,8 @@ Use `lucide-react-native`. A Babel plugin rewrites each import to that icon's ow
   - `xs` 14 beside `caption`;
   - `sm` 16 beside `label` or `bodySm`;
   - `compact` 18 beside `body`;
-  - `default` 20 for a standalone control;
-  - `feature` 24 beside `sectionTitle`;
+  - `default` 20 for a glyph alone in a row (a chevron, a row's trailing control);
+  - `feature` 24 beside `sectionTitle`, and for `IconButton` (Back, Close, ⋮);
   - `hero` 32 for hero and empty states.
 
   A size off the ramp fails `hig-icon-size.test.ts`.
@@ -331,7 +344,7 @@ Use `lucide-react-native`. A Babel plugin rewrites each import to that icon's ow
 ### Create menu
 
 The disc opens two choices, each with its description (`lib/create-menu-view-model.ts`):
-- **Create**: "Image, Video, and Motion".
+- **Generate**: "Image, Video, and Motion" (Create until 2026-11-02, when the owner chose Generate: under the Create disc it read as the same word twice).
 - **Post**: "Share finished media".
 
 Keep generating and publishing visibly different.
@@ -394,18 +407,45 @@ New or migrated UI uses these primitives from `components/ui.tsx`. A missing one
 | `SurfaceSection` | A titled panel grouping related controls |
 | `DisclosureSection` | A section that expands and collapses (advanced settings) |
 | `ChoiceChip` | One choice among a few, with real selected state |
+| `SegmentedControl` | One choice among two to five closely related options: `radio` for a setting, `tab` for the view below it (below) |
 | `Pill` | A static tag, optionally with an icon |
 | `MetricCard` | A number with its label, an optional icon, body and action |
 | `ReadinessRow` | A pre-flight line: neutral, ready, warning, danger |
 | `ToggleRow` | A labelled switch with an explanation |
-| `PrimaryButton` | The one main action of a decision area. It takes a coral fill or a tool accent, and `loadingLabel` narrates the wait ("Publishing…") |
-| `SecondaryButton` | Supporting actions; never competes with the primary |
-| `IconButton` | An icon-only control; its label is required |
+| `PrimaryButton` | The one main action of a decision area. It takes a coral fill or a tool accent, a leading `icon` and a `trailingIcon`, `size="roomy"` in a footer; while it waits the spinner takes its glyph's place beside the label, and `loadingLabel` narrates a wait ("Publishing…") |
+| `SecondaryButton` | Supporting actions; never competes with the primary. The same slots and sizes, and an `accent` that tints it for one tool's action (Enhance shot, Use enhanced) |
+| `ToggleButton` | A button that turns something on: the primary until it is on, a supporting action after (Follow, then Following), one view throughout and selected once on |
+| `IconButton` | An icon-only control, a filled 48pt circle; `plain` in a header bar. Its label is required. `iconButtonMenuTrigger` draws a native menu's ⋮ the same way |
 | `AppTextInput` | Label above; `hint`, an announced `error`, a `footer` for counts, a clear button |
 | `MediaFrame` | A picture or video with its aspect ratio held before load |
 | `StatusBlock` | Empty, info, success, warning and error states: a title and a next step |
 | `WebLinkButton` | Opens a web page (help, legal) |
 | `CreatorAvatar` | A creator's photo with an initial as fallback |
+
+### Segmented control and buttons
+
+A control's shape lives in its primitive, so a screen cannot drift from it: a value guard holds a radius, not a control a screen draws for itself (the web's sign-in switch drifted that way). Until November 2026 the app drew its segmented control seven times by hand, with three track fills (`panel`, `surfaceInset`, `surfaceStrong`), three label sizes (12, 13 and a 12/800 raw `Text`), a haptic on two of them and three ways of saying which was chosen; about twenty buttons re-spelled the button primitives at 44, 48, 50 and 54pt, most with no press state but opacity.
+
+**The segmented control** (`SegmentedControl`), one look:
+- A capsule track in `surfaceInset` with the `border` hairline, and the choice in use a capsule of `primaryFill` with `onPrimary` ink, 4pt inside it, so the two curves share a centre (`radii.pill` both, no continuous corner). The others carry no fill until pressed (`pressed`).
+- As tall as a button beside it: the track is `touch.default` (48pt) and a thumb 38pt, and each segment answers to the whole track through its slop, so the hit region is 48pt with no dead edge.
+- Labels in the `label` role, on one line, truncating where they do not fit, as UIKit's own control does. They never shrink to fit: React Native 0.83 reads no `minimumFontScale`, so a shrinking label had no floor but 4pt, under the 11pt one.
+- `role="radio"` (the default) picks a setting: Appearance, Autoplay previews, a draft's shot mode, Enhance's Full or Light. `role="tab"` switches the view below it: Profile's collections, sign in or sign up, a creator's tabs, the comment order. Segmented controls: "Consider a segmented control to switch between closely related subviews." On iOS a tab segment is a button with the selected state, since iOS gives "tab" no trait and VoiceOver read one as its bare label ("Selected, Sign in, button", as React Navigation's tabs read); Android announces "tab".
+- `fill` shares the row equally ("keep segment size consistent"); `fill={false}` sizes each segment to its word, at least 48pt, for a control beside a title (the comment order) or another control (Full or Light beside Undo).
+- Choosing the segment in use does nothing; a real change ticks (`haptic.select`), so a screen never ticks for it.
+
+The coral thumb is the app's own (iOS's system control draws a neutral one): six of the seven copies drew it, and `primaryFill` is the token for "buttons and the selected segment" (Color above). The web draws the same control the same way (`design-web.md` → Components).
+
+**Buttons** come from `PrimaryButton`, `SecondaryButton` and `IconButton`, one height and one press feel per role:
+- **Height:** 48pt (`touch.default`) for every button; `size="roomy"` (56pt) only for the one action that closes a screen's or a sheet's footer (the composer's Next and Publish beside its Visibility, Save item). Buttons side by side share a height (Buttons: "use style — not size — to visually distinguish the preferred choice").
+- **Press:** the shared spring (`usePressMotion`: 0.96 for buttons, 0.9 for icon buttons) with the pressed opacity and a pressed fill (`primaryFillPressed` on a coral primary, `pressed` on the neutral secondary and icon buttons; a tint keeps its wash), and the `light` haptic on a primary, and on a toggle either way.
+- **Glyphs:** `icon` before the label and `trailingIcon` after it, drawn in the label's colour at the label's size (`icon.compact` beside a primary's `button` text, `icon.sm` beside a secondary's `label`); an element is drawn as given (`SaveHeart`'s pop). While a button waits the activity indicator takes the leading glyph's place, beside its label or `loadingLabel` (Buttons: "hiding the button image"); one with no glyph and no `loadingLabel` waits as a bare spinner. An empty label leaves the glyph alone, named by `accessibilityLabel` (the details page's Comments while there are none).
+- **Labels:** several words wrap between them at large text sizes, as the HIG prefers to truncating. One word stays whole, on one line, and truncates where it does not fit, since a word wrapped in a third of a phone's width breaks inside itself ("Comme / nt"). No label shrinks to fit: React Native 0.83 reads no `minimumFontScale`, so the shrink had no floor but 4pt.
+- **`IconButton`** is a filled 48pt circle (`surfaceStrong`), its glyph at `icon.feature`, the size every Back and Close is drawn at (`lib/platform-glyphs.ts`). `variant="plain"` leaves the circle out until it is pressed, for a button in a header bar whose own surface holds it (the composer's header, the media feed's, the creator page's glass circle): the HIG's exception for "a button in a toolbar". An `accent` tints it with the accent's wash and hairline, as it tints a secondary. Its hit region is its 48pt circle, with no slop: above the 44pt floor and the same for every Back, Close and ⋮ (the hand-drawn ones reached 56 to 60pt, each its own). A native menu's ⋮ among icon buttons takes `iconButtonMenuTrigger`: iOS draws it in SwiftUI from those values, not from `renderButton`, and the creator page's kept the old ringed circle beside the new Share until it did.
+- **`ToggleButton`** turns something on: the primary until it is on, a supporting action after (Follow, then Following). It stays one view as it flips, so VoiceOver and TalkBack keep their place on it and read it selected; Follow drawn as two buttons swapped by state lost that focus at every press, and ticked one way only. It keeps its words beside the spinner while the change is sent, so it does not narrow. The creator page's Follow is words alone: with a glyph it put Share and ⋮ under the avatar on a 375pt iPhone.
+- `style` places a primitive (`flex`, `alignSelf`, an absolute position) and never restyles it, and a button given a place fills it, so a row of `flex: 1` buttons shares one height when one of them wraps; `accessibilityLabel` and `accessibilityValue` speak a button whose label is a number (Comments).
+
+Still drawn by hand: the two tab headers' icon buttons (Explore's side-menu button and Home's top-bar controls, 20pt glyphs; next, with a look on both tabs), Explore search's Back, and the Reference details sheet's outline and danger actions (Replace media, the Seedance asset, Remove, Cancel upload), which want a danger tone the primitives do not have yet. On purpose: Profile's Active, Archived and Failed chips (filters with counts, which wrap at large text sizes), Explore search's scope (Top, Creators, Posts, Recipes; a segmented control by the HIG, next to move once the primitive takes a disabled segment), the recipe's Latest or Purchased chips, the creator bar's settings chip and Generate (a bar of capsules of its own), the edit-profile sheet's Cancel and Save (a sheet's bar buttons), inline actions in Alerts rows, and everything drawn over a picture (the reel's rail, the lightbox), which takes `mediaColors`.
 
 Beyond `ui.tsx`:
 

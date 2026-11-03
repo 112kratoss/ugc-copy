@@ -5,7 +5,7 @@ export default function CreatorLoading() {
   return (
     <div className="ui-page ui-page-ambient px-4 py-8 sm:px-6 sm:py-12" aria-busy="true" aria-label="Loading creator">
       <div className="mx-auto max-w-5xl">
-        <SkeletonLoader className="h-40 rounded-[28px]" />
+        <SkeletonLoader className="h-40 rounded-3xl" />
         <div className="mt-6 flex items-center gap-4">
           <SkeletonLoader className="h-20 w-20 rounded-full" />
           <div className="flex-1 space-y-3">

@@ -50,12 +50,11 @@ describe('the post that cannot load', () => {
 
   it('says what happened and offers the retry it already had in hand', () => {
     expect(postRoute).toContain("This post isn&apos;t available");
-    expect(postRoute).toContain('accessibilityLabel="Try again"');
-    expect(postRoute).toContain('onPress={() => void refetchPost()}');
+    expect(postRoute).toContain('<SecondaryButton label="Try again" onPress={() => void refetchPost()} />');
   });
 
   it('draws one back control for every state rather than one per branch', () => {
-    expect(postRoute.match(/accessibilityLabel="Go back"/g)).toHaveLength(1);
+    expect(postRoute.match(/label="Go back"/g)).toHaveLength(1);
   });
 
   /**

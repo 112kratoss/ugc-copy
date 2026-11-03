@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Ban,
   ChevronRight,
@@ -23,6 +23,7 @@ import {
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 
 import { useAuth } from '@/components/AuthProvider';
+import { SegmentedControl } from '@/components/DesignSystem';
 import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import ProfileShareButton from '@/components/ProfileShareButton';
@@ -290,7 +291,7 @@ function MediaCard({
     </>
   );
 
-  const className = `group block w-full overflow-hidden rounded-[22px] border border-white/8 bg-[#111215] text-left shadow-[0_18px_50px_rgba(0,0,0,0.22)] transition${
+  const className = `group block w-full overflow-hidden rounded-2xl border border-white/8 bg-[#111215] text-left shadow-[0_18px_50px_rgba(0,0,0,0.22)] transition${
     isInteractive ? ' hover:-translate-y-0.5 hover:border-white/16' : ''
   }`;
 
@@ -507,21 +508,6 @@ export default function OwnerProfileMediaHub({
     updateLocation({ tab, postId: null }, 'push');
   };
 
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: ProfileMediaTab) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const tabOrder: ProfileMediaTab[] = ['posts', 'saved'];
-    const currentIndex = tabOrder.indexOf(tab);
-    const nextIndex = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? tabOrder.length - 1
-        : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabOrder.length) % tabOrder.length;
-    const nextTab = tabOrder[nextIndex];
-    selectTab(nextTab);
-    document.getElementById(`profile-tab-${nextTab}`)?.focus();
-  };
-
   const openPost = (item: ShowcaseFeedItem) => {
     reelHistoryModeRef.current = 'pushed';
     setSelectedMediaIndex(0);
@@ -629,8 +615,8 @@ export default function OwnerProfileMediaHub({
   const activeSaveState = activeTab === 'saved' ? savedSaveState : postSaveState;
   const activePageInfo = activeTab === 'saved' ? savedPageInfo : postsPageInfo;
   const tabs = [
-    { id: 'posts' as const, label: 'Posts', count: stats?.posts ?? null, icon: Layers3 },
-    { id: 'saved' as const, label: 'Saved', count: savedTotal, icon: Heart },
+    { id: 'posts' as const, label: 'Posts', count: stats?.posts ?? null },
+    { id: 'saved' as const, label: 'Saved', count: savedTotal },
   ];
 
   const loadMore = async () => {
@@ -670,7 +656,7 @@ export default function OwnerProfileMediaHub({
 
   return (
     <>
-      <section className="ui-enter mb-5 overflow-hidden rounded-[30px] border border-white/10 bg-[var(--ui-surface-1)] shadow-[0_28px_90px_rgba(0,0,0,0.28)]">
+      <section className="ui-enter mb-5 overflow-hidden rounded-3xl border border-white/10 bg-[var(--ui-surface-1)] shadow-[0_28px_90px_rgba(0,0,0,0.28)]">
         <div className="relative h-36 overflow-hidden bg-[radial-gradient(circle_at_20%_0%,rgba(255,122,89,0.28),transparent_42%),radial-gradient(circle_at_85%_20%,rgba(56,189,248,0.18),transparent_36%),#151519] sm:h-52">
           {profile.coverUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -740,29 +726,29 @@ export default function OwnerProfileMediaHub({
       </section>
 
       <section aria-label="Creator account shortcuts" className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Link href="/pricing" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/20 hover:bg-[var(--ui-surface-2)]">
+        <Link href="/pricing" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-3xl border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/20 hover:bg-[var(--ui-surface-2)]">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300"><Crown className="h-5 w-5" aria-hidden /></span>
           <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Credits</span><span className="mt-1 block truncate text-lg font-extrabold text-white">{profile.credits ?? '—'}</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
-        <Link href="/marketplace/sell" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)]">
+        <Link href="/marketplace/sell" className="ui-focus-ring group flex min-h-28 items-center gap-3 rounded-3xl border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)]">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]"><WalletCards className="h-5 w-5" aria-hidden /></span>
           {/* Lifetime earnings here read as money in hand, and stayed whole after a payout request took the balance to $0.00. */}
           <span className="min-w-0"><span className="block text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Wallet</span><span className="mt-1 block truncate text-lg font-extrabold text-white">{walletBalance ? walletBalance.availableUsd : '—'}</span><span className="mt-0.5 block truncate text-xs text-zinc-500">{walletBalance ? 'Available to withdraw' : 'Balance unavailable'}</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
-        <Link href="/invite" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-[24px] border border-amber-300/15 bg-[linear-gradient(135deg,rgba(245,158,11,0.08),rgba(24,24,27,0.86))] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/25 lg:col-span-1">
+        <Link href="/invite" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-3xl border border-amber-300/15 bg-[linear-gradient(135deg,rgba(245,158,11,0.08),rgba(24,24,27,0.86))] p-4 transition hover:-translate-y-0.5 hover:border-amber-300/25 lg:col-span-1">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300"><Gift className="h-5 w-5" aria-hidden /></span>
           <span className="min-w-0"><span className="block font-bold text-white">Invite &amp; Earn</span><span className="mt-1 block truncate text-xs text-zinc-500">Earn bonus credits</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
-        <Link href="/marketplace/sell" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-[24px] border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)] lg:col-span-1">
+        <Link href="/marketplace/sell" className="ui-focus-ring group col-span-2 flex min-h-24 items-center gap-3 rounded-3xl border border-white/8 bg-[var(--ui-surface-1)] p-4 transition hover:-translate-y-0.5 hover:border-[rgba(255,122,89,0.24)] hover:bg-[var(--ui-surface-2)] lg:col-span-1">
           <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]"><Store className="h-5 w-5" aria-hidden /></span>
           <span className="min-w-0"><span className="block font-bold text-white">Recipe sales</span><span className="mt-1 block truncate text-xs text-zinc-500">Your recipes and earnings</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
         </Link>
         {/* The one way to see whom you blocked and take a block back: a blocked creator is left out of every place that would show them. Quiet, and a row of its own: it is housekeeping, not a destination. */}
-        <Link href="/profile/blocked" className="ui-focus-ring group col-span-2 flex min-h-14 items-center gap-3 rounded-[20px] border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 transition hover:border-white/15 hover:bg-[var(--ui-surface-2)] lg:col-span-2">
+        <Link href="/profile/blocked" className="ui-focus-ring group col-span-2 flex min-h-14 items-center gap-3 rounded-2xl border border-white/8 bg-[var(--ui-surface-1)] px-4 py-3 transition hover:border-white/15 hover:bg-[var(--ui-surface-2)] lg:col-span-2">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.05] text-zinc-300"><Ban className="h-4 w-4" aria-hidden /></span>
           <span className="min-w-0"><span className="block text-sm font-bold text-white">Blocked users</span><span className="mt-0.5 block truncate text-xs text-zinc-500">See whom you blocked, and unblock them</span></span>
           <ChevronRight className="ml-auto h-4 w-4 shrink-0 text-zinc-600 transition group-hover:translate-x-0.5 group-hover:text-zinc-300" aria-hidden />
@@ -770,7 +756,7 @@ export default function OwnerProfileMediaHub({
         <MatureContentSetting />
       </section>
 
-      <section id="profile-media" className="mb-8 overflow-hidden rounded-[30px] border border-white/8 bg-[linear-gradient(145deg,rgba(24,24,27,0.78),rgba(8,8,10,0.94))] shadow-[0_28px_90px_rgba(0,0,0,0.3)]">
+      <section id="profile-media" className="mb-8 overflow-hidden rounded-3xl border border-white/8 bg-[linear-gradient(145deg,rgba(24,24,27,0.78),rgba(8,8,10,0.94))] shadow-[0_28px_90px_rgba(0,0,0,0.3)]">
       <div className="border-b border-white/8 px-5 py-6 sm:px-7">
         {/* A new post starts from the top bar's Create menu, and creations
             live in Studio. */}
@@ -779,45 +765,33 @@ export default function OwnerProfileMediaHub({
           <h2 className="mt-2 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Your posts and saves</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
             Explore viewers see your posts in the reel. Your creations stay private in{' '}
-            <Link href="/creations" className="ui-focus-ring rounded font-semibold text-zinc-200 underline-offset-4 hover:underline">Studio</Link>
+            <Link href="/creations" className="ui-focus-ring rounded-lg font-semibold text-zinc-200 underline-offset-4 hover:underline">Studio</Link>
             {' '}until you post them.
           </p>
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-2 rounded-[22px] border border-white/8 bg-black/25 p-1" role="tablist" aria-label="Profile media">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            const selected = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                id={`profile-tab-${tab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={`profile-panel-${tab.id}`}
-                aria-label={tab.count === null ? tab.label : `${tab.label} ${tab.count}`}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => selectTab(tab.id)}
-                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
-                className={`ui-focus-ring inline-flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-[18px] px-2 text-xs font-semibold transition sm:gap-2 sm:px-4 sm:text-sm ${selected
-                  ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_8px_24px_rgba(255,122,89,0.18)]'
-                  : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'}`}
-              >
-                <Icon className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden />
-                <span className="truncate">{tab.label}</span>
-                <span className={`hidden rounded-full px-2 py-0.5 text-xs sm:inline ${selected ? 'bg-black/20' : 'bg-black/25 text-zinc-500'}`}>{tab.count ?? '—'}</span>
-              </button>
-            );
-          })}
-        </div>
+        <SegmentedControl
+          role="tab"
+          ariaLabel="Profile media"
+          options={tabs.map((tab) => ({
+            value: tab.id,
+            label: tab.label,
+            count: tab.count ?? '—',
+            ariaLabel: tab.count === null ? tab.label : `${tab.label} ${tab.count}`,
+            id: `profile-tab-${tab.id}`,
+            controls: `profile-panel-${tab.id}`,
+          }))}
+          value={activeTab}
+          onChange={selectTab}
+          className="mt-6"
+        />
       </div>
 
       <div id={`profile-panel-${activeTab}`} role="tabpanel" aria-labelledby={`profile-tab-${activeTab}`} className="p-4 sm:p-6">
         {isLoading ? (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4" aria-label="Loading profile media">
             {Array.from({ length: 8 }, (_, index) => (
-              <div key={index} className="aspect-[4/5] animate-pulse rounded-[22px] border border-white/8 bg-white/[0.04]" />
+              <div key={index} className="aspect-[4/5] animate-pulse rounded-2xl border border-white/8 bg-white/[0.04]" />
             ))}
           </div>
         ) : errors[activeTab] && activeCount === 0 ? (

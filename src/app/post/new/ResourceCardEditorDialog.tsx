@@ -184,7 +184,7 @@ function ResourceTypeRow({
     <button
       type="button"
       onClick={() => onChoose(type)}
-      className="flex w-full items-center gap-3 rounded-[18px] border border-white/8 bg-white/[0.03] p-3 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
+      className="flex w-full items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.03] p-3 text-left transition hover:border-white/20 hover:bg-white/[0.06]"
     >
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-300">
         <ResourceTypeIcon type={type} />
@@ -441,7 +441,7 @@ function ResourceCardEditorDialogContent({
         aria-busy={isUploading}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-[28px] border border-white/10 bg-zinc-950 shadow-2xl shadow-black/70 outline-none sm:rounded-[28px]"
+        className="flex max-h-[92dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-3xl border border-white/10 bg-zinc-950 shadow-2xl shadow-black/70 outline-none sm:rounded-3xl"
       >
         <div className="flex items-center gap-3 border-b border-white/8 px-5 py-4">
           <div className="min-w-0 flex-1">
@@ -474,7 +474,7 @@ function ResourceCardEditorDialogContent({
               onClick={() => setShowsMoreTypes((current) => !current)}
               aria-expanded={showsMoreTypes}
               aria-controls={moreTypesId}
-              className="flex min-h-11 w-full items-center gap-2 rounded-[18px] px-3 text-left text-sm font-semibold text-zinc-300 transition hover:bg-white/[0.04] hover:text-white"
+              className="flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-left text-sm font-semibold text-zinc-300 transition hover:bg-white/[0.04] hover:text-white"
             >
               <span className="min-w-0 flex-1">More types</span>
               <ChevronDown
@@ -561,7 +561,7 @@ function ResourceCardEditorDialogContent({
                     aria-invalid={Boolean(contentError)}
                     aria-describedby={contentError ? contentErrorId : undefined}
                     placeholder="This content is revealed only after unlock"
-                    className="w-full rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
+                    className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35"
                   />
                 </label>
               ) : null}

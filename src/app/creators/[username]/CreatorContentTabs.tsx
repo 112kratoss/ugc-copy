@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
+import { SegmentedControl } from '@/components/DesignSystem';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import { loadShowcaseReelViewer } from '@/app/showcase/showcase-reel-loader';
@@ -397,22 +398,6 @@ export function CreatorContentTabs({
     window.history.replaceState(null, '', `${pathname}${query}${tabHashes[tab]}`);
   };
 
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentTab: CreatorTab) => {
-    const currentIndex = tabs.findIndex((tab) => tab.id === currentTab);
-    let nextIndex = currentIndex;
-
-    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
-    else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-    else if (event.key === 'Home') nextIndex = 0;
-    else if (event.key === 'End') nextIndex = tabs.length - 1;
-    else return;
-
-    event.preventDefault();
-    const nextTab = tabs[nextIndex];
-    handleTabSelect(nextTab.id);
-    document.getElementById(`creator-tab-${nextTab.id}`)?.focus();
-  };
-
   const handleRemix = async (id: string) => {
     if (!user || !session?.access_token) {
       router.push(`/login?returnUrl=${encodeURIComponent(profilePath)}`);
@@ -487,31 +472,21 @@ export function CreatorContentTabs({
 
   return (
     <section className="mt-7" aria-label="Creator portfolio" onClickCapture={closeOnLinkToThisPage}>
-      <div className="sticky top-16 z-20 -mx-1 rounded-[20px] border border-white/8 bg-black/80 p-1.5 shadow-lg backdrop-blur-xl sm:top-20 sm:mx-0">
-        <div className="grid grid-cols-3 gap-1" role="tablist" aria-label="Creator profile sections">
-          {tabs.map((tab) => {
-            const selected = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                id={`creator-tab-${tab.id}`}
-                aria-controls={`creator-panel-${tab.id}`}
-                aria-selected={selected}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => handleTabSelect(tab.id)}
-                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
-                className={`ui-focus-ring min-h-11 rounded-[15px] px-2 text-sm font-bold transition ${
-                  selected ? 'bg-white text-black' : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'
-                }`}
-              >
-                {tab.label} <span className={selected ? 'text-black/55' : 'text-zinc-600'}>{tab.count}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      {/* Sticky under the top bar, and opaque, so the grid scrolls under it. */}
+      <SegmentedControl
+        role="tab"
+        ariaLabel="Creator profile sections"
+        options={tabs.map((tab) => ({
+          value: tab.id,
+          label: tab.label,
+          count: tab.count,
+          id: `creator-tab-${tab.id}`,
+          controls: `creator-panel-${tab.id}`,
+        }))}
+        value={activeTab}
+        onChange={handleTabSelect}
+        className="sticky top-16 z-20 -mx-1 shadow-lg sm:top-20 sm:mx-0"
+      />
 
       <div
         id={`creator-panel-${activeTab}`}
@@ -619,7 +594,7 @@ function CreatorCard({
   const unlockLabel = item.asset ? getAssetAccessLabel(item.asset, { isOwner }) : null;
 
   return (
-    <article className="group min-w-0 overflow-hidden rounded-[20px] border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">
+    <article className="group min-w-0 overflow-hidden rounded-ui-xl border border-white/8 bg-[#111215] transition hover:border-white/18 hover:bg-[#15161a] focus-within:border-white/24">
       <div className="relative aspect-[4/5] overflow-hidden bg-black">
         {isText ? (
           <button
@@ -682,7 +657,7 @@ function ToolsGrid({ tools }: { tools: CreatorProfilePageData['stats']['toolsUse
         <Link
           key={tool.slug}
           href={`/showcase?tool=${encodeURIComponent(tool.slug)}`}
-          className="ui-focus-ring flex min-h-20 items-center gap-3 rounded-[18px] border border-white/8 bg-[#111215] px-4 transition hover:border-sky-300/25 hover:bg-[#15161a]"
+          className="ui-focus-ring flex min-h-20 items-center gap-3 rounded-2xl border border-white/8 bg-[#111215] px-4 transition hover:border-sky-300/25 hover:bg-[#15161a]"
         >
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-400/10 text-sky-300">
             <Layers3 className="h-5 w-5" />

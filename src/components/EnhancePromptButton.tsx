@@ -9,6 +9,7 @@ import {
     type PromptEnhancementResult,
     requestPromptEnhancement,
 } from '@/components/enhancePromptClient';
+import { SegmentedControl } from '@/components/DesignSystem';
 
 // The service debits this same constant, so the price on the button is the charge.
 const ENHANCEMENT_PRICE_LABEL = `${PROMPT_ENHANCEMENT_COST_CREDITS} ${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? 'credit' : 'credits'}`;
@@ -19,6 +20,12 @@ const ENHANCE_READY_CLASS = 'border border-brand-coral/30 bg-brand-coral/10 text
 const ENHANCE_IDLE_CLASS = 'bg-zinc-900/30 text-zinc-600 border border-white/5 cursor-not-allowed';
 const PRICE_READY_CLASS = 'bg-black/25 text-[#ffc1b2]';
 const PRICE_IDLE_CLASS = 'bg-zinc-800 text-zinc-600';
+
+// The level, in the app's words: Full rewrites with the model's craft, Light keeps the creator's.
+const ENHANCEMENT_LEVEL_OPTIONS = [
+    { value: 'cinematic', label: 'Full', title: 'Full rewrite with model-specific craft' },
+    { value: 'faithful', label: 'Light', title: 'Light touch — keeps your wording, fills only missing essentials' },
+] as const;
 
 interface EnhancePromptButtonProps {
     prompt: string;
@@ -194,33 +201,21 @@ export default function EnhancePromptButton({
     const enhanceLabel = `${isEnhancing ? loadingLabel : label}, ${ENHANCEMENT_PRICE_LABEL}`;
 
     const levelToggle = showLevelToggle ? (
-        <div className="flex items-center rounded-lg border border-white/10 bg-zinc-900/40 p-0.5" role="group" aria-label="Enhancement level">
-            {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, levelLabel]) => (
-                <button
-                    key={value}
-                    type="button"
-                    onClick={() => setLevel(value)}
-                    aria-pressed={level === value}
-                    title={value === 'cinematic'
-                        ? 'Full rewrite with model-specific craft'
-                        : 'Light touch — keeps your wording, fills only missing essentials'}
-                    className={`rounded-md font-semibold transition-colors ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-0.5 text-[10px]'} ${
-                        level === value
-                            ? 'bg-brand-coral/20 text-[#ffb09c]'
-                            : 'text-zinc-500 hover:text-zinc-300'
-                    }`}
-                >
-                    {levelLabel}
-                </button>
-            ))}
-        </div>
+        <SegmentedControl
+            fill={false}
+            size="compact"
+            ariaLabel="Enhancement level"
+            options={ENHANCEMENT_LEVEL_OPTIONS}
+            value={level}
+            onChange={setLevel}
+        />
     ) : null;
 
     const undoButton = canUndo ? (
         <button
             type="button"
             onClick={handleUndo}
-            className={`flex items-center gap-1 rounded-lg border border-white/10 bg-zinc-900/40 font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-1 text-[11px]'}`}
+            className="flex min-h-9 items-center gap-1 rounded-full border border-white/10 bg-zinc-900/40 font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 px-3 text-xs"
         >
             <Undo2 className="w-3 h-3" />
             <span>Undo</span>
@@ -231,7 +226,7 @@ export default function EnhancePromptButton({
         <button
             type="button"
             onClick={handleUseOffer}
-            className={`flex items-center gap-1 rounded-lg border border-brand-coral/30 bg-brand-coral/10 font-medium text-[#ffb09c] transition-colors hover:border-brand-coral/50 hover:bg-brand-coral/15 ${isToolbar ? 'min-h-9 px-3 text-xs' : 'px-2 py-1 text-[11px]'}`}
+            className="flex min-h-9 items-center gap-1 rounded-full border border-brand-coral/30 bg-brand-coral/10 font-medium text-[#ffb09c] transition-colors hover:border-brand-coral/50 hover:bg-brand-coral/15 px-3 text-xs"
         >
             <Sparkles className="w-3 h-3" />
             <span>Use enhanced</span>
@@ -249,7 +244,7 @@ export default function EnhancePromptButton({
             )}
 
             {showWarnings && !error && warnings && warnings.length > 0 && (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
                     <p className="font-semibold">Prompt quality notes</p>
                     <ul className="mt-1 space-y-1">
                         {warnings.slice(0, 3).map((warning) => (
@@ -260,7 +255,7 @@ export default function EnhancePromptButton({
             )}
 
             {error && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-lg animate-in fade-in slide-in-from-top-1 duration-200">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/10 border border-red-500/20 rounded-2xl animate-in fade-in slide-in-from-top-1 duration-200">
                     <AlertCircle className="w-3 h-3 text-red-400 shrink-0" />
                     <span className="text-xs text-red-400">{error}</span>
                 </div>
@@ -295,7 +290,7 @@ export default function EnhancePromptButton({
                     </button>
                 </div>
                 {levelToggle || undoButton || offerButton ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                         {levelToggle}
                         {undoButton}
                         {offerButton}
@@ -308,12 +303,13 @@ export default function EnhancePromptButton({
 
     return (
         <div className="flex flex-col gap-1.5 mb-2">
-            <div className="flex items-center gap-2">
+            {/* One height for the row, the level control's 36px, and it wraps where a shot card is narrow. */}
+            <div className="flex flex-wrap items-center gap-2">
                 <button
                     onClick={handleEnhance}
                     disabled={!canEnhance}
                     aria-label={enhanceLabel}
-                    className={`group flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-300 ${
+                    className={`group flex min-h-9 items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all duration-300 ${
                         canEnhance ? ENHANCE_READY_CLASS : ENHANCE_IDLE_CLASS
                     }`}
                 >

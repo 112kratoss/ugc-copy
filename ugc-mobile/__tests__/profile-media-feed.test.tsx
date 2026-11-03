@@ -130,10 +130,15 @@ vi.mock('@/components/profile-feed-card', () => ({
     return null;
   },
 }));
-vi.mock('@/components/ui', () => ({
-  SecondaryButton: nothing,
-  StatusBlock: (props: { title: string }) => React.createElement('status-block', props),
-}));
+vi.mock('@/components/ui', async (importOriginal) => {
+  // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return {
+    ...actual,
+    SecondaryButton: nothing,
+    StatusBlock: (props: { title: string }) => React.createElement('status-block', props),
+  };
+});
 vi.mock('@/components/viewer-action-sheet', () => ({ ViewerActionSheet: nothing }));
 
 vi.mock('@/lib/audio-creation-native-player', () => ({ audioCreationPlayback: { pause: vi.fn() } }));

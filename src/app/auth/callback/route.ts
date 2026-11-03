@@ -9,15 +9,41 @@ import {
   createAuthRouteClient,
   resolveServerPostAuthPath,
 } from '@/lib/auth-onboarding-server';
+import { logBackendError } from '@/lib/backend-logger';
 import { withReferralClaimStatus } from '@/lib/referral';
 import { clearReferralVisitCookie } from '@/lib/referral-route-service';
 
 import { claimPendingReferralForAuth, recordWebAuthSucceeded } from '../post-auth';
 
+/** A provider's word for a sign-in the person turned down: Google's, then Apple's Cancel. */
+const PROVIDER_CANCELLATIONS = new Set(['access_denied', 'user_cancelled_authorize']);
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get('code');
   const next = getSafeAuthNextPath(requestUrl.searchParams.get('next'));
+  const providerError = requestUrl.searchParams.get('error');
+  const errorCode = requestUrl.searchParams.get('error_code');
+
+  // Supabase sends a refusal back here without a code. A provider's own, such as
+  // its Cancel, carries no error_code, and goes back to sign in, keeping where it
+  // was going. Supabase's own carry one, its 403s as access_denied too (a
+  // suspended account, an expired email link). Those and every other error are
+  // logged, because the page they end on cannot say why: an expired Apple client
+  // secret, for one, fails every web Apple sign-in this way (the runbook's "Sign
+  // in with Apple on the web").
+  if (!code && providerError) {
+    if (!errorCode && PROVIDER_CANCELLATIONS.has(providerError)) {
+      return NextResponse.redirect(
+        new URL(`/login?returnUrl=${encodeURIComponent(next)}`, requestUrl.origin)
+      );
+    }
+    logBackendError('auth_callback_provider_error', {
+      error: providerError,
+      errorCode,
+      errorDescription: requestUrl.searchParams.get('error_description'),
+    });
+  }
 
   if (code) {
     try {
@@ -41,7 +67,7 @@ export async function GET(request: Request) {
           if (referral.clearCookie) {
             clearReferralVisitCookie(response, requestUrl.protocol === 'https:');
           }
-          // Google and the email links finish here, never in /auth/continue.
+          // Google, Apple and the email links finish here, never in /auth/continue.
           await recordWebAuthSucceeded({ next, origin: requestUrl.origin, supabase, userId: data.user.id });
           return response;
         }

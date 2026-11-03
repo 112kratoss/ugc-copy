@@ -263,7 +263,7 @@ describe('NewPostClient', () => {
     expect(screen.getByRole('textbox', { name: /^title/i })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: /^story/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^media$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^media$/i })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^media$/i })).toBeInTheDocument();
   });
 
   it('caps the title input at the limit and shows a live counter', () => {
@@ -287,7 +287,7 @@ describe('NewPostClient', () => {
   it('blocks publishing a recipe whose preview was cleared', async () => {
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A note that stands on its own for the community.' },
     });
@@ -330,7 +330,7 @@ describe('NewPostClient', () => {
   // follows them until the creator writes in it.
   it('suggests the preview from the items and stops once the creator writes it', () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     const preview = () => screen.getByLabelText(/recipe preview, required/i);
     expect(preview()).toHaveValue('');
@@ -557,7 +557,7 @@ describe('NewPostClient', () => {
   it('refuses to save a resource card with no content', () => {
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     chooseItemType(/external link/i);
@@ -574,7 +574,7 @@ describe('NewPostClient', () => {
   // until then a plain line says what Save is waiting for.
   it('holds the item editor’s errors until a field was touched, with a plain line meanwhile', () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     chooseItemType(/external link/i);
@@ -609,7 +609,7 @@ describe('NewPostClient', () => {
   // behind More types.
   it('offers four item types first and the other five behind More types', () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
 
@@ -656,7 +656,7 @@ describe('NewPostClient', () => {
       </>
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
@@ -686,7 +686,7 @@ describe('NewPostClient', () => {
         <FeedbackViewport />
       </>
     );
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
@@ -742,7 +742,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     chooseItemType(/source assets/i);
@@ -798,7 +798,7 @@ describe('NewPostClient', () => {
     });
 
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     chooseItemType(/source assets/i);
@@ -846,7 +846,7 @@ describe('NewPostClient', () => {
     });
 
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     chooseItemType(/source assets/i);
@@ -914,7 +914,7 @@ describe('NewPostClient', () => {
     });
 
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     chooseItemType(/source assets/i);
@@ -937,7 +937,7 @@ describe('NewPostClient', () => {
 
   it('rejects documents in a reference-media card before upload', async () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /reference media/i }));
@@ -956,7 +956,7 @@ describe('NewPostClient', () => {
 
   it('contains focus in the resource dialog and restores it when closed', () => {
     const { container } = render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     const opener = screen.getByRole('button', { name: /add your first item/i });
     opener.focus();
@@ -1013,7 +1013,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A breakdown with a supporting still attached to it.' },
     });
@@ -1557,7 +1557,7 @@ describe('NewPostClient', () => {
 
   it('restores focus to the resource opener after closing the dialog', () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     const opener = screen.getByRole('button', { name: /add your first item/i });
     opener.focus();
@@ -1570,7 +1570,7 @@ describe('NewPostClient', () => {
 
   it('limits the general resource picker to server-supported file types', () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     chooseItemType(/source assets/i);
@@ -1674,7 +1674,7 @@ describe('NewPostClient', () => {
   it('blocks publishing an untitled post and never reaches the API', async () => {
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A note that is long enough to publish on its own.' },
     });
@@ -1705,8 +1705,8 @@ describe('NewPostClient', () => {
     expect(screen.queryByText(/one post, one optional recipe/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /browse recipes/i })).not.toBeInTheDocument();
 
-    expect(screen.getByRole('button', { name: /^media$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^text$/i })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^media$/i })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^text$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /add media/i })).toBeInTheDocument();
 
     const checklist = screen.getByLabelText(/publish checklist/i);
@@ -2011,7 +2011,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'Lead with a concrete before-and-after in the first line.' },
     });
@@ -2087,7 +2087,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'Keep the hook direct and make the benefit visible instantly.' },
     });
@@ -2162,7 +2162,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A compact breakdown for a multi-part creative.' },
     });
@@ -2480,8 +2480,10 @@ describe('NewPostClient', () => {
     fireEvent.click(screen.getByRole('button', { name: /save item/i }));
     expect(screen.getByText(/1 selected output/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
-    expect(screen.queryByLabelText('Post media order')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
+    // Two images attached: Text asks before it lets them go.
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove media' }));
+    await waitFor(() => expect(screen.queryByLabelText('Post media order')).not.toBeInTheDocument());
     expect(screen.queryByText(/selected output/i)).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A useful text proof with enough detail for the community to learn from.' },
@@ -2503,9 +2505,33 @@ describe('NewPostClient', () => {
     expect(resourceBundle.resources.sections[0].scope).toEqual({ kind: 'all' });
   });
 
+  it('asks before the media or text switch lets attached media go, by key as by click', async () => {
+    renderComposerWithTwoImages();
+    const media = screen.getByRole('radio', { name: /^media$/i });
+    media.focus();
+    // An arrow picks Text, as a click does: with two images attached it asks first.
+    fireEvent.keyDown(media, { key: 'ArrowRight' });
+    const question = await screen.findByRole('alertdialog');
+    expect(question).toHaveTextContent('Switch to a text post?');
+    expect(question).toHaveTextContent('The 2 pictures and clips you added are removed.');
+    fireEvent.click(within(question).getByRole('button', { name: 'Keep media' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('radio', { name: /^media$/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Post media order')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^media$/i })).toHaveFocus());
+  });
+
+  it('switches to text at once while no media is attached', () => {
+    render(<NewPostClient />);
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^text$/i })).toHaveAttribute('aria-checked', 'true');
+  });
+
   it('asks for confirmation before removing a resource card', () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
     fireEvent.click(screen.getByRole('button', { name: /add your first item/i }));
     fireEvent.click(screen.getByRole('button', { name: /prompt or script/i }));
@@ -2527,7 +2553,7 @@ describe('NewPostClient', () => {
   // Publish asks for an item instead, as the app does.
   it('keeps the recipe chosen when its last item goes, and asks for an item at Publish', async () => {
     render(<NewPostClient />);
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A note that stands on its own for the community.' },
     });
@@ -2576,7 +2602,7 @@ describe('NewPostClient', () => {
   }
 
   function renderComposerWithTwoImages() {
-    const { container } = render(<NewPostClient />);
+    const { container } = render(<><NewPostClient /><FeedbackViewport /></>);
     const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(fileInput, {
       target: {
@@ -3149,7 +3175,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A private draft note.' },
     });
@@ -3178,7 +3204,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A public note for the community.' },
     });
@@ -3208,7 +3234,7 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'test' },
     });
@@ -3805,14 +3831,18 @@ describe('NewPostClient', () => {
         return rejectWhenAborted(options?.signal);
       });
 
-      const { container } = render(<NewPostClient />);
+      const { container } = render(<><NewPostClient /><FeedbackViewport /></>);
       attachFile(container, new File(['a'], 'first.png', { type: 'image/png' }));
       attachFile(container, new File(['b'], 'second.png', { type: 'image/png' }));
       await waitFor(() => expect(signals).toHaveLength(2));
 
-      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
+      // Nothing stops until the question is answered.
+      const question = await screen.findByRole('alertdialog', { name: 'Switch to a text post?' });
+      expect(signals.some((signal) => signal.aborted)).toBe(false);
+      fireEvent.click(within(question).getByRole('button', { name: 'Remove media' }));
 
-      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      await waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
     });
 
     it('still cancels every file at once, and keeps them all', async () => {
@@ -4098,7 +4128,7 @@ describe('NewPostClient', () => {
 
       expectInOrder([
         screen.getByRole('heading', { name: /^media$/i }),
-        screen.getByRole('button', { name: /^media$/i }),
+        screen.getByRole('radio', { name: /^media$/i }),
         screen.getByRole('textbox', { name: /^title/i }),
         screen.getByRole('button', { name: /^made with/i }),
         screen.getByRole('textbox', { name: /^story/i }),
@@ -4119,7 +4149,7 @@ describe('NewPostClient', () => {
       );
       expect(screen.queryByRole('textbox', { name: /caption/i })).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
       expect(screen.getByRole('textbox', { name: /^post text, required/i })).toHaveAttribute(
         'placeholder',
         'Share a prompt, idea, breakdown, or useful note…',
@@ -4237,7 +4267,7 @@ describe('NewPostClient', () => {
       expect(checklist).toHaveTextContent(/media added/i);
       expect(checklist).not.toHaveTextContent(/proof/i);
 
-      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
       const isTicked = () => Boolean(
         within(checklist).getByText(/^post text added$/i).parentElement?.parentElement?.querySelector('.lucide-check'),
       );
@@ -4500,7 +4530,7 @@ describe('NewPostClient', () => {
       expect(screen.queryByRole('button', { name: /explore description/i })).not.toBeInTheDocument();
       expect(screen.queryByText(/explore description/i)).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
       fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
         target: { value: 'A note that stands on its own for the community.' },
       });
@@ -4708,7 +4738,7 @@ describe('NewPostClient', () => {
       let answerNew: (value: unknown) => void = () => {};
       enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answerNew = resolve; }) });
       render(<NewPostClient />);
-      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
       fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
         target: { value: 'A note that stands on its own for the community.' },
       });
@@ -5091,7 +5121,7 @@ describe('NewPostClient', () => {
       });
 
       render(<NewPostClient />);
-      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
       fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
         target: { value: 'A note that stands on its own for the community.' },
       });
@@ -5492,7 +5522,7 @@ describe('NewPostClient', () => {
     searchParamsState.value = new URLSearchParams({ resourceMode: 'paid' });
     render(<NewPostClient />);
 
-    fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A text post long enough to pass the public quality rule.' },
     });
@@ -5544,7 +5574,7 @@ describe('NewPostClient', () => {
     const postsCalls = () => fetchMock.mock.calls.filter(([url]) => String(url) === '/api/posts');
 
     function writeTextPost() {
-      fireEvent.click(screen.getByRole('button', { name: /^text$/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
       fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
         target: { value: 'A note that stands on its own for the community.' },
       });

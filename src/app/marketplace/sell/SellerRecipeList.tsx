@@ -279,7 +279,7 @@ function SellerRecipeRow({
           <Link
             href={href}
             prefetch={false}
-            className="ui-focus-ring block truncate rounded-sm text-sm font-semibold leading-6 text-[var(--ui-text-primary)] after:absolute after:inset-0 sm:text-base"
+            className="ui-focus-ring block truncate rounded-lg text-sm font-semibold leading-6 text-[var(--ui-text-primary)] after:absolute after:inset-0 sm:text-base"
           >
             {title}
           </Link>

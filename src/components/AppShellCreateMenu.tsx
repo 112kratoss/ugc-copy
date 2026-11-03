@@ -231,7 +231,7 @@ function CreateMenuChoice({
   const isCreate = item.id === 'create';
   const Icon = CREATE_MENU_ICONS[item.id];
   const bodyId = `${APP_SHELL_CREATE_MENU_ID}-${item.id}`;
-  const className = `ui-focus-ring flex min-h-36 flex-col justify-between gap-4 rounded-[20px] border p-4 text-left transition active:scale-[0.985] ${
+  const className = `ui-focus-ring flex min-h-36 flex-col justify-between gap-4 rounded-ui-xl border p-4 text-left transition active:scale-[0.985] ${
     isCreate
       ? 'border-transparent bg-[var(--ui-primary)] text-[var(--ui-primary-on)] hover:bg-[var(--ui-primary-strong)]'
       : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] text-[var(--ui-text-primary)] hover:bg-[var(--ui-surface-3)]'

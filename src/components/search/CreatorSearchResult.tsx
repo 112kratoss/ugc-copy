@@ -7,7 +7,7 @@ export function CreatorSearchResult({ creator }: { creator: CreatorResult }) {
   return (
     <Link
       href={`/creators/${encodeURIComponent(creator.username)}`}
-      className="ui-focus-ring flex min-h-20 items-center gap-4 rounded-[22px] border border-white/8 bg-white/[0.035] p-3 transition hover:border-white/15 hover:bg-white/[0.065]"
+      className="ui-focus-ring flex min-h-20 items-center gap-4 rounded-2xl border border-white/8 bg-white/[0.035] p-3 transition hover:border-white/15 hover:bg-white/[0.065]"
     >
       {creator.avatarUrl ? (
         // eslint-disable-next-line @next/next/no-img-element

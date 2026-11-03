@@ -212,7 +212,6 @@ function DialogButton({
         justifyContent: 'center',
         paddingHorizontal: appTheme.spacing.gap,
         borderRadius: appTheme.radii.pill,
-        borderCurve: 'continuous',
         backgroundColor: destructive
           ? (pressed ? theme.semantic.danger.background : 'transparent')
           : (pressed ? theme.colors.surfaceStrong : theme.colors.surface),

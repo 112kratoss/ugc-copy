@@ -444,12 +444,12 @@ describe('AppShellClient', () => {
       expect(menu).toHaveAttribute('popover', 'auto');
       expect(topBarCreate).toHaveAttribute('popovertarget', menu.id);
       expect(bottomCreate).toHaveAttribute('popovertarget', menu.id);
-      // Create and Post, in that order, the post started with a Back to Home.
+      // Generate and Post, in that order, the post started with a Back to Home.
       expect(within(menu).getAllByRole('link', { hidden: true }).map((link) => [
         link.getAttribute('aria-label'),
         link.getAttribute('href'),
       ])).toEqual([
-        ['Create', '/create'],
+        ['Generate', '/create'],
         ['Post', '/post/new?from=home'],
       ]);
       const post = within(menu).getByRole('link', { name: 'Post', hidden: true });
@@ -469,7 +469,7 @@ describe('AppShellClient', () => {
       document.addEventListener('click', listener, true);
 
       try {
-        fireEvent.click(within(menu).getByRole('link', { name: 'Create', hidden: true }));
+        fireEvent.click(within(menu).getByRole('link', { name: 'Generate', hidden: true }));
       } finally {
         document.removeEventListener('click', listener, true);
       }
@@ -534,7 +534,7 @@ describe('AppShellClient', () => {
         topBarCreate.focus();
         fireEvent.click(topBarCreate);
         expect(menu).toHaveAttribute('data-open');
-        const create = within(menu).getByRole('link', { name: 'Create', hidden: true });
+        const create = within(menu).getByRole('link', { name: 'Generate', hidden: true });
         expect(create).toHaveFocus();
 
         // A key on the page is the page's; one in the menu, and Escape, are the menu's.
@@ -905,7 +905,7 @@ describe('AppShellClient', () => {
         ['Explore', '/showcase', null],
         ['Marketplace', '/marketplace', null],
         // A way in, as the bottom bar's + was: the launchpad, never the page open.
-        ['Create', '/create', null],
+        ['Generate', '/create', null],
         ['Post', '/post/new', null],
         ['Studio', '/creations', null],
         ['Workflow Canvas', '/create-workflow', null],
@@ -1054,7 +1054,7 @@ describe('AppShellClient', () => {
       for (const link of [
         within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('link', { name: 'Explore' }),
         within(bottomNavigation()).getByRole('link', { name: 'Home' }),
-        within(createMenu()).getByRole('link', { name: 'Create', hidden: true }),
+        within(createMenu()).getByRole('link', { name: 'Generate', hidden: true }),
         screen.getByRole('link', { name: 'Open alerts' }),
       ]) {
         fireEvent.click(link);

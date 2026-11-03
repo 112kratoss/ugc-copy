@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import type { AriaRole, ComponentType, ReactNode } from 'react';
+import type { AriaRole, ComponentType, KeyboardEvent, ReactNode, Ref } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -425,6 +425,172 @@ export function IconButton({
     <button type="button" aria-label={label} title={label} onClick={onClick} className={classes}>
       {content}
     </button>
+  );
+}
+
+export type SegmentedControlOption<T extends string> = {
+  value: T;
+  label: string;
+  /** A number after the label, quieter than it: a tab's count. */
+  count?: ReactNode;
+  /** Read in the label's place, when the drawn words need their context. */
+  ariaLabel?: string;
+  /** A tooltip that says what the choice does. */
+  title?: string;
+  /** For a tab: its own id (the tab panel's `aria-labelledby`) and its panel's id. */
+  id?: string;
+  controls?: string;
+};
+
+/*
+ * The slot is the button and answers to the track's whole height; the thumb is
+ * drawn 4px inside it, so with the hairline the default control is 48px, a
+ * Button's height, as the app's is (`ugc-mobile/components/ui.tsx`). Compact is
+ * the 36px floor of a dense row, for Enhance's level beside Undo.
+ */
+const SEGMENT_SIZES = {
+  default: { slot: 'min-h-11.5 px-0.5 py-1', thumb: 'min-h-9.5 px-3' },
+  compact: { slot: 'min-h-8.5 px-0.5 py-0.5', thumb: 'min-h-7.5 px-2.5' },
+} as const;
+
+/**
+ * The option a key moves the choice to in a row of `count`, wrapping at the
+ * ends, or null for a key that is not a move. A radio group takes all four
+ * arrows; a horizontal tab list (`vertical: false`) only the side ones, so Up
+ * and Down still scroll the page (WAI-ARIA Tabs: "so those keys can provide
+ * their normal browser scrolling functions"). A key held with Alt, Ctrl or Cmd
+ * is the browser's (Alt+← and Cmd+← go back), never a move.
+ */
+export function choiceKeyTarget(
+  { key, altKey, ctrlKey, metaKey }: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean },
+  index: number,
+  count: number,
+  { vertical = true }: { vertical?: boolean } = {}
+): number | null {
+  if (altKey || ctrlKey || metaKey) return null;
+  const moves: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: count - 1 };
+  if (vertical) Object.assign(moves, { ArrowDown: index + 1, ArrowUp: index - 1 });
+  if (!(key in moves)) return null;
+  return (moves[key] + count) % count;
+}
+
+/**
+ * One choice among two to five closely related options, the web's one segmented
+ * control: a capsule track in the inset fill with a hairline, and the choice in
+ * use a coral capsule inside it, as the app draws it. Until November 2026 the
+ * web drew this control six times by hand (and twice more through the
+ * creators' setting choices), with four selected fills and three ARIA patterns.
+ *
+ * `role` says what a choice does, as in the app: `radio` picks a setting
+ * (Enhance's level, a creator's frames or references), `tab` switches what is
+ * shown below it (sign in or sign up, a profile's posts and saves), each
+ * option's `id` and `controls` naming it and its panel where there is one.
+ * Either way it is one stop in the tab order, on the choice in use, and the
+ * arrow keys, Home and End move the choice, as WAI-ARIA's radio group and tabs
+ * patterns ask: all four arrows in a radio group, the side ones in a tab list
+ * (`choiceKeyTarget`). `toggle` is for a control whose arrow keys belong to the
+ * page around it: the comment order, inside the reel whose ← and → step through
+ * posts, is two pressed-or-not buttons, each a stop in the tab order.
+ *
+ * `fill` shares the row equally ("keep segment size consistent", HIG Segmented
+ * controls); `fill={false}` sizes each to its label, for a control beside a
+ * heading. Text only: the HIG prefers text or images, "not a mix of both".
+ *
+ * No hooks, so the module stays one a server component can import.
+ */
+export function SegmentedControl<T extends string>({
+  options,
+  value,
+  onChange,
+  role = 'radio',
+  ariaLabel,
+  fill = true,
+  size = 'default',
+  className,
+  ref,
+}: {
+  options: readonly SegmentedControlOption<T>[];
+  value: T;
+  onChange: (value: T) => void;
+  role?: 'radio' | 'tab' | 'toggle';
+  /** Names the group for a screen reader: "Sort comments", "Shot mode". */
+  ariaLabel?: string;
+  fill?: boolean;
+  size?: keyof typeof SEGMENT_SIZES;
+  /** Where the control sits: margins, `sticky`, a shadow. Never its shape. */
+  className?: string;
+  /** The group, for a parent that gives the focus back to the choice in use. */
+  ref?: Ref<HTMLDivElement>;
+}) {
+  const tabs = role === 'tab';
+  const toggles = role === 'toggle';
+  const selectedIndex = options.findIndex((option) => option.value === value);
+  const sizing = SEGMENT_SIZES[size];
+
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const next = choiceKeyTarget(event, index, options.length, { vertical: !tabs });
+    if (next === null) return;
+    event.preventDefault();
+    if (options[next].value !== value) onChange(options[next].value);
+    const buttons = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(':scope > button');
+    buttons?.[next]?.focus();
+  };
+
+  return (
+    <div
+      ref={ref}
+      role={tabs ? 'tablist' : toggles ? 'group' : 'radiogroup'}
+      aria-label={ariaLabel}
+      className={clsx(
+        fill ? 'flex' : 'inline-flex',
+        'rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] px-0.5',
+        className
+      )}
+    >
+      {options.map((option, index) => {
+        const chosen = index === selectedIndex;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            id={option.id}
+            role={tabs ? 'tab' : toggles ? undefined : 'radio'}
+            aria-checked={tabs || toggles ? undefined : chosen}
+            aria-selected={tabs ? chosen : undefined}
+            aria-pressed={toggles ? chosen : undefined}
+            aria-controls={option.controls}
+            aria-label={option.ariaLabel}
+            title={option.title}
+            // One stop in the tab order, on the choice in use (the first while none is); every
+            // toggle is a stop of its own.
+            tabIndex={toggles ? undefined : chosen || (selectedIndex === -1 && index === 0) ? 0 : -1}
+            onClick={() => {
+              if (!chosen) onChange(option.value);
+            }}
+            onKeyDown={toggles ? undefined : (event) => onKeyDown(event, index)}
+            className={clsx(
+              'group/segment ui-focus-ring flex min-w-0 rounded-full',
+              fill ? 'flex-1 basis-0' : 'shrink-0',
+              sizing.slot
+            )}
+          >
+            <span
+              className={clsx(
+                'flex w-full min-w-0 items-center justify-center gap-1.5 rounded-full text-[13px] font-bold leading-[18px] transition-colors duration-150',
+                sizing.thumb,
+                chosen
+                  ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
+                  : 'text-[var(--ui-text-muted)] group-hover/segment:bg-[var(--ui-surface-2)] group-hover/segment:text-[var(--ui-text-secondary)]'
+              )}
+            >
+              <span className="truncate">{option.label}</span>
+              {/* The space keeps the name "Posts 8", not "Posts8"; the gap draws it. */}
+              {option.count !== undefined ? <>{' '}<span className="shrink-0 tabular-nums opacity-70">{option.count}</span></> : null}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

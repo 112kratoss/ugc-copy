@@ -10,6 +10,7 @@ function resolvePressableStyle(style: unknown) {
     : style;
 }
 
+vi.mock('expo-router', () => ({ Link: ({ children }: { children: unknown }) => children }));
 vi.mock('react-native', () => ({
   Pressable: ({ children, style, ...props }: MockProps) =>
     React.createElement('pressable', {
@@ -58,11 +59,12 @@ vi.mock('@/lib/safe-area', () => ({
 
 import { MagicCreateMenu } from '../components/magic-create-menu';
 import { CREATE_MENU_ACTIONS, getCreateMenuActionHref } from '../lib/create-menu-view-model';
+import { appTheme } from '../lib/theme';
 
 describe('create menu view model', () => {
-  it('exposes exactly Create and Post actions in create-first order', () => {
+  it('exposes exactly Generate and Post actions in generate-first order', () => {
     expect(CREATE_MENU_ACTIONS.map((action) => action.id)).toEqual(['create', 'post']);
-    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Create', 'Post']);
+    expect(CREATE_MENU_ACTIONS.map((action) => action.label)).toEqual(['Generate', 'Post']);
     expect(CREATE_MENU_ACTIONS.find((action) => action.id === 'post')?.body).toBe('Share finished media');
   });
 
@@ -92,7 +94,7 @@ describe('MagicCreateMenu', () => {
       tree = renderer.create(<MagicCreateMenu visible onClose={onClose} onAction={onAction} />);
     });
 
-    expect(tree!.root.findByProps({ accessibilityLabel: 'Create' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Generate' })).toBeTruthy();
     expect(tree!.root.findByProps({ accessibilityLabel: 'Post' })).toBeTruthy();
 
     renderer.act(() => {
@@ -100,6 +102,25 @@ describe('MagicCreateMenu', () => {
     });
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps each choice on one line that shrinks to fit its tile at large text sizes', () => {
+    let tree: ReturnType<typeof renderer.create> | undefined;
+
+    renderer.act(() => {
+      tree = renderer.create(<MagicCreateMenu visible onClose={vi.fn()} onAction={vi.fn()} />);
+    });
+
+    // A single word in a tile of fixed width: at large text sizes "Generate" was broken in two.
+    for (const label of ['Generate', 'Post']) {
+      const matches = tree!.root.findAll((node) => node.type === 'text' && node.props.children === label);
+      expect(matches).toHaveLength(1);
+      expect(matches[0].props).toMatchObject({
+        numberOfLines: 1,
+        adjustsFontSizeToFit: true,
+        maxFontSizeMultiplier: appTheme.typeScale.control,
+      });
+    }
   });
 
   it('emits the selected action', () => {

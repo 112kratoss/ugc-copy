@@ -1,15 +1,17 @@
-import { useId, useState, type Ref } from 'react';
+import { isValidElement, useId, useState, type Ref } from 'react';
 import { MediaViewportScrollView as ScrollView } from '@/components/media-viewport-scroll-view';
 import { Image } from 'expo-image';
 import { Link } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
+  Platform,
   Pressable,
   Text,
   TextInput,
   useWindowDimensions,
   View,
+  type PressableProps,
   type StyleProp,
   type TextInputProps,
   type TextProps,
@@ -20,6 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Sparkles, X } from 'lucide-react-native';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import type { NativeMenuTrigger } from '@/components/native-menu-types';
 import { useDisplayFontLoaded } from '@/lib/display-font-ready';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { getAvatarInitial } from '@/lib/profile-view-model';
@@ -37,10 +40,23 @@ type IconComponent = React.ComponentType<{
   size?: number;
   strokeWidth?: number;
 }>;
+/**
+ * What a button draws beside its label: an icon, which the button colours and
+ * sizes with the label, or an element the caller draws itself (`SaveHeart`,
+ * whose pop is its own).
+ */
+type ButtonIcon = IconComponent | React.ReactElement;
+
+function ButtonGlyph({ icon, color, size }: { icon?: ButtonIcon; color: string; size: number }) {
+  if (!icon) return null;
+  if (isValidElement(icon)) return icon;
+  const Icon = icon;
+  return <Icon color={color} size={size} />;
+}
 
 function resolveMotionView() {
   try {
-    return Animated.View;
+    return Animated.View ?? View;
   } catch {
     // Keeps shared primitives usable under minimal react-native test mocks.
     return View;
@@ -533,6 +549,154 @@ export function ChoiceChip({
   );
 }
 
+/** The clearance between a segmented control's track and its thumbs, on every side. */
+const SEGMENT_INSET = appTheme.spacing.unit;
+/** The track's hairline. */
+const SEGMENT_TRACK_BORDER = 1;
+/**
+ * The control is as tall as a button beside it (`touch.default`), so a thumb is
+ * drawn 4pt inside the track and each segment answers to the track's full
+ * height through its slop: a 48pt hit region on a 38pt capsule.
+ */
+const SEGMENT_THUMB_HEIGHT = appTheme.touch.default - 2 * (SEGMENT_INSET + SEGMENT_TRACK_BORDER);
+/**
+ * A tab segment's role on a platform. iOS gives "tab" no trait, so VoiceOver read
+ * one as its bare label; a button with the selected state reads "Selected, Sign
+ * in, button" there, as React Navigation's tabs do. Android announces "tab".
+ */
+export function segmentTabRole(os: string): 'button' | 'tab' {
+  return os === 'ios' ? 'button' : 'tab';
+}
+
+function resolveSegmentTabRole() {
+  try {
+    return segmentTabRole(Platform.OS);
+  } catch {
+    // Keeps the control usable under react-native test mocks without Platform.
+    return 'tab' as const;
+  }
+}
+
+const SEGMENT_TAB_ROLE = resolveSegmentTabRole();
+
+const SEGMENT_HIT_SLOP = {
+  top: SEGMENT_INSET + SEGMENT_TRACK_BORDER,
+  bottom: SEGMENT_INSET + SEGMENT_TRACK_BORDER,
+  left: SEGMENT_INSET / 2,
+  right: SEGMENT_INSET / 2,
+};
+
+export type SegmentedControlOption<Value extends string> = {
+  value: Value;
+  label: string;
+  /** Spoken in the label's place when the drawn word needs its context ("Switch to sign up"). */
+  accessibilityLabel?: string;
+};
+
+/**
+ * One choice among two to five closely related options, drawn once for the
+ * whole app: a capsule track in the inset fill with a hairline, and the choice
+ * in use a coral capsule 4pt inside it, so the two curves share a centre.
+ * Until November 2026 the app drew this control by hand seven times, with three
+ * track fills, three label sizes and haptics on two of them.
+ *
+ * `role` says what a choice does. `radio` picks a setting (Appearance, a
+ * draft's shot mode); `tab` switches the view below the control (Profile's
+ * collections, sign in or sign up, the comment order). Segmented controls:
+ * "Consider a segmented control to switch between closely related subviews."
+ *
+ * `fill` shares the row equally, as the HIG prefers ("keep segment size
+ * consistent"); `fill={false}` sizes each segment to its label, for a control
+ * beside a title or another control. A label stays on one line and truncates
+ * where it does not fit, as UIKit's own control does: it never shrinks, since
+ * React Native 0.83 reads no `minimumFontScale` and a shrinking label had no
+ * floor but 4pt.
+ *
+ * Choosing the segment already in use does nothing, and only a real change
+ * ticks (`haptic.select`).
+ */
+export function SegmentedControl<Value extends string>({
+  options,
+  value,
+  onChange,
+  accessibilityLabel,
+  role = 'radio',
+  fill = true,
+  disabled = false,
+  style,
+  testID,
+}: {
+  options: readonly SegmentedControlOption<Value>[];
+  value: Value;
+  onChange: (value: Value) => void;
+  /** Names the group for a screen reader: "Appearance", "Sort comments". */
+  accessibilityLabel?: string;
+  role?: 'radio' | 'tab';
+  fill?: boolean;
+  disabled?: boolean;
+  /** Where the control sits: margins, `alignSelf`, a width. */
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+}) {
+  const theme = useAppTheme();
+  const tabs = role === 'tab';
+
+  return (
+    <View
+      testID={testID}
+      accessibilityRole={tabs ? 'tablist' : 'radiogroup'}
+      accessibilityLabel={accessibilityLabel}
+      style={[
+        {
+          flexDirection: 'row',
+          gap: SEGMENT_INSET,
+          padding: SEGMENT_INSET,
+          borderRadius: appTheme.radii.pill,
+          borderWidth: SEGMENT_TRACK_BORDER,
+          borderColor: theme.colors.border,
+          backgroundColor: theme.colors.surfaceInset,
+          opacity: disabled ? appTheme.opacity.disabled : 1,
+        },
+        style,
+      ]}
+    >
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole={tabs ? SEGMENT_TAB_ROLE : 'radio'}
+            accessibilityLabel={option.accessibilityLabel ?? option.label}
+            accessibilityState={tabs ? { selected: active, disabled } : { checked: active, disabled }}
+            disabled={disabled}
+            hitSlop={SEGMENT_HIT_SLOP}
+            onPress={() => {
+              if (active) return;
+              haptic.select();
+              onChange(option.value);
+            }}
+            style={({ pressed }) => ({
+              flex: fill ? 1 : undefined,
+              minWidth: fill ? undefined : appTheme.touch.default,
+              minHeight: SEGMENT_THUMB_HEIGHT,
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: appTheme.radii.pill,
+              backgroundColor: active ? theme.colors.primaryFill : pressed ? theme.colors.pressed : 'transparent',
+              opacity: pressed ? appTheme.opacity.pressed : 1,
+              paddingHorizontal: fill ? appTheme.spacing.compact : appTheme.spacing.gap,
+            })}
+          >
+            <AppText selectable={false} variant="label" color={active ? 'onPrimary' : 'muted'} numberOfLines={1}>
+              {option.label}
+            </AppText>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 export function MetricCard({
   icon,
   label,
@@ -561,7 +725,7 @@ export function MetricCard({
           style={{
             width: compact ? 34 : 42,
             height: compact ? 34 : 42,
-            borderRadius: compact ? 17 : 21,
+            borderRadius: appTheme.radii.pill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: accent ? `${accentColor(accent, theme.colors)}1f` : theme.colors.surfaceStrong,
@@ -672,7 +836,7 @@ export function ReadinessRow({
         paddingVertical: appTheme.spacing.compact,
       }}
     >
-      <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: semantic.foreground }} />
+      <View style={{ width: 9, height: 9, borderRadius: appTheme.radii.pill, backgroundColor: semantic.foreground }} />
       <View style={{ flex: 1, gap: 2 }}>
         <AppText selectable={false} variant="label" color={semantic.foreground}>
           {label}
@@ -757,7 +921,7 @@ export function ToggleRow({
           style={{
             width: 48,
             height: 30,
-            borderRadius: 15,
+            borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: value ? `${color}88` : theme.colors.borderStrong,
             backgroundColor: value ? `${color}30` : theme.colors.surfaceInset,
@@ -769,7 +933,7 @@ export function ToggleRow({
             style={{
             width: 22,
             height: 22,
-            borderRadius: 11,
+            borderRadius: appTheme.radii.pill,
               backgroundColor: value ? accentFill(accent) : theme.colors.muted,
               transform: thumbTranslate ? [{ translateX: thumbTranslate }] : undefined,
           }}
@@ -780,127 +944,223 @@ export function ToggleRow({
   );
 }
 
-export function PrimaryButton({
+/**
+ * A button's words. A label of several words wraps between them at large text
+ * sizes, as the HIG prefers to truncating; a one-word label cannot wrap without
+ * breaking the word ("Comme / nt" in a third of a phone's width), so it stays on
+ * one line and truncates. It never shrinks to fit: React Native 0.83 reads no
+ * `minimumFontScale`, so a shrinking label had no floor but 4pt, under the 11pt
+ * one.
+ */
+function ButtonLabel({ text, variant, color }: { text: string; variant: 'button' | 'label'; color: string }) {
+  const oneWord = !/\s/.test(text.trim());
+  return (
+    <AppText
+      selectable={false}
+      variant={variant}
+      color={color}
+      numberOfLines={oneWord ? 1 : undefined}
+      style={{ flexShrink: 1, textAlign: 'center' }}
+    >
+      {text}
+    </AppText>
+  );
+}
+
+/**
+ * What a button draws: its label alone, the label between its glyphs, or a
+ * glyph alone where the label is empty (a count of none: the accessible name
+ * says what it is). While it waits, the activity indicator takes the leading
+ * glyph's place, beside the label or `loadingLabel` (HIG Buttons: "the system
+ * displays the activity indicator next to the original or alternative label,
+ * hiding the button image"); a button with no glyph and no `loadingLabel`
+ * waits as a bare spinner.
+ */
+function ButtonContent({
   label,
-  loadingLabel,
-  onPress,
-  disabled,
   loading,
-  accent = 'primary',
-  size = 'default',
-  accessibilityHint,
+  loadingLabel,
+  icon,
+  trailingIcon,
+  variant,
+  color,
+  iconSize,
 }: {
+  label: string;
+  loading: boolean;
+  loadingLabel?: string;
+  icon?: ButtonIcon;
+  trailingIcon?: ButtonIcon;
+  variant: 'button' | 'label';
+  color: string;
+  iconSize: number;
+}) {
+  const waitingLabel = loadingLabel ?? (icon ? label : undefined);
+  if (loading && !waitingLabel) return <ActivityIndicator color={color} />;
+  const text = loading ? waitingLabel ?? '' : label;
+  if (!loading && !icon && !trailingIcon) return <ButtonLabel text={text} variant={variant} color={color} />;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact }}>
+      {loading ? <ActivityIndicator color={color} /> : <ButtonGlyph icon={icon} color={color} size={iconSize} />}
+      {text ? <ButtonLabel text={text} variant={variant} color={color} /> : null}
+      {loading ? null : <ButtonGlyph icon={trailingIcon} color={color} size={iconSize} />}
+    </View>
+  );
+}
+
+type ButtonProps = {
   label: string;
   /**
    * What the button says while it waits. HIG Buttons: "you can also configure
    * the button to display a different label alongside the activity indicator …
-   * the label 'Checkout' could change to 'Checking out…'". Without it the
-   * button falls back to a bare spinner, which is the older behaviour and
-   * still correct for actions too short to need narrating.
+   * the label 'Checkout' could change to 'Checking out…'". Without it a button
+   * with a glyph keeps its label beside the spinner, and one without falls back
+   * to a bare spinner, the older behaviour, still right for an action too short
+   * to need narrating.
    */
   loadingLabel?: string;
   onPress?: () => void;
   disabled?: boolean;
   loading?: boolean;
-  accent?: ToolAccent;
+  /** Before the label; the spinner's place while the button waits. */
+  icon?: ButtonIcon;
+  /** After the label: a chevron that says where the button goes. */
+  trailingIcon?: ButtonIcon;
+  /** `roomy` for the one action that closes a screen or a sheet, in its footer. */
   size?: 'default' | 'roomy';
+  /** The spoken name, when the drawn label is a number or needs its context. */
+  accessibilityLabel?: string;
   accessibilityHint?: string;
+  accessibilityValue?: PressableProps['accessibilityValue'];
+  /**
+   * Where the button sits: `flex`, `alignSelf`, margins. Never its look. A
+   * button given a place fills it, so a row of `flex: 1` buttons shares one
+   * height when one of them wraps.
+   */
+  style?: StyleProp<ViewStyle>;
+  testID?: string;
+};
+
+/**
+ * The one button behind `PrimaryButton`, `SecondaryButton` and `ToggleButton`,
+ * so a button that changes rank with its state stays one view.
+ */
+function ActionButton({
+  prominence,
+  selected,
+  tick,
+  label,
+  loadingLabel,
+  onPress,
+  disabled,
+  loading,
+  accent,
+  size = 'default',
+  icon,
+  trailingIcon,
+  accessibilityLabel,
+  accessibilityHint,
+  accessibilityValue,
+  style,
+  testID,
+}: ButtonProps & {
+  prominence: 'primary' | 'secondary';
+  accent?: ToolAccent;
+  selected?: boolean;
+  /** The light haptic on a press: a primary's, and a toggle's in both directions. */
+  tick?: boolean;
 }) {
   const theme = useAppTheme();
-  const fillColor = accentFill(accent);
+  const primary = prominence === 'primary';
+  // In the body, not a default beside `prominence`: React Compiler cannot lower that one
+  // and skipped the whole component.
+  const ticks = tick ?? primary;
   const unavailable = Boolean(disabled || loading);
-  const textColor = disabled
-    ? theme.colors.muted
-    : onAccentFill(accent);
   const motion = usePressMotion(unavailable);
+  const fill = accent ?? 'primary';
+  // A secondary takes an accent as a tint: its wash and hairline, its label in the accent.
+  const tint = !primary && accent ? accentColor(accent, theme.colors) : null;
+  const textColor = primary
+    ? disabled ? theme.colors.muted : onAccentFill(fill)
+    : tint ?? theme.colors.text;
 
   return (
-    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+    <MotionView style={[style, motion.animatedStyle as StyleProp<ViewStyle>]}>
       <Pressable
+        testID={testID}
         accessibilityRole="button"
-        accessibilityLabel={label}
+        accessibilityLabel={accessibilityLabel ?? label}
         accessibilityHint={accessibilityHint}
+        accessibilityValue={accessibilityValue}
         accessibilityLiveRegion={loading ? 'polite' : 'none'}
-        accessibilityState={{ busy: Boolean(loading), disabled: unavailable }}
+        accessibilityState={{ busy: Boolean(loading), disabled: unavailable, selected }}
         disabled={unavailable}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
-        onPress={() => {
+        onPress={ticks ? () => {
           haptic.light();
           onPress?.();
-        }}
+        } : onPress}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
         style={({ pressed }) => ({
+          flexGrow: style ? 1 : undefined,
           minHeight: size === 'roomy' ? appTheme.touch.roomy : appTheme.touch.default,
           alignItems: 'center',
           justifyContent: 'center',
           borderRadius: appTheme.radii.pill,
-          borderWidth: theme.state.focus.width,
-          borderColor: motion.focused ? theme.state.focus.color : 'transparent',
-          backgroundColor: disabled ? theme.colors.panelSoft : fillColor,
+          // A primary keeps a transparent focus-width border, so the ring takes no room when it comes.
+          borderWidth: primary || motion.focused ? theme.state.focus.width : 1,
+          borderColor: motion.focused
+            ? theme.state.focus.color
+            : primary ? 'transparent' : tint ? `${tint}55` : theme.colors.border,
+          backgroundColor: primary
+            ? disabled ? theme.colors.panelSoft
+              : pressed && fill === 'primary' ? theme.colors.primaryFillPressed : accentFill(fill)
+            : tint ? `${tint}1f` : pressed ? theme.colors.pressed : theme.colors.panelSoft,
           opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
-          paddingHorizontal: appTheme.spacing.panel,
+          paddingHorizontal: primary ? appTheme.spacing.panel : appTheme.spacing.card,
         })}
       >
-        {loading && !loadingLabel ? (
-          <ActivityIndicator color={textColor} />
-        ) : loading ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-            <ActivityIndicator color={textColor} />
-            <AppText selectable={false} variant="button" color={textColor}>{loadingLabel}</AppText>
-          </View>
-        ) : (
-          <AppText selectable={false} variant="button" color={textColor}>{label}</AppText>
-        )}
+        <ButtonContent
+          label={label}
+          loading={Boolean(loading)}
+          loadingLabel={loadingLabel}
+          icon={icon}
+          trailingIcon={trailingIcon}
+          variant={primary ? 'button' : 'label'}
+          color={textColor}
+          iconSize={primary ? appTheme.icon.compact : appTheme.icon.sm}
+        />
       </Pressable>
     </MotionView>
   );
 }
 
-export function SecondaryButton({
-  label,
-  onPress,
-  disabled,
-  accessibilityHint,
-}: {
-  label: string;
-  onPress?: () => void;
-  disabled?: boolean;
-  accessibilityHint?: string;
-}) {
-  const theme = useAppTheme();
-  const motion = usePressMotion(Boolean(disabled));
+/** The one thing to do on a screen or in a row: coral (or a tool's accent), with the light haptic. */
+export function PrimaryButton(props: ButtonProps & { accent?: ToolAccent }) {
+  return <ActionButton {...props} prominence="primary" />;
+}
 
-  return (
-    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        accessibilityHint={accessibilityHint}
-        accessibilityState={{ disabled: Boolean(disabled) }}
-        disabled={disabled}
-        onBlur={motion.onBlur}
-        onFocus={motion.onFocus}
-        onPress={onPress}
-        onPressIn={motion.onPressIn}
-        onPressOut={motion.onPressOut}
-        style={({ pressed }) => ({
-          minHeight: appTheme.touch.default,
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: appTheme.radii.pill,
-          borderWidth: motion.focused ? theme.state.focus.width : 1,
-          borderColor: motion.focused ? theme.state.focus.color : theme.colors.border,
-          backgroundColor: pressed ? theme.colors.pressed : theme.colors.panelSoft,
-          opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
-          paddingHorizontal: appTheme.spacing.card,
-        })}
-      >
-        <AppText selectable={false} variant="label" color="text">{label}</AppText>
-      </Pressable>
-    </MotionView>
-  );
+/**
+ * A supporting action: never competes with the primary. Neutral by default; an
+ * `accent` tints it (the accent's wash and hairline, its label in the accent),
+ * for an action that belongs to one tool, such as enhancing a shot.
+ */
+export function SecondaryButton(props: ButtonProps & { accent?: ToolAccent }) {
+  return <ActionButton {...props} prominence="secondary" />;
+}
+
+/**
+ * A button that turns something on (Follow, then Following): the primary until
+ * it is on, a supporting action after, with the same light tick either way. It
+ * stays one view as it flips, so a screen reader keeps its place on it and
+ * hears it selected; two buttons swapped by state lose that focus the moment
+ * the state changes.
+ */
+export function ToggleButton({ on, ...props }: ButtonProps & { on: boolean }) {
+  // It keeps its words beside the spinner, so it does not narrow while the change is sent.
+  return <ActionButton {...props} loadingLabel={props.loadingLabel ?? props.label} prominence={on ? 'secondary' : 'primary'} selected={on} tick />;
 }
 
 /** Width reserved beside the text for a trailing in-field control. */
@@ -1103,63 +1363,93 @@ export function Pill({
   );
 }
 
+/**
+ * An icon-only control: a 48pt circle, the glyph at `icon.feature`, the size
+ * every Back and Close in the app is drawn at (`lib/platform-glyphs.ts`). It
+ * takes the filled circle iOS draws a Close button in. `plain` leaves the
+ * circle out until it is pressed, for a button in a header bar whose own
+ * surface already holds it (HIG Buttons: a button in a toolbar is the exception
+ * to "prefer buttons that have a discernible background shape and fill").
+ */
 export function IconButton({
   icon: Icon,
   label,
   onPress,
   disabled,
+  busy = false,
   accent,
+  variant = 'filled',
   style,
   accessibilityHint,
+  testID,
 }: {
   icon: IconComponent;
   label: string;
   onPress?: () => void;
   disabled?: boolean;
+  /** Announced while the press is still being acted on (closing a draft that saves first). */
+  busy?: boolean;
   accent?: ToolAccent;
+  variant?: 'filled' | 'plain';
+  /** Where the button sits: margins, `alignSelf`, an absolute position. Never its look. */
   style?: StyleProp<ViewStyle>;
   accessibilityHint?: string;
+  testID?: string;
 }) {
   const theme = useAppTheme();
-  const color = accent ? accentColor(accent, theme.colors) : theme.colors.text;
+  const tint = accent ? accentColor(accent, theme.colors) : null;
   const motion = usePressMotion(Boolean(disabled), { scale: appTheme.motion.scale.pressedControl });
+  const restingFill = tint ? `${tint}1f` : variant === 'plain' ? 'transparent' : theme.colors.surfaceStrong;
 
   return (
-    <MotionView style={motion.animatedStyle as StyleProp<ViewStyle>}>
+    <MotionView style={[style, motion.animatedStyle as StyleProp<ViewStyle>]}>
       <Pressable
+        testID={testID}
         accessibilityRole="button"
         accessibilityLabel={label}
         accessibilityHint={accessibilityHint}
-        accessibilityState={{ disabled: Boolean(disabled) }}
+        accessibilityState={{ busy, disabled: Boolean(disabled) }}
         disabled={disabled}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
         onPress={onPress}
         onPressIn={motion.onPressIn}
         onPressOut={motion.onPressOut}
-        style={({ pressed }) => [
-          {
-            minHeight: appTheme.touch.default,
-            minWidth: appTheme.touch.default,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderWidth: motion.focused ? theme.state.focus.width : 1,
-            borderColor: motion.focused
-              ? theme.state.focus.color
-              : accent ? `${color}55` : theme.colors.border,
-            borderRadius: appTheme.radii.pill,
-            backgroundColor: accent
-              ? `${color}1f`
-              : pressed ? theme.colors.pressed : theme.colors.surface,
-            opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
-          },
-          style,
-        ]}
+        style={({ pressed }) => ({
+          minHeight: appTheme.touch.default,
+          minWidth: appTheme.touch.default,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: appTheme.radii.pill,
+          // An accent keeps its hairline, as a tinted SecondaryButton does; the others take the
+          // focus ring's width, transparent until it comes.
+          borderWidth: tint && !motion.focused ? 1 : theme.state.focus.width,
+          borderColor: motion.focused ? theme.state.focus.color : tint ? `${tint}55` : 'transparent',
+          backgroundColor: pressed && !tint ? theme.colors.pressed : restingFill,
+          opacity: pressed ? appTheme.opacity.pressed : disabled ? appTheme.opacity.disabled : 1,
+        })}
       >
-        <Icon color={color} size={appTheme.icon.default} />
+        <Icon color={tint ?? theme.colors.text} size={appTheme.icon.feature} />
       </Pressable>
     </MotionView>
   );
+}
+
+/**
+ * The native menu's ⋮ drawn as `IconButton` draws itself, for a menu that sits
+ * among icon buttons. On iOS SwiftUI draws the trigger from these values, not
+ * from `renderButton`, so a look spelled out beside an `IconButton` drifts from
+ * it: the creator page's ⋮ kept the old ringed circle beside the new Share.
+ */
+export function iconButtonMenuTrigger(colors: Pick<ThemeColors, 'text' | 'surfaceStrong'>): NativeMenuTrigger {
+  return {
+    width: appTheme.touch.default,
+    height: appTheme.touch.default,
+    iconSize: appTheme.icon.feature,
+    iconColor: colors.text,
+    vertical: true,
+    circle: { fill: colors.surfaceStrong },
+  };
 }
 
 export function MediaFrame({

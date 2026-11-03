@@ -103,6 +103,7 @@ export type {
 export {
   AccountReauthenticationFailedError,
   getAccountReauthenticationMethods,
+  getAppleReauthenticationMethods,
 } from './account-reauthentication';
 
 interface AuthContextValue {
@@ -336,6 +337,15 @@ export function isAccountReauthenticationRequired(error: unknown) {
     && (apiErrorDetail(error, 'reason') === 'reauthentication_required'
       || error.code === 'RECENT_AUTH_REQUIRED'
       || error.code === 'APPLE_REAUTH_REQUIRED');
+}
+
+/**
+ * The server found an Apple identity on the account, read afresh, and wants
+ * Apple's own code: true even when this session's copy of the account, older
+ * than the Apple sign-in linked to it, shows none.
+ */
+export function isAppleReauthenticationRequired(error: unknown) {
+  return error instanceof ApiError && error.code === 'APPLE_REAUTH_REQUIRED';
 }
 
 function hasJsonBody(error: ApiError) {

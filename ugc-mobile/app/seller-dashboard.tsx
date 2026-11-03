@@ -310,7 +310,7 @@ function MetricCard({ icon, label, value }: { icon: React.ReactNode; label: stri
     <View accessible accessibilityLabel={`${label}: ${value}`} style={{ flex: 1 }}>
       <Card>
         <View style={{ gap: 10 }}>
-          <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
+          <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surface, alignItems: 'center', justifyContent: 'center' }}>
             {icon}
           </View>
           <AppText variant="caption" color="faint">{label}</AppText>

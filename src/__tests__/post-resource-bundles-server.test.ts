@@ -1440,7 +1440,7 @@ describe('post resource bundle server access', () => {
 
       expect(detail?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
       expect(Date.now() - started).toBeLessThan(3000);
-    }, 10_000);
+    });
 
     // The app's recipe page names the kinds whether or not it is unlocked.
     it('counts what was merged in for a buyer and for the owner, read as the teaser reads it', async () => {
@@ -1826,7 +1826,7 @@ describe('post resource bundle server access', () => {
         expect(failed.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
         expect(slow.items[0]?.lockedPreview.itemCounts).toEqual({ prompt: 1 });
         expect(Date.now() - started).toBeLessThan(3000);
-      }, 10_000);
+      });
 
       // Review of cb35d555: the RPC page counted before its own search check,
       // which reads a tile's kinds, so whether "files" kept a recipe the SQL

@@ -18,7 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PostComments, type PostCommentsHandle } from '@/components/comments-sheet';
-import { CreatorAvatar } from '@/components/ui';
+import { CreatorAvatar, IconButton, SecondaryButton } from '@/components/ui';
 import { FeedCardAction } from '@/components/feed-card-shell';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
@@ -374,23 +374,7 @@ export default function PostScreen() {
               <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm, textAlign: 'center' }}>
                 Check your connection and try again.
               </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Try again"
-                onPress={() => void refetchPost()}
-                style={({ pressed }) => ({
-                  minHeight: appTheme.touch.compact,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 22,
-                  backgroundColor: theme.colors.surfaceStrong,
-                  opacity: pressed ? appTheme.opacity.pressed : 1,
-                  paddingHorizontal: 22,
-                })}
-              >
-                <Text style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>Try again</Text>
-              </Pressable>
+              <SecondaryButton label="Try again" onPress={() => void refetchPost()} />
             </>
           ) : (
             <ActivityIndicator color={theme.colors.primary} />
@@ -591,29 +575,13 @@ function leavePost() {
 }
 
 function BackControl({ topInset }: { topInset: number }) {
-  const theme = useAppTheme();
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Go back"
+    <IconButton
+      icon={BackGlyph}
+      label="Go back"
       onPress={leavePost}
-      hitSlop={8}
-      style={({ pressed }) => ({
-        position: 'absolute',
-        zIndex: 2,
-        left: appTheme.spacing.gap,
-        top: topInset + 10,
-        height: 44,
-        width: 44,
-        borderRadius: 22,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: theme.colors.surfaceStrong,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-    </Pressable>
+      style={{ position: 'absolute', zIndex: 2, left: appTheme.spacing.gap, top: topInset + appTheme.spacing.compact }}
+    />
   );
 }
 

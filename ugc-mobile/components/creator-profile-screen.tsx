@@ -5,7 +5,7 @@ import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'ex
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
-import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2, UserCheck, UserPlus } from 'lucide-react-native';
+import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { NativeMenu } from '@/components/native-menu';
-import { AppText, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
+import { AppText, IconButton, iconButtonMenuTrigger, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock, ToggleButton } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { mergeRefreshedFirstPage, type ProfilePageAdapter } from '@/lib/profile-media-refresh';
 import { canRequestNextFeedPage } from '@/lib/feed-pagination';
@@ -651,26 +651,13 @@ function CreatorTopBar({ topInset }: { topInset: number }) {
       subscription.remove();
     };
   }, [glassAvailable]);
-  const back = (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Go back"
-      onPress={leaveCreatorProfile}
-      style={({ pressed }) => ({
-        width: 44,
-        height: 44,
-        borderRadius: 22,
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-    </Pressable>
-  );
+  // Plain: where the glass is drawn it is the button's circle, and elsewhere the
+  // bar is, as for the native header's own Back.
+  const backSize = appTheme.touch.default;
+  const back = <IconButton icon={BackGlyph} label="Go back" variant="plain" onPress={leaveCreatorProfile} />;
   return (
     <View style={{ paddingTop: topInset, paddingBottom: 10, backgroundColor: theme.colors.background }}>
-      <View style={{ height: 44, justifyContent: 'center' }}>
+      <View style={{ height: backSize, justifyContent: 'center' }}>
         <Text
           accessibilityRole="header"
           numberOfLines={1}
@@ -681,7 +668,8 @@ function CreatorTopBar({ topInset }: { topInset: number }) {
         </Text>
         <View style={{ position: 'absolute', left: 16, top: 0 }}>
           {glassAvailable && !reduceTransparency ? (
-            <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive style={{ width: 44, height: 44, borderRadius: 22 }}>
+            <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive // expo-glass-effect hands this radius to UIKit as given, without React Native's clamp, so it is the exact half.
+              style={{ width: backSize, height: backSize, borderRadius: backSize / 2 }}>
               {back}
             </GlassView>
           ) : back}
@@ -718,7 +706,7 @@ function CreatorHeader({
   const initial = creatorInitial(profile);
 
   return (
-    <View style={{ overflow: 'hidden', borderRadius: 28, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
+    <View style={{ overflow: 'hidden', borderRadius: appTheme.radii.xl, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
       <View style={{ height: 136, backgroundColor: theme.colors.panelSoft }}>
         {profile.coverUrl ? (
           <Image source={{ uri: profile.coverUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
@@ -729,7 +717,9 @@ function CreatorHeader({
       </View>
 
       <View style={{ padding: 16, paddingTop: 0, gap: 14 }}>
-        <View style={{ marginTop: -42, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
+        {/* Where the actions do not fit beside the avatar (on a 360dp phone, or at large text
+            sizes) they take the next line, under it, rather than run off the card. */}
+        <View style={{ marginTop: -42, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
           <CreatorAvatar avatarUrl={profile.avatarUrl} initial={initial} size={86} />
           <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
             {data.viewer.isOwner ? (
@@ -737,26 +727,15 @@ function CreatorHeader({
             ) : data.viewer.blockedByViewer ? null : (
               <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
             )}
-            <CircleAction label="Share profile" onPress={onShareProfile}>
-              <ShareGlyph size={appTheme.icon.compact} color={theme.colors.text} />
-            </CircleAction>
+            <IconButton icon={ShareGlyph} label="Share profile" onPress={onShareProfile} />
             {!data.viewer.isOwner ? (
               <NativeMenu
                 model={safetyMenu}
                 accessibilityLabel="More options"
-                trigger={{
-                  width: 48,
-                  height: 48,
-                  iconSize: appTheme.icon.default,
-                  iconColor: theme.colors.text,
-                  vertical: true,
-                  circle: { fill: theme.colors.panelSoft, ring: theme.colors.border },
-                }}
+                trigger={iconButtonMenuTrigger(theme.colors)}
                 onFallbackPress={onSafetyOptions}
                 renderButton={(onPress) => (
-                  <CircleAction label="More options" onPress={onPress}>
-                    <MoreVertical size={appTheme.icon.default} color={theme.colors.text} />
-                  </CircleAction>
+                  <IconButton icon={MoreVertical} label="More options" onPress={onPress} />
                 )}
               />
             ) : null}
@@ -813,34 +792,17 @@ function CreatorStats({ stats }: { stats: CreatorProfileStats }) {
 }
 
 function CreatorTabs({ activeTab, data, onChange }: { activeTab: CreatorProfileTab; data: CreatorProfileResponse; onChange: (tab: CreatorProfileTab) => void }) {
-  const theme = useAppTheme();
   const counts: Record<CreatorProfileTab, number | null> = {
     creations: data.stats?.publicCreations ?? null,
     unlocks: data.stats?.unlocks ?? null,
     tools: data.stats?.toolsUsed.length ?? null,
   };
+  const options = CREATOR_PROFILE_TABS.map((tab) => {
+    const count = counts[tab.id];
+    return { value: tab.id, label: count === null ? tab.label : `${tab.label} ${formatCompactCount(count)}` };
+  });
 
-  return (
-    <View style={{ flexDirection: 'row', gap: 4, borderRadius: 18, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surfaceInset, padding: 4 }}>
-      {CREATOR_PROFILE_TABS.map((tab) => {
-        const active = activeTab === tab.id;
-        const count = counts[tab.id];
-        return (
-          <Pressable
-            key={tab.id}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-            onPress={() => onChange(tab.id)}
-            style={({ pressed }) => ({ flex: 1, minHeight: appTheme.touch.default, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: active ? theme.colors.primaryFill : 'transparent', opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 5 })}
-          >
-            <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, ...appTheme.type.label, fontWeight: '700' }}>
-              {count === null ? tab.label : `${tab.label} ${formatCompactCount(count)}`}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+  return <SegmentedControl role="tab" options={options} value={activeTab} onChange={onChange} />;
 }
 
 function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeVideoPreview: boolean; item: ShowcaseFeedItem; onPress: (zoom: AppleZoomOpen | null) => void; width: number }) {
@@ -855,7 +817,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
   const zoomSource = useMediaZoomSource({
     itemId: item.id,
     // The card clips its own top corners; the window matches them on the way out.
-    radius: 20,
+    radius: appTheme.radii.lg,
     // The media's own shape, not the tile's 4:5 crop of it.
     aspectRatio: mediaItemAspectRatio(tileMediaItems[0]),
     preview: showcaseMediaZoomPreview(tileMediaItems[0]),
@@ -868,7 +830,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
 
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
+      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
         <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
         <View style={{ height, backgroundColor: theme.colors.surfaceInset }}>
           {isTextPost ? (
@@ -882,7 +844,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
             <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><ImageIcon size={appTheme.icon.hero} color={theme.colors.faint} /></View>
           )}
           {hasVideo ? (
-            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: themes.dark.colors.overlay }}>
+            <View style={{ position: 'absolute', top: 8, right: 8, width: 30, height: 30, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: themes.dark.colors.overlay }}>
               <Play size={appTheme.icon.sm} color={mediaColors.onMedia} fill={mediaColors.onMedia} />
             </View>
           ) : null}
@@ -920,9 +882,9 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
       accessibilityRole="button"
       accessibilityLabel={`View posts made with ${tool.label}`}
       onPress={() => router.push({ pathname: '/(tabs)/showcase', params: { tool: tool.slug } } as never)}
-      style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: 20, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+      style={({ pressed }) => ({ minHeight: 76, marginBottom: 10, borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
-      <View style={{ width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.image}22` }}>
+      <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: `${theme.colors.image}22` }}>
         <Layers3 size={20} color={theme.colors.image} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
@@ -935,23 +897,16 @@ function CreatorToolRow({ tool }: { tool: CreatorTool }) {
 }
 
 function EditProfileButton({ onPress }: { onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable accessibilityRole="button" accessibilityLabel="Edit profile" onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, backgroundColor: theme.colors.primaryFill, opacity: pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 15 })}>
-      <Pencil size={appTheme.icon.sm} color={theme.colors.onPrimary} />
-      <Text style={{ color: theme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>Edit</Text>
-    </Pressable>
-  );
+  return <PrimaryButton label="Edit" accessibilityLabel="Edit profile" icon={Pencil} onPress={onPress} />;
 }
 
+/**
+ * Follow is the prominent action; once followed it steps back to a supporting one, as one view.
+ * Words alone: with a glyph the primary's Follow put Share and ⋮ under the avatar on a
+ * 375pt iPhone, where the hand-built one fitted.
+ */
 function FollowButton({ following, loading, onPress }: { following: boolean; loading: boolean; onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable accessibilityRole="button" accessibilityState={{ busy: loading, selected: following }} disabled={loading} onPress={onPress} style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 7, borderWidth: following ? 1 : 0, borderColor: theme.colors.borderStrong, backgroundColor: following ? theme.colors.surface : theme.colors.primaryFill, opacity: loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1, paddingHorizontal: 16 })}>
-      {loading ? <ActivityIndicator size="small" color={following ? theme.colors.text : theme.colors.onPrimary} /> : following ? <UserCheck size={16} color={theme.colors.text} /> : <UserPlus size={16} color={theme.colors.onPrimary} />}
-      <Text style={{ color: following ? theme.colors.text : theme.colors.onPrimary, ...appTheme.type.label, fontWeight: '700' }}>{following ? 'Following' : 'Follow'}</Text>
-    </Pressable>
-  );
+  return <ToggleButton on={following} label={following ? 'Following' : 'Follow'} loading={loading} onPress={onPress} />;
 }
 
 function SocialChip({ label, url }: { label: string; url: string }) {
@@ -964,13 +919,6 @@ function SocialChip({ label, url }: { label: string; url: string }) {
   );
 }
 
-function CircleAction({ children, label, onPress }: { children: ReactNode; label: string; onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panelSoft, opacity: pressed ? appTheme.opacity.pressed : 1 })}>{children}</Pressable>
-  );
-}
-
 /**
  * Round, because the same person's avatar is round on the profile tab, on every
  * feed row and in the comments sheet. A rounded square here made one account
@@ -980,7 +928,7 @@ function CreatorAvatar({ avatarUrl, initial, size }: { avatarUrl: string | null;
   const theme = useAppTheme();
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, padding: 3, backgroundColor: theme.colors.panel, borderWidth: 2, borderColor: theme.colors.primary }}>
-      <View style={{ flex: 1, overflow: 'hidden', borderRadius: size / 2 - 5, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
+      <View style={{ flex: 1, overflow: 'hidden', borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.panelSoft }}>
         {avatarUrl ? <Image source={{ uri: avatarUrl }} contentFit="cover" style={{ position: 'absolute', inset: 0 }} /> : <Text selectable style={{ color: theme.colors.text, fontSize: 26, fontWeight: '800' }}>{initial}</Text>}
       </View>
     </View>

@@ -424,6 +424,11 @@ const lightTabBar: TabBarTokens = {
  * `appTheme`, anywhere — module scope included.
  */
 const staticTokens = {
+  // Three shapes (docs/design/design-mobile.md → Radius): a control on one row is a
+  // capsule (`pill`); the outermost container takes a fixed step by its size; and a
+  // shape nested close inside a container is concentric with it, the container's
+  // radius less the gap between their edges. `hig-corner-radius.test.ts` holds every
+  // radius in the app to these steps.
   radii: {
     xs: 8,
     sm: 12,
@@ -522,10 +527,10 @@ const staticTokens = {
     /**
      * The icon size ramp, stepped to sit beside the type ramp above: 14 next to
      * `caption`, 16 next to `label`/`bodySm`, 18 next to `body`, 20 for a
-     * standalone control, 24 next to `sectionTitle`, 32 for hero and empty
-     * states. HIG Icons asks for a consistent size across the set; a screen
-     * that needs a size not on this ramp is choosing a new one, and
-     * `hig-icon-size.test.ts` will say so.
+     * glyph alone in a row, 24 next to `sectionTitle` and for `IconButton`, 32
+     * for hero and empty states. HIG Icons asks for a consistent size across
+     * the set; a screen that needs a size not on this ramp is choosing a new
+     * one, and `hig-icon-size.test.ts` will say so.
      */
     xs: 14,
     sm: 16,

@@ -1,5 +1,5 @@
 /**
- * Where a provider sign-in (Google) sends the browser back to: `/auth/callback`
+ * Where a provider sign-in (Google or Apple) sends the browser back to: `/auth/callback`
  * on the configured origin, which finishes the sign-in and goes on to `next`.
  * Shared by the login page and the creators' sign-up sheet.
  */

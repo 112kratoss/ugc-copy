@@ -151,7 +151,7 @@ function ComposerMediaLightboxDialog({
           </button>
         </div>
 
-        <div className="relative flex min-h-[220px] w-full items-center justify-center rounded-[24px] border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
+        <div className="relative flex min-h-[220px] w-full items-center justify-center rounded-3xl border border-white/10 bg-black p-4 sm:min-h-[420px] sm:p-6">
           {activeItem.mediaKind === 'video' ? (
             <InlineMediaVideo
               key={activeItem.id}

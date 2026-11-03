@@ -25,6 +25,7 @@ import {
   CreatorToolTabs,
   CreatorTopUpNotice,
   CreatorUploadSlot,
+  CreatorVisitorNote,
   CreatorRunFailed,
   CreatorRunFailedLine,
   CreatorRunWaitLines,
@@ -329,27 +330,39 @@ describe('the setting choices', () => {
 });
 
 describe('the setting choices, named for their options', () => {
-  it('reads an option by its label, and keeps a group the options name out of sight', () => {
+  it('reads an option by its label, named by its heading', () => {
     const onChange = vi.fn();
     render(
       <CreatorSettingChoices
-        label="Shot mode"
-        labelHidden
-        options={['single', 'multi'] as const}
-        optionLabel={(value) => (value === 'multi' ? 'Multi-shot' : 'Single shot')}
-        value="single"
+        label="Quality"
+        options={['std', 'pro'] as const}
+        optionLabel={(value) => (value === 'pro' ? 'Pro 1080p' : 'Standard 720p')}
+        value="std"
         onChange={onChange}
         columns={2}
         accent="video"
       />
     );
 
-    const group = screen.getByRole('radiogroup', { name: 'Shot mode' });
-    expect(screen.getByText('Shot mode')).toHaveClass('sr-only');
-    expect(within(group).getByRole('radio', { name: 'Single shot' })).toHaveAttribute('aria-checked', 'true');
+    const group = screen.getByRole('radiogroup', { name: 'Quality' });
+    expect(within(group).getByRole('radio', { name: 'Standard 720p' })).toHaveAttribute('aria-checked', 'true');
 
-    fireEvent.click(within(group).getByRole('radio', { name: 'Multi-shot' }));
-    expect(onChange).toHaveBeenCalledWith('multi');
+    fireEvent.click(within(group).getByRole('radio', { name: 'Pro 1080p' }));
+    expect(onChange).toHaveBeenCalledWith('pro');
+  });
+
+  it('leaves a key held with Alt, Ctrl or Cmd to the browser', () => {
+    const onChange = vi.fn();
+    render(
+      <CreatorSettingChoices label="Quality" options={['std', 'pro'] as const} value="std" onChange={onChange} columns={2} />
+    );
+    const first = screen.getByRole('radio', { name: 'std' });
+    // fireEvent says false when the key's default was prevented.
+    expect(fireEvent.keyDown(first, { key: 'ArrowLeft', altKey: true })).toBe(true);
+    expect(fireEvent.keyDown(first, { key: 'ArrowLeft', metaKey: true })).toBe(true);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(fireEvent.keyDown(first, { key: 'ArrowRight' })).toBe(false);
+    expect(onChange).toHaveBeenCalledWith('pro');
   });
 });
 
@@ -1294,3 +1307,19 @@ describe('the creator column layout', () => {
   });
 });
 
+
+// The line under a signed-out visitor's bar. The sheet Generate opens offers Google and
+// Apple, so the line names both: an Apple account that pressed Google would make a second one.
+describe('the visitor note under the bar', () => {
+  it('names both ways in when the welcome credits are not known', () => {
+    render(<CreatorVisitorNote welcomeCredits={null} cost={19} />);
+    expect(screen.getByText('Sign in with Google or Apple to generate')).toBeInTheDocument();
+    expect(screen.getByText(/This run/)).toHaveTextContent('This run 19');
+  });
+
+  it('says what a new account starts with when they are', () => {
+    render(<CreatorVisitorNote welcomeCredits={25} cost={19} />);
+    expect(screen.getByText(/New accounts get/)).toHaveTextContent('New accounts get 25 free credits');
+    expect(screen.queryByText(/Sign in with/)).toBeNull();
+  });
+});

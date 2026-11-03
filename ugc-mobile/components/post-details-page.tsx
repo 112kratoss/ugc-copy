@@ -8,7 +8,7 @@ import { GenerationOutputs, GenerationReferences } from '@/components/generation
 import { PostResourceBundleContent, ResourceRevisionSwitch } from '@/components/post-resource-bundle-content';
 import { ResourceAction } from '@/components/resource-action';
 import { ResourceKindRow } from '@/components/resource-kind-row';
-import { CreatorAvatar, Pill } from '@/components/ui';
+import { CreatorAvatar, IconButton, iconButtonMenuTrigger, Pill, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { SaveHeart } from '@/components/save-heart';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { useAuth } from '@/lib/auth';
@@ -318,7 +318,7 @@ export function PostDetailsPage({
         ) : sectionState === 'error' ? (
           <View style={{ gap: 10 }}>
             <ErrorText message={resourceQuery.error instanceof Error ? resourceQuery.error.message : 'Could not load this recipe.'} />
-            <DetailActionButton label="Try again" icon={<FileText size={appTheme.icon.compact} color={theme.colors.text} />} onPress={() => void resourceQuery.refetch()} />
+            <SecondaryButton label="Try again" icon={FileText} onPress={() => void resourceQuery.refetch()} />
           </View>
         ) : (
           <>
@@ -331,12 +331,11 @@ export function PostDetailsPage({
               {/* Free is one tap; a paid unlock asks first, and is not
                   offered while the known balance is short of it
                   (`useBundleUnlock`). */}
-              <DetailActionButton
+              <PrimaryButton
                 disabled={bundleUnlock.shortfall > 0}
                 label={!user ? 'Sign in to unlock' : unlock.accessMode === 'free' ? 'Get free recipe' : unlockPriceLabel ? `Unlock for ${unlockPriceLabel}` : 'Unlock with credits'}
-                icon={<Lock size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
+                icon={Lock}
                 loading={bundleUnlock.isPending}
-                primary
                 onPress={bundleUnlock.request}
               />
               {bundleUnlock.shortfallMessage ? (
@@ -345,11 +344,7 @@ export function PostDetailsPage({
                 </Text>
               ) : null}
               {bundleUnlock.offersCredits ? (
-                <DetailActionButton
-                  label="Get credits"
-                  icon={<Crown size={appTheme.icon.compact} color={theme.colors.text} />}
-                  onPress={bundleUnlock.goToCredits}
-                />
+                <SecondaryButton label="Get credits" icon={Crown} onPress={bundleUnlock.goToCredits} />
               ) : null}
               {bundleUnlock.error ? <ErrorText message={bundleUnlock.error} /> : null}
             </View>
@@ -459,41 +454,41 @@ export function PostDetailsPage({
             orphaned on a row of its own. */}
         <View style={{ gap: 10 }}>
           {primaryAction ? (
-            <DetailActionButton
-              grow
+            <PrimaryButton
               label={primaryAction.label}
-              icon={<Repeat2 size={appTheme.icon.compact} color={theme.colors.onPrimary} />}
-              primary
+              icon={Repeat2}
               loading={remixLoading}
               onPress={() => void onRecreate(item)}
             />
           ) : null}
           <View style={{ flexDirection: 'row', gap: 10 }}>
-            <DetailActionButton
+            <SecondaryButton
               disabled={!item.canSave}
-              grow
               label={item.isSaved ? 'Saved' : 'Save'}
-              icon={<SaveHeart saved={item.isSaved} size={appTheme.icon.compact} enabled={item.canSave} />}
+              icon={<SaveHeart saved={item.isSaved} size={appTheme.icon.sm} enabled={item.canSave} />}
               loading={saveLoading}
               onPress={() => onSave(item)}
+              style={{ flex: 1 }}
             />
-            <DetailActionButton
+            <SecondaryButton
               disabled={!item.canShare}
-              grow
               label="Share"
-              icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.text} />}
+              icon={ShareGlyph}
               onPress={() => void onShare(item)}
+              style={{ flex: 1 }}
             />
             {openComments ? (
-              <DetailActionButton
+              <SecondaryButton
                 accessibilityLabel="Comments"
                 // The count is the label's text, which the label above replaces for a screen reader. Never
                 // undefined: Android keeps a value set back to undefined (hig-accessibility-label-states).
                 accessibilityValue={{ text: commentCount > 0 ? commentCountLabel(commentCount) : '' }}
-                grow
-                label={commentCount > 0 ? formatCompactCount(commentCount) : 'Comment'}
-                icon={<MessageCircle size={appTheme.icon.compact} color={theme.colors.text} />}
+                // With none yet the glyph stands alone: "Comment" in a third of a phone's width
+                // left no room for the word beside its glyph.
+                label={commentCount > 0 ? formatCompactCount(commentCount) : ''}
+                icon={MessageCircle}
                 onPress={openComments}
+                style={{ flex: 1 }}
               />
             ) : null}
           </View>
@@ -565,11 +560,9 @@ function DetailsHeader({
       }}
     >
       {onBack ? (
-        <HeaderButton accessibilityLabel={backLabel} onPress={onBack}>
-          <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-        </HeaderButton>
+        <IconButton icon={BackGlyph} label={backLabel} onPress={onBack} />
       ) : (
-        <View style={{ width: 48, height: 48 }} />
+        <View style={{ width: appTheme.touch.default, height: appTheme.touch.default }} />
       )}
       <Text numberOfLines={1} style={{ flex: 1, textAlign: 'center', color: theme.colors.text, ...appTheme.type.cardTitle, fontWeight: '800' }}>
         {title}
@@ -579,51 +572,19 @@ function DetailsHeader({
           item={item}
           excludeActions={['view-details']}
           accessibilityLabel="More options"
-          trigger={{
-            width: 48,
-            height: 48,
-            iconSize: appTheme.icon.feature,
-            iconColor: theme.colors.text,
-            vertical: true,
-            circle: { fill: theme.colors.surfaceStrong },
-            hitSlop: 6,
-          }}
+          trigger={iconButtonMenuTrigger(theme.colors)}
           onFallbackPress={onActionsOpen}
           renderButton={(onPress) => (
-            <HeaderButton accessibilityLabel="More options" onPress={onPress}>
-              <MoreVertical size={appTheme.icon.feature} color={theme.colors.text} />
-            </HeaderButton>
+            <IconButton icon={MoreVertical} label="More options" onPress={onPress} />
           )}
         />
       ) : (
-        <View style={{ width: 48, height: 48 }} />
+        <View style={{ width: appTheme.touch.default, height: appTheme.touch.default }} />
       )}
     </View>
   );
 }
 
-function HeaderButton({ accessibilityLabel, children, onPress }: { accessibilityLabel: string; children: React.ReactNode; onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      hitSlop={6}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: theme.colors.surfaceStrong,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      {children}
-    </Pressable>
-  );
-}
 
 function ResourcesHeading({ pills }: { pills: Array<{ label: string; accent: ToolAccent }> }) {
   const theme = useAppTheme();
@@ -696,52 +657,3 @@ function CopyableText({ text, onCopy }: { text: string; onCopy: (text: string) =
   );
 }
 
-function DetailActionButton({
-  accessibilityLabel,
-  accessibilityValue,
-  disabled,
-  grow,
-  icon,
-  label,
-  loading,
-  onPress,
-  primary,
-}: {
-  accessibilityLabel?: string;
-  accessibilityValue?: { text: string };
-  disabled?: boolean;
-  /** Share the row equally with its siblings instead of hugging the label. */
-  grow?: boolean;
-  icon: React.ReactNode;
-  label: string;
-  loading?: boolean;
-  onPress: () => void;
-  primary?: boolean;
-}) {
-  const theme = useAppTheme();
-  const primaryColor = theme.colors.primaryFill;
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel ?? label}
-      accessibilityValue={accessibilityValue}
-      disabled={disabled || loading}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: appTheme.touch.compact,
-        flex: grow ? 1 : undefined,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        borderRadius: 22,
-        backgroundColor: primary ? primaryColor : theme.colors.surfaceStrong,
-        opacity: disabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: 15,
-      })}
-    >
-      {loading ? <ActivityIndicator color={primary ? theme.colors.onPrimary : theme.colors.text} /> : icon}
-      <Text numberOfLines={1} style={{ color: primary ? theme.colors.onPrimary : theme.colors.text, ...appTheme.type.bodySm, fontWeight: '800' }}>{label}</Text>
-    </Pressable>
-  );
-}

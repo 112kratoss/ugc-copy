@@ -3274,7 +3274,7 @@ export function WorkflowCanvasInspector({
       {positionedNodePopup && nodePopupPosition && (
         <div
           data-testid="workflow-inspector-popup"
-          className="pointer-events-auto absolute flex min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#050505] shadow-[0_28px_120px_rgba(0,0,0,0.55)]"
+          className="pointer-events-auto absolute flex min-h-0 flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#050505] shadow-[0_28px_120px_rgba(0,0,0,0.55)]"
           style={{
             left: nodePopupPosition.left,
             top: nodePopupPosition.top,
@@ -3296,7 +3296,7 @@ export function WorkflowCanvasInspector({
           {edgePopup && (
             <div
               data-testid="workflow-inspector-popup"
-              className="pointer-events-auto flex max-h-full w-[420px] min-h-0 flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#050505] shadow-[0_28px_120px_rgba(0,0,0,0.55)]"
+              className="pointer-events-auto flex max-h-full w-[420px] min-h-0 flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#050505] shadow-[0_28px_120px_rgba(0,0,0,0.55)]"
             >
               {edgePopup}
             </div>
@@ -3304,7 +3304,7 @@ export function WorkflowCanvasInspector({
 
           <div
             data-testid="workflow-inspector-menu"
-            className="pointer-events-auto flex min-w-[128px] flex-col gap-2 rounded-[24px] border border-white/10 bg-black/88 p-2 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur"
+            className="pointer-events-auto flex min-w-[128px] flex-col gap-2 rounded-3xl border border-white/10 bg-black/88 p-2 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur"
           >
             <button
               type="button"

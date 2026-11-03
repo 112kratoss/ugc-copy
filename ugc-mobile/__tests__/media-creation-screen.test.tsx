@@ -1647,7 +1647,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     const actionColumns = actionGrid.findAll(
       (node) =>
         node.props.accessibilityRole === 'button' &&
-        node.props.style?.minHeight === 60,
+        // Capsules on one row, as the web draws them: half their minimum height, so a wrapped label
+        // grows a rounded rectangle rather than a stadium.
+        node.props.style?.minHeight === 48 &&
+        node.props.style?.borderRadius === 24 &&
+        node.props.style?.flexDirection === 'row',
     );
     expect(actionColumns.map((node) => node.props.accessibilityLabel)).toEqual(['Templates', 'Enhance · 2 credits']);
     const referenceRail = tree!.root.findByProps({ testID: 'image-reference-rail' });
@@ -4082,8 +4086,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     const resolution = tree!.root.find((node) => String(node.type) === 'pressable' && node.props.testID === 'parameter-choice-resolution-1K');
     const output = tree!.root.find((node) => String(node.type) === 'pressable' && node.props.testID === 'parameter-choice-outputFormat-jpg');
-    expect(resolution.props.style).toEqual(expect.objectContaining({ width: '31%', minHeight: 48, borderRadius: 14 }));
-    expect(output.props.style).toEqual(expect.objectContaining({ width: '48.5%', minHeight: 48, borderRadius: 14 }));
+    expect(resolution.props.style).toEqual(expect.objectContaining({ width: '31%', minHeight: 48, borderRadius: 12, borderCurve: 'continuous' }));
+    expect(output.props.style).toEqual(expect.objectContaining({ width: '48.5%', minHeight: 48, borderRadius: 12, borderCurve: 'continuous' }));
     expect(resolution.props.accessibilityState).toEqual({ selected: true });
     expect(output.props.accessibilityState).toEqual({ selected: true });
 
@@ -4238,9 +4242,10 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       tree!.root.findByProps({ accessibilityLabel: 'Close generation parameters' }).props.onPress();
     });
 
+    // The shot mode is a setting of the draft: a radio in the app's segmented control.
     const multiShotSwitch = tree!.root.find((node) => (
       String(node.type) === 'pressable'
-      && node.props.accessibilityRole === 'button'
+      && node.props.accessibilityRole === 'radio'
       && node.props.accessibilityLabel === 'Multi-shot'
     ));
     renderer.act(() => {
@@ -5272,13 +5277,13 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     expect(tree!.root.findByProps({ accessibilityLabel: 'Full enhancement' })).toBeTruthy();
     const lightControl = tree!.root.findByProps({ accessibilityLabel: 'Light enhancement' });
-    expect(lightControl.props.accessibilityState).toEqual(expect.objectContaining({ selected: false }));
+    expect(lightControl.props.accessibilityState).toEqual(expect.objectContaining({ checked: false }));
 
     renderer.act(() => {
       lightControl.props.onPress();
     });
     expect(tree!.root.findByProps({ accessibilityLabel: 'Light enhancement' }).props.accessibilityState)
-      .toEqual(expect.objectContaining({ selected: true }));
+      .toEqual(expect.objectContaining({ checked: true }));
 
     renderer.act(() => {
       tree!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('creator lifts the serum');
@@ -6095,7 +6100,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await settle();
         expect(collectText(tree.root.findByProps({ testID: 'video-shot-totals' }))).toEqual(['5 of 5 shots · 17s of 15s']);
         expect(addShot().props.disabled).toBe(true);
-        expect(addShot().props.accessibilityState).toEqual({ disabled: true });
+        expect(addShot().props.accessibilityState).toMatchObject({ disabled: true });
         expect(blocker(tree)).toContain('Kling 3.0 Cinematic multi-shot runs can be at most 15 seconds in total.');
         expect(generateButton(tree).props.disabled).toBe(true);
       });

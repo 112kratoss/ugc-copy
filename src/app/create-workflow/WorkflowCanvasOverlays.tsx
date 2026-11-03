@@ -56,7 +56,7 @@ function CanvasSelectionHud({
   const edgeCount = selection.edgeIds.length;
 
   return (
-    <div data-testid="canvas-selection-hud" className="absolute left-4 top-24 z-20 max-w-md rounded-[28px] border border-white/10 bg-black/85 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur">
+    <div data-testid="canvas-selection-hud" className="absolute left-4 top-24 z-20 max-w-md rounded-3xl border border-white/10 bg-black/85 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-300">
@@ -122,7 +122,7 @@ function PreviewMediaOverlay({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-6xl rounded-[28px] border border-white/10 bg-[#050505] p-4 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
+        className="w-full max-w-6xl rounded-3xl border border-white/10 bg-[#050505] p-4 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between gap-4">
@@ -256,7 +256,7 @@ function CanvasContextMenu({
       <div
         ref={menuRef}
         data-testid="canvas-context-menu"
-        className="absolute w-max min-w-[260px] max-w-[calc(100%-1rem)] max-h-[calc(100%-1rem)] overflow-y-auto rounded-[24px] border border-white/10 bg-black/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur"
+        className="absolute w-max min-w-[260px] max-w-[calc(100%-1rem)] max-h-[calc(100%-1rem)] overflow-y-auto rounded-3xl border border-white/10 bg-black/95 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.5)] backdrop-blur"
         onClick={(event) => event.stopPropagation()}
         onContextMenu={(event) => {
           event.preventDefault();

@@ -324,8 +324,14 @@ describe('S2 — the front door uses the app\'s own controls', () => {
     const unselected = { accessibilityLabel: 'Switch to sign up' };
 
     for (const tab of [selected, unselected]) {
-      expect(hosts(tree, tab)[0].props.accessibilityRole).toBe('tab');
-      expect(styleOf(tree, tab).minHeight).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
+      const [host] = hosts(tree, tab);
+      // A tab segment on iOS, this suite's platform as the control loads: a button with the selected
+      // state, since iOS gives "tab" no trait (`segmentTabRole`).
+      expect(host.props.accessibilityRole).toBe('button');
+      expect(typeof host.props.accessibilityState.selected).toBe('boolean');
+      // The thumb is drawn inside the track and answers to the track's whole height.
+      const slop = host.props.hitSlop as { top: number; bottom: number };
+      expect(Number(styleOf(tree, tab).minHeight) + slop.top + slop.bottom).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
     }
     expect(styleOf(tree, selected).backgroundColor).toBe(themes.dark.colors.primaryFill);
     expect(styleOf(tree, unselected).backgroundColor).toBe('transparent');

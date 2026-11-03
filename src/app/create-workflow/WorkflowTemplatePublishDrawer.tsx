@@ -121,9 +121,9 @@ function renderConsumerTestSetupWindow(
     <style>
       * { box-sizing: border-box; }
       body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #070707; color: #fafafa; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      main { width: min(100%, 520px); border: 1px solid ${isError ? 'rgba(244,63,94,.3)' : 'rgba(139,92,246,.28)'}; border-radius: 28px; padding: 30px; background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.018)); box-shadow: 0 28px 100px rgba(0,0,0,.55); }
+      main { width: min(100%, 520px); border: 1px solid ${isError ? 'rgba(244,63,94,.3)' : 'rgba(139,92,246,.28)'}; border-radius: 24px; padding: 30px; background: linear-gradient(145deg, rgba(255,255,255,.055), rgba(255,255,255,.018)); box-shadow: 0 28px 100px rgba(0,0,0,.55); }
       .brand { color: #a1a1aa; font-size: 11px; font-weight: 700; letter-spacing: .18em; text-transform: uppercase; }
-      .mark { display: grid; place-items: center; width: 44px; height: 44px; margin: 28px 0 22px; border-radius: 15px; background: ${isError ? 'rgba(244,63,94,.12)' : 'rgba(139,92,246,.14)'}; color: ${isError ? '#fecdd3' : '#ddd6fe'}; font-size: 22px; }
+      .mark { display: grid; place-items: center; width: 44px; height: 44px; margin: 28px 0 22px; border-radius: 12px; background: ${isError ? 'rgba(244,63,94,.12)' : 'rgba(139,92,246,.14)'}; color: ${isError ? '#fecdd3' : '#ddd6fe'}; font-size: 22px; }
       .spinner { width: 20px; height: 20px; border: 2px solid rgba(221,214,254,.28); border-top-color: #ddd6fe; border-radius: 50%; animation: spin .8s linear infinite; }
       h1 { margin: 0; font-size: clamp(24px, 6vw, 34px); line-height: 1.08; letter-spacing: -.035em; }
       p { margin: 14px 0 0; color: #b4b4bd; font-size: 15px; line-height: 1.65; }
@@ -713,7 +713,7 @@ export function WorkflowTemplatePublishDrawer({
       aria-modal="false"
       aria-label="Publish workflow as template"
       data-testid="workflow-template-publish-drawer"
-      className="pointer-events-auto fixed inset-2 z-[80] flex w-auto max-w-none flex-col overflow-hidden rounded-[24px] border border-emerald-500/20 bg-[#050505]/98 shadow-[0_28px_120px_rgba(0,0,0,0.68)] backdrop-blur-xl lg:absolute lg:inset-x-auto lg:inset-y-3 lg:right-3 lg:w-[430px] lg:max-w-[calc(100%-1.5rem)] lg:rounded-[30px]"
+      className="pointer-events-auto fixed inset-2 z-[80] flex w-auto max-w-none flex-col overflow-hidden rounded-3xl border border-emerald-500/20 bg-[#050505]/98 shadow-[0_28px_120px_rgba(0,0,0,0.68)] backdrop-blur-xl lg:absolute lg:inset-x-auto lg:inset-y-3 lg:right-3 lg:w-[430px] lg:max-w-[calc(100%-1.5rem)]"
     >
       <div className="border-b border-white/10 px-5 py-4">
         <div className="flex items-start justify-between gap-3">

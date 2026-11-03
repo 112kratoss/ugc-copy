@@ -433,7 +433,7 @@ function findViewByTestId(root: renderer.ReactTestInstance, testID: string) {
 
 function tabSegment(tree: renderer.ReactTestRenderer, tab: 'Creations' | 'Posts') {
   return tree.root.find((node) => (
-    String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === tab
+    String(node.type) === 'pressable' && isTabSegment(node) && node.props.accessibilityLabel === tab
   ));
 }
 
@@ -449,6 +449,12 @@ function readyRuns(count: number) {
  * changed three things it renders: the page title, the segmented control, and
  * the refresh button (which the signed-out list mounts with no handler).
  */
+/** A tab segment: on iOS, this suite's platform, a button with the selected state (`segmentTabRole`). */
+function isTabSegment(node: { props: Record<string, unknown> }) {
+  const state = node.props.accessibilityState as { selected?: boolean } | undefined;
+  return node.props.accessibilityRole === 'button' && typeof state?.selected === 'boolean';
+}
+
 describe('ProfileDashboard signed out', () => {
   beforeEach(() => {
     routerState.push.mockClear();
@@ -2609,7 +2615,7 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(chipGroups()).toEqual(['Filter posts']);
 
       const savedTab = tree.root.find((node) => (
-        String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === 'Saved'
+        String(node.type) === 'pressable' && isTabSegment(node) && node.props.accessibilityLabel === 'Saved'
       ));
       renderer.act(() => { savedTab.props.onPress(); });
       expect(chipGroups()).toEqual([]);
@@ -2629,7 +2635,7 @@ describe('ProfileDashboard media tiles routing', () => {
       expect(shows('No archived creations')).toBe(false);
 
       const savedTab = tree.root.find((node) => (
-        String(node.type) === 'pressable' && node.props.accessibilityRole === 'tab' && node.props.accessibilityLabel === 'Saved'
+        String(node.type) === 'pressable' && isTabSegment(node) && node.props.accessibilityLabel === 'Saved'
       ));
       renderer.act(() => { savedTab.props.onPress(); });
       expect(shows('No saved media yet')).toBe(true);

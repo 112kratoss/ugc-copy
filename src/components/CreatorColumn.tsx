@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, Ref, RefObject } from 'react';
+import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, RefObject } from 'react';
 import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Play, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
@@ -17,7 +17,7 @@ import {
   type StudioMediaPreviewType,
 } from '@/components/CreatorStudio';
 import { CreditTopUpHost } from '@/components/CreditTopUpSheet';
-import { getAccentClasses, IconButton, type UiAccent } from '@/components/DesignSystem';
+import { choiceKeyTarget, getAccentClasses, IconButton, type UiAccent } from '@/components/DesignSystem';
 import type { CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
 import { openCreditTopUp, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
@@ -401,14 +401,10 @@ const CHOICE_COLUMNS = { 1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4
  * `.ui-surface` is a page panel's, 94% opaque, and with no blur behind it the
  * column's words showed through the settings.
  */
-const FLOATING_SURFACE_CLASS =
-  'rounded-ui-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-ui-panel';
-
-/** How a choice's options sit: a grid of equal cells, or a pill sized to their words. */
-type CreatorChoiceLayout =
-  | { appearance?: 'grid'; columns: keyof typeof CHOICE_COLUMNS }
-  /** Side by side in a pill: a choice in a card's heading (the video creator's frames or references). */
-  | { appearance: 'pill'; columns?: undefined };
+const FLOATING_SURFACE_FILL = 'border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-ui-panel';
+const FLOATING_SURFACE_CLASS = `rounded-ui-2xl ${FLOATING_SURFACE_FILL}`;
+/** The bar holds its capsules 8px in, so its corners are concentric with theirs: 24 + 8. */
+const FLOATING_BAR_CLASS = `rounded-4xl ${FLOATING_SURFACE_FILL}`;
 
 /**
  * The box an aspect-ratio option draws beside its words, as the app's parameter
@@ -432,35 +428,33 @@ export function aspectRatioMark(option: string): ReactNode {
 
 /**
  * One setting with a single value (aspect ratio, resolution, quality): a radio
- * group, so a screen reader hears which one is chosen, and the arrow keys move
- * the choice as they do in any radio group. The parent decides whether a pick
- * takes effect: one that asks first leaves `value` where it was until it is answered.
+ * group of equal cells, so a screen reader hears which one is chosen, and the
+ * arrow keys move the choice as they do in any radio group. The parent decides
+ * whether a pick takes effect: one that asks first leaves `value` where it was
+ * until it is answered. A choice of a few words with no price, a mode such as
+ * the video creator's shot mode, is the shared `SegmentedControl` instead.
  */
 export function CreatorSettingChoices<T extends string>({
   label,
-  labelHidden = false,
   hint,
   options,
   optionLabel,
   value,
   onChange,
-  appearance = 'grid',
   columns,
   accent = 'image',
   capitalize = false,
   optionPrice,
   optionMark,
-  ref,
 }: {
   label: string;
-  /** For a group whose options say what it is, as the shot mode's do. */
-  labelHidden?: boolean;
   hint?: string;
   options: readonly T[];
   /** What an option says, where its value is not words ("std" → "Standard 720p"). */
   optionLabel?: (option: T) => string;
   value: T;
   onChange: (value: T) => void;
+  columns: keyof typeof CHOICE_COLUMNS;
   accent?: UiAccent;
   capitalize?: boolean;
   /**
@@ -472,51 +466,30 @@ export function CreatorSettingChoices<T extends string>({
   optionPrice?: (option: T) => OptionPrice | null;
   /** A small picture before an option's words (the ratios' boxes: `aspectRatioMark`), in the accent once chosen. */
   optionMark?: (option: T) => ReactNode;
-  /** The radio group, for a parent that gives the focus back to the chosen option. */
-  ref?: Ref<HTMLDivElement>;
-} & CreatorChoiceLayout) {
+}) {
   const labelId = useId();
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = options.indexOf(value);
   const { selected: selectedClasses, mark: selectedMarkClass } = getAccentClasses(accent);
-  const pill = appearance === 'pill';
 
-  const choose = (index: number) => {
-    const next = (index + options.length) % options.length;
+  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const next = choiceKeyTarget(event, index, options.length);
+    if (next === null) return;
+    event.preventDefault();
     onChange(options[next]);
     optionRefs.current[next]?.focus();
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const moves: Record<string, number> = {
-      ArrowRight: index + 1,
-      ArrowDown: index + 1,
-      ArrowLeft: index - 1,
-      ArrowUp: index - 1,
-      Home: 0,
-      End: options.length - 1,
-    };
-    if (!(event.key in moves)) return;
-    event.preventDefault();
-    choose(moves[event.key]);
-  };
 
   return (
-    <div className={clsx(pill && 'shrink-0')}>
-      {labelHidden ? (
-        <p id={labelId} className="sr-only">{label}</p>
-      ) : (
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
-          {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
-        </div>
-      )}
+    <div>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
+        {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
+      </div>
       <div
-        ref={ref}
         role="radiogroup"
         aria-labelledby={labelId}
-        className={pill
-          ? 'inline-flex rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-1'
-          : clsx('grid gap-1.5', CHOICE_COLUMNS[columns ?? 1])}
+        className={clsx('grid gap-1.5', CHOICE_COLUMNS[columns])}
       >
         {options.map((option, index) => {
           const checked = index === selectedIndex;
@@ -540,18 +513,15 @@ export function CreatorSettingChoices<T extends string>({
               onClick={() => onChange(option)}
               onKeyDown={(event) => onKeyDown(event, index)}
               className={clsx(
-                'ui-focus-ring min-h-10 border text-xs font-bold transition-colors duration-150',
-                pill ? 'inline-flex items-center rounded-full px-3.5' : 'rounded-ui-md px-2',
+                'ui-focus-ring min-h-10 rounded-ui-md border px-2 text-xs font-bold transition-colors duration-150',
                 optionPrice && 'flex min-h-12 flex-col items-center justify-center gap-0.5 py-1',
-                // The room a mark has is measured on the option itself (a grid cell, never a pill),
-                // and its line is centred, so a long one shares the padding on both sides.
-                mark && !pill && '@container flex items-center justify-center',
+                // The room a mark has is measured on the option itself, and its line is
+                // centred, so a long one shares the padding on both sides.
+                mark && '@container flex items-center justify-center',
                 capitalize && 'capitalize',
                 checked
                   ? selectedClasses
-                  : pill
-                    ? 'border-transparent text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-secondary)]'
-                    : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
+                  : 'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-secondary)]'
               )}
             >
               {mark ? (
@@ -755,7 +725,7 @@ export function CreatorColumnBar({
     >
       {/* One surface for the line and the bar, so nothing scrolling under the
           bar shows between them, and opaque, so nothing needs blurring behind it. */}
-      <div className={clsx(FLOATING_SURFACE_CLASS, 'overflow-hidden', holdsFootUnderColumn && 'max-[768px]:pb-[env(safe-area-inset-bottom)]')}>
+      <div className={clsx(FLOATING_BAR_CLASS, 'overflow-hidden', holdsFootUnderColumn && 'max-[768px]:pb-[env(safe-area-inset-bottom)]')}>
         {status ? (
           <div data-creator-bar-status className="border-b border-[var(--ui-border-subtle)] px-4 py-3 text-sm">
             {status}
@@ -967,7 +937,7 @@ export function CreatorVisitorNote({ welcomeCredits, cost }: { welcomeCredits: n
       <span>
         {welcomeCredits !== null
           ? <>New accounts get <strong className={strong}>{welcomeCredits} free credits</strong></>
-          : 'Sign in with Google to generate'}
+          : 'Sign in with Google or Apple to generate'}
       </span>
       {cost !== null ? (
         <span>
@@ -1007,7 +977,7 @@ const NOTE_STRONG_CLASS = 'font-bold text-[var(--ui-text-secondary)]';
 
 /** A link in the line under the bar: the words' size, its press area the 44px of a control. */
 export const CREATOR_NOTE_LINK_CLASS =
-  "ui-focus-ring relative rounded-sm font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 after:absolute after:inset-x-0 after:-inset-y-3 after:content-[''] hover:text-[var(--ui-text-primary)]";
+  "ui-focus-ring relative rounded-lg font-semibold text-[var(--ui-text-secondary)] underline underline-offset-4 after:absolute after:inset-x-0 after:-inset-y-3 after:content-[''] hover:text-[var(--ui-text-primary)]";
 
 /** Under a signed-in creator's bar: the balance, and what this run leaves of it ("Balance 22 · leaves 3"). */
 export function CreatorBalanceNote({ balance, cost }: { balance: number; cost: number | null }) {
@@ -1899,7 +1869,7 @@ export function CreatorCanvas({
         <h2
           ref={headingRef}
           tabIndex={-1}
-          className="ui-focus-ring rounded-sm text-base font-bold leading-6 text-[var(--ui-text-primary)] outline-none sm:text-lg"
+          className="ui-focus-ring rounded-lg text-base font-bold leading-6 text-[var(--ui-text-primary)] outline-none sm:text-lg"
         >
           {title}
         </h2>

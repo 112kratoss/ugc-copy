@@ -347,7 +347,7 @@ export function WorkflowCanvasShareActions({
               role="dialog"
               aria-modal="true"
               data-testid="workflow-share-dialog"
-              className="w-full max-w-xl rounded-[30px] border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
+              className="w-full max-w-xl rounded-3xl border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4">
@@ -369,7 +369,7 @@ export function WorkflowCanvasShareActions({
                 </button>
               </div>
 
-              <div className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.03] p-4">
+              <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
                 <div className="text-sm font-medium text-white">{shareSummary?.title || canvasTitle.trim() || 'Untitled workflow'}</div>
                 <div className="mt-3 flex flex-wrap gap-2 text-xs uppercase tracking-[0.16em] text-zinc-500">
                   <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
@@ -434,7 +434,7 @@ export function WorkflowCanvasShareActions({
               role="dialog"
               aria-modal="true"
               data-testid="workflow-import-dialog"
-              className="w-full max-w-xl rounded-[30px] border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
+              className="w-full max-w-xl rounded-3xl border border-white/10 bg-[#050505] p-6 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4">
@@ -531,7 +531,7 @@ export function WorkflowCanvasShareActions({
               ) : null}
 
               {importPreview ? (
-                <div className="mt-6 rounded-[24px] border border-white/10 bg-white/[0.03] p-5">
+                <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <div className="text-lg font-semibold text-white">{importPreview.title}</div>

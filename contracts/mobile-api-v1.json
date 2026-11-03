@@ -127,6 +127,8 @@
       "path": "/api/account",
       "auth": "required",
       "guestToken": "A guest's own token deletes the guest identity and what it made (D5) with the same request and needs no reauthentication: no recent sign-in and no appleAuthorizationCode. The answers are the ones below; a guest since linked to an account gets errors.guestLinked.",
+      "appleAuthorizationClient": "Website only, never the app: the website's Continue with Apple adds appleAuthorizationClient 'web', and its code is redeemed as the website's Services ID. A request with no client (the app's) or with 'native' is redeemed as the bundle id, as before; any other client name gets 400 before Apple is asked.",
+      "appleCodeSpent": "An error given after Apple took the request's code (a refusal past the token exchange, or a deletion that did not start after Apple's step) adds appleCodeSpent: true. The website reads it to ask Apple for a new code rather than send the spent one again; the app asks Apple at every attempt and ignores it.",
       "cacheControl": "private, no-store",
       "request": {
         "confirmation": "DELETE",

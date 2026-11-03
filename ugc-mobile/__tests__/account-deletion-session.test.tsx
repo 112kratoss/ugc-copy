@@ -162,6 +162,7 @@ import {
   isAccountDeletionUnderway,
   isAccountReauthenticationRequired,
   isAmbiguousAccountDeletionAnswer,
+  isAppleReauthenticationRequired,
   useAuth,
 } from '../lib/auth';
 
@@ -375,6 +376,13 @@ describe('what a deletion answer means for the account', () => {
     expect(isAccountReauthenticationRequired(legacyApple)).toBe(true);
     expect(isAccountReauthenticationRequired(mismatch)).toBe(false);
     expect(isAccountReauthenticationRequired(Object.assign(new Error('Sign in again.'), { code: 'RECENT_AUTH_REQUIRED' }))).toBe(false);
+
+    // Only a refusal that asks for Apple's code says the account has Apple.
+    expect(isAppleReauthenticationRequired(legacyApple)).toBe(true);
+    expect(isAppleReauthenticationRequired(recentSignInRequired)).toBe(false);
+    expect(isAppleReauthenticationRequired(appleFailed)).toBe(false);
+    expect(isAppleReauthenticationRequired(mismatch)).toBe(false);
+    expect(isAppleReauthenticationRequired(Object.assign(new Error('Continue with Apple.'), { code: 'APPLE_REAUTH_REQUIRED' }))).toBe(false);
   });
 });
 

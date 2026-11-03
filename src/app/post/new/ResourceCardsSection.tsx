@@ -104,7 +104,7 @@ function ResourceCardRow({
   ].filter(Boolean);
 
   return (
-    <div className="flex items-center gap-3 rounded-[20px] border border-white/8 bg-black/30 p-3">
+    <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-black/30 p-3">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-300">
         <ResourceTypeIcon type={card.type} className="h-4.5 w-4.5" />
       </span>
@@ -170,7 +170,7 @@ function ResourceCardRow({
  */
 function CreationReferencesRow({ count }: { count: number }) {
   return (
-    <div className="flex items-center gap-3 rounded-[20px] border border-white/8 bg-black/30 p-3">
+    <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-black/30 p-3">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-zinc-300">
         <ImageIcon className="h-4.5 w-4.5" />
       </span>
@@ -222,7 +222,7 @@ export default function ResourceCardsSection({
   return (
     <div className="space-y-5">
       {buyerCount > 0 ? (
-        <div className="flex items-start gap-3 rounded-[20px] border border-white/8 bg-black/25 p-4 text-xs leading-5 text-zinc-300">
+        <div className="flex items-start gap-3 rounded-2xl border border-white/8 bg-black/25 p-4 text-xs leading-5 text-zinc-300">
           <Users className="mt-0.5 h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
           <p>{describeRecipeBuyers(buyerCount)}</p>
         </div>
@@ -265,7 +265,7 @@ export default function ResourceCardsSection({
           <button
             type="button"
             onClick={onAddCard}
-            className="mt-3 flex w-full flex-col items-center justify-center gap-2 rounded-[22px] border border-dashed border-white/12 bg-white/[0.02] px-4 py-8 text-zinc-400 transition hover:border-emerald-300/40 hover:text-zinc-200"
+            className="mt-3 flex w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/12 bg-white/[0.02] px-4 py-8 text-zinc-400 transition hover:border-emerald-300/40 hover:text-zinc-200"
           >
             <Package className="h-7 w-7 text-zinc-500" />
             <span className="text-sm font-semibold">Add your first item</span>
@@ -301,7 +301,7 @@ export default function ResourceCardsSection({
           aria-invalid={Boolean(previewError)}
           aria-describedby={previewError ? `${previewHelpId} ${previewErrorId}` : previewHelpId}
           placeholder="Tell people what they will receive"
-          className="w-full rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
+          className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-emerald-400/35 focus:bg-white/[0.05]"
         />
         <p id={previewHelpId} className="mt-2 text-xs leading-5 text-zinc-500">
           Everyone sees this before unlocking.

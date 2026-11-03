@@ -8,7 +8,7 @@ import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ContentPolicyGate } from '@/components/content-policy-gate';
-import { AppText, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
+import { AppText, IconButton, PrimaryButton, ReadinessRow, SecondaryButton, StatusBlock, SurfaceSection, ToggleRow } from '@/components/ui';
 import { ComposerMediaLightbox, getComposerMediaFileName, getComposerMediaLabel } from '@/components/composer-media-lightbox';
 import { CompactFieldLabel, ComposerFieldShell, ComposerInput, FieldErrorText } from '@/components/composer-fields';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -186,6 +186,7 @@ const COMPOSER_TOP_PADDING = 8;
 const COMPOSER_SECTION_STYLE = {
   padding: 14,
   borderRadius: appTheme.radii.lg,
+  borderCurve: 'continuous',
   gap: 10,
 } as const;
 
@@ -256,35 +257,16 @@ function PostComposerHeader({
         {isResources ? <HeaderIconButton label="Close post composer" icon="close" onPress={onClose} /> : null}
       </View>
       <View style={{ flexDirection: 'row', gap: 6, paddingBottom: 8 }}>
-        <View style={{ flex: 1, height: 3, borderRadius: 2, backgroundColor: theme.colors.primary }} />
-        <View style={{ flex: 1, height: 3, borderRadius: 2, backgroundColor: isResources ? theme.colors.primary : theme.colors.border }} />
+        <View style={{ flex: 1, height: 3, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.primary }} />
+        <View style={{ flex: 1, height: 3, borderRadius: appTheme.radii.pill, backgroundColor: isResources ? theme.colors.primary : theme.colors.border }} />
       </View>
     </View>
   );
 }
 
+/** Plain: the composer's header bar is the surface its Back and Close sit on. */
 function HeaderIconButton({ label, icon, onPress }: { label: string; icon: 'back' | 'close'; onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      hitSlop={4}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
-      })}
-    >
-      {icon === 'back'
-        ? <BackGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-        : <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />}
-    </Pressable>
-  );
+  return <IconButton icon={icon === 'back' ? BackGlyph : CloseGlyph} label={label} variant="plain" onPress={onPress} />;
 }
 
 function PostDetailsPage({
@@ -415,7 +397,8 @@ function PostDetailsPage({
             flexDirection: 'row',
             alignItems: 'center',
             gap: 12,
-            borderRadius: 16,
+            borderRadius: appTheme.radii.md,
+            borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: theme.colors.borderSubtle,
             backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
@@ -491,7 +474,8 @@ function PostFormatSelector({
               style={({ pressed }) => ({
                 flex: 1,
                 minHeight: 68,
-                borderRadius: 17,
+                borderRadius: appTheme.radii.md,
+                borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: selected ? `${theme.colors.primary}aa` : theme.colors.borderSubtle,
                 backgroundColor: selected ? `${theme.colors.primary}18` : pressed ? theme.colors.surfaceStrong : theme.colors.surface,
@@ -642,29 +626,13 @@ function PostResourcesPage({
                 <AppText variant="cardTitle">What people receive</AppText>
                 <AppText variant="caption" color="muted">{itemsLabel}</AppText>
               </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Add item"
-                onPress={onAddResource}
-                style={({ pressed }) => ({
-                  minHeight: 48,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 7,
-                  borderRadius: 24,
-                  paddingHorizontal: 14,
-                  backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
-                })}
-              >
-                <Plus size={17} color={theme.colors.onPrimary} />
-                <AppText variant="label" color="onPrimary">Add</AppText>
-              </Pressable>
+              <PrimaryButton label="Add" accessibilityLabel="Add item" icon={Plus} onPress={onAddResource} />
             </View>
 
             {/* A recipe people have is edited like any other (recipe audit S2): each save is a new
                 version, and the people who have it keep theirs. */}
             {buyersNote ? (
-              <View style={{ borderRadius: 14, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 12, paddingVertical: 10 }}>
+              <View style={{ borderRadius: appTheme.radii.sm, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 12, paddingVertical: 10 }}>
                 <AppText variant="caption" color="textSecondary">{buyersNote}</AppText>
               </View>
             ) : null}
@@ -687,7 +655,8 @@ function PostResourcesPage({
                 onPress={onAddResource}
                 style={({ pressed }) => ({
                   minHeight: 120,
-                  borderRadius: 18,
+                  borderRadius: appTheme.radii.md,
+                  borderCurve: 'continuous',
                   borderWidth: 1,
                   borderStyle: 'dashed',
                   borderColor: pressed ? `${theme.colors.primary}aa` : theme.colors.border,
@@ -792,7 +761,7 @@ function RecipeAccessCards({
               flexDirection: 'row',
               alignItems: 'center',
               gap: 12,
-              borderRadius: 18,
+              borderRadius: appTheme.radii.md,
               borderCurve: 'continuous',
               borderWidth: 1,
               borderColor: checked ? hexWithAlpha(color, 0.6) : theme.colors.border,
@@ -803,7 +772,7 @@ function RecipeAccessCards({
               opacity: pressed ? appTheme.opacity.pressed : 1,
             })}
           >
-            <View style={{ width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(color, 0.13) }}>
+            <View style={{ width: 36, height: 36, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(color, 0.13) }}>
               {choice.value === 'free'
                 ? <Sparkles size={appTheme.icon.sm} color={color} />
                 : choice.value === 'paid'
@@ -842,14 +811,15 @@ function CreationReferencesRow({ fileCount }: { fileCount: number }) {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        borderRadius: 18,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: theme.colors.borderSubtle,
         backgroundColor: theme.colors.surface,
         padding: 12,
       }}
     >
-      <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+      <View style={{ width: 44, height: 44, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
         <ResourceTypeIcon type="reference_media" color={theme.colors.textSecondary} />
       </View>
       <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
@@ -894,7 +864,8 @@ function PostPublishSummary({
   return (
     <View
       style={{
-        borderRadius: 18,
+        borderRadius: appTheme.radii.lg,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: ready ? theme.semantic.success.border : theme.semantic.warning.border,
         backgroundColor: theme.colors.surface,
@@ -903,7 +874,7 @@ function PostPublishSummary({
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-        <View style={{ width: 58, height: 58, borderRadius: 15, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+        <View style={{ width: 58, height: 58, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
           {cover && draft.mode !== 'text' ? (
             <StableMediaImage
               url={cover}
@@ -957,7 +928,7 @@ function PostPublishSummary({
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 7 }}>
         {[visibilityLabel, resourceLabel].map((label) => (
-          <View key={label} style={{ minHeight: 28, justifyContent: 'center', borderRadius: 14, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 10 }}>
+          <View key={label} style={{ minHeight: 28, justifyContent: 'center', borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, paddingHorizontal: 10 }}>
             <AppText variant="caption" color="textSecondary">{label}</AppText>
           </View>
         ))}
@@ -997,14 +968,15 @@ function ResourceCardRow({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        borderRadius: 18,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: isPostComposerResourceCardReady(card) ? theme.colors.borderSubtle : theme.semantic.warning.border,
         backgroundColor: theme.colors.surface,
         padding: 12,
       }}
     >
-      <View style={{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+      <View style={{ width: 44, height: 44, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
         <ResourceTypeIcon type={card.type} color={theme.colors.textSecondary} />
       </View>
       <Pressable
@@ -1022,7 +994,7 @@ function ResourceCardRow({
         accessibilityLabel={`Remove ${card.title || typeLabel}`}
         hitSlop={6}
         onPress={onRemove}
-        style={({ pressed }) => ({ width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        style={({ pressed }) => ({ width: 44, height: 44, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
       >
         <Trash2 size={18} color={theme.colors.danger} />
       </Pressable>
@@ -1107,7 +1079,7 @@ function ComposerUndoBar({
           paddingHorizontal: appTheme.spacing.gap,
           alignItems: 'center',
           justifyContent: 'center',
-          borderRadius: appTheme.radii.sm,
+          borderRadius: appTheme.radii.pill,
           backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
         })}
       >
@@ -1168,67 +1140,28 @@ function PostComposerFooter({
       }}
     >
       {step === 'details' ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Next"
-          onPress={onNext}
-          style={({ pressed }) => ({
-            minHeight: 54,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            borderRadius: 17,
-            backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
-          })}
-        >
-          <AppText variant="button" color="onPrimary">Next</AppText>
-          <ChevronRight size={19} color={theme.colors.onPrimary} />
-        </Pressable>
+        <PrimaryButton label="Next" size="roomy" trailingIcon={ChevronRight} onPress={onNext} />
       ) : (
         <View style={{ flexDirection: 'row', gap: 10 }}>
-          <Pressable
-            accessibilityRole="button"
+          <SecondaryButton
+            label={visibilityLabel}
             accessibilityLabel={`Visibility: ${visibilityLabel}`}
+            size="roomy"
+            icon={Globe2}
+            trailingIcon={ChevronDown}
             onPress={onVisibility}
-            style={({ pressed }) => ({
-              minWidth: 112,
-              minHeight: 54,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 7,
-              borderRadius: 17,
-              borderWidth: 1,
-              borderColor: theme.colors.border,
-              backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
-            })}
-          >
-            <Globe2 size={17} color={theme.colors.textSecondary} />
-            <AppText variant="label">{visibilityLabel}</AppText>
-            <ChevronDown size={15} color={theme.colors.muted} />
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={submitLabel}
-            accessibilityState={{ disabled: disabled || loading, busy: loading }}
-            disabled={disabled || loading}
+            // Placed, so it fills the row's height when Publish's label wraps.
+            style={{ flexShrink: 0 }}
+          />
+          <PrimaryButton
+            label={submitLabel}
+            loadingLabel={submitLabel}
+            size="roomy"
+            disabled={disabled}
+            loading={loading}
             onPress={onPublish}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: 54,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              borderRadius: 17,
-              backgroundColor: theme.colors.primaryFill,
-              opacity: disabled || loading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            {loading ? <ActivityIndicator size="small" color={theme.colors.onPrimary} /> : null}
-            <AppText variant="button" color="onPrimary">{submitLabel}</AppText>
-          </Pressable>
+            style={{ flex: 1 }}
+          />
         </View>
       )}
     </View>
@@ -1264,8 +1197,9 @@ function VisibilitySheet({
           accessibilityViewIsModal
           style={[
             {
-              borderTopLeftRadius: 28,
-              borderTopRightRadius: 28,
+              borderTopLeftRadius: appTheme.radii.xl,
+              borderTopRightRadius: appTheme.radii.xl,
+              borderCurve: 'continuous',
               borderWidth: 1,
               borderBottomWidth: 0,
               borderColor: theme.colors.border,
@@ -1293,15 +1227,16 @@ function VisibilitySheet({
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 12,
-                borderRadius: 16,
+                borderRadius: appTheme.radii.md,
+                borderCurve: 'continuous',
                 borderWidth: 1,
                 borderColor: value === option.id ? `${theme.colors.primary}99` : theme.colors.borderSubtle,
                 backgroundColor: value === option.id ? theme.colors.selected : pressed ? theme.colors.surfaceStrong : theme.colors.surface,
                 padding: 12,
               })}
             >
-              <View style={{ width: 24, height: 24, borderRadius: 12, borderWidth: 1, borderColor: value === option.id ? theme.colors.primary : theme.colors.borderStrong, alignItems: 'center', justifyContent: 'center' }}>
-                {value === option.id ? <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: theme.colors.primary }} /> : null}
+              <View style={{ width: 24, height: 24, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: value === option.id ? theme.colors.primary : theme.colors.borderStrong, alignItems: 'center', justifyContent: 'center' }}>
+                {value === option.id ? <View style={{ width: 12, height: 12, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.primary }} /> : null}
               </View>
               <View style={{ flex: 1, gap: 2 }}>
                 <AppText variant="label">{option.label}</AppText>
@@ -1468,8 +1403,9 @@ function ResourceComposerSheet({
                 // The one thing between the header and the Save row that can give way is the scroll
                 // view, and the panel has to be allowed to pass the keyboard's squeeze on to it.
                 flexShrink: 1,
-                borderTopLeftRadius: 28,
-                borderTopRightRadius: 28,
+                borderTopLeftRadius: appTheme.radii.xl,
+                borderTopRightRadius: appTheme.radii.xl,
+                borderCurve: 'continuous',
                 borderWidth: 1,
                 borderBottomWidth: 0,
                 borderColor: theme.colors.border,
@@ -1569,14 +1505,15 @@ function ResourceComposerContent({
           flexDirection: 'row',
           alignItems: 'center',
           gap: 12,
-          borderRadius: 17,
+          borderRadius: appTheme.radii.md,
+          borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: theme.colors.borderSubtle,
           backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
           padding: 12,
         })}
       >
-        <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
+        <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
           <ResourceTypeIcon type={resourceOption.id} color={theme.colors.textSecondary} />
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
@@ -1628,13 +1565,14 @@ function ResourceComposerContent({
               flexDirection: 'row',
               alignItems: 'center',
               gap: 12,
-              borderRadius: 17,
+              borderRadius: appTheme.radii.md,
+              borderCurve: 'continuous',
               paddingHorizontal: 12,
               paddingVertical: 8,
               backgroundColor: pressed ? theme.colors.surfaceStrong : 'transparent',
             })}
           >
-            <View style={{ width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceInset }}>
+            <View style={{ width: 42, height: 42, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceInset }}>
               <Ellipsis size={appTheme.icon.default} color={theme.colors.textSecondary} />
             </View>
             <AppText variant="label" color="textSecondary" style={{ flex: 1 }}>More types</AppText>
@@ -1731,7 +1669,7 @@ function ResourceComposerContent({
               <ComposerFieldShell>
                 <CompactFieldLabel label={card.type === 'reference_media' ? 'Reference files' : card.type === 'workflow' ? 'Workflow files' : 'Files'} optional={card.type === 'workflow' || card.type === 'other'} required={card.type === 'reference_media' || card.type === 'source_assets'} />
                 {card.attachments.map((attachment) => (
-                  <View key={attachment.id} style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 14, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 11 }}>
+                  <View key={attachment.id} style={{ minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 11 }}>
                     <FileText size={17} color={theme.colors.textSecondary} />
                     <AppText variant="caption" numberOfLines={1} style={{ flex: 1 }}>{attachment.label}</AppText>
                     <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${attachment.label}`} onPress={() => onRemoveAttachment(attachment.id)} style={({ pressed }) => ({ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
@@ -1790,12 +1728,12 @@ function ResourceComposerContent({
                         <AppText variant="caption" color="danger">Cancel</AppText>
                       </Pressable>
                     </View>
-                    <View style={{ height: 5, overflow: 'hidden', borderRadius: 3, backgroundColor: theme.colors.borderSubtle }}>
+                    <View style={{ height: 5, overflow: 'hidden', borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.borderSubtle }}>
                       <View
                         style={{
                           width: `${uploadProgress?.percent ?? 0}%`,
                           height: '100%',
-                          borderRadius: 3,
+                          borderRadius: appTheme.radii.pill,
                           backgroundColor: theme.colors.primary,
                         }}
                       />
@@ -1809,7 +1747,7 @@ function ResourceComposerContent({
                 ) : uploadError ? (
                   <View
                     accessibilityLiveRegion="polite"
-                    style={{ gap: 8, borderRadius: 14, backgroundColor: `${theme.colors.danger}12`, padding: 11 }}
+                    style={{ gap: 8, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', backgroundColor: `${theme.colors.danger}12`, padding: 11 }}
                   >
                     <AppText variant="label" color="danger">Could not add file</AppText>
                     <AppText variant="caption" color="muted">{uploadError}</AppText>
@@ -1838,26 +1776,15 @@ function ResourceComposerContent({
             {saveHint && !isUploading ? (
               <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>{saveHint}</AppText>
             ) : null}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Save item"
-              accessibilityState={{ disabled: !isReady || isUploading }}
+            <PrimaryButton
+              label="Save item"
+              size="roomy"
               disabled={!isReady || isUploading}
               onPress={() => {
                 Keyboard.dismiss();
                 onSave();
               }}
-              style={({ pressed }) => ({
-                minHeight: 54,
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: 17,
-                backgroundColor: theme.colors.primaryFill,
-                opacity: !isReady || isUploading ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              <AppText variant="button" color="onPrimary">Save item</AppText>
-            </Pressable>
+            />
           </View>
         </>
       ) : null}
@@ -1893,7 +1820,7 @@ function ResourceFilePickButton({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        borderRadius: 15,
+        borderRadius: appTheme.radii.pill,
         borderWidth: 1,
         borderStyle: 'dashed',
         borderColor: theme.colors.border,
@@ -1943,7 +1870,8 @@ function ResourceScopePicker({
           flexDirection: 'row',
           alignItems: 'center',
           gap: 9,
-          borderRadius: 14,
+          borderRadius: appTheme.radii.sm,
+          borderCurve: 'continuous',
           borderWidth: 1,
           borderColor: card.appliesToAll ? `${theme.colors.image}99` : theme.colors.border,
           backgroundColor: card.appliesToAll ? `${theme.colors.image}16` : pressed ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
@@ -1970,14 +1898,14 @@ function ResourceScopePicker({
                 opacity: pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <View style={{ height: 82, borderRadius: 13, overflow: 'hidden', borderWidth: selected ? 2 : 1, borderColor: selected ? theme.colors.image : theme.colors.border, backgroundColor: theme.colors.surfaceInset }}>
+              <View style={{ height: 82, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', overflow: 'hidden', borderWidth: selected ? 2 : 1, borderColor: selected ? theme.colors.image : theme.colors.border, backgroundColor: theme.colors.surfaceInset }}>
                 {item.mediaKind === 'image' ? (
                   <StableMediaImage url={item.previewUrl ?? item.uri} cacheKey={`scope:${mediaKey}`} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
                 ) : (
                   <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Play size={24} color={theme.colors.textSecondary} /></View>
                 )}
                 {selected ? (
-                  <View style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.image }}>
+                  <View style={{ position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.image }}>
                     <Check size={13} color={theme.colors.textInverse} />
                   </View>
                 ) : null}
@@ -3870,7 +3798,9 @@ function NewPostComposer() {
         visibility={draft.visibility}
         isEditMode={isEditMode}
         loading={publishMutation.isPending || isSavingIdentity}
-        disabled={!canSubmit || isSavingIdentity || isPickingMedia || pendingRetryMedia.length > 0 || (composerStep === 'resources' && !stepTwoValidation.valid)}
+        // The name and handle save is `loading`, which already holds the button: as `disabled`
+        // too it drew grey, then coral once the post began.
+        disabled={!canSubmit || isPickingMedia || pendingRetryMedia.length > 0 || (composerStep === 'resources' && !stepTwoValidation.valid)}
         onNext={goToResources}
         onVisibility={() => setIsVisibilityOpen(true)}
         onPublish={() => void submitPost()}
@@ -3954,7 +3884,7 @@ function MadeWithSection({
         <View
           style={{
             minHeight: 48,
-            borderRadius: 16,
+            borderRadius: appTheme.radii.md,
             borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: hexWithAlpha(theme.colors.image, 0.20),
@@ -4139,9 +4069,7 @@ function MadeWithSection({
           );
         })}
         {!disabled && rows.length < MAX_MADE_WITH_ROWS ? (
-          <View style={{ alignSelf: 'flex-start' }}>
-            <MiniAction label="Add another tool" onPress={onAdd} />
-          </View>
+          <SecondaryButton label="Add another tool" onPress={onAdd} style={{ alignSelf: 'flex-start' }} />
         ) : null}
       </View>
     </SurfaceSection>
@@ -4325,7 +4253,7 @@ function MobileCreatablePicker({
           maxLength={MADE_WITH_LABEL_MAX_LENGTH}
           style={{
             minHeight: appTheme.touch.compact,
-            borderRadius: 14,
+            borderRadius: appTheme.radii.sm,
             borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: isOpen ? `${theme.colors.image}88` : theme.colors.border,
@@ -4369,7 +4297,7 @@ function MobileCreatablePicker({
         <View
           style={{
             maxHeight: 224,
-            borderRadius: 16,
+            borderRadius: appTheme.radii.md,
             borderCurve: 'continuous',
             borderWidth: 1,
             borderColor: theme.colors.border,
@@ -4487,7 +4415,7 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
   return (
     <View
       style={{
-        borderRadius: 18,
+        borderRadius: appTheme.radii.lg,
         borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: hexWithAlpha(theme.colors.text, 0.10),
@@ -4515,7 +4443,7 @@ function GeneratedProofCard({ item }: { item: GenerationListItem }) {
       <View
         style={{
           minHeight: 220,
-          borderRadius: 16,
+          borderRadius: appTheme.radii.md,
           borderCurve: 'continuous',
           overflow: 'hidden',
           borderWidth: 1,
@@ -4824,7 +4752,8 @@ function UploadContent({
           onPress={onPickMedia}
           style={({ pressed }) => ({
             minHeight: 124,
-            borderRadius: 16,
+            borderRadius: appTheme.radii.md,
+            borderCurve: 'continuous',
             borderWidth: 1,
             borderStyle: 'dashed',
             borderColor: pressed ? `${theme.colors.image}aa` : theme.colors.border,
@@ -4869,7 +4798,8 @@ function AddMediaGalleryCard({
       onPress={onPress}
       style={({ pressed }) => ({
         width: MEDIA_CARD_WIDTH,
-        borderRadius: 16,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderStyle: 'dashed',
         borderColor: pressed ? `${theme.colors.image}cc` : theme.colors.border,
@@ -4891,7 +4821,7 @@ function AddMediaGalleryCard({
           style={{
             width: 42,
             height: 42,
-            borderRadius: 21,
+            borderRadius: appTheme.radii.pill,
             borderWidth: 1,
             borderColor: `${theme.colors.image}88`,
             backgroundColor: hexWithAlpha(theme.colors.image, 0.12),
@@ -5094,7 +5024,8 @@ function MediaGalleryCard({
       onTouchCancel={clearTouchState}
       style={{
         width: MEDIA_CARD_WIDTH,
-        borderRadius: 16,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
         borderWidth: 1,
         borderColor: isDragging ? `${theme.colors.image}dd` : index === 0 ? `${theme.colors.image}aa` : theme.colors.border,
         backgroundColor: isDragging ? theme.colors.surfaceStrong : theme.colors.surfaceInset,
@@ -5132,7 +5063,7 @@ function MediaGalleryCard({
               right: 8,
               width: 30,
               height: 30,
-              borderRadius: 15,
+              borderRadius: appTheme.radii.pill,
               borderWidth: 1,
               borderColor: hexWithAlpha(mediaColors.onMedia, 0.2),
               backgroundColor: hexWithAlpha(mediaColors.mediaGround, 0.58),
@@ -5154,41 +5085,6 @@ function MediaGalleryCard({
         </Text>
       </View>
     </View>
-  );
-}
-
-function MiniAction({
-  label,
-  onPress,
-  disabled = false,
-  accessibilityLabel,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  accessibilityLabel?: string;
-}) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel ?? label}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: appTheme.touch.compact,
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surfaceStrong,
-        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-      })}
-    >
-      <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '700' }}>{label}</Text>
-    </Pressable>
   );
 }
 
