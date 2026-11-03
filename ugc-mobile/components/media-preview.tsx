@@ -182,7 +182,11 @@ export function StableMediaImage(props: StableMediaImageProps) {
   // and keyed on the whole address each read started every picture on it
   // over, blank, then thumbhash, then picture, under the reader (a Creations
   // card on the Pixel 9a emulator, 2026-11-03). The session decides when to
-  // take the newer address. Worked out once per address: it parses the URL.
+  // take the newer address. It is the one place a picture is held through a
+  // new signature: the lists keep each read's addresses as they come, so
+  // whatever opens a file itself (Download, the audio player) has the newest,
+  // and a picture that has failed is handed a fresh one to try by the next
+  // read. Worked out once per address: it parses the URL.
   const file = useMemo(() => signedMediaIdentity(props.url), [props.url]);
   return <StableMediaImageSession key={`${props.cacheKey}|${file}`} {...props} />;
 }

@@ -16,7 +16,6 @@ import {
   profileGenerationsQueryOptions,
   profileOwnerPostsQueryOptions,
 } from './profile-media-query';
-import { keepLibraryMediaAddresses } from './profile-library-stable-media';
 import { isOwnerPostLibraryMember, type ProfilePostsScope } from './profile-view-model';
 import type { GenerationListItem, OwnerPostListItem } from './types';
 
@@ -107,9 +106,6 @@ export function useProfileLibrarySource({
     queryKey: ['profile-library-selection', source, ownerId, initialId],
     enabled: active && Boolean(initialId) && primaryHasData && !selectedInLoaded,
     staleTime: 1000 * 60,
-    // Read again on return to the app once a minute old, and signed again with
-    // it: the card it heads keeps the addresses it has, as the library's do.
-    structuralSharing: keepLibraryMediaAddresses,
     retry: false,
     queryFn: async (): Promise<GenerationListItem | OwnerPostListItem | null> => {
       if (creations) {
