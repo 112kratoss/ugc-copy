@@ -727,6 +727,8 @@ describe('opening the feed on a card', () => {
   const cardFrame = () => openingCards()[0].findAll((node) => node.props.style?.paddingHorizontal !== undefined)[0];
   /** Whether the opened card stands on the list's foot, under the space that fills the list above it. */
   const onFoot = () => openingCards()[0].findAll((node) => node.props.style?.flexGrow === 1).length === 1;
+  /** What a screen reader is told is under way while the list seeks the card. */
+  const openingProgress = () => trees.at(-1)!.root.findAll((node) => node.props.accessibilityRole === 'progressbar');
   const listCard = (index: number) => listState.props!.data![index];
 
   /** The list's first layout, which starts its landing; every scroll arrives on the card. */
@@ -752,6 +754,35 @@ describe('opening the feed on a card', () => {
       accessibilityElementsHidden: true,
       importantForAccessibility: 'no-hide-descendants',
     });
+  });
+
+  // Review of PR #679, finding 11. The list and the card standing over it are
+  // hidden from screen readers while the list seeks the card, and the spinner
+  // that said so went when the card came: a screen reader found the top bar alone.
+  it('tells a screen reader the creation is opening while the list seeks it, and nothing once landed', async () => {
+    openOn('gen-3');
+
+    expect(openingProgress()).toHaveLength(1);
+    expect(openingProgress()[0].props).toMatchObject({
+      accessible: true,
+      accessibilityLabel: 'Opening creation',
+      accessibilityState: { busy: true },
+      // It draws nothing and takes no touches: the card is what shows.
+      pointerEvents: 'none',
+    });
+
+    await listLaidOut();
+    expect(openingProgress()).toHaveLength(0);
+  });
+
+  it('says a post is opening on the Posts feed', () => {
+    landingMode.real = true;
+    routerState.params = { source: 'profile-posts', initialId: 'post-1' };
+    libraryState.items = [publicPost];
+    libraryState.selection = 'found';
+    renderFeed();
+
+    expect(openingProgress().map((node) => node.props.accessibilityLabel)).toEqual(['Opening post']);
   });
 
   it.each([

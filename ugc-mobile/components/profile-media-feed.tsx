@@ -757,6 +757,20 @@ export function ProfileMediaFeedScreen() {
           onLeft={handOverOpeningCard}
         />
       ) : null}
+      {landing.phase === 'seeking' ? (
+        // While the list seeks the card, it and the card over it are hidden
+        // from screen readers, so this tells them the card is opening, as the
+        // spinner the card replaced did (review of #679, finding 11). It draws
+        // nothing.
+        <View
+          pointerEvents="none"
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel={`Opening ${noun}`}
+          accessibilityState={{ busy: true }}
+          style={{ position: 'absolute', inset: 0 }}
+        />
+      ) : null}
       </View>
       </MediaZoomSurface>
       </ZoomVeilScope>
@@ -810,12 +824,13 @@ function leaveFeed() {
  * whatever the media's shape and the length of the text, and its video shows
  * its poster, the clip's first frame. It takes no touches and nothing of it
  * reaches a screen reader: the list is hidden from both while it seeks, and the
- * list's card is the one that answers once landed. It has a `MediaZoomSurface`
- * of its own because the register of zoom tiles keys on surface and post: in
- * the list's, its tile would replace the list card's and take it away on
- * unmount, leaving a reel opened later nothing to close into. In its own it
- * still takes its media's shape from its zoom source under UIKit's zoom, as the
- * list's card does.
+ * list's card is the one that answers once landed. Until then a screen reader
+ * is told the card is opening, as the spinner told it. It has a
+ * `MediaZoomSurface` of its own because the register of zoom tiles keys on
+ * surface and post: in the list's, its tile would replace the list card's and
+ * take it away on unmount, leaving a reel opened later nothing to close into.
+ * In its own it still takes its media's shape from its zoom source under
+ * UIKit's zoom, as the list's card does.
  *
  * It sits on the page's ground, so once the list has landed its fade brings the
  * list in round the card while the card crosses onto an identical one. The list
