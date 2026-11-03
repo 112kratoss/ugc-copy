@@ -624,6 +624,41 @@ describe('a page opened from a post of theirs', () => {
     expect(mocks.api.getCreatorProfile).toHaveBeenCalledTimes(1);
   });
 
+  // Review of #679: the page looked through every cache of posts as it
+  // mounted, its own grid held or not.
+  describe('looking for a post of theirs', () => {
+    /** The page's look through the posts the app holds: Home's and Explore's lanes come first. */
+    const lookups = (findAll: { mock: { calls: unknown[][] } }) => findAll.mock.calls
+      .filter(([filters]) => (filters as { queryKey?: unknown[] } | undefined)?.queryKey?.[0] === 'showcase-feed');
+
+    it('does not, for a page it holds already', async () => {
+      const queryClient = newQueryClient();
+      lunaInLane(queryClient);
+      queryClient.setQueryData(GRID_KEY, { pages: [creatorPage()], pageParams: [0] });
+      const findAll = vi.spyOn(queryClient.getQueryCache(), 'findAll');
+      const tree = await renderScreen(queryClient);
+
+      expect(tileLabels(tree)).toEqual(['Open Post post-1', 'Open Post post-2']);
+      expect(lookups(findAll)).toEqual([]);
+    });
+
+    it('does once for a page it is still reading, and not again once the read lands', async () => {
+      const queryClient = newQueryClient();
+      lunaInLane(queryClient);
+      const read = heldRead();
+      const findAll = vi.spyOn(queryClient.getQueryCache(), 'findAll');
+      const tree = await renderScreen(queryClient);
+      expect(texts(tree)).toContain('Luna Studio');
+      expect(lookups(findAll)).toHaveLength(1);
+
+      await act(async () => read.land(creatorPage()));
+      await settle();
+
+      expect(tileLabels(tree)).toEqual(['Open Post post-1', 'Open Post post-2']);
+      expect(lookups(findAll)).toHaveLength(1);
+    });
+  });
+
   it('draws the skeleton, as before, for a creator the app holds no post of', async () => {
     heldRead();
     const tree = await renderScreen(newQueryClient());

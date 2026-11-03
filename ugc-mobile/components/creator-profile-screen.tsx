@@ -137,12 +137,17 @@ export function CreatorProfileScreen({
     enabled: Boolean(username),
   });
   const data = profileQuery.data?.pages[0];
+  const hasPage = Boolean(data);
   // Who they are, as a post of theirs the app already holds names them: the
   // header is drawn from it while the first read, which a touch on their avatar
-  // or handle started (`prepareCreatorProfile`), is on its way.
-  const opening = useMemo(() => creatorProfileOpening(queryClient, username), [queryClient, username]);
+  // or handle started (`creatorProfilePress`), is on its way. Looked for only
+  // while the page holds nothing of its own: a page read before draws itself,
+  // and the look goes through every post the app holds (review of #679).
+  const opening = useMemo(
+    () => (hasPage ? null : creatorProfileOpening(queryClient, username)),
+    [hasPage, queryClient, username],
+  );
   const headerProfile = data?.profile ?? (profileQuery.isLoading ? opening : null);
-  const hasPage = Boolean(data);
   const items = useMemo(() => flattenCreatorProfilePages(profileQuery.data?.pages), [profileQuery.data?.pages]);
   const profilePageCount = profileQuery.data?.pages.length ?? 0;
   const currentTabItems = useMemo(() => creatorProfileTabItems(items, activeTab), [activeTab, items]);
