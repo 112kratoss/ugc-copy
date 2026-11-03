@@ -21,7 +21,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import {
   Animated,
-  BackHandler,
   Modal,
   PanResponder,
   type ModalProps,
@@ -33,6 +32,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Overlay } from '@/components/overlay-host';
 import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
 import { BrandLockup, IconButton } from '@/components/ui';
 import { showMessageDialog } from '@/lib/dialog';
@@ -47,6 +47,7 @@ import { appTheme } from '@/lib/theme';
 import { UNLOCKED_RECIPES_LABEL, UNLOCKED_RECIPES_PATH } from '@/lib/recipe-unlocked-notice';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 
 /** Below this the drag is still ambiguous with a tap or a vertical scroll. */
 const DRAWER_DRAG_CLAIM_DISTANCE = 8;
@@ -123,16 +124,9 @@ export function HomeSideMenu({
     });
   }, [open, progress, reduceMotionEnabled, rendered]);
 
-  useEffect(() => {
-    if (IS_TEST_ENVIRONMENT || !open || !BackHandler.addEventListener) return;
-
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      onClose();
-      return true;
-    });
-
-    return () => subscription.remove();
-  }, [onClose, open]);
+  // The Modal's window takes Android's back key while it is up
+  // (`onRequestClose`); this holds it for the drawer however it is hosted.
+  useHardwareBack(open, onClose);
 
   const openScreen = (path: string) => {
     handoff.handOff(path, () => router.push(path as never));
@@ -231,6 +225,15 @@ export function HomeSideMenu({
     : entryTranslateX;
 
   return (
+    // Hosted at the root, above the navigator, not in the tab screen that opens
+    // it. A row that switches tabs (the Profile and Credits cards) has
+    // react-native-screens detach that screen, and the Modal's host with it,
+    // which takes a Modal's window down: Home showed bare for two frames before
+    // Credits was drawn (Pixel 9a emulator, 2026-11-03). From the root the
+    // drawer leaves over the new tab as it does over a pushed screen. The Modal
+    // stays: its window keeps the screen reader in the drawer and takes the
+    // back key, as before.
+    <Overlay visible={rendered}>
     <ModalSurface
       visible={rendered}
       transparent
@@ -434,6 +437,7 @@ export function HomeSideMenu({
         </AnimatedView>
       </View>
     </ModalSurface>
+    </Overlay>
   );
 }
 
