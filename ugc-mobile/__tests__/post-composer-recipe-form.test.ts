@@ -177,7 +177,7 @@ describe('the Recipe preview follows the items until the creator writes it (S6)'
   it('follows the creation’s references as they are switched on and off', () => {
     const before = creationDraft({ cards: [card('prompt')], previewText: 'Includes the prompt.' });
     const on = { ...before, creationPackage: { attachGenerationReferences: true } };
-    const withReferences = generation({ input_media: [{ url: 'https://cdn.example.com/a.jpg', kind: 'image' }] });
+    const withReferences = generation({ input_media: [{ url: 'https://cdn.example.com/a.jpg', kind: 'image', recipeCopyable: true }] });
     expect(followSuggestedRecipePreview(before, on, withReferences).resource.previewText).toBe('Includes the prompt and reference media.');
     expect(followSuggestedRecipePreview(before, on, item).resource.previewText).toBe('Includes the prompt.');
   });
@@ -235,7 +235,7 @@ describe('what the recipe needs before it can be published', () => {
   });
 
   it('takes a creation’s references as the recipe’s content (A-F9)', () => {
-    const item = generation({ input_media: [{ url: 'https://cdn.example.com/a.jpg', kind: 'image' }] });
+    const item = generation({ input_media: [{ url: 'https://cdn.example.com/a.jpg', kind: 'image', recipeCopyable: true }] });
     const draft = creationDraft({ previewText: 'Includes reference media.' }, true);
     expect(validatePostComposerDraft(draft, { includesCreationReferences: true })).toEqual({ valid: true });
     expect(validatePostComposerDraft(draft)).toEqual({ valid: false, message: 'Add at least one item to the recipe.' });
@@ -292,7 +292,7 @@ describe('remix comes with the recipe (S1)', () => {
   });
 
   it('publishes a recipe of the creation’s references alone, for the server to fill', () => {
-    const item = generation({ input_media: [{ url: 'https://cdn.example.com/a.jpg', kind: 'image' }] });
+    const item = generation({ input_media: [{ url: 'https://cdn.example.com/a.jpg', kind: 'image', recipeCopyable: true }] });
     const payload = buildPublishGenerationPostPayload(item, creationDraft({ previewText: 'Includes reference media.' }, true));
     expect(payload.includeGenerationReferences).toBe(true);
     expect(payload.resourceBundle).toEqual({

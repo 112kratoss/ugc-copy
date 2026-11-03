@@ -3,7 +3,7 @@ import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import type { ImagePickerAsset } from 'expo-image-picker';
-import { BookOpen, Check, ChevronDown, ChevronRight, CircleMinus, Ellipsis, ExternalLink, FileText, FolderOpen, Globe2, ImageIcon, Images, Lock, Package, Pencil, Play, Plus, Repeat2, ScrollText, Shapes, SlidersHorizontal, Sparkles, Trash2, Upload, Workflow, X } from 'lucide-react-native';
+import { BookOpen, Check, ChevronDown, ChevronRight, CircleMinus, Ellipsis, ExternalLink, FileText, FolderOpen, Globe2, ImageIcon, Images, Lock, Music, Package, Pencil, Play, Plus, Repeat2, ScrollText, Shapes, SlidersHorizontal, Sparkles, Trash2, Upload, Workflow, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,7 +16,7 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { PublicIdentityCard } from '@/components/public-identity-card';
 import { Overlay } from '@/components/overlay-host';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '@/components/sheet-chrome';
-import { showConfirmDialog } from '@/lib/dialog';
+import { showConfirmDialog, showMessageDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
@@ -24,6 +24,16 @@ import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { adjustProfileStats, invalidateProfileStats, profileQueryKey } from '@/lib/profile-stats';
 import { useClaimPublicIdentity } from '@/lib/use-claim-public-identity';
+import {
+  CREATION_INPUTS_INCLUDED,
+  CREATION_INPUTS_INCLUDED_DETAIL,
+  CREATION_PROMPT_INCLUDED,
+  CREATION_PROMPT_INCLUDED_DETAIL,
+  describeCreationInputsSwitch,
+  describeUncopiedCreationInputs,
+  needsCreationPromptItem,
+  type GenerationReference,
+} from '@/lib/creation-recipe/creation-recipe';
 import {
   getInitialPublicIdentity,
   isPublicIdentityReady,
@@ -121,11 +131,13 @@ import {
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
   type PostComposerValidationOptions,
-  hasCopiedCreationReferences,
-  hasGenerationReferences,
+  adoptRecipeItemsAdded,
+  getCreationInputsInRecipe,
+  hasCreationPromptCard,
   isLockedCreationPromptCard,
   withCreationPromptCard,
   withCreationRecipeDefaults,
+  withoutStandInCreationPrompt,
   upsertOptimisticOwnerPostInfiniteData,
   type PostComposerDraft,
   type PostComposerDetailErrors,
@@ -176,7 +188,7 @@ import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import { useHardwareBack } from '@/lib/use-hardware-back';
-import type { GenerationInputMediaItem, GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceItemType, SourceToolOption } from '@/lib/types';
+import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { haptic } from '@/lib/haptics';
 
@@ -532,9 +544,12 @@ function PostResourcesPage({
     && (publishValidation.message === RECIPE_PREVIEW_REQUIRED_MESSAGE || publishValidation.message === RECIPE_PREVIEW_QUALITY_MESSAGE)
     ? publishValidation.message
     : undefined;
-  // Copies an earlier save or the publish made are listed as the recipe's own items.
-  const copiedCreationReferences = hasCopiedCreationReferences(draft.resource.cards, selectedGeneration?.id);
-  const includesCreationReferences = !copiedCreationReferences && willAttachGenerationReferences(selectedGeneration, draft);
+  // What "From this creation" says reads the recipe as it is (#677's review):
+  // the exact prompt only while a card holds it, and the saved inputs the
+  // server copies, "included" only once every one has its copy in the items.
+  const promptIncluded = hasCreationPromptCard(draft.resource.cards, selectedGeneration);
+  const creationInputs = getCreationInputsInRecipe(draft.resource.cards, selectedGeneration);
+  const includesCreationReferences = willAttachGenerationReferences(selectedGeneration, draft);
   const cardCount = draft.resource.cards.length;
   const itemsLabel = cardCount === 0
     ? includesCreationReferences ? 'Creation references' : 'Add at least one item.'
@@ -594,25 +609,25 @@ function PostResourcesPage({
         </ComposerFieldShell>
       ) : null}
 
-      {resourceActive && selectedGeneration && (selectedGeneration.prompt?.trim() || hasGenerationReferences(selectedGeneration)) ? (
+      {resourceActive && selectedGeneration && (promptIncluded || creationInputs.offered.length > 0) ? (
         <ComposerFieldShell>
           <CompactFieldLabel label="From this creation" />
-          {selectedGeneration.prompt?.trim() ? (
+          {promptIncluded ? (
             <AppText variant="caption" color="muted">
-              {'Exact prompt included. Every creation\'s recipe has it: the Remix that comes with one fills it in for whoever unlocks it.'}
+              {`${CREATION_PROMPT_INCLUDED} ${CREATION_PROMPT_INCLUDED_DETAIL}`}
             </AppText>
           ) : null}
-          {hasGenerationReferences(selectedGeneration) ? (
+          {creationInputs.offered.length > 0 ? (
             <>
-              <CreationInputThumbnails inputs={selectedGeneration.input_media ?? []} />
-              {copiedCreationReferences ? (
+              <CreationInputThumbnails generationId={selectedGeneration.id} inputs={creationInputs.offered} />
+              {creationInputs.allIncluded ? (
                 <AppText variant="caption" color="muted">
-                  Saved inputs included in this recipe. They are listed with the items below.
+                  {`${CREATION_INPUTS_INCLUDED} ${CREATION_INPUTS_INCLUDED_DETAIL}`}
                 </AppText>
               ) : (
                 <ToggleRow
                   label="Include creation references"
-                  body="Attach the saved inputs above as reusable references. Off unless you choose it: inputs can be personal."
+                  body={describeCreationInputsSwitch(creationInputs.included, creationInputs.offered.length)}
                   value={draft.creationPackage.attachGenerationReferences}
                   onValueChange={(attachGenerationReferences) => onCreationPackageChange({ attachGenerationReferences })}
                   accent="image"
@@ -678,7 +693,7 @@ function PostResourcesPage({
             )}
 
             {includesCreationReferences ? (
-              <CreationReferencesRow fileCount={countCreationReferenceFiles(selectedGeneration)} />
+              <CreationReferencesRow fileCount={countCreationReferenceFiles(selectedGeneration, draft.resource.cards)} />
             ) : null}
 
             {/* Remix comes with any recipe on a post made from a creation (recipe audit S1): the
@@ -802,8 +817,9 @@ function RecipeAccessCards({
 
 /**
  * What "Include creation references" adds, drawn with the items (recipe audit
- * A-F9): the server copies the creation's saved inputs in at publish, so they
- * have no editor of their own; the toggle above takes them out again.
+ * A-F9): the server copies the creation's saved inputs in at a publish or a
+ * save, so they have no editor of their own until then; the toggle above takes
+ * them out again. Once copied they are the recipe's own items.
  */
 function CreationReferencesRow({ fileCount }: { fileCount: number }) {
   const theme = useAppTheme();
@@ -946,9 +962,10 @@ function PostPublishSummary({
 /**
  * A creation's saved inputs, small, in "From this creation": what "Include
  * creation references" would hand to whoever unlocks the recipe. Out of view,
- * the option read as nothing at all.
+ * the option read as nothing at all. Only the inputs the server copies are
+ * drawn and counted (`getCreationInputsInRecipe`), each by its kind.
  */
-function CreationInputThumbnails({ inputs }: { inputs: GenerationInputMediaItem[] }) {
+function CreationInputThumbnails({ generationId, inputs }: { generationId: string; inputs: GenerationReference[] }) {
   const theme = useAppTheme();
   if (inputs.length === 0) return null;
   return (
@@ -957,34 +974,38 @@ function CreationInputThumbnails({ inputs }: { inputs: GenerationInputMediaItem[
         {`${inputs.length} saved ${inputs.length === 1 ? 'input' : 'inputs'}`}
       </AppText>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-        {inputs.map((input, index) => {
-          const kind = input.mediaType ?? input.kind;
-          return (
-            <View
-              key={input.id ?? `input-${index}`}
-              accessible
-              accessibilityLabel={input.label?.trim() || `Saved input ${index + 1}`}
-              style={{
-                width: 56,
-                height: 56,
-                overflow: 'hidden',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRadius: appTheme.radii.sm,
-                borderCurve: 'continuous',
-                backgroundColor: theme.colors.surfaceStrong,
-              }}
-            >
-              {kind === 'image' && input.url ? (
-                <Image source={{ uri: input.url }} style={{ width: 56, height: 56 }} contentFit="cover" />
-              ) : kind === 'video' ? (
-                <Play size={appTheme.icon.default} color={theme.colors.textSecondary} />
-              ) : (
-                <ImageIcon size={appTheme.icon.default} color={theme.colors.textSecondary} />
-              )}
-            </View>
-          );
-        })}
+        {inputs.map((input) => (
+          <View
+            key={input.id}
+            accessible
+            accessibilityLabel={input.label}
+            style={{
+              width: 56,
+              height: 56,
+              overflow: 'hidden',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: appTheme.radii.sm,
+              borderCurve: 'continuous',
+              backgroundColor: theme.colors.surfaceStrong,
+            }}
+          >
+            {input.mediaKind === 'image' && input.url ? (
+              // Keyed by the input, not its signed link, which changes on every read.
+              <Image
+                source={{ uri: input.url, cacheKey: `creation-input:${generationId}:${input.id}` }}
+                style={{ width: 56, height: 56 }}
+                contentFit="cover"
+              />
+            ) : input.mediaKind === 'video' ? (
+              <Play size={appTheme.icon.default} color={theme.colors.textSecondary} />
+            ) : input.mediaKind === 'audio' ? (
+              <Music size={appTheme.icon.default} color={theme.colors.textSecondary} />
+            ) : (
+              <ImageIcon size={appTheme.icon.default} color={theme.colors.textSecondary} />
+            )}
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -1016,6 +1037,14 @@ function ResourceCardRow({
       : card.externalUrl.trim()
         ? card.type === 'remix_link' ? 'Protected remix link' : 'Protected link'
         : 'Needs content';
+  // One set of lines for both rows: the locked one names where it comes from.
+  const rowText = (
+    <>
+      <AppText variant="label" numberOfLines={1}>{card.title.trim() || typeLabel}</AppText>
+      <AppText variant="caption" color="muted" numberOfLines={1}>{`${locked ? 'From this creation' : typeLabel} · ${contentLabel}`}</AppText>
+      <AppText variant="caption" color="image" numberOfLines={1}>{scopeLabel}</AppText>
+    </>
+  );
 
   return (
     <View
@@ -1036,11 +1065,7 @@ function ResourceCardRow({
         <ResourceTypeIcon type={card.type} color={theme.colors.textSecondary} />
       </View>
       {locked ? (
-        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-          <AppText variant="label" numberOfLines={1}>{card.title.trim() || typeLabel}</AppText>
-          <AppText variant="caption" color="muted" numberOfLines={1}>{`From this creation · ${contentLabel}`}</AppText>
-          <AppText variant="caption" color="image" numberOfLines={1}>{scopeLabel}</AppText>
-        </View>
+        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>{rowText}</View>
       ) : (
         <Pressable
           accessibilityRole="button"
@@ -1048,9 +1073,7 @@ function ResourceCardRow({
           onPress={onEdit}
           style={({ pressed }) => ({ flex: 1, minWidth: 0, gap: 3, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
-          <AppText variant="label" numberOfLines={1}>{card.title.trim() || typeLabel}</AppText>
-          <AppText variant="caption" color="muted" numberOfLines={1}>{`${typeLabel} · ${contentLabel}`}</AppText>
-          <AppText variant="caption" color="image" numberOfLines={1}>{scopeLabel}</AppText>
+          {rowText}
         </Pressable>
       )}
       {locked ? null : (
@@ -2117,6 +2140,9 @@ function NewPostComposer() {
   // Undo and redo: every removal below is instant, so each one leaves what it
   // took here and offers it back for a moment.
   const [undoEntry, setUndoEntry] = useState<ComposerUndoEntry<PostComposerRemoval> | null>(null);
+  // The removal of a creator's own prompt card that the creation's exact one
+  // took the place of: Undo puts theirs back and lets the exact one go again.
+  const promptReplacedByRemovalRef = useRef<PostComposerRemoval | null>(null);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const scrollYRef = useRef(0);
@@ -2246,6 +2272,18 @@ function NewPostComposer() {
     }
   }, [explicitGeneration, generationId, isEditMode]);
 
+  // Every creation's recipe has its exact prompt (owner, 2026-11-03): one left
+  // with no prompt card of its own (the creator removed theirs) gets the
+  // locked one back, by the rule the server holds every save to (#677's
+  // review). Once the composer has its creation: before that, the new post's
+  // defaults and the edit's prefill put it where the composer starts.
+  const creationPrompt = selectedGeneration && !isTemplateGeneration(selectedGeneration) ? selectedGeneration.prompt : null;
+  const hasComposerCreation = isEditMode ? hasPrefilledEdit : Boolean(selectedGeneration);
+  useEffect(() => {
+    if (!hasComposerCreation || !needsCreationPromptItem(draft.resource.cards, creationPrompt)) return;
+    setDraft((current) => ({ ...current, resource: withCreationPromptCard(current.resource, creationPrompt) }));
+  }, [creationPrompt, draft.resource.cards, hasComposerCreation]);
+
   useEffect(() => {
     if (!generationId || !generationsQuery.isSuccess) return;
     const requested = allGenerations.find((item) => item.id === generationId);
@@ -2253,10 +2291,23 @@ function NewPostComposer() {
     router.replace(`/showcase/${encodeURIComponent(requested.linked_post_id)}` as never);
   }, [allGenerations, generationId, generationsQuery.isSuccess]);
 
-  // Prefill when postId is provided and post detail resolves
+  // Prefill when postId is provided and post detail resolves. A creation's
+  // post waits for its creation too: the exact prompt its recipe holds is the
+  // creation's, and the post row keeps no copy of it (a compose submission
+  // stores none, #677's review). Taken in here, before the edit's starting
+  // point is read, the prompt is where the edit starts, not an edit of it.
+  // A read that failed, or one waiting for a connection, goes without it.
+  const creationReadSettled = generationsQuery.isSuccess
+    || generationsQuery.isError
+    || generationsQuery.fetchStatus === 'paused';
   useEffect(() => {
     if (postId && postQuery.data?.post && !hasPrefilledEdit) {
       const post = postQuery.data.post;
+      if (post.generationId && !creationReadSettled) return;
+      const postCreation = post.generationId
+        ? generationsQuery.data?.generations.find((item) => item.id === post.generationId) ?? null
+        : null;
+      const creationPrompt = postCreation && !isTemplateGeneration(postCreation) ? postCreation.prompt : null;
       const resourceBundleInput = post.resourceBundleInput;
       const mode = post.postFormat === 'text' ? 'text' : post.generationId ? 'creation' : 'upload';
       const hydratedResourceCards = resourceBundleInput
@@ -2346,11 +2397,11 @@ function NewPostComposer() {
           // showed 100 tokens and saved 900 through the legacy-USD rule.
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
           priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : '900',
-        }) : getDefaultResourceDraft(), post.generationId ? post.prompt : null),
+        }) : getDefaultResourceDraft(), creationPrompt),
       });
       setHasPrefilledEdit(true);
     }
-  }, [postId, postQuery.data, hasPrefilledEdit, shareAfterPublish]);
+  }, [postId, postQuery.data, hasPrefilledEdit, shareAfterPublish, creationReadSettled, generationsQuery.data]);
 
   useEffect(() => () => {
     for (const controller of activeUploadControllersRef.current) {
@@ -2591,7 +2642,7 @@ function NewPostComposer() {
       try {
         if (postId) {
           const isGen = Boolean(postQuery.data?.post?.generationId);
-          const payload = buildUpdatePostPayload(isGen, submittedDraft);
+          const payload = buildUpdatePostPayload(isGen, submittedDraft, selectedGeneration);
           sentPostMedia = 'mediaItems' in payload;
           return await api.updatePost(postId, payload);
         }
@@ -2622,6 +2673,18 @@ function NewPostComposer() {
       return { submittedDraft };
     },
     onSuccess: (response, _targetVisibility, context) => {
+      // What the server put into the recipe beside what was sent is the
+      // composer's own from here, and the switch that asked for the saved
+      // inputs is off again; the ones it could not copy are named (#677's
+      // review). The post page and the editor offer the rest.
+      setDraft((current) => adoptRecipeItemsAdded(current, response.recipeItemsAdded));
+      const referencesNotCopied = response.referencesNotCopied ?? 0;
+      if (referencesNotCopied > 0) {
+        showMessageDialog({
+          title: isEditMode ? 'Saved' : 'Posted',
+          message: describeUncopiedCreationInputs(referencesNotCopied),
+        });
+      }
       setMessage({
         tone: 'success',
         title: isEditMode ? 'Saved' : 'Posted',
@@ -3273,10 +3336,18 @@ function NewPostComposer() {
     if (!undoEntry) return;
     const { removal, scrollY } = undoEntry;
     dismissUndo();
+    const dropsStandInPrompt = promptReplacedByRemovalRef.current === removal;
+    promptReplacedByRemovalRef.current = null;
     // Onto the draft as it is now: the offer can be taken mid-typing, and what
     // was typed since the removal stays. An item put back is named again in a
     // Recipe preview that still says what was suggested.
     setDraft((current) => followSuggestedRecipePreview(current, putBackComposerRemoval(current, removal), selectedGeneration));
+    // A creator's own prompt card put back takes its place again from the
+    // creation's exact one, which stood in for it: a recipe with a prompt item
+    // of its own keeps that one alone.
+    if (dropsStandInPrompt) {
+      setDraft((current) => followSuggestedRecipePreview(current, withoutStandInCreationPrompt(current, selectedGeneration), selectedGeneration));
+    }
     setDetailErrors((current) => (
       Object.keys(current).length > 0
         ? getPostComposerDetailErrors(putBackComposerRemoval(draft, removal), { grandfatheredTitle: initialTitleRef.current })
@@ -3490,6 +3561,11 @@ function NewPostComposer() {
     if (isPickingResourceFile && editingResourceId === id) return;
     const taken = takeComposerResourceCard(draft, id);
     if (!taken) return;
+    // The creator's last prompt card: the creation's exact prompt takes its place.
+    promptReplacedByRemovalRef.current = needsCreationPromptItem(taken.draft.resource.cards, creationPrompt)
+      && !needsCreationPromptItem(draft.resource.cards, creationPrompt)
+      ? taken.removal
+      : null;
     offerUndo(taken.removal.card.title.trim() || 'item', taken.removal);
     setDraft((current) => {
       const next = takeComposerResourceCard(current, id)?.draft;
@@ -3638,11 +3714,17 @@ function NewPostComposer() {
     // off sale when people have it: asked first (recipe audit A-F2), and Keep
     // recipe puts the choice back as it was.
     const loadedRecipe = isEditMode ? postQuery.data?.post?.resourceBundleInput ?? null : null;
+    // Asked by what the save sends, not by the mode shown (#677's review): a
+    // recipe whose last item went is No recipe unless the creation's saved
+    // inputs fill it, and a save of No recipe takes the recipe off the post.
+    const nextAccessMode = isEditMode
+      ? buildUpdatePostPayload(Boolean(postQuery.data?.post?.generationId), draft, selectedGeneration).resourceBundle.accessMode
+      : draft.resource.accessMode;
     const removal = getRecipeRemovalConfirmation({
       loadedAccessMode: loadedRecipe?.accessMode ?? null,
       loadedItemCount: loadedRecipe ? hydratePostComposerResourceCards(loadedRecipe).length : 0,
       buyerCount: recipeBuyerCount,
-      nextAccessMode: draft.resource.accessMode,
+      nextAccessMode,
       // The same condition as the "Remix comes with this recipe" line above.
       reopensPost: draft.mode === 'creation',
     });

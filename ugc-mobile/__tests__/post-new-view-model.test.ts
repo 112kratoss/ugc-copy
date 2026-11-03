@@ -18,9 +18,13 @@ import {
   getExplicitPublishGeneration,
   getPostComposerDetailErrors,
   getPublicPostQualityError,
+  adoptRecipeItemsAdded,
+  countCreationReferenceFiles,
+  getCreationInputsInRecipe,
   hasCreationPromptCard,
-  hasCopiedCreationReferences,
+  hasGenerationReferences,
   isLockedCreationPromptCard,
+  willAttachGenerationReferences,
   withCreationPromptCard,
   withCreationRecipeDefaults,
   TITLE_MAX_LENGTH,
@@ -46,7 +50,8 @@ import {
   type PostComposerDraft,
 } from '../lib/post-new-view-model';
 import { normalizeAuthReturnTo } from '../lib/auth-navigation';
-import type { GenerationListItem } from '../lib/types';
+import { getPostComposerDraftSignature } from '../lib/post-composer-draft-resume';
+import type { GenerationListItem, PostResourceItem } from '../lib/types';
 
 function generation(overrides: Partial<GenerationListItem>): GenerationListItem {
   return {
@@ -531,12 +536,19 @@ describe('post new view model', () => {
     });
 
     // Locked in the recipe (owner, 2026-11-03): drawn with neither Edit nor Remove.
-    it('is the one locked item, found by its text or by the title it is made with', () => {
-      expect(isLockedCreationPromptCard(webCard, item)).toBe(true);
+    // #677's review: locked by its title and its text together. A card that
+    // kept the title over other words, or holds the words under a title of its
+    // own, stays the creator's to edit.
+    it('is the one locked item, found by its title and its text together', () => {
+      expect(isLockedCreationPromptCard(createPostComposerResourceCard('prompt', {
+        title: 'Exact generation prompt',
+        textContent: 'venom hero shot',
+      }), item)).toBe(true);
+      expect(isLockedCreationPromptCard(webCard, item)).toBe(false);
       expect(isLockedCreationPromptCard(createPostComposerResourceCard('prompt', {
         title: 'Exact generation prompt',
         textContent: 'the prompt a sell link wrote',
-      }), item)).toBe(true);
+      }), item)).toBe(false);
       expect(isLockedCreationPromptCard(createPostComposerResourceCard('prompt', { textContent: 'my own prompt' }), item)).toBe(false);
       expect(isLockedCreationPromptCard(createPostComposerResourceCard('guide', { textContent: 'venom hero shot' }), item)).toBe(false);
       // A creation with no prompt has nothing to lock.
@@ -606,20 +618,156 @@ describe('post new view model', () => {
       expect(withCreationPromptCard(none, 'Make a glossy product photo').accessMode).toBe('none');
     });
 
-    it('reads copies of the inputs made by a publish or an earlier save from the cards', () => {
-      const copy = createPostComposerResourceCard('reference_media', {
-        attachments: [{
-          id: 'att-1',
-          kind: 'file',
-          label: 'Reference 1',
-          storagePath: 'user-1/generation-references/gen-1/reference-input-1.jpg',
-        }],
+  });
+
+  // #677's review: the app's composer reads a creation's recipe by the rules the
+  // server and the web composer read it by (ugc-mobile/lib/creation-recipe).
+  describe('a creation’s recipe, by the shared rule', () => {
+    const creation = (overrides: Partial<GenerationListItem> = {}) => generation({
+      prompt: 'Make a glossy product photo',
+      input_media: [
+        { id: 'input-1', url: 'https://cdn.example.com/a.jpg', kind: 'image', recipeCopyable: true },
+        { id: 'input-2', url: 'https://cdn.example.com/b.mp3', mediaType: 'audio', recipeCopyable: true },
+        // In another account's folder: the server copies none of it.
+        { id: 'input-3', url: 'https://cdn.example.com/c.jpg', kind: 'image', recipeCopyable: false },
+        // From a server that did not say: nothing is promised.
+        { id: 'input-4', url: 'https://cdn.example.com/d.jpg', kind: 'image' },
+      ],
+      ...overrides,
+    });
+    const copyCard = (inputId: string) => createPostComposerResourceCard('reference_media', {
+      attachments: [{
+        id: `reference-${inputId}`,
+        kind: 'file',
+        label: 'Reference',
+        storagePath: `user-1/generation-references/gen-1/00-reference-${inputId}.jpg`,
+      }],
+    });
+    const recipeDraft = (
+      cards: PostComposerDraft['resource']['cards'],
+      overrides: Partial<PostComposerDraft> = {},
+    ): PostComposerDraft => ({
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      proofMode: 'media',
+      title: 'Hero product image',
+      selectedGenerationId: 'gen-1',
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'free',
+        previewText: 'The product references behind this still.',
+        cards,
+      },
+      ...overrides,
+    });
+
+    // #677's review: zero items with the inputs switched on sent No recipe, and
+    // the save deleted the recipe it meant to fill.
+    it('sends a recipe of the saved inputs alone from an edit, never No recipe', () => {
+      const draft = recipeDraft([], { creationPackage: { attachGenerationReferences: true } });
+      const payload = buildUpdatePostPayload(true, draft, creation());
+
+      expect(payload.resourceBundle).toMatchObject({ accessMode: 'free', resources: { items: [] } });
+      expect(payload).toHaveProperty('includeGenerationReferences', true);
+      // Switched off, the same empty recipe is No recipe, which the save asks about first.
+      expect(buildUpdatePostPayload(true, { ...draft, creationPackage: { attachGenerationReferences: false } }, creation()).resourceBundle)
+        .toEqual({ accessMode: 'none' });
+    });
+
+    // #677's review: the default prompt card took a random id on every open, so
+    // an untouched composer reopened over its kept draft read as unsaved work.
+    it('gives the exact prompt’s card one id, so an untouched draft reads the same each time it opens', () => {
+      const opened = { ...getDefaultPostComposerDraft(), mode: 'creation' as const, proofMode: 'media' as const, selectedGenerationId: 'gen-1' };
+      const first = withCreationRecipeDefaults(opened, creation());
+      const second = withCreationRecipeDefaults(opened, creation());
+
+      expect(first.resource.cards.map((card) => card.id)).toEqual(['creation-prompt']);
+      expect(getPostComposerDraftSignature(first)).toBe(getPostComposerDraftSignature(second));
+      expect(withCreationPromptCard(getDefaultPostComposerDraft().resource, 'Make a glossy product photo').cards[0]?.id).toBe('creation-prompt');
+    });
+
+    // #677's review: a rewritten "Exact generation prompt" was frozen, and the
+    // app's text-only check disagreed with the lock.
+    it('locks the exact prompt by its title and its text, and counts the prompt by its text', () => {
+      const exact = createPostComposerResourceCard('prompt', { title: 'Exact generation prompt', textContent: ' Make a glossy product photo ' });
+      const rewritten = createPostComposerResourceCard('prompt', { title: 'Exact generation prompt', textContent: 'Make a glossy photo, redacted' });
+      const ownWords = createPostComposerResourceCard('prompt', { title: 'Prompt or script', textContent: 'Make a glossy product photo' });
+
+      expect(isLockedCreationPromptCard(exact, creation())).toBe(true);
+      expect(isLockedCreationPromptCard(rewritten, creation())).toBe(false);
+      expect(isLockedCreationPromptCard(ownWords, creation())).toBe(false);
+      // The recipe holds the exact prompt wherever its text is; a rewritten one is not it.
+      expect(hasCreationPromptCard([ownWords], creation())).toBe(true);
+      expect(hasCreationPromptCard([rewritten], creation())).toBe(false);
+      expect(getPostComposerPackageStatus(recipeDraft([rewritten]), creation()).label).toBe('Free recipe ready');
+    });
+
+    // #677's review: the strip showed and counted inputs the server never copies.
+    it('offers, shows and counts only the saved inputs the server copies', () => {
+      expect(getCreationInputsInRecipe([], creation()).offered.map((input) => [input.id, input.mediaKind])).toEqual([
+        ['input-1', 'image'],
+        ['input-2', 'audio'],
+      ]);
+      expect(countCreationReferenceFiles(creation())).toBe(2);
+      expect(hasGenerationReferences(creation())).toBe(true);
+      const notCopied = creation({ input_media: [{ id: 'input-3', url: 'https://cdn.example.com/c.jpg', kind: 'image', recipeCopyable: false }] });
+      expect(hasGenerationReferences(notCopied)).toBe(false);
+      expect(countCreationReferenceFiles(notCopied)).toBe(0);
+      expect(willAttachGenerationReferences(notCopied, recipeDraft([], { creationPackage: { attachGenerationReferences: true } }))).toBe(false);
+    });
+
+    // #677's review: one copy read as "Included in this recipe", so a partial
+    // copy could never be completed.
+    it('reads the inputs as included only once each has its copy, and asks for the rest until then', () => {
+      const switchedOn = { creationPackage: { attachGenerationReferences: true } };
+      const partial = getCreationInputsInRecipe([copyCard('input-1')], creation());
+      expect(partial).toMatchObject({ included: 1, allIncluded: false });
+      expect(willAttachGenerationReferences(creation(), recipeDraft([copyCard('input-1')], switchedOn))).toBe(true);
+
+      const whole = getCreationInputsInRecipe([copyCard('input-1'), copyCard('input-2')], creation());
+      expect(whole).toMatchObject({ included: 2, allIncluded: true });
+      expect(willAttachGenerationReferences(creation(), recipeDraft([copyCard('input-1'), copyCard('input-2')], switchedOn))).toBe(false);
+      // Another creation's copies are not this one's.
+      expect(getCreationInputsInRecipe([copyCard('input-1')], creation({ id: 'gen-2' })).included).toBe(0);
+    });
+
+    // #677's review: the client never learned what the copy did.
+    it('adopts what the server added to the recipe as cards, and switches the inputs off', () => {
+      const added = (inputId: string): PostResourceItem => ({
+        id: `reference-${inputId}`,
+        scope: { kind: 'all' },
+        type: 'reference_image',
+        role: 'style_reference',
+        sectionId: null,
+        title: `Reference ${inputId}`,
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: `user-1/generation-references/gen-1/00-reference-${inputId}.jpg`,
+        contentType: 'image/jpeg',
+        sizeBytes: 2048,
+        workflowSnapshot: null,
+        sortOrder: 1,
+        isPrimary: false,
+        remixUse: 'reference_only',
       });
-      expect(hasCopiedCreationReferences([copy], 'gen-1')).toBe(true);
-      expect(hasCopiedCreationReferences([copy], 'gen-2')).toBe(false);
-      expect(hasCopiedCreationReferences([copy], null)).toBe(false);
-      expect(hasCopiedCreationReferences([createPostComposerResourceCard('guide', { textContent: 'Notes' })], 'gen-1')).toBe(false);
-      expect(hasCopiedCreationReferences(null, 'gen-1')).toBe(false);
+      const exactPrompt = createPostComposerResourceCard('prompt', { id: 'creation-prompt', title: 'Exact generation prompt', textContent: 'Make a glossy product photo' });
+      const firstCopy = copyCard('input-1');
+      const before = recipeDraft([exactPrompt, firstCopy], { creationPackage: { attachGenerationReferences: true } });
+
+      const after = adoptRecipeItemsAdded(before, [
+        // Held already by its file: not a second card.
+        added('input-1'),
+        added('input-2'),
+        { ...added('prompt'), id: 'creation-prompt-item', type: 'prompt', storagePath: null, textContent: 'Make a glossy product photo', title: 'Exact generation prompt' },
+      ]);
+
+      expect(after.resource.cards.map((card) => card.id)).toEqual(['creation-prompt', firstCopy.id, 'hydrated-item-reference-input-2']);
+      expect(after.resource.cards[2].attachments[0]).toMatchObject({ storagePath: added('input-2').storagePath, contentType: 'image/jpeg' });
+      expect(after.creationPackage.attachGenerationReferences).toBe(false);
+      expect(getCreationInputsInRecipe(after.resource.cards, creation()).allIncluded).toBe(true);
+      // Nothing added, only the switch goes off.
+      expect(adoptRecipeItemsAdded(before, undefined).resource).toBe(before.resource);
     });
   });
 
@@ -1442,7 +1590,7 @@ describe('post new view model', () => {
   it('keeps normal creation posts from auto-attaching saved generation references', () => {
     const item = generation({
       id: 'gen-with-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
     const draft = {
       ...getDefaultPostComposerDraft(),
@@ -1468,7 +1616,7 @@ describe('post new view model', () => {
   it('requests generation references only when the explicit creation package toggle is enabled', () => {
     const item = generation({
       id: 'gen-with-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
     const draft = {
       ...getDefaultPostComposerDraft(),
@@ -1501,7 +1649,7 @@ describe('post new view model', () => {
   it('keeps non-public creation posts without unlocks from auto-attaching generation references', () => {
     const item = generation({
       id: 'gen-private-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
 
     const draft = {
@@ -1571,7 +1719,7 @@ describe('post new view model', () => {
   it('reports attached creation references as the package status', () => {
     const item = generation({
       id: 'gen-summary',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
     const draft = {
       ...getDefaultPostComposerDraft(),
@@ -1598,7 +1746,7 @@ describe('post new view model', () => {
   it('uses explicit unlock preview labels before auto generation reference labels', () => {
     const item = generation({
       id: 'gen-unlock-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
 
     expect(getPostComposerPreviewStatusLabel({
@@ -1815,13 +1963,16 @@ describe('post new view model', () => {
         },
       };
       const switchedOn = { ...recipe, creationPackage: { attachGenerationReferences: true } };
+      const creation = generation({ input_media: [{ id: 'input-1', url: 'https://cdn.example.com/a.jpg', kind: 'image', recipeCopyable: true }] });
 
-      expect(buildUpdatePostPayload(true, switchedOn)).toHaveProperty('includeGenerationReferences', true);
-      expect(buildUpdatePostPayload(true, recipe)).not.toHaveProperty('includeGenerationReferences');
-      // Not into No recipe, and not for a post that is not a creation's.
-      expect(buildUpdatePostPayload(true, { ...switchedOn, resource: { ...switchedOn.resource, accessMode: 'none' as const } }))
+      expect(buildUpdatePostPayload(true, switchedOn, creation)).toHaveProperty('includeGenerationReferences', true);
+      expect(buildUpdatePostPayload(true, recipe, creation)).not.toHaveProperty('includeGenerationReferences');
+      // Not into No recipe, not for a post that is not a creation's, and not
+      // without inputs the server copies.
+      expect(buildUpdatePostPayload(true, { ...switchedOn, resource: { ...switchedOn.resource, accessMode: 'none' as const } }, creation))
         .not.toHaveProperty('includeGenerationReferences');
-      expect(buildUpdatePostPayload(false, switchedOn)).not.toHaveProperty('includeGenerationReferences');
+      expect(buildUpdatePostPayload(false, switchedOn, creation)).not.toHaveProperty('includeGenerationReferences');
+      expect(buildUpdatePostPayload(true, switchedOn, generation({ input_media: [] }))).not.toHaveProperty('includeGenerationReferences');
     });
 
     it('submits text post edits without duplicating the caption into the body', () => {

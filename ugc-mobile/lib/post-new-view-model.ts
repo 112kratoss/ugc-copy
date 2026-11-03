@@ -32,6 +32,18 @@ import {
   recipeKeepsPromptPrivate,
   suggestCreationPostTitle,
 } from '@/lib/post-publish-policy/post-publish-policy';
+// One rule with the server and the web composer: the exact prompt's item, the
+// lock, and which saved inputs a creation's recipe is offered (#677's review).
+import {
+  CREATION_PROMPT_CARD_ID,
+  CREATION_PROMPT_ITEM_TITLE,
+  countCreationInputsInRecipe,
+  holdsCreationPrompt,
+  isLockedCreationPromptItem,
+  needsCreationPromptItem,
+  recipeCopyableInputs,
+  type GenerationReference,
+} from '@/lib/creation-recipe/creation-recipe';
 
 export type PostComposerMode = 'text' | 'upload' | 'creation';
 export type PostComposerProofMode = 'media' | 'text';
@@ -671,9 +683,16 @@ export function foldRecipeSummaryIntoPreview(resource: PostComposerResourceDraft
   };
 }
 
-/** How many saved inputs of a creation "Include creation references" copies into its recipe. */
-export function countCreationReferenceFiles(item: GenerationListItem | null | undefined): number {
-  return (item?.input_media ?? []).filter((media) => media.url || media.kind).length;
+/**
+ * How many saved inputs "Include creation references" copies into the recipe:
+ * those the server copies (`recipeCopyable`) that the recipe does not hold yet.
+ */
+export function countCreationReferenceFiles(
+  item: GenerationListItem | null | undefined,
+  cards: readonly PostComposerResourceCardDraft[] = [],
+): number {
+  const { offered, included } = getCreationInputsInRecipe(cards, item);
+  return offered.length - included;
 }
 
 /** The note above a recipe's items once people have it (recipe audit S2). */
@@ -946,26 +965,17 @@ export function getDefaultCreationPackageDraft(): PostComposerCreationPackageDra
   };
 }
 
-/** The item a creation's exact prompt makes, titled as the web titles it (A-F16). */
-const CREATION_PROMPT_CARD_TITLE = 'Exact generation prompt';
-
-function isCreationPromptCard(card: PostComposerResourceCardDraft, prompt: string) {
-  return Boolean(prompt) && card.type === 'prompt' && card.textContent.trim() === prompt;
-}
-
 /**
  * The exact prompt's item, fixed in a creation's recipe (owner, 2026-11-03):
- * drawn with neither Edit nor Remove. Found by its text, or by its title for
- * one a sell link wrote from the prompt the creation ran with, as the web finds it.
+ * drawn with neither Edit nor Remove. Its title and its text both say so
+ * (`isLockedCreationPromptItem`, the rule the web and the server read): one
+ * the creator rewrote, or their own card holding the same words, stays theirs.
  */
 export function isLockedCreationPromptCard(
   card: PostComposerResourceCardDraft,
   generation: GenerationListItem | null | undefined,
 ): boolean {
-  const prompt = generation?.prompt?.trim() ?? '';
-  return Boolean(prompt)
-    && card.type === 'prompt'
-    && (card.textContent.trim() === prompt || card.title.trim() === CREATION_PROMPT_CARD_TITLE);
+  return isLockedCreationPromptItem(card, generation?.prompt);
 }
 
 /**
@@ -1001,46 +1011,101 @@ export function withCreationPromptCard(
   prompt: string | null | undefined,
 ): PostComposerResourceDraft {
   const text = prompt?.trim() ?? '';
-  if (!text || resource.cards.some((card) => card.type === 'prompt')) {
+  if (!needsCreationPromptItem(resource.cards, text)) {
     return resource;
   }
   return {
     ...resource,
     cardAuthoringMode: 'cards',
-    cards: [
-      createPostComposerResourceCard('prompt', { title: CREATION_PROMPT_CARD_TITLE, textContent: text }),
-      ...resource.cards,
-    ],
+    cards: [createCreationPromptCard(text), ...resource.cards],
   };
 }
 
 /**
- * Inputs the publish or an earlier save copied into the recipe come back as
- * its own file items, kept in the creator's references folder for this
- * creation: listed with the items, where they can be removed one by one.
+ * Undo put a creator's own prompt card back where the creation's exact one
+ * stood in for it (`withCreationPromptCard` adds it to a recipe left with no
+ * prompt card). A recipe with a prompt item of its own keeps that one alone,
+ * so the stand-in goes again; with no other prompt card there, it stays.
  */
-export function hasCopiedCreationReferences(
-  cards: PostComposerResourceCardDraft[] | null | undefined,
-  generationId: string | null | undefined,
-): boolean {
-  if (!generationId) return false;
-  return (cards ?? []).some((card) => card.attachments.some((attachment) => (
-    typeof attachment.storagePath === 'string'
-    && attachment.storagePath.includes(`/generation-references/${generationId}/`)
-  )));
+export function withoutStandInCreationPrompt(
+  draft: PostComposerDraft,
+  generation: GenerationListItem | null | undefined,
+): PostComposerDraft {
+  const cards = draft.resource.cards;
+  const standIn = cards.find((card) => card.id === CREATION_PROMPT_CARD_ID && isLockedCreationPromptItem(card, generation?.prompt));
+  const keepsOwnPrompt = cards.some((card) => card !== standIn && card.type === 'prompt' && card.textContent.trim());
+  if (!standIn || !keepsOwnPrompt) return draft;
+  return { ...draft, resource: { ...draft.resource, cards: cards.filter((card) => card !== standIn) } };
+}
+
+/**
+ * The exact prompt's card, under the one id both composers give it: a draft
+ * kept on the device and the same creation opened afresh then read the same.
+ * A random id read as unsaved work on every reopen (#677's review).
+ */
+function createCreationPromptCard(prompt: string): PostComposerResourceCardDraft {
+  return createPostComposerResourceCard('prompt', {
+    id: CREATION_PROMPT_CARD_ID,
+    title: CREATION_PROMPT_ITEM_TITLE,
+    textContent: prompt,
+  });
+}
+
+/**
+ * The saved inputs "From this creation" offers (those the server copies into
+ * the recipe, `recipeCopyable`), and how many the recipe holds a copy of
+ * already: an earlier save's or the publish's, listed with the items. They are
+ * "included" only once every one is.
+ */
+export function getCreationInputsInRecipe(
+  cards: readonly PostComposerResourceCardDraft[] | null | undefined,
+  generation: GenerationListItem | null | undefined,
+): { offered: GenerationReference[]; included: number; allIncluded: boolean } {
+  const offered = recipeCopyableInputs(generation?.input_media);
+  const storagePaths = (cards ?? []).flatMap((card) => card.attachments.map((attachment) => attachment.storagePath));
+  const included = countCreationInputsInRecipe(offered, storagePaths, generation?.id);
+  return { offered, included, allIncluded: offered.length > 0 && included === offered.length };
 }
 
 /**
  * Whether the recipe carries the creation's exact prompt ("Prompt recipe
- * ready"). Read from the cards by their text, as the web composer does: found
- * by the app's own card id, a prompt card made on the web read as missing.
+ * ready", "Exact prompt included."): a prompt card holding its text, whatever
+ * the card is titled (`holdsCreationPrompt`). Every locked card is one.
  */
 export function hasCreationPromptCard(
   cards: PostComposerResourceCardDraft[] | null | undefined,
   generation: GenerationListItem | null | undefined,
 ): boolean {
-  const prompt = generation?.prompt?.trim() ?? '';
-  return (cards ?? []).some((card) => isCreationPromptCard(card, prompt));
+  return (cards ?? []).some((card) => holdsCreationPrompt(card, generation?.prompt));
+}
+
+/**
+ * The draft as the server saved it (#677's review): the items it put into the
+ * recipe beside those sent (the exact prompt, the saved inputs it copied)
+ * become cards, as a reload of the post would draw them, and the switch that
+ * asked for the inputs is off again. An item a card already holds (its file,
+ * or for the prompt its text) is not drawn twice.
+ */
+export function adoptRecipeItemsAdded(
+  draft: PostComposerDraft,
+  items: readonly PostResourceItem[] | null | undefined,
+): PostComposerDraft {
+  const cards = draft.resource.cards ?? [];
+  const heldPaths = new Set(cards.flatMap((card) => card.attachments.map((attachment) => attachment.storagePath).filter(Boolean)));
+  const fresh = (items ?? []).filter((item) => (item.storagePath
+    ? !heldPaths.has(item.storagePath)
+    : !(item.type === 'prompt' && cards.some((card) => holdsCreationPrompt(card, item.textContent)))));
+  const adopted = fresh.length > 0
+    ? hydratePostComposerResourceCards({ accessMode: draft.resource.accessMode, resources: { items: [...fresh] } })
+    : [];
+
+  return {
+    ...draft,
+    resource: adopted.length > 0
+      ? { ...draft.resource, cardAuthoringMode: 'cards', cards: [...cards, ...adopted] }
+      : draft.resource,
+    creationPackage: { ...getCreationPackageDraft(draft), attachGenerationReferences: false },
+  };
 }
 
 export function getDefaultPostComposerDraft(): PostComposerDraft {
@@ -1192,16 +1257,20 @@ function buildDescriptionPatch(draft: PostComposerDraft): { description?: string
 export function buildUpdatePostPayload(
   isGenerationBacked: boolean,
   draft: PostComposerDraft,
+  generation?: GenerationListItem | null,
 ) {
+  // As on a publish: the server copies a creation's saved inputs into the
+  // recipe sent when asked, from the editor too (owner, 2026-11-03). A recipe
+  // of the inputs alone is sent as one, with no item of its own: sent as No
+  // recipe, the save deleted the recipe it meant to fill (#677's review).
+  const includeGenerationReferences = isGenerationBacked
+    && draft.resource.accessMode !== 'none'
+    && willAttachGenerationReferences(generation, draft);
   const resourceBundlePatch = {
-    resourceBundle: buildPostResourceBundleInput(draft.resource) ?? { accessMode: 'none' as const },
-    // As on a publish: the server copies a creation's saved inputs into the
-    // recipe sent when asked, from the editor too (owner, 2026-11-03).
-    ...(isGenerationBacked
-      && getCreationPackageDraft(draft).attachGenerationReferences
-      && draft.resource.accessMode !== 'none'
-      ? { includeGenerationReferences: true }
-      : {}),
+    resourceBundle: buildPostResourceBundleInput(draft.resource)
+      ?? (includeGenerationReferences ? buildCreationReferencesOnlyBundleInput(draft.resource) : null)
+      ?? { accessMode: 'none' as const },
+    ...(includeGenerationReferences ? { includeGenerationReferences: true } : {}),
   };
   const descriptionPatch = buildDescriptionPatch(draft);
 
@@ -1261,9 +1330,10 @@ export type PostComposerValidationOptions = {
    */
   grandfatheredTitle?: string | null;
   /**
-   * The publish copies the creation's saved inputs into the recipe ("Include
-   * creation references"), which then has something in it with no item of its
-   * own (recipe audit A-F9). `willAttachGenerationReferences` answers it.
+   * A publish or an edit's save copies the creation's saved inputs into the
+   * recipe ("Include creation references"), which then has something in it
+   * with no item of its own (recipe audit A-F9). `willAttachGenerationReferences`
+   * answers it.
    */
   includesCreationReferences?: boolean;
 };
@@ -1813,37 +1883,26 @@ export function getPostComposerPreviewStatusLabel(
 
 /**
  * The creation's exact prompt added to its recipe, which turns a free one on
- * where there was none. Nothing takes it out again: the item is locked
- * (`isLockedCreationPromptCard`).
+ * where there was none. A recipe with a prompt item of its own keeps that one
+ * alone (`needsCreationPromptItem`). Nothing takes the exact one out again:
+ * its item is locked (`isLockedCreationPromptCard`).
  */
 export function applyCreationPromptResource(
   draft: PostComposerDraft,
   selectedGeneration: GenerationListItem | null | undefined,
 ): PostComposerDraft {
   const prompt = selectedGeneration?.prompt?.trim() ?? '';
-  const cards = draft.resource.cards ?? [];
+  const withPrompt = withCreationPromptCard(draft.resource, prompt);
 
   // The Recipe preview is suggested from the items as for any other item
   // ("Includes the prompt."), as the web composer does (recipe audit A-F16).
   return followSuggestedRecipePreview(draft, {
     ...draft,
     resource: {
-      ...draft.resource,
+      ...withPrompt,
       cardAuthoringMode: 'cards',
       accessMode: draft.resource.accessMode === 'none' ? 'free' : draft.resource.accessMode,
       promptText: draft.resource.promptText.trim() ? draft.resource.promptText : prompt,
-      // A card made on the web, or by an earlier save, is the prompt already.
-      // A new one takes its own id, so it cannot collide with an earlier card
-      // whose text was edited away from the prompt.
-      cards: cards.some((card) => isCreationPromptCard(card, prompt))
-        ? cards
-        : [
-            ...cards,
-            createPostComposerResourceCard('prompt', {
-              title: CREATION_PROMPT_CARD_TITLE,
-              textContent: prompt,
-            }),
-          ],
     },
   }, selectedGeneration);
 }
@@ -2032,17 +2091,26 @@ export function getPublishGenerationMediaKind(item: GenerationListItem): 'image'
   return 'image';
 }
 
+/**
+ * Whether the creation has saved inputs to offer its recipe: those the server
+ * copies (`recipeCopyable`). An input in another account's folder, or one an
+ * older run's settings name, is not copied, so it is not offered either.
+ */
 export function hasGenerationReferences(item: GenerationListItem | null | undefined) {
-  return Boolean(item?.input_media?.some((media) => media.url || media.kind));
+  return recipeCopyableInputs(item?.input_media).length > 0;
 }
 
+/**
+ * Whether the save asks the server for the creation's saved inputs: switched
+ * on, with some offered input the recipe does not hold yet.
+ */
 export function shouldIncludeGenerationReferences(
   item: GenerationListItem,
   draft: PostComposerDraft
 ) {
-  return draft.mode === 'creation'
-    && getCreationPackageDraft(draft).attachGenerationReferences
-    && hasGenerationReferences(item);
+  if (draft.mode !== 'creation' || !getCreationPackageDraft(draft).attachGenerationReferences) return false;
+  const { offered, included } = getCreationInputsInRecipe(draft.resource.cards, item);
+  return offered.length > included;
 }
 
 export function willAttachGenerationReferences(

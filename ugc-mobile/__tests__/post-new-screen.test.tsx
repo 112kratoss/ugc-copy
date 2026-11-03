@@ -60,7 +60,7 @@ const profileState = vi.hoisted(() => ({ profile: null as Record<string, unknown
 // The files still on the device, by uri; anything else reads as gone.
 const deviceFileState = vi.hoisted(() => ({ uris: new Set<string>() }));
 // The creation the composer is opened on, when a case needs one other than `generationItem`.
-const generationState = vi.hoisted(() => ({ item: null as Record<string, unknown> | null }));
+const generationState = vi.hoisted(() => ({ item: null as Record<string, unknown> | null, pending: false }));
 const mutationState = vi.hoisted(() => ({
   mutate: vi.fn(),
   isPending: false,
@@ -104,7 +104,8 @@ const generationItem = {
   title: 'Hero product image',
   description: 'A polished output',
   prompt: 'Exact glossy product prompt',
-  input_media: [{ url: 'https://cdn.example.com/reference.jpg', kind: 'image' }],
+  // Offered to the recipe: the server copies it (`recipeCopyable`).
+  input_media: [{ id: 'input-1', url: 'https://cdn.example.com/reference.jpg', kind: 'image', recipeCopyable: true }],
   linked_post_id: null,
 };
 
@@ -154,7 +155,9 @@ vi.mock('@tanstack/react-query', () => ({
   useQuery: (options: { queryKey: string[]; enabled?: boolean; gcTime?: number }) => {
     queryOptionsState.options.push(options);
     if (options.queryKey[0] === 'post-new-generations') {
-      return { data: { generations: [generationState.item ?? generationItem] }, error: null, isLoading: false, isSuccess: true };
+      return generationState.pending
+        ? { data: undefined, error: null, isLoading: true, isSuccess: false, isError: false }
+        : { data: { generations: [generationState.item ?? generationItem] }, error: null, isLoading: false, isSuccess: true };
     }
     if (options.queryKey[0] === 'post-edit') {
       return postEditState.post
@@ -279,6 +282,7 @@ vi.mock('lucide-react-native', () => {
     ImageIcon: icon('image-icon'),
     Link2: icon('link-icon'),
     Lock: icon('lock-icon'),
+    Music: icon('music-icon'),
     Package: icon('package-icon'),
     Pencil: icon('pencil-icon'),
     Play: icon('play-icon'),
@@ -444,6 +448,7 @@ describe('mobile external post composer', () => {
     routerState.canGoBack.mockReset();
     routerState.canGoBack.mockReturnValue(false);
     generationState.item = null;
+    generationState.pending = false;
     profileState.profile = null;
     authState.user.user_metadata = {};
     authState.refreshProfile.mockClear();
@@ -2773,8 +2778,9 @@ describe('mobile external post composer', () => {
       id: 'post-from-creation',
       title: 'Hero product image',
       description: null,
-      // The owner post carries its creation's prompt (owner-posts.ts).
-      prompt: 'Exact glossy product prompt',
+      // A compose submission stores no prompt on the post: the exact prompt
+      // comes from the creation's own read (#677's review).
+      prompt: null,
       body: '',
       postFormat: 'media',
       generationId: 'gen-1',
@@ -2808,7 +2814,7 @@ describe('mobile external post composer', () => {
       expect(pressables(tree, 'Edit Exact generation prompt')).toHaveLength(0);
 
       expect(text).toContain('1 saved input');
-      expect(tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessibilityLabel === 'Saved input 1')).toHaveLength(1);
+      expect(tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessibilityLabel === 'Reference image')).toHaveLength(1);
       expect(toggle(tree, 'Include creation references').props.value).toBe(false);
       // Where the post starts: nothing for the leave guard to keep.
       expect(gestureEnabled(tree)).toBe(true);
@@ -2825,8 +2831,9 @@ describe('mobile external post composer', () => {
     });
 
     // The save copies the inputs too now (owner, 2026-11-03), so an edit offers
-    // them; a prompt card made on the web is the creation's prompt, kept as it is.
-    it('offers the references on an edit, and reads a prompt card made on the web as the locked prompt', async () => {
+    // them. A prompt card made on the web under its kind's title holds the
+    // exact prompt, but is the creator's card: it stays theirs to edit (#677's review).
+    it('offers the references on an edit, and keeps a prompt card made on the web editable', async () => {
       paramsState.params = { postId: 'post-from-creation' };
       postEditState.post = creationPost({
         accessMode: 'free',
@@ -2841,7 +2848,8 @@ describe('mobile external post composer', () => {
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
       expect(collectText(tree.root)).toContain('1 item');
-      expect(pressables(tree, 'Remove Prompt or script')).toHaveLength(0);
+      expect(collectText(tree.root).some((line) => line.startsWith('Exact prompt included.'))).toBe(true);
+      expect(pressables(tree, 'Remove Prompt or script')).toHaveLength(1);
       expect(toggle(tree, 'Include creation references').props.value).toBe(false);
 
       renderer.act(() => toggle(tree, 'Include creation references').props.onValueChange(true));
@@ -2901,6 +2909,121 @@ describe('mobile external post composer', () => {
       expect(collectText(tree.root)).toContain('Saved inputs included in this recipe. They are listed with the items below.');
       expect(toggle(tree, 'Include creation references')).toBeUndefined();
       expect(collectText(tree.root)).toContain('2 items');
+    });
+
+    // #677's review: the edit took its prompt from the post row, which a
+    // compose submission leaves empty, so it never added one. It waits for the
+    // creation's own read, behind "Loading your post".
+    it('waits for the creation’s read before it opens an edit', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost({ accessMode: 'free', previewText: 'A lighting guide.', resources: { items: [] } });
+      generationState.pending = true;
+      const tree = await renderScreen();
+
+      expect(collectText(tree.root)).toContain('Loading your post');
+      expect(collectText(tree.root)).not.toContain('Exact generation prompt');
+    });
+
+    // #677's review: the caption keyed on the creation, not the recipe, and a
+    // recipe whose own prompt was removed never got the exact one back.
+    it('says the exact prompt is in only while it is, and puts it back in place of the creator’s own, until Undo', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost({
+        accessMode: 'free',
+        previewText: 'My own prompt and a lighting guide.',
+        resources: {
+          items: [
+            { id: 'own', type: 'prompt', title: 'My prompt', textContent: 'My own wording', sortOrder: 0 },
+            { id: 'guide', type: 'note', title: 'Lighting guide', textContent: 'Key light at 45 degrees.', sortOrder: 1 },
+          ],
+        },
+      });
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      const captioned = () => collectText(tree.root).some((line) => line.startsWith('Exact prompt included.'));
+
+      // A recipe with a prompt of its own keeps it alone, and does not hold the exact one.
+      expect(collectText(tree.root)).not.toContain('Exact generation prompt');
+      expect(captioned()).toBe(false);
+
+      await renderer.act(async () => {
+        findPressableByAccessibilityLabel(tree.root, 'Remove My prompt').props.onPress();
+        await Promise.resolve();
+      });
+      expect(collectText(tree.root)).toContain('Exact generation prompt');
+      expect(pressables(tree, 'Remove Exact generation prompt')).toHaveLength(0);
+      expect(captioned()).toBe(true);
+
+      await renderer.act(async () => {
+        findPressableByAccessibilityLabel(tree.root, 'Undo removing My prompt').props.onPress();
+        await Promise.resolve();
+      });
+      expect(collectText(tree.root)).toContain('My prompt');
+      expect(collectText(tree.root)).not.toContain('Exact generation prompt');
+    });
+
+    // #677's review: an edit with no item of its own and the inputs switched
+    // on sent No recipe, and the save deleted the recipe without a question.
+    it('saves a recipe of the inputs alone from an edit as a recipe, asking nothing', async () => {
+      generationState.item = { ...generationItem, prompt: null };
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost({ accessMode: 'free', previewText: 'The product reference behind this still.', resources: { items: [] } });
+      authState.api.updatePost.mockResolvedValueOnce({ success: true, postId: 'post-from-creation', visibility: 'public' });
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => toggle(tree, 'Include creation references').props.onValueChange(true));
+      expect(collectText(tree.root)).toContain('Creation references');
+
+      await renderer.act(async () => {
+        findPressableByAccessibilityLabel(tree.root, 'Save changes').props.onPress();
+        await Promise.resolve();
+      });
+      expect(alertState.alert).not.toHaveBeenCalled();
+      expect(mutationState.mutate).toHaveBeenCalledWith('public');
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+      expect(authState.api.updatePost.mock.calls.at(-1)?.[1]).toMatchObject({
+        includeGenerationReferences: true,
+        resourceBundle: { accessMode: 'free', resources: { items: [] } },
+      });
+    });
+
+    // #677's review: the strip promised inputs the server does not copy.
+    it('shows and offers only the saved inputs the server copies, and an audio input as audio', async () => {
+      generationState.item = {
+        ...generationItem,
+        input_media: [
+          { id: 'input-1', url: 'https://cdn.example.com/reference.jpg', kind: 'image', recipeCopyable: true },
+          { id: 'input-2', url: 'https://cdn.example.com/voice.mp3', mediaType: 'audio', role: 'reference_audio', recipeCopyable: true },
+          { id: 'input-3', url: 'https://cdn.example.com/theirs.jpg', kind: 'image', recipeCopyable: false },
+          { id: 'input-4', url: 'https://cdn.example.com/legacy.jpg', kind: 'image' },
+        ],
+      };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(collectText(tree.root)).toContain('2 saved inputs');
+      const tiles = tree.root.findAll((node) => String(node.type) === 'view' && typeof node.props.accessibilityLabel === 'string'
+        && ['Reference image', 'Reference audio'].includes(node.props.accessibilityLabel));
+      expect(tiles.map((node) => node.props.accessibilityLabel)).toEqual(['Reference image', 'Reference audio']);
+      expect(tiles[1].findAll((node) => String(node.type) === 'music-icon')).toHaveLength(1);
+    });
+
+    // #677's review: the client never learned what the copy did.
+    it('says which saved inputs a save could not copy into the recipe', async () => {
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      renderer.act(() => mutationState.options?.onSuccess?.({
+        postId: 'post-123',
+        recipeItemsAdded: [],
+        referencesNotCopied: 1,
+      } as { postId?: string | null }));
+
+      expect(alertState.alert).toHaveBeenCalledWith(
+        'Posted',
+        '1 saved input could not be copied into the recipe. Include it again and save to try once more.',
+      );
     });
   });
 
