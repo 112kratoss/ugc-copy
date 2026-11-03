@@ -158,6 +158,7 @@ vi.mock('@/components/viewer-actions-menu', () => ({
 }));
 
 vi.mock('@/components/media-zoom', () => ({
+  MediaZoomCarriedPicture: nothing,
   MediaZoomChrome: passThrough,
   MediaZoomStage: passThrough,
   peekOpeningPost: () => null,

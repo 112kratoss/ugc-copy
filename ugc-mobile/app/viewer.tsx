@@ -17,7 +17,7 @@ import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomProgress, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
-import { MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
+import { MediaZoomCarriedPicture, MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
@@ -2157,6 +2157,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         <MediaSlidePage
           active={videoPlaybackActive}
           slideActive={active}
+          onScreen={active}
           prepareVideo={prepareVideo}
           authReturnTo={authReturnTo}
           bottomInset={bottomInset}
@@ -2218,6 +2219,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
             slideActive={active}
             // The page on screen is where the zoom's close shrinks the reel out of.
             zoomTarget={active && currentHorizontalIndex === pageIndex}
+            onScreen={active && currentHorizontalIndex === pageIndex}
             prepareVideo={prepareVideo && preparedMediaIndex === pageIndex}
             authReturnTo={authReturnTo}
             bottomInset={bottomInset}
@@ -2408,6 +2410,7 @@ function MediaSlidePage({
   initialSection,
   slideActive,
   zoomTarget = false,
+  onScreen = false,
   prepareVideo,
   authReturnTo,
   bottomInset,
@@ -2433,6 +2436,11 @@ function MediaSlidePage({
   slideActive: boolean;
   /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
   zoomTarget?: boolean;
+  /**
+   * This page is the one on screen, on the slide the reader is on: a media page
+   * draws the tapped tile's picture there until its own has painted.
+   */
+  onScreen?: boolean;
   prepareVideo: boolean;
   /** Where the Details page's "Sign in to unlock" comes back to. */
   authReturnTo: string;
@@ -2489,6 +2497,7 @@ function MediaSlidePage({
           active={active}
           slideActive={slideActive}
           zoomTarget={zoomTarget}
+          onScreen={onScreen}
           prepareVideo={prepareVideo}
           onDoubleTapSave={onDoubleTapSave}
           width={width}
@@ -2535,6 +2544,7 @@ function ImmersiveMedia({
   active,
   slideActive,
   zoomTarget = false,
+  onScreen = false,
   prepareVideo,
   onDoubleTapSave,
   width,
@@ -2546,6 +2556,8 @@ function ImmersiveMedia({
   slideActive: boolean;
   /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
   zoomTarget?: boolean;
+  /** This page is the one on screen, on the slide the reader is on; see `MediaSlidePage`. */
+  onScreen?: boolean;
   prepareVideo: boolean;
   onDoubleTapSave: (position: DoubleTapSavePosition) => void;
   width: number;
@@ -2620,6 +2632,12 @@ function ImmersiveMedia({
   // and shrink the reel back out of (lib/apple-zoom.ts).
   const zoomTargetRect = zoomTarget ? <AppleZoomTarget rect={mediaRectInScreen({ width, height }, mediaAspectRatio)} /> : null;
 
+  // The tapped tile's picture, over this page's own until that has painted,
+  // when the reel opened on this post. It goes straight over the picture, so
+  // everything drawn over that — the video's view, its badges, and the rail,
+  // caption and Back the slide and the reel add on top — is over it as well.
+  const carriedPicture = onScreen ? <MediaZoomCarriedPicture itemId={postId} /> : null;
+
   if (mediaItem.mediaKind === 'video') {
     return (
       <View style={{ width, height, backgroundColor: mediaColors.mediaGround }}>
@@ -2640,6 +2658,7 @@ function ImmersiveMedia({
             style={{ position: 'absolute', width, height }}
           />
         ) : null}
+        {carriedPicture}
         {prepareVideo && mediaItem.url ? (
           <ActiveVideo
             key={mediaItem.id}
@@ -2693,6 +2712,7 @@ function ImmersiveMedia({
           recyclingKey={`viewer:${mediaItem.id}`}
           style={{ width, height }}
         />
+        {carriedPicture}
         {zoomTargetRect}
       </DoubleTapPressable>
     );
