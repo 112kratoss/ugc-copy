@@ -48,8 +48,8 @@ function remixReads() {
   }));
 }
 
-function renew({ formAccount = 'user-1', originalResult = null as string | null } = {}) {
-  return renderHook(() => useRemixLinkRenewal({ remixId: 'gen-1', remixPostId: 'post-1', formAccount, pageToken: 'page-token', originalResult })).result.current;
+function renew({ formAccount = 'user-1', pageToken = 'page-token' as string | null, originalResult = null as string | null } = {}) {
+  return renderHook(() => useRemixLinkRenewal({ remixId: 'gen-1', remixPostId: 'post-1', formAccount, pageToken, originalResult })).result.current;
 }
 
 beforeEach(() => {
@@ -83,6 +83,17 @@ describe('useRemixLinkRenewal', () => {
     await renew()(lapsed);
 
     expect(remixReads().map(({ authorization }) => authorization)).toEqual(['Bearer page-token']);
+  });
+
+  // The read is the form's account's or none: never the other account's session the browser may
+  // hold (a sign-in in another tab), which reads the remix through that account's gate.
+  it('reads nothing where the browser holds another account’s session and the page has none', async () => {
+    browser.session = { access_token: 'other-token', user: { id: 'user-2' } };
+    const lapsed = signedStorageLink(CLIP);
+    advancePastTheHour();
+
+    await expect(renew({ pageToken: null })(lapsed)).resolves.toBe(lapsed);
+    expect(remixReads()).toEqual([]);
   });
 
   it('serves the links asked for while a read is out from that one read', async () => {

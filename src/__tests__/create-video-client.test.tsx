@@ -8528,6 +8528,24 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByText('Original result · intense')).toBeNull();
     });
 
+    // The read for a fresh link is the form's account's: the page's session where the browser holds
+    // another account's (a sign-in in another tab), which the remix source refuses here.
+    it('reads the remix for a fresh link as the form’s account, not the other account the browser holds', async () => {
+      movePageClock();
+      authClient.session = { access_token: 'token-user-2', user: { id: 'user-2' } };
+      stubRemix(() => ownRunRemix(), { refusedToken: 'token-user-2' });
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
+      const use = await screen.findByRole('button', { name: 'Use as reference' });
+
+      advancePastTheHour();
+      fireEvent.click(use);
+
+      const clips = await screen.findByRole('list', { name: 'Reference videos' });
+      expect(within(clips).getByText('4.2s clip')).toBeInTheDocument();
+      const reads = fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'));
+      expect(reads.map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token', 'Bearer test-token']);
+    });
+
     it('plays the original past the hour by a link that opens', async () => {
       movePageClock();
       stubRemix(() => ownRunRemix());

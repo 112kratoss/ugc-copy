@@ -3524,6 +3524,22 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
     expect(using).not.toHaveAttribute('aria-busy');
   });
 
+  // The read for a fresh link is the form's account's: the page's session where the browser holds
+  // another account's (a sign-in in another tab). The remix source answers no other.
+  it('reads the remix for a fresh link as the form’s account, not the other account the browser holds', async () => {
+    movePageClock();
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-user-2', user: { id: 'user-2' } } } });
+    const fetchMock = installFetch({ remixBundle: (authorization) => (authorization === 'Bearer test-token' ? ownRunRemix() : null) });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    expectOpensObject((await screen.findByAltText('Original result · Harbour')).getAttribute('src')!, RESULT);
+    expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init))).toEqual(['Bearer test-token', 'Bearer test-token']);
+  });
+
   it('shows the original past the hour by a link that opens', async () => {
     movePageClock();
     installFetch({ remixBundle: () => ownRunRemix() });

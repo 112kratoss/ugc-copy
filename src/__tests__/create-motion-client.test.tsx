@@ -2561,6 +2561,23 @@ describe('CreateMotionClient a remix kept open past its links’ hour', () => {
     expect(screen.getByRole('button', { name: 'Use as reference video' })).toBeEnabled();
   });
 
+  // The read for a fresh link is the form's account's: the page's session where the browser holds
+  // another account's (a sign-in in another tab), which the remix source refuses here.
+  it('reads the remix for a fresh link as the form’s account, not the other account the browser holds', async () => {
+    movePageClock();
+    sessionState.session = { access_token: 'token-user-2', user: { id: 'user-2' } };
+    refusedRemixToken = 'token-user-2';
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
+
+    expect(await screen.findByRole('button', { name: 'Using original result' })).toBeDisabled();
+    expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+    expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token', 'Bearer test-token']);
+  });
+
   it('plays the original past the hour by a link that opens', async () => {
     movePageClock();
     render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
