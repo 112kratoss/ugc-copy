@@ -2220,7 +2220,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
             active={active && currentHorizontalIndex === pageIndex && (page.type !== 'media' || videoPlaybackActive)}
             slideActive={active}
             // The page on screen is where the zoom's close shrinks the reel out of.
-            zoomTarget={active && currentHorizontalIndex === pageIndex}
+            zoomTarget
             onScreen={active && currentHorizontalIndex === pageIndex}
             prepareVideo={prepareVideo && preparedMediaIndex === pageIndex}
             authReturnTo={authReturnTo}
@@ -2436,7 +2436,7 @@ function MediaSlidePage({
   initialSection?: PostDetailsSection;
   /** The reader is on this slide, overlays included -- see ActiveVideo's rewind. */
   slideActive: boolean;
-  /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
+  /** While on screen, this page marks where the zoom's close shrinks out of (iOS 18). */
   zoomTarget?: boolean;
   /**
    * This page is the one on screen, on the slide the reader is on: a media page
@@ -2556,7 +2556,7 @@ function ImmersiveMedia({
   mediaItem: ShowcaseMediaItem;
   active: boolean;
   slideActive: boolean;
-  /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
+  /** While on screen, this page marks where the zoom's close shrinks out of (iOS 18). */
   zoomTarget?: boolean;
   /** This page is the one on screen, on the slide the reader is on; see `MediaSlidePage`. */
   onScreen?: boolean;
@@ -2632,7 +2632,7 @@ function ImmersiveMedia({
 
   // Where the media sits on the page, for UIKit's zoom to grow the tile into
   // and shrink the reel back out of (lib/apple-zoom.ts).
-  const zoomTargetRect = zoomTarget ? <AppleZoomTarget rect={mediaRectInScreen({ width, height }, mediaAspectRatio)} /> : null;
+  const zoomTargetRect = zoomTarget && onScreen ? <AppleZoomTarget rect={mediaRectInScreen({ width, height }, mediaAspectRatio)} /> : null;
 
   // The tapped tile's picture, over this page's own until that has painted,
   // when the reel opened on this post. It goes straight over the picture, so
