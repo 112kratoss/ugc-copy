@@ -90,16 +90,16 @@ describe('useRemixLinkRenewal', () => {
     expect(remixReads().map(({ authorization }) => authorization)).toEqual(['Bearer page-token']);
   });
 
-  it('serves every lapsed link from one read, those asked together included', async () => {
+  it('serves the links asked for while a read is out from that one read', async () => {
     const opened = answerNow();
     advancePastTheHour();
     const renewLink = renew();
 
-    const [clip, picture] = await Promise.all([
+    const [clip, picture, result] = await Promise.all([
       renewLink(opened.inputs.motion!.referenceVideo!.url!),
       renewLink(opened.inputs.motion!.characterImage!.url!),
+      renewLink(opened.result!.url!, { result: true }),
     ]);
-    const result = await renewLink(opened.result!.url!, { result: true });
 
     expectOpensObject(clip, CLIP);
     expectOpensObject(picture, PICTURE);
@@ -107,16 +107,33 @@ describe('useRemixLinkRenewal', () => {
     expect(remixReads()).toHaveLength(1);
   });
 
-  it('reads again once the answer it holds has lapsed too', async () => {
+  // Each ask made while a read is out is answered by that read, a read that fails or is given up
+  // too: each such ask went on to read again for itself, a herd against the remix source's limit of
+  // 60 reads in ten minutes.
+  it('answers every ask made while a read is out from it, a read that fails included', async () => {
     const opened = answerNow();
+    advancePastTheHour();
+    answer = () => new Response(JSON.stringify({ error: 'Too many requests' }), { status: 429 });
     const renewLink = renew();
-    advancePastTheHour();
-    await renewLink(opened.result!.url!);
-    advancePastTheHour();
+    const asked = [
+      opened.inputs.motion!.referenceVideo!.url!,
+      opened.inputs.motion!.characterImage!.url!,
+      opened.result!.url!,
+    ];
 
-    const renewed = await renewLink(opened.result!.url!);
+    await expect(Promise.all(asked.map((link) => renewLink(link)))).resolves.toEqual(asked);
+    expect(remixReads()).toHaveLength(1);
+  });
 
-    expectOpensObject(renewed, RESULT);
+  // No answer is kept once its read is over: a link asked for afterwards is read for again, so an
+  // answer is never taken for the remix after the remix has changed (its original posted since).
+  it('reads again for a link asked for once the last read is over', async () => {
+    const opened = answerNow();
+    advancePastTheHour();
+    const renewLink = renew();
+
+    expectOpensObject(await renewLink(opened.inputs.motion!.referenceVideo!.url!), CLIP);
+    expectOpensObject(await renewLink(opened.inputs.motion!.characterImage!.url!), PICTURE);
     expect(remixReads()).toHaveLength(2);
   });
 
@@ -154,17 +171,6 @@ describe('useRemixLinkRenewal', () => {
     answer = () => new Response(JSON.stringify(answerNow()), { status: 200 });
     expectOpensObject(await renewLink(lapsed), CLIP);
     expect(remixReads()).toHaveLength(2);
-  });
-
-  it('reads no more for a file the answer it holds does not hand out', async () => {
-    const elsewhere = signedStorageLink('uploads/user-1/hero.png');
-    const lapsedClip = signedStorageLink(CLIP);
-    advancePastTheHour();
-    const renewLink = renew();
-    await renewLink(lapsedClip);
-
-    await expect(renewLink(elsewhere)).resolves.toBe(elsewhere);
-    expect(remixReads()).toHaveLength(1);
   });
 
   it('renews nothing off a remix page', async () => {
