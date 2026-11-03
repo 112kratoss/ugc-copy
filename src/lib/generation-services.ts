@@ -72,6 +72,7 @@ import {
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
+import { checkSeedanceAssetsUsable } from '@/lib/seedance-asset-provenance';
 import { getCanonicalStoredMediaLocation, getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 import { buildKieWebhookCallbackUrl } from '@/lib/kie-webhook';
 import { buildVeoJobsTaskBody, VEO_JOBS_PROVIDER_API_SETTINGS } from '@/lib/veo-provider-api';
@@ -1149,6 +1150,23 @@ function preparedSeedanceAssetIds(assets: SeedanceAssetCollections | null | unde
     if (sourceUrl && assetId) ids.set(sourceUrl, assetId);
   }
   return ids;
+}
+
+/** Each prepared Seedance asset's id, with the file it stands in for: `preparedSeedanceAssetIds` turned round. */
+function preparedSeedanceAssetSources(assets: SeedanceAssetCollections | null | undefined): Map<string, string> {
+  return new Map([...preparedSeedanceAssetIds(assets)].map(([sourceUrl, assetId]) => [assetId, sourceUrl]));
+}
+
+/** The provider asset handles a Seedance 2 request sends, wherever a file goes. */
+function seedanceAssetIdsSent(input: Record<string, unknown>): string[] {
+  const values = [
+    input.first_frame_url,
+    input.last_frame_url,
+    ...[input.reference_image_urls, input.reference_video_urls, input.reference_audio_urls]
+      .flatMap((list) => (Array.isArray(list) ? list : [])),
+  ];
+  return values.filter((value): value is string => typeof value === 'string' && PROVIDER_ASSET_HANDLE_PATTERN.test(value.trim()))
+    .map((value) => value.trim());
 }
 
 function getConfiguredSupabaseOrigin(): string | null {
@@ -3165,6 +3183,19 @@ export async function startVideoGeneration(params: {
           if (resolvedReferenceAudioUrls.length > 0) {
             input.reference_audio_urls = preferPrepared(normalizeMediaUrlList(referenceAudioUrls), resolvedReferenceAudioUrls);
           }
+        }
+
+        // Every asset id the run sends, bare or in a file's place, runs the file it was prepared from:
+        // one prepared from a recipe file runs only for its preparer, while the unlock still holds
+        // (owner, 2026-11-04). Asked before anything is held or sent.
+        const assetUse = await checkSeedanceAssetsUsable({
+          viewerUserId: userId,
+          assetIds: seedanceAssetIdsSent(input),
+          pairedSources: preparedSeedanceAssetSources(seedanceAssets),
+          reads: mediaSourceOptions.recipeCopyReads,
+        });
+        if (!assetUse.ok) {
+          throw new GenerationServiceError(assetUse.message, assetUse.status);
         }
 
         body = {

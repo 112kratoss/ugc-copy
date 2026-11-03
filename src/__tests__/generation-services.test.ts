@@ -31,6 +31,16 @@ const recipeCopyImportMocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/generation-reference-copy-import', () => recipeCopyImportMocks);
 
+// Whether each Seedance asset id a run sends may run for its caller (owner, 2026-11-04): allowed by
+// default; the cases below refuse it.
+const seedanceProvenanceMocks = vi.hoisted(() => ({
+  checkSeedanceAssetsUsable: vi.fn<(params: { viewerUserId: string; assetIds: Iterable<string>; pairedSources?: ReadonlyMap<string, string> }) => Promise<
+    { ok: true } | { ok: false; status: 400 | 500; message: string }
+  >>(async () => ({ ok: true })),
+}));
+
+vi.mock('@/lib/seedance-asset-provenance', () => seedanceProvenanceMocks);
+
 // The generations rows every mock held in the current test.
 const mockedGenerationRows: GenerationRow[][] = [];
 const CREATOR_STORAGE_PATH = new RegExp(`(?:${[...USER_SCOPED_STORAGE_BUCKETS].join('|')})/[^/"]+/`);
@@ -6649,6 +6659,52 @@ describe('generation services', () => {
     expect(inputMediaRows[1]).toMatchObject({
       metadata: expect.objectContaining({ sourceStoragePath: 'uploads/user-1/dance.mp4', durationSeconds: 9.4 }),
     });
+  });
+
+  // Owner, 2026-11-04: an asset id is a bearer handle at the provider. Each one a Seedance run sends,
+  // in a file's place or bare, is asked of before anything is held or sent, with the file it stood in for.
+  it('asks of every Seedance asset id it sends, and refuses a run whose asset the caller may no longer use', async () => {
+    const { startVideoGeneration } = await import('@/lib/generation-services');
+    const ALI = 'https://signed.example.com/ali.png';
+    const start = (supabase: ReturnType<typeof createSupabaseMock>['supabase']) => startVideoGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'Make @ali dance.',
+      model: 'seedance-2',
+      duration: 12,
+      aspectRatio: '9:16',
+      resolution: '480p',
+      referenceMode: 'elements',
+      elements: [{ id: 'imageReferences-1', displayName: 'Ali', handle: '@ali', storagePath: 'uploads/user-1/ali.png', sourceGenerationId: null }],
+      elementImageUrls: [ALI],
+      // A bare handle where a clip goes, as a workflow sends it.
+      referenceVideoUrls: ['asset-bare-1'],
+      seedanceAssets: {
+        images: [{ assetId: 'asset-ali-1', assetType: 'Image', status: 'active', sourceUrl: ALI, error: null, lastCheckedAt: null }],
+      },
+    });
+
+    vi.mocked(fetch).mockClear();
+    seedanceProvenanceMocks.checkSeedanceAssetsUsable.mockClear();
+    seedanceProvenanceMocks.checkSeedanceAssetsUsable.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      message: 'A prepared file in this run comes from a recipe you can no longer use. Remove it and try again.',
+    });
+    const refused = createSupabaseMock();
+    await expect(start(refused.supabase)).rejects.toMatchObject({
+      status: 400,
+      message: 'A prepared file in this run comes from a recipe you can no longer use. Remove it and try again.',
+    });
+    expect(seedanceProvenanceMocks.checkSeedanceAssetsUsable).toHaveBeenCalledWith(expect.objectContaining({
+      viewerUserId: 'user-1',
+      assetIds: ['asset-ali-1', 'asset-bare-1'],
+      pairedSources: new Map([['asset-ali-1', ALI]]),
+    }));
+    // Nothing was held and nothing sent.
+    expect(refused.generations).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   // The catalog adapter kept the compiled prompt as the run's prompt, so a remix of a

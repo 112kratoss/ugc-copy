@@ -3,9 +3,21 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createSeedanceAssetForRoute, getSeedanceAssetForRoute } from '@/lib/seedance-asset-service';
 
-function createAdminSupabaseMock() {
+function createAdminSupabaseMock(options: { recordError?: { code?: string; message: string } } = {}) {
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  // Every Seedance asset record written (`seedance_prepared_assets`, owner 2026-11-04).
+  const records: Array<Record<string, unknown>> = [];
   const client = {
+    from(table: string) {
+      if (table !== 'seedance_prepared_assets') throw new Error(`Unexpected table: ${table}`);
+      return {
+        async insert(row: Record<string, unknown>) {
+          if (options.recordError) return { data: null, error: options.recordError };
+          records.push({ table, ...row });
+          return { data: null, error: null };
+        },
+      };
+    },
     async rpc(fn: string, args: Record<string, unknown>) {
       rpcCalls.push({ fn, args });
       return {
@@ -24,6 +36,7 @@ function createAdminSupabaseMock() {
   return {
     client: client as unknown as SupabaseClient,
     rpcCalls,
+    records,
   };
 }
 
@@ -89,6 +102,31 @@ describe('createSeedanceAssetForRoute', () => {
         }),
       })
     );
+    // Recorded as the preparer's own file: anyone its remix hands the id to may run it.
+    expect(admin.records).toEqual([{
+      table: 'seedance_prepared_assets',
+      asset_id: 'asset-123',
+      owner_user_id: 'user-1',
+      source: 'uploads/user-1/reference.mp4',
+      recipe_file: null,
+      recorded_from: 'prepare',
+    }]);
+  });
+
+  // An asset id the server cannot say the file of is never handed out (owner, 2026-11-04).
+  it('hands out no asset id it could not record', async () => {
+    const admin = createAdminSupabaseMock({ recordError: { code: '57014', message: 'statement timeout' } });
+    const result = await createSeedanceAssetForRoute({
+      adminSupabase: admin.client,
+      apiKey: 'test-key',
+      body: { url: 'uploads/user-1/reference.mp4', assetType: 'Video' },
+      fetcher: vi.fn(async () => ({ ok: true, json: async () => ({ code: 200, data: { assetId: 'asset-123', status: 'processing' } }) } as Response)),
+      resolveStoredMediaUrl: vi.fn(async () => 'https://signed.example.com/uploads/user-1/reference.mp4'),
+      userId: 'user-1',
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 500 });
+    expect(JSON.stringify(result)).not.toContain('asset-123');
   });
 
   it.each([
@@ -151,6 +189,15 @@ describe('createSeedanceAssetForRoute from a recipe file', () => {
     // (`preparedSeedanceAssetIdsFor`), never this reply (2026-11-04 re-review).
     expect(result).toMatchObject({ ok: true, body: { assetId: 'asset-mine', sourceUrl: IMPORTED } });
     expect(resolveStoredMediaUrl).not.toHaveBeenCalled();
+    // Recorded as the copy it runs, so a start refuses it once the unlock is gone (owner, 2026-11-04).
+    expect(admin.records).toEqual([{
+      table: 'seedance_prepared_assets',
+      asset_id: 'asset-mine',
+      owner_user_id: 'user-1',
+      source: COPY,
+      recipe_file: COPY,
+      recorded_from: 'prepare',
+    }]);
   });
 
   it.each([
