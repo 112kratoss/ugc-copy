@@ -922,6 +922,37 @@ describe('listOwnerGenerationsForRoute', () => {
           .toEqual([false, false, false, false]);
       }
     });
+
+    // Owner, 2026-11-03 (#678): what the creator bought in someone else's recipe is theirs to use,
+    // never to give on, though its kept row sits in their own folder like any upload of theirs.
+    it('marks no file the creator bought in someone else’s recipe, however its row says so', async () => {
+      const kept = (id: string, sortOrder: number, metadata: Record<string, unknown>) => ({
+        ...inputRow(id, OWNER, `generation_inputs/${OWNER}/gen-inputs/0${sortOrder}-reference-image.png`, sortOrder),
+        metadata,
+      });
+      const { generations } = await listStoredLibrary({
+        profiles,
+        generations: [libraryRow({ id: 'gen-inputs' })],
+        posts: [],
+        generation_input_media: [
+          inputRow('own', OWNER, `generation_inputs/${OWNER}/gen-inputs/own.png`, 0),
+          // Kept from a run start's import of a seller's copy.
+          kept('imported', 1, { sourceStoragePath: `generation_inputs/${OWNER}/recipe-imports/seller-9/gen-0/00-reference-image-row.png` }),
+          // Marked as it was kept, which a run made again from that run's own copy carries on.
+          kept('marked', 2, { sourceKind: 'recipe-file', sourceStoragePath: `generation_inputs/${OWNER}/gen-0/00-reference-image.png` }),
+          // Kept from the seller's file itself.
+          kept('seller-source', 3, { sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/01-reference-image-row.png' }),
+        ],
+      }, 'id=gen-inputs&includeArchived=true&limit=1');
+
+      expect((generations[0].input_media as Array<{ id: string; recipeCopyable: boolean }>)
+        .map(({ id, recipeCopyable }) => [id, recipeCopyable])).toEqual([
+        ['own', true],
+        ['imported', false],
+        ['marked', false],
+        ['seller-source', false],
+      ]);
+    });
   });
 
   it("answers the contract's failed-only query with the failed runs alone, paged as it pins", async () => {

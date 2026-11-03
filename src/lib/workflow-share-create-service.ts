@@ -6,6 +6,7 @@ import {
   WORKFLOW_CANVAS_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { isRecipeFileSource } from '@/lib/generation-input-origin';
 import {
   createWorkflowShareSnapshotGraph,
   normalizeWorkflowGraph,
@@ -161,7 +162,14 @@ export async function createWorkflowShareForRoute({
 
   const canvasRecord = canvas as WorkflowCanvasShareSourceRow;
   const graph = normalizeWorkflowGraph(canvasRecord.graph);
-  const shareGraph = createWorkflowShareSnapshotGraph(graph);
+  // An input's prepared Seedance asset id runs the file it was prepared from for whoever imports the
+  // share. One prepared from a file of someone else's recipe (its copy, or a start's import of one, in
+  // either layout) is the sharer's to use through their unlock, never to hand on (2026-11-04 re-review):
+  // it is left out, and the input waits empty for the importer's own. The sharer's own files' go along.
+  const sharer = new Set([userId]);
+  const shareGraph = createWorkflowShareSnapshotGraph(graph, {
+    sharesSeedanceAsset: (asset) => !isRecipeFileSource(asset.sourceUrl, sharer),
+  });
   const shareInsert = {
     owner_user_id: userId,
     source_canvas_id: canvasRecord.id,

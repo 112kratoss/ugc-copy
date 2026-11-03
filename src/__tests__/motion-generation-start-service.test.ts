@@ -266,6 +266,8 @@ describe('startMotionGenerationForRoute', () => {
       userClient.client,
       'https://signed.example.com/reference.mp4',
       'user-1',
+      // The start's one read of each unlock, which a character restored from a recipe's copy shares.
+      { recipeCopyReads: expect.any(Map) },
     );
     expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith(resolvedReference);
   });

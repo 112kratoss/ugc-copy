@@ -2,7 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { enforceBackendRateLimit, MEDIA_GENERATION_RATE_LIMIT } from '@/lib/backend-rate-limit';
 import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
+import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
 import { resolveGenerationMediaSource, startMotionGeneration } from '@/lib/generation-services';
+import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,
@@ -80,8 +82,9 @@ async function measureReferenceVideoSeconds(
   supabase: MotionGenerationStartRouteClient,
   referenceVideoUrl: string,
   userId: string,
+  recipeCopyReads: RecipeCopyReads,
 ): Promise<{ source: string; seconds: number }> {
-  const source = await resolveGenerationMediaSource(supabase, referenceVideoUrl, userId);
+  const source = await resolveGenerationMediaSource(supabase, referenceVideoUrl, userId, { recipeCopyReads });
   const measured = /^https:\/\//i.test(source) ? await probeMediaDurationSeconds(source) : null;
   if (measured === null || !Number.isFinite(measured) || measured <= 0) {
     throw new MotionGenerationStartValidationError(
@@ -157,7 +160,9 @@ export async function startMotionGenerationForRoute({
     // Measured once the key is claimed: a start already accepted replays
     // without reading its clip again.
     start: async (clientRequestKeyHash) => {
-      const measured = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId);
+      // One for the start: the clip and the character share each unlock's read.
+      const recipeCopyReads = createRecipeCopyReads();
+      const measured = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId, recipeCopyReads);
       const measuredSeconds = measured.seconds;
       // Kie's motion control takes a clip of 3 to 30 seconds; a shorter one was priced
       // at 3, held, and refused by the provider.
@@ -192,7 +197,8 @@ export async function startMotionGenerationForRoute({
         // The clip as resolved to measure it: the file measured is the one the provider fetches, and a
         // link the client kept past its hour (a remix's original) is not sent on.
         referenceVideoUrl: measured.source,
-        characterImageUrl,
+        // Sent as given, but where a remix restored it from a recipe's copy: imported first, as the clip was.
+        characterImageUrl: await resolveRecipeFileReference(supabase, characterImageUrl, userId, { recipeCopyReads }),
         duration: Number(normalizedSettings.duration),
         referenceVideoSeconds: measuredSeconds,
         characterOrientation: characterOrientation === 'image' ? 'image' : 'video',

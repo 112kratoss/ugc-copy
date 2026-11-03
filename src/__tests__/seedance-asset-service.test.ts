@@ -117,6 +117,61 @@ describe('createSeedanceAssetForRoute', () => {
   });
 });
 
+// 2026-11-03 re-review: a picture of a person restored from a recipe's copy runs on Seedance 2 only as a
+// prepared asset, and the buyer could not prepare the seller's file. It is imported first, with the
+// unlock read again (`reuseRecipeFile`), and the asset is prepared from the buyer's own import.
+describe('createSeedanceAssetForRoute from a recipe file', () => {
+  const COPY = 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-1.png';
+  const IMPORTED = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-1.png?token=fresh';
+  const created = () => vi.fn(async () => ({ ok: true, json: async () => ({ code: 200, data: { assetId: 'asset-mine', status: 'processing' } }) } as Response));
+
+  it('prepares the buyer’s own import of a copy their unlock still covers', async () => {
+    const admin = createAdminSupabaseMock();
+    const fetcher = created();
+    const resolveStoredMediaUrl = vi.fn();
+    const reuseRecipeFile = vi.fn(async () => ({ outcome: 'imported' as const, storagePath: 'generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-1.png', signedUrl: IMPORTED }));
+
+    const result = await createSeedanceAssetForRoute({
+      adminSupabase: admin.client,
+      apiKey: 'test-key',
+      body: { url: COPY, assetType: 'Image' },
+      fetcher,
+      resolveStoredMediaUrl,
+      reuseRecipeFile,
+      userId: 'user-1',
+    });
+
+    expect(reuseRecipeFile).toHaveBeenCalledWith({ source: COPY, viewerUserId: 'user-1' });
+    expect(fetcher).toHaveBeenCalledWith('https://api.kie.ai/api/v1/playground/createAsset', expect.objectContaining({
+      body: JSON.stringify({ assetType: 'Image', url: IMPORTED }),
+    }));
+    // The reply names the buyer's import, but a run records the asset under the link its client sends,
+    // the copy's own: what a remix of the buyer's run is held to is that record, tested where the run
+    // makes it (unified-generation-start-service.test.ts) and where a remix reads it
+    // (`preparedSeedanceAssetIdsFor`), never this reply (2026-11-04 re-review).
+    expect(result).toMatchObject({ ok: true, body: { assetId: 'asset-mine', sourceUrl: IMPORTED } });
+    expect(resolveStoredMediaUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['refuses one the unlock no longer covers', 'not-eligible' as const, 400, 'Asset media must belong to the authenticated user.'],
+    ['fails retryably when the unlock cannot be read', 'failed' as const, 500, 'We could not prepare a file from a recipe you unlocked. Please try again.'],
+  ])('%s, preparing nothing', async (_, outcome, status, error) => {
+    const admin = createAdminSupabaseMock();
+    const fetcher = created();
+
+    await expect(createSeedanceAssetForRoute({
+      adminSupabase: admin.client,
+      apiKey: 'test-key',
+      body: { url: COPY, assetType: 'Image' },
+      fetcher,
+      reuseRecipeFile: vi.fn(async () => ({ outcome })),
+      userId: 'user-1',
+    })).resolves.toMatchObject({ ok: false, status, body: { error } });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
 // A remix the run's inputs are handed to gets the assets prepared from them
 // (owner, 2026-10-29), and reading one back asks Kie, whose answer can carry
 // the link the asset was made from: the creator's upload, file name and all.

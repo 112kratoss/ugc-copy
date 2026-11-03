@@ -13,6 +13,8 @@ import {
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
 import { getVideoReferenceSupport, IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
+import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
+import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
   GENERATION_SUBMISSION_PENDING_MESSAGE,
   getHeldProviderSubmissionGenerationId,
@@ -368,18 +370,19 @@ async function measureMotionReferenceSeconds(params: {
   referenceVideoUrl: string;
   userId: string;
   templateContext?: TemplateGenerationContext;
-}): Promise<{ billableSeconds: number; measuredSeconds: number } | null> {
+  recipeCopyReads: RecipeCopyReads;
+}): Promise<{ source: string; billableSeconds: number; measuredSeconds: number } | null> {
   const { supabase, referenceVideoUrl, userId, templateContext } = params;
   const source = await resolveGenerationMediaSource(
     supabase,
     referenceVideoUrl,
     userId,
-    templateMediaSourceOptions(templateContext),
+    { ...templateMediaSourceOptions(templateContext), recipeCopyReads: params.recipeCopyReads },
   );
   if (!/^https:\/\//i.test(source)) return null;
   const measured = await probeMediaDurationSeconds(source);
   return measured !== null && Number.isFinite(measured) && measured > 0
-    ? { billableSeconds: Math.max(1, Math.ceil(measured)), measuredSeconds: measured }
+    ? { source, billableSeconds: Math.max(1, Math.ceil(measured)), measuredSeconds: measured }
     : null;
 }
 
@@ -1232,11 +1235,21 @@ export async function executeWorkflowRunnableNode(params: {
       return buildBlockedError('Motion control requires both an image input and a video input.');
     }
 
-    const clip = await measureMotionReferenceSeconds({ supabase, referenceVideoUrl, userId, templateContext });
+    // One read of each unlock for the step: its clip and its character share it.
+    const recipeCopyReads = createRecipeCopyReads();
+    const clip = await measureMotionReferenceSeconds({ supabase, referenceVideoUrl, userId, templateContext, recipeCopyReads });
     if (clip === null) {
       return buildBlockedError('The reference clip’s length could not be verified.');
     }
     const duration = clip.billableSeconds;
+    // Sent as given, but where it can be a recipe file: checked against the unlock and imported first,
+    // as every other start does (`resolveRecipeFileReference`).
+    const characterImageUrlToSend = await resolveRecipeFileReference(
+      supabase,
+      characterImageUrl,
+      userId,
+      { ...templateMediaSourceOptions(templateContext), recipeCopyReads },
+    );
 
     const quote = await quoteRunnableNode({
       kind: 'motion',
@@ -1254,8 +1267,9 @@ export async function executeWorkflowRunnableNode(params: {
       userId,
       prompt,
       model: data.model,
-      referenceVideoUrl,
-      characterImageUrl,
+      // The clip as resolved to measure it: the file measured is the one the provider fetches.
+      referenceVideoUrl: clip.source,
+      characterImageUrl: characterImageUrlToSend,
       duration,
       referenceVideoSeconds: clip.measuredSeconds,
       characterOrientation: data.characterOrientation,

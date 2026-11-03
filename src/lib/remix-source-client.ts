@@ -5,6 +5,10 @@ import type {
   RemixResolvedImageElement,
   RemixSourceBundle,
 } from '@/lib/remix-source';
+import {
+  parseRemixInputSlots,
+  type RemixInputSlot,
+} from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
 export interface RemixElementSeed extends ImageElementDescriptor {
   previewUrl: string;
@@ -129,4 +133,52 @@ export function getRemixRestoreWarning(issues: string[]): string | null {
   }
 
   return REMIX_RESTORE_WARNING;
+}
+
+/**
+ * The remix notice's words: where the settings came from, then what could not be restored. The
+ * inputs the creator kept to themselves are no restore failure: their empty boxes have a notice of
+ * their own (`StudioRemixSlotsNotice`, `remixInputSlotsNotice`), which the remixer can put away for
+ * the rest of the remix while this one, with the original and Use as reference, stays.
+ */
+export function getRemixNoticeDescription(title: string | null, restoreWarning: string | null): string {
+  return [
+    `Settings pre-filled from ${title ? `"${title}"` : 'the original creation'}.`,
+    restoreWarning,
+  ].filter(Boolean).join(' ');
+}
+
+/**
+ * The inputs a remix is not given, as empty slots for the remixer's own (owner, 2026-11-03):
+ * what the bundle names, anything malformed left out. A creator keeps them beside its form
+ * and never persists, prices or sends them; a slot leaves the list once its box is filled.
+ */
+export function readRemixInputSlots(bundle: Pick<RemixSourceBundle, 'inputSlots'>): RemixInputSlot[] {
+  return parseRemixInputSlots(bundle.inputSlots);
+}
+
+/** The slots once `slotId`'s box is filled. */
+export function withoutRemixInputSlot(slots: readonly RemixInputSlot[], slotId: string): RemixInputSlot[] {
+  return slots.filter((slot) => slot.id !== slotId);
+}
+
+/**
+ * The side the video creator's inputs open on for a remix's slots: References where a picture,
+ * clip or track waits there (which, on a model that keeps its start image beside its references,
+ * shows a start frame's box too), Frames where only a frame's box does, else null, for the
+ * bundle's own side. Kling 3.0's clips are named video elements beside either side, so they
+ * choose none (`clipsBesideSides`), and on any other model a clip the prompt names by its handle
+ * has no place at all (`remixInputSlotPlaced`), so it chooses none either.
+ */
+export function remixSlotsInputSide(
+  slots: readonly Pick<RemixInputSlot, 'role' | 'handle'>[],
+  { clipsBesideSides }: { clipsBesideSides: boolean },
+): 'frames' | 'references' | null {
+  const onReferences = slots.some((slot) => (
+    slot.role === 'reference_image'
+    || slot.role === 'reference_audio'
+    || (slot.role === 'reference_video' && !clipsBesideSides && !slot.handle)
+  ));
+  if (onReferences) return 'references';
+  return slots.some((slot) => slot.role === 'start_frame' || slot.role === 'end_frame') ? 'frames' : null;
 }

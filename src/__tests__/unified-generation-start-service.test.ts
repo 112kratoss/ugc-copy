@@ -628,6 +628,8 @@ describe('reference lengths a caller reports', () => {
     const startVideo = vi.fn(async () => started);
     const startMotion = vi.fn(async () => started);
     const probeInputDuration = vi.fn(async () => measuredSeconds);
+    // Called as the start calls it: the client, the reference, the caller, and the start's options.
+    const resolveInputSource = vi.fn(async (...call: [unknown, string, string, { recipeCopyReads?: unknown }?]) => resolveLink(call[1]));
     const outcome = startUnifiedGenerationForRoute(
       {
         request: new Request('http://localhost/api/generations', {
@@ -658,11 +660,11 @@ describe('reference lengths a caller reports', () => {
         enforceRateLimit: vi.fn(async () => undefined) as never,
         startVideo: startVideo as never,
         startMotion: startMotion as never,
-        resolveInputSource: vi.fn(async (_client: unknown, url: string) => resolveLink(url)),
+        resolveInputSource: resolveInputSource as never,
         probeInputDuration,
       },
     );
-    return { outcome, startVideo, startMotion, probeInputDuration };
+    return { outcome, startVideo, startMotion, probeInputDuration, resolveInputSource };
   }
 
   it('starts the run on the links its references were measured from', async () => {
@@ -783,6 +785,48 @@ describe('reference lengths a caller reports', () => {
     });
     await expect(honest.outcome).resolves.toMatchObject({ success: true });
     expect(honest.startMotion).toHaveBeenCalledWith(expect.objectContaining({ duration: 30, quotedCostCredits: 300 }));
+  });
+
+  // A remix of a bought recipe restores the character from the seller's copy, whose link went to the
+  // provider as given: no unlock read again, and refused there once its hour ran out (2026-11-03 review).
+  it('imports a motion run’s character restored from a recipe’s copy before the provider is sent it', async () => {
+    const copy = 'https://media.example.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png?token=hour-old';
+    const imported = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-0/00-character-image-row-1.png?token=fresh';
+    const body = motionBody(5, 5);
+    body.inputs[0] = { ...body.inputs[0], url: copy };
+    const run = start({
+      body,
+      measuredSeconds: 5,
+      operation: MOTION_OPERATION,
+      quote: durationPricedQuote,
+      resolveLink: (url) => (url === copy ? imported : url),
+    });
+
+    await expect(run.outcome).resolves.toMatchObject({ success: true });
+    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: imported, referenceVideoUrl: REFERENCE_URL }));
+    // The clip, resolved to be measured, and the character share the start's one read of each unlock.
+    const [clipCall, characterCall] = run.resolveInputSource.mock.calls;
+    expect([clipCall?.[1], characterCall?.[1]]).toEqual([REFERENCE_URL, copy]);
+    expect(characterCall?.[3]?.recipeCopyReads).toBeInstanceOf(Map);
+    expect(characterCall?.[3]?.recipeCopyReads).toBe(clipCall?.[3]?.recipeCopyReads);
+  });
+
+  // A kept input of the caller's own can be a recipe file a remix imported (2026-11-03 re-review): it is
+  // resolved, which checks its mark against the unlock. A link that can be no recipe file goes as given.
+  it('resolves a character that is the caller’s own kept input, and sends any other as it was given', async () => {
+    const run = start({ body: motionBody(5, 5), measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote });
+
+    await expect(run.outcome).resolves.toMatchObject({ success: true });
+    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: CHARACTER_URL }));
+    expect(run.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL, CHARACTER_URL]);
+
+    const elsewhere = 'https://cdn.example.com/character.png';
+    const body = motionBody(5, 5);
+    body.inputs[0] = { ...body.inputs[0], url: elsewhere };
+    const given = start({ body, measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote });
+    await expect(given.outcome).resolves.toMatchObject({ success: true });
+    expect(given.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: elsewhere }));
+    expect(given.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL]);
   });
 
   // A motion run's adapter sends its clip as given, so it is handed the link resolved to measure it: the
@@ -1811,6 +1855,43 @@ describe('a page run the provider is sent', () => {
       referenceVideoUrls: [CLIP],
       seedanceAssets: { videos: [expect.objectContaining({ assetId: 'asset-clip-1', sourceUrl: CLIP })] },
     });
+  });
+
+  // 2026-11-04 re-review: a buyer's client prepares a picture from a recipe's copy (the asset route
+  // imports the copy first and prepares the import) and sends the copy's own link beside the asset's
+  // id. The run records the asset under that link, never the import's, so it is that link a remix of
+  // the buyer's run is held to: no remix is handed the asset, even with an input that recorded it.
+  it('records a picture prepared from a recipe’s copy under the copy’s link, whose asset no remix is handed', async () => {
+    const COPY_LINK = 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-9.png?token=read';
+    const IMPORTED = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-9.png?token=fresh';
+    // The buyer's unlock holds: the start imports the copy again, as their own file (`reuseRecipeFile`).
+    vi.doMock('@/lib/generation-reference-copy-import', async (importOriginal) => ({
+      ...await importOriginal<typeof import('@/lib/generation-reference-copy-import')>(),
+      reuseRecipeFile: vi.fn(async ({ source }: { source: string }) => (source.includes('post_resource_files/seller-9/')
+        ? { outcome: 'imported' as const, storagePath: 'generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-9.png', signedUrl: IMPORTED }
+        : null)),
+    }));
+    const { outcome, request, reservation } = await startFromPage({
+      kind: 'video',
+      modelId: 'seedance-2',
+      prompt: '@lead walks along the harbour at dusk.',
+      shots: [],
+      settings: { aspectRatio: '16:9', sound: false, duration: 5, resolution: '720p', referenceMode: 'elements' },
+      inputs: [{ slot: 'imageReferences', kind: 'image', url: COPY_LINK, assetId: 'asset-mine', label: 'Lead', handle: '@lead' }],
+    }).finally(() => vi.doUnmock('@/lib/generation-reference-copy-import'));
+
+    expect(outcome).toMatchObject({ success: true, modelId: 'seedance-2' });
+    expect(JSON.stringify(request)).toContain('asset-mine');
+    const recorded = (reservation?.p_workflow_settings as { seedanceAssets?: unknown } | undefined)?.seedanceAssets;
+    expect(recorded).toMatchObject({ images: [expect.objectContaining({ assetId: 'asset-mine', sourceUrl: COPY_LINK })] });
+
+    const { preparedSeedanceAssetIdsFor } = await import('@/lib/generation-input-media');
+    const kept = {
+      id: 'row-lead', generationId: 'generation-1', mediaType: 'image' as const, role: 'reference_image', label: 'Lead', url: null,
+      storagePath: 'generation_inputs/user-1/generation-1/00-reference_image.png', sourceGenerationId: null, sortOrder: 0,
+      metadata: { seedanceAsset: { assetId: 'asset-mine', assetType: 'Image', status: 'active' } },
+    };
+    expect(preparedSeedanceAssetIdsFor(recorded, [kept], new Set([kept.id]), new Set(['user-1']))).toBeNull();
   });
 
   it('sends Nano Banana 2 the legend for a mentioned picture and keeps the prompt as written', async () => {

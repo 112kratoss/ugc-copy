@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { StudioModelNotice, StudioOutOfDatePageNotice, StudioQuoteRetry, StudioRemixNotice } from '@/components/CreatorStudio';
+import { StudioModelNotice, StudioOutOfDatePageNotice, StudioQuoteRetry, StudioRemixNotice, StudioRemixSlotsNotice } from '@/components/CreatorStudio';
 
 describe('creator studio notices', () => {
   it('keeps the remix title on remix notices and gives model notices their own', () => {
@@ -54,6 +54,26 @@ describe('creator studio notices', () => {
     // No restored result: nothing to open, and the notice keeps its icon.
     view.rerender(<StudioRemixNotice description={description} original={null} />);
     expect(screen.queryByRole('button', { name: 'View original' })).not.toBeInTheDocument();
+  });
+
+  // A remix's empty boxes have a notice of their own, which can be put away for the remix, as the
+  // app's banner can (2026-11-03), while the remix's own notice stays.
+  it('names a remix’s empty boxes on a card of their own, which puts itself away', () => {
+    const onDismiss = vi.fn();
+    render(
+      <>
+        <StudioRemixNotice description={'Settings pre-filled from "Neon city".'} />
+        <StudioRemixSlotsNotice description="The creator kept 2 inputs to themselves. Add your own in the empty boxes." onDismiss={onDismiss} />
+      </>
+    );
+
+    const boxes = screen.getByText('The creator kept 2 inputs to themselves. Add your own in the empty boxes.').closest('section');
+    expect(boxes).toHaveTextContent('Remix source');
+    expect(boxes).not.toHaveTextContent('Remixing Community Creation');
+    // The remix's own notice has nothing to put away.
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss remix source notice' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it('offers a dismiss button only when the model notice can be dismissed', () => {

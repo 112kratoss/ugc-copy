@@ -754,9 +754,11 @@ export async function listOwnerGenerationsForRoute({
     const sourceGenerationOwners = unreadSourceIds.length > 0
       ? new Map([...pageSourceGenerationOwners, ...await loadSourceGenerationOwners(adminSupabase, unreadSourceIds)])
       : pageSourceGenerationOwners;
-    const ownInputIds = new Set(inputMedia
-      .filter((item) => generationInputOrigin(item, { ownerIds: ownerIdSet, sourceGenerationOwners }) === 'own')
-      .map((item) => item.id));
+    const inputOrigins = new Map(inputMedia.map((item) => [
+      item.id,
+      generationInputOrigin(item, { ownerIds: ownerIdSet, sourceGenerationOwners }),
+    ] as const));
+    const ownInputIds = new Set(inputMedia.filter((item) => inputOrigins.get(item.id) === 'own').map((item) => item.id));
     const paywallPrefill = summaryOnly || template
       ? null
       : buildGenerationPaywallPrefill({
@@ -764,7 +766,9 @@ export async function listOwnerGenerationsForRoute({
         creationMode: generation.creation_mode ?? null,
         prompt: generation.prompt,
         workflowSettings,
-        inputMedia,
+        // A file of someone else's recipe goes in no recipe of this creator's (`isRecipeFileInput`),
+        // so the recipe they start from counts none.
+        inputMedia: inputMedia.filter((item) => inputOrigins.get(item.id) !== 'recipe'),
         ownInputIds,
       });
     const outputUrl = resolveGenerationOutputUrl(adminSupabase, generation, resolvedMediaUrls);
