@@ -27,6 +27,7 @@ import { BACKEND_JOBS_BY_NAME, type BackendJobDefinition } from '@/lib/backend-j
 import { hasFeedEmbeddingWork, runFeedEmbeddingJob } from '@/lib/feed-embeddings';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
+import { sweepRecipeFileCopies } from '@/lib/recipe-copy-sweep';
 import {
   GenerationCompletionBatchError,
   hasDueGenerationCompletionJobs,
@@ -606,6 +607,29 @@ export function runOperationalDataRetentionBackendJob(options: {
     run: (client, context) => pruneOperationalBackendData(client, {
       now: new Date(context.startedAtMs),
     }),
+  });
+}
+
+export function runRecipeCopySweepBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['recipe-copy-sweep'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'recipe_copy_sweep_started',
+      skippedNoWork: 'recipe_copy_sweep_skipped_no_work',
+      skippedLocked: 'recipe_copy_sweep_skipped',
+      completed: 'recipe_copy_sweep_finished',
+      failed: 'recipe_copy_sweep_failed',
+    },
+    // The candidates are the run's own read; a run that finds none reports zeros.
+    hasWork: async () => true,
+    run: (client, context) => sweepRecipeFileCopies(client, { now: new Date(context.startedAtMs) }),
   });
 }
 

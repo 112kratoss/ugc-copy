@@ -96,6 +96,7 @@ describe('backend job registry', () => {
       'media-upload-reclaim',
       'mobile-push-receipts',
       'operational-data-retention',
+      'recipe-copy-sweep',
       'referral-reward-reconciliation',
       'showcase-media-revocations',
       'workflow-run-steps',
@@ -139,8 +140,9 @@ describe('backend job registry', () => {
     // scheduler invocation, so they add no Vercel cron invocation of their own.
     // So does feed-embeddings every ten minutes (+144/day): logical runs, not
     // Vercel invocations. The Kie balance check (+144/day) is the same: it
-    // rides the shared scheduler and adds no cron entry of its own.
-    expect(logicalDailyRuns).toBe(1227);
+    // rides the shared scheduler and adds no cron entry of its own. So does the
+    // recipe copy sweep every six hours (+4/day).
+    expect(logicalDailyRuns).toBe(1231);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking
@@ -197,6 +199,24 @@ describe('backend job registry', () => {
       'referral-reward-reconciliation',
       'workflow-run-steps',
     ]);
+  });
+
+  it('runs the recipe copy sweep four times a day inside the shared tick', () => {
+    // Every six hours at :50, picked up by the 00:50, 06:50, 12:50 and 18:50
+    // scheduler ticks only: logical runs, no cron entry of its own.
+    const due = (timestamp: string) => getDueBackendJobs(Date.parse(timestamp)).map((job) => job.name);
+    expect(due('2026-06-22T06:50:00.000Z')).toContain('recipe-copy-sweep');
+    expect(due('2026-06-22T00:50:00.000Z')).toContain('recipe-copy-sweep');
+    expect(due('2026-06-22T07:50:00.000Z')).not.toContain('recipe-copy-sweep');
+    expect(due('2026-06-22T06:40:00.000Z')).not.toContain('recipe-copy-sweep');
+    expect(BACKEND_JOB_VERCEL_CRONS.map((cron) => cron.path)).not.toContain('/api/cron/recipe-copy-sweep');
+    const sweep = BACKEND_JOB_REGISTRY.find((job) => job.name === 'recipe-copy-sweep');
+    expect(sweep).toMatchObject({
+      dispatch: 'scheduler',
+      cadenceMinutes: 360,
+      dailyInvocations: 4,
+      healthExpectedMaxAgeMinutes: 720,
+    });
   });
 
   it('keeps literal Next.js maxDuration exports aligned with the registry', () => {

@@ -279,6 +279,7 @@ const SERVICE_ROUTES = [
   '/api/cron/media-upload-reclaim',
   '/api/cron/mobile-push-receipts',
   '/api/cron/operational-data-retention',
+  '/api/cron/recipe-copy-sweep',
   '/api/cron/referral-rewards',
   '/api/cron/showcase-media-revocations',
   '/api/cron/workflow-run-steps',
