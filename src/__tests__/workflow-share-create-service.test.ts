@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createWorkflowShareForRoute } from '@/lib/workflow-share-create-service';
 import {
   createStarterGraph,
+  createWorkflowNode,
   createWorkflowShareSnapshotGraph,
+  type SerializedWorkflowCanvasGraph,
+  type WorkflowCanvasGraph,
+  type WorkflowNodeKind,
 } from '@/lib/workflow-canvas';
 import {
   WORKFLOW_CANVAS_SELECT,
@@ -89,6 +93,8 @@ function createServiceSupabaseMock({
 function createUserSupabaseMock(options?: {
   canvasMissing?: boolean;
   fallbackCanvasLoad?: boolean;
+  /** The canvas's stored graph; the starter graph without one. */
+  graph?: WorkflowCanvasGraph;
 }) {
   const selectedCanvasColumns: string[] = [];
   const tableReads: string[] = [];
@@ -96,7 +102,7 @@ function createUserSupabaseMock(options?: {
   const canvasRow = {
     id: 'canvas-1',
     title: 'Workflow canvas',
-    graph: sourceGraph,
+    graph: options?.graph ?? sourceGraph,
     created_at: '2026-04-02T09:00:00.000Z',
     updated_at: '2026-04-02T09:00:00.000Z',
     revision: 3,
@@ -272,5 +278,54 @@ describe('createWorkflowShareForRoute', () => {
     expect(serviceSupabase.tableReads).toContain('workflow_shares');
     expect(serviceSupabase.insertedShares).toHaveLength(1);
     expect(WORKFLOW_SHARE_SUMMARY_SELECT).toContain('import_count');
+  });
+
+  // 2026-11-04 re-review: a share kept each input's prepared Seedance asset id, which runs the file it was
+  // prepared from for anyone who imports the share, the link it was prepared from aside. One a buyer
+  // prepared from a file of someone else's recipe ran the seller's picture for strangers: it is left out,
+  // its input empty for the importer to fill. The sharer's own assets go with the share, as before.
+  it('leaves out of a share an asset prepared from a recipe file, and shares the sharer’s own', async () => {
+    const signed = (path: string) => `https://project.supabase.co/storage/v1/object/sign/${path}?token=read`;
+    const prepared = (type: WorkflowNodeKind, id: string, assetId: string, assetType: string, sourcePath: string) => {
+      const node = createWorkflowNode(type, { x: 0, y: 0 });
+      node.id = id;
+      Object.assign(node.data, {
+        seedanceAsset: { assetId, assetType, status: 'active', sourceUrl: signed(sourcePath), error: null, lastCheckedAt: '2026-11-04T09:00:00.000Z' },
+      });
+      return node;
+    };
+    const graph: WorkflowCanvasGraph = {
+      ...createStarterGraph(),
+      nodes: [
+        // As the asset route answers a recipe file: prepared from the buyer's import of the seller's copy.
+        prepared('image-input', 'bought-import', 'asset-import', 'Image', 'generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-9.png'),
+        prepared('video-input', 'bought-copy', 'asset-copy', 'Video', 'post_resource_files/seller-9/generation-references/gen-0/01-reference-video-row-8.mp4'),
+        // An import in the first round's layout, which named no seller.
+        prepared('audio-input', 'bought-first-round', 'asset-first-round', 'Audio', 'generation_inputs/user-1/recipe-imports/gen-0/02-reference-audio-row-7.mp3'),
+        prepared('image-input', 'own-upload', 'asset-own', 'Image', 'generated_images/user-1/face.png'),
+        // The sharer's own recipe's copy of their own creation's input is their own file.
+        prepared('image-input', 'own-recipe-copy', 'asset-own-copy', 'Image', 'post_resource_files/user-1/generation-references/gen-1/00-reference-image-row-1.png'),
+      ],
+      edges: [],
+    };
+    const serviceSupabase = createServiceSupabaseMock();
+
+    const result = await createWorkflowShareForRoute({
+      canvasId: 'canvas-1',
+      origin: 'http://localhost',
+      serviceSupabase: serviceSupabase.client,
+      userId: 'user-1',
+      userSupabase: createUserSupabaseMock({ graph }).client,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    const shared = serviceSupabase.insertedShares[0].graph as SerializedWorkflowCanvasGraph;
+    const assetOf = (id: string) => (shared.nodes.find((node) => node.id === id)?.data as { seedanceAsset?: unknown }).seedanceAsset;
+    for (const id of ['bought-import', 'bought-copy', 'bought-first-round']) {
+      expect(assetOf(id), id).toMatchObject({ assetId: null, status: 'idle', sourceUrl: null, lastCheckedAt: null });
+    }
+    expect(assetOf('own-upload')).toMatchObject({ assetId: 'asset-own', assetType: 'Image', status: 'active', sourceUrl: null });
+    expect(assetOf('own-recipe-copy')).toMatchObject({ assetId: 'asset-own-copy', status: 'active', sourceUrl: null });
+    expect(JSON.stringify(shared)).not.toMatch(/asset-import|asset-copy|asset-first-round|seller-9|recipe-imports|post_resource_files/);
   });
 });
