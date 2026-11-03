@@ -1,12 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
 import { Menu } from 'lucide-react-native';
 import type React from 'react';
-import { createContext, useContext, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useMemo, useRef } from 'react';
 import { type GestureResponderEvent, useWindowDimensions, View } from 'react-native';
 
-import { HomeSideMenu } from '@/components/home-side-menu';
-import { useAuth } from '@/lib/auth';
+import { WorkspaceSideMenu } from '@/components/workspace-side-menu';
 import { EDGE_SWIPE_START_WIDTH } from '@/lib/edge-swipe-menu';
+import { useWorkspaceSideMenuState } from '@/lib/side-menu-host';
 import {
   shouldOpenWorkspaceSideMenu,
   shouldTrackWorkspaceSideMenuTouchStart,
@@ -52,19 +51,12 @@ export function WorkspaceSideMenuGestureLayer({
   topOffset = 0,
 }: WorkspaceSideMenuGestureLayerProps) {
   const { height } = useWindowDimensions();
-  const { api, credits, signOut, user } = useAuth();
-  const [menuVisible, setMenuVisible] = useState(false);
+  // Drawn by the tab bar under the tabs layout, which outlives this tab
+  // (lib/side-menu-host.ts); drawn here anywhere else.
+  const sideMenu = useWorkspaceSideMenuState();
+  const menuVisible = sideMenu.visible;
+  const openMenu = sideMenu.open;
   const touchStartRef = useRef<WorkspaceSideMenuTouchPoint | null>(null);
-
-  const profileQuery = useQuery({
-    queryKey: ['profile', user?.id],
-    enabled: Boolean(user && menuVisible),
-    queryFn: () => api.getProfile(),
-    staleTime: 1000 * 60 * 5,
-  });
-
-  // The seller total rides on the profile; unknown until the profile has answered.
-  const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
 
   const handleTouchStart = (event: GestureResponderEvent) => {
     const touch = event.nativeEvent.touches[0];
@@ -88,7 +80,7 @@ export function WorkspaceSideMenuGestureLayer({
     const end = touch ? { x: touch.pageX, y: touch.pageY } : null;
 
     if (shouldOpenWorkspaceSideMenu({ edgeWidth, enabled, menuVisible, start, end })) {
-      setMenuVisible(true);
+      openMenu();
     }
   };
 
@@ -96,7 +88,7 @@ export function WorkspaceSideMenuGestureLayer({
     touchStartRef.current = null;
   };
 
-  const menuApi = useMemo(() => ({ open: () => setMenuVisible(true) }), []);
+  const menuApi = useMemo(() => ({ open: openMenu }), [openMenu]);
 
   return (
     <WorkspaceSideMenuContext.Provider value={menuApi}>
@@ -110,15 +102,9 @@ export function WorkspaceSideMenuGestureLayer({
           {children}
         </View>
       ) : null}
-      <HomeSideMenu
-        visible={menuVisible}
-        onClose={() => setMenuVisible(false)}
-        user={user}
-        profile={profileQuery.data}
-        credits={credits}
-        totalSalesUsdCents={totalSalesUsdCents}
-        onSignOut={signOut}
-      />
+      {sideMenu.hosted ? null : (
+        <WorkspaceSideMenu visible={menuVisible} onClose={sideMenu.close} />
+      )}
     </WorkspaceSideMenuContext.Provider>
   );
 }

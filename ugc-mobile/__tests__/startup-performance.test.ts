@@ -47,13 +47,15 @@ describe('mobile startup performance contracts', () => {
 
   it('never fetches seller history for the side menu: the total rides on the profile', () => {
     const homeSource = readProjectFile('components/home-dashboard.tsx');
-    const workspaceMenuSource = readProjectFile('components/workspace-side-menu-gesture-layer.tsx');
+    const gestureLayerSource = readProjectFile('components/workspace-side-menu-gesture-layer.tsx');
+    // Home and Explore no longer draw the menu: the tab bar does, through this
+    // one component, which reads the profile for it (lib/side-menu-host.ts).
+    const workspaceMenuSource = readProjectFile('components/workspace-side-menu.tsx');
 
-    expect(homeSource).not.toContain('owner-posts-sales-summary');
-    expect(homeSource).not.toContain('listOwnerPosts(');
-    expect(workspaceMenuSource).not.toContain('owner-posts-sales-summary');
-    expect(workspaceMenuSource).not.toContain('listOwnerPosts(');
-    expect(homeSource).toContain('profileQuery.data?.sales?.earningsUsdCents ?? null');
+    for (const source of [homeSource, gestureLayerSource, workspaceMenuSource]) {
+      expect(source).not.toContain('owner-posts-sales-summary');
+      expect(source).not.toContain('listOwnerPosts(');
+    }
     expect(workspaceMenuSource).toContain('profileQuery.data?.sales?.earningsUsdCents ?? null');
   });
 });

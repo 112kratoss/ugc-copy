@@ -16,8 +16,8 @@ import { GuestMergeBanner } from '@/components/guest-merge-banner';
 import { HomeFeedCardView } from '@/components/home-feed-card';
 import { HomeShelf } from '@/components/home-shelf';
 import { MediaZoomSurface } from '@/components/media-zoom';
-import { HomeSideMenu } from '@/components/home-side-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
+import { WorkspaceSideMenu } from '@/components/workspace-side-menu';
 import { WorkspaceSideMenuGlyph, WORKSPACE_SIDE_MENU_LABEL } from '@/components/workspace-side-menu-gesture-layer';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { Reveal } from '@/components/reveal';
@@ -58,6 +58,7 @@ import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
 import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
+import { useWorkspaceSideMenuState } from '@/lib/side-menu-host';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import {
   createFeedAttentionTracker,
@@ -143,7 +144,7 @@ export function HomeDashboard() {
   // after the first request, or the next one after a sign-out, needs a page
   // ranked for it, since the server refuses events against another viewer's
   // feed session.
-  const { user, identityUserId, api, credits, isLoading: isAuthLoading, signOut } = useAuth();
+  const { user, identityUserId, api, credits, isLoading: isAuthLoading } = useAuth();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -158,7 +159,8 @@ export function HomeDashboard() {
   const horizontalPadding = isCompact ? 15 : 18;
   const contentWidth = pageWidth - horizontalPadding * 2;
 
-  const [menuVisible, setMenuVisible] = useState(false);
+  // Drawn by the tab bar, which outlives this tab (lib/side-menu-host.ts).
+  const sideMenu = useWorkspaceSideMenuState();
   // The search Explore opens, opened over Home from its top bar.
   const [searchVisible, setSearchVisible] = useState(false);
   const [activeChipId, setActiveChipId] = useState<HomeFeedChipId>('for-you');
@@ -259,7 +261,8 @@ export function HomeDashboard() {
   const queryKey = laneQueryOptions.queryKey;
   const viewerFeedQueryKey = useMemo(() => createShowcaseFeedViewerQueryKey(identityUserId), [identityUserId]);
 
-  const profileQuery = useQuery({
+  // Kept warm for the side menu, which reads the profile under this key.
+  useQuery({
     queryKey: ['profile', user?.id],
     enabled: Boolean(user),
     queryFn: () => api.getProfile(),
@@ -537,9 +540,6 @@ export function HomeDashboard() {
   // Home's own query counted a status that does not exist ('starting'), left
   // out 'pending', and re-read the library every minute while nothing ran.
   const activeGenerationCount = useActiveGenerationCount();
-
-  // The seller total rides on the profile; unknown until the profile has answered.
-  const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
 
   // Home's "Make this" shelf. Keyed by identity: a member's answer carries
   // their own offers, a guest's or a signed-out one the creations alone, and a
@@ -1096,7 +1096,7 @@ export function HomeDashboard() {
             <View style={{ paddingHorizontal: horizontalPadding, gap: 12 }}>
               <HomeTopBar
                 credits={credits}
-                onMenuPress={() => setMenuVisible(true)}
+                onMenuPress={sideMenu.open}
                 onSearchPress={() => setSearchVisible(true)}
               />
               {/* What became of the guest credits a sign-in carried over, under
@@ -1249,15 +1249,9 @@ export function HomeDashboard() {
         visible={unlockRemixOpen}
       />
 
-      <HomeSideMenu
-        visible={menuVisible}
-        onClose={() => setMenuVisible(false)}
-        user={user}
-        profile={profileQuery.data}
-        credits={credits}
-        totalSalesUsdCents={totalSalesUsdCents}
-        onSignOut={signOut}
-      />
+      {sideMenu.hosted ? null : (
+        <WorkspaceSideMenu visible={sideMenu.visible} onClose={sideMenu.close} />
+      )}
     </View>
     </MediaZoomSurface>
     </FeedVideoActivationContext.Provider>
