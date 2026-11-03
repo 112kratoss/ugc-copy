@@ -429,7 +429,7 @@ export function PostDetailsPage({
           {/* "9:16 · 1K · JPG", in the web post page's words; VoiceOver names each value. */}
           {generationSetup.entries.length > 0 ? (
             <Text
-              accessibilityLabel={`Generation settings: ${describeGenerationSetup(generationSetup.entries)}`}
+              accessibilityLabel={describeGenerationSetup(generationSetup.entries)}
               style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}
             >
               {formatGenerationSetupLine(generationSetup.entries)}

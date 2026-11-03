@@ -171,10 +171,29 @@ it("draws the settings a post read by id carries under its Made with, and none f
   const template = mobileApiContract.endpoints.getShowcasePost.responseVariants.templateResult.item;
   const [templateItem] = buildImmersiveShowcaseItems('showcase-feed', [template as typeof item]);
   expect(templateItem.details?.generationSetup).toEqual([]);
-  // A feed page leaves them out, and Details reads the post for them.
-  const [feedItem] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, generationSetup: undefined }]);
-  expect(feedItem.details).not.toHaveProperty('generationSetup');
-  expect(shouldReadPostGenerationSetup(feedItem)).toBe(true);
+  expect(shouldReadPostGenerationSetup(templateItem)).toBe(false);
+  // A card without them (kept from before, or one whose settings the server could not read) is
+  // read for them.
+  const [keptItem] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, generationSetup: undefined }]);
+  expect(keptItem.details).not.toHaveProperty('generationSetup');
+  expect(shouldReadPostGenerationSetup(keptItem)).toBe(true);
+});
+
+// #675's review: every feed card carries its post's settings from the read that hydrates it, so
+// Details opened from Home, a profile or Saved reads nothing more for them.
+it('draws the settings a feed card carries, from the feed and Saved alike, with nothing more read', async () => {
+  const { items } = await clientForEndpoint('getShowcaseFeed').getShowcaseFeed(
+    { limit: 10, ...mobileApiContract.endpoints.getShowcaseFeed.query },
+    { auth: false },
+  );
+  const [card] = buildImmersiveShowcaseItems('showcase-feed', items);
+  expect(formatGenerationSetupLine(card.details?.generationSetup ?? [])).toBe('16:9 · 1K · JPG');
+  expect(shouldReadPostGenerationSetup(card)).toBe(false);
+
+  const saved = await clientForEndpoint('getSavedMedia').getSavedMedia();
+  const [savedCard] = buildImmersiveShowcaseItems('showcase-feed', saved.items);
+  expect(savedCard.details?.generationSetup).toEqual(card.details?.generationSetup);
+  expect(shouldReadPostGenerationSetup(savedCard)).toBe(false);
 });
 
 it("names no model and offers no Remix for a template result's post, on its card, in the reel and in its details", async () => {

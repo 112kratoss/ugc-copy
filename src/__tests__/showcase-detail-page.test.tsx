@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseDetailPage, { generateMetadata } from '@/app/showcase/[id]/page';
@@ -1189,27 +1189,65 @@ describe('Showcase detail page', () => {
         expect(within(line).getByText('Search grounding on')).toHaveAttribute('title', 'Google Search grounding');
       });
 
-      it('draws no line where the read sends none: an upload, a template result', async () => {
-        const head = await renderHead({ generationSetup: [] });
-        expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+      // The read decides which posts have a line (`publicPostGenerationSetup`): the page draws what it is sent.
+      it('draws no line where the read sends none or could not read it: an upload, a template result, a text post', async () => {
+        for (const generationSetup of [[], undefined]) {
+          const head = await renderHead({ generationSetup });
+          expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+          cleanup();
+        }
       });
 
-      it('draws none on a text post, whatever it is sent, as it names no model either', async () => {
-        const head = await renderHead({
-          generationSetup: imageSetup,
-          mediaUrl: null,
-          mediaKind: null,
-          category: 'text',
-          postFormat: 'text',
-          body: 'Open with tension.',
-        });
-        expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
-      });
-
-      it('draws none on a post under its NSFW cover, whatever it is sent', async () => {
-        const head = await renderHead({ generationSetup: imageSetup, isNsfw: true, nsfwRevealed: false });
+      it('draws none on a post under its NSFW cover, which clears it with the rest it hides', async () => {
+        const detail = await getPublicPostDetailMock('post-1');
+        const head = await renderHead({ ...coverNsfwContent({ ...detail, generationSetup: imageSetup }) });
         expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
         expect(head).not.toHaveTextContent('9:16');
+      });
+
+      // A paid recipe sells the prompt and the inputs; the settings are the post's, for everyone.
+      it('draws the line for a visitor beside a paid recipe they have not unlocked', async () => {
+        const head = await renderHead({
+          generationSetup: imageSetup,
+          resourceBundle: {
+            id: 'bundle-1',
+            accessMode: 'paid',
+            priceQuote: { formatted: '$9.00', note: null },
+            resourceKinds: ['prompt', 'files'],
+            lockedPreview: {
+              resourceKinds: ['prompt', 'files'],
+              attachmentPreviews: [],
+              itemCounts: { prompt: 1, files: 2 },
+              itemPreviews: [{ type: 'prompt', title: 'Prompt', role: 'primary', remixUse: 'none' }],
+              hasPrompt: true,
+              hasNotes: false,
+              hasWorkflow: false,
+              hasRemix: true,
+              updatedAt: '2026-03-28T10:00:00.000Z',
+            },
+            viewerCanAccess: false,
+            viewerIsOwner: false,
+            salesCount: 0,
+            resources: null,
+            title: 'Golden hour recipe',
+            summary: 'The prompt and its references',
+            previewText: 'The prompt and its references',
+            priceUsdCents: 900,
+            status: 'published',
+          },
+        });
+
+        const line = within(head).getByTestId('post-generation-setup');
+        expect(line.querySelector('[aria-hidden="true"]')?.textContent).toBe('9:16·1K·JPG');
+        // The recipe stays locked under the post, and holds no copy of the line.
+        const recipe = screen.getByTestId('canonical-post-recipe');
+        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
+          isFree: false,
+          viewerCanAccess: false,
+          resourceKinds: ['prompt', 'files'],
+        }));
+        expect(within(recipe).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+        expect(screen.getAllByTestId('post-generation-setup')).toHaveLength(1);
       });
     });
   });

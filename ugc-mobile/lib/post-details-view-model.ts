@@ -83,15 +83,14 @@ export function buildPostDetailsMeta(
   };
 }
 
-/** The model a template's result is named by: its settings are the template author's, so its post shows none. */
-const TEMPLATE_RESULT_MODEL = 'template-workflow';
-
 /**
  * Whether Details reads the post for its creation's settings, which everyone
- * sees under Made with (owner, 2026-11-03): a post made from a creation and
- * opened from a feed page, which leaves them out. A post read by id brings them
- * (empty where it has none). An upload, a written post, a template's result and
- * a post under its NSFW cover (which names no creation) have none to read.
+ * sees under Made with (owner, 2026-11-03): a post made from a creation whose
+ * card came without them (Home's first page kept from an earlier launch, or a
+ * card whose settings the server could not read). Every other card brings them,
+ * empty where it has none, which the server decides (a template's result, an
+ * upload, a written post); an upload, a written post and a post under its NSFW
+ * cover (which names no creation) have none to read either way.
  */
 export function shouldReadPostGenerationSetup(
   item: Pick<ImmersivePreviewItem, 'sourceType' | 'showcasePostId' | 'generationId' | 'previewKind' | 'details'>,
@@ -100,8 +99,7 @@ export function shouldReadPostGenerationSetup(
     && Boolean(item.showcasePostId)
     && Boolean(item.generationId)
     && item.previewKind !== 'text'
-    && item.details?.generationSetup === undefined
-    && item.details?.model !== TEMPLATE_RESULT_MODEL;
+    && item.details?.generationSetup === undefined;
 }
 
 export interface PostDetailsStat {

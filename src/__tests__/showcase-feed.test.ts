@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { postgrestSelect } from './fixtures/postgrest-select';
 
 const nextCacheState = vi.hoisted(() => ({
   invocations: [] as unknown[][],
@@ -157,6 +158,10 @@ let lastPurchaseBundleIds: unknown[] | null = null;
 let profilesGate: Promise<void> | null = null;
 let tableAccesses: string[] = [];
 let rpcAccesses: string[] = [];
+// Every select of the generations table, as sent.
+let generationSelects: string[] = [];
+// The NSFW posts a viewer has revealed (`has_nsfw_reveal`).
+let nsfwRevealsState: Array<{ postId: string; viewerId: string }> = [];
 // Every direct read of the recipe table: its columns, posts and filters.
 let bundleTableReads: Array<{ columns: string; postIds: unknown[]; filters: Record<string, unknown> }> = [];
 // Forces the fake to answer the top-sales RPC as missing, so the legacy
@@ -254,6 +259,12 @@ function createServiceClientMock() {
   return {
     async rpc(name: string, args?: Record<string, unknown>) {
       rpcAccesses.push(name);
+      if (name === 'has_nsfw_reveal') {
+        return {
+          data: nsfwRevealsState.some((reveal) => reveal.postId === args?.p_post_id && reveal.viewerId === args?.p_viewer_id),
+          error: null,
+        };
+      }
       if (name === 'list_showcase_top_sales_post_ids' && !topSalesRpcMissingState) {
         // Sales order with the migration's exact tie-breaks, honoring the
         // unlock filter the way the SQL predicates do.
@@ -485,9 +496,9 @@ function createServiceClientMock() {
       if (table === 'generations') {
         const filters: Record<string, unknown> = {};
         const sorts: Array<{ column: keyof GenerationModelRow; ascending: boolean }> = [];
-        // A read answers with the columns it asked for, as PostgREST does, so a
-        // column the select leaves out is missing here too.
-        let selectedColumns: string[] | null = null;
+        // A read answers with the columns and JSON paths it asked for, as PostgREST
+        // does, so a column the select leaves out is missing here too.
+        let selected: string | null = null;
 
         const run = () => {
           const rows = [...generationModelsState]
@@ -510,13 +521,10 @@ function createServiceClientMock() {
               return 0;
             });
 
-          const columns = selectedColumns;
+          const columns = selected;
           return {
             data: columns
-              ? rows.map((row) => Object.fromEntries(columns.map((column) => [
-                  column,
-                  (row as Record<string, unknown>)[column] ?? null,
-                ])) as GenerationModelRow)
+              ? rows.map((row) => postgrestSelect(row as Record<string, unknown>, columns) as GenerationModelRow)
               : rows,
             error: null,
           };
@@ -524,9 +532,8 @@ function createServiceClientMock() {
 
         const query = {
           select(columns?: string) {
-            selectedColumns = typeof columns === 'string' && columns.trim() !== '*'
-              ? columns.split(',').map((column) => column.trim())
-              : null;
+            if (typeof columns === 'string') generationSelects.push(columns);
+            selected = typeof columns === 'string' && columns.trim() !== '*' ? columns : null;
             return query;
           },
           in(column: string, values: unknown[]) {
@@ -791,6 +798,8 @@ describe('showcase feed', () => {
     profilesGate = null;
     tableAccesses = [];
     rpcAccesses = [];
+    generationSelects = [];
+    nsfwRevealsState = [];
     bundleTableReads = [];
     topSalesRpcMissingState = false;
     postsRangeReads = [];
@@ -1569,12 +1578,44 @@ describe('showcase feed', () => {
         source_tool_slug: null,
       }),
     ];
+    // Both stored settings a line could be built from: only the template check keeps the template's out.
     generationModelsState = [
-      { id: 'gen-template', model: 'nano-banana-pro', template_run_id: 'run-1', template_run_step_id: 'step-1' },
-      { id: 'gen-ordinary', model: 'nano-banana-2', template_run_id: null, template_run_step_id: null },
+      {
+        id: 'gen-template',
+        model: 'nano-banana-pro',
+        category: 'image',
+        template_run_id: 'run-1',
+        template_run_step_id: 'step-1',
+        workflow_settings: { model: 'nano-banana-pro', aspectRatio: '9:16', resolution: '2K', outputFormat: 'png' },
+      },
+      {
+        id: 'gen-ordinary',
+        model: 'nano-banana-2',
+        category: 'image',
+        template_run_id: null,
+        template_run_step_id: null,
+        workflow_settings: { model: 'nano-banana-2', aspectRatio: '4:5', resolution: '1K', outputFormat: 'jpg' },
+      },
     ];
-    const templateResult = { model: 'template-workflow', canRemix: false, remixCapability: 'none', remixTarget: null };
-    const ordinary = { model: 'nano-banana-2', canRemix: true, remixCapability: 'public', remixTarget: 'image' };
+    const templateResult = {
+      model: 'template-workflow',
+      canRemix: false,
+      remixCapability: 'none',
+      remixTarget: null,
+      // Its settings are the template author's too: its card shows none.
+      generationSetup: [],
+    };
+    const ordinary = {
+      model: 'nano-banana-2',
+      canRemix: true,
+      remixCapability: 'public',
+      remixTarget: 'image',
+      generationSetup: [
+        { label: 'Aspect ratio', value: '4:5' },
+        { label: 'Resolution', value: '1K' },
+        { label: 'Output format', value: 'JPG' },
+      ],
+    };
 
     const { getShowcaseFeedItemById, getShowcaseFeedPage } = await import('@/lib/showcase-feed');
     const query = { category: 'all', sort: 'recent', offset: 0, limit: 12 } as const;
@@ -1597,10 +1638,9 @@ describe('showcase feed', () => {
       canRemix: pinned.canRemix,
       remixCapability: pinned.remixCapability,
       remixTarget: pinned.remixTarget,
+      generationSetup: pinned.generationSetup,
     });
-    // Its settings are the template author's too: the read shows none.
-    expect(item?.generationSetup).toEqual(pinned.generationSetup);
-    expect(pinned.generationSetup).toEqual([]);
+    expect(JSON.stringify(item?.generationSetup)).not.toMatch(/9:16|2K|PNG/);
   });
 
   it('keeps remix access disabled for unrelated viewers of remix-enabled bundles', async () => {
@@ -2241,13 +2281,21 @@ describe('showcase feed', () => {
     });
 
     // Owner's decision, 2026-11-03: a creation's settings are a standard detail
-    // of its post. The app's Details reads them here; feed pages leave them out.
-    it("carries the creation's settings, which feed pages leave out", async () => {
+    // of its post. Every card carries them from the read that hydrates it, the
+    // read by id included, which reads its creation once.
+    it("carries the creation's settings on every card, from the read that hydrates it", async () => {
       generationModelsState = [{
         id: 'gen-1',
         model: 'nano-banana-2',
         category: 'image',
-        workflow_settings: { model: 'nano-banana-2', aspectRatio: '16:9', resolution: '1K', outputFormat: 'jpg', googleSearch: false },
+        workflow_settings: {
+          model: 'nano-banana-2',
+          aspectRatio: '16:9',
+          resolution: '1K',
+          outputFormat: 'jpg',
+          googleSearch: false,
+          compiledPrompt: 'The prompt the paid recipe sells',
+        },
       }];
 
       const { getShowcaseFeedItemById, getShowcaseFeedPage } = await import('@/lib/showcase-feed');
@@ -2257,10 +2305,48 @@ describe('showcase feed', () => {
       expect(item?.generationSetup).toEqual(mobileApiContract.endpoints.getShowcasePost.response.item.generationSetup);
       expect(item?.asset).toMatchObject({ accessMode: 'paid' });
       expect(item?.prompt).toBe('');
+      expect(JSON.stringify(item)).not.toContain('The prompt the paid recipe sells');
+      // One read of the creation, which selected the settings' paths and not the record.
+      const settingsReads = generationSelects.filter((select) => select.includes('workflow_settings'));
+      expect(settingsReads).toHaveLength(1);
+      expect(settingsReads[0]).not.toMatch(/workflow_settings(?!->)/);
 
       const page = await getShowcaseFeedPage({ category: 'all', sort: 'recent', offset: 0, limit: 12 });
       expect(page.items[0]?.id).toBe('post-1');
-      expect(page.items[0]).not.toHaveProperty('generationSetup');
+      expect(page.items[0]?.generationSetup).toEqual(mobileApiContract.endpoints.getShowcaseFeed.response.items[0].generationSetup);
+    });
+
+    // An NSFW post's settings describe what its cover hides: a viewer who revealed it gets them
+    // with the rest, as the reveal route's item (iOS's in-app reveal) and its detail (the web's).
+    it('carries the settings of an NSFW post its viewer revealed, and none under the cover', async () => {
+      postsState = [createPostRow({ id: 'post-nsfw', created_at: '2026-03-20T10:00:00.000Z', generation_id: 'gen-1', is_nsfw: true })];
+      generationModelsState = [{
+        id: 'gen-1',
+        model: 'nano-banana-2',
+        category: 'image',
+        workflow_settings: { model: 'nano-banana-2', aspectRatio: '9:16', resolution: '2K', outputFormat: 'png' },
+      }];
+      resourceBundlesState = [];
+      nsfwRevealsState = [{ postId: 'post-nsfw', viewerId: 'viewer-1' }];
+
+      const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+      const revealed = await getShowcaseFeedItemById({ postId: 'post-nsfw', viewerUserId: 'viewer-1', revealNsfw: true });
+      expect(revealed).toMatchObject({
+        isNsfw: true,
+        nsfwRevealed: true,
+        generationSetup: [
+          { label: 'Aspect ratio', value: '9:16' },
+          { label: 'Resolution', value: '2K' },
+          { label: 'Output format', value: 'PNG' },
+        ],
+      });
+
+      // Another viewer, or the same one without asking to reveal it, gets the cover.
+      for (const options of [{ viewerUserId: 'viewer-2', revealNsfw: true }, { viewerUserId: 'viewer-1' }]) {
+        const covered = await getShowcaseFeedItemById({ postId: 'post-nsfw', ...options });
+        expect(covered).toMatchObject({ isNsfw: true, nsfwRevealed: false, generationSetup: [] });
+        expect(JSON.stringify(covered)).not.toContain('9:16');
+      }
     });
 
     it("shows none for a post with no creation, and none under an NSFW cover", async () => {

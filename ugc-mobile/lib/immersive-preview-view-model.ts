@@ -68,9 +68,9 @@ export interface ImmersivePostDetails {
    */
   model?: string | null;
   /**
-   * The creation's settings, drawn under Made with, when the post came from
-   * its own read (empty where it has none); unset from a feed page, whose
-   * posts Details reads for them (`usePostGenerationSetup`).
+   * The creation's settings, drawn under Made with, as the post's card carries
+   * them (empty where it has none); unset where the card came without them, and
+   * Details then reads the post for them (`usePostGenerationSetup`).
    */
   generationSetup?: GenerationSetupEntry[];
   creatorLabel: string;

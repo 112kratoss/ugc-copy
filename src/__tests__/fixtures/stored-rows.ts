@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { postgrestSelect } from './postgrest-select';
+
 type Row = Record<string, unknown>;
 type Call = (args: Row) => unknown;
 
@@ -27,9 +29,11 @@ function isFailure(value: unknown): value is Failure {
  * Rows the real code can read the way it reads Postgres.
  *
  * A read answers with the columns it asked for and no others, so code that
- * needs a column has to select it. Asking for a column the table does not
- * have is refused, as PostgREST refuses it. Filters are applied, not just
- * recorded: a row a query would not return is not returned here.
+ * needs a column has to select it, and a JSON path into a column
+ * (`alias:column->key->>key`) with the value at that path, as PostgREST does.
+ * Asking for a column the table does not have is refused, as PostgREST refuses
+ * it. Filters are applied, not just recorded: a row a query would not return
+ * is not returned here.
  *
  * It covers the filters the generation jobs, the notifier and the owner
  * library route use, and nothing else. A filter it does not know throws, so
@@ -131,13 +135,15 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
       });
     }
     const known = rowsOf(table)[0];
-    const unknown = known ? asked.filter((column) => column !== '*' && !(column in known)) : [];
+    // The column a field reads: `alias:column->path` reads `column`.
+    const columnOf = (field: string) => field.slice(field.indexOf(':') + 1).split('->')[0]!;
+    const unknown = known ? asked.filter((field) => field !== '*' && !(columnOf(field) in known)) : [];
     if (unknown.length) throw new Error(`column ${table}.${unknown[0]} does not exist`);
     reads.push({ table, columns: asked });
 
     const { filters, matching } = filtered(table);
     const answer = () => matching().map((row) => (
-      asked.includes('*') ? { ...row } : Object.fromEntries(asked.map((column) => [column, row[column]]))
+      asked.includes('*') ? { ...row } : postgrestSelect(row, columns)
     ));
 
     return Object.assign(filters, {

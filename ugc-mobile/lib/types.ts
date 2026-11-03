@@ -1043,10 +1043,11 @@ export interface ShowcaseFeedItem {
   /** Set by the by-id read; feed pages list public posts only. */
   visibility?: 'public' | 'unlisted';
   /**
-   * The settings of the creation the post was made from, which everyone sees
-   * under Made with (owner, 2026-11-03). Set by the by-id read, empty where
-   * there are none to show; feed pages leave it out, and Details reads the
-   * post for it (`usePostGenerationSetup`).
+   * The settings the post's creator chose for its creation, which everyone sees
+   * under Made with (owner, 2026-11-03). Every card carries them, the by-id read's
+   * too, empty where there are none to show; a card from before, or one whose
+   * settings the server could not read, comes without them, and Details reads
+   * the post for them (`usePostGenerationSetup`).
    */
   generationSetup?: GenerationSetupEntry[];
 }

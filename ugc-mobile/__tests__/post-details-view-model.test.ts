@@ -353,8 +353,8 @@ describe('a run that made several files', () => {
   });
 });
 
-// Owner, 2026-11-03: a creation's settings show under Made with for everyone. A
-// post read by id brings them; a feed page does not, so Details reads the post.
+// Owner, 2026-11-03: a creation's settings show under Made with for everyone. Every
+// card carries them (#675's review); Details reads the post only for a card without them.
 describe('when Details reads a post for its creation\'s settings', () => {
   const creationPost = (overrides: Partial<ImmersivePreviewItem> = {}) => showcaseItem({
     showcasePostId: 'post-1',
@@ -362,26 +362,29 @@ describe('when Details reads a post for its creation\'s settings', () => {
     ...overrides,
   });
 
-  it('reads a creation post opened from a feed page, which carries none', () => {
+  // Home's first page kept from before, or a card whose settings the server could not read.
+  it('reads a creation post whose card came without them', () => {
     expect(shouldReadPostGenerationSetup(creationPost())).toBe(true);
   });
 
-  it('reads nothing where the post brought them, empty or not', () => {
+  it('reads nothing where the card brought them, empty or not', () => {
     const details = creationPost().details!;
     expect(shouldReadPostGenerationSetup(creationPost({ details: { ...details, generationSetup: [] } }))).toBe(false);
     expect(shouldReadPostGenerationSetup(creationPost({
       details: { ...details, generationSetup: [{ label: 'Aspect ratio', value: '9:16' }] },
     }))).toBe(false);
+    // A template's result: the server sends none, its settings being its author's, and the app
+    // keeps no rule of its own for it.
+    expect(shouldReadPostGenerationSetup(creationPost({
+      details: { ...details, model: 'template-workflow', generationSetup: [] },
+    }))).toBe(false);
   });
 
   it('reads nothing for a post with none to show', () => {
-    const details = creationPost().details!;
     // An upload, or a post under its NSFW cover, which names no creation.
     expect(shouldReadPostGenerationSetup(creationPost({ generationId: null }))).toBe(false);
     // A written post.
     expect(shouldReadPostGenerationSetup(creationPost({ previewKind: 'text' }))).toBe(false);
-    // A template's result, whose settings are its author's.
-    expect(shouldReadPostGenerationSetup(creationPost({ details: { ...details, model: 'template-workflow' } }))).toBe(false);
     // The owner's own creations and posts, which are no public read's.
     expect(shouldReadPostGenerationSetup(creationPost({ sourceType: 'generation' }))).toBe(false);
     expect(shouldReadPostGenerationSetup(creationPost({ sourceType: 'owner-post' }))).toBe(false);

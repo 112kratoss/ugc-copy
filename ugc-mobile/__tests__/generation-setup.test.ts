@@ -42,11 +42,22 @@ describe('the generation setup line', () => {
     expect(generationSetupTerm({ label: 'Prompt magic', value: 'Off' })).toBe('Prompt magic off');
   });
 
-  it('tells a screen reader each value by its name', () => {
+  it('lets a mode or a quality the model offered stand as its name', () => {
+    expect(formatGenerationSetupLine([
+      { label: GENERATION_SETUP_LABELS.aspectRatio, value: '16:9' },
+      { label: GENERATION_SETUP_LABELS.mode, value: 'Fast' },
+      { label: GENERATION_SETUP_LABELS.resolution, value: '1080P' },
+    ])).toBe('16:9 · Fast · 1080P');
+    expect(generationSetupTerm({ label: GENERATION_SETUP_LABELS.quality, value: 'Standard' })).toBe('Standard');
+    expect(generationSetupTerm({ label: 'Speed', value: 'Turbo' })).toBe('Turbo');
+  });
+
+  // One lead-in for both clients: the web's line and the app's Details said it in a copy each.
+  it('tells a screen reader the line and each value by its name', () => {
     expect(describeGenerationSetup([
       { label: 'Aspect ratio', value: '16:9' },
       { label: 'Sound', value: 'On' },
-    ])).toBe('Aspect ratio: 16:9, Sound: On');
+    ])).toBe('Generation settings: Aspect ratio: 16:9, Sound: On');
   });
 
   it('reads the pairs an answer carries, and nothing from one that carries none', () => {

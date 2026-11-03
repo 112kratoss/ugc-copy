@@ -40,7 +40,7 @@ import {
   type GenerationPreviewInfo,
 } from '@/lib/generation-preview-info';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
-import { loadPublicGenerationSetup } from '@/lib/public-generation-setup';
+import { loadPublicGenerationSetupCatalog, publicPostGenerationSetup } from '@/lib/public-generation-setup';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -677,6 +677,9 @@ export async function resolvePostRowsToFeedItems(
     return profilesMap;
   };
 
+  // Each card carries its post's line (the settings its creator chose, owner 2026-11-03), built
+  // from the creation's read below against the published catalog, which loads beside it.
+  const generationSetupCatalog = generationIds.length > 0 ? loadPublicGenerationSetupCatalog() : null;
   const loadGenerationInfo = (mediaItemsPromise: Promise<Map<string, PostMediaSummary[]>>) =>
     loadGenerationPreviewInfoMap(adminSupabase, generationIds, {
       signPreviewFor: mediaItemsPromise.then((mediaItemsMap) => new Set(
@@ -684,6 +687,7 @@ export async function resolvePostRowsToFeedItems(
           .filter((row) => row.generation_id && coverNeedsGenerationPreview(mediaItemsMap.get(row.id)))
           .map((row) => row.generation_id as string),
       )),
+      ...(generationSetupCatalog ? { generationSetupCatalog } : {}),
     });
 
   const loadSourceTools = async () => {
@@ -794,6 +798,12 @@ export async function resolvePostRowsToFeedItems(
           ? 'manual'
           : post.source_tool ?? 'external';
 
+      // Left out where the creation or the catalog could not be read: unknown, never none.
+      const generationSetup = publicPostGenerationSetup(
+        { postFormat: post.post_format, generationId: post.generation_id },
+        generationInfo?.generationSetup,
+      );
+
       const remix = resolvePostRemixCapability({
         generationId: post.generation_id,
         postFormat: post.post_format,
@@ -853,6 +863,7 @@ export async function resolvePostRowsToFeedItems(
         canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
         remixCapability: remix.capability,
         remixTarget: remix.target,
+        ...(generationSetup ? { generationSetup } : {}),
       };
       return nsfwIds.has(post.id) && !revealedNsfwIds.has(post.id) ? coverNsfwContent(item) : item;
     })
@@ -1710,14 +1721,11 @@ export async function getShowcaseFeedItemById(options: {
   }
 
   const revealed = options.revealNsfw && await hasNsfwReveal(adminSupabase, postId, viewerUserId);
-  // The creation's settings, which a post shows everyone (owner, 2026-11-03): the
-  // app's Details reads them from here, as feed pages leave them out. Read beside
-  // the post's hydration, not after it.
-  const [[item], generationSetup] = await Promise.all([
-    resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set())
-      .then((items) => addCreationReferenceCountsToFeedItems(items, adminSupabase)),
-    loadPublicGenerationSetup(adminSupabase, row.generation_id),
-  ]);
+  // The card carries its creation's settings from its hydration, as every feed card does.
+  const [item] = await addCreationReferenceCountsToFeedItems(
+    await resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set()),
+    adminSupabase,
+  );
   if (!item) {
     return null;
   }
@@ -1738,9 +1746,7 @@ export async function getShowcaseFeedItemById(options: {
 
   // Comments are public-only on the server; the client reads this to hide them.
   const visibility = (row as { visibility?: string | null }).visibility === 'unlisted' ? 'unlisted' : 'public';
-  // A post under its NSFW cover, or a text post, shows none.
-  const showsSetup = !(sanitizedItem.isNsfw && !sanitizedItem.nsfwRevealed) && sanitizedItem.postFormat !== 'text';
-  return { ...sanitizedItem, visibility, generationSetup: showsSetup ? generationSetup : [] };
+  return { ...sanitizedItem, visibility };
 }
 
 /**

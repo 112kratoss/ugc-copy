@@ -8,6 +8,8 @@ type QueryArgs = {
   enabled: boolean;
   staleTime: number;
   retry: (failureCount: number, error: unknown) => boolean;
+  retryOnMount: boolean;
+  refetchOnWindowFocus: boolean;
 };
 
 const { state } = vi.hoisted(() => ({
@@ -31,6 +33,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { ApiError } from '@/lib/api-client';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { ONE_TIME_POST_READ, retryUnlessRefused } from '@/lib/one-time-post-read';
 import { usePostGenerationSetup } from '@/lib/use-post-generation-setup';
 
 const IMAGE_SETUP = [
@@ -71,9 +74,20 @@ describe('usePostGenerationSetup', () => {
     latest = null;
   });
 
-  it('reads a feed post once Details is on screen, holding the line until the settings come', async () => {
+  // Feed cards carry the line since #675's review: Details reads nothing for a card that brought it.
+  it('draws the settings a card brought, reading nothing', () => {
+    expect(render(feedItem({}, { generationSetup: IMAGE_SETUP }))).toEqual({ entries: IMAGE_SETUP, pending: false });
+    expect(state.queryArgs?.enabled).toBe(false);
+    // A card from a template's result, an upload or a post under its cover brings none.
+    expect(render(feedItem({}, { model: 'template-workflow', generationSetup: [] }))).toEqual({ entries: [], pending: false });
+    expect(state.queryArgs?.enabled).toBe(false);
+  });
+
+  // A card kept from before (Home's first page persists between launches), or one a server could
+  // not read the settings for, carries none: Details reads the post once it is on screen.
+  it('reads a post whose card came without them, once Details is on screen, holding the line meanwhile', async () => {
     const pending = render(feedItem(), false);
-    expect(state.queryArgs).toMatchObject({ queryKey: ['post-generation-setup', 'post-1'], enabled: false, staleTime: Infinity });
+    expect(state.queryArgs).toMatchObject({ queryKey: ['post-generation-setup', 'post-1'], enabled: false });
     expect(pending).toEqual({ entries: [], pending: true });
 
     render(feedItem(), true);
@@ -83,34 +97,44 @@ describe('usePostGenerationSetup', () => {
     state.getShowcasePost.mockResolvedValue({ success: true, item: { id: 'post-1', generationSetup: [...IMAGE_SETUP, { label: 'Seed' }] } });
     await expect(state.queryArgs!.queryFn()).resolves.toEqual(IMAGE_SETUP);
     expect(state.getShowcasePost).toHaveBeenCalledWith('post-1');
-    // A server from before the setup was public sends none.
-    state.getShowcasePost.mockResolvedValue({ success: true, item: { id: 'post-1' } });
+    // None to show is an answer, kept as none.
+    state.getShowcasePost.mockResolvedValue({ success: true, item: { id: 'post-1', generationSetup: [] } });
     await expect(state.queryArgs!.queryFn()).resolves.toEqual([]);
 
     state.query = { data: IMAGE_SETUP, isPending: false };
     expect(render(feedItem())).toEqual({ entries: IMAGE_SETUP, pending: false });
   });
 
-  it('lets the line go when the read fails, and asks again only after a dropped connection', () => {
-    state.query = { data: undefined, isPending: false };
-    expect(render(feedItem())).toEqual({ entries: [], pending: false });
-
-    expect(state.queryArgs!.retry(0, new Error('Network request failed'))).toBe(true);
-    expect(state.queryArgs!.retry(1, new Error('Network request failed'))).toBe(false);
-    expect(state.queryArgs!.retry(0, new ApiError('Post not found.', 404))).toBe(false);
+  // The server leaves the field out where it could not read the settings: kept as none, the line
+  // would stay away for the session. It fails instead, and is asked again as a dropped read is.
+  it('keeps no answer that could not tell the settings as none', async () => {
+    render(feedItem());
+    state.getShowcasePost.mockResolvedValue({ success: true, item: { id: 'post-1' } });
+    await expect(state.queryArgs!.queryFn()).rejects.toThrow();
   });
 
-  it('draws the settings a post brought, reading nothing', () => {
-    expect(render(feedItem({}, { generationSetup: IMAGE_SETUP }))).toEqual({ entries: IMAGE_SETUP, pending: false });
-    expect(state.queryArgs?.enabled).toBe(false);
-    expect(render(feedItem({}, { generationSetup: [] }))).toEqual({ entries: [], pending: false });
-    expect(state.queryArgs?.enabled).toBe(false);
+  // A failed read is not asked again at every remount and every return to the foreground, where the
+  // held line flashed each time: the post read's policy that the remix source row keeps too.
+  it("reads once, by the app's one-time post read", () => {
+    render(feedItem());
+    expect(state.queryArgs).toMatchObject(ONE_TIME_POST_READ);
+    expect(state.queryArgs).toMatchObject({ staleTime: Infinity, retryOnMount: false, refetchOnWindowFocus: false });
+    expect(state.queryArgs!.retry).toBe(retryUnlessRefused);
+
+    state.query = { data: undefined, isPending: false };
+    expect(render(feedItem())).toEqual({ entries: [], pending: false });
+  });
+
+  it('asks again only after a dropped connection, once', () => {
+    expect(retryUnlessRefused(0, new Error('Network request failed'))).toBe(true);
+    expect(retryUnlessRefused(1, new Error('Network request failed'))).toBe(false);
+    expect(retryUnlessRefused(0, new ApiError('Post not found.', 404))).toBe(false);
+    expect(retryUnlessRefused(0, new ApiError('Busy', 503))).toBe(true);
   });
 
   it('reads nothing and holds no line for a post with none to show', () => {
     for (const item of [
       feedItem({ generationId: null }),
-      feedItem({}, { model: 'template-workflow' }),
       feedItem({ previewKind: 'text' }, { generationSetup: IMAGE_SETUP }),
       feedItem({ sourceType: 'owner-post' }),
     ]) {

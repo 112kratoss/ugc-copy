@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 
-import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
 import { readGenerationSetup, type GenerationSetupEntry } from '@/lib/generation-setup/generation-setup';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
+import { ONE_TIME_POST_READ } from '@/lib/one-time-post-read';
 import { shouldReadPostGenerationSetup } from '@/lib/post-details-view-model';
 
 export interface PostGenerationSetup {
@@ -13,17 +13,15 @@ export interface PostGenerationSetup {
   pending: boolean;
 }
 
-/** A refusal (gone, private, blocked) answers the same again; a dropped connection may not. */
-function retryUnlessRefused(failureCount: number, error: unknown) {
-  return failureCount < 1 && !(error instanceof ApiError && error.status >= 400 && error.status < 500);
-}
-
 /**
- * The creation's settings for a post's Details (owner, 2026-11-03). A post read
- * by id brings them; a feed page leaves them out, so Details reads the post
- * once it is on screen and keeps the answer, as a post's settings never change.
- * The read has a key of its own: the feeds seed the post's own query with the
- * card they opened, which carries none, and Details would have read that.
+ * The creation's settings for a post's Details (owner, 2026-11-03). Every card
+ * carries them from the read that hydrated it, so Details draws the card's. A
+ * card without them (Home's first page kept from an earlier launch, or one whose
+ * settings the server could not read) has Details read the post once it is on
+ * screen, by the app's one-time post read. An answer that still cannot tell them
+ * fails rather than being kept as none. The read has a key of its own: the
+ * feeds seed the post's own query with the card they opened, and Details would
+ * have read that.
  */
 export function usePostGenerationSetup(item: ImmersivePreviewItem, active: boolean): PostGenerationSetup {
   const { api } = useAuth();
@@ -31,10 +29,13 @@ export function usePostGenerationSetup(item: ImmersivePreviewItem, active: boole
   const postId = reads ? item.showcasePostId : null;
   const query = useQuery({
     queryKey: ['post-generation-setup', postId],
-    queryFn: async () => readGenerationSetup((await api.getShowcasePost(postId!)).item?.generationSetup) ?? [],
+    queryFn: async () => {
+      const setup = readGenerationSetup((await api.getShowcasePost(postId!)).item?.generationSetup);
+      if (!setup) throw new Error('The post came back without its settings.');
+      return setup;
+    },
     enabled: active && Boolean(postId),
-    staleTime: Infinity,
-    retry: retryUnlessRefused,
+    ...ONE_TIME_POST_READ,
   });
 
   if (item.previewKind === 'text') return { entries: [], pending: false };

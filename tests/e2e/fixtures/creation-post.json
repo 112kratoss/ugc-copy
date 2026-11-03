@@ -70,24 +70,32 @@
   ],
   "generation": {
     "model": "nano-banana-2",
-    "category": "image",
-    "creation_mode": null,
-    "workflow_settings": {
-      "model": "nano-banana-2",
-      "aspectRatio": "9:16",
-      "resolution": "1K",
-      "outputFormat": "jpg",
-      "googleSearch": false,
-      "elements": [
-        {
-          "id": "element-1",
-          "displayName": "Skyline",
-          "handle": "@skyline",
-          "storagePath": "e2e-setup-creator/skyline.png"
-        }
-      ]
-    },
     "template_run_id": null,
-    "template_run_step_id": null
+    "template_run_step_id": null,
+    "setup_model": "nano-banana-2",
+    "setup_aspect_ratio": "9:16",
+    "setup_resolution": "1K",
+    "setup_quality_mode": null,
+    "setup_output_format": "jpg",
+    "setup_google_search": false,
+    "setup_mode": null,
+    "setup_duration": null,
+    "setup_sound": null,
+    "setup_fixed_lens": null,
+    "setup_multi_prompts": null,
+    "setup_shots": null,
+    "setup_character_orientation": null,
+    "setup_reference_mode": null,
+    "setup_start_frame": null,
+    "setup_end_frame": null,
+    "setup_elements_0": {
+      "id": "element-1",
+      "displayName": "Skyline",
+      "handle": "@skyline",
+      "storagePath": "e2e-setup-creator/skyline.png"
+    },
+    "setup_elements_1": null,
+    "setup_reference_image_urls_0": null,
+    "setup_reference_image_urls_1": null
   }
 }

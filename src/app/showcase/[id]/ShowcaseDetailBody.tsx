@@ -1,6 +1,5 @@
 import NsfwPostReveal from '@/components/NsfwPostReveal';
 import Link from 'next/link';
-import { Fragment } from 'react';
 import { BookText, ShoppingBag } from 'lucide-react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
@@ -18,11 +17,8 @@ import {
 } from '@/lib/post-resource-bundles';
 import { getPublicPostMetaDescription, type PublicPostDetail } from '@/lib/public-posts';
 import type { ShowcaseReturnContext } from '@/lib/share';
-import {
-  describeGenerationSetup,
-  generationSetupTerm,
-} from '../../../../ugc-mobile/lib/generation-setup/generation-setup';
 
+import PostGenerationSetupLine from './PostGenerationSetupLine';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
 import { buildRecipePanelProps, getRecipeRemixOffer } from './recipe-panel-props';
 import ReportPostButton from './ReportPostButton';
@@ -136,11 +132,6 @@ export default function ShowcaseDetailBody({
     ? null
     : getPostModelDisplayName(detail.model)
       ?? (outsideTool && !isOwnSourceTool(outsideTool) ? outsideTool : null);
-  // The creation's settings, on a line of their own under Made with: a standard
-  // detail everyone sees without unlocking anything (owner, 2026-11-03). The read
-  // sends none for an upload, a template's result or a post under its cover; the
-  // words are the app's too (`generation-setup.ts`).
-  const generationSetup = isTextOnlyPost || isNsfwCovered ? [] : detail.generationSetup ?? [];
   const detailMediaItems = detail.mediaItems?.length
     ? detail.mediaItems
     : detail.mediaUrl && detail.mediaKind
@@ -315,20 +306,12 @@ export default function ShowcaseDetailBody({
                   )}
                 </div>
 
-                {/* "9:16 · 1K · JPG": each value names its setting on hover, and a screen reader hears them named. */}
-                {generationSetup.length > 0 ? (
-                  <p data-testid="post-generation-setup" className="mt-2 text-xs text-zinc-500">
-                    <span className="sr-only">{`Generation settings: ${describeGenerationSetup(generationSetup)}`}</span>
-                    <span aria-hidden="true" className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      {generationSetup.map((entry, index) => (
-                        <Fragment key={entry.label}>
-                          {index > 0 ? <span>·</span> : null}
-                          <span title={entry.label}>{generationSetupTerm(entry)}</span>
-                        </Fragment>
-                      ))}
-                    </span>
-                  </p>
-                ) : null}
+                {/*
+                  * The creation's settings under Made with: a standard detail everyone sees
+                  * without unlocking anything (owner, 2026-11-03). The read sends none for an
+                  * upload, a text post, a template's result or a post under its cover.
+                  */}
+                <PostGenerationSetupLine entries={detail.generationSetup} />
 
                 {/* On a covered post the gate holds the heading: "Mature content", then the title once revealed. */}
                 {isNsfwCovered ? null : (

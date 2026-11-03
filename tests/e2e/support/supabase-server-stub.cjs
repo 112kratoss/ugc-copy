@@ -147,7 +147,8 @@ const READS = [
     answer: () => json([], { 'content-range': '*/0' }),
   },
   {
-    // loadPublicPostGeneration: the creation's model and settings.
+    // loadPublicPostGeneration: the creation's model, and the settings its line reads, each under
+    // its alias as PostgREST answers the paths the read selects (PUBLIC_GENERATION_SETUP_PATHS).
     methods: ['GET'],
     path: '/rest/v1/generations',
     filters: { id: `eq.${creationPost.post.generation_id}` },
