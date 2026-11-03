@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyCatalogModelDefaults } from '../lib/generation-model-draft';
-import { createDefaultCreationDraft, renameMediaDraft, type CreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
+import { createDefaultCreationDraft, hydrateCreationDraftFromRemixSource, renameMediaDraft, type CreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
 import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
 import type { RemixInputSlot } from '../lib/remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from '../lib/types';
@@ -63,6 +63,44 @@ describe('a saved remix with empty slots', () => {
     // The remixer filled the first already: the session keeps what is left.
     expect(recoverRemixReferences(imageDraft('Place @product on a counter', [backdropSlot]), restored).inputSlots).toEqual([backdropSlot]);
     expect(recoverRemixReferences(imageDraft('Place @product on a counter', []), restored).inputSlots).toEqual([]);
+  });
+
+  // A failed read of a buyer's copies turned every input into an empty slot, with no word of it: its
+  // mentions had boxes, so the source was never read again, and the copies never came back (2026-11-03
+  // review). The source now names no slot and says the read failed (`withheld-inputs`), so the session
+  // is a failed restore, read again on its Retry and on its next visit; then the copy comes back as a
+  // reference, and only the input the source truly withholds is a slot.
+  it('reads again a remix whose withheld inputs could not be read, and takes the slots and copies of the read that worked', () => {
+    const source = (overrides: Partial<RemixSourceBundle>): RemixSourceBundle => ({
+      generation: { id: 'gen-1', title: 'Counter', prompt: 'Place @product beside @backdrop', category: 'image', model: 'nano-banana-2' },
+      result: null,
+      inputs: {},
+      workflowSettings: { model: 'nano-banana-2' },
+      restoreIssues: [],
+      ...overrides,
+    });
+    const degraded = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), source({ restoreIssues: ['withheld-inputs'] }));
+    expect(degraded.warning).toBeTruthy();
+    expect(degraded.draft).not.toHaveProperty('inputSlots');
+    expect(needsRemixReferenceRecovery(degraded.draft)).toBe(true);
+
+    const copy = {
+      id: 'row-product',
+      displayName: 'product',
+      handle: '@product',
+      storagePath: 'post_resource_files/creator-1/generation-references/gen-1/00-reference-image-row-product.png',
+      sourceGenerationId: null,
+      url: 'https://signed.example/recipe-copy.png',
+    };
+    const backdropBox: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@backdrop', name: 'Reference image 1' };
+    const read = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), source({ inputs: { image: { elements: [copy] } }, inputSlots: [backdropBox] }));
+    expect(read.warning).toBeNull();
+
+    const recovered = recoverRemixReferences(degraded.draft, read.draft);
+    expect(recovered.inputSlots).toEqual([backdropBox]);
+    expect(recovered.tool === 'image' && recovered.references.map((media) => [media.handle, media.url])).toEqual([['@product', copy.url]]);
+    // Recovered, the session holds the copy and the box: nothing is read again.
+    expect(needsRemixReferenceRecovery(recovered)).toBe(false);
   });
 });
 

@@ -12,10 +12,12 @@ import {
     promptLimitFor,
 } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 import {
+    openRemixInputSlots,
     readRemixSlotMentions,
     remixInputSlotAction,
     remixInputSlotsNotice,
     remixInputSlotTitle,
+    remixSlotFillNaming,
     remixSlotMentionsMessage,
     withRemixSlotEnhancerReferences,
     type RemixInputSlot,
@@ -113,7 +115,6 @@ import {
     readRemixInputSlots,
     REMIX_RESTORE_WARNING,
     isRemixResultReference,
-    remixSlotFillNaming,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
 import {
@@ -964,9 +965,10 @@ function ImageCreator({
     };
 
     /**
-     * The remixer's own picture in a remix's empty slot: a reference of theirs, under the slot's
-     * name and the @handle the prompt mentions it by, so the prompt works unchanged. The checks of
-     * an add hold: a file the sign step refuses, or one past the model's limit, leaves the box.
+     * The remixer's own picture in a remix's empty slot: a reference of theirs, named as both creators
+     * name a fill (`remixSlotFillNaming`: "product" under the @product the prompt mentions it by, or the
+     * box's own name), so the prompt works unchanged. The checks of an add hold: a file the sign step
+     * refuses, or one past the model's limit, leaves the box.
      */
     const fillReferenceImageSlot = async (slot: RemixInputSlot, files: File[]) => {
         const [file] = files;
@@ -1389,9 +1391,11 @@ function ImageCreator({
     // What Enhance keeps: the references the run sends, and the remix's empty boxes the prompt
     // mentions, placed or not, so a rewrite never takes a box's mention out (2026-11-03). A prompt
     // naming either is polished around rather than rewritten.
+    // A box a reference the remixer holds already answers is no box to fill (`openRemixInputSlots`, as the app reads it).
+    const openRemixSlots = openRemixInputSlots(remixSlots, elements.map((element) => element.handle));
     const enhancerReferences = withRemixSlotEnhancerReferences(
         sentElements.map((element) => ({ handle: element.handle, displayName: element.displayName })),
-        remixSlots,
+        openRemixSlots,
         prompt,
     );
     const promptMentions = extractPromptHandles(prompt);
@@ -1400,7 +1404,7 @@ function ImageCreator({
     // A remix's empty boxes for the references it was not given, drawn after the restored ones
     // while the model takes references. A prompt-only model has no place for them: they wait for a
     // switch back, where they are drawn as they were left.
-    const imageSlots = remixSlots.filter((slot) => slot.role === 'reference_image');
+    const imageSlots = openRemixSlots.filter((slot) => slot.role === 'reference_image');
     const referenceImageSlots = model.maxImages > 0 ? imageSlots : [];
     const unplacedImageSlots = model.maxImages > 0 ? [] : imageSlots;
     // A mention of an empty box's handle asks for the remixer's own in that box, or says the model

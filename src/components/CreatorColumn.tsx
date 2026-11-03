@@ -21,6 +21,7 @@ import { choiceKeyTarget, getAccentClasses, IconButton, type UiAccent } from '@/
 import type { CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
 import { openCreditTopUp, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
+import { isValidElementHandle } from '@/lib/image-elements';
 import type { OptionPrice } from '@/lib/use-quote-prices';
 
 /**
@@ -1494,8 +1495,6 @@ export function CreatorMediaReferenceTile({
 /** How a remix's empty slot is drawn: a tile with a picture's frame, a clip's wide one, or a row. */
 export type CreatorRemixSlotFrame = 'square' | 'wide' | 'none';
 
-const REMIX_SLOT_HANDLE = /^@[a-z0-9_]+$/;
-
 /**
  * An input a remix was not given, as an empty, dashed box in its place (owner, 2026-11-03): the
  * @handle the prompt knows it by, else its name (`remixInputSlotTitle`), and what to add
@@ -1581,7 +1580,8 @@ export function CreatorRemixSlotTile({
           </span>
         )}
         <span className={clsx('pointer-events-none flex min-w-0 flex-col gap-0.5', frame !== 'none' && 'px-1.5 pb-1')}>
-          {REMIX_SLOT_HANDLE.test(title) ? (
+          {/* A title that is a handle, by the server's own rule, which the mention grammar's parity test holds. */}
+          {isValidElementHandle(title) ? (
             <StudioElementHandle handle={title} className={clsx('text-xs font-semibold', handleClassName ?? classes.accentText)} />
           ) : (
             // The box's title, so two lines of it rather than a cut ("Reference im…").

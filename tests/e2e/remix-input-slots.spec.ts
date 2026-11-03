@@ -93,7 +93,8 @@ test('the image creator draws a box for each reference it was not given, and the
   await page.locator('input[data-remix-slot="slot-1"]').setInputFiles(png('mine.png'));
 
   await expect(references.getByRole('button', { name: 'Insert @product' })).toBeVisible();
-  await expect(references.getByAltText('Reference image 1', { exact: true })).toBeVisible();
+  // Named for the handle its box goes by, as the app names a fill (`remixSlotFillNaming`).
+  await expect(references.getByAltText('product', { exact: true })).toBeVisible();
   await expect(productBox).toHaveCount(0);
   await expect(page.getByText(slotMessage('@product'), { exact: true })).toHaveCount(0);
   await expect(page.getByText(kept(1), { exact: true })).toBeVisible();
@@ -161,7 +162,7 @@ test('the video creator opens a references run on References, a box among each k
   await openRemix(page, 'create-video', slotRemix('video', 'wan-2.7', '@product spins on a turntable under soft light.', [
     { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
     { id: 'slot-2', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
-    { id: 'slot-3', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 1', durationSeconds: 2 },
+    { id: 'slot-3', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 1' },
     { id: 'slot-4', kind: 'audio', role: 'reference_audio', handle: null, name: 'Reference audio 1' },
   ], { referenceMode: 'elements', duration: 5, aspectRatio: '16:9' }));
 
@@ -200,7 +201,7 @@ test('the video creator opens a references run on References, a box among each k
 
 test('the video creator draws a subject it was not given as an empty subject under its handle', async ({ page }) => {
   await openRemix(page, 'create-video', slotRemix('video', 'kling-o3', '@maya walks through the rain, slow push in.', [
-    { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+    { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' },
   ], { duration: 5, aspectRatio: '16:9', resolution: '720p' }));
 
   const box = page.getByRole('button', { name: 'Add your pictures for @maya' });
@@ -215,7 +216,7 @@ test('the video creator draws a subject it was not given as an empty subject und
 
   await expect(subjects.getByText('2/4 images')).toBeVisible();
   await expect(subjects.getByRole('button', { name: 'Insert @maya' })).toBeVisible();
-  await expect(subjects.getByPlaceholder('Subject name')).toHaveValue('Subject 1');
+  await expect(subjects.getByPlaceholder('Subject name')).toHaveValue('maya');
   await expect(box).toHaveCount(0);
   await expect(page.getByText(slotMessage('@maya'), { exact: true })).toHaveCount(0);
   await expect(page.getByText(REMIX_NOTICE, { exact: true })).toBeVisible();
@@ -226,7 +227,7 @@ test('the video creator draws a subject it was not given as an empty subject und
 test('the motion creator draws a box on the character and the clip it was not given', async ({ page }) => {
   await openRemix(page, 'create-motion', slotRemix('video', 'kling-3.0', 'Dance on the roof at dusk', [
     { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
-    { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+    { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' },
   ], { mode: '720p', characterOrientation: 'video', creationMode: 'motion' }));
 
   const inputs = page.getByRole('group', { name: 'Required inputs' });

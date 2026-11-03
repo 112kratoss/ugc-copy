@@ -23,6 +23,7 @@ vi.mock('@/lib/generation-input-media-import', () => sharedImportMocks);
 // buyer unlocked (owner, 2026-11-03): refused by default, as other people's media is.
 const recipeCopyImportMocks = vi.hoisted(() => ({
   importGenerationReferenceCopy: vi.fn(async () => ({ outcome: 'not-eligible' as const })),
+  createRecipeCopyReads: () => new Map(),
 }));
 
 vi.mock('@/lib/generation-reference-copy-import', () => recipeCopyImportMocks);
@@ -1585,12 +1586,47 @@ describe('generation services', () => {
 
     // The shared import is asked first and declines a file outside the creators' kept inputs.
     expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({ source: recipeCopy, viewerUserId: 'user-1' });
-    expect(recipeCopyImportMocks.importGenerationReferenceCopy).toHaveBeenCalledWith({ source: recipeCopy, viewerUserId: 'user-1' });
+    // With the start's one memo of the unlock reads, which all its references share.
+    expect(recipeCopyImportMocks.importGenerationReferenceCopy).toHaveBeenCalledWith({ source: recipeCopy, viewerUserId: 'user-1', reads: expect.any(Map) });
     expect(sharedImportMocks.resolveRemixResultMedia).not.toHaveBeenCalled();
     expect(rpcCalls.map((call) => call.fn)).toContain('start_generation');
     expect(providerBody).toMatchObject({
       input: { image_input: [importedSignedUrl] },
     });
+  });
+
+  // Each reference read the gate, the recipe and the rows again (2026-11-03 review): one start's
+  // references share one memo of those reads, and the next start reads them anew.
+  it('shares one memo of the unlock reads between a start’s references, and makes a new one for the next start', async () => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ code: 200, data: { taskId: 'task-copies' } }) } as Response);
+    const copy = (row: number) => `https://project.supabase.co/storage/v1/object/sign/post_resource_files/user-2/generation-references/gen-9/0${row}-reference-image-row-${row}.png?token=remix`;
+    recipeCopyImportMocks.importGenerationReferenceCopy.mockClear();
+    recipeCopyImportMocks.importGenerationReferenceCopy.mockImplementation((async ({ source }: { source: string }) => ({
+      outcome: 'imported',
+      storagePath: `generation_inputs/user-1/recipe-imports/gen-9/${source.length}.png`,
+      signedUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-9/${source.length}.png?token=copy`,
+    })) as never);
+
+    for (const run of [1, 2]) {
+      const { supabase } = createSupabaseMock();
+      await startImageGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: `Remix ${run} of a bought recipe.`,
+        model: 'nano-banana-2',
+        imageUrls: [copy(1), copy(2)],
+      });
+    }
+
+    const reads = recipeCopyImportMocks.importGenerationReferenceCopy.mock.calls.map((call) => (call as unknown as [{ reads: unknown }])[0].reads);
+    expect(reads).toHaveLength(4);
+    expect(reads[0]).toBe(reads[1]);
+    expect(reads[2]).toBe(reads[3]);
+    expect(reads[2]).not.toBe(reads[0]);
+    recipeCopyImportMocks.importGenerationReferenceCopy.mockReset().mockResolvedValue({ outcome: 'not-eligible' } as never);
   });
 
   it.each([

@@ -84,7 +84,7 @@ import {
   catalogMultiShotLimits,
   catalogPromptMeters,
   catalogRefusedRunPrice,
-  catalogRemixSlotRoles,
+  catalogRemixSlotPlacement,
   catalogRunEnhancementInputs,
   catalogRunSlots,
   catalogStandbyReferencesReason,
@@ -3280,13 +3280,13 @@ function IdentityCreationScreen({
   ) : null;
   // A remix's empty boxes this model has a place for, which its composer draws: one without a place
   // waits in the draft, and a mention of it says so, until a switch back draws it as it was left.
-  const remixSlotRoles = currentModel ? catalogRemixSlotRoles(rawDraft, currentModel) : null;
-  const placedRemixSlots = placedRemixInputSlots(rawDraft, remixSlotRoles);
+  const remixSlotPlacement = currentModel ? catalogRemixSlotPlacement(rawDraft, currentModel) : null;
+  const placedRemixSlots = placedRemixInputSlots(rawDraft, remixSlotPlacement?.roles ?? null, remixSlotPlacement ?? {});
   // The inputs the source's creator kept to themselves are no failed restore: a retry brings none of
   // them, so the line says only that their boxes wait for the remixer's own, while any stay empty and
   // until the remixer puts it away for the rest of the remix (2026-11-03): a box nobody mentions may
   // stay empty for good.
-  const remixSlotsNotice = isRestoringRemix ? null : remixDraftSlotsNotice(rawDraft, remixSlotRoles);
+  const remixSlotsNotice = isRestoringRemix ? null : remixDraftSlotsNotice(rawDraft, remixSlotPlacement?.roles ?? null, remixSlotPlacement ?? {});
   const dismissRemixSlots = () => {
     if (activeTool === 'image') setImageDraft(dismissRemixSlotsNotice);
     else if (activeTool === 'video') setVideoDraft(dismissRemixSlotsNotice);
@@ -5284,7 +5284,7 @@ function RemixInputSlotTile({ slot, compact = false, disabled, progress = null, 
         borderCurve: 'continuous',
         borderWidth: 1,
         borderStyle: 'dashed',
-        borderColor: hexWithAlpha(theme.colors.image, 0.42),
+        borderColor: hexWithAlpha(theme.colors.image, 0.38),
         backgroundColor: hexWithAlpha(theme.colors.image, 0.055),
         alignItems: 'center',
         justifyContent: 'center',

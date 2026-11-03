@@ -114,7 +114,7 @@ describe('creation draft resume', () => {
     useMemoryStorage();
     const drafts = defaultDrafts();
     const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
-    const clipSlot: RemixInputSlot = { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4.2 };
+    const clipSlot: RemixInputSlot = { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' };
     const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' })!;
     await persistCreationDrafts({
       ...drafts,

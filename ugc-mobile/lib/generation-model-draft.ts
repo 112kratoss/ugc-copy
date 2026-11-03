@@ -24,6 +24,7 @@ import {
   hydrateCreationDraftFromRemixSource,
   promptMentionErrors,
   REMIX_RESTORE_WARNING_MESSAGE,
+  type RemixSlotPlacement,
   videoSubjects,
   withClipHandles,
   type CatalogDraftInputAsset,
@@ -548,6 +549,20 @@ export function catalogRemixSlotRoles(draft: CreationDraft, model: GenerationMod
   if (opens(rail, (slot) => slot.key === 'audioReferences')) roles.add('reference_audio');
   if (catalogSubjectSlot(model)) roles.add('subject');
   return roles;
+}
+
+/**
+ * Where this model has a place for a remix's empty slots, as its creator draws them and its run's
+ * check reads them: the roles (`catalogRemixSlotRoles`), whether a video model's clips answer to a
+ * handle (`takesNamedClips`: a clip the prompt names has no place where they do not, on the web
+ * too), and the model's name for the words that say a box has none (owner, 2026-11-03).
+ */
+export function catalogRemixSlotPlacement(draft: CreationDraft, model: GenerationModelDescriptor): RemixSlotPlacement {
+  return {
+    roles: catalogRemixSlotRoles(draft, model),
+    modelName: model.displayName,
+    ...(draft.tool === 'video' ? { clipsTakeHandles: takesNamedClips(model) } : {}),
+  };
 }
 
 /**
@@ -1147,10 +1162,7 @@ export function validateCatalogCreationDraft(
 
   // A mention of a remix's empty slot asks for the remixer's own input in its box, or says this model
   // has no place for it; any other is unknown.
-  errors.push(...promptMentionErrors(unknownPromptMentions(draft, model), draft, {
-    roles: catalogRemixSlotRoles(draft, model),
-    modelName: model.displayName,
-  }));
+  errors.push(...promptMentionErrors(unknownPromptMentions(draft, model), draft, catalogRemixSlotPlacement(draft, model)));
 
   const hasServerQuote = typeof options.quotedCost === 'number' && Number.isFinite(options.quotedCost);
   const cost = hasServerQuote ? options.quotedCost as number : 0;

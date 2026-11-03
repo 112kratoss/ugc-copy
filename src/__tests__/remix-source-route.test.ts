@@ -13,23 +13,6 @@ vi.mock('@/lib/moderation-service', () => ({
   }),
 }));
 
-// The unlock's own read (`getPostResourceBundleDetailByPostId`) stands in for the
-// recipe tables this fake does not hold. The copies are still found in what it
-// answers and signed by the real code.
-const recipeDetail = vi.hoisted(() => ({ getDetailByPostId: vi.fn() }));
-
-vi.mock('@/lib/post-resource-bundles-server', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/post-resource-bundles-server')>();
-  return {
-    ...actual,
-    loadGenerationRecipeReferenceCopiesByPostId: (
-      params: Parameters<typeof actual.loadGenerationRecipeReferenceCopiesByPostId>[0],
-    ) => actual.loadGenerationRecipeReferenceCopiesByPostId({
-      ...params,
-      getDetailByPostId: recipeDetail.getDetailByPostId as never,
-    }),
-  };
-});
 
 type GenerationRow = {
   id: string;
@@ -71,8 +54,11 @@ type PostRow = {
 type BundleRow = {
   id: string;
   post_id: string;
-  status: 'draft' | 'published';
+  owner_user_id?: string;
+  status: 'draft' | 'published' | 'retired';
   allow_remix: boolean;
+  resource_items?: unknown[];
+  resource_sections?: unknown[];
 };
 
 let currentUserId: string | null = 'user-1';
@@ -192,6 +178,12 @@ function createRouteRequest(url: string) {
   } as never;
 }
 
+// Every table the service client read, in order.
+let adminReads: string[] = [];
+function adminFromTables() {
+  return adminReads;
+}
+
 function createAdminClientMock() {
   return {
     rpc: vi.fn(async (fn: string) => {
@@ -208,6 +200,7 @@ function createAdminClientMock() {
       };
     }),
     from: vi.fn((table: string) => {
+      adminReads.push(table);
       if (table === 'post_resource_bundles') {
         const filters = new Map<string, unknown>();
         const query = {
@@ -219,7 +212,11 @@ function createAdminClientMock() {
             return query;
           },
           async maybeSingle() {
-            return { data: bundleRows.get(String(filters.get('post_id'))) ?? null, error: null };
+            // The gate reads the post's recipe by its post; the copies are read on from it by its id.
+            const row = filters.has('id')
+              ? [...bundleRows.values()].find((bundle) => bundle.id === filters.get('id'))
+              : bundleRows.get(String(filters.get('post_id')));
+            return { data: row ?? null, error: null };
           },
         };
         return query;
@@ -451,6 +448,7 @@ describe('/api/remix-source route', () => {
     vi.clearAllMocks();
     currentUserId = 'user-1';
     currentUserIsAnonymous = false;
+    adminReads = [];
     generationRows = new Map();
     postRows = new Map();
     bundleRows = new Map();
@@ -461,7 +459,6 @@ describe('/api/remix-source route', () => {
     gateState.rateLimitAllowed = true;
     gateState.blocked = false;
     gateState.blockCheckThrows = false;
-    recipeDetail.getDetailByPostId.mockReset();
   });
 
   afterEach(() => {
@@ -628,7 +625,7 @@ describe('/api/remix-source route', () => {
     ]);
     expect(JSON.stringify(data)).not.toMatch(/alisa\.jpg|uploads\/|media-1|Alisa|el-1/);
     // No recipe on the post, so no copy is looked for.
-    expect(recipeDetail.getDetailByPostId).not.toHaveBeenCalled();
+    expect(adminFromTables()).not.toContain('post_resource_bundle_purchases');
   });
 
   // Owner, 2026-11-03: someone who unlocked a recipe whose creator keeps the
@@ -644,7 +641,20 @@ describe('/api/remix-source route', () => {
       prompt: 'Place @product beside @backdrop.',
     }));
     postRows.set('post-1', createExposedPost('source-1', { id: 'post-1' }));
-    bundleRows.set('post-1', { id: 'bundle-1', post_id: 'post-1', status: 'published', allow_remix: false });
+    bundleRows.set('post-1', {
+      id: 'bundle-1',
+      post_id: 'post-1',
+      owner_user_id: 'creator-1',
+      status: 'published',
+      allow_remix: false,
+      resource_items: [
+        { id: 'prompt', type: 'prompt', title: 'Prompt', textContent: 'Place @product beside @backdrop.' },
+        { id: `reference-${PRODUCT_ROW}`, type: 'reference_image', title: 'Product', storagePath: PRODUCT_COPY },
+        // Named after the backdrop, but kept in another creation's folder: no copy of it.
+        { id: `reference-${BACKDROP_ROW}`, type: 'reference_image', title: 'Backdrop', storagePath: `creator-1/generation-references/source-9/01-reference-image-${BACKDROP_ROW}.png` },
+      ],
+      resource_sections: [],
+    });
     purchaseRows = [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'user-2' }];
     inputMediaRows = [
       {
@@ -676,31 +686,14 @@ describe('/api/remix-source route', () => {
         },
       },
     ];
-    recipeDetail.getDetailByPostId.mockResolvedValue({
-      viewerCanAccess: true,
-      seller: { id: 'creator-1' },
-      post: { generationId: 'source-1' },
-      resources: {
-        items: [
-          { id: 'prompt', storagePath: null },
-          { id: `reference-${PRODUCT_ROW}`, storagePath: PRODUCT_COPY },
-          // Named after the backdrop, but kept in another creation's folder: no copy of it.
-          { id: `reference-${BACKDROP_ROW}`, storagePath: `creator-1/generation-references/source-9/01-reference-image-${BACKDROP_ROW}.png` },
-        ],
-      },
-      purchasedRevision: null,
-    });
 
     const { GET } = await import('@/app/api/remix-source/route');
     const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1&postId=post-1'));
 
     expect(response.status).toBe(200);
     const data = await response.json();
-    // The gate found this buyer unlocked post-1's recipe, and the creator's switch is off.
-    expect(recipeDetail.getDetailByPostId).toHaveBeenCalledWith('post-1', expect.objectContaining({
-      viewerUserId: 'user-2',
-      countLockedReferences: false,
-    }));
+    // The gate found this buyer bought post-1's recipe, and its purchase is not read again for the copies.
+    expect(adminFromTables().filter((table) => table === 'post_resource_bundle_purchases')).toHaveLength(1);
     expect(data.inputs.image.elements).toEqual([expect.objectContaining({
       id: PRODUCT_ROW,
       handle: '@product',

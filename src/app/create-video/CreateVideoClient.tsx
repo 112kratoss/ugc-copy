@@ -157,12 +157,14 @@ import {
     getRemixResultReferenceLabel,
     isRemixResultReference,
     readRemixInputSlots,
-    remixSlotFillNaming,
     remixSlotsInputSide,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
 import {
+    openRemixInputSlots,
     readRemixSlotMentions,
+    remixInputSlotPlaced,
+    remixSlotFillNaming,
     remixInputSlotAction,
     remixInputSlotsNotice,
     remixInputSlotTitle,
@@ -1929,8 +1931,17 @@ function VideoCreator({
     // mention of it reads as any unknown one. One the model has no place for at all, on either side
     // with these settings (a switch to a model that takes none of its kind, or to a story, which
     // sends no reference picture), waits for a switch back, where it is drawn as it was left, and a
-    // mention of it says so (`unplacedRemixSlotsMessage`).
-    const remixSlotPlaceOffered = (role: RemixInputSlotRole): boolean => {
+    // mention of it says so (`unplacedRemixSlotsMessage`). So does a clip the prompt mentions by its
+    // handle on a model whose clips take none (any but Kling 3.0): a plain clip answers no mention, and
+    // its box held the run for one its fill could never answer (`remixInputSlotPlaced`, the app's rule).
+    // A box something the remixer holds already answers is no box to fill (`openRemixInputSlots`).
+    const openRemixSlots = openRemixInputSlots(remixSlots, [
+        ...elements.map((element) => element.handle),
+        ...(isKlingVideoModel ? klingVideoElements.map((element) => element.handle) : []),
+        ...klingSubjectHandles,
+    ].filter((handle): handle is string => Boolean(handle)));
+    const remixSlotHasPlace = (slot: RemixInputSlot) => remixInputSlotPlaced(slot, null, { clipsTakeHandles: isKlingVideoModel });
+    const remixSlotRoleOffered = (role: RemixInputSlotRole): boolean => {
         switch (role) {
             case 'reference_image':
                 return Boolean(inputSides.references) && canUseVideoElements;
@@ -1948,10 +1959,10 @@ function VideoCreator({
                 return false;
         }
     };
-    const unplacedRemixSlots = remixSlots.filter((slot) => !remixSlotPlaceOffered(slot.role));
+    const unplacedRemixSlots = openRemixSlots.filter((slot) => !remixSlotHasPlace(slot) || !remixSlotRoleOffered(slot.role));
     const showsReferencesSide = inputView.side === 'references';
     const showsFramesSide = inputView.side === 'frames';
-    const remixSlotPlaceShown = (role: RemixInputSlotRole): boolean => {
+    const remixSlotRoleShown = (role: RemixInputSlotRole): boolean => {
         switch (role) {
             case 'reference_image':
                 return showsReferencesSide && !currentIsMultiShot && canUseVideoElements;
@@ -1972,8 +1983,8 @@ function VideoCreator({
                 return false;
         }
     };
-    const shownRemixSlots: ShownRemixSlot[] = remixSlots
-        .filter((slot) => remixSlotPlaceShown(slot.role))
+    const shownRemixSlots: ShownRemixSlot[] = openRemixSlots
+        .filter((slot) => remixSlotHasPlace(slot) && remixSlotRoleShown(slot.role))
         .map((slot) => ({ ...slot, title: remixInputSlotTitle(slot), action: remixInputSlotAction(slot) }));
     const shownSlotsOf = (role: RemixInputSlotRole) => shownRemixSlots.filter((slot) => slot.role === role);
     // What the boxes on the page are, until the remixer puts it away for the rest of the remix.
@@ -2382,7 +2393,7 @@ function VideoCreator({
     // boxes those words mention, placed or not, so a rewrite never takes a box's mention out
     // (2026-11-03). None at all leaves the field out, as it always did.
     const enhancerReferencesBeside = (references: Array<{ handle: string; displayName: string }>, words: string) => {
-        const kept = withRemixSlotEnhancerReferences(references, remixSlots, words);
+        const kept = withRemixSlotEnhancerReferences(references, openRemixSlots, words);
         return kept.length > 0 ? kept : undefined;
     };
     const buildSinglePromptQualityContext = () => ({

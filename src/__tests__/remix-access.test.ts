@@ -30,6 +30,7 @@ const EXPOSED_POST = {
 const REMIX_RECIPE = {
   id: 'bundle-1',
   post_id: 'post-1',
+  owner_user_id: 'creator-1',
   status: 'published',
   allow_remix: true,
 };
@@ -100,6 +101,7 @@ describe('resolveRemixAccess', () => {
       post: null,
       includeSharedInputMedia: true,
       recipeEntitled: false,
+      recipe: null,
     });
     expect(from).not.toHaveBeenCalled();
   });
@@ -165,6 +167,7 @@ describe('resolveRemixAccess', () => {
       post: EXPOSED_POST,
       includeSharedInputMedia: true,
       recipeEntitled: false,
+      recipe: null,
     });
   });
 
@@ -267,6 +270,7 @@ describe('resolveRemixAccess', () => {
         post: EXPOSED_POST,
         includeSharedInputMedia: true,
         recipeEntitled: false,
+        recipe: null,
       });
     });
 
@@ -384,6 +388,8 @@ describe('resolveRemixAccess', () => {
       post: EXPOSED_POST,
       includeSharedInputMedia: false,
       recipeEntitled: true,
+      // Read on by the copies a remix restores (`loadGenerationRecipeReferenceCopies`): not read twice.
+      recipe: { id: 'bundle-1', ownerUserId: 'creator-1', published: true, viewerHasPurchased: true },
     });
     expect(stranger).toEqual({ allowed: false, reason: 'unlock_required' });
   });
@@ -442,6 +448,7 @@ describe('resolveRemixAccess', () => {
         post: EXPOSED_POST,
         includeSharedInputMedia: false,
         recipeEntitled: false,
+        recipe: { id: 'bundle-1', ownerUserId: 'creator-1', published: true, viewerHasPurchased: true },
       });
       expect(owner).toMatchObject({ allowed: true, basis: 'owner' });
     });
@@ -461,6 +468,32 @@ describe('resolveRemixAccess', () => {
     });
 
     expect(decision).toMatchObject({ allowed: true, basis: 'public', recipeEntitled: false });
+  });
+
+  // A retired recipe gates no Remix, and its buyers keep it: the gate names it, unasked about the
+  // viewer's purchase, for the copies a remix restores to read on from (2026-11-03 review).
+  it('names a retired recipe on the post without asking whether the viewer bought it', async () => {
+    const { client, from } = createClient({
+      tables: {
+        post_resource_bundles: [{ ...REMIX_RECIPE, status: 'retired' }],
+        post_resource_bundle_purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'viewer-1' }],
+      },
+    });
+
+    const decision = await resolveRemixAccess({
+      adminSupabase: client,
+      viewerUserId: 'viewer-1',
+      generation: GENERATION,
+      dependencies: notBlocked(),
+    });
+
+    expect(decision).toMatchObject({
+      allowed: true,
+      basis: 'public',
+      recipeEntitled: false,
+      recipe: { id: 'bundle-1', ownerUserId: 'creator-1', published: false, viewerHasPurchased: null },
+    });
+    expect(from.mock.calls.map(([table]) => table)).not.toContain('post_resource_bundle_purchases');
   });
 
   // A template's recipe and model are its author's (Studio shows the result's

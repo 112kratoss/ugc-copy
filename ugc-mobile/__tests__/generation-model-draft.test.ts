@@ -17,6 +17,7 @@ import {
   catalogMultiShotLimits,
   catalogPromptLimitError,
   catalogPromptMeters,
+  catalogRemixSlotPlacement,
   catalogRemixSlotRoles,
   catalogRunEnhancementInputs,
   catalogRunInputSlots,
@@ -40,6 +41,7 @@ import {
   createMediaDraftFromUpload,
   createSubjectDraft,
   fillRemixInputSlot,
+  placedRemixInputSlots,
   renameMediaDraft,
   videoDraftReferenceMode,
   type CreationDraft,
@@ -1658,6 +1660,11 @@ describe('a prompt is held to its model’s own limit', () => {
   });
 });
 
+/** A placement as the screen hands it on: the roles, then the rest of what places a slot. */
+function placementArguments(placement: ReturnType<typeof catalogRemixSlotPlacement>) {
+  return [placement.roles, placement] as const;
+}
+
 // Owner, 2026-11-03: a remix not given its creator's inputs gets an empty slot in place of each, which
 // its prompt names; the remixer fills it with their own, and nothing of a slot is ever sent or priced.
 describe('a remix’s empty input slots in a catalog run', () => {
@@ -1683,7 +1690,7 @@ describe('a remix’s empty input slots in a catalog run', () => {
     inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
     inputSlots: [
       { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
-      { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4 },
+      { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
     ],
     workflowSettings: { model: kling30.id, referenceMode: 'frames', duration: 5 },
     restoreIssues: [],
@@ -1766,13 +1773,24 @@ describe('a remix’s empty input slots in a catalog run', () => {
     expect(validateCatalogCreationDraft(back, slotsImage, ready).errors)
       .toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
 
-    // A Kling 3.0 clip's box on Seedance 2 has a place among its clips; Kling O3 takes no clip.
+    // Kling O3 takes no clip. Seedance 2 takes plain clips, which answer no mention: a box for the
+    // "@dance" its prompt names held the run there for a handle its fill could never have (2026-11-03
+    // review), so it has no place there either, as on the web (`remixInputSlotPlaced`).
     const { draft: dance } = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), videoSource, catalog);
     const onO3 = applyCatalogModelDefaults(dance, klingO3, catalog.revision);
     expect(validateCatalogCreationDraft(onO3, klingO3, ready).errors)
       .toContain('Kling O3 has no place for @dance. Switch back, or take @dance out of the prompt.');
     const onSeedance = applyCatalogModelDefaults(dance, seedance2, catalog.revision);
     expect(validateCatalogCreationDraft(onSeedance, seedance2, ready).errors)
-      .toContain('Add your own for @dance in its box, or take @dance out of the prompt.');
+      .toContain('Seedance 2 has no place for @dance. Switch back, or take @dance out of the prompt.');
+    expect(catalogRemixSlotPlacement(onSeedance, seedance2)).toMatchObject({ modelName: 'Seedance 2', clipsTakeHandles: false });
+    expect(placedRemixInputSlots(onSeedance, ...placementArguments(catalogRemixSlotPlacement(onSeedance, seedance2))).map((slot) => slot.id))
+      .toEqual(['slot-1']);
+    // A clip box the prompt does not name keeps its place among Seedance 2's clips.
+    const plainClip = { ...onSeedance, inputSlots: [{ id: 'slot-3', kind: 'video' as const, role: 'reference_video' as const, handle: null, name: 'Reference video 2' }] };
+    expect(placedRemixInputSlots(plainClip, ...placementArguments(catalogRemixSlotPlacement(plainClip, seedance2))).map((slot) => slot.id))
+      .toEqual(['slot-3']);
+    // Kling 3.0 names its clips: the box is placed there, as before.
+    expect(catalogRemixSlotPlacement(dance, kling30)).toMatchObject({ clipsTakeHandles: true });
   });
 });

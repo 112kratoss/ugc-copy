@@ -29,10 +29,12 @@ import {
 } from '@/lib/generation-model-adapters';
 import type { ReferenceMediaDescriptor } from '@/lib/generation-input-media';
 import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
+import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
 import {
   generationCostChangedError,
   GenerationServiceError,
   resolveGenerationMediaSource,
+  resolveRecipeFileReference,
   startCatalogGeneration,
   startImageGeneration,
   startMotionGeneration,
@@ -176,7 +178,7 @@ type UnifiedGenerationDependencies = {
   resolveSource?: typeof resolveSourceGenerationId;
   enforceRateLimit?: typeof enforceBackendRateLimit;
   /** Turns an input URL into the source the provider will fetch, as the adapters do. */
-  resolveInputSource?: (supabase: SupabaseClient, url: string, userId: string) => Promise<string>;
+  resolveInputSource?: typeof resolveGenerationMediaSource;
   probeInputDuration?: (url: string) => Promise<number | null>;
 };
 
@@ -666,6 +668,7 @@ export async function dispatchCatalogGenerationAdapter({
   clientRequestKeyHash,
   sourceGenerationId,
   resolvedMediaSources,
+  recipeCopyReads,
   dependencies,
 }: {
   request: UnifiedGenerationRequest;
@@ -678,10 +681,12 @@ export async function dispatchCatalogGenerationAdapter({
   sourceGenerationId: string | null;
   /** Links resolved while the run was priced (`resolveBillableInputDurations`), which its start reuses. */
   resolvedMediaSources?: ReadonlyMap<string, string>;
+  /** The start's reads of its caller's unlocks, shared with the pricing's resolves (`createRecipeCopyReads`). */
+  recipeCopyReads?: RecipeCopyReads;
   dependencies: Required<Pick<
     UnifiedGenerationDependencies,
     'startCatalog' | 'startImage' | 'startVideo' | 'startMotion'
-  >>;
+  >> & Pick<UnifiedGenerationDependencies, 'resolveInputSource'>;
 }) {
   const normalized = quote.normalizedSettings;
   if (operation.adapterKey === 'kie-task-v1') {
@@ -702,6 +707,7 @@ export async function dispatchCatalogGenerationAdapter({
       quotedCostCredits: quote.costCredits,
       sourceGenerationId,
       resolvedMediaSources,
+      recipeCopyReads,
     });
   }
 
@@ -857,6 +863,7 @@ export async function dispatchCatalogGenerationAdapter({
       catalogRevision: quote.catalogRevision,
       sourceGenerationId,
       resolvedMediaSources,
+      recipeCopyReads,
     });
   }
 
@@ -870,6 +877,15 @@ export async function dispatchCatalogGenerationAdapter({
         { inputs: 'Required motion inputs are missing.' },
       );
     }
+    // Its clip was resolved to be measured; a character restored from a recipe's copy is imported
+    // now, with the unlock read again, before the provider is sent it (`resolveRecipeFileReference`).
+    const characterImageUrl = await resolveRecipeFileReference(
+      supabase,
+      character.url,
+      userId,
+      { resolved: resolvedMediaSources, recipeCopyReads },
+      dependencies.resolveInputSource,
+    );
     return dependencies.startMotion({
       supabase,
       creditSupabase: adminSupabase,
@@ -877,7 +893,7 @@ export async function dispatchCatalogGenerationAdapter({
       clientRequestKeyHash,
       model: request.modelId as MotionModelId,
       prompt: request.prompt,
-      characterImageUrl: character.url,
+      characterImageUrl,
       referenceVideoUrl: reference.url,
       duration: Number(normalized.duration ?? 1),
       // A motion run's performance is always measured before it is priced (resolveBillableInputDurations).
@@ -944,13 +960,15 @@ export async function startUnifiedGenerationForRoute(
         parsed.sourceGenerationId,
         { callerIsGuest },
       );
+      // One for the whole start: the pricing's resolves and the run's share each unlock's read.
+      const recipeCopyReads = createRecipeCopyReads();
       const billable = await resolveBillableInputDurations({
         request: run,
         descriptor: snapshot.catalog.models.find((model) => (
           model.id === parsed.modelId && model.kind === parsed.kind
         )),
         operation,
-        resolveInputSource: (url) => resolveInputSource(supabase, url, userId),
+        resolveInputSource: (url) => resolveInputSource(supabase, url, userId, { recipeCopyReads }),
         probeInputDuration,
       });
       const billableQuote = billable.verified.length > 0
@@ -1001,11 +1019,13 @@ export async function startUnifiedGenerationForRoute(
         clientRequestKeyHash,
         sourceGenerationId,
         resolvedMediaSources: billable.resolvedSources,
+        recipeCopyReads,
         dependencies: {
           startCatalog: dependencies.startCatalog ?? startCatalogGeneration,
           startImage: dependencies.startImage ?? startImageGeneration,
           startVideo: dependencies.startVideo ?? startVideoGeneration,
           startMotion: dependencies.startMotion ?? startMotionGeneration,
+          resolveInputSource,
         },
       });
     },

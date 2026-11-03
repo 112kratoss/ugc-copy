@@ -16,8 +16,7 @@
  * relative import, so it stays free of React Native, Expo and Node imports.
  */
 
-export const REMIX_INPUT_SLOT_KINDS = ['image', 'video', 'audio'] as const;
-export type RemixInputSlotKind = (typeof REMIX_INPUT_SLOT_KINDS)[number];
+export type RemixInputSlotKind = 'image' | 'video' | 'audio';
 
 export const REMIX_INPUT_SLOT_ROLES = [
   'reference_image',
@@ -44,12 +43,12 @@ export interface RemixInputSlot {
    * one can have been made from an upload's file name.
    */
   handle: string | null;
-  /** What the slot is called: its role's own name, numbered where the role repeats ("Reference image 2"). */
+  /**
+   * What the slot is called: its role's own name, numbered where the role repeats ("Reference image 2").
+   * Nothing else of the input goes with it: not a clip's length, nor how many pictures a subject fused,
+   * which say something of what the creator kept to themselves and which no creator reads.
+   */
   name: string;
-  /** A subject's picture count, which its creator fused under one handle. */
-  pictureCount?: number;
-  /** A clip or track's length in seconds, when the run kept it. */
-  durationSeconds?: number;
 }
 
 /** Which creator a run belongs to: a motion run's inputs are its character and its clip whatever their stored roles. */
@@ -63,6 +62,9 @@ export interface RemixInputSlotSource {
   metadata?: Record<string, unknown> | null;
 }
 
+// The mention grammar: copies of the server's (`isValidElementHandle` and `HANDLE_PATTERN` in
+// src/lib/image-elements.ts), since this module imports nothing. The parity test in
+// ugc-mobile/__tests__/media-creation-view-model.test.ts holds both to the server's.
 const HANDLE_PATTERN = /^@[a-z0-9_]+$/;
 const PROMPT_HANDLE_PATTERN = /(^|[^\w])(@[a-z0-9_]+)(?=$|[^\w])/g;
 
@@ -80,6 +82,14 @@ const ROLE_NAMES: Record<RemixInputSlotRole, string> = {
 /** Roles a run holds more than one of: their slots are numbered. */
 const REPEATING_ROLES = new Set<RemixInputSlotRole>(['reference_image', 'reference_video', 'reference_audio', 'subject']);
 
+/**
+ * Roles a run holds one of (a start frame, an end frame, a motion run's character and its clip): the
+ * first input of the role is the run's, and a later one neither restores nor gets a slot.
+ */
+export const SINGLE_USE_REMIX_SLOT_ROLES: ReadonlySet<RemixInputSlotRole> = new Set(
+  REMIX_INPUT_SLOT_ROLES.filter((role) => !REPEATING_ROLES.has(role)),
+);
+
 const ROLE_KINDS: Record<RemixInputSlotRole, RemixInputSlotKind> = {
   reference_image: 'image',
   start_frame: 'image',
@@ -91,12 +101,17 @@ const ROLE_KINDS: Record<RemixInputSlotRole, RemixInputSlotKind> = {
   subject: 'image',
 };
 
-function promptHandles(prompt: string | null | undefined): Set<string> {
+/** The words a run is written in: its prompt, or a story's shots beside it, each read on its own. */
+export type RemixSlotWords = string | readonly (string | null | undefined)[] | null | undefined;
+
+function promptHandles(words: RemixSlotWords): Set<string> {
   const handles = new Set<string>();
-  (prompt ?? '').replace(PROMPT_HANDLE_PATTERN, (match, _prefix: string, handle: string) => {
-    handles.add(handle);
-    return match;
-  });
+  for (const text of typeof words === 'string' ? [words] : words ?? []) {
+    (text ?? '').replace(PROMPT_HANDLE_PATTERN, (match, _prefix: string, handle: string) => {
+      handles.add(handle);
+      return match;
+    });
+  }
   return handles;
 }
 
@@ -105,13 +120,11 @@ function readHandle(metadata: Record<string, unknown> | null | undefined): strin
   return typeof handle === 'string' && HANDLE_PATTERN.test(handle) ? handle : null;
 }
 
-function readDuration(metadata: Record<string, unknown> | null | undefined): number | undefined {
-  const seconds = metadata?.durationSeconds;
-  return typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 ? seconds : undefined;
-}
-
-/** A stored input's slot role for a run of `tool`, or null for an input no creator restores. */
-function slotRoleFor(source: RemixInputSlotSource, tool: RemixInputSlotTool): RemixInputSlotRole | null {
+/**
+ * A stored input's slot role for a run of `tool`, or null for an input no creator restores: what the
+ * builder below reads, and what the server splits a run's inputs by before it builds them.
+ */
+export function remixInputSlotRoleFor(source: Pick<RemixInputSlotSource, 'mediaType' | 'role'>, tool: RemixInputSlotTool): RemixInputSlotRole | null {
   if (tool === 'motion') {
     // The catalog path stored these under plain reference roles until motion
     // runs got motion roles: a motion run holds one picture and one clip.
@@ -138,23 +151,25 @@ function slotRoleFor(source: RemixInputSlotSource, tool: RemixInputSlotTool): Re
 /**
  * The slots for a run's saved inputs, in the run's order: one per input, one
  * per named subject, and at most one character and one clip for a motion run.
- * A handle is kept only where `prompt` mentions it.
+ * A handle is kept only where the run's words mention it: `prompt` is the
+ * creation's prompt, or that and each of a story's shots, since a story keeps
+ * only its first shot as the prompt while the remixer is given every shot.
  */
 export function buildRemixInputSlots(
   sources: readonly RemixInputSlotSource[],
-  options: { tool: RemixInputSlotTool; prompt: string | null | undefined },
+  options: { tool: RemixInputSlotTool; prompt: RemixSlotWords },
 ): RemixInputSlot[] {
   const mentioned = promptHandles(options.prompt);
   const ordered = [...sources].sort((left, right) => left.sortOrder - right.sortOrder);
   const counts = new Map<RemixInputSlotRole, number>();
-  const subjectSlots = new Map<string, RemixInputSlot>();
+  const subjectKeys = new Set<string>();
   const slots: RemixInputSlot[] = [];
   const singleUse = new Set<RemixInputSlotRole>();
 
   for (const source of ordered) {
-    const role = slotRoleFor(source, options.tool);
+    const role = remixInputSlotRoleFor(source, options.tool);
     if (!role) continue;
-    if (!REPEATING_ROLES.has(role)) {
+    if (SINGLE_USE_REMIX_SLOT_ROLES.has(role)) {
       // A run holds one start frame, one end frame, one character and one motion clip.
       if (singleUse.has(role)) continue;
       singleUse.add(role);
@@ -162,35 +177,23 @@ export function buildRemixInputSlots(
     const storedHandle = readHandle(source.metadata);
     const handle = storedHandle && mentioned.has(storedHandle) ? storedHandle : null;
 
-    // A subject's pictures share its handle, or its index on runs that kept none.
-    let subjectKey: string | null = null;
+    // A subject's pictures share its handle, or its index on runs that kept none: one slot for them all.
     if (role === 'subject') {
       const subjectIndex = source.metadata?.subjectIndex;
-      subjectKey = storedHandle ?? (typeof subjectIndex === 'number' ? `index:${subjectIndex}` : null);
-      if (!subjectKey) continue;
-      const existing = subjectSlots.get(subjectKey);
-      if (existing) {
-        existing.pictureCount = (existing.pictureCount ?? 0) + 1;
-        continue;
-      }
+      const subjectKey = storedHandle ?? (typeof subjectIndex === 'number' ? `index:${subjectIndex}` : null);
+      if (!subjectKey || subjectKeys.has(subjectKey)) continue;
+      subjectKeys.add(subjectKey);
     }
 
     const count = (counts.get(role) ?? 0) + 1;
     counts.set(role, count);
-    const slot: RemixInputSlot = {
+    slots.push({
       id: `slot-${slots.length + 1}`,
       kind: ROLE_KINDS[role],
       role,
       handle,
       name: REPEATING_ROLES.has(role) ? `${ROLE_NAMES[role]} ${count}` : ROLE_NAMES[role],
-    };
-    if (subjectKey) {
-      slot.pictureCount = 1;
-      subjectSlots.set(subjectKey, slot);
-    }
-    const seconds = slot.kind === 'image' ? undefined : readDuration(source.metadata);
-    if (seconds !== undefined) slot.durationSeconds = seconds;
-    slots.push(slot);
+    });
   }
 
   return slots;
@@ -209,15 +212,7 @@ export function parseRemixInputSlots(value: unknown): RemixInputSlot[] {
     const slotRole = role as RemixInputSlotRole;
     const handle = typeof candidate.handle === 'string' && HANDLE_PATTERN.test(candidate.handle) ? candidate.handle : null;
     const name = typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name.trim() : ROLE_NAMES[slotRole];
-    const slot: RemixInputSlot = { id: candidate.id, kind: ROLE_KINDS[slotRole], role: slotRole, handle, name };
-    if (slotRole === 'subject' && typeof candidate.pictureCount === 'number' && candidate.pictureCount > 0) {
-      slot.pictureCount = Math.trunc(candidate.pictureCount);
-    }
-    const seconds = typeof candidate.durationSeconds === 'number' && Number.isFinite(candidate.durationSeconds) && candidate.durationSeconds > 0
-      ? candidate.durationSeconds
-      : undefined;
-    if (seconds !== undefined && slot.kind !== 'image') slot.durationSeconds = seconds;
-    slots.push(slot);
+    slots.push({ id: candidate.id, kind: ROLE_KINDS[slotRole], role: slotRole, handle, name });
   }
   return slots;
 }
@@ -303,20 +298,65 @@ export function remixInputSlotHandles(slots: readonly Pick<RemixInputSlot, 'hand
 }
 
 /**
- * A remix's empty slots sorted by whether the chosen model has a place for their role (`placedRoles`,
- * read off the model by each creator): those it draws a box for, and those it has nowhere to put. A
- * slot without a place stays the remix's, for a switch back. Null roles, before the model is known,
- * place every slot.
+ * What each creator reads off its chosen model to place a remix's empty slots: whether that model's
+ * clips answer to an @handle (Kling 3.0's video elements). Unknown (undefined) places every clip.
  */
-export function remixInputSlotsByPlace<T extends Pick<RemixInputSlot, 'role'>>(
+export interface RemixSlotPlaceOptions {
+  clipsTakeHandles?: boolean;
+}
+
+/**
+ * Whether the chosen model has a place for a slot: its role among those the model draws a box for
+ * (`placedRoles`, read off the model by each creator; null, before the model is known, places every
+ * role), and for a clip the prompt mentions by its handle, clips that answer to one. A plain clip
+ * answers no mention (Seedance 2's), so on such a model a box for "@dance" held the run for a
+ * mention its fill could never answer, on the web and in the app (2026-11-03): it has no place there.
+ */
+export function remixInputSlotPlaced(
+  slot: Pick<RemixInputSlot, 'role' | 'handle'>,
+  placedRoles: ReadonlySet<RemixInputSlotRole> | null,
+  options: RemixSlotPlaceOptions = {},
+): boolean {
+  if (placedRoles && !placedRoles.has(slot.role)) return false;
+  return !(slot.role === 'reference_video' && slot.handle && options.clipsTakeHandles === false);
+}
+
+/**
+ * A remix's empty slots sorted by whether the chosen model has a place for them (`remixInputSlotPlaced`):
+ * those it draws a box for, and those it has nowhere to put. A slot without a place stays the remix's,
+ * for a switch back.
+ */
+export function remixInputSlotsByPlace<T extends Pick<RemixInputSlot, 'role' | 'handle'>>(
   slots: readonly T[],
   placedRoles: ReadonlySet<RemixInputSlotRole> | null,
+  options: RemixSlotPlaceOptions = {},
 ): { placed: T[]; unplaced: T[] } {
-  if (!placedRoles) return { placed: [...slots], unplaced: [] };
-  return {
-    placed: slots.filter((slot) => placedRoles.has(slot.role)),
-    unplaced: slots.filter((slot) => !placedRoles.has(slot.role)),
-  };
+  const placed = slots.filter((slot) => remixInputSlotPlaced(slot, placedRoles, options));
+  return { placed, unplaced: slots.filter((slot) => !placed.includes(slot)) };
+}
+
+/**
+ * The boxes still open, by one rule for both creators (2026-11-03): a box whose handle something the
+ * remix holds already answers (a picture added through the add tile and named so) is not waited on,
+ * drawn or counted in the notice, as a fill there would only add a second reference under a renamed
+ * handle. It opens again if that reference goes. A box with no handle waits for its own fill.
+ */
+export function openRemixInputSlots<T extends Pick<RemixInputSlot, 'handle'>>(
+  slots: readonly T[],
+  answeredHandles: Iterable<string>,
+): T[] {
+  const answered = new Set(answeredHandles);
+  return slots.filter((slot) => !(slot.handle && answered.has(slot.handle)));
+}
+
+/**
+ * What the remixer's own media in a box is called, by both creators: the words of the handle the
+ * prompt mentions the box by ("@product" is "product"), or else the box's own name ("Start frame",
+ * "Reference image 2"). `handle` is the box's, which the prompt's mention then finds, or null for a
+ * box the prompt does not mention: its fill takes a handle as any reference added under that name.
+ */
+export function remixSlotFillNaming(slot: Pick<RemixInputSlot, 'handle' | 'name'>): { displayName: string; handle: string | null } {
+  return { displayName: slot.handle?.slice(1).replace(/_+/g, ' ').trim() || slot.name, handle: slot.handle };
 }
 
 /** A prompt's unknown mentions as a remix's empty slots read them. */
@@ -362,10 +402,11 @@ export function remixSlotMentionsMessage(
 /**
  * The named references an Enhance request tells the enhancer to keep (`elementReferences`): those the
  * run sends, then every empty slot that `prompt` (the words being enhanced) mentions, under its handle
- * and its name, placed or not. The enhancer keeps a handle only where it is told of it, and an Enhance
- * that rewrote "@product" out of a remix's prompt left its box with nothing to answer (2026-11-03). A
- * box the words do not mention has nothing to keep, and is no reference the run has. A box once filled
- * is its reference's, which the run sends under the same handle. Each handle once, the run's first.
+ * and the name its fill will have (`remixSlotFillNaming`), placed or not. The enhancer keeps a handle
+ * only where it is told of it, and an Enhance that rewrote "@product" out of a remix's prompt left its
+ * box with nothing to answer (2026-11-03). A box the words do not mention has nothing to keep, and is
+ * no reference the run has. A box once filled is its reference's, which the run sends under the same
+ * handle. Each handle once, the run's first.
  */
 export function withRemixSlotEnhancerReferences(
   references: readonly { handle: string; displayName: string }[],
@@ -377,7 +418,7 @@ export function withRemixSlotEnhancerReferences(
   const boxes = slots.flatMap((slot) => {
     if (!slot.handle || !mentioned.has(slot.handle) || kept.has(slot.handle)) return [];
     kept.add(slot.handle);
-    return [{ handle: slot.handle, displayName: slot.name }];
+    return [{ handle: slot.handle, displayName: remixSlotFillNaming(slot).displayName }];
   });
   return [...references, ...boxes];
 }

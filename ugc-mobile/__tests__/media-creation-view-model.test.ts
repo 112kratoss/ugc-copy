@@ -1069,6 +1069,22 @@ describe('extractPromptHandles', () => {
     expect(patternIn(join(repoRoot, 'lib/media-creation-view-model.ts'))).toBe(server);
   });
 
+  // The remix slots' module (shared by the server, the web and the app, so it imports nothing) keeps
+  // copies of the same grammar: one to read a prompt's handles, one to keep a slot's handle. A copy
+  // that drifts drops a handle the prompt mentions, and its box reads as an unknown mention, with
+  // nothing turning red (2026-11-03 review).
+  it('reads remix slots’ handles with the grammar the server reads a prompt with', () => {
+    const constantIn = (file: string, name: string) => readFileSync(file, 'utf8').match(new RegExp(`^const ${name} = (.+);$`, 'm'))?.[1];
+    const slotsModule = join(repoRoot, 'lib/remix-input-slots/remix-input-slots.ts');
+    const server = join(repoRoot, '..', 'src/lib/image-elements.ts');
+    const serverRule = readFileSync(server, 'utf8').match(/function isValidElementHandle\([^)]*\)[^{]*\{[^}]*?(\/\^@[^/\n]+\/)/)?.[1];
+
+    expect(constantIn(server, 'HANDLE_PATTERN')).toBeDefined();
+    expect(constantIn(slotsModule, 'PROMPT_HANDLE_PATTERN')).toBe(constantIn(server, 'HANDLE_PATTERN'));
+    expect(serverRule).toBe('/^@[a-z0-9_]+$/');
+    expect(constantIn(slotsModule, 'HANDLE_PATTERN')).toBe(serverRule);
+  });
+
   // A remix hands a clip the handle its run kept only when the server's rule takes it
   // (isValidElementHandle), and the app keeps it by its own copy of that rule. A copy that
   // drifts drops a handle the prompt mentions, and the run is held again.
@@ -1278,22 +1294,22 @@ describe('a remix’s empty input slots', () => {
       inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
       inputSlots: [
         { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
-        { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4.2 },
+        { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
         { id: 'slot-3', kind: 'audio', role: 'reference_audio', handle: null, name: 'Reference audio 1' },
-        { id: 'slot-4', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+        { id: 'slot-4', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' },
         { id: 'slot-5', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
       ],
     }));
     expect(video.warning).toBeNull();
     expect(video.draft.inputSlots?.map((slot) => slot.role)).toEqual(['start_frame', 'reference_video', 'reference_audio', 'subject']);
-    expect(video.draft.inputSlots?.[1]).toEqual({ id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4.2 });
+    expect(video.draft.inputSlots?.[1]).toEqual({ id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' });
 
     const motion = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), remixSourceBundle({
       generation: { category: 'video', model: 'kling-3.0', prompt: '' },
       workflowSettings: { model: 'kling-3.0' },
       inputSlots: [
         { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
-        { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+        { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' },
         { id: 'slot-3', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 1' },
       ],
     }));
@@ -1335,7 +1351,7 @@ describe('a remix’s empty input slots', () => {
         { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
         { id: 'slot-3', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 2' },
         { id: 'slot-4', kind: 'audio', role: 'reference_audio', handle: null, name: 'Reference audio 1' },
-        { id: 'slot-5', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+        { id: 'slot-5', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' },
       ],
     };
     const framed = fillRemixInputSlot(base, 'slot-1', [upload('door.png')]);
@@ -1363,7 +1379,7 @@ describe('a remix’s empty input slots', () => {
       ...createDefaultCreationDraft('motion'),
       inputSlots: [
         { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
-        { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+        { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' },
       ] satisfies RemixInputSlot[],
     };
     const character = fillRemixInputSlot(base, 'slot-1', [upload('me.png')]);
@@ -1421,7 +1437,8 @@ describe('a remix’s empty input slots', () => {
     const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot, backdropSlot]));
     const request = buildPromptEnhancementRequest(draft);
     // Under the box's own name; the box without a handle gives none to keep, and nothing is counted as sent.
-    expect(request.context).toMatchObject({ referenceImageCount: 0, elementReferences: [{ handle: '@product', displayName: 'Reference image 1' }] });
+    // A box is named for Enhance as its fill will be (`remixSlotFillNaming`), so a box and its fill read alike.
+    expect(request.context).toMatchObject({ referenceImageCount: 0, elementReferences: [{ handle: '@product', displayName: 'product' }] });
     expect(JSON.stringify(request)).not.toMatch(/slot-\d|inputSlots/);
     expect(promptNamesKeptReference(request)).toBe(true);
     expect(promptNamesKeptReference(buildPromptEnhancementRequest({ ...draft, prompt: 'A bottle on a marble counter' }))).toBe(false);
@@ -1440,14 +1457,14 @@ describe('a remix’s empty input slots', () => {
       prompt: 'Open on the door, then @dance spins',
       inputSlots: [danceSlot],
     };
-    expect(buildPromptEnhancementRequest(video).context?.elementReferences).toEqual([{ handle: '@dance', displayName: 'Reference video 1' }]);
+    expect(buildPromptEnhancementRequest(video).context?.elementReferences).toEqual([{ handle: '@dance', displayName: 'dance' }]);
     const videoRun = { startFrame: null, endFrame: null, referenceImageCount: 0, hasReferenceVideo: false, elementReferences: [{ handle: '@hero', displayName: 'Hero' }] };
     expect(buildPromptEnhancementRequest(video, { videoRun }).context?.elementReferences).toEqual([
       { handle: '@hero', displayName: 'Hero' },
-      { handle: '@dance', displayName: 'Reference video 1' },
+      { handle: '@dance', displayName: 'dance' },
     ]);
     const story: VideoCreationDraft = { ...video, isMultiShot: true, multiPrompts: [{ id: 'shot-1', prompt: '@dance at dusk', duration: 5 }] };
-    expect(buildShotPromptEnhancementRequest(story, 'shot-1')?.context.elementReferences).toEqual([{ handle: '@dance', displayName: 'Reference video 1' }]);
+    expect(buildShotPromptEnhancementRequest(story, 'shot-1')?.context.elementReferences).toEqual([{ handle: '@dance', displayName: 'dance' }]);
   });
 
   // A switch to a model with no place for a box's kind hid the box, and its mention read as an unknown
@@ -1467,6 +1484,16 @@ describe('a remix’s empty input slots', () => {
     expect(placedRemixInputSlots(draft, takesPictures.roles)).toEqual([productSlot, backdropSlot]);
     // Before the model is known, every box is drawn, as before.
     expect(placedRemixInputSlots(draft, null)).toEqual([productSlot, backdropSlot]);
+    // A clip the prompt names has a place only where clips answer to a handle (Kling 3.0's video
+    // elements), as on the web (`remixInputSlotPlaced`): on a plain-clip model its mention says so.
+    const danceSlot: RemixInputSlot = { id: 'slot-7', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' };
+    const clips = { ...createDefaultCreationDraft('video'), prompt: '@dance spins', inputSlots: [danceSlot] };
+    const roles = new Set<RemixInputSlot['role']>(['reference_video']);
+    expect(placedRemixInputSlots(clips, roles, { clipsTakeHandles: false })).toEqual([]);
+    expect(placedRemixInputSlots(clips, roles, { clipsTakeHandles: true })).toEqual([danceSlot]);
+    expect(promptMentionErrors(['@dance'], clips, { roles, modelName: 'Seedance 2', clipsTakeHandles: false }))
+      .toEqual(['Seedance 2 has no place for @dance. Switch back, or take @dance out of the prompt.']);
+    expect(remixDraftSlotsNotice(clips, roles, { clipsTakeHandles: false })).toBeNull();
     expect(promptMentionErrors(['@product'], draft)).toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
   });
 

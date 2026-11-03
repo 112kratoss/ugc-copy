@@ -9327,7 +9327,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
           inputSlots: [
             { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
-            { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4 },
+            { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
           ],
           workflowSettings: { model: 'kling-3.0-video', referenceMode: 'frames', duration: 5 },
           restoreIssues: [],
@@ -9371,7 +9371,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           generation: { id: 'gen-slots', title: 'Maya', prompt: '@maya walks into the rain', category: 'video', model: 'kling-o3' },
           result: null,
           inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
-          inputSlots: [{ id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 }],
+          inputSlots: [{ id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' }],
           workflowSettings: { model: 'kling-o3' },
           restoreIssues: [],
         });
@@ -9396,7 +9396,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           inputs: {},
           inputSlots: [
             { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
-            { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+            { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' },
           ],
           workflowSettings: { model: 'kling-3.0' },
           restoreIssues: [],
@@ -9428,7 +9428,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
           prompt: 'Place @product on a marble counter',
           context: expect.objectContaining({
             referenceImageCount: 0,
-            elementReferences: [{ handle: '@product', displayName: 'Reference image 1' }],
+            // Named as its fill will be (`remixSlotFillNaming`), as on the web.
+            elementReferences: [{ handle: '@product', displayName: 'product' }],
             elementEnhancementMode: 'append-only',
           }),
         }));

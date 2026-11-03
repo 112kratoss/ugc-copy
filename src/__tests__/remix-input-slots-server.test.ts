@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-rows';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import {
+  buildGenerationReferenceCopyPath,
+  buildGenerationReferenceResourceItems,
   findGenerationReferenceCopies,
-  loadGenerationRecipeReferenceCopiesByPostId,
-  type PostResourceBundleDetail,
+  loadGenerationRecipeReferenceCopies,
+  parseGenerationReferenceCopyPath,
+  type GenerationReferenceCopyRecipe,
 } from '@/lib/post-resource-bundles-server';
-import { splitRemixInputsByCopy } from '@/lib/remix-input-slots-server';
+import { remixSlotWords, splitRemixInputsByCopy } from '@/lib/remix-input-slots-server';
 
 // Owner, 2026-11-03: a remix that is given none of the run's inputs gets an
 // empty slot for each, and someone who unlocked the recipe gets back the inputs
@@ -56,71 +60,120 @@ describe('finding the copies a recipe holds of its creation’s inputs', () => {
   });
 });
 
-describe('reading the copies from the recipe the viewer has', () => {
-  const recipeItem = (rowId: string, storagePath: string) => ({ id: `reference-${rowId}`, storagePath });
+// One writer files the copies; a remix and a run start read them back. Each of their fixtures
+// once typed the layout by hand, so a writer that changed left them green while buyers got empty boxes.
+describe('the copy layout, from its writer to its readers', () => {
+  const SELLER_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+  const GENERATION_ID = 'b1b2c3d4-0000-4000-8000-000000000001';
+  const rows = [
+    { id: 'c1b2c3d4-0000-4000-8000-0000000000a1', role: 'reference_image', sort_order: 0, media_type: 'image' as const, storage_path: `generation_inputs/${SELLER_ID}/${GENERATION_ID}/00-reference_image.png` },
+    { id: 'c1b2c3d4-0000-4000-8000-0000000000b2', role: 'subject_image', sort_order: 11, media_type: 'image' as const, storage_path: `generation_inputs/${SELLER_ID}/${GENERATION_ID}/11-subject_image.webp` },
+    { id: 'c1b2c3d4-0000-4000-8000-0000000000c3', role: 'motion_reference_video', sort_order: 2, media_type: 'video' as const, storage_path: `generation_inputs/${SELLER_ID}/${GENERATION_ID}/02-motion_reference_video.mov` },
+  ];
 
-  function detail(overrides: Partial<{
-    viewerCanAccess: boolean;
-    currentItems: Array<{ id: string; storagePath: string }> | null;
-    purchasedItems: Array<{ id: string; storagePath: string }> | null;
-    generationId: string;
-  }> = {}): PostResourceBundleDetail {
-    const { viewerCanAccess = true, currentItems = [], purchasedItems = null, generationId = GENERATION } = overrides;
-    return {
-      viewerCanAccess,
-      resources: currentItems ? { items: currentItems } : null,
-      purchasedRevision: purchasedItems ? { resources: { items: purchasedItems } } : null,
-      seller: { id: SELLER },
-      post: { generationId },
-    } as unknown as PostResourceBundleDetail;
-  }
+  it('reads back every copy the writer files, by its row, and the start’s parser reads its folder', async () => {
+    const uploads: string[] = [];
+    const client = {
+      from: () => {
+        const query = { select: () => query, eq: () => query, order: async () => ({ data: rows.map((row) => ({ ...row, generation_id: GENERATION_ID, user_id: SELLER_ID, label: null, source_generation_id: null, metadata: {} })), error: null }) };
+        return query;
+      },
+      storage: {
+        from: () => ({
+          download: async () => ({ data: new Blob(['media'], { type: 'image/png' }), error: null }),
+          upload: async (filePath: string) => {
+            uploads.push(filePath);
+            return { error: null };
+          },
+        }),
+      },
+    };
+
+    const items = await buildGenerationReferenceResourceItems({ supabase: client as never, ownerUserId: SELLER_ID, generationId: GENERATION_ID });
+
+    expect(items.map((item) => item.storagePath)).toEqual(uploads);
+    expect(items.map((item) => item.storagePath)).toEqual(rows.map((row) => buildGenerationReferenceCopyPath(SELLER_ID, GENERATION_ID, row)));
+    expect(findGenerationReferenceCopies({ items, ownerUserId: SELLER_ID, generationId: GENERATION_ID, inputRowIds: rows.map((row) => row.id) }))
+      .toEqual(new Map(rows.map((row, index) => [row.id, items[index]!.storagePath!])));
+    for (const item of items) {
+      expect(parseGenerationReferenceCopyPath(item.storagePath!)).toEqual({
+        ownerUserId: SELLER_ID,
+        generationId: GENERATION_ID,
+        fileName: item.storagePath!.split('/').pop(),
+      });
+    }
+  });
+
+  it.each([
+    ['another folder of the recipe files', `${SELLER_ID}/resources/${GENERATION_ID}/guide.pdf`],
+    ['a file below a creation’s folder', `${SELLER_ID}/generation-references/${GENERATION_ID}/nested/00-reference-image-row.png`],
+    ['the folder itself', `${SELLER_ID}/generation-references/${GENERATION_ID}`],
+    ['no account', `/generation-references/${GENERATION_ID}/00.png`],
+  ])('reads %s as no copy', (_, filePath) => {
+    expect(parseGenerationReferenceCopyPath(filePath)).toBeNull();
+  });
+});
+
+describe('reading the copies from the recipe the viewer bought', () => {
+  const recipeItem = (rowId: string, storagePath: string) => ({ id: `reference-${rowId}`, type: 'reference_image', title: 'Reference', storagePath });
+  const RECIPE: GenerationReferenceCopyRecipe = { id: 'bundle-1', ownerUserId: SELLER, viewerHasPurchased: true };
 
   type SignedUrlAnswer = { data: { signedUrl: string } | null; error: { message: string } | null };
 
-  function storageClient({ failing = [] as string[] } = {}) {
+  function recipeClient(options: {
+    currentItems?: unknown[];
+    purchasedItems?: unknown[] | null;
+    purchases?: Array<Record<string, unknown>> | ReturnType<typeof databaseError>;
+    failing?: string[];
+  } = {}) {
+    const stored = createStoredRows({
+      post_resource_bundles: [{ id: 'bundle-1', resource_items: options.currentItems ?? [], resource_sections: [] }],
+      post_resource_bundle_purchases: options.purchases ?? [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
+    }, {
+      get_purchased_post_resource_bundle_revision: () => (options.purchasedItems
+        ? [{ is_latest: false, resource_items: options.purchasedItems, resource_sections: [] }]
+        : []),
+    });
     const createSignedUrl = vi.fn<(filePath: string, expiresIn: number) => Promise<SignedUrlAnswer>>(async (filePath) => (
-      failing.includes(filePath)
+      (options.failing ?? []).includes(filePath)
         ? { data: null, error: { message: 'storage outage' } }
         : { data: { signedUrl: `https://signed.example/post_resource_files/${filePath}?token=short` }, error: null }
     ));
-    const from = vi.fn<(bucket: string) => { createSignedUrl: typeof createSignedUrl }>(() => ({ createSignedUrl }));
-    return { client: { storage: { from } } as never, from, createSignedUrl };
+    const storageFrom = vi.fn(() => ({ createSignedUrl }));
+    const from = vi.fn((table: string) => stored.client.from(table));
+    return { client: { from, rpc: stored.client.rpc, storage: { from: storageFrom } } as never, from, storageFrom, createSignedUrl };
   }
 
-  async function load(recipe: PostResourceBundleDetail | null, options: { inputRowIds?: string[]; failing?: string[] } = {}) {
-    const storage = storageClient({ failing: options.failing });
-    const getDetailByPostId = vi.fn(async () => recipe);
-    const copies = await loadGenerationRecipeReferenceCopiesByPostId({
-      postId: 'post-verified',
+  async function load(client: ReturnType<typeof recipeClient>, options: { recipe?: Partial<GenerationReferenceCopyRecipe>; inputRowIds?: string[]; signUrls?: boolean } = {}) {
+    return loadGenerationRecipeReferenceCopies({
+      adminSupabase: client.client,
+      recipe: { ...RECIPE, ...options.recipe },
       generationId: GENERATION,
       viewerUserId: 'buyer-1',
       inputRowIds: options.inputRowIds ?? [ROW_A, ROW_B],
-      adminSupabase: storage.client,
-      getDetailByPostId: getDetailByPostId as never,
+      ...(options.signUrls === undefined ? {} : { signUrls: options.signUrls }),
     });
-    return { copies, getDetailByPostId, ...storage };
   }
 
-  it('reads the unlock as the file route does, and signs each copy briefly in the recipe files', async () => {
-    const { copies, getDetailByPostId, from, createSignedUrl, client } = await load(detail({ currentItems: [recipeItem(ROW_A, COPY_A)] }));
+  it('reads the recipe the gate found its buyer bought, and signs each copy briefly in the recipe files', async () => {
+    const client = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)] });
 
-    expect(getDetailByPostId).toHaveBeenCalledWith('post-verified', {
-      viewerUserId: 'buyer-1',
-      adminSupabase: client,
-      countLockedReferences: false,
-    });
-    expect(from).toHaveBeenCalledWith('post_resource_files');
-    expect(createSignedUrl).toHaveBeenCalledWith(COPY_A, 3600);
+    const copies = await load(client);
+
+    expect(client.storageFrom).toHaveBeenCalledWith('post_resource_files');
+    expect(client.createSignedUrl).toHaveBeenCalledWith(COPY_A, 3600);
     expect(copies).toEqual(new Map([[ROW_A, {
       storagePath: `post_resource_files/${COPY_A}`,
       url: `https://signed.example/post_resource_files/${COPY_A}?token=short`,
     }]]));
+    // What the gate read is not read again: no purchase, no post, no profile.
+    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['post_resource_bundles']);
   });
 
   // A creator who edits a sold recipe cannot take back what it held when it was
-  // unlocked: the file route signs a file of either version for its buyer.
-  it('finds a copy that is only in the version the viewer unlocked', async () => {
-    const { copies } = await load(detail({
+  // bought: the file route signs a file of either version for its buyer.
+  it('finds a copy that is only in the version the viewer bought', async () => {
+    const copies = await load(recipeClient({
       currentItems: [recipeItem(ROW_B, COPY_B)],
       purchasedItems: [recipeItem(ROW_A, COPY_A)],
     }));
@@ -128,29 +181,48 @@ describe('reading the copies from the recipe the viewer has', () => {
     expect([...copies.keys()].sort()).toEqual([ROW_A, ROW_B]);
   });
 
-  it.each([
-    ['no recipe for this viewer', null],
-    ['a viewer without access', detail({ viewerCanAccess: false, currentItems: [recipeItem(ROW_A, COPY_A)] })],
-    ['a recipe whose resources are withheld', detail({ currentItems: null })],
-    ['a recipe on another creation', detail({ currentItems: [recipeItem(ROW_A, COPY_A)], generationId: 'gen-2' })],
-  ])('signs nothing for %s', async (_, recipe) => {
-    const { copies, createSignedUrl } = await load(recipe);
+  // A recipe its seller retired gates no Remix, so the gate asked no purchase: it is read here.
+  it('reads the purchase of a recipe the gate did not ask about, and finds its copies for its buyer alone', async () => {
+    const buyer = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)] });
+    expect([...(await load(buyer, { recipe: { viewerHasPurchased: null } })).keys()]).toEqual([ROW_A]);
 
-    expect(copies).toEqual(new Map());
-    expect(createSignedUrl).not.toHaveBeenCalled();
+    const stranger = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)], purchases: [{ id: 'p', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }] });
+    expect(await load(stranger, { recipe: { viewerHasPurchased: null } })).toEqual(new Map());
+    expect(stranger.createSignedUrl).not.toHaveBeenCalled();
   });
 
-  it('keeps a copy whose signing failed, without a link', async () => {
-    const { copies } = await load(detail({ currentItems: [recipeItem(ROW_A, COPY_A)] }), { failing: [COPY_A] });
+  it('throws when the purchase cannot be read, rather than taking it for none', async () => {
+    const client = recipeClient({ purchases: databaseError('57014', 'canceling statement due to statement timeout') });
 
-    expect(copies.get(ROW_A)).toEqual({ storagePath: `post_resource_files/${COPY_A}`, url: null });
+    await expect(load(client, { recipe: { viewerHasPurchased: null } })).rejects.toBeTruthy();
+  });
+
+  it.each([
+    ['a viewer who never bought it', { viewerHasPurchased: false }],
+    ['its seller, whose copies are their own files', { ownerUserId: 'buyer-1' }],
+    ['a recipe with no seller', { ownerUserId: null }],
+  ])('reads and signs nothing for %s', async (_, recipe) => {
+    const client = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)] });
+
+    expect(await load(client, { recipe: recipe as never })).toEqual(new Map());
+    expect(client.from).not.toHaveBeenCalled();
+    expect(client.createSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('keeps a copy whose signing failed, without a link, and signs nothing for a start', async () => {
+    const failing = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)], failing: [COPY_A] });
+    expect((await load(failing)).get(ROW_A)).toEqual({ storagePath: `post_resource_files/${COPY_A}`, url: null });
+
+    const unsigned = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)] });
+    expect((await load(unsigned, { signUrls: false })).get(ROW_A)).toEqual({ storagePath: `post_resource_files/${COPY_A}`, url: null });
+    expect(unsigned.createSignedUrl).not.toHaveBeenCalled();
   });
 
   it('reads nothing for a run with no rows', async () => {
-    const { copies, getDetailByPostId } = await load(detail(), { inputRowIds: [] });
+    const client = recipeClient();
 
-    expect(copies).toEqual(new Map());
-    expect(getDetailByPostId).not.toHaveBeenCalled();
+    expect(await load(client, { inputRowIds: [] })).toEqual(new Map());
+    expect(client.from).not.toHaveBeenCalled();
   });
 });
 
@@ -191,15 +263,28 @@ describe('splitting withheld inputs into restored copies and slots', () => {
     const { restored, withheld } = splitRemixInputsByCopy([
       input('lead-1', 'image', 'subject_image', 0, { handle: '@lead', subjectIndex: 0 }),
       input('lead-2', 'image', 'subject_image', 1, { handle: '@lead', subjectIndex: 0 }),
-      input('bottle-1', 'image', 'subject_image', 2, { handle: '@bottle', subjectIndex: 1 }),
-      input('bottle-2', 'image', 'subject_image', 3, { handle: '@bottle', subjectIndex: 1 }),
+      input('lead-3', 'image', 'subject_image', 2, { handle: '@lead', subjectIndex: 0 }),
+      input('bottle-1', 'image', 'subject_image', 3, { handle: '@bottle', subjectIndex: 1 }),
+      input('bottle-2', 'image', 'subject_image', 4, { handle: '@bottle', subjectIndex: 1 }),
       // Names no subject, so it cannot be restored as one, copy or not.
-      input('unnamed', 'image', 'subject_image', 4, { subjectIndex: 2 }),
-    ], new Set(['lead-2', 'unnamed']), 'video');
+      input('unnamed', 'image', 'subject_image', 5, { subjectIndex: 2 }),
+    ], new Set(['lead-2', 'lead-3', 'unnamed']), 'video');
 
-    // @lead comes back with its one copied picture, and no slot asks for @lead beside it.
-    expect(ids(restored)).toEqual(['lead-2']);
+    // @lead comes back with its two copied pictures, and no slot asks for @lead beside it.
+    expect(ids(restored)).toEqual(['lead-2', 'lead-3']);
     expect(ids(withheld)).toEqual(['bottle-1', 'bottle-2', 'unnamed']);
+  });
+
+  // A subject takes two to four pictures (`SUBJECT_IMAGES_PER_NAME`): one restored alone opened below
+  // the minimum, with no word of it (2026-11-03 review). It is the remixer's to fill instead.
+  it('gives a subject with fewer copied pictures than a subject takes its slot, rather than part of it', () => {
+    const { restored, withheld } = splitRemixInputsByCopy([
+      input('lead-1', 'image', 'subject_image', 0, { handle: '@lead', subjectIndex: 0 }),
+      input('lead-2', 'image', 'subject_image', 1, { handle: '@lead', subjectIndex: 0 }),
+    ], new Set(['lead-2']), 'video');
+
+    expect(ids(restored)).toEqual([]);
+    expect(ids(withheld)).toEqual(['lead-1', 'lead-2']);
   });
 
   it('reads a frame as the first of its role, as the slot builder and the restore both do', () => {
@@ -234,5 +319,15 @@ describe('splitting withheld inputs into restored copies and slots', () => {
       input('frame', 'image', 'start_frame', 0),
       input('picture', 'image', 'subject_image', 1, { handle: '@lead', subjectIndex: 0 }),
     ], new Set(['frame', 'picture']), 'image')).toEqual({ restored: [], withheld: [] });
+  });
+});
+
+// A story keeps only its first shot as the creation's prompt; every shot reaches the remixer.
+describe('the words a run’s handles are read in', () => {
+  it('reads the prompt and each of a story’s shots', () => {
+    expect(remixSlotWords('@hero walks in', { multiPrompts: [{ prompt: '@hero walks in' }, { prompt: '@villain waits' }, { duration: 3 }, null] }))
+      .toEqual(['@hero walks in', '@hero walks in', '@villain waits', null, null]);
+    expect(remixSlotWords(null, { multiPrompts: 'not shots' })).toEqual([null]);
+    expect(remixSlotWords('@hero', {})).toEqual(['@hero']);
   });
 });

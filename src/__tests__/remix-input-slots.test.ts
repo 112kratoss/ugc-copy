@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRemixInputSlots,
+  openRemixInputSlots,
   parseRemixInputSlots,
   readRemixSlotMentions,
+  remixInputSlotRoleFor,
   REMIX_INPUT_SLOTS_NOTICE_LABEL,
   remixInputSlotAction,
   remixInputSlotHandles,
   remixInputSlotsByPlace,
   remixInputSlotsNotice,
   remixInputSlotTitle,
+  remixSlotFillNaming,
   remixSlotMentionsMessage,
+  SINGLE_USE_REMIX_SLOT_ROLES,
   unfilledRemixSlotsMessage,
   unplacedRemixSlotsMessage,
   withRemixSlotEnhancerReferences,
@@ -42,7 +46,8 @@ describe('remix input slots', () => {
     expect(JSON.stringify(slots)).not.toMatch(/IMG_2201|passport|displayName/);
   });
 
-  it('gives a video run its frames once each, its clips and tracks with their lengths, and one slot per subject', () => {
+  // A slot says what goes there and nothing of what was there: no clip's length, no subject's picture count.
+  it('gives a video run its frames once each, its clips and tracks, and one slot per subject', () => {
     const slots = buildRemixInputSlots([
       input('image', 'start_frame', 0),
       input('image', 'end_frame', 1),
@@ -58,11 +63,36 @@ describe('remix input slots', () => {
     expect(slots).toEqual([
       { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
       { id: 'slot-2', kind: 'image', role: 'end_frame', handle: null, name: 'End frame' },
-      { id: 'slot-3', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4.2 },
+      { id: 'slot-3', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
       { id: 'slot-4', kind: 'audio', role: 'reference_audio', handle: null, name: 'Reference audio 1' },
-      { id: 'slot-5', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
-      { id: 'slot-6', kind: 'image', role: 'subject', handle: null, name: 'Subject 2', pictureCount: 1 },
+      { id: 'slot-5', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' },
+      { id: 'slot-6', kind: 'image', role: 'subject', handle: null, name: 'Subject 2' },
     ]);
+  });
+
+  // A story stores its first shot as the creation's prompt; every shot reaches the remixer, and a
+  // handle only a later shot names read as an unknown mention, its box as "Subject 2" (2026-11-03).
+  it('keeps a handle any of the words mention: the prompt and each of a story’s shots', () => {
+    const subjects = [
+      input('image', 'subject_image', 0, { handle: '@hero', subjectIndex: 0 }),
+      input('image', 'subject_image', 1, { handle: '@villain', subjectIndex: 1 }),
+      input('video', 'reference_video', 2, { handle: '@chase' }),
+    ];
+
+    expect(buildRemixInputSlots(subjects, { tool: 'video', prompt: ['@hero walks in.', '@villain waits.', null, 'They run like @chase'] }).map((slot) => slot.handle))
+      .toEqual(['@hero', '@villain', '@chase']);
+    expect(buildRemixInputSlots(subjects, { tool: 'video', prompt: '@hero walks in.' }).map((slot) => slot.handle))
+      .toEqual(['@hero', null, null]);
+    // Two shots read apart: a handle is never made of the end of one and the start of the next.
+    expect(buildRemixInputSlots([input('image', 'reference_image', 0, { handle: '@ab' })], { tool: 'video', prompt: ['@a', 'b'] }).map((slot) => slot.handle))
+      .toEqual([null]);
+  });
+
+  it('reads each input’s slot role as the builder does, and names the roles a run holds one of', () => {
+    expect(remixInputSlotRoleFor(input('image', 'reference_image', 0), 'motion')).toBe('character_image');
+    expect(remixInputSlotRoleFor(input('video', 'reference_video', 0), 'video')).toBe('reference_video');
+    expect(remixInputSlotRoleFor(input('image', 'subject_image', 0), 'image')).toBeNull();
+    expect([...SINGLE_USE_REMIX_SLOT_ROLES].sort()).toEqual(['character_image', 'end_frame', 'motion_reference_video', 'start_frame']);
   });
 
   it('reads a motion run as one character and one clip, whatever roles the catalog path stored', () => {
@@ -72,7 +102,7 @@ describe('remix input slots', () => {
       input('image', 'reference_image', 2),
     ], { tool: 'motion', prompt: '' })).toEqual([
       { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
-      { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+      { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' },
     ]);
   });
 
@@ -94,9 +124,9 @@ describe('remix input slots', () => {
       null,
       'slot-5',
     ])).toEqual([
-      // Kind follows the role, and a picture has no length.
+      // Kind follows the role, and nothing else the bundle sent is kept.
       { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
-      { id: 'slot-2', kind: 'image', role: 'subject', handle: null, name: 'Subject', pictureCount: 2 },
+      { id: 'slot-2', kind: 'image', role: 'subject', handle: null, name: 'Subject' },
     ]);
     expect(parseRemixInputSlots(undefined)).toEqual([]);
     expect(parseRemixInputSlots({ id: 'slot-1' })).toEqual([]);
@@ -148,6 +178,37 @@ describe('remix input slots', () => {
     expect(remixInputSlotsByPlace([product, dance], null)).toEqual({ placed: [product, dance], unplaced: [] });
   });
 
+  // Kling 3.0 takes clips under the handles its prompt mentions them by; a plain-clip model (Seedance 2)
+  // takes none, so a box for "@dance" there held the run for a mention its fill could never answer.
+  it('has no place for a clip the prompt names on a model whose clips take no handle', () => {
+    const plainClip: RemixInputSlot = { ...dance, id: 'slot-5', handle: null, name: 'Reference video 2' };
+    const roles = new Set<RemixInputSlot['role']>(['reference_video', 'reference_image']);
+
+    expect(remixInputSlotsByPlace([product, dance, plainClip], roles, { clipsTakeHandles: false }))
+      .toEqual({ placed: [product, plainClip], unplaced: [dance] });
+    expect(remixInputSlotsByPlace([product, dance, plainClip], roles, { clipsTakeHandles: true }))
+      .toEqual({ placed: [product, dance, plainClip], unplaced: [] });
+    // Before the model is known its clips are not either: every box keeps its place.
+    expect(remixInputSlotsByPlace([dance], null)).toEqual({ placed: [dance], unplaced: [] });
+    expect(remixInputSlotsByPlace([dance], null, { clipsTakeHandles: false })).toEqual({ placed: [], unplaced: [dance] });
+  });
+
+  // One rule for both creators (2026-11-03): the web kept a box its reference already answered, and
+  // named a fill "Reference image 1" where the app named it "product".
+  it('opens only the boxes nothing the remix holds answers', () => {
+    expect(openRemixInputSlots([product, backdrop, dance], ['@product'])).toEqual([backdrop, dance]);
+    expect(openRemixInputSlots([product, backdrop], new Set(['@reference_image_2']))).toEqual([product, backdrop]);
+    expect(openRemixInputSlots([product], [])).toEqual([product]);
+  });
+
+  it('names a fill for the handle the prompt mentions its box by, or else for the box', () => {
+    expect(remixSlotFillNaming(product)).toEqual({ displayName: 'product', handle: '@product' });
+    expect(remixSlotFillNaming({ handle: '@red_sneaker__2', name: 'Reference image 1' })).toEqual({ displayName: 'red sneaker 2', handle: '@red_sneaker__2' });
+    // A box with no handle is named for itself, and its fill takes a handle as any reference added under that name.
+    expect(remixSlotFillNaming(backdrop)).toEqual({ displayName: 'Reference image 2', handle: null });
+    expect(remixSlotFillNaming(start)).toEqual({ displayName: 'Start frame', handle: null });
+  });
+
   it('reads a prompt’s unknown mentions against the boxes on the page and those the model has no place for', () => {
     expect(readRemixSlotMentions(['@ghost', '@product', '@dance'], { placed: [product, backdrop], unplaced: [dance] }))
       .toEqual({ waiting: ['@product'], unplaced: ['@dance'], other: ['@ghost'] });
@@ -180,8 +241,9 @@ describe('remix input slots', () => {
       { ...product, id: 'slot-9', name: 'Subject 1' },
     ], prompt)).toEqual([
       { handle: '@bottle', displayName: 'bottle' },
-      { handle: '@product', displayName: 'Reference image 1' },
-      { handle: '@dance', displayName: 'Reference video 1' },
+      // Named as the box's fill will be (`remixSlotFillNaming`), so Enhance reads a box and its fill alike.
+      { handle: '@product', displayName: 'product' },
+      { handle: '@dance', displayName: 'dance' },
     ]);
     // A box the words do not mention has nothing to keep, and is no reference of the run.
     expect(withRemixSlotEnhancerReferences(sent, [product, dance], 'A bottle on @bottle_stand')).toEqual(sent);

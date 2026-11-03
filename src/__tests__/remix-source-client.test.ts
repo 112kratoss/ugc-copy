@@ -12,7 +12,6 @@ import {
   joinRemixRestoreWarnings,
   readRemixInputSlots,
   REMIX_RESTORE_WARNING,
-  remixSlotFillNaming,
   remixSlotsInputSide,
   withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
@@ -219,11 +218,6 @@ describe('a remix’s empty slots in the web creators', () => {
     expect(withoutRemixInputSlot([product, backdrop], 'slot-9')).toEqual([product, backdrop]);
   });
 
-  it('names the remixer’s file after its slot, under the handle the prompt knows', () => {
-    expect(remixSlotFillNaming(product)).toEqual({ displayName: 'Reference image 1', handle: '@product' });
-    expect(remixSlotFillNaming(backdrop)).toEqual({ displayName: 'Reference image 2', handle: null });
-  });
-
   // What the creator kept is a notice of its own, which the remixer can put away for the remix, as
   // in the app (2026-11-03): the remix's own notice keeps the original and Use as reference.
   it('says where the remix came from and what could not be restored, and leaves the empty boxes to their own notice', () => {
@@ -234,16 +228,18 @@ describe('a remix’s empty slots in the web creators', () => {
   });
 
   it('opens the video creator’s inputs where the empty boxes are', () => {
-    const start = { role: 'start_frame' } as const;
-    const clip = { role: 'reference_video' } as const;
-    expect(remixSlotsInputSide([start, { role: 'end_frame' }], { clipsBesideSides: false })).toBe('frames');
+    const start = { role: 'start_frame', handle: null } as const;
+    const clip = { role: 'reference_video', handle: null } as const;
+    expect(remixSlotsInputSide([start, { role: 'end_frame', handle: null }], { clipsBesideSides: false })).toBe('frames');
     // A model that keeps its start image beside its references (Wan 2.7) shows the frame's box there too.
     expect(remixSlotsInputSide([start, clip], { clipsBesideSides: false })).toBe('references');
-    expect(remixSlotsInputSide([{ role: 'reference_audio' }], { clipsBesideSides: false })).toBe('references');
+    expect(remixSlotsInputSide([{ role: 'reference_audio', handle: null }], { clipsBesideSides: false })).toBe('references');
     // Kling 3.0's clips are named video elements beside either side, and a subject is neither.
     expect(remixSlotsInputSide([clip], { clipsBesideSides: true })).toBeNull();
     expect(remixSlotsInputSide([clip, start], { clipsBesideSides: true })).toBe('frames');
-    expect(remixSlotsInputSide([{ role: 'subject' }], { clipsBesideSides: false })).toBeNull();
+    expect(remixSlotsInputSide([{ role: 'subject', handle: '@lead' }], { clipsBesideSides: false })).toBeNull();
     expect(remixSlotsInputSide([], { clipsBesideSides: false })).toBeNull();
+    // A clip the prompt names has no place on a model whose clips take no handle: it opens no side.
+    expect(remixSlotsInputSide([{ role: 'reference_video', handle: '@dance' }, start], { clipsBesideSides: false })).toBe('frames');
   });
 });

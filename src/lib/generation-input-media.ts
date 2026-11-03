@@ -2,6 +2,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import {
+  isRecipeFileInput,
+  isRecipeFileSource,
+  RECIPE_FILE_SOURCE_KIND,
+  RECIPE_IMPORT_FOLDER,
+} from '@/lib/generation-input-origin';
+import {
   isValidElementHandle,
   normalizeSubmittedElementDescriptors,
   type ImageElementDescriptor,
@@ -360,6 +366,57 @@ async function loadCandidateMedia(
   };
 }
 
+/** The folders a run start imports another account's media into, which no kept input is stored in. */
+const IMPORT_FOLDERS = new Set(['remix-imports', RECIPE_IMPORT_FOLDER]);
+
+/**
+ * The candidates that are a file of someone else's recipe (`isRecipeFileInput`), which their rows are
+ * marked as: one the start imported through the caller's unlock, whose source names the recipe file
+ * or its import, and one made from a kept input of the caller's own that is marked, as a run made
+ * again from a creation of theirs is: its source is that run's own copy, which reads as the caller's
+ * upload, and a mark lost there would hand on what the caller bought. A read of those rows that fails
+ * marks every candidate made from one: kept unmarked, a recipe file would be handed on for good.
+ */
+async function findRecipeFileCandidates(
+  supabase: SupabaseClient,
+  userId: string,
+  candidates: readonly PersistGenerationInputCandidate[],
+): Promise<Set<PersistGenerationInputCandidate>> {
+  const own = new Set([userId]);
+  const marked = new Set<PersistGenerationInputCandidate>();
+  const fromKeptInputs = new Map<string, PersistGenerationInputCandidate[]>();
+  for (const candidate of candidates) {
+    const sources = [candidate.sourceStoragePath, candidate.sourceUrl];
+    if (sources.some((source) => isRecipeFileSource(source, own))) {
+      marked.add(candidate);
+      continue;
+    }
+    for (const source of sources) {
+      const location = normalizeStoragePath(source, userId);
+      if (location?.bucket !== GENERATION_INPUTS_BUCKET || IMPORT_FOLDERS.has(location.filePath.split('/')[1] ?? '')) continue;
+      const key = `${location.bucket}/${location.filePath}`;
+      fromKeptInputs.set(key, [...(fromKeptInputs.get(key) ?? []), candidate]);
+    }
+  }
+  if (fromKeptInputs.size === 0) return marked;
+
+  const { data, error } = await supabase
+    .from('generation_input_media')
+    .select('storage_path, metadata')
+    .eq('user_id', userId)
+    .in('storage_path', [...fromKeptInputs.keys()]);
+  if (error) {
+    logBackendError('failed_to_read_kept_inputs_for_recipe_file_mark', { error });
+    for (const fromRow of fromKeptInputs.values()) fromRow.forEach((candidate) => marked.add(candidate));
+    return marked;
+  }
+  for (const row of (data ?? []) as Array<{ storage_path: string; metadata: Record<string, unknown> | null }>) {
+    if (!isRecipeFileInput({ metadata: row.metadata }, own)) continue;
+    fromKeptInputs.get(row.storage_path)?.forEach((candidate) => marked.add(candidate));
+  }
+  return marked;
+}
+
 export async function persistGenerationInputMedia(params: {
   supabase: SupabaseClient;
   generationId: string | null | undefined;
@@ -375,6 +432,7 @@ export async function persistGenerationInputMedia(params: {
   if (!generationId || candidates.length === 0) {
     return;
   }
+  const recipeFiles = await findRecipeFileCandidates(supabase, userId, candidates);
 
   // Each failure below is logged where it happens, which says nothing about
   // the generation as a whole. These add up to whether its recipe was kept.
@@ -428,6 +486,8 @@ export async function persistGenerationInputMedia(params: {
         ...(candidate.metadata ?? {}),
         sourceStoragePath: candidate.sourceStoragePath ?? null,
         sourceUrl: candidate.sourceUrl ?? null,
+        // Never handed on (`isRecipeFileInput`): set here from the sources the start resolved, never asked of a client.
+        ...(recipeFiles.has(candidate) ? { sourceKind: RECIPE_FILE_SOURCE_KIND } : {}),
       };
 
       durableMutationOutcomeUnknown = true;
@@ -1114,6 +1174,39 @@ function preparedSeedanceAssetIds(value: unknown): ReturnType<typeof readSeedanc
     videos: idsOnly(collections.videos),
     audios: idsOnly(collections.audios),
   };
+}
+
+/**
+ * What a remix that restores only some of a run's references, from the copies a recipe it unlocked
+ * holds, is given of the run's prepared assets (owner, 2026-11-03): each restored reference's asset id,
+ * kind and state, as `preparedSeedanceAssetIds` gives a remix the inputs are handed to every one. A
+ * remixer cannot prepare a recipe's copy, and a real person's picture runs only as a prepared asset. An
+ * input the remix is not given (an empty slot) gets none: its asset would run the creator's own file.
+ * Each list keeps the restored ones in the run's order, which is how both creators pair an asset with
+ * a restored reference, by its place among them: the reference pictures (for a run from before the
+ * family took frames, which kept its pictures as frames, the frames), clips and tracks. Null when no
+ * restored reference was prepared.
+ */
+export function preparedSeedanceAssetIdsFor(
+  value: unknown,
+  inputs: readonly GenerationInputMediaItem[],
+  restoredIds: ReadonlySet<string>,
+): ReturnType<typeof readSeedanceAssetCollections> {
+  const prepared = preparedSeedanceAssetIds(value);
+  if (!prepared) return null;
+  const ordered = [...inputs].sort((left, right) => left.sortOrder - right.sortOrder);
+  const ofRole = (mediaType: GenerationInputMediaType, role: string) => ordered.filter((item) => item.mediaType === mediaType && item.role === role);
+  const pictures = ofRole('image', 'reference_image');
+  const frames = [...ofRole('image', 'start_frame').slice(0, 1), ...ofRole('image', 'end_frame').slice(0, 1)];
+  const restored = (items: GenerationInputMediaItem[], assets: Array<SeedanceAssetMetadata | null>) => (
+    items.flatMap((item, index) => (restoredIds.has(item.id) ? [assets[index] ?? null] : []))
+  );
+  const subset = {
+    images: restored(pictures.length > 0 ? pictures : frames, prepared.images),
+    videos: restored(ofRole('video', 'reference_video'), prepared.videos),
+    audios: restored(ofRole('audio', 'reference_audio'), prepared.audios),
+  };
+  return [...subset.images, ...subset.videos, ...subset.audios].some(Boolean) ? subset : null;
 }
 
 /**

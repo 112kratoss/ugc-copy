@@ -215,6 +215,130 @@ describe('generation input media persistence', () => {
   });
 });
 
+// Owner, 2026-11-03: a run that used a file of someone else's recipe through its creator's unlock
+// keeps it marked, so nothing ever hands it on (`isRecipeFileInput`): marked from the sources the start
+// resolved, and carried to a run made again from that run's own copy, which reads as the caller's upload.
+describe('an input kept from a file of someone else’s recipe', () => {
+  const SELLER_COPY = 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-1.png';
+  const IMPORTED = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-0/00-reference-image-row-1.png?token=copy';
+
+  function persisting(keptRows: Array<{ storage_path: string; metadata: Record<string, unknown> | null }> | { error: { message: string } } = []) {
+    const inserted: Array<Record<string, unknown>> = [];
+    const lookups: Array<{ eq: unknown[][]; in: unknown[][] }> = [];
+    const supabase = {
+      storage: {
+        from: vi.fn(() => ({
+          download: vi.fn(async () => ({ data: new Blob(['copy'], { type: 'image/png' }), error: null })),
+          upload: vi.fn(async () => ({ error: null })),
+        })),
+      },
+      from: vi.fn(() => {
+        const lookup = { eq: [] as unknown[][], in: [] as unknown[][] };
+        const query = {
+          insert: async (row: Record<string, unknown>) => {
+            inserted.push(row);
+            return { error: null };
+          },
+          select: () => {
+            lookups.push(lookup);
+            return query;
+          },
+          eq: (...filter: unknown[]) => {
+            lookup.eq.push(filter);
+            return query;
+          },
+          in: async (...filter: unknown[]) => {
+            lookup.in.push(filter);
+            return Array.isArray(keptRows)
+              ? { data: keptRows.filter((row) => (filter[1] as string[]).includes(row.storage_path)), error: null }
+              : { data: null, error: keptRows.error };
+          },
+        };
+        return query;
+      }),
+    };
+    return { supabase: supabase as never, inserted, lookups };
+  }
+
+  const candidate = (sourceStoragePath: string | null, sourceUrl: string | null, sortOrder = 0) => ({
+    mediaType: 'image' as const,
+    role: 'reference_image' as const,
+    label: 'Reference image',
+    sourceStoragePath,
+    sourceUrl,
+    sortOrder,
+  });
+
+  it.each([
+    ['the seller’s copy a remix submitted, imported by the start', SELLER_COPY, IMPORTED],
+    ['the start’s import alone, sent as a link', null, IMPORTED],
+  ])('marks %s', async (_, sourceStoragePath, sourceUrl) => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const { supabase, inserted } = persisting();
+
+    await persistGenerationInputMedia({ supabase, generationId: 'gen-1', userId: 'user-1', candidates: [candidate(sourceStoragePath, sourceUrl)] });
+
+    expect(inserted).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ sourceKind: 'recipe-file' }) })]);
+  });
+
+  it('marks a run made again from the caller’s own copy of a recipe file, and nothing of theirs beside it', async () => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const recreated = 'generation_inputs/user-1/gen-0/00-reference_image.png';
+    const ownUpload = 'generation_inputs/user-1/gen-0/01-reference_image.png';
+    const { supabase, inserted, lookups } = persisting([
+      { storage_path: recreated, metadata: { sourceKind: 'recipe-file', sourceStoragePath: SELLER_COPY } },
+      { storage_path: ownUpload, metadata: { sourceStoragePath: 'uploads/user-1/face.png' } },
+    ]);
+
+    await persistGenerationInputMedia({
+      supabase,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      candidates: [candidate(recreated, `https://project.supabase.co/storage/v1/object/sign/${recreated}?token=x`), candidate(ownUpload, null, 1)],
+    });
+
+    // One read of the caller's own kept inputs, by their paths.
+    expect(lookups).toEqual([{ eq: [['user_id', 'user-1']], in: [['storage_path', [recreated, ownUpload]]] }]);
+    expect(inserted.map((row) => (row.metadata as Record<string, unknown>).sourceKind)).toEqual(['recipe-file', undefined]);
+  });
+
+  it('marks a run made again from the caller’s own kept input when that input cannot be read', async () => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const { supabase, inserted } = persisting({ error: { message: 'canceling statement due to statement timeout' } });
+
+    await persistGenerationInputMedia({
+      supabase,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      candidates: [candidate('generation_inputs/user-1/gen-0/00-reference_image.png', null)],
+    });
+
+    expect(inserted).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ sourceKind: 'recipe-file' }) })]);
+  });
+
+  // Behaviour that predates recipe copies: unchanged, and nothing read for it.
+  it.each([
+    ['the caller’s own recipe file', 'post_resource_files/user-1/resources/guide.png', 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/user-1/resources/guide.png?token=x'],
+    ['another creator’s shared input, imported', 'generation_inputs/creator-1/gen-9/00-reference_image.jpg', 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/remix-imports/gen-9/00-reference_image.jpg?token=copy'],
+  ])('leaves %s unmarked', async (_, sourceStoragePath, sourceUrl) => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const { supabase, inserted, lookups } = persisting();
+    const downloadRemoteMedia = vi.fn(async () => ({ blob: new Blob(['file'], { type: 'image/png' }), sourceName: 'guide.png' }));
+
+    await persistGenerationInputMedia({
+      supabase,
+      generationId: 'gen-1',
+      userId: 'user-1',
+      candidates: [candidate(sourceStoragePath, sourceUrl)],
+      downloadRemoteMedia,
+    });
+
+    expect(lookups).toEqual([]);
+    expect(inserted).toHaveLength(1);
+    expect((inserted[0]?.metadata as Record<string, unknown>).sourceKind).toBeUndefined();
+  });
+});
+
 describe('generation input media loading', () => {
   afterEach(() => {
     vi.restoreAllMocks();

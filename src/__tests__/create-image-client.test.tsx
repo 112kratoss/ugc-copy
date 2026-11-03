@@ -3233,7 +3233,8 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     fillBox(view.container, 'slot-1', myPicture());
 
     expect(await screen.findByRole('button', { name: 'Insert @product' })).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Reference image 1')).toBeInTheDocument();
+    // Named for the handle the prompt mentions its box by, as the app names it (`remixSlotFillNaming`).
+    expect(screen.getByDisplayValue('product')).toBeInTheDocument();
     expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('Place @product on a marble counter, soft light');
     // The other box waits, unmentioned, and holds nothing back.
     expect(emptyBoxes()).toEqual(['Add your image for Reference image 2']);
@@ -3243,6 +3244,29 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     await waitFor(() => expect(generateButton()).toBeEnabled());
     // A remix saves nothing, a box or the picture in it.
     expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
+  });
+
+  // One rule for both creators (2026-11-03): the web kept a box a reference already answered, and a
+  // fill there only added a second reference under a renamed handle. The app hid it.
+  it('puts away a box a reference the remixer added under its handle answers, and counts it no more', async () => {
+    installFetch({ remixBundle: MARBLE_REMIX });
+    const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    await screen.findByRole('button', { name: 'Add your image for @product' });
+
+    const input = view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]');
+    fireEvent.change(input!, { target: { files: [new File(['shoe'], 'shoe.png', { type: 'image/png' })] } });
+    const field = await waitFor(() => {
+      const found = view.container.querySelector<HTMLInputElement>('input[placeholder="Rename element"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    fireEvent.change(field, { target: { value: 'product' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+
+    expect(await screen.findByRole('button', { name: 'Insert @product' })).toBeInTheDocument();
+    await waitFor(() => expect(emptyBoxes()).toEqual(['Add your image for Reference image 2']));
+    expect(screen.getByText('The creator kept 1 input to themselves. Add your own in the empty box.')).toBeInTheDocument();
+    expect(slotMessageLines()).toEqual([]);
   });
 
   it('prices and sends what fills a box, never an empty one', async () => {
@@ -3260,7 +3284,7 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
     const body = startBody(startCalls(fetchMock)[0]);
     expect(body.prompt).toBe('Place @product on a marble counter, soft light');
-    expect(body.inputs).toEqual([expect.objectContaining({ slot: 'imageReferences', kind: 'image', handle: '@product', label: 'Reference image 1' })]);
+    expect(body.inputs).toEqual([expect.objectContaining({ slot: 'imageReferences', kind: 'image', handle: '@product', label: 'product' })]);
     expect(JSON.stringify(body)).not.toMatch(/slot-2|Reference image 2/);
   });
 
@@ -3340,7 +3364,7 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
       context?: { referenceImageCount?: number; elementEnhancementMode?: string; elementReferences?: Array<{ handle: string; displayName: string }> };
     };
 
-    await waitFor(() => expect(enhance().context?.elementReferences).toEqual([{ handle: '@product', displayName: 'Reference image 1' }]));
+    await waitFor(() => expect(enhance().context?.elementReferences).toEqual([{ handle: '@product', displayName: 'product' }]));
     expect(enhance().label).toBe('Polish');
     expect(enhance().context).toMatchObject({ referenceImageCount: 0, elementEnhancementMode: 'append-only' });
     expect(JSON.stringify(enhance().context)).not.toMatch(/slot-\d|Reference image 2/);

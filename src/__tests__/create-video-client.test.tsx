@@ -8154,7 +8154,7 @@ describe('CreateVideoClient Kling video elements', () => {
       stubRemix(slotRemix('wan-2.7', '@product spins on a turntable.', [
         { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
         { id: 'slot-2', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
-        { id: 'slot-3', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 1', durationSeconds: 4 },
+        { id: 'slot-3', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 1' },
         { id: 'slot-4', kind: 'audio', role: 'reference_audio', handle: null, name: 'Reference audio 1' },
       ], { referenceMode: 'elements' }));
       const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
@@ -8179,7 +8179,8 @@ describe('CreateVideoClient Kling video elements', () => {
 
       fillBox(view.container, 'slot-2', [photo('mine')]);
       expect(await screen.findByRole('button', { name: 'Insert @product' })).toBeInTheDocument();
-      expect(screen.getByDisplayValue('Reference image 1')).toBeInTheDocument();
+      // Named for the handle its box goes by, as the app names it (`remixSlotFillNaming`).
+      expect(screen.getByDisplayValue('product')).toBeInTheDocument();
       expect(slotMessageLines()).toEqual([]);
       fillBox(view.container, 'slot-3', [clip('mine')]);
       expect(await screen.findByText('4.2s clip')).toBeInTheDocument();
@@ -8191,7 +8192,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(postedRun()).toBeDefined());
       const sent = postedRun().inputs as Array<Record<string, unknown>>;
       expect(sent.map((input) => [input.slot, input.label, input.handle ?? null])).toEqual([
-        ['imageReferences', 'Reference image 1', '@product'],
+        ['imageReferences', 'product', '@product'],
         ['videoReferences', 'Reference video 1', null],
       ]);
       // A remix saves nothing, a box or what fills it.
@@ -8236,7 +8237,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('draws a subject it was not given as an empty subject under its handle, and the remixer’s pictures make it theirs', async () => {
       stubRemix(slotRemix('kling-o3', '@maya walks through the rain.', [
-        { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+        { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' },
       ]));
       const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
@@ -8252,7 +8253,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fillBox(view.container, 'slot-1', [photo('front'), photo('side')]);
 
       expect(await screen.findByText('2/4 images')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('Subject 1')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('maya')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Insert @maya' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Add your pictures for @maya' })).toBeNull();
       expect(slotMessageLines()).toEqual([]);
@@ -8262,7 +8263,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('holds a run whose shot mentions an empty box, in the same words', async () => {
       stubRemix(slotRemix('kling-o3', '', [
-        { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+        { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' },
       ], { isMultiShot: true, multiPrompts: [{ id: '1', prompt: '@maya walks through the rain.', duration: 5 }] }));
       const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
       await screen.findByRole('button', { name: 'Add your pictures for @maya' });
@@ -8282,7 +8283,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     it('draws a Kling 3.0 clip it was not given among the video elements, and the remixer’s clip takes its handle', async () => {
       stubRemix(slotRemix('kling-3.0-video', '@dance on the rooftop at dusk.', [
-        { id: 'slot-1', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 5 },
+        { id: 'slot-1', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
       ]));
       const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
@@ -8302,6 +8303,27 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByRole('button', { name: 'Add your video for @dance' })).toBeNull();
       expect(slotMessageLines()).toEqual([]);
       await waitFor(() => expect(quotedSlots()).toEqual({ videoElements: { count: 1 } }));
+    });
+
+    // Seedance 2's clips take no handle: a box for "@dance" there held the run for a mention its fill
+    // could never answer (2026-11-03 review). It has no place there, as the app reads it.
+    it('has no place for a clip the prompt names on a model whose clips take no handle', async () => {
+      stubRemix(slotRemix('seedance-2-5', '@dance on the rooftop at dusk.', [
+        { id: 'slot-1', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
+        { id: 'slot-2', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 2' },
+      ], { referenceMode: 'elements' }));
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+
+      expect(await screen.findByRole('button', { name: 'Add your video for Reference video 2' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Add your video for @dance' })).toBeNull();
+      // Under the prompt, then beside Generate, which it holds. The handle is drawn apart from the words.
+      const lines = screen.queryAllByText(/has no place for/).map((line) => line.textContent);
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatch(/has no place for @dance\. Switch back, or take @dance out of the prompt\.$/);
+      expect(lines[1]).toBe(lines[0]);
+      expect(screen.queryByText(/Unknown element mention/)).toBeNull();
+      expect(screen.getByText(keptBoxes(1))).toBeInTheDocument();
+      expect(generateButton()).toBeDisabled();
     });
 
     // A model with no place for a box's kind hid it, and its mention read as an unknown one, as if the
@@ -8351,20 +8373,20 @@ describe('CreateVideoClient Kling video elements', () => {
         .filter((props) => props.context?.shotIndex === undefined)
         .at(-1);
 
-      await waitFor(() => expect(promptEnhance()?.context?.elementReferences).toEqual([{ handle: '@product', displayName: 'Reference image 1' }]));
+      await waitFor(() => expect(promptEnhance()?.context?.elementReferences).toEqual([{ handle: '@product', displayName: 'product' }]));
       expect(promptEnhance()?.context?.referenceImageCount).toBe(0);
       expect(JSON.stringify(promptEnhance()?.context)).not.toMatch(/slot-\d|Reference video 1/);
 
       // Filled, the handle is the remixer's picture's, which the run sends.
       fillBox(view.container, 'slot-1', [photo('mine')]);
       await screen.findByRole('button', { name: 'Insert @product' });
-      await waitFor(() => expect(promptEnhance()?.context?.elementReferences).toEqual([{ handle: '@product', displayName: 'Reference image 1' }]));
+      await waitFor(() => expect(promptEnhance()?.context?.elementReferences).toEqual([{ handle: '@product', displayName: 'product' }]));
       expect(promptEnhance()?.context?.referenceImageCount).toBe(1);
     });
 
     it('has a shot’s Enhance keep the handle of a subject’s empty box', async () => {
       stubRemix(slotRemix('kling-o3', '', [
-        { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+        { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' },
       ], { isMultiShot: true, multiPrompts: [{ id: '1', prompt: '@maya walks through the rain.', duration: 5 }] }));
       render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
       await screen.findByRole('button', { name: 'Add your pictures for @maya' });
@@ -8373,7 +8395,7 @@ describe('CreateVideoClient Kling video elements', () => {
         .map(([props]) => props)
         .filter((props) => props.context?.shotIndex === 0)
         .at(-1);
-      await waitFor(() => expect(shotEnhance()?.context?.elementReferences).toEqual([{ handle: '@maya', displayName: 'Subject 1' }]));
+      await waitFor(() => expect(shotEnhance()?.context?.elementReferences).toEqual([{ handle: '@maya', displayName: 'maya' }]));
     });
 
     // The notice stayed for as long as a box was empty, a box nobody mentions included (2026-11-03).

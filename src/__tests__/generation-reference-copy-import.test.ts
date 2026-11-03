@@ -1,16 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-rows';
-import { importGenerationReferenceCopy } from '@/lib/generation-reference-copy-import';
-import {
-  loadGenerationRecipeReferenceCopiesByPostId,
-  type PostResourceBundleDetail,
-} from '@/lib/post-resource-bundles-server';
+import { createRecipeCopyReads, importGenerationReferenceCopy } from '@/lib/generation-reference-copy-import';
+import { buildGenerationReferenceCopyPath } from '@/lib/post-resource-bundles-server';
 
 // Owner, 2026-11-03: a remix of an unlocked recipe restores the inputs the
 // recipe holds copies of. Those copies are the seller's files, so a run start
 // refused them as someone else's media until it could import one the caller's
-// unlock covers, as it imports a creator's freely shared input.
+// purchase covers, once their right to reuse it is read again: the remix
+// source's own gate (`resolveRemixAccess`), then the recipe they bought.
 
 const SELLER = 'a1b2c3d4-0000-4000-8000-000000000001';
 const VIEWER = 'a1b2c3d4-0000-4000-8000-000000000002';
@@ -20,27 +18,51 @@ const ROW = 'c1b2c3d4-0000-4000-8000-000000000001';
 const OTHER_ROW = 'c1b2c3d4-0000-4000-8000-000000000002';
 const OTHER_GENERATION_ROW = 'c1b2c3d4-0000-4000-8000-000000000003';
 
-/** The copy of ROW as "Include creation references" files it (buildGenerationReferenceResourceItems). */
-const COPY = `${SELLER}/generation-references/${GENERATION}/00-reference-image-${ROW}.png`;
-const OTHER_COPY = `${SELLER}/generation-references/${GENERATION}/01-reference-image-${OTHER_ROW}.png`;
+/** The copy of each row as "Include creation references" files it: its one writer. */
+const copyOf = (rowId: string, sortOrder: number, generationId = GENERATION) => buildGenerationReferenceCopyPath(SELLER, generationId, {
+  id: rowId,
+  role: 'reference_image',
+  sort_order: sortOrder,
+  storage_path: `generation_inputs/${SELLER}/${generationId}/0${sortOrder}-reference_image.png`,
+  media_type: 'image',
+});
+const COPY = copyOf(ROW, 0);
+const OTHER_COPY = copyOf(OTHER_ROW, 1);
 const SOURCE = `post_resource_files/${COPY}`;
-const DESTINATION = `${VIEWER}/remix-imports/${GENERATION}/00-reference-image-${ROW}.png`;
+const DESTINATION = `${VIEWER}/recipe-imports/${GENERATION}/${COPY.split('/').pop()}`;
 
-const copyItem = (rowId: string, storagePath: string) => ({ id: `reference-${rowId}`, storagePath });
+/** A recipe item as the recipe stores it (`buildGenerationReferenceResourceItems`). */
+const copyItem = (rowId: string, storagePath: string) => ({ id: `reference-${rowId}`, type: 'reference_image', title: 'Reference', storagePath });
 
-/** The recipe this viewer has, as the unlock's read answers it. */
-function unlocked(
-  items: Array<{ id: string; storagePath: string }>,
-  overrides: { purchasedItems?: Array<{ id: string; storagePath: string }>; viewerCanAccess?: boolean; generationId?: string } = {},
-): PostResourceBundleDetail {
-  return {
-    viewerCanAccess: overrides.viewerCanAccess ?? true,
-    resources: { items },
-    purchasedRevision: overrides.purchasedItems ? { resources: { items: overrides.purchasedItems } } : null,
-    seller: { id: SELLER },
-    post: { generationId: overrides.generationId ?? GENERATION },
-  } as unknown as PostResourceBundleDetail;
-}
+const PUBLIC_GENERATION = {
+  id: GENERATION,
+  user_id: SELLER,
+  is_public: true,
+  share_input_media_for_remix: false,
+  template_run_id: null,
+  template_run_step_id: null,
+};
+/** The creation's post as the feed shows it: public, live and visible. */
+const EXPOSED_POST = {
+  id: 'post-1',
+  user_id: SELLER,
+  generation_id: GENERATION,
+  category: 'image',
+  post_format: 'media',
+  source_kind: 'magicbooklet',
+  visibility: 'public',
+  archived_at: null,
+  review_status: 'visible',
+};
+const RECIPE = {
+  id: 'bundle-1',
+  post_id: 'post-1',
+  owner_user_id: SELLER,
+  status: 'published',
+  allow_remix: false,
+  resource_items: [copyItem(ROW, COPY)],
+  resource_sections: [],
+};
 
 type Tables = Parameters<typeof createStoredRows>[0];
 type StorageError = { statusCode?: string; message: string; error?: string };
@@ -48,24 +70,30 @@ type CopyAnswer = { data: { path: string } | null; error: StorageError | null };
 type SignAnswer = { data: { signedUrl: string } | null; error: { message: string } | null };
 
 function setUp(options: {
-  /** Each post's recipe as this viewer has it, by post id; none for a post they never unlocked. */
-  recipes?: Record<string, PostResourceBundleDetail | null>;
   tables?: Tables;
-  detailError?: Error;
+  /** The version the viewer bought, where it is no longer the recipe's latest. */
+  purchasedRevision?: { resource_items: unknown[] } | null;
+  blocked?: boolean;
+  viewer?: { id: string; is_anonymous: boolean } | null;
   copyError?: StorageError | null;
   signError?: { message: string } | null;
 } = {}) {
   const stored = createStoredRows({
-    posts: [
-      { id: 'post-1', user_id: SELLER, generation_id: GENERATION },
-      { id: 'post-2', user_id: SELLER, generation_id: OTHER_GENERATION },
-    ],
+    generations: [PUBLIC_GENERATION, { ...PUBLIC_GENERATION, id: OTHER_GENERATION }],
+    posts: [EXPOSED_POST, { ...EXPOSED_POST, id: 'post-2', generation_id: OTHER_GENERATION }],
+    post_resource_bundles: [RECIPE],
+    post_resource_bundle_purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: VIEWER }],
     generation_input_media: [
       { id: ROW, generation_id: GENERATION },
       { id: OTHER_ROW, generation_id: GENERATION },
       { id: OTHER_GENERATION_ROW, generation_id: OTHER_GENERATION },
     ],
+    profiles: [{ id: 'nobody', merged_into_user_id: null }],
     ...options.tables,
+  }, {
+    get_purchased_post_resource_bundle_revision: () => (options.purchasedRevision
+      ? [{ ...options.purchasedRevision, is_latest: false, resource_sections: [] }]
+      : []),
   });
   const copy = vi.fn<(from: string, to: string, options?: { destinationBucket?: string }) => Promise<CopyAnswer>>(
     async (_from, to) => (options.copyError ? { data: null, error: options.copyError } : { data: { path: to }, error: null }),
@@ -77,41 +105,37 @@ function setUp(options: {
   ));
   const storageFrom = vi.fn((bucket: string) => ({ bucket, copy, createSignedUrl }));
   const from = vi.fn((table: string) => stored.client.from(table));
-  const client = { from, storage: { from: storageFrom } };
-
-  const recipes = options.recipes ?? { 'post-1': unlocked([copyItem(ROW, COPY)]) };
-  const getDetailByPostId = vi.fn(async (postId: string) => {
-    if (options.detailError) throw options.detailError;
-    return recipes[postId] ?? null;
-  });
-  // The real reader and matcher, over the recipe this fake answers.
-  const loadCopies = vi.fn((params: Parameters<typeof loadGenerationRecipeReferenceCopiesByPostId>[0]) => (
-    loadGenerationRecipeReferenceCopiesByPostId({ ...params, getDetailByPostId: getDetailByPostId as never })
-  ));
+  const viewer = options.viewer === undefined ? { id: VIEWER, is_anonymous: false } : options.viewer;
+  const getUserById = vi.fn(async () => ({ data: { user: viewer }, error: null }));
+  const client = { from, rpc: stored.client.rpc, storage: { from: storageFrom }, auth: { admin: { getUserById } } };
+  const isUserRelationshipBlocked = vi.fn(async () => options.blocked === true);
 
   return {
     dependencies: {
       createServiceClient: (() => client) as never,
-      loadGenerationRecipeReferenceCopiesByPostId: loadCopies as never,
+      isUserRelationshipBlocked: isUserRelationshipBlocked as never,
     },
     from,
     storageFrom,
     copy,
     createSignedUrl,
-    getDetailByPostId,
-    loadCopies,
+    getUserById,
+    isUserRelationshipBlocked,
+    called: stored.called,
   };
 }
 
-function importAs(viewerUserId: string, source: string, stub: ReturnType<typeof setUp>) {
-  return importGenerationReferenceCopy({ source, viewerUserId, dependencies: stub.dependencies });
+function importAs(viewerUserId: string, source: string, stub: ReturnType<typeof setUp>, reads?: ReturnType<typeof createRecipeCopyReads>) {
+  return importGenerationReferenceCopy({ source, viewerUserId, reads, dependencies: stub.dependencies });
 }
+
+const readsOf = (stub: ReturnType<typeof setUp>, table: string) => stub.from.mock.calls.filter(([name]) => name === table).length;
 
 describe('importing a recipe’s copy of a creation’s input into a run', () => {
   it.each([
     ['its stored path', SOURCE],
     ['a signed link to it, expired or not', `https://project.supabase.co/storage/v1/object/sign/${SOURCE}?token=expired`],
-  ])('imports a copy the viewer’s unlock covers, from %s, into their own folder', async (_, source) => {
+  ])('imports a copy the viewer bought, from %s, into a folder of their own kept for recipe files', async (_, source) => {
     const stub = setUp();
 
     const result = await importAs(VIEWER, source, stub);
@@ -121,69 +145,96 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
       storagePath: `generation_inputs/${DESTINATION}`,
       signedUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/${DESTINATION}?token=copy`,
     });
-    // Read again now, through the unlock's own read, for the seller's post of that creation.
-    expect(stub.getDetailByPostId).toHaveBeenCalledWith('post-1', expect.objectContaining({
-      viewerUserId: VIEWER,
-      countLockedReferences: false,
-    }));
-    expect(stub.loadCopies).toHaveBeenCalledWith(expect.objectContaining({
-      postId: 'post-1',
-      generationId: GENERATION,
-      viewerUserId: VIEWER,
-      inputRowIds: [ROW, OTHER_ROW],
-      signUrls: false,
-    }));
+    // The remix gate, asked again: the post read, the block asked about its creator.
+    expect(stub.isUserRelationshipBlocked).toHaveBeenCalledWith(expect.objectContaining({ firstUserId: VIEWER, secondUserId: SELLER }));
     // Copied, not read through: from the recipe files into the caller's generation inputs.
     expect(stub.storageFrom).toHaveBeenCalledWith('post_resource_files');
     expect(stub.copy).toHaveBeenCalledTimes(1);
     expect(stub.copy).toHaveBeenCalledWith(COPY, DESTINATION, { destinationBucket: 'generation_inputs' });
-    expect(stub.storageFrom).toHaveBeenCalledWith('generation_inputs');
     expect(stub.createSignedUrl).toHaveBeenCalledWith(DESTINATION, 3600);
   });
 
   // A seller who edits a sold recipe takes back nothing its buyers paid for.
-  it('imports a copy that is only in the version the viewer unlocked', async () => {
+  it('imports a copy that is only in the version the viewer bought', async () => {
     const stub = setUp({
-      recipes: { 'post-1': unlocked([copyItem(OTHER_ROW, OTHER_COPY)], { purchasedItems: [copyItem(ROW, COPY)] }) },
+      tables: { post_resource_bundles: [{ ...RECIPE, resource_items: [copyItem(OTHER_ROW, OTHER_COPY)] }] },
+      purchasedRevision: { resource_items: [copyItem(ROW, COPY)] },
     });
 
     await expect(importAs(VIEWER, SOURCE, stub)).resolves.toMatchObject({ outcome: 'imported' });
   });
 
+  // A recipe its seller retired gates no Remix, and stays its buyers', as their files do.
+  it('imports a copy of a retired recipe for its buyer, and for no one else', async () => {
+    const retired = { post_resource_bundles: [{ ...RECIPE, status: 'retired' }] };
+
+    await expect(importAs(VIEWER, SOURCE, setUp({ tables: retired }))).resolves.toMatchObject({ outcome: 'imported' });
+    const neverBought = setUp({ tables: { ...retired, post_resource_bundle_purchases: [{ id: 'p', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }] } });
+    await expect(importAs(VIEWER, SOURCE, neverBought)).resolves.toEqual({ outcome: 'not-eligible' });
+    expect(neverBought.copy).not.toHaveBeenCalled();
+  });
+
+  // A purchase is the entitlement: no reveal is asked of an NSFW post's buyer, as the buyer library asks none.
+  it('imports a copy for the buyer of an NSFW post’s recipe', async () => {
+    const stub = setUp({ tables: { posts: [{ ...EXPOSED_POST, is_nsfw: true }] } });
+
+    await expect(importAs(VIEWER, SOURCE, stub)).resolves.toMatchObject({ outcome: 'imported' });
+  });
+
   it.each([
-    ['a viewer who never unlocked the recipe', { 'post-1': null }],
-    ['a viewer whose unlock is gone, refunded since the remix', { 'post-1': unlocked([copyItem(ROW, COPY)], { viewerCanAccess: false }) }],
-    ['a copy that is not in the version they have', { 'post-1': unlocked([copyItem(OTHER_ROW, OTHER_COPY)]) }],
-    ['a copy their version holds under another input’s name', { 'post-1': unlocked([copyItem(OTHER_ROW, COPY)]) }],
-  ])('refuses %s', async (_, recipes) => {
-    const stub = setUp({ recipes });
+    ['a viewer who never bought the recipe', { post_resource_bundle_purchases: [{ id: 'p', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }] }],
+    ['a copy that is not in the version they have', { post_resource_bundles: [{ ...RECIPE, resource_items: [copyItem(OTHER_ROW, OTHER_COPY)] }] }],
+    ['a copy their version holds under another input’s name', { post_resource_bundles: [{ ...RECIPE, resource_items: [copyItem(OTHER_ROW, COPY)] }] }],
+    ['a post with no recipe', { post_resource_bundles: [{ ...RECIPE, post_id: 'post-elsewhere' }] }],
+  ])('refuses %s', async (_, tables) => {
+    const stub = setUp({ tables });
 
     await expect(importAs(VIEWER, SOURCE, stub)).resolves.toEqual({ outcome: 'not-eligible' });
     expect(stub.copy).not.toHaveBeenCalled();
     expect(stub.createSignedUrl).not.toHaveBeenCalled();
   });
 
-  it('refuses a copy kept in another creation’s folder, even where the viewer unlocked both recipes', async () => {
+  // Entitlement to read is not entitlement to reuse (2026-11-03 review): a saved remix, or a request
+  // made by hand, imported the copy at Generate after any of these, which `/api/remix-source` refuses.
+  it.each([
+    ['the seller blocked the buyer, or the buyer the seller', { blocked: true }],
+    ['the post is archived', { tables: { posts: [{ ...EXPOSED_POST, archived_at: '2026-11-03T00:00:00Z' }] } }],
+    ['the post is private', { tables: { posts: [{ ...EXPOSED_POST, visibility: 'private' }] } }],
+    ['the post is taken down', { tables: { posts: [{ ...EXPOSED_POST, review_status: 'hidden' }] } }],
+    ['the post is deleted, its tombstone taking the creation private', { tables: { generations: [{ ...PUBLIC_GENERATION, is_public: false }] } }],
+    ['the creation is a template’s result', { tables: { generations: [{ ...PUBLIC_GENERATION, template_run_id: 'run-1' }] } }],
+    ['the viewer is a guest', { viewer: { id: VIEWER, is_anonymous: true } }],
+  ])('refuses the buyer once %s', async (_, options) => {
+    const stub = setUp(options as Parameters<typeof setUp>[0]);
+
+    await expect(importAs(VIEWER, SOURCE, stub)).resolves.toEqual({ outcome: 'not-eligible' });
+    expect(stub.copy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a copy kept in another creation’s folder, even where the viewer bought both recipes', async () => {
     // Named after ROW, an input of GENERATION, but filed in OTHER_GENERATION's folder.
-    const misfiled = `${SELLER}/generation-references/${OTHER_GENERATION}/00-reference-image-${ROW}.png`;
+    const misfiled = copyOf(ROW, 0, OTHER_GENERATION);
     const stub = setUp({
-      recipes: {
-        'post-1': unlocked([copyItem(ROW, misfiled)]),
-        'post-2': unlocked([copyItem(ROW, misfiled)], { generationId: OTHER_GENERATION }),
+      tables: {
+        post_resource_bundles: [
+          { ...RECIPE, resource_items: [copyItem(ROW, misfiled)] },
+          { ...RECIPE, id: 'bundle-2', post_id: 'post-2', resource_items: [copyItem(ROW, misfiled)] },
+        ],
+        post_resource_bundle_purchases: [
+          { id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: VIEWER },
+          { id: 'purchase-2', bundle_id: 'bundle-2', buyer_user_id: VIEWER },
+        ],
       },
     });
 
+    // Its folder names OTHER_GENERATION: that creation's recipe is read, and ROW is none of its inputs.
     await expect(importAs(VIEWER, `post_resource_files/${misfiled}`, stub)).resolves.toEqual({ outcome: 'not-eligible' });
-    // Its folder names OTHER_GENERATION: that creation's post is read, and ROW is none of its inputs.
-    expect(stub.getDetailByPostId).toHaveBeenCalledTimes(1);
-    expect(stub.getDetailByPostId).toHaveBeenCalledWith('post-2', expect.anything());
-    expect(stub.loadCopies).toHaveBeenCalledWith(expect.objectContaining({ inputRowIds: [OTHER_GENERATION_ROW] }));
     expect(stub.copy).not.toHaveBeenCalled();
   });
 
   it('refuses a file of the seller’s recipe folder that is no copy, even one the recipe lists', async () => {
     const notes = `${SELLER}/generation-references/${GENERATION}/notes.txt`;
-    const stub = setUp({ recipes: { 'post-1': unlocked([copyItem(ROW, COPY), { id: 'item-3', storagePath: notes }]) } });
+    const stub = setUp({ tables: { post_resource_bundles: [{ ...RECIPE, resource_items: [copyItem(ROW, COPY), { id: 'item-3', type: 'file', title: 'Notes', storagePath: notes }] }] } });
 
     await expect(importAs(VIEWER, `post_resource_files/${notes}`, stub)).resolves.toEqual({ outcome: 'not-eligible' });
     expect(stub.copy).not.toHaveBeenCalled();
@@ -191,8 +242,8 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
 
   it.each([
     ['another of the seller’s recipe files', `post_resource_files/${SELLER}/resources/${GENERATION}/guide.pdf`],
-    ['a file below a copy’s folder', `post_resource_files/${SELLER}/generation-references/${GENERATION}/nested/00-reference-image-${ROW}.png`],
-    ['a creation segment that is no id', `post_resource_files/${SELLER}/generation-references/gen-1/00-reference-image-${ROW}.png`],
+    ['a file below a copy’s folder', `post_resource_files/${SELLER}/generation-references/${GENERATION}/nested/${COPY.split('/').pop()}`],
+    ['a creation segment that is no id', `post_resource_files/${SELLER}/generation-references/gen-1/${COPY.split('/').pop()}`],
     ['a creator’s own kept input, which the shared import answers', `generation_inputs/${SELLER}/${GENERATION}/00-reference_image.png`],
     ['an upload', `uploads/${SELLER}/hero.png`],
   ])('refuses %s without reading anything', async (_, source) => {
@@ -200,7 +251,6 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
 
     await expect(importAs(VIEWER, source, stub)).resolves.toEqual({ outcome: 'not-eligible' });
     expect(stub.from).not.toHaveBeenCalled();
-    expect(stub.getDetailByPostId).not.toHaveBeenCalled();
     expect(stub.copy).not.toHaveBeenCalled();
   });
 
@@ -212,24 +262,27 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
     expect(stub.copy).not.toHaveBeenCalled();
   });
 
-  it('refuses a creation with no post of the seller’s, or no saved inputs', async () => {
-    const noPost = setUp({ tables: { posts: [{ id: 'post-1', user_id: 'someone-else', generation_id: GENERATION }] } });
-    await expect(importAs(VIEWER, SOURCE, noPost)).resolves.toEqual({ outcome: 'not-eligible' });
-    expect(noPost.getDetailByPostId).not.toHaveBeenCalled();
+  it('refuses a creation with no saved inputs', async () => {
+    const stub = setUp({ tables: { generation_input_media: [{ id: OTHER_GENERATION_ROW, generation_id: OTHER_GENERATION }] } });
 
-    const noInputs = setUp({ tables: { generation_input_media: [] } });
-    await expect(importAs(VIEWER, SOURCE, noInputs)).resolves.toEqual({ outcome: 'not-eligible' });
-    expect(noInputs.getDetailByPostId).not.toHaveBeenCalled();
+    await expect(importAs(VIEWER, SOURCE, stub)).resolves.toEqual({ outcome: 'not-eligible' });
+    expect(stub.copy).not.toHaveBeenCalled();
   });
 
-  // As the shared import answers: a read, the copy or its signing that fails
-  // is retryable, and nothing is copied before the unlock is settled.
+  // As the shared import answers: a read, the copy or its signing that fails is retryable, and
+  // nothing is copied before the unlock is settled. A purchase read that fails is no "never bought".
   it.each([
+    ['the creation', { tables: { generations: databaseError('57014', 'canceling statement due to statement timeout') } }],
     ['the post', { tables: { posts: databaseError('57014', 'canceling statement due to statement timeout') } }],
+    ['the recipe', { tables: { post_resource_bundles: databaseError('57014', 'canceling statement due to statement timeout') } }],
+    ['the purchase', { tables: { post_resource_bundle_purchases: databaseError('57014', 'canceling statement due to statement timeout') } }],
+    ['a retired recipe’s purchase', { tables: {
+      post_resource_bundles: [{ ...RECIPE, status: 'retired' }],
+      post_resource_bundle_purchases: databaseError('57014', 'canceling statement due to statement timeout'),
+    } }],
     ['the saved inputs', { tables: { generation_input_media: databaseError('57014', 'canceling statement due to statement timeout') } }],
-    ['the recipe', { detailError: new Error('post_resource_bundles unavailable') }],
   ])('fails retryably, copying nothing, when the read of %s fails', async (_, options) => {
-    const stub = setUp(options);
+    const stub = setUp(options as Parameters<typeof setUp>[0]);
 
     await expect(importAs(VIEWER, SOURCE, stub)).resolves.toEqual({ outcome: 'failed' });
     expect(stub.copy).not.toHaveBeenCalled();
@@ -246,5 +299,26 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
       outcome: 'imported',
       storagePath: `generation_inputs/${DESTINATION}`,
     });
+  });
+
+  // Each reference of a start used to read the gate, the recipe and the rows again (2026-11-03 review).
+  it('reads one creation’s unlock once for all of a start’s references, and again at the next start', async () => {
+    const stub = setUp({ tables: { post_resource_bundles: [{ ...RECIPE, resource_items: [copyItem(ROW, COPY), copyItem(OTHER_ROW, OTHER_COPY)] }] } });
+    const reads = createRecipeCopyReads();
+
+    const results = await Promise.all([
+      importAs(VIEWER, SOURCE, stub, reads),
+      importAs(VIEWER, `post_resource_files/${OTHER_COPY}`, stub, reads),
+    ]);
+
+    expect(results.map((result) => result.outcome)).toEqual(['imported', 'imported']);
+    expect(readsOf(stub, 'posts')).toBe(1);
+    expect(readsOf(stub, 'post_resource_bundles')).toBe(2); // the gate's, and the recipe's items
+    expect(readsOf(stub, 'generation_input_media')).toBe(1);
+    expect(stub.getUserById).toHaveBeenCalledTimes(1);
+    expect(stub.copy).toHaveBeenCalledTimes(2);
+
+    await importAs(VIEWER, SOURCE, stub, createRecipeCopyReads());
+    expect(readsOf(stub, 'posts')).toBe(2);
   });
 });

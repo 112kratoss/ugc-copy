@@ -628,6 +628,8 @@ describe('reference lengths a caller reports', () => {
     const startVideo = vi.fn(async () => started);
     const startMotion = vi.fn(async () => started);
     const probeInputDuration = vi.fn(async () => measuredSeconds);
+    // Called as the start calls it: the client, the reference, the caller, and the start's options.
+    const resolveInputSource = vi.fn(async (...call: [unknown, string, string, { recipeCopyReads?: unknown }?]) => resolveLink(call[1]));
     const outcome = startUnifiedGenerationForRoute(
       {
         request: new Request('http://localhost/api/generations', {
@@ -658,11 +660,11 @@ describe('reference lengths a caller reports', () => {
         enforceRateLimit: vi.fn(async () => undefined) as never,
         startVideo: startVideo as never,
         startMotion: startMotion as never,
-        resolveInputSource: vi.fn(async (_client: unknown, url: string) => resolveLink(url)),
+        resolveInputSource: resolveInputSource as never,
         probeInputDuration,
       },
     );
-    return { outcome, startVideo, startMotion, probeInputDuration };
+    return { outcome, startVideo, startMotion, probeInputDuration, resolveInputSource };
   }
 
   it('starts the run on the links its references were measured from', async () => {
@@ -783,6 +785,38 @@ describe('reference lengths a caller reports', () => {
     });
     await expect(honest.outcome).resolves.toMatchObject({ success: true });
     expect(honest.startMotion).toHaveBeenCalledWith(expect.objectContaining({ duration: 30, quotedCostCredits: 300 }));
+  });
+
+  // A remix of a bought recipe restores the character from the seller's copy, whose link went to the
+  // provider as given: no unlock read again, and refused there once its hour ran out (2026-11-03 review).
+  it('imports a motion run’s character restored from a recipe’s copy before the provider is sent it', async () => {
+    const copy = 'https://media.example.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png?token=hour-old';
+    const imported = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-0/00-character-image-row-1.png?token=fresh';
+    const body = motionBody(5, 5);
+    body.inputs[0] = { ...body.inputs[0], url: copy };
+    const run = start({
+      body,
+      measuredSeconds: 5,
+      operation: MOTION_OPERATION,
+      quote: durationPricedQuote,
+      resolveLink: (url) => (url === copy ? imported : url),
+    });
+
+    await expect(run.outcome).resolves.toMatchObject({ success: true });
+    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: imported, referenceVideoUrl: REFERENCE_URL }));
+    // The clip, resolved to be measured, and the character share the start's one read of each unlock.
+    const [clipCall, characterCall] = run.resolveInputSource.mock.calls;
+    expect([clipCall?.[1], characterCall?.[1]]).toEqual([REFERENCE_URL, copy]);
+    expect(characterCall?.[3]?.recipeCopyReads).toBeInstanceOf(Map);
+    expect(characterCall?.[3]?.recipeCopyReads).toBe(clipCall?.[3]?.recipeCopyReads);
+  });
+
+  it('sends any other character as it was given, resolving nothing for it', async () => {
+    const run = start({ body: motionBody(5, 5), measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote });
+
+    await expect(run.outcome).resolves.toMatchObject({ success: true });
+    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: CHARACTER_URL }));
+    expect(run.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL]);
   });
 
   // A motion run's adapter sends its clip as given, so it is handed the link resolved to measure it: the

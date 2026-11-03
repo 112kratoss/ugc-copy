@@ -163,28 +163,21 @@ export function withoutRemixInputSlot(slots: readonly RemixInputSlot[], slotId: 
 }
 
 /**
- * What the remixer's file in a slot is called: the slot's name, under the @handle the prompt
- * mentions it by, so the mention resolves; with no handle, the handle its name gives.
- */
-export function remixSlotFillNaming(slot: Pick<RemixInputSlot, 'name' | 'handle'>): { displayName: string; handle: string | null } {
-  return { displayName: slot.name, handle: slot.handle };
-}
-
-/**
  * The side the video creator's inputs open on for a remix's slots: References where a picture,
  * clip or track waits there (which, on a model that keeps its start image beside its references,
  * shows a start frame's box too), Frames where only a frame's box does, else null, for the
  * bundle's own side. Kling 3.0's clips are named video elements beside either side, so they
- * choose none (`clipsBesideSides`).
+ * choose none (`clipsBesideSides`), and on any other model a clip the prompt names by its handle
+ * has no place at all (`remixInputSlotPlaced`), so it chooses none either.
  */
 export function remixSlotsInputSide(
-  slots: readonly Pick<RemixInputSlot, 'role'>[],
+  slots: readonly Pick<RemixInputSlot, 'role' | 'handle'>[],
   { clipsBesideSides }: { clipsBesideSides: boolean },
 ): 'frames' | 'references' | null {
   const onReferences = slots.some((slot) => (
     slot.role === 'reference_image'
     || slot.role === 'reference_audio'
-    || (slot.role === 'reference_video' && !clipsBesideSides)
+    || (slot.role === 'reference_video' && !clipsBesideSides && !slot.handle)
   ));
   if (onReferences) return 'references';
   return slots.some((slot) => slot.role === 'start_frame' || slot.role === 'end_frame') ? 'frames' : null;
