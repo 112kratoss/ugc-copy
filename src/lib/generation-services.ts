@@ -63,6 +63,11 @@ import {
   type ReferenceMediaDescriptor,
 } from '@/lib/generation-input-media';
 import { importSharedGenerationInputMedia, resolveRemixResultMedia } from '@/lib/generation-input-media-import';
+import {
+  createRecipeCopyReads,
+  reuseRecipeFile,
+  type RecipeCopyReads,
+} from '@/lib/generation-reference-copy-import';
 // Shared with both composers' inputs, so the three limits cannot drift.
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
@@ -1233,6 +1238,11 @@ export interface GenerationMediaSourceOptions {
    * than resolved, and for someone else's result checked, a second time.
    */
   resolved?: ReadonlyMap<string, string>;
+  /**
+   * The start's reads of its caller's unlocks (`createRecipeCopyReads`), shared by all its
+   * references: a remix restoring several of a recipe's copies reads its unlock once per start.
+   */
+  recipeCopyReads?: RecipeCopyReads;
 }
 
 export async function resolveGenerationMediaSource(
@@ -1277,6 +1287,21 @@ export async function resolveGenerationMediaSource(
     return data.signedUrl;
   }
 
+  // A recipe file the caller holds (a bought recipe's copy, a start's import of one, or a kept input
+  // of theirs marked as one) is theirs to use only while the unlock still says so: each use reads it
+  // again and imports the copy anew (`reuseRecipeFile`). Signed as their own file, a refund or a
+  // block since the remix ended nothing (2026-11-03 re-review).
+  const recipeFile = await reuseRecipeFile({ source, viewerUserId: userId, reads: options.recipeCopyReads });
+  if (recipeFile?.outcome === 'imported') return recipeFile.signedUrl;
+  // Retryable, and said of the recipe: only a recipe file gets here, never a creator's own upload whose
+  // kept row could not be read, which the path leaves to the start (2026-11-04 re-review).
+  if (recipeFile?.outcome === 'failed') {
+    throw new GenerationServiceError('We could not prepare a file from a recipe you unlocked. Please try again.', 500);
+  }
+  if (recipeFile?.outcome === 'not-eligible') {
+    throw new GenerationServiceError('Media references must belong to the authenticated user.', 400);
+  }
+
   const resolved = await resolveOwnedStoredMediaUrl(supabase, source, userId);
   if (!resolved) {
     if (await isMissingOwnUpload(supabase, source, userId)) {
@@ -1292,6 +1317,8 @@ export async function resolveGenerationMediaSource(
     // from the storage path, never from the client's signed URL. A remix also
     // offers the original's own result as a reference, answered with a link to
     // it under the same gate as the remix source's.
+    // A remix of an unlocked recipe restores the inputs the recipe holds copies of, which are the
+    // seller's files: those were imported above, once the unlock was read again (`reuseRecipeFile`).
     const imported = await importSharedGenerationInputMedia({
       source,
       viewerUserId: userId,
@@ -1947,7 +1974,7 @@ export async function startImageGeneration(params: {
       ? normalizedReferences.map((reference) => reference.url)
       : normalizeMediaUrlList(imageUrls),
     userId,
-    { templateAssetScope: templateAssetScope(templateContext) },
+    { templateAssetScope: templateAssetScope(templateContext), recipeCopyReads: createRecipeCopyReads() },
   );
 
   assertGenerationRequest(
@@ -2360,6 +2387,8 @@ export async function startVideoGeneration(params: {
   templateContext?: TemplateGenerationContext;
   /** Links the start resolved already, by reference (`GenerationMediaSourceOptions.resolved`). */
   resolvedMediaSources?: ReadonlyMap<string, string>;
+  /** The start's reads of its caller's unlocks (`GenerationMediaSourceOptions.recipeCopyReads`). */
+  recipeCopyReads?: RecipeCopyReads;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
@@ -2408,9 +2437,11 @@ export async function startVideoGeneration(params: {
   if (templateContext && !privateRecipe) {
     throw new GenerationServiceError('Template generations must keep their recipe private.', 500);
   }
+  // One for the whole start: its references are resolved stage by stage, each with these.
   const mediaSourceOptions: GenerationMediaSourceOptions = {
     templateAssetScope: templateAssetScope(templateContext),
     resolved: resolvedMediaSources,
+    recipeCopyReads: params.recipeCopyReads ?? createRecipeCopyReads(),
   };
 
   const selectedModel = VIDEO_MODELS[model];
@@ -3899,6 +3930,8 @@ export async function startCatalogGeneration(params: {
   inputsPreResolved?: boolean;
   /** Links the start resolved already, by reference (`GenerationMediaSourceOptions.resolved`). */
   resolvedMediaSources?: ReadonlyMap<string, string>;
+  /** The start's reads of its caller's unlocks (`GenerationMediaSourceOptions.recipeCopyReads`). */
+  recipeCopyReads?: RecipeCopyReads;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
@@ -4047,17 +4080,18 @@ export async function startCatalogGeneration(params: {
     // round-trip per asset, and on a client retry the reservation returns the original
     // prediction and all of that work would be thrown away. Adapter errors raised here
     // settle through the quiet-settle catch below, which is an already-handled path.
+    // One for every input: a remix restoring several of a recipe's copies reads its unlock once.
+    const mediaSourceOptions: GenerationMediaSourceOptions = {
+      templateAssetScope: templateAssetScope(templateContext),
+      resolved: resolvedMediaSources,
+      recipeCopyReads: params.recipeCopyReads ?? createRecipeCopyReads(),
+    };
     const resolvedInputs = inputsPreResolved
       ? inputs.map((asset) => ({ ...asset, url: asset.url ?? null }))
       : await Promise.all(inputs.map(async (asset) => ({
           ...asset,
           url: typeof asset.url === 'string' && asset.url.trim()
-            ? await resolveGenerationMediaSource(
-                supabase,
-                asset.url,
-                userId,
-                { templateAssetScope: templateAssetScope(templateContext), resolved: resolvedMediaSources },
-              )
+            ? await resolveGenerationMediaSource(supabase, asset.url, userId, mediaSourceOptions)
             : null,
         })));
     const providerRequest = buildGenerationProviderRequest({

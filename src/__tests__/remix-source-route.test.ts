@@ -13,6 +13,7 @@ vi.mock('@/lib/moderation-service', () => ({
   }),
 }));
 
+
 type GenerationRow = {
   id: string;
   user_id: string | null;
@@ -53,8 +54,11 @@ type PostRow = {
 type BundleRow = {
   id: string;
   post_id: string;
-  status: 'draft' | 'published';
+  owner_user_id?: string;
+  status: 'draft' | 'published' | 'retired';
   allow_remix: boolean;
+  resource_items?: unknown[];
+  resource_sections?: unknown[];
 };
 
 let currentUserId: string | null = 'user-1';
@@ -174,6 +178,12 @@ function createRouteRequest(url: string) {
   } as never;
 }
 
+// Every table the service client read, in order.
+let adminReads: string[] = [];
+function adminFromTables() {
+  return adminReads;
+}
+
 function createAdminClientMock() {
   return {
     rpc: vi.fn(async (fn: string) => {
@@ -190,6 +200,7 @@ function createAdminClientMock() {
       };
     }),
     from: vi.fn((table: string) => {
+      adminReads.push(table);
       if (table === 'post_resource_bundles') {
         const filters = new Map<string, unknown>();
         const query = {
@@ -201,7 +212,11 @@ function createAdminClientMock() {
             return query;
           },
           async maybeSingle() {
-            return { data: bundleRows.get(String(filters.get('post_id'))) ?? null, error: null };
+            // The gate reads the post's recipe by its post; the copies are read on from it by its id.
+            const row = filters.has('id')
+              ? [...bundleRows.values()].find((bundle) => bundle.id === filters.get('id'))
+              : bundleRows.get(String(filters.get('post_id')));
+            return { data: row ?? null, error: null };
           },
         };
         return query;
@@ -389,6 +404,15 @@ function createAdminClientMock() {
           };
         }
 
+        if (bucket === 'post_resource_files') {
+          return {
+            createSignedUrl: vi.fn(async (filePath: string, expiresIn: number) => ({
+              data: { signedUrl: `https://signed.example.com/post-resource-files/${filePath}?expires=${expiresIn}` },
+              error: null,
+            })),
+          };
+        }
+
         throw new Error(`Unexpected storage bucket: ${bucket}`);
       }),
     },
@@ -424,6 +448,7 @@ describe('/api/remix-source route', () => {
     vi.clearAllMocks();
     currentUserId = 'user-1';
     currentUserIsAnonymous = false;
+    adminReads = [];
     generationRows = new Map();
     postRows = new Map();
     bundleRows = new Map();
@@ -507,6 +532,13 @@ describe('/api/remix-source route', () => {
     expect(data.inputMedia).toBeUndefined();
     expect(data.workflowSettings.elements).toBeUndefined();
     expect(data.restoreIssues).toEqual([]);
+    // Owner, 2026-11-03: an empty slot for each input the run's settings name, read
+    // without signing. The prompt mentions neither handle, so neither is given.
+    expect(data.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 1' },
+      { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
+    ]);
+    expect(JSON.stringify(data)).not.toMatch(/bottle|Reference result|ref-1|el-\d|uploads\//);
   });
 
   it('keeps reference images private when the linked post has no saved recipe', async () => {
@@ -586,6 +618,94 @@ describe('/api/remix-source route', () => {
     expect(data.inputs.image).toBeUndefined();
     expect(data.inputMedia).toBeUndefined();
     expect(data.workflowSettings.elements).toBeUndefined();
+    expect(data.restoreIssues).toEqual([]);
+    // The kept row names a slot under the handle the prompt mentions, and gives nothing else of itself.
+    expect(data.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@alisa', name: 'Reference image 1' },
+    ]);
+    expect(JSON.stringify(data)).not.toMatch(/alisa\.jpg|uploads\/|media-1|Alisa|el-1/);
+    // No recipe on the post, so no copy is looked for.
+    expect(adminFromTables()).not.toContain('post_resource_bundle_purchases');
+  });
+
+  // Owner, 2026-11-03: someone who unlocked a recipe whose creator keeps the
+  // run's inputs to themselves gets back the ones "Include creation references"
+  // copied into it, from the copies, and an empty slot for each of the rest.
+  it("restores an unlocked recipe's copies of the run's inputs and gives the rest empty slots", async () => {
+    const PRODUCT_ROW = '6f1c2d3e-4a5b-4c6d-8e7f-00000000000a';
+    const BACKDROP_ROW = '6f1c2d3e-4a5b-4c6d-8e7f-00000000000b';
+    const PRODUCT_COPY = `creator-1/generation-references/source-1/00-reference-image-${PRODUCT_ROW}.png`;
+    currentUserId = 'user-2';
+    generationRows.set('source-1', createPublicSource({
+      share_input_media_for_remix: false,
+      prompt: 'Place @product beside @backdrop.',
+    }));
+    postRows.set('post-1', createExposedPost('source-1', { id: 'post-1' }));
+    bundleRows.set('post-1', {
+      id: 'bundle-1',
+      post_id: 'post-1',
+      owner_user_id: 'creator-1',
+      status: 'published',
+      allow_remix: false,
+      resource_items: [
+        { id: 'prompt', type: 'prompt', title: 'Prompt', textContent: 'Place @product beside @backdrop.' },
+        { id: `reference-${PRODUCT_ROW}`, type: 'reference_image', title: 'Product', storagePath: PRODUCT_COPY },
+        // Named after the backdrop, but kept in another creation's folder: no copy of it.
+        { id: `reference-${BACKDROP_ROW}`, type: 'reference_image', title: 'Backdrop', storagePath: `creator-1/generation-references/source-9/01-reference-image-${BACKDROP_ROW}.png` },
+      ],
+      resource_sections: [],
+    });
+    purchaseRows = [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'user-2' }];
+    inputMediaRows = [
+      {
+        id: PRODUCT_ROW,
+        generation_id: 'source-1',
+        user_id: 'creator-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'Product',
+        storage_path: 'generation_inputs/creator-1/source-1/00-reference_image.png',
+        source_generation_id: null,
+        sort_order: 0,
+        metadata: { handle: '@product', displayName: 'Product' },
+      },
+      {
+        id: BACKDROP_ROW,
+        generation_id: 'source-1',
+        user_id: 'creator-1',
+        media_type: 'image',
+        role: 'reference_image',
+        label: 'my-passport.jpg',
+        storage_path: 'generation_inputs/creator-1/source-1/01-reference_image.png',
+        source_generation_id: null,
+        sort_order: 1,
+        metadata: {
+          handle: '@backdrop',
+          displayName: 'my-passport.jpg',
+          sourceStoragePath: 'uploads/creator-1/my-passport.jpg',
+        },
+      },
+    ];
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1&postId=post-1'));
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    // The gate found this buyer bought post-1's recipe, and its purchase is not read again for the copies.
+    expect(adminFromTables().filter((table) => table === 'post_resource_bundle_purchases')).toHaveLength(1);
+    expect(data.inputs.image.elements).toEqual([expect.objectContaining({
+      id: PRODUCT_ROW,
+      handle: '@product',
+      storagePath: `post_resource_files/${PRODUCT_COPY}`,
+      url: `https://signed.example.com/post-resource-files/${PRODUCT_COPY}?expires=3600`,
+    })]);
+    expect(data.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@backdrop', name: 'Reference image 1' },
+    ]);
+    expect(data.inputMedia).toBeUndefined();
+    // The creator's own kept files are neither signed nor named, nor where the upload was staged.
+    expect(JSON.stringify(data)).not.toMatch(/generation-inputs|generation_inputs|my-passport|uploads\/|source-9/);
     expect(data.restoreIssues).toEqual([]);
   });
 

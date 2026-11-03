@@ -9231,6 +9231,281 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       });
     });
 
+    // Owner, 2026-11-03: a remix not given its creator's inputs gets an empty box in place of each, named
+    // as its prompt names it, to fill with the remixer's own. It used to open with nothing, and the
+    // prompt's mentions held Generate as "Unknown element mention".
+    describe('a remix’s empty input slots', () => {
+      const slotsRemix = { generationId: 'gen-slots', postId: 'post-slots' };
+      const sessionKey = creationDraftStorageKey(remixDraftScope('user-123', slotsRemix)!);
+      const imageSlotsSource = () => ({
+        generation: { id: 'gen-slots', title: 'Counter', prompt: 'Place @product on a marble counter', category: 'image', model: 'nano-banana-2' },
+        result: null,
+        inputs: { image: { elements: [] } },
+        inputSlots: [
+          { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
+          { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
+        ],
+        workflowSettings: { model: 'nano-banana-2' },
+        restoreIssues: [],
+      });
+      const slotBoxes = (tree: renderer.ReactTestRenderer, id: string) => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.testID === `remix-input-slot-${id}`
+      ));
+      const sentRun = () => authState.api.startGeneration.mock.calls[0][0] as { prompt: string; inputs: Array<Record<string, unknown>> };
+      const openImageRemix = async () => {
+        // A catalog whose model publishes its slots, as production's does: what the run sends is read from them.
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.getRemixSourceBundle.mockResolvedValue(imageSlotsSource());
+        return open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+      };
+
+      it('draws an empty box for each picture the creator kept, holds Generate on its mention, and fills it with the remixer’s own', async () => {
+        authState.api.startGeneration.mockResolvedValue(started('pred-slots'));
+        const tree = await openImageRemix();
+
+        // Each box is titled as the prompt names it, or else by its name, and says what it takes.
+        const rail = tree.root.findByProps({ testID: 'image-reference-rail' });
+        expect(collectText(rail.findByProps({ testID: 'remix-input-slot-slot-1' }))).toEqual(['@product', 'Add your image']);
+        expect(collectText(rail.findByProps({ testID: 'remix-input-slot-slot-2' }))).toEqual(['Reference image 2', 'Add your image']);
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+        // No restore failed, so nothing offers to retry one.
+        expect(hasLabel(tree.root, 'Retry restore')).toBe(false);
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(text(tree)).not.toContain('Unknown element mention');
+        expect(findPressableByLabelPrefix(tree.root, 'Generate').props.disabled).toBe(true);
+
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('IMG_2201.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('IMG_2201.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your image for @product').props.onPress(); });
+        await settle();
+
+        expect(pickMedia).toHaveBeenCalledWith('image');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        // Named for its slot, so the prompt's mention finds it.
+        expect(hasLabel(tree.root, 'Open details for product')).toBe(true);
+        expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+        expect(text(tree)).not.toContain('Add your own for @product');
+
+        await pressGenerate(tree);
+        expect(sentRun().prompt).toBe('Place @product on a marble counter');
+        expect(sentRun().inputs).toEqual([
+          expect.objectContaining({ slot: 'imageReferences', handle: '@product', url: 'https://cdn.example.com/IMG_2201.png' }),
+        ]);
+        // Neither the run nor any price asked for it carries a slot.
+        const asked = JSON.stringify([sentRun(), ...authState.api.quoteGenerationModel.mock.calls.map(([body]) => body)]);
+        expect(asked).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
+      });
+
+      it('keeps the boxes still to fill with the session, and draws them again on a resume without reading the source', async () => {
+        const first = await openImageRemix();
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('bottle.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('bottle.png'));
+        await renderer.act(async () => { await labelled(first.root, 'Add your image for @product').props.onPress(); });
+        await settle();
+
+        const saved = JSON.parse(memory.get(sessionKey) ?? 'null');
+        expect(saved).toMatchObject({ remixRestored: true });
+        expect(saved.image.inputSlots).toEqual([{ id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' }]);
+        // The fill is the remixer's, so a restore read again keeps it.
+        expect(saved.remixEditedKeys.image).toEqual(expect.arrayContaining(['references', 'inputSlots']));
+        first.unmount();
+
+        authState.api.getRemixSourceBundle.mockClear();
+        const resumed = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+        expect(slotBoxes(resumed, 'slot-1')).toHaveLength(0);
+        expect(slotBoxes(resumed, 'slot-2')).toHaveLength(1);
+        expect(hasLabel(resumed.root, 'Open details for product')).toBe(true);
+        expect(text(resumed)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+      });
+
+      it('draws a Kling 3.0 remix’s kept frame on its own box and its clip on the rail, and sends the clip under the handle its prompt names', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-slots', title: 'Dance', prompt: 'Open on the door, then @dance spins', category: 'video', model: 'kling-3.0-video' },
+          result: null,
+          inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+          inputSlots: [
+            { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
+            { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
+          ],
+          workflowSettings: { model: 'kling-3.0-video', referenceMode: 'frames', duration: 5 },
+          restoreIssues: [],
+        });
+        authState.api.startGeneration.mockResolvedValue(started('pred-dance'));
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={slotsRemix} />);
+
+        expect(collectText(tree.root.findByProps({ testID: 'video-start-frame-slot' }))).toEqual(['Start frame', 'Add your image']);
+        const rail = tree.root.findByProps({ testID: 'video-reusable-reference-rail' });
+        expect(collectText(rail.findByProps({ testID: 'remix-input-slot-slot-2' }))).toEqual(['@dance', 'Add your video']);
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+        expect(blocker(tree)).toBe('Add your own for @dance in its box, or take @dance out of the prompt.');
+
+        vi.mocked(pickMedia).mockResolvedValueOnce({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValueOnce(uploaded('move.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 4 }));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your video for @dance').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenLastCalledWith('video');
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(0);
+        expect(hasLabel(tree.root, 'Open details for dance')).toBe(true);
+
+        // The frame's own box takes the frame the creator kept.
+        vi.mocked(pickMedia).mockResolvedValueOnce(pickedImage('door.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValueOnce(uploaded('door.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add start frame').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenLastCalledWith('image');
+        expect(text(tree)).not.toContain('The creator kept');
+
+        await pressGenerate(tree);
+        expect(sentRun().prompt).toBe('Open on the door, then @dance spins');
+        expect(sentRun().inputs).toEqual([
+          expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/door.png' }),
+          expect.objectContaining({ slot: 'videoElements', handle: '@dance', url: 'https://cdn.example.com/move.mp4', durationSeconds: 4 }),
+        ]);
+      });
+
+      it('draws a kept subject among the subjects, and makes the pictures picked for it the subject its prompt names', async () => {
+        catalogState.catalog = parityCatalog([parityKlingO3()]);
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-slots', title: 'Maya', prompt: '@maya walks into the rain', category: 'video', model: 'kling-o3' },
+          result: null,
+          inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+          inputSlots: [{ id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' }],
+          workflowSettings: { model: 'kling-o3' },
+          restoreIssues: [],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={slotsRemix} />);
+        const group = tree.root.findByProps({ testID: 'video-subjects-group' });
+        expect(collectText(group.findByProps({ testID: 'remix-input-slot-slot-1' }))).toEqual(['@maya', 'Add your pictures']);
+
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('maya-front.png'), pickedImage('maya-side.png')] as never);
+        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your pictures for @maya').props.onPress(); });
+        await settle();
+        expect(pickMediaList).toHaveBeenCalledWith('image', { allowsMultipleSelection: true });
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(hasLabel(tree.root, 'Open details for maya, @maya')).toBe(true);
+        expect(text(tree)).not.toContain('Add your own for @maya');
+      });
+
+      it('draws a motion remix’s kept character and clip on their own boxes, and fills the character', async () => {
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-slots', title: 'Moves', prompt: '', category: 'video', model: 'kling-3.0' },
+          result: null,
+          inputs: {},
+          inputSlots: [
+            { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
+            { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' },
+          ],
+          workflowSettings: { model: 'kling-3.0' },
+          restoreIssues: [],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="motion" remixSource={slotsRemix} />);
+        expect(collectText(tree.root.findByProps({ testID: 'motion-character-slot' }))).toEqual(['Character image', 'Add your image']);
+        expect(collectText(tree.root.findByProps({ testID: 'motion-video-slot' }))).toEqual(['Motion video', 'Add your video']);
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('me.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('me.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add character image').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenCalledWith('image');
+        expect(hasLabel(tree.root, 'Open details for Character image')).toBe(true);
+        expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+      });
+
+      // Three edges of 2026-11-03: Enhance could rewrite a box's @handle out of the prompt; a model with
+      // no place for a box hid it and read its mention as an unknown one; and the boxes' notice could not
+      // be put away while a box nobody mentions stayed empty.
+      it('has Enhance keep an empty box’s handle, polishing around the sentence that names it', async () => {
+        authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'Place @product on a marble counter, glossy reflections.', remainingCredits: 900 });
+        const tree = await openImageRemix();
+
+        await renderer.act(async () => { await labelled(tree.root, 'Polish · 2 credits').props.onPress(); });
+
+        expect(authState.api.enhancePrompt).toHaveBeenCalledWith(expect.objectContaining({
+          prompt: 'Place @product on a marble counter',
+          context: expect.objectContaining({
+            referenceImageCount: 0,
+            // Named as its fill will be (`remixSlotFillNaming`), as on the web.
+            elementReferences: [{ handle: '@product', displayName: 'product' }],
+            elementEnhancementMode: 'append-only',
+          }),
+        }));
+        expect(JSON.stringify(authState.api.enhancePrompt.mock.calls[0][0])).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Place @product on a marble counter, glossy reflections.');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+      });
+
+      it('says a box the chosen model has no place for waits for a switch back, where it is drawn again beside what was filled', async () => {
+        const full = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14), parityImageModel('prompt-only', 'Prompt Only', 0)]);
+        catalogState.catalog = full;
+        catalogState.summaries = full.models;
+        authState.api.getRemixSourceBundle.mockResolvedValue(imageSlotsSource());
+        const tree = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        const pickModel = async (displayName: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Selected model').props.onPress(); });
+          await renderer.act(async () => { findPressableByLabelPrefix(tree.root, `${displayName}.`).props.onPress(); });
+          await settle();
+        };
+
+        await pickModel('Prompt Only');
+
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(blocker(tree)).toBe('Prompt Only has no place for @product. Switch back, or take @product out of the prompt.');
+        expect(text(tree)).not.toContain('Unknown element mention');
+        // No box is drawn here, so the notice of them is not either.
+        expect(text(tree)).not.toContain('The creator kept');
+        expect(findPressableByLabelPrefix(tree.root, 'Generate').props.disabled).toBe(true);
+
+        await pickModel('Nano Banana 2.0');
+
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(1);
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        // A box filled before a switch is the remixer's picture after it: it waits for a model that
+        // takes it, and is back on the rail beside the box still empty.
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('backdrop.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('backdrop.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your image for Reference image 2').props.onPress(); });
+        await settle();
+        expect(hasLabel(tree.root, 'Open details for Reference image 2')).toBe(true);
+        await pickModel('Prompt Only');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(collectText(tree.root.findByProps({ testID: 'standby-references' }))).toContain('Not sent with this run');
+        await pickModel('Nano Banana 2.0');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(0);
+        expect(hasLabel(tree.root, 'Open details for Reference image 2')).toBe(true);
+        expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+      });
+
+      it('puts the boxes’ notice away for the rest of the remix, a resume included, and keeps the boxes', async () => {
+        const tree = await openImageRemix();
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        await renderer.act(async () => { labelled(tree.root, 'Dismiss Remix source').props.onPress(); });
+        await settle();
+
+        expect(text(tree)).not.toContain('The creator kept');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(1);
+        // The mention still holds the run, in its own words.
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(JSON.parse(memory.get(sessionKey) ?? 'null').image.inputSlotsNoticeDismissed).toBe(true);
+        tree.unmount();
+
+        authState.api.getRemixSourceBundle.mockClear();
+        const resumed = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+        expect(slotBoxes(resumed, 'slot-1')).toHaveLength(1);
+        expect(text(resumed)).not.toContain('The creator kept');
+      });
+    });
+
     describe('sign-in from the creator', () => {
       beforeEach(() => {
         authState.user = null;

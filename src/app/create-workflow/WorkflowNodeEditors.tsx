@@ -2106,13 +2106,8 @@ function NodeEditorContent({
                         ...node.data,
                         imageUrl: uploaded.signedUrl,
                         storagePath: uploaded.storagePath,
-                        seedanceAsset: {
-                          ...imageInput.seedanceAsset,
-                          assetType: 'Image',
-                          sourceUrl: uploaded.signedUrl,
-                          status: imageInput.seedanceAsset.status === 'active' ? 'active' : 'idle',
-                          lastCheckedAt: new Date().toISOString(),
-                        },
+                        // A new file has no asset until it is prepared: the old one ran the file before it.
+                        seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Image', sourceUrl: uploaded.signedUrl }),
                       } as Partial<WorkflowNodeData>);
                     } catch (uploadError) {
                       onSetError(uploadError instanceof Error ? uploadError.message : 'Image upload failed');
@@ -2184,13 +2179,8 @@ function NodeEditorContent({
                         videoUrl: uploaded.signedUrl,
                         storagePath: uploaded.storagePath,
                         durationSeconds,
-                        seedanceAsset: {
-                          ...videoInput.seedanceAsset,
-                          assetType: 'Video',
-                          sourceUrl: uploaded.signedUrl,
-                          status: videoInput.seedanceAsset.status === 'active' ? 'active' : 'idle',
-                          lastCheckedAt: new Date().toISOString(),
-                        },
+                        // A new file has no asset until it is prepared: the old one ran the file before it.
+                        seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Video', sourceUrl: uploaded.signedUrl }),
                       } as Partial<WorkflowNodeData>);
                     } catch (uploadError) {
                       onSetError(uploadError instanceof Error ? uploadError.message : 'Video upload failed');
@@ -2255,13 +2245,8 @@ function NodeEditorContent({
                         ...node.data,
                         audioUrl: uploaded.signedUrl,
                         storagePath: uploaded.storagePath,
-                        seedanceAsset: {
-                          ...audioInput.seedanceAsset,
-                          assetType: 'Audio',
-                          sourceUrl: uploaded.signedUrl,
-                          status: audioInput.seedanceAsset.status === 'active' ? 'active' : 'idle',
-                          lastCheckedAt: new Date().toISOString(),
-                        },
+                        // A new file has no asset until it is prepared: the old one ran the file before it.
+                        seedanceAsset: createSeedanceAssetMetadata({ assetType: 'Audio', sourceUrl: uploaded.signedUrl }),
                       } as Partial<WorkflowNodeData>);
                     } catch (uploadError) {
                       onSetError(uploadError instanceof Error ? uploadError.message : 'Audio upload failed');

@@ -90,9 +90,20 @@ import {
   type GenerationInputMediaRow,
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
-import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+import { getUserOwnedStoredMediaLocation, parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { isOwnOrLinkedAccountId, readLinkedAccountIds, resolveLinkedAccountIds } from '@/lib/account-identity';
-import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner, type GenerationInputOrigin } from '@/lib/generation-input-origin';
+import {
+  generationInputOrigin,
+  isRecipeFileInput,
+  loadSourceGenerationOwners,
+  needsSourceGenerationOwner,
+  type GenerationInputOrigin,
+} from '@/lib/generation-input-origin';
+import {
+  generationReferenceCopyFolder,
+  parseGenerationReferenceCopyPath,
+  RECIPE_FILES_BUCKET,
+} from '@/lib/recipe-file-paths';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
@@ -564,13 +575,26 @@ function mapGenerationInputRemixUse(row: GenerationInputMediaRow): PostResourceR
     : 'none';
 }
 
-function buildReferenceResourceStoragePath(ownerUserId: string, generationId: string, row: GenerationInputMediaRow): string {
+/**
+ * Where "Include creation references" keeps its copy of one of a creation's saved inputs, in the
+ * publisher's recipe files: `<publisher>/generation-references/<generation>/<NN>-<role>-<row id>.<ext>`
+ * (the folder is `recipe-file-paths.ts`'s). The layout's one writer. Its readers are
+ * `parseGenerationReferenceCopyPath` (a run start importing a copy, the checks of a recipe file's
+ * later use) and `findGenerationReferenceCopies` (a remix finding the copies its recipe holds).
+ */
+export function buildGenerationReferenceCopyPath(
+  ownerUserId: string,
+  generationId: string,
+  row: Pick<GenerationInputMediaRow, 'id' | 'role' | 'sort_order' | 'storage_path' | 'media_type'>,
+): string {
   const sortOrder = Math.max(0, row.sort_order ?? 0).toString().padStart(2, '0');
   const role = sanitizePathSegment(row.role, 'reference');
   const id = sanitizePathSegment(row.id, 'input');
   const extension = inferExtensionFromPath(row.storage_path, row.media_type);
-  return `${ownerUserId}/generation-references/${generationId}/${sortOrder}-${role}-${id}.${extension}`;
+  return `${generationReferenceCopyFolder(ownerUserId, generationId)}${sortOrder}-${role}-${id}.${extension}`;
 }
+
+export { parseGenerationReferenceCopyPath };
 
 function buildReferenceSummary(count: number): string {
   return count === 1 ? '1 saved reference from this creation' : `${count} saved references from this creation`;
@@ -752,8 +776,14 @@ export async function buildGenerationReferenceResourceItems(params: {
   const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId)
     ? await resolveLinkedAccountIds(params.supabase, params.ownerUserId)
     : [params.ownerUserId];
+  const publisherIds = new Set(sourceOwnerIds);
 
   for (const [index, row] of rows.entries()) {
+    // A file of someone else's recipe the run used through the publisher's unlock is theirs to use,
+    // never to sell or give on (owner, 2026-11-03), whatever this recipe's switches say.
+    if (isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, publisherIds)) {
+      continue;
+    }
     const sourceLocation = sourceOwnerIds.includes(row.user_id)
       ? getUserOwnedStoredMediaLocation(row.storage_path, row.user_id)
       : null;
@@ -761,7 +791,7 @@ export async function buildGenerationReferenceResourceItems(params: {
       continue;
     }
 
-    const targetPath = buildReferenceResourceStoragePath(params.ownerUserId, params.generationId, row);
+    const targetPath = buildGenerationReferenceCopyPath(params.ownerUserId, params.generationId, row);
 
     try {
       const { data: blob, error: downloadError } = await params.supabase.storage
@@ -1015,9 +1045,12 @@ async function passesGenerationRecipeInputGates(
 }
 
 /**
- * The generation's saved inputs, or for a generation made before inputs were
- * saved, the ones its settings name, signed from the folder of whoever made
- * it: a guest's creation keeps its files under the guest's id.
+ * The generation's saved inputs a recipe hands on, or for a generation made before inputs were
+ * saved, the ones its settings name, signed from the folder of whoever made it: a guest's creation
+ * keeps its files under the guest's id. A file of someone else's recipe the run used through the
+ * creator's unlock (`isRecipeFileInput`) is never handed on (owner, 2026-11-03): it is set apart in
+ * `recipeFiles`, for a remix to give an empty slot in its place, and every reader of a recipe's inputs
+ * (its unlock, its teasers' counts, a remix, a run start's import) reads `inputMedia` alone.
  */
 async function resolveGenerationRecipeInputMedia(params: {
   adminSupabase: SupabaseClient;
@@ -1025,19 +1058,24 @@ async function resolveGenerationRecipeInputMedia(params: {
   generation: Pick<GenerationRecipeRow, 'id' | 'user_id' | 'category' | 'workflow_settings'>;
   durableInputMedia: GenerationInputMediaItem[];
   urlMode: 'signed' | 'none';
-}): Promise<GenerationInputMediaItem[]> {
-  if (params.durableInputMedia.length > 0) {
-    return params.durableInputMedia;
+}): Promise<{ inputMedia: GenerationInputMediaItem[]; recipeFiles: GenerationInputMediaItem[] }> {
+  const inputs = params.durableInputMedia.length > 0
+    ? params.durableInputMedia
+    : await buildLegacyGenerationInputMedia({
+      supabase: params.adminSupabase,
+      generationId: params.generation.id,
+      ownerUserId: params.generation.user_id ?? params.post.user_id,
+      category: params.generation.category ?? params.post.category,
+      workflowSettings: normalizeWorkflowSettings(params.generation.workflow_settings) ?? {},
+      urlMode: params.urlMode,
+    });
+  const creatorIds = new Set([params.generation.user_id, params.post.user_id].filter((id): id is string => Boolean(id)));
+  const inputMedia: GenerationInputMediaItem[] = [];
+  const recipeFiles: GenerationInputMediaItem[] = [];
+  for (const input of inputs) {
+    (isRecipeFileInput(input, creatorIds) ? recipeFiles : inputMedia).push(input);
   }
-
-  return buildLegacyGenerationInputMedia({
-    supabase: params.adminSupabase,
-    generationId: params.generation.id,
-    ownerUserId: params.generation.user_id ?? params.post.user_id,
-    category: params.generation.category ?? params.post.category,
-    workflowSettings: normalizeWorkflowSettings(params.generation.workflow_settings) ?? {},
-    urlMode: params.urlMode,
-  });
+  return { inputMedia, recipeFiles };
 }
 
 /**
@@ -1080,7 +1118,7 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
    * hands over the uploads the run's settings name, file names and all.
    */
   throwOnError?: boolean;
-}): Promise<{ generation: GenerationRecipeRow; inputMedia: GenerationInputMediaItem[] } | null> {
+}): Promise<{ generation: GenerationRecipeRow; inputMedia: GenerationInputMediaItem[]; recipeFiles: GenerationInputMediaItem[] } | null> {
   const { adminSupabase } = params;
   const post = await loadGenerationRecipePostRow(adminSupabase, params.postId);
   const generation = post ? await loadGenerationRecipeRow(adminSupabase, params.generationId) : null;
@@ -1106,7 +1144,7 @@ async function loadEligibleGenerationRecipeInputMedia(params: {
 
   return {
     generation,
-    inputMedia: await resolveGenerationRecipeInputMedia({
+    ...await resolveGenerationRecipeInputMedia({
       adminSupabase,
       post,
       generation,
@@ -1209,13 +1247,13 @@ async function resolveGenerationRecipeInputs(params: {
     return null;
   }
 
-  return resolveGenerationRecipeInputMedia({
+  return (await resolveGenerationRecipeInputMedia({
     adminSupabase: params.adminSupabase,
     post,
     generation,
     durableInputMedia: mapGenerationInputMediaRowsWithoutUrls(generation.inputs ?? []),
     urlMode: 'none',
-  });
+  })).inputMedia;
 }
 
 /**
@@ -1316,6 +1354,22 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
   /** Rethrow a failed read of the kept inputs (`loadEligibleGenerationRecipeInputMedia`). */
   throwOnError?: boolean;
 }): Promise<GenerationInputMediaItem[]> {
+  return (await loadGenerationRecipeRemixInputsByPostId(params)).inputMedia;
+}
+
+/**
+ * What an unlocked recipe hands a remix of its creation (`inputMedia`, signed), and the inputs it
+ * keeps back however its switches stand (`recipeFiles`, unsigned): files of someone else's recipe the
+ * run used through the creator's unlock, which a remix gives an empty slot in their place.
+ */
+export async function loadGenerationRecipeRemixInputsByPostId(params: {
+  postId: string;
+  generationId: string;
+  viewerUserId: string;
+  adminSupabase?: SupabaseClient;
+  /** Rethrow a failed read of the kept inputs (`loadEligibleGenerationRecipeInputMedia`). */
+  throwOnError?: boolean;
+}): Promise<{ inputMedia: GenerationInputMediaItem[]; recipeFiles: GenerationInputMediaItem[] }> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
   const entitlement = await getPostResourceBundleDetailByPostId(params.postId, {
     viewerUserId: params.viewerUserId,
@@ -1331,7 +1385,7 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
     || entitlement.resources?.allowRemix !== true
     || entitlement.post?.generationId !== params.generationId
   ) {
-    return [];
+    return { inputMedia: [], recipeFiles: [] };
   }
 
   const eligible = await loadEligibleGenerationRecipeInputMedia({
@@ -1346,7 +1400,184 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
     throwOnError: params.throwOnError,
   });
 
-  return eligible?.inputMedia ?? [];
+  return {
+    inputMedia: eligible?.inputMedia ?? [],
+    recipeFiles: (eligible?.recipeFiles ?? []).map(withoutInputMediaUrl),
+  };
+}
+
+/** An input held back from a remix, as its slot reads it: never with a link to the file. */
+function withoutInputMediaUrl(item: GenerationInputMediaItem): GenerationInputMediaItem {
+  return { ...item, url: null };
+}
+
+/**
+ * Whether a recipe item's path is the copy "Include creation references" makes of one input row:
+ * a file of the publisher's folder for the creation (`parseGenerationReferenceCopyPath`), named after
+ * the row (`buildGenerationReferenceCopyPath`), exactly as stored, with nothing decoded on the way.
+ */
+function isGenerationReferenceCopyOf(
+  storagePath: string | null | undefined,
+  expected: { ownerUserId: string; generationId: string; rowSegment: string },
+): storagePath is string {
+  if (!storagePath || parseCanonicalStorageObjectPath(storagePath, { ownerUserId: expected.ownerUserId }) !== storagePath) return false;
+  const copy = parseGenerationReferenceCopyPath(storagePath);
+  if (!copy || copy.ownerUserId !== expected.ownerUserId || copy.generationId !== expected.generationId) return false;
+  const extensionStart = copy.fileName.lastIndexOf('.');
+  return extensionStart > 0 && copy.fileName.slice(0, extensionStart).endsWith(`-${expected.rowSegment}`);
+}
+
+/**
+ * The copies of a creation's saved inputs among a recipe's items, by the input
+ * row each was made from, as object paths in `post_resource_files`. "Include
+ * creation references" stores a row's copy as `reference-<row id>`
+ * (`generationReferenceItemId`) in the publisher's folder for the creation; an
+ * item of that id kept anywhere else, another creation's folder included, is
+ * no copy of the row and is left out.
+ */
+export function findGenerationReferenceCopies(params: {
+  items: readonly Pick<PostResourceItem, 'id' | 'storagePath'>[];
+  ownerUserId: string;
+  generationId: string;
+  inputRowIds: readonly string[];
+}): Map<string, string> {
+  const copies = new Map<string, string>();
+  for (const rowId of params.inputRowIds) {
+    // `generationReferenceItemId` without its fallback to the row's place: an
+    // id that sanitizes to nothing names no row.
+    const rowSegment = sanitizePathSegment(rowId, '');
+    if (!rowSegment || copies.has(rowId)) continue;
+    const copy = params.items.find((item) => (
+      item.id === `reference-${rowSegment}`
+      && isGenerationReferenceCopyOf(item.storagePath, { ownerUserId: params.ownerUserId, generationId: params.generationId, rowSegment })
+    ));
+    if (copy?.storagePath) copies.set(rowId, copy.storagePath);
+  }
+  return copies;
+}
+
+/** As long as every other link a remix source hands out: the remix form holds it for its session. */
+const GENERATION_REFERENCE_COPY_URL_TTL_SECONDS = 3600;
+
+/** A recipe's copy of one of its creation's saved inputs (`buildGenerationReferenceResourceItems`). */
+export interface GenerationReferenceCopy {
+  /** Where the copy is kept: `post_resource_files/<publisher>/generation-references/<generation>/<file>`. */
+  storagePath: string;
+  /** A short-lived signed link to the copy; null when it could not be signed, or was not asked for. */
+  url: string | null;
+}
+
+/**
+ * The recipe on a creation's post as the remix gate read it (`resolveRemixAccess`'s `recipe`): which
+ * recipe, whose files, and whether the viewer bought it where the gate asked (a published recipe).
+ */
+export interface GenerationReferenceCopyRecipe {
+  id: string;
+  ownerUserId: string | null;
+  /** Null where the gate did not ask: a retired recipe, which gates no Remix and still is its buyers'. */
+  viewerHasPurchased: boolean | null;
+}
+
+/** Whether the viewer bought this recipe. Throws when the read fails: no answer is not "not bought". */
+async function readRecipePurchase(adminSupabase: SupabaseClient, recipeId: string, viewerUserId: string): Promise<boolean> {
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundle_purchases')
+    .select('id')
+    .eq('bundle_id', recipeId)
+    .eq('buyer_user_id', viewerUserId)
+    .maybeSingle();
+  if (error) {
+    if (isMissingPostResourceBundlesSchemaError(error)) return false;
+    throw error;
+  }
+  return Boolean(data);
+}
+
+/**
+ * The copies a recipe its viewer bought holds of its creation's saved inputs, for a remix whose
+ * creator keeps the inputs themselves out of it (owner, 2026-11-03), by the input row each was made
+ * from, each with a short-lived signed link unless `signUrls` is false (a run start importing one).
+ *
+ * It reads on from the remix gate (`resolveRemixAccess`), which has settled everything but the
+ * recipe's contents and was the last word on the post, the block and the generation: it read the
+ * recipe on the post and, for a published one, the viewer's purchase, which are not read again. A
+ * retired recipe gates no Remix, so the gate did not ask: its purchase is read here, since a recipe
+ * its seller retired stays its buyers' (as the post's file route keeps signing their files). The
+ * copies come from the versions that route signs a file of for its buyer: the recipe as it stands and
+ * the version they bought, so a later edit takes back nothing they paid for. No reveal is asked of an
+ * NSFW post's buyer, as the buyer library asks none (`entitledPurchase`): a purchase is the entitlement.
+ *
+ * Empty for a viewer who never bought it (a refund deletes the purchase) and for its seller, whose
+ * copies are their own files. Throws when a read fails, so a caller never takes a failure for "no
+ * copies": a remix would turn the inputs into empty slots, a start would answer "not yours".
+ */
+export async function loadGenerationRecipeReferenceCopies(params: {
+  adminSupabase: SupabaseClient;
+  recipe: GenerationReferenceCopyRecipe;
+  generationId: string;
+  viewerUserId: string;
+  /** The creation's saved input rows to find copies of. */
+  inputRowIds: readonly string[];
+  signUrls?: boolean;
+}): Promise<Map<string, GenerationReferenceCopy>> {
+  const { adminSupabase, recipe } = params;
+  if (params.inputRowIds.length === 0 || !recipe.ownerUserId || recipe.ownerUserId === params.viewerUserId) {
+    return new Map();
+  }
+  const purchased = recipe.viewerHasPurchased ?? await readRecipePurchase(adminSupabase, recipe.id, params.viewerUserId);
+  if (!purchased) {
+    return new Map();
+  }
+
+  const { data, error } = await adminSupabase
+    .from('post_resource_bundles')
+    .select('resource_items, resource_sections')
+    .eq('id', recipe.id)
+    .maybeSingle();
+  if (error) {
+    if (isMissingPostResourceBundlesSchemaError(error) || isMissingPostResourceItemsColumnError(error)) return new Map();
+    throw error;
+  }
+  const stored = data as Pick<BundleRow, 'resource_items' | 'resource_sections'> | null;
+  if (!stored) {
+    return new Map();
+  }
+  // The version the buyer bought can hold a copy the recipe no longer does: a failed read of it is no
+  // "nothing more", which would make that copy a slot, or refuse it at Generate for good.
+  const purchasedRevision = await loadPurchasedBundleRevision(adminSupabase, recipe.id, params.viewerUserId, { throwOnError: true });
+  const itemsOf = (row: { resource_items?: unknown; resource_sections?: unknown }) => normalizePostResourceItems(
+    row.resource_items,
+    { sections: normalizePostResourceSections(row.resource_sections) },
+  );
+
+  const filePaths = findGenerationReferenceCopies({
+    items: [...itemsOf(stored), ...(purchasedRevision && !purchasedRevision.is_latest ? itemsOf(purchasedRevision) : [])],
+    // Where the file route signs the recipe's files from: its seller's folder.
+    ownerUserId: recipe.ownerUserId,
+    generationId: params.generationId,
+    inputRowIds: params.inputRowIds,
+  });
+
+  return new Map(await Promise.all([...filePaths].map(async ([rowId, filePath]) => {
+    const storagePath = `${RECIPE_FILES_BUCKET}/${filePath}`;
+    if (params.signUrls === false) {
+      return [rowId, { storagePath, url: null } satisfies GenerationReferenceCopy] as const;
+    }
+    let url: string | null = null;
+    try {
+      const { data: signed, error: signError } = await adminSupabase.storage
+        .from(RECIPE_FILES_BUCKET)
+        .createSignedUrl(filePath, GENERATION_REFERENCE_COPY_URL_TTL_SECONDS);
+      if (signError || !signed?.signedUrl) {
+        logBackendError('post_resource_generation_ref_copy_sign_failed', { error: signError });
+      } else {
+        url = signed.signedUrl;
+      }
+    } catch (signError) {
+      logBackendError('post_resource_generation_ref_copy_sign_failed', { error: signError });
+    }
+    return [rowId, { storagePath, url } satisfies GenerationReferenceCopy] as const;
+  })));
 }
 
 async function buildPriceQuote(
@@ -2659,6 +2890,7 @@ async function loadPurchasedBundleRevision(
   adminSupabase: SupabaseClient,
   bundleId: string,
   buyerUserId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<PurchasedRevisionRow | null> {
   const { data, error } = await adminSupabase.rpc('get_purchased_post_resource_bundle_revision', {
     p_bundle_id: bundleId,
@@ -2668,6 +2900,8 @@ async function loadPurchasedBundleRevision(
   if (error) {
     if (!isMissingPostResourceBundlesSchemaError(error)) {
       logBackendError('post_resource_purchased_revision_load_failed', { error: error });
+      // A reader that would take "no revision" for "nothing more was bought" hears of it.
+      if (options.throwOnError) throw error;
     }
     return null;
   }

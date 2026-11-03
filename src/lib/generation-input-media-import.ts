@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isGuestUser, isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
+import { isRecipeFileInput } from '@/lib/generation-input-origin';
 import { SHOWCASE_MEDIA_BUCKET } from '@/lib/generation-post-media';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
@@ -42,7 +43,8 @@ export interface SharedInputMediaImportDependencies {
   loadGenerationRecipeRemixInputMediaByPostId?: typeof loadGenerationRecipeRemixInputMediaByPostId;
 }
 
-function isAlreadyExistsStorageError(error: { statusCode?: string | number; message?: string; error?: string }): boolean {
+/** Storage's answer to a copy whose destination exists: a retry, or a second remix, reuses the copy made before. */
+export function isAlreadyExistsStorageError(error: { statusCode?: string | number; message?: string; error?: string }): boolean {
   return String(error.statusCode ?? '') === '409'
     || error.error === 'Duplicate'
     || /already exists/i.test(error.message ?? '');
@@ -107,7 +109,7 @@ export async function importSharedGenerationInputMedia(params: {
 
   const mediaRowResult = await adminSupabase
     .from('generation_input_media')
-    .select('id, generation_id, user_id, storage_path')
+    .select('id, generation_id, user_id, storage_path, metadata')
     .eq('storage_path', storagePathKey)
     .limit(1);
   if (mediaRowResult.error) {
@@ -115,7 +117,7 @@ export async function importSharedGenerationInputMedia(params: {
     return { outcome: 'failed' };
   }
   const mediaRow = (mediaRowResult.data ?? [])[0] as
-    | { id: string; generation_id: string; user_id: string; storage_path: string }
+    | { id: string; generation_id: string; user_id: string; storage_path: string; metadata: Record<string, unknown> | null }
     | undefined;
   if (!mediaRow || mediaRow.user_id !== ownerUserId) return { outcome: 'not-eligible' };
 
@@ -138,6 +140,12 @@ export async function importSharedGenerationInputMedia(params: {
   // which keeps those checks in force.
   const ownedByViewer = await isOwnOrLinkedAccountId(adminSupabase, params.viewerUserId, ownerUserId);
   if (!ownedByViewer) {
+    // A file of someone else's recipe the creator's run used through their unlock is theirs to
+    // use, never to hand on (owner, 2026-11-03): no sharing switch and no recipe of theirs covers it.
+    if (isRecipeFileInput({ metadata: mediaRow.metadata }, new Set([mediaRow.user_id]))) {
+      return { outcome: 'not-eligible' };
+    }
+
     // Mirrors the remix gate's block check, which asks about the post's owner
     // (for a guest's creation, the account, not the guest id in the path): a
     // check that errors open is not a gate.

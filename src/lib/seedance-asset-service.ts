@@ -16,6 +16,7 @@ import {
   fetchWithProviderTimeout,
   PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
+import { reuseRecipeFile as defaultReuseRecipeFile } from '@/lib/generation-reference-copy-import';
 import { resolveOwnedStoredMediaUrl as defaultResolveStoredMediaUrl } from '@/lib/server-helpers';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 
@@ -197,6 +198,7 @@ export async function createSeedanceAssetForRoute({
   body,
   fetcher = fetch,
   resolveStoredMediaUrl = defaultResolveStoredMediaUrl,
+  reuseRecipeFile = defaultReuseRecipeFile,
   userId,
 }: {
   adminSupabase: SupabaseClient;
@@ -204,6 +206,7 @@ export async function createSeedanceAssetForRoute({
   body: SeedanceAssetRouteBody;
   fetcher?: typeof fetch;
   resolveStoredMediaUrl?: ResolveStoredMediaUrl;
+  reuseRecipeFile?: (params: { source: string; viewerUserId: string }) => ReturnType<typeof defaultReuseRecipeFile>;
   userId: string;
 }): Promise<SeedanceAssetRouteResult> {
   const normalizedAssetType = normalizeAssetType(body.assetType);
@@ -232,14 +235,25 @@ export async function createSeedanceAssetForRoute({
   }
 
   try {
-    if (!getUserOwnedStoredMediaLocation(normalizedUrl, userId)) {
+    // A recipe file (a bought recipe's copy, the buyer's import of one, or a kept input of theirs marked
+    // as one) is prepared only while the unlock still covers it, and from the buyer's own import of the
+    // copy, so the asset is theirs (2026-11-03 re-review): a picture of a person restored from a recipe
+    // runs on Seedance 2 only as a prepared asset. No remix of the buyer's creation is handed it.
+    const recipeFile = await reuseRecipeFile({ source: normalizedUrl, viewerUserId: userId });
+    if (recipeFile?.outcome === 'failed') {
+      return { ok: false, status: 500, body: { error: 'We could not prepare a file from a recipe you unlocked. Please try again.' } };
+    }
+    if (recipeFile?.outcome === 'not-eligible') {
+      return { ok: false, status: 400, body: { error: 'Asset media must belong to the authenticated user.' } };
+    }
+    if (!recipeFile && !getUserOwnedStoredMediaLocation(normalizedUrl, userId)) {
       return {
         ok: false,
         status: 400,
         body: { error: 'Asset media must belong to the authenticated user.' },
       };
     }
-    const resolvedUrl = await resolveStoredMediaUrl(adminSupabase, normalizedUrl, userId);
+    const resolvedUrl = recipeFile ? recipeFile.signedUrl : await resolveStoredMediaUrl(adminSupabase, normalizedUrl, userId);
     if (!resolvedUrl) {
       return {
         ok: false,

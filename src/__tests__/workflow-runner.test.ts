@@ -551,7 +551,7 @@ const STEP_START_SERVICES: Record<WorkflowNodeKind, StepStartService | null> = {
 };
 
 /** One node of the kind as the canvas makes it, with the inputs it needs to start. */
-function createSingleStepGraph(kind: WorkflowNodeKind) {
+function createSingleStepGraph(kind: WorkflowNodeKind, characterUrl = 'https://cdn.example.com/character.png') {
   const step = createWorkflowNode(kind, { x: 320, y: 40 });
   const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
   const character = createWorkflowNode('image-input', { x: 40, y: 240 });
@@ -561,7 +561,7 @@ function createSingleStepGraph(kind: WorkflowNodeKind) {
         nodes: [
           {
             ...character,
-            data: { ...(character.data as ImageInputNodeData), imageUrl: 'https://cdn.example.com/character.png' },
+            data: { ...(character.data as ImageInputNodeData), imageUrl: characterUrl },
           },
           {
             ...performance,
@@ -659,12 +659,15 @@ describe('workflow-runner recovery', () => {
   });
 
   describe('a motion step', () => {
-    async function runMotionStep(templateContext?: { runId: string; stepId: string; templateId?: string; templateVersionId?: string | null }) {
+    async function runMotionStep(
+      templateContext?: { runId: string; stepId: string; templateId?: string; templateVersionId?: string | null },
+      characterUrl?: string,
+    ) {
       const services = await import('@/lib/generation-services');
       vi.mocked(services.startMotionGeneration).mockResolvedValue({
         predictionId: 'pred-motion', remainingCredits: 40, cost: 88, generationId: 'gen-motion',
       });
-      const { graph, node } = createSingleStepGraph('motion-generate');
+      const { graph, node } = createSingleStepGraph('motion-generate', characterUrl);
       const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
       const result = await executeWorkflowRunnableNode({
         supabase: { role: 'runner' } as never,
@@ -687,7 +690,7 @@ describe('workflow-runner recovery', () => {
         { role: 'runner' },
         'https://cdn.example.com/reference.mp4',
         'user-1',
-        {},
+        { recipeCopyReads: expect.any(Map) },
       );
       expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith('https://cdn.example.com/reference.mp4');
       expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -720,6 +723,45 @@ describe('workflow-runner recovery', () => {
       expect(startMotionGeneration).not.toHaveBeenCalled();
     });
 
+    // A step's motion start sends its inputs as given (2026-11-03 re-review): a character restored from
+    // a recipe's copy reached the provider with no unlock read, and the clip measured was not the link sent.
+    it('imports a character that may be a recipe file, and starts on the links it resolved', async () => {
+      const copy = 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png?token=old';
+      const imported = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-character-image-row-1.png?token=fresh';
+      const measured = 'https://signed.example.com/reference.mp4?token=measured';
+      resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => (
+        url === copy ? imported : url === 'https://cdn.example.com/reference.mp4' ? measured : url
+      ));
+
+      const { startMotionGeneration } = await runMotionStep(undefined, copy);
+
+      expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith({ role: 'runner' }, copy, 'user-1', expect.objectContaining({ recipeCopyReads: expect.any(Map) }));
+      expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: imported, referenceVideoUrl: measured }));
+      resolveGenerationMediaSourceMock.mockReset().mockImplementation(async (_client: unknown, url: string) => (
+        url.startsWith('https://') ? url : `https://signed.example.com/${encodeURIComponent(url)}`
+      ));
+    });
+
+    it('refuses the step when a recipe file’s unlock is gone, before anything is quoted', async () => {
+      const copy = 'post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png';
+      resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => {
+        if (url === copy) throw new Error('Media references must belong to the authenticated user.');
+        return url;
+      });
+
+      await expect(runMotionStep(undefined, copy)).rejects.toThrow('Media references must belong to the authenticated user.');
+      resolveGenerationMediaSourceMock.mockReset().mockImplementation(async (_client: unknown, url: string) => (
+        url.startsWith('https://') ? url : `https://signed.example.com/${encodeURIComponent(url)}`
+      ));
+    });
+
+    it('sends a character that can be no recipe file as it was given', async () => {
+      const { startMotionGeneration } = await runMotionStep();
+
+      expect(resolveGenerationMediaSourceMock.mock.calls.map(([, url]) => url)).toEqual(['https://cdn.example.com/reference.mp4']);
+      expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: 'https://cdn.example.com/character.png' }));
+    });
+
     it('reads a template run’s clip within that template’s assets', async () => {
       await runMotionStep({ runId: 'run-1', stepId: 'step-1', templateId: 'template-1', templateVersionId: 'version-1' });
 
@@ -727,7 +769,7 @@ describe('workflow-runner recovery', () => {
         { role: 'runner' },
         'https://cdn.example.com/reference.mp4',
         'user-1',
-        { templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' } },
+        { templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' }, recipeCopyReads: expect.any(Map) },
       );
     });
   });

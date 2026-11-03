@@ -4,8 +4,9 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, Play, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, Play, RefreshCw, SlidersHorizontal, Sparkles, SquareDashed, X } from 'lucide-react';
 import clsx from 'clsx';
+import { REMIX_INPUT_SLOTS_NOTICE_LABEL } from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
 import {
   getAccentClasses,
@@ -301,6 +302,24 @@ export function StudioRemixNotice({
       label={label}
       description={description}
       action={action}
+    />
+  );
+}
+
+/**
+ * What a remix's empty boxes are (`remixInputSlotsNotice`): the inputs its creator kept to themselves,
+ * waiting for the remixer's own. A card of its own beside the remix's notice, as the app's banner is,
+ * so the remixer can put it away for the rest of the remix (2026-11-03), when a box nobody mentions
+ * is to stay empty; the remix's own notice, with the original and Use as reference, stays.
+ */
+export function StudioRemixSlotsNotice({ description, onDismiss }: { description: string; onDismiss: () => void }) {
+  return (
+    <StudioNoticeCard
+      icon={SquareDashed}
+      label={REMIX_INPUT_SLOTS_NOTICE_LABEL}
+      description={description}
+      onDismiss={onDismiss}
+      dismissLabel="Dismiss remix source notice"
     />
   );
 }

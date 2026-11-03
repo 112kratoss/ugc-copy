@@ -1,6 +1,7 @@
 import { isValidElementHandle, type ImageElementDescriptor } from '@/lib/image-elements';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import type { RemixInputSlot } from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
 type RemixResultMediaType = 'image' | 'video';
 export type RemixAssetKind = 'image' | 'video' | 'audio';
@@ -77,6 +78,12 @@ export interface RemixSourceBundle {
   };
   /** The owner's remix only: the kept rows, with where each input was staged. */
   inputMedia?: GenerationInputMediaItem[];
+  /**
+   * The inputs this remix is not given, as empty slots for the remixer's own
+   * (`ugc-mobile/lib/remix-input-slots`): absent for the owner and wherever
+   * every input is restored. Not restore failures, so never in `restoreIssues`.
+   */
+  inputSlots?: RemixInputSlot[];
   workflowSettings: Record<string, unknown>;
   restoreIssues: string[];
 }
