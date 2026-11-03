@@ -87,6 +87,12 @@ function SwiftUIMenu({ accessibilityHint, accessibilityLabel, model, style, trig
     <View style={style}>
       <Host
         colorScheme={scheme}
+        // The button lies where React Native puts it; the screen's safe area is
+        // already in that. Left to the hosting controller, a ••• laid out below
+        // a list's fold took the home indicator's 34 pt inset and kept it once
+        // scrolled up: centred in what was left, it sat 17 pt above its row on
+        // every card that scrolled in (iPhone 17 Pro simulator, 2026-11-03).
+        ignoreSafeArea="all"
         style={{ width: trigger.width + slop * 2, height: trigger.height + slop * 2, margin: -slop }}
       >
         <Menu

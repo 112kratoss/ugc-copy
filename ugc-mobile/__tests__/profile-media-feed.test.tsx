@@ -159,8 +159,11 @@ vi.mock('@/lib/post-lifecycle', () => ({
   toPostLifecyclePost: (post: unknown) => post,
 }));
 vi.mock('@/lib/profile-feed-card-view-model', () => ({
+  FEED_LANDING_SPINNER_DELAY_MS: 600,
   INITIAL_FEED_LANDING: { phase: 'idle', targetIndex: -1 },
   buildProfileFeedCards: (items: Array<{ id: string }>) => items.map((item) => ({ id: item.id, item })),
+  feedLandingScrollArrived: () => false,
+  initialFeedLanding: () => ({ phase: 'idle', targetIndex: -1 }),
   reduceFeedLanding: (state: unknown) => state,
   shouldScrollToFeedTarget: () => false,
 }));

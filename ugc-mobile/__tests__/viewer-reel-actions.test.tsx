@@ -178,7 +178,7 @@ vi.mock('@/components/apple-zoom', () => ({
   useAppleZoomRetarget: () => undefined,
   useAppleZoomSourceId: () => null,
 }));
-vi.mock('@/components/apple-zoom-progress', () => ({ AppleZoomProgress: nothing }));
+vi.mock('@/components/apple-zoom-progress', () => ({ AppleZoomProgress: nothing, AppleZoomTopControlsCue: nothing }));
 vi.mock('@/components/app-scheme-scope', () => ({ AppSchemeScope: passThrough }));
 vi.mock('@/components/audio-creation-player', () => ({ AudioCreationPlayer: nothing }));
 vi.mock('@/components/comments-sheet', () => ({ CommentsSheet: nothing }));

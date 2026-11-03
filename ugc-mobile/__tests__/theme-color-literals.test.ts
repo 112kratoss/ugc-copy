@@ -93,7 +93,7 @@ describe('light mode — theme colours adopted by ratchet', () => {
 
   it('keeps every surface that stays dark inside a dark scope', () => {
     const read = (relative: string) => readFileSync(path.join(mobileRoot, relative), 'utf8');
-    expect(read('app/viewer.tsx')).toMatch(/<ThemeScope scheme="dark">[\s\S]*<ImmersivePreviewViewer \/>/);
+    expect(read('app/viewer.tsx')).toMatch(/<ThemeScope scheme="dark">[\s\S]*<ImmersivePreviewViewer\b[^>]*\/>/);
     expect(read('app/onboarding.tsx')).toMatch(/<ThemeScope scheme="dark">[\s\S]*<OnboardingFlow \/>/);
     expect(read('components/media-lightbox.tsx')).toMatch(/<ThemeScope scheme="dark">[\s\S]*<MediaLightboxContent/);
     expect(read('app/_layout.tsx')).toMatch(/<ThemeScope scheme="dark">\s*<MediaZoomFlightLayer/);

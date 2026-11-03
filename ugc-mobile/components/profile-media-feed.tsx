@@ -41,8 +41,10 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import {
-  INITIAL_FEED_LANDING,
+  FEED_LANDING_SPINNER_DELAY_MS,
   buildProfileFeedCards,
+  feedLandingScrollArrived,
+  initialFeedLanding,
   reduceFeedLanding,
   shouldScrollToFeedTarget,
   type ProfileFeedCard,
@@ -239,13 +241,16 @@ export function ProfileMediaFeedScreen() {
    * another card. Scrolling rather than reordering keeps the cards above it
    * reachable.
    */
-  const [landing, dispatchLanding] = useReducer(reduceFeedLanding, INITIAL_FEED_LANDING);
+  const targetIndex = initialId ? cards.findIndex((card) => card.id === initialId) : -1;
+  const [landing, dispatchLanding] = useReducer(reduceFeedLanding, targetIndex, initialFeedLanding);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [listReady, setListReady] = useState(false);
   const landingSeekingRef = useRef(false);
   const landingScrollInFlightRef = useRef(false);
+  /** The index the landing scroll in flight is taking the list to. */
+  const landingScrollIndexRef = useRef<number | null>(null);
   const landingTargetVisibleRef = useRef(false);
-  const targetIndex = initialId ? cards.findIndex((card) => card.id === initialId) : -1;
+  const [landingSpinnerDue, setLandingSpinnerDue] = useState(false);
 
   useEffect(() => {
     landingSeekingRef.current = landing.phase === 'seeking';
@@ -268,6 +273,7 @@ export function ProfileMediaFeedScreen() {
     if (!list || landingScrollInFlightRef.current) return;
     const index = landing.targetIndex;
     landingScrollInFlightRef.current = true;
+    landingScrollIndexRef.current = index;
     void list.scrollToIndex({ index, animated: false, viewPosition: 0 })
       .then(() => {
         const visible = list.computeVisibleIndices();
@@ -280,13 +286,43 @@ export function ProfileMediaFeedScreen() {
       })
       .finally(() => {
         landingScrollInFlightRef.current = false;
+        landingScrollIndexRef.current = null;
       });
   }, [cards.length, landing, layoutRevision, listReady]);
+
+  // The landing scroll's one native move: the feed shows from it rather than
+  // from the promise, which resolves 200 ms later (`feedLandingScrollArrived`).
+  // iOS only until it has been watched on Android, where cards overlapped as a
+  // jump settled (docs/audits/creations-feed-landing-fix-2026-09-16.md); the
+  // promise is what was checked there.
+  const noteLandingScroll = useCallback((nativeOffset: number) => {
+    const index = landingScrollIndexRef.current;
+    const list = listRef.current;
+    if (index === null || !list || !landingSeekingRef.current) return;
+    const layout = list.getLayout(index);
+    if (!layout || !feedLandingScrollArrived(nativeOffset, layout.y + list.getFirstItemOffset())) return;
+    const visible = list.computeVisibleIndices();
+    dispatchLanding({
+      type: 'scroll-complete',
+      index,
+      targetVisible: index >= visible.startIndex && index <= visible.endIndex,
+    });
+  }, []);
 
   useEffect(() => {
     if (landing.phase !== 'seeking') return;
     const timer = setInterval(() => dispatchLanding({ type: 'tick', now: Date.now() }), LANDING_TICK_MS);
     return () => clearInterval(timer);
+  }, [landing.phase]);
+
+  // A spinner only for a landing that is taking a while (`FEED_LANDING_SPINNER_DELAY_MS`).
+  useEffect(() => {
+    if (landing.phase !== 'seeking') return undefined;
+    const timer = setTimeout(() => setLandingSpinnerDue(true), FEED_LANDING_SPINNER_DELAY_MS);
+    return () => {
+      clearTimeout(timer);
+      setLandingSpinnerDue(false);
+    };
   }, [landing.phase]);
 
   useEffect(() => {
@@ -603,6 +639,7 @@ export function ProfileMediaFeedScreen() {
           acknowledgeListLayout();
         }}
         onContentSizeChange={acknowledgeListLayout}
+        onScroll={Platform.OS === 'ios' ? (event) => noteLandingScroll(event.nativeEvent.contentOffset.y) : undefined}
         onScrollBeginDrag={() => {
           // The reader's own scroll outranks the landing: never yank them back.
           dispatchLanding({ type: 'reader-scrolled' });
@@ -654,7 +691,7 @@ export function ProfileMediaFeedScreen() {
           />
         )}
       />
-      {landing.phase === 'seeking' ? (
+      {landing.phase === 'seeking' && landingSpinnerDue ? (
         <View
           pointerEvents="none"
           style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}
