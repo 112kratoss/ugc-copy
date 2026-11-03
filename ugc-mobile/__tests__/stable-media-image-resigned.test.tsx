@@ -19,9 +19,16 @@ vi.mock('@/lib/use-stable-signed-url', async (importOriginal) => {
 vi.mock('@/components/recoverable-video-preview', () => ({
   RecoverableVideoPreview: (props: MockProps) => React.createElement('video-preview', props),
 }));
+const appState = vi.hoisted(() => ({ current: 'active', listeners: new Set<(state: string) => void>() }));
 vi.mock('react-native', () => ({
   Platform: { OS: 'android' },
-  AppState: { currentState: 'active', addEventListener: () => ({ remove: () => undefined }) },
+  AppState: {
+    get currentState() { return appState.current; },
+    addEventListener: (_type: string, listener: (state: string) => void) => {
+      appState.listeners.add(listener);
+      return { remove: () => appState.listeners.delete(listener) };
+    },
+  },
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -51,6 +58,11 @@ function signed(file: string, endsAt: number, signature = `sig-${endsAt}`) {
     signature,
   ].join('.');
   return `${STORAGE}/storage/v1/object/sign/generated_images/user-1/${file}?token=${token}`;
+}
+
+function setAppState(state: string) {
+  appState.current = state;
+  appState.listeners.forEach((listener) => listener(state));
 }
 
 /** The native image the session draws: one with a source, not the failure plate's thumbhash. */
@@ -119,6 +131,23 @@ describe('StableMediaImage given a new signature of the file it draws', () => {
     expect(picture(tree)!.props.source.uri).toBe(HELD);
 
     renderer.act(() => { vi.advanceTimersByTime(1); });
+    expect(picture(tree)!.props.source.uri).toBe(LATER);
+    expect(picture(tree)).toBe(before);
+  });
+
+  // Android times the wait by a clock that stops while the phone sleeps
+  // (`JavaTimerManager`): the app comes back with the wait not yet over.
+  it('takes the newer signature as the app comes back after a sleep past the minute before the end', () => {
+    const tree = mount(<StableMediaImage url={HELD} cacheKey="k" />);
+    const before = picture(tree)!;
+    renderer.act(() => { tree.update(<StableMediaImage url={LATER} cacheKey="k" />); });
+
+    renderer.act(() => setAppState('background'));
+    // Fifty seconds left of the address drawn: past the minute, short of the route's 30 s.
+    vi.setSystemTime(T0 + 59 * MINUTE_MS + 10_000);
+    renderer.act(() => setAppState('active'));
+    renderer.act(() => { vi.advanceTimersByTime(0); });
+
     expect(picture(tree)!.props.source.uri).toBe(LATER);
     expect(picture(tree)).toBe(before);
   });

@@ -12,6 +12,9 @@ const loads = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth', () => ({ useAuth: () => auth }));
 vi.mock('@/lib/env', () => ({ env: { apiBaseUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co' } }));
+vi.mock('react-native', () => ({
+  AppState: { currentState: 'active', addEventListener: () => ({ remove: () => undefined }) },
+}));
 vi.mock('expo-image', () => ({
   Image: {
     loadAsync: (source: { uri: string; cacheKey?: string; headers?: Record<string, string> }) => {

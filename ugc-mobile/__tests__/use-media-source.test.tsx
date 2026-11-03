@@ -5,7 +5,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const auth = vi.hoisted(() => ({ session: { access_token: 'first-session', expires_at: 10, user: { id: 'owner' } } }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => auth }));
 vi.mock('@/lib/env', () => ({ env: { apiBaseUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co' } }));
+const appState = vi.hoisted(() => ({ current: 'active', listeners: new Set<(state: string) => void>() }));
+vi.mock('react-native', () => ({
+  AppState: {
+    get currentState() { return appState.current; },
+    addEventListener: (_type: string, listener: (state: string) => void) => {
+      appState.listeners.add(listener);
+      return { remove: () => appState.listeners.delete(listener) };
+    },
+  },
+}));
 import { useMediaSource } from '../lib/use-media-source';
+
+function setAppState(state: string) {
+  appState.current = state;
+  appState.listeners.forEach((listener) => listener(state));
+}
 
 describe('media source session renewal', () => {
   afterEach(() => vi.useRealTimers());
@@ -25,6 +40,31 @@ describe('media source session renewal', () => {
     renderer.act(() => { vi.advanceTimersByTime(expiresAt - 30_000 - 2_147_483_647); });
     expect(new URL(result!.source.uri).pathname).toBe('/api/media');
     renderer.act(() => tree.unmount());
+  });
+
+  // Android times a wait by a clock that stops while the phone sleeps
+  // (`JavaTimerManager`): back from a sleep past the address's end, no timer has
+  // fired yet, and the wall clock is all that says the address has ended.
+  it('moves to the route as the app comes back after a sleep that outlasted the address', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const token = `head.${Buffer.from(JSON.stringify({ exp: 3600 })).toString('base64url')}.signature`;
+    const url = `https://project.supabase.co/storage/v1/object/sign/generated_images/owner/slept.webp?token=${token}`;
+    let result: ReturnType<typeof useMediaSource>;
+    function Probe() { result = useMediaSource(url); return null; }
+    let tree: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(<Probe />); });
+    expect(result!.source.uri).toBe(url);
+
+    renderer.act(() => setAppState('background'));
+    // The phone sleeps for two hours: the wall clock moves, the timers do not.
+    vi.setSystemTime(2 * 60 * 60 * 1000);
+    renderer.act(() => setAppState('active'));
+    renderer.act(() => { vi.advanceTimersByTime(0); });
+
+    expect(new URL(result!.source.uri).pathname).toBe('/api/media');
+    renderer.act(() => tree.unmount());
+    expect(appState.listeners.size).toBe(0);
   });
 
   it('recovers a mounted signed URL at expiry without a library refetch', () => {

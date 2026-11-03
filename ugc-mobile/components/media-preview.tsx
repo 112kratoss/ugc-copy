@@ -20,7 +20,8 @@ import {
   type MediaRecoverySlot,
 } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
-import { ADOPT_WITHIN_MS, shouldAdoptSignedUrl, signedMediaIdentity } from '@/lib/use-stable-signed-url';
+import { ADOPT_WITHIN_MS, signedMediaIdentity } from '@/lib/use-stable-signed-url';
+import { whenClockReaches } from '@/lib/wall-clock-timer';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
@@ -189,8 +190,6 @@ export function StableMediaImage(props: StableMediaImageProps) {
 const NO_PROGRESS = { attemptKey: '', progressed: false, loaded: false };
 /** The silent retries of a latched stall: how many so far, whether one is loading now, and when the plate went up. */
 const NO_AUTO_RETRY = { sourceId: '', count: 0, loading: false, latchedAt: 0 };
-/** setTimeout's longest wait; a longer one fires at once. */
-const MAX_TIMER_MS = 2_147_483_647;
 
 function StableMediaImageSession({
   // The parent's address for this file now, which a read of its list may have
@@ -264,18 +263,12 @@ function StableMediaImageSession({
     return drawn && offered && offered.expiresAt > drawn.expiresAt ? parentUrl : null;
   }, [parentUrl, url]);
   if (laterSigning && latched && !renewing) setUrl(laterSigning);
-  const [lifeCheck, setLifeCheck] = useState(0);
   useEffect(() => {
     if (!laterSigning || renewing) return undefined;
     const drawn = getPrivateMediaExpiry(url, env.supabaseUrl);
     if (!drawn) return undefined;
-    const timer = setTimeout(() => {
-      if (shouldAdoptSignedUrl(url, laterSigning, Date.now(), env.supabaseUrl)) setUrl(laterSigning);
-      // A wait longer than setTimeout's longest fired early: wait for the rest.
-      else setLifeCheck((check) => check + 1);
-    }, Math.min(MAX_TIMER_MS, Math.max(0, drawn.expiresAt - ADOPT_WITHIN_MS - Date.now())));
-    return () => clearTimeout(timer);
-  }, [laterSigning, lifeCheck, renewing, url]);
+    return whenClockReaches(drawn.expiresAt - ADOPT_WITHIN_MS, () => setUrl(laterSigning));
+  }, [laterSigning, renewing, url]);
 
   // The zoom looks a picture's decoded shape up by the parent's address
   // (`useDecodedImageAspectRatio`): a newer address for a picture already
