@@ -42,6 +42,7 @@ const state = vi.hoisted(() => {
         },
       }),
       removeQueries: vi.fn(),
+      invalidateQueries: vi.fn(() => Promise.resolve()),
     },
     replace: vi.fn(),
     // The device keychain, as expo-secure-store holds it.
@@ -1297,7 +1298,7 @@ describe("a guest's deletion and the tickets on this phone (D5)", () => {
 // read in the last minute then showed the account Follow for a creator it
 // follows, and the reel's Follow pill took its answer from those pages.
 describe('the creator pages read before a sign-in', () => {
-  type RemoveQueriesFilter = { predicate: (query: { queryKey: readonly unknown[] }) => boolean };
+  type RemoveQueriesFilter = { predicate: (query: { queryKey: readonly unknown[] }) => boolean; type?: string };
 
   const signIns = {
     password: (session: ReturnType<typeof sessionFor>) => {
@@ -1336,11 +1337,15 @@ describe('the creator pages read before a sign-in', () => {
       // One removal, by the first key part, as a sign-out makes it: every
       // handle's grid and every creator's follow state, and nothing else.
       expect(state.queryClient.removeQueries).toHaveBeenCalledOnce();
-      const [{ predicate }] = state.queryClient.removeQueries.mock.calls[0] as [RemoveQueriesFilter];
+      const [{ predicate, type }] = state.queryClient.removeQueries.mock.calls[0] as [RemoveQueriesFilter];
       expect(predicate({ queryKey: ['creator-profile', 'infinite', 'luna'] })).toBe(true);
       expect(predicate({ queryKey: ['creator-follow-state', 'creator-7'] })).toBe(true);
       expect(predicate({ queryKey: ['profile', 'account-a'] })).toBe(false);
       expect(predicate({ queryKey: ['showcase-feed', 'infinite', 'account-a'] })).toBe(false);
+      // A grid a reel on screen reads is kept and read again as the account:
+      // removed, it emptied the reel the guest signed in from.
+      expect(type).toBe('inactive');
+      expect(state.queryClient.invalidateQueries).toHaveBeenCalledWith({ predicate, type: 'active' });
       unmount();
     },
   );
