@@ -23,6 +23,7 @@ const contentPreferences = vi.hoisted(() => ({
   options: null as null | { queryKey: unknown; enabled: boolean; queryFn: unknown },
 }));
 
+vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 vi.mock('@tanstack/react-query', () => ({
   useQuery: (options: { queryKey: unknown; enabled: boolean; queryFn: unknown }) => {
     contentPreferences.options = options;
@@ -50,6 +51,7 @@ vi.mock('react-native', () => ({
   },
   Pressable: ({ children, style: _style, ...props }: MockProps & { style?: unknown }) =>
     React.createElement('pressable', props, typeof children === 'function' ? (children as (s: { pressed: boolean }) => React.ReactNode)({ pressed: false }) : children),
+  Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
@@ -73,12 +75,17 @@ vi.mock('lucide-react-native', () => {
   };
 });
 
-vi.mock('@/components/ui', () => ({
-  AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
-  Card: ({ children, ...props }: MockProps) => React.createElement('card', props, children),
-  Screen: ({ children, ...props }: MockProps) => React.createElement('screen', props, children),
-  SectionTitle: (props: MockProps) => React.createElement('section-title', props),
-}));
+vi.mock('@/components/ui', async (importOriginal) => {
+  // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return {
+    ...actual,
+    AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
+    Card: ({ children, ...props }: MockProps) => React.createElement('card', props, children),
+    Screen: ({ children, ...props }: MockProps) => React.createElement('screen', props, children),
+    SectionTitle: (props: MockProps) => React.createElement('section-title', props),
+  };
+});
 
 vi.mock('@/components/onboarding-resume-card', () => ({
   OnboardingResumeCard: (props: MockProps) => React.createElement('onboarding-resume-card', props),
@@ -88,7 +95,8 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
-vi.mock('@/lib/pricing', () => ({
+vi.mock('@/lib/pricing', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/pricing')>(),
   CREDIT_BALANCE_LOADING_LABEL: 'Balance loading…',
   formatCreditAmount: (amount: number) => String(amount),
 }));

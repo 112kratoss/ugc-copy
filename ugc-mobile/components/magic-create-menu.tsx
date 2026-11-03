@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
+import { IconButton } from '@/components/ui';
 import { CREATE_MENU_ACTIONS, type CreateMenuAction, type CreateMenuActionId } from '@/lib/create-menu-view-model';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { useReducedMotion } from '@/lib/motion';
@@ -212,28 +213,7 @@ export function MagicCreateMenu({
 }
 
 function CloseMenuButton({ onPress }: { onPress: () => void }) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="Close create menu"
-      onPress={onPress}
-      hitSlop={4}
-      style={({ pressed }) => ({
-        width: 48,
-        height: 48,
-        borderRadius: appTheme.radii.pill,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
-    >
-      <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-    </Pressable>
-  );
+  return <IconButton icon={CloseGlyph} label="Close create menu" onPress={onPress} />;
 }
 
 function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction; width: number; onPress: () => void }) {

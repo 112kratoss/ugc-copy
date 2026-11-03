@@ -137,7 +137,10 @@ vi.mock('react-native', () => ({
   useWindowDimensions: () => ({ width: 390, height: 844 }),
 }));
 
-vi.mock('@/lib/motion', () => ({ useReducedMotion: () => false }));
+vi.mock('@/lib/motion', async (importOriginal) => ({
+  usePressMotion: (await importOriginal<typeof import('@/lib/motion')>()).usePressMotion,
+  useReducedMotion: () => false,
+}));
 vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }),
 }));
@@ -148,10 +151,15 @@ vi.mock('lucide-react-native', () => ({
   MoreHorizontal: (props: MockProps) => React.createElement('icon-more', props),
   SendHorizontal: (props: MockProps) => React.createElement('icon-send', props),
 }));
-vi.mock('@/components/ui', () => ({
-  CreatorAvatar: (props: MockProps) => React.createElement('avatar', props),
-  StatusBlock: (props: MockProps) => React.createElement('status-block', props),
-}));
+vi.mock('@/components/ui', async (importOriginal) => {
+  // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return {
+    ...actual,
+    CreatorAvatar: (props: MockProps) => React.createElement('avatar', props),
+    StatusBlock: (props: MockProps) => React.createElement('status-block', props),
+  };
+});
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({
     api: {
@@ -1013,14 +1021,14 @@ describe('comment order', () => {
     listPostComments.mockResolvedValue(page([comment()]));
     const tree = renderSheet();
 
-    expect(pressable(tree.root, 'Top').props.accessibilityState).toEqual({ selected: true });
-    expect(pressable(tree.root, 'New').props.accessibilityState).toEqual({ selected: false });
+    expect(pressable(tree.root, 'Top').props.accessibilityState).toMatchObject({ selected: true });
+    expect(pressable(tree.root, 'New').props.accessibilityState).toMatchObject({ selected: false });
     expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'top', 'viewer-1']);
 
     pickOrder(tree.root, 'New');
 
-    expect(pressable(tree.root, 'Top').props.accessibilityState).toEqual({ selected: false });
-    expect(pressable(tree.root, 'New').props.accessibilityState).toEqual({ selected: true });
+    expect(pressable(tree.root, 'Top').props.accessibilityState).toMatchObject({ selected: false });
+    expect(pressable(tree.root, 'New').props.accessibilityState).toMatchObject({ selected: true });
     expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'newest', 'viewer-1']);
     await threadQuery().queryFn({ pageParam: 0 });
     expect(listPostComments).toHaveBeenLastCalledWith('post-1', { limit: 20, offset: 0, sort: 'newest' });
@@ -1089,7 +1097,7 @@ describe('comment order', () => {
       tree.update(sheetElement({ postId: 'post-2' }));
     });
 
-    expect(pressable(tree.root, 'Top').props.accessibilityState).toEqual({ selected: true });
+    expect(pressable(tree.root, 'Top').props.accessibilityState).toMatchObject({ selected: true });
     const asked = queryOptions.mock.calls
       .map(([options]) => (options as ThreadQueryOptions).queryKey)
       .filter((key) => key[0] === 'post-comments');
@@ -1103,7 +1111,7 @@ describe('comment order', () => {
 
     pickOrder(tree.root, 'New');
 
-    expect(pressable(tree.root, 'New').props.accessibilityState).toEqual({ selected: true });
+    expect(pressable(tree.root, 'New').props.accessibilityState).toMatchObject({ selected: true });
     expect(threadQuery().queryKey).toEqual(['post-comments', 'post-1', 'newest', 'viewer-1']);
     expect(listScrollToOffset).not.toHaveBeenCalled();
   });

@@ -49,6 +49,7 @@ function applyCredits(credits: number | null, options?: { marketplaceSpendableCr
   }
 }
 
+vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 vi.mock('expo-haptics', () => hapticsState);
 
 vi.mock('expo-router', () => ({

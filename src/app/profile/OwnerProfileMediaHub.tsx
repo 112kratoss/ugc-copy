@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Ban,
   ChevronRight,
@@ -23,6 +23,7 @@ import {
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 
 import { useAuth } from '@/components/AuthProvider';
+import { SegmentedControl } from '@/components/DesignSystem';
 import { HoverVideo } from '@/components/HoverVideo';
 import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import ProfileShareButton from '@/components/ProfileShareButton';
@@ -507,21 +508,6 @@ export default function OwnerProfileMediaHub({
     updateLocation({ tab, postId: null }, 'push');
   };
 
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, tab: ProfileMediaTab) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    const tabOrder: ProfileMediaTab[] = ['posts', 'saved'];
-    const currentIndex = tabOrder.indexOf(tab);
-    const nextIndex = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? tabOrder.length - 1
-        : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + tabOrder.length) % tabOrder.length;
-    const nextTab = tabOrder[nextIndex];
-    selectTab(nextTab);
-    document.getElementById(`profile-tab-${nextTab}`)?.focus();
-  };
-
   const openPost = (item: ShowcaseFeedItem) => {
     reelHistoryModeRef.current = 'pushed';
     setSelectedMediaIndex(0);
@@ -629,8 +615,8 @@ export default function OwnerProfileMediaHub({
   const activeSaveState = activeTab === 'saved' ? savedSaveState : postSaveState;
   const activePageInfo = activeTab === 'saved' ? savedPageInfo : postsPageInfo;
   const tabs = [
-    { id: 'posts' as const, label: 'Posts', count: stats?.posts ?? null, icon: Layers3 },
-    { id: 'saved' as const, label: 'Saved', count: savedTotal, icon: Heart },
+    { id: 'posts' as const, label: 'Posts', count: stats?.posts ?? null },
+    { id: 'saved' as const, label: 'Saved', count: savedTotal },
   ];
 
   const loadMore = async () => {
@@ -784,33 +770,21 @@ export default function OwnerProfileMediaHub({
           </p>
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-2 rounded-full border border-white/8 bg-black/25 p-1" role="tablist" aria-label="Profile media">
-          {tabs.map((tab) => {
-            const Icon = tab.icon;
-            const selected = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                id={`profile-tab-${tab.id}`}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={`profile-panel-${tab.id}`}
-                aria-label={tab.count === null ? tab.label : `${tab.label} ${tab.count}`}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => selectTab(tab.id)}
-                onKeyDown={(event) => handleTabKeyDown(event, tab.id)}
-                className={`ui-focus-ring inline-flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-full px-2 text-xs font-semibold transition sm:gap-2 sm:px-4 sm:text-sm ${selected
-                  ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-[0_8px_24px_rgba(255,122,89,0.18)]'
-                  : 'text-zinc-400 hover:bg-white/[0.06] hover:text-white'}`}
-              >
-                <Icon className="hidden h-4 w-4 shrink-0 sm:block" aria-hidden />
-                <span className="truncate">{tab.label}</span>
-                <span className={`hidden rounded-full px-2 py-0.5 text-xs sm:inline ${selected ? 'bg-black/20' : 'bg-black/25 text-zinc-500'}`}>{tab.count ?? '—'}</span>
-              </button>
-            );
-          })}
-        </div>
+        <SegmentedControl
+          role="tab"
+          ariaLabel="Profile media"
+          options={tabs.map((tab) => ({
+            value: tab.id,
+            label: tab.label,
+            count: tab.count ?? '—',
+            ariaLabel: tab.count === null ? tab.label : `${tab.label} ${tab.count}`,
+            id: `profile-tab-${tab.id}`,
+            controls: `profile-panel-${tab.id}`,
+          }))}
+          value={activeTab}
+          onChange={selectTab}
+          className="mt-6"
+        />
       </div>
 
       <div id={`profile-panel-${activeTab}`} role="tabpanel" aria-labelledby={`profile-tab-${activeTab}`} className="p-4 sm:p-6">

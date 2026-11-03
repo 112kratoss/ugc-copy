@@ -25,6 +25,7 @@ const { authState, bundleContentProps, mutationOptions, queryOptions, queryState
   showActionSheet: vi.fn(),
 }));
 
+vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
 vi.mock('react-native', () => ({
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Linking: { openURL: vi.fn() },
@@ -88,10 +89,15 @@ vi.mock('@/components/save-heart', () => ({
   SaveHeart: (props: MockProps) => React.createElement('save-heart', props),
 }));
 
-vi.mock('@/components/ui', () => ({
-  CreatorAvatar: (props: MockProps) => React.createElement('avatar', props),
-  Pill: ({ label, ...props }: MockProps) => React.createElement('text', props, label),
-}));
+vi.mock('@/components/ui', async (importOriginal) => {
+  // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return {
+    ...actual,
+    CreatorAvatar: (props: MockProps) => React.createElement('avatar', props),
+    Pill: ({ label, ...props }: MockProps) => React.createElement('text', props, label),
+  };
+});
 
 vi.mock('@/components/post-resource-bundle-content', () => ({
   PostResourceBundleContent: (props: unknown) => {

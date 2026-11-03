@@ -141,9 +141,14 @@ vi.mock('@/components/comments-sheet', () => ({
     return React.createElement('post-comments', props, contentHeader);
   }),
 }));
-vi.mock('@/components/ui', () => ({
-  CreatorAvatar: (props: MockProps) => React.createElement('avatar', props),
-}));
+vi.mock('@/components/ui', async (importOriginal) => {
+  // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return {
+    ...actual,
+    CreatorAvatar: (props: MockProps) => React.createElement('avatar', props),
+  };
+});
 vi.mock('@/components/feed-card-shell', () => ({
   FeedCardAction: ({ label, onPress }: { label: string; onPress: () => void }) =>
     React.createElement('feed-card-action', { label, onPress }),

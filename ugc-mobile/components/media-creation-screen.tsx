@@ -29,8 +29,10 @@ import { RemixSourceRow, type RemixSourceSeed } from '@/components/remix-source-
 import {
   AppText,
   ChoiceChip,
+  IconButton,
   PrimaryButton,
   SecondaryButton,
+  SegmentedControl,
 } from '@/components/ui';
 import { WhatsNewModelsStrip } from '@/components/whats-new-models-strip';
 import { ensureAiDataConsent } from '@/lib/ai-data-consent';
@@ -169,7 +171,6 @@ import { createSeedanceAssetMetadata, isSeedance2VideoModelId, type SeedanceAsse
 import type { PromptLengthMeter } from '@/lib/model-catalog/provider-prompt-limits';
 import { useGenerationModelCatalog } from '@/lib/use-generation-model-catalog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
-import { verticalHitSlop } from '@/lib/hit-target';
 import { haptic } from '@/lib/haptics';
 import { useFocusRequest } from '@/lib/use-focus-request';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -3700,25 +3701,14 @@ function CompactCreatorHeader({
       <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <View style={{ minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           {onClose ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={remix ? "Close remix" : "Close creator"}
-              accessibilityHint={remix ? "Saves your changes and returns to the source post." : "Saves your changes and returns to the previous screen."}
+            <IconButton
+              icon={CloseGlyph}
+              label={remix ? 'Close remix' : 'Close creator'}
+              accessibilityHint={remix ? 'Saves your changes and returns to the source post.' : 'Saves your changes and returns to the previous screen.'}
               disabled={closing}
-              accessibilityState={{ busy: closing }}
+              busy={closing}
               onPress={onClose}
-              style={({ pressed }) => ({
-                width: 48,
-                height: 48,
-                borderRadius: appTheme.radii.pill,
-                backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong,
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.textSecondary} />
-            </Pressable>
+            />
           ) : null}
           <AppText variant="pageTitle">{remix ? 'Remix' : 'Create'}</AppText>
         </View>
@@ -4303,21 +4293,16 @@ function CompactShotEditor({
           <Text style={{ color: theme.colors.video, fontSize: 11, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' }}>Multi-shot story</Text>
           <Text testID="video-shot-totals" style={{ color: theme.colors.muted, fontSize: 11 }}>{`${shotsLabel} · ${totalLabel}`}</Text>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add shot"
-          accessibilityState={{ disabled: atShotCap }}
+        <SecondaryButton
+          label="Add shot"
+          icon={Plus}
           disabled={atShotCap}
           onPress={() => {
             const id = `shot-${Date.now().toString(36)}`;
             onChange((current) => ({ ...current, multiPrompts: [...current.multiPrompts, { id, prompt: '', duration: 5 }] }));
             setSelectedId(id);
           }}
-          style={({ pressed }) => ({ minHeight: 48, borderRadius: appTheme.radii.pill, paddingHorizontal: 13, backgroundColor: pressed ? theme.colors.pressed : theme.colors.surfaceStrong, flexDirection: 'row', alignItems: 'center', gap: 6, opacity: atShotCap ? 0.38 : pressed ? appTheme.opacity.pressed : 1 })}
-        >
-          <Plus size={16} color={theme.colors.video} />
-          <Text style={{ color: theme.colors.text, fontSize: 11, fontWeight: '800' }}>Add shot</Text>
-        </Pressable>
+        />
       </View>
       <ScrollView horizontal keyboardShouldPersistTaps="handled" showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 8 }}>
         {draft.multiPrompts.map((shot, index) => {
@@ -4365,17 +4350,14 @@ function CompactShotEditor({
             </View>
           ) : null}
           <View style={{ paddingHorizontal: 12, paddingBottom: 4 }}>
-            <Pressable
-              accessibilityRole="button"
+            <SecondaryButton
+              accent="primary"
+              label={shotEnhanceLabels.label}
               accessibilityLabel={shotEnhanceLabels.accessibilityLabel}
-              accessibilityState={{ disabled: shotEnhanceDisabled }}
+              icon={Wand2}
               disabled={shotEnhanceDisabled}
               onPress={() => onEnhanceShot(selectedShot.id)}
-              style={({ pressed }) => ({ minHeight: 44, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.primary, 0.3), backgroundColor: hexWithAlpha(theme.colors.primary, 0.11), flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 12, opacity: shotEnhanceDisabled ? 0.45 : pressed ? appTheme.opacity.pressed : 1 })}
-            >
-              <Wand2 size={16} color={theme.colors.primary} />
-              <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '800' }}>{shotEnhanceLabels.label}</Text>
-            </Pressable>
+            />
           </View>
           <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}>
             <Text style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Shot duration</Text>
@@ -4406,6 +4388,12 @@ function CompactShotEditor({
     </View>
   );
 }
+
+/** A model that tells a story in shots offers them in place of the single prompt. */
+const VIDEO_SHOT_MODE_OPTIONS = [
+  { value: 'single', label: 'Single shot' },
+  { value: 'multi', label: 'Multi-shot' },
+] as const;
 
 function VideoCreatorComposer({
   draft,
@@ -4727,29 +4715,18 @@ function VideoCreatorComposer({
   return (
     <View testID="video-creator-composer" style={{ gap: 12 }}>
       {model?.capabilities.multiShot ? (
-        <View testID="video-shot-mode" style={{ minHeight: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, padding: 4, flexDirection: 'row', gap: 4 }}>
-          {[
-            { label: 'Single shot', value: false },
-            { label: 'Multi-shot', value: true },
-          ].map((option) => (
-            <Pressable
-              key={option.label}
-              accessibilityRole="button"
-              accessibilityLabel={option.label}
-              accessibilityState={{ selected: draft.isMultiShot === option.value }}
-              onPress={() => {
-                // The field being typed in leaves with the switch, without a blur, and Android keeps
-                // its keyboard up for a field that is gone.
-                if (draft.isMultiShot !== option.value) Keyboard.dismiss();
-                onChange((current) => ({ ...current, isMultiShot: option.value, referenceMode: option.value ? 'frames' : current.referenceMode }));
-              }}
-              hitSlop={verticalHitSlop(40)}
-              style={({ pressed }) => ({ flex: 1, minHeight: 40, borderRadius: appTheme.radii.pill, backgroundColor: draft.isMultiShot === option.value ? hexWithAlpha(theme.colors.image, 0.14) : pressed ? theme.colors.pressed : 'transparent', alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-            >
-              <Text style={{ color: draft.isMultiShot === option.value ? theme.colors.text : theme.colors.muted, fontSize: 12, fontWeight: '800' }}>{option.label}</Text>
-            </Pressable>
-          ))}
-        </View>
+        <SegmentedControl
+          testID="video-shot-mode"
+          options={VIDEO_SHOT_MODE_OPTIONS}
+          value={draft.isMultiShot ? 'multi' : 'single'}
+          onChange={(mode) => {
+            const isMultiShot = mode === 'multi';
+            // The field being typed in leaves with the switch, without a blur, and Android keeps
+            // its keyboard up for a field that is gone.
+            Keyboard.dismiss();
+            onChange((current) => ({ ...current, isMultiShot, referenceMode: isMultiShot ? 'frames' : current.referenceMode }));
+          }}
+        />
       ) : null}
 
       {draft.isMultiShot ? (
@@ -5374,6 +5351,11 @@ function ReferenceMentionSuggestions({
   );
 }
 
+const ENHANCEMENT_LEVEL_OPTIONS = [
+  { value: 'cinematic', label: 'Full', accessibilityLabel: 'Full enhancement' },
+  { value: 'faithful', label: 'Light', accessibilityLabel: 'Light enhancement' },
+] as const;
+
 /**
  * Enhancement level + undo, shared by every prompt surface (one per creator
  * composer) so the controls cannot drift apart.
@@ -5407,52 +5389,16 @@ function EnhanceControlsRow({
           Your @references stay as written. Polish only adds light visual detail around them.
         </Text>
       ) : (
-      <View style={{ flexDirection: 'row', borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: hexWithAlpha(theme.colors.text, 0.12), padding: 2 }}>
-        {([['cinematic', 'Full'], ['faithful', 'Light']] as const).map(([value, label]) => (
-          <Pressable
-            key={value}
-            accessibilityRole="button"
-            accessibilityLabel={value === 'cinematic' ? 'Full enhancement' : 'Light enhancement'}
-            accessibilityState={{ selected: level === value, disabled }}
-            disabled={disabled}
-            onPress={() => onLevelChange(value)}
-            hitSlop={verticalHitSlop(32)}
-            // A press state as well as the selected state: without one, tapping
-            // the option you are already on gives no feedback at all.
-            style={({ pressed }) => ({
-              minHeight: 32,
-              paddingHorizontal: 12,
-              borderRadius: appTheme.radii.pill,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: level === value
-                ? hexWithAlpha(theme.colors.primary, 0.18)
-                : pressed ? theme.colors.surfaceStrong : 'transparent',
-              opacity: disabled ? 0.5 : pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <Text style={{ color: level === value ? theme.colors.primary : theme.colors.faint, fontWeight: '700', fontSize: 12 }}>{label}</Text>
-          </Pressable>
-        ))}
-      </View>
+        <SegmentedControl
+          fill={false}
+          options={ENHANCEMENT_LEVEL_OPTIONS}
+          value={level}
+          onChange={onLevelChange}
+          disabled={disabled}
+        />
       )}
       {canUndo ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Undo enhancement"
-          onPress={onUndo}
-          hitSlop={verticalHitSlop(32)}
-          style={({ pressed }) => ({
-            minHeight: 32,
-            paddingHorizontal: 12,
-            borderRadius: appTheme.radii.pill,
-            borderWidth: 1,
-            borderColor: hexWithAlpha(theme.colors.text, 0.12),
-            alignItems: 'center',
-            justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-        >
-          <Text style={{ color: theme.colors.muted, fontWeight: '700', fontSize: 12 }}>Undo</Text>
-        </Pressable>
+        <SecondaryButton label="Undo" accessibilityLabel="Undo enhancement" onPress={onUndo} />
       ) : null}
     </View>
   );
@@ -5474,23 +5420,7 @@ function EnhanceOffer({ onUse }: { onUse: () => void }) {
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Use enhanced prompt"
-        onPress={onUse}
-        hitSlop={verticalHitSlop(32)}
-        style={({ pressed }) => ({
-          minHeight: 32,
-          paddingHorizontal: 12,
-          borderRadius: appTheme.radii.pill,
-          borderWidth: 1,
-          borderColor: hexWithAlpha(theme.colors.primary, 0.3),
-          backgroundColor: hexWithAlpha(theme.colors.primary, 0.11),
-          alignItems: 'center',
-          justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-      >
-        <Text style={{ color: theme.colors.primary, fontWeight: '700', fontSize: 12 }}>Use enhanced</Text>
-      </Pressable>
+      <SecondaryButton accent="primary" label="Use enhanced" accessibilityLabel="Use enhanced prompt" onPress={onUse} />
       <Text accessibilityLiveRegion="polite" style={{ flex: 1, color: theme.colors.muted, fontSize: 11, lineHeight: 15 }}>
         Your edits were kept.
       </Text>
@@ -5736,9 +5666,7 @@ function ReferenceDetailsOverlay({
                 drag waits for the body to be at its top, and with the keyboard up the body never quite is. */}
             <View {...drag.panHandlers} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
               <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '800' }}>{`${nounLabel} details`}</Text>
-              <Pressable accessibilityRole="button" accessibilityLabel={`Close ${content.noun} details`} onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-                <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-              </Pressable>
+              <IconButton icon={CloseGlyph} label={`Close ${content.noun} details`} onPress={onClose} />
             </View>
             {/* `handled`: a press on a row answers with the keyboard up, and a touch on anything else in the body puts the keyboard away. */}
             <ScrollView {...drag.scrollProps} automaticallyAdjustKeyboardInsets keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 14 }}>
@@ -6019,9 +5947,7 @@ function SearchableModelPickerSheet({
                 <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Choose model</Text>
                 <Text style={{ color: theme.colors.muted, fontSize: 12 }}>Defaults and quote update after selection.</Text>
               </View>
-              <Pressable accessibilityRole="button" accessibilityLabel="Close model picker" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-                <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-              </Pressable>
+              <IconButton icon={CloseGlyph} label="Close model picker" onPress={onClose} />
             </View>
             <View style={{ minHeight: 52, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.borderStrong, backgroundColor: theme.colors.surfaceInset, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 }}>
               <Search size={18} color={theme.colors.muted} />
@@ -6139,9 +6065,7 @@ function CreatorParameterSheet({
               <Text style={{ color: theme.colors.text, fontSize: 21, fontWeight: '800' }}>Generation parameters</Text>
               <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 12 }}>{model?.displayName ?? `${TOOL_META[draft.tool].title} settings`}</Text>
             </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close generation parameters" onPress={onClose} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-              <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-            </Pressable>
+            <IconButton icon={CloseGlyph} label="Close generation parameters" onPress={onClose} />
           </View>
           <ScrollView {...drag.scrollProps} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, gap: 18 }}>
             {!catalog || !model ? (
@@ -6332,9 +6256,11 @@ function GenerationWorkspace({
               run the ✕ only hides the outcome, which the panel's "Back to creator" clears, so it is
               Close there, not a second "Back to creator" (A3, 2026-10-21); over a start it could not
               confirm, both only hide the view, and share the name. */}
-          <Pressable accessibilityRole="button" accessibilityLabel={succeeded ? 'Close' : pollingInterrupted ? 'Minimize generation' : attemptUnconfirmed ? 'Back to creator' : failed ? 'Close' : 'Minimize generation'} onPress={onMinimize} style={({ pressed }) => ({ width: 48, height: 48, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-            <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-          </Pressable>
+          <IconButton
+            icon={CloseGlyph}
+            label={succeeded ? 'Close' : pollingInterrupted ? 'Minimize generation' : attemptUnconfirmed ? 'Back to creator' : failed ? 'Close' : 'Minimize generation'}
+            onPress={onMinimize}
+          />
         </View>
 
         <ScrollView keyboardShouldPersistTaps="never" contentContainerStyle={{ flexGrow: 1, padding: 18, paddingBottom: safeAreaInsets.bottom + 18, gap: 18 }}>
@@ -6348,29 +6274,21 @@ function GenerationWorkspace({
                 // publishes the first, as the web creator says.
                 <View testID="result-output-pager" style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
                   {/* Words rather than chevrons: a left chevron is the app's Back glyph. */}
-                  <Pressable
-                    accessibilityRole="button"
+                  <SecondaryButton
+                    label="Previous"
                     accessibilityLabel="Previous output"
-                    accessibilityState={{ disabled: shownIndex === 0 }}
                     disabled={shownIndex === 0}
                     onPress={() => showOutput(shownIndex - 1)}
-                    style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 16, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: shownIndex === 0 ? 0.4 : pressed ? appTheme.opacity.pressed : 1 })}
-                  >
-                    <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>Previous</Text>
-                  </Pressable>
+                  />
                   <Text accessibilityLiveRegion="polite" style={{ minWidth: 64, textAlign: 'center', color: theme.colors.textSecondary, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
                     {`${shownIndex + 1} of ${outputs.length}`}
                   </Text>
-                  <Pressable
-                    accessibilityRole="button"
+                  <SecondaryButton
+                    label="Next"
                     accessibilityLabel="Next output"
-                    accessibilityState={{ disabled: shownIndex >= outputs.length - 1 }}
                     disabled={shownIndex >= outputs.length - 1}
                     onPress={() => showOutput(shownIndex + 1)}
-                    style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 16, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceStrong, alignItems: 'center', justifyContent: 'center', opacity: shownIndex >= outputs.length - 1 ? 0.4 : pressed ? appTheme.opacity.pressed : 1 })}
-                  >
-                    <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '800' }}>Next</Text>
-                  </Pressable>
+                  />
                 </View>
               ) : null}
               <View style={{ gap: 10 }}>

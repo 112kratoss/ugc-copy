@@ -190,7 +190,7 @@ describe("the sign-in screen's other params", () => {
 
     const tree = render();
 
-    expect(tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.accessibilityState).toEqual({ selected: true });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.accessibilityState).toMatchObject({ selected: true });
   });
 
   // `signInNoticeRoute`, after this device's session ended elsewhere.
@@ -203,7 +203,7 @@ describe("the sign-in screen's other params", () => {
   // A route with an empty query has no params object at all.
   it('opens on Sign in with no params, and steps aside for someone signed in', async () => {
     routeState.params = undefined as unknown as Record<string, string>;
-    expect(render().root.findByProps({ accessibilityLabel: 'Switch to sign in' }).props.accessibilityState).toEqual({ selected: true });
+    expect(render().root.findByProps({ accessibilityLabel: 'Switch to sign in' }).props.accessibilityState).toMatchObject({ selected: true });
 
     authState.user = { id: 'user-1' };
     await renderer.act(async () => {

@@ -34,7 +34,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
-import { BrandLockup } from '@/components/ui';
+import { BrandLockup, IconButton } from '@/components/ui';
 import { showMessageDialog } from '@/lib/dialog';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
@@ -270,25 +270,7 @@ export function HomeSideMenu({
               <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}>
                 <BrandLockup />
               </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close menu"
-                onPress={onClose}
-                hitSlop={4}
-                style={({ pressed }) => ({
-                  width: 48,
-                  height: 48,
-                  borderRadius: appTheme.radii.pill,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  backgroundColor: pressed ? theme.colors.surfaceStrong : theme.colors.surface,
-                  opacity: pressed ? appTheme.opacity.pressed : 1,
-                })}
-              >
-                <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-              </Pressable>
+              <IconButton icon={CloseGlyph} label="Close menu" onPress={onClose} />
             </View>
 
             <Pressable

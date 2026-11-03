@@ -4,7 +4,7 @@ import { router } from 'expo-router';
 import { ArrowUpRight, Ban, Bell, ChevronRight, CircleHelp, CreditCard, EyeOff, FileText, Gift, LogOut, ShieldCheck, Sparkles, Trash2, UserRound } from 'lucide-react-native';
 import { ActivityIndicator, Linking, Platform, Pressable, View } from 'react-native';
 
-import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
+import { AppText, Card, Screen, SectionTitle, SegmentedControl } from '@/components/ui';
 import { AutoplaySetting } from '@/components/autoplay-setting';
 import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { useAiDataConsent } from '@/lib/ai-data-consent';
@@ -24,7 +24,6 @@ import {
   readMediaDiagnostics,
   summarizeMediaDiagnostics,
 } from '@/lib/media-diagnostics';
-import { haptic } from '@/lib/haptics';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { useAuth, type AccountDeletionOutcome } from '@/lib/auth';
@@ -440,12 +439,13 @@ const APPEARANCE_LABELS: Record<AppearancePreference, string> = {
   dark: 'Dark',
 };
 
+const APPEARANCE_OPTIONS = APPEARANCE_PREFERENCES.map((option) => ({ value: option, label: APPEARANCE_LABELS[option] }));
+
 /**
- * Follow the phone, or hold one scheme whatever it says. Drawn as the app's
- * segmented control (the same track and solid selected fill as `ModeTabs` on
- * the sign-in screen and `ProfileSegment`) with radio semantics, because this
- * picks a setting rather than switching a view. The change lands in the same
- * frame; there is nothing to confirm.
+ * Follow the phone, or hold one scheme whatever it says. The app's segmented
+ * control with radio semantics, because this picks a setting rather than
+ * switching a view. The change lands in the same frame; there is nothing to
+ * confirm.
  */
 function AppearanceSetting() {
   const theme = useAppTheme();
@@ -460,54 +460,12 @@ function AppearanceSetting() {
         <AppText variant="cardTitle">Appearance</AppText>
         <AppText variant="bodySm" color="muted">{body}</AppText>
       </View>
-      <View
-        accessibilityRole="radiogroup"
+      <SegmentedControl
         accessibilityLabel="Appearance"
-        style={{
-          flexDirection: 'row',
-          gap: 4,
-          padding: 4,
-          borderRadius: appTheme.radii.pill,
-          borderWidth: 1,
-          borderColor: theme.colors.border,
-          backgroundColor: theme.colors.surfaceInset,
-        }}
-      >
-        {APPEARANCE_PREFERENCES.map((option) => {
-          const active = option === preference;
-          return (
-            <Pressable
-              key={option}
-              accessibilityRole="radio"
-              accessibilityLabel={APPEARANCE_LABELS[option]}
-              accessibilityState={{ checked: active }}
-              onPress={() => {
-                if (active) return;
-                haptic.select();
-                setAppearancePreference(option);
-              }}
-              style={({ pressed }) => ({
-                flex: 1,
-                minHeight: appTheme.touch.compact,
-                borderRadius: appTheme.radii.pill,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: active ? theme.colors.primaryFill : 'transparent',
-                opacity: pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              <AppText
-                selectable={false}
-                variant="label"
-                color={active ? theme.colors.onPrimary : theme.colors.muted}
-                numberOfLines={1}
-              >
-                {APPEARANCE_LABELS[option]}
-              </AppText>
-            </Pressable>
-          );
-        })}
-      </View>
+        options={APPEARANCE_OPTIONS}
+        value={preference}
+        onChange={setAppearancePreference}
+      />
     </Card>
   );
 }

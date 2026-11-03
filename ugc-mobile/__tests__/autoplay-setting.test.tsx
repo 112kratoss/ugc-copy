@@ -15,16 +15,24 @@ const storage = vi.hoisted(() => ({
 
 const select = vi.hoisted(() => vi.fn());
 
+vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }) }));
+vi.mock('expo-router', () => ({ Link: ({ children }: { children: unknown }) => children }));
 vi.mock('react-native', () => ({
   Pressable: ({ children, style: _style, ...props }: MockProps & { style?: unknown }) =>
     React.createElement('pressable', props, typeof children === 'function' ? (children as (s: { pressed: boolean }) => React.ReactNode)({ pressed: false }) : children),
+  Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
-vi.mock('@/components/ui', () => ({
-  AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
-  Card: ({ children, ...props }: MockProps) => React.createElement('card', props, children),
-}));
+vi.mock('@/components/ui', async (importOriginal) => {
+  // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return {
+    ...actual,
+    AppText: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
+    Card: ({ children, ...props }: MockProps) => React.createElement('card', props, children),
+  };
+});
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {

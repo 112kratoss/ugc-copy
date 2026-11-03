@@ -60,7 +60,7 @@ import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWel
 import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
 import { useCreatorDraftOwner, useCreatorForm, useCreatorSignOut, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
-import { getAccentClasses, IconButton } from '@/components/DesignSystem';
+import { getAccentClasses, IconButton, SegmentedControl, type SegmentedControlOption } from '@/components/DesignSystem';
 import { videoRunShortSummary, videoSettingsSummary } from '../../../ugc-mobile/lib/creator-settings-summary/creator-settings-summary';
 import {
     referenceKeepWords,
@@ -514,8 +514,11 @@ function savedVideoSettingsAtDefaults(draft: Partial<VideoCreatorDraft>, descrip
     return catalogSettingsAtControlDefaults(descriptor.controls, (control) => saved[control.key]);
 }
 
-/** Single shot or multi-shot, as the app's segmented control offers them. */
-const SHOT_MODES = ['single', 'multi'] as const;
+/** Single shot or multi-shot: the segmented control, in the app's words. */
+const SHOT_MODE_OPTIONS: readonly SegmentedControlOption<'single' | 'multi'>[] = [
+    { value: 'single', label: 'Single shot' },
+    { value: 'multi', label: 'Multi-shot' },
+];
 
 /**
  * The run in flight, as it was started: its frame's shape, its settings' line, its prompt,
@@ -5550,15 +5553,11 @@ function VideoCreator({
                         </AnimatePresence>
 
                         {videoModel.supportsMultiShot ? (
-                            <CreatorSettingChoices
-                                label="Shot mode"
-                                labelHidden
-                                options={SHOT_MODES}
-                                optionLabel={(value) => (value === 'multi' ? 'Multi-shot' : 'Single shot')}
+                            <SegmentedControl
+                                ariaLabel="Shot mode"
+                                options={SHOT_MODE_OPTIONS}
                                 value={currentIsMultiShot ? 'multi' : 'single'}
                                 onChange={(value) => setIsMultiShot(value === 'multi')}
-                                columns={2}
-                                accent="video"
                             />
                         ) : null}
 
@@ -5741,16 +5740,14 @@ function VideoCreator({
                         {inputView.side ? (
                             <CreatorInputsCard
                                 switcher={inputView.switchable ? (
-                                    <CreatorSettingChoices
+                                    <SegmentedControl
                                         ref={inputSwitchRef}
-                                        label={`Start from ${inputSides.labels.frames.toLowerCase()} or ${inputSides.labels.references.toLowerCase()}`}
-                                        labelHidden
-                                        options={VIDEO_INPUT_SIDES}
-                                        optionLabel={(side) => inputSides.labels[side]}
+                                        fill={false}
+                                        className="shrink-0"
+                                        ariaLabel={`Start from ${inputSides.labels.frames.toLowerCase()} or ${inputSides.labels.references.toLowerCase()}`}
+                                        options={VIDEO_INPUT_SIDES.map((side) => ({ value: side, label: inputSides.labels[side] }))}
                                         value={inputView.side}
                                         onChange={(side) => void requestInputSide(side)}
-                                        appearance="pill"
-                                        accent="video"
                                     />
                                 ) : null}
                                 hint={inputsHint}

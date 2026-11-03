@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
+import { SegmentedControl } from '@/components/DesignSystem';
 import { useAuth } from '@/components/AuthProvider';
 import { useConfirmation } from '@/components/useConfirmation';
 import {
@@ -32,9 +33,9 @@ import {
 import { formatRelativeTime } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 
-const SORTS: Array<{ id: PostCommentSort; label: string }> = [
-    { id: 'top', label: 'Top' },
-    { id: 'newest', label: 'New' },
+const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string }> = [
+    { value: 'top', label: 'Top' },
+    { value: 'newest', label: 'New' },
 ];
 
 const REPORT_REASONS = [
@@ -685,27 +686,16 @@ export default function PostComments({
                 </h2>
                 {/* Sorting nothing is noise — the pills appear with the first comment. */}
                 {totalCount > 0 ? (
-                <div
-                    className="flex items-center gap-1 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] p-1"
-                    role="group"
-                    aria-label="Sort comments"
-                >
-                    {SORTS.map((option) => (
-                        <button
-                            key={option.id}
-                            type="button"
-                            onClick={() => setSort(option.id)}
-                            aria-pressed={sort === option.id}
-                            className={`ui-focus-ring min-h-11 rounded-full px-4 text-xs font-bold transition ${
-                                sort === option.id
-                                    ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)]'
-                                    : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
-                            }`}
-                        >
-                            {option.label}
-                        </button>
-                    ))}
-                </div>
+                // Toggle buttons, not tabs: in the reel ← and → step through posts, so
+                // the order takes no arrow keys, as its buttons took none before.
+                <SegmentedControl
+                    role="toggle"
+                    fill={false}
+                    ariaLabel="Sort comments"
+                    options={SORT_OPTIONS}
+                    value={sort}
+                    onChange={setSort}
+                />
                 ) : null}
             </div>
 

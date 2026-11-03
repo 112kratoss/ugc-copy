@@ -36,7 +36,7 @@ import { PushOfferCard } from '@/components/push-offer-card';
 import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
-import { AppText, IconButton, SecondaryButton, StatusBlock } from '@/components/ui';
+import { AppText, IconButton, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { loadActiveGenerationRecord } from '@/lib/active-generation-record';
 import { useAppForeground } from '@/lib/app-foreground';
 import { useAuth } from '@/lib/auth';
@@ -990,22 +990,11 @@ function SignedOutCard() {
           </AppText>
         </View>
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Sign in"
+      <PrimaryButton
+        label="Sign in"
         // Back to Profile once signed in: without it sign-in ends on Home.
         onPress={() => router.push({ pathname: '/auth', params: { returnTo: '/profile' } } as never)}
-        style={({ pressed }) => ({
-          minHeight: 50,
-          borderRadius: appTheme.radii.pill,
-          backgroundColor: theme.colors.primaryFill,
-          alignItems: 'center',
-          justifyContent: 'center',
-          opacity: pressed ? appTheme.opacity.pressed : 1,
-        })}
-      >
-        <Text style={{ color: theme.colors.onPrimary, fontSize: 15, fontWeight: '800' }}>Sign in</Text>
-      </Pressable>
+      />
     </View>
   );
 }
@@ -1127,69 +1116,19 @@ function ProfileHeroCard({
       <View style={{ paddingHorizontal: 16, paddingBottom: 16 }}>
         <View style={{ marginTop: -32, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
           <ProfileAvatar profile={profile} initials={initials} />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Edit profile"
-            onPress={onEdit}
-            style={({ pressed }) => ({
-              minHeight: 48,
-              borderRadius: appTheme.radii.pill,
-              backgroundColor: theme.colors.primaryFill,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              paddingHorizontal: 16,
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <Pencil size={appTheme.icon.sm} color={theme.colors.onPrimary} />
-            {/* The name the control has always had in its accessibility label,
-                now the name it draws — and the name the screen it opens gives
-                itself. S10's rule, on a smaller scale: a destination answers to
-                the control that reaches it. */}
-            <Text style={{ color: theme.colors.onPrimary, fontSize: 14, fontWeight: '800' }}>Edit profile</Text>
-          </Pressable>
+          {/* The name the control has always had in its accessibility label,
+              now the name it draws — and the name the screen it opens gives
+              itself. S10's rule, on a smaller scale: a destination answers to
+              the control that reaches it. */}
+          <PrimaryButton label="Edit profile" icon={Pencil} onPress={onEdit} />
         </View>
         {onViewPublic || onShare ? (
           <View style={{ flexDirection: 'row', gap: 8, paddingTop: 10 }}>
             {onViewPublic ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="View public profile"
-                onPress={onViewPublic}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  minHeight: 44,
-                  borderRadius: appTheme.radii.pill,
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: pressed ? appTheme.opacity.pressed : 1,
-                })}
-              >
-                <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '700' }}>View public profile</Text>
-              </Pressable>
+              <SecondaryButton label="View public profile" onPress={onViewPublic} style={{ flex: 1 }} />
             ) : null}
             {onShare ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Share profile"
-                onPress={onShare}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  minHeight: 44,
-                  borderRadius: appTheme.radii.pill,
-                  borderWidth: 1,
-                  borderColor: theme.colors.border,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: pressed ? appTheme.opacity.pressed : 1,
-                })}
-              >
-                <Text style={{ color: theme.colors.text, fontSize: 13, fontWeight: '700' }}>Share profile</Text>
-              </Pressable>
+              <SecondaryButton label="Share profile" onPress={onShare} style={{ flex: 1 }} />
             ) : null}
           </View>
         ) : null}
@@ -1622,35 +1561,10 @@ function getProfileMediaSwipeDirection(gestureState: PanResponderGestureState): 
   return gestureState.dx < 0 ? 'left' : 'right';
 }
 
+const PROFILE_MEDIA_TAB_OPTIONS = PROFILE_MEDIA_TABS.map((tab) => ({ value: tab, label: tab }));
+
 function ProfileSegment({ value, onChange }: { value: ProfileMediaTab; onChange: (value: ProfileMediaTab) => void }) {
-  const theme = useAppTheme();
-  return (
-    <View style={{ flexDirection: 'row', gap: 4, borderRadius: appTheme.radii.pill, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.panel, padding: 4 }}>
-      {PROFILE_MEDIA_TABS.map((tab) => {
-        const active = tab === value;
-        return (
-          <Pressable
-            key={tab}
-            accessibilityRole="tab"
-            accessibilityLabel={tab}
-            accessibilityState={{ selected: active }}
-            onPress={() => onChange(tab)}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: appTheme.touch.compact,
-              borderRadius: appTheme.radii.pill,
-              backgroundColor: active ? theme.colors.primaryFill : 'transparent',
-              alignItems: 'center',
-              justifyContent: 'center',
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <Text numberOfLines={1} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, fontSize: 12, fontWeight: '800' }}>{tab}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+  return <SegmentedControl role="tab" options={PROFILE_MEDIA_TAB_OPTIONS} value={value} onChange={onChange} />;
 }
 
 function ProfileMediaScopeControl<Scope extends string>({

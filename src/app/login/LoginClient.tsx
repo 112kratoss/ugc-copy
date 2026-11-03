@@ -12,6 +12,12 @@ import { buildAuthContinuePath } from '@/lib/auth-onboarding';
 import { startProviderSignIn, type SignInProvider } from '@/lib/provider-sign-in';
 import AppleLogo from '@/components/AppleLogo';
 import SignInAgreement from '@/components/SignInAgreement';
+import { SegmentedControl } from '@/components/DesignSystem';
+
+const AUTH_MODE_OPTIONS = [
+    { value: 'login', label: 'Sign in' },
+    { value: 'signup', label: 'Sign up' },
+] as const;
 
 const SUPPORT_MAILTO = `mailto:${siteConfig.supportEmail}`;
 
@@ -157,32 +163,14 @@ export default function LoginClient({
                     </div>
 
                     <div className="rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
-                        <div className="mb-6 grid grid-cols-2 rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] p-1" role="group" aria-label="Choose authentication mode">
-                            <button
-                                type="button"
-                                aria-pressed={isLogin}
-                                onClick={() => chooseMode(true)}
-                                className={`ui-focus-ring min-h-11 rounded-full px-3 text-sm font-extrabold transition ${
-                                    isLogin
-                                        ? 'bg-[var(--ui-surface-3)] text-[var(--ui-text-primary)] shadow-sm'
-                                        : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
-                                }`}
-                            >
-                                Sign in
-                            </button>
-                            <button
-                                type="button"
-                                aria-pressed={!isLogin}
-                                onClick={() => chooseMode(false)}
-                                className={`ui-focus-ring min-h-11 rounded-full px-3 text-sm font-extrabold transition ${
-                                    !isLogin
-                                        ? 'bg-[var(--ui-primary)] text-[var(--ui-primary-on)] shadow-sm'
-                                        : 'text-[var(--ui-text-muted)] hover:text-[var(--ui-text-primary)]'
-                                }`}
-                            >
-                                Sign up
-                            </button>
-                        </div>
+                        <SegmentedControl
+                            role="tab"
+                            ariaLabel="Choose authentication mode"
+                            options={AUTH_MODE_OPTIONS}
+                            value={isLogin ? 'login' : 'signup'}
+                            onChange={(mode) => chooseMode(mode === 'login')}
+                            className="mb-6"
+                        />
 
                         {isLogin ? (
                             <>

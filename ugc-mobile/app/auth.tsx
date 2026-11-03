@@ -8,7 +8,7 @@ import { Eye, EyeOff, LockKeyhole, Mail, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { BrandLockup, PrimaryButton } from '@/components/ui';
+import { BrandLockup, IconButton, PrimaryButton, SegmentedControl } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
   SIGN_IN_SUPPORT,
@@ -267,29 +267,13 @@ export default function AuthScreen() {
 }
 
 function AuthHeader() {
-  const theme = useAppTheme();
   return (
-    <View style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-        onPress={() => leaveAuthScreen(router)}
-        style={({ pressed }) => ({
-          width: 48,
-          height: 48,
-          borderRadius: appTheme.radii.pill,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: theme.colors.panelSoft,
-          opacity: pressed ? appTheme.opacity.pressed : 1,
-        })}
-      >
-        <CloseGlyph size={appTheme.icon.feature} color={theme.colors.text} />
-      </Pressable>
+    <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+      <IconButton icon={CloseGlyph} label="Close" onPress={() => leaveAuthScreen(router)} />
       <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center' }}>
         <BrandLockup />
       </View>
-      <View style={{ width: 48, height: 48 }} />
+      <View style={{ width: appTheme.touch.default, height: appTheme.touch.default }} />
     </View>
   );
 }
@@ -625,44 +609,20 @@ function SignInSupportLink() {
   );
 }
 
+const AUTH_MODE_OPTIONS = [
+  { value: 'login', label: 'Sign in', accessibilityLabel: 'Switch to sign in' },
+  { value: 'signup', label: 'Sign up', accessibilityLabel: 'Switch to sign up' },
+] as const;
+
 /**
- * The app's segmented control, as `ProfileSegment` and `CreatorHeader` already
- * draw it: `role="tab"`, a solid fill on the selected item and a dark label on
- * it. This screen used to invent its own — a tinted fill with a coloured
- * border — which is the Familiarity rule ("once you establish a behavior or
- * appearance for an element, apply it throughout") broken on the front door.
+ * The app's segmented control (`SegmentedControl`), as tabs: the form below
+ * it is what changes. This screen used to invent its own — a tinted fill with a
+ * coloured border — which is the Familiarity rule ("once you establish a
+ * behavior or appearance for an element, apply it throughout") broken on the
+ * front door.
  */
 function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mode: 'login' | 'signup') => void }) {
-  const theme = useAppTheme();
-  return (
-    <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: appTheme.radii.pill, backgroundColor: theme.colors.surfaceInset, borderWidth: 1, borderColor: theme.colors.border }}>
-      {(['login', 'signup'] as const).map((item) => {
-        const active = item === mode;
-        return (
-          <Pressable
-            key={item}
-            accessibilityRole="tab"
-            accessibilityLabel={item === 'login' ? 'Switch to sign in' : 'Switch to sign up'}
-            accessibilityState={{ selected: active }}
-            onPress={() => onChange(item)}
-            style={({ pressed }) => ({
-              flex: 1,
-              minHeight: appTheme.touch.compact,
-              borderRadius: appTheme.radii.pill,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: active ? theme.colors.primaryFill : 'transparent',
-              opacity: pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <Text numberOfLines={1} style={{ color: active ? theme.colors.onPrimary : theme.colors.muted, fontSize: 13, fontWeight: '700' }}>
-              {item === 'login' ? 'Sign in' : 'Sign up'}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+  return <SegmentedControl role="tab" options={AUTH_MODE_OPTIONS} value={mode} onChange={onChange} />;
 }
 
 /** A control inside a text field, at the HIG's 44pt floor rather than icon-sized. */

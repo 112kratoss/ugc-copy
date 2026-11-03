@@ -53,9 +53,19 @@ vi.mock('lucide-react-native', () => {
 });
 
 vi.mock('@/components/sheet-chrome', () => ({ SHEET_DISMISS_DISTANCE: 100, SHEET_DISMISS_VELOCITY: 0.6 }));
-vi.mock('@/components/ui', () => ({ BrandLockup: () => React.createElement('brand-lockup') }));
+vi.mock('@/components/ui', async (importOriginal) => {
+  // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
+  const actual = await importOriginal<typeof import('@/components/ui')>();
+  return {
+    ...actual,
+    BrandLockup: () => React.createElement('brand-lockup'),
+  };
+});
 vi.mock('@/lib/dialog', () => ({ showMessageDialog: vi.fn() }));
-vi.mock('@/lib/motion', () => ({ useReducedMotion: () => true }));
+vi.mock('@/lib/motion', async (importOriginal) => ({
+  usePressMotion: (await importOriginal<typeof import('@/lib/motion')>()).usePressMotion,
+  useReducedMotion: () => true,
+}));
 vi.mock('@/lib/platform-glyphs', () => ({
   CloseGlyph: (props: Record<string, unknown>) => React.createElement('close-glyph', props),
 }));

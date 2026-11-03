@@ -10,6 +10,7 @@ function resolvePressableStyle(style: unknown) {
     : style;
 }
 
+vi.mock('expo-router', () => ({ Link: ({ children }: { children: unknown }) => children }));
 vi.mock('react-native', () => ({
   Pressable: ({ children, style, ...props }: MockProps) =>
     React.createElement('pressable', {
