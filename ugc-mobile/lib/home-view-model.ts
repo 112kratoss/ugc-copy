@@ -1,3 +1,5 @@
+import { cachedDateTimeFormat, cachedNumberFormat } from './intl-format-cache';
+
 export function formatCompactCount(value: number | null | undefined) {
   const safeValue = Math.max(0, value ?? 0);
   if (safeValue >= 1_000_000) return `${trimOneDecimal(safeValue / 1_000_000)}M`;
@@ -12,7 +14,7 @@ export function formatCompactCount(value: number | null | undefined) {
  */
 export function formatUsdCents(value: number | null | undefined) {
   const safeValue = Math.max(0, value ?? 0);
-  return new Intl.NumberFormat('en-US', {
+  return cachedNumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
@@ -41,7 +43,9 @@ export function formatRelativeTime(value: string | null | undefined, now = new D
   const diffWeeks = Math.floor(diffDays / 7);
   if (diffWeeks < 5) return `${diffWeeks}w ago`;
 
-  return new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(timestamp));
+  // Kept between calls (`lib/intl-format-cache.ts`): the Alerts list asks for
+  // one per row.
+  return cachedDateTimeFormat('en', { month: 'short', day: 'numeric' }).format(new Date(timestamp));
 }
 
 function trimOneDecimal(value: number) {
