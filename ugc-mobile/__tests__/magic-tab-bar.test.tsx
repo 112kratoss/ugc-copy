@@ -371,7 +371,9 @@ describe('MagicTabBar', () => {
 
     const root = tree.root.findAll((node) => String(node.type) === 'view')[0];
     expect((root.props.style as Record<string, unknown>).opacity).toBe(1);
-    expect(root.props.pointerEvents).toBe('auto');
+    // The dock and the disc take their touches; the bar's empty strips pass
+    // theirs on to the screen beneath, as they did while the view was flattened.
+    expect(root.props.pointerEvents).toBe('box-none');
     expect(root.props.accessibilityElementsHidden).toBe(false);
     expect(root.props.importantForAccessibility).toBe('auto');
   });
@@ -683,6 +685,37 @@ describe('MagicTabBar create menu hand-off', () => {
       tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress();
     });
   };
+
+  it('keeps the menu under one native bar view while Generate hides the bar', () => {
+    // Fabric flattens a view with nothing to draw and gives it a native view
+    // again once it has opacity, pointer or accessibility props, moving its
+    // children; a Modal host moved off the window dismisses its window. Shown,
+    // the bar's root had none of those, so hiding it for the creator took the
+    // menu's window down mid hand-off (Pixel 9a emulator, 2026-11-03: two
+    // frames of bare Profile, then the sheet back for one frame). A test
+    // renderer does not flatten: the pin is on the prop that stops it.
+    const { tree, navigation } = renderTabBar(4);
+    const barRoot = () => tree.root.findAll((node) => String(node.type) === 'view')[0];
+    expect(barRoot().props.collapsable).toBe(false);
+    openMenu(tree);
+
+    renderer.act(() => tile(tree, 'Generate').props.onPress());
+    // The layout hides the bar once the creator is focused.
+    renderer.act(() => {
+      tree.update(
+        <MagicTabBar
+          state={{ index: 2, key: 'tabs-key', routeNames: routes.map((route) => route.name), routes, stale: false, type: 'tab', history: [] } as never}
+          descriptors={{} as never}
+          navigation={navigation as never}
+          insets={{ top: 0, right: 0, bottom: 0, left: 0 }}
+          hidden
+        />
+      );
+    });
+
+    expect(barRoot().props.collapsable).toBe(false);
+    expect((barRoot().props.style as Record<string, unknown>).opacity).toBe(0);
+  });
 
   it('jumps to the creator at the tap and leaves in the same render', () => {
     const { tree, navigation } = renderTabBar(4);

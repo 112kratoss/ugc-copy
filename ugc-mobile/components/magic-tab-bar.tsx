@@ -226,7 +226,24 @@ export function MagicTabBar({
       // bar mounted keeps the blur's target hookup stable across transitions,
       // so hide with opacity, not `display: 'none'` — display none detaches
       // the native view and reintroduces the same attach-during-fade window.
-      pointerEvents={hidden ? 'none' : 'auto'}
+      //
+      // Never flattened, for the same reason. Shown, this view carries nothing
+      // Fabric needs a native view for, so it was flattened away; hiding it
+      // (opacity 0, no pointer events, hidden from accessibility) made Fabric
+      // create one and move the bar's children into it
+      // (`ViewShadowNode.cpp`, `formsStackingContext`). The create menu's Modal
+      // is one of them, and a Modal host taken off the window dismisses its
+      // window: Android's `onDetachedFromWindow` drops the Dialog until a later
+      // prop update shows it again, and iOS dismisses when it loses its
+      // superview. Generate hides the bar while the menu is still leaving over
+      // the creator: on the Pixel 9a emulator the menu's window vanished for two
+      // frames, Profile showed bare, and the sheet came back for one frame
+      // mid-exit (2026-11-03). Shown, it is `box-none`: a native view now, it
+      // would otherwise take the touches that landed on the feed through its
+      // empty strips (the overhang above the dock, the side margins, the
+      // home-indicator band) while it was flattened.
+      collapsable={false}
+      pointerEvents={hidden ? 'none' : 'box-none'}
       accessibilityElementsHidden={hidden}
       importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
       style={{
