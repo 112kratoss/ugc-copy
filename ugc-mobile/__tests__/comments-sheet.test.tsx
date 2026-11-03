@@ -144,8 +144,36 @@ vi.mock('@/lib/motion', async (importOriginal) => ({
 vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }),
 }));
+/**
+ * The navigation container as the sheet's hand-off reads it
+ * (`lib/menu-handoff.ts`): the focused route, and the `state` event the real
+ * container emits once a navigation has been committed. `land` is that event.
+ */
+const container = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const fake = {
+    routeKey: 'viewer-key',
+    listeners,
+    ref: {
+      isReady: () => true,
+      getCurrentRoute: () => ({ key: fake.routeKey, name: fake.routeKey.replace(/-key$/, '') }),
+      addListener: (_type: string, callback: () => void) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    },
+    land(routeKey: string) {
+      fake.routeKey = routeKey;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+  return fake;
+});
 vi.mock('expo-router', () => ({
   router: { push: mocks.routerPush, setParams: mocks.routerSetParams },
+  useNavigationContainerRef: () => container.ref,
 }));
 vi.mock('lucide-react-native', () => ({
   MoreHorizontal: (props: MockProps) => React.createElement('icon-more', props),
@@ -344,6 +372,8 @@ beforeEach(() => {
   replyPages = [];
   queryState = {};
   replyQueryState = {};
+  container.routeKey = 'viewer-key';
+  container.listeners.clear();
   for (const mock of [
     listPostComments,
     createPostComment,
@@ -529,13 +559,16 @@ describe('comments sheet', () => {
       pressable(tree.root, 'Reply to @batman').props.onPress();
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
     expect(routerPush).toHaveBeenCalledWith({
       pathname: '/auth',
       params: {
         returnTo: '/viewer?source=showcase-feed&initialId=post-1&comments=post-1&replyTo=comment-1',
       },
     });
+    // Sign-in is built a render after the tap; the sheet closes over it.
+    expect(onClose).not.toHaveBeenCalled();
+    renderer.act(() => container.land('auth-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows a successful reply immediately and writes it into an existing cache', async () => {
@@ -724,7 +757,7 @@ describe('comments sheet', () => {
     expect(presented[0].actions.every((action) => action.destructive)).toBe(true);
   });
 
-  it("opens a comment author's profile from the handle or the avatar, closing the sheet first", () => {
+  it("opens a comment author's profile from the handle or the avatar, closing the sheet over it", () => {
     pages = [page([comment()])];
     const onClose = vi.fn();
     const tree = renderSheet({ onClose });
@@ -733,11 +766,22 @@ describe('comments sheet', () => {
       pressable(tree.root, 'Open @batman profile').props.onPress();
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    // Pushed at the tap; the sheet stays over the post until the profile has
+    // been built under it, a render later, and only then closes. Closed first,
+    // it left the post bare in between (on Home, which unmounts it, at once).
     expect(routerPush).toHaveBeenCalledWith('/creators/batman');
-    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(routerPush.mock.invocationCallOrder[0]);
+    expect(onClose).not.toHaveBeenCalled();
+    renderer.act(() => container.land('creator-batman-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
 
     // The avatar takes the same tap; the handle is the one a screen reader lists.
+    renderer.act(() => {
+      tree.update(sheetElement({ onClose, visible: false }));
+    });
+    container.routeKey = 'viewer-key';
+    renderer.act(() => {
+      tree.update(sheetElement({ onClose }));
+    });
     const avatarTarget = tree.root.find(
       (node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true
     );
@@ -748,6 +792,22 @@ describe('comments sheet', () => {
     });
     expect(routerPush).toHaveBeenCalledTimes(2);
     expect(routerPush).toHaveBeenLastCalledWith('/creators/batman');
+  });
+
+  it('opens one screen for two quick taps on authors', () => {
+    pages = [page([comment()])];
+    const tree = renderSheet();
+    const handle = pressable(tree.root, 'Open @batman profile');
+    const avatar = tree.root.find(
+      (node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true
+    );
+
+    renderer.act(() => {
+      handle.props.onPress();
+      avatar.props.onPress();
+    });
+
+    expect(routerPush).toHaveBeenCalledTimes(1);
   });
 
   it('opens the author of a reply too', () => {
@@ -962,13 +1022,14 @@ describe('comments sheet', () => {
       await flushPromises();
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
     expect(routerPush).toHaveBeenCalledWith({
       pathname: '/auth',
       params: {
         returnTo: '/viewer?source=showcase-feed&initialId=post-1&comments=post-1&replyTo=comment-1',
       },
     });
+    renderer.act(() => container.land('auth-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('names one reply in the singular and reports whether the replies are open', () => {
