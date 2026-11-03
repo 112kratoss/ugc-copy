@@ -3501,6 +3501,29 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
     expect(screen.getByText(limit)).toBeInTheDocument();
   });
 
+  // A press that waits on a fresh link (up to twelve seconds) says so: the button takes no second
+  // press and is busy, in the words of what it is doing. It showed nothing until the read answered.
+  it('shows “Use as reference” under way while it waits on a fresh link', async () => {
+    movePageClock();
+    installFetch({ remixBundle: () => ownRunRemix() });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    // The read for a fresh link is held until the test answers it.
+    let answerRead: () => void = () => undefined;
+    installFetch({ remixBundle: () => ownRunRemix(), remixHold: new Promise<void>((resolve) => { answerRead = resolve; }) });
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    const underWay = await screen.findByRole('button', { name: 'Adding the original…' });
+    expect(underWay).toBeDisabled();
+    expect(underWay).toHaveAttribute('aria-busy', 'true');
+    answerRead();
+    const using = await screen.findByRole('button', { name: 'Using original result' });
+    expect(using).toBeDisabled();
+    expect(using).not.toHaveAttribute('aria-busy');
+  });
+
   it('shows the original past the hour by a link that opens', async () => {
     movePageClock();
     installFetch({ remixBundle: () => ownRunRemix() });
