@@ -45,4 +45,6 @@ export interface EditablePostDraft {
   hasPaidOrders: boolean;
   /** People who have this recipe: paid sales plus free unlocks. */
   resourceBundleBuyerCount?: number;
+  /** Whether anyone has had the post's recipe, a retired one included: it gains no exact prompt. */
+  resourceBundleEverUnlocked?: boolean;
 }

@@ -22,12 +22,21 @@ import {
   stripDerivedGenerationReferenceItems,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
+  type PostResourceItem,
 } from '@/lib/post-resource-bundles';
 import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
+  applyCopiedGenerationReferences,
+  copyPlannedGenerationReferences,
+  GENERATION_REFERENCES_NOT_COPIED_ERROR,
   getMarketplaceQualityErrorForPostBundle,
+  planGenerationReferenceCopies,
+  prepareCreationRecipeBundle,
+  readAddedRecipeItems,
   updatePostWithResourceBundleAtomically,
+  type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
+import { creationMaySharePostInputs } from '@/lib/generation-input-media';
 import { isOwnerPostTitleFallback } from '@/lib/owner-post-title-fallback';
 import { createPostDeletedRefusal } from '@/lib/post-lifecycle-service';
 import { PostSourceToolsWriteError, replacePostSourceTools } from '@/lib/post-source-tools-server';
@@ -59,7 +68,12 @@ import {
 import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
-import { isCreatorProfileCheckError, isCreatorProfileReadinessError } from '@/lib/marketplace-trust';
+import {
+  getMarketplaceRefusalFields,
+  getRecipeTitleRefusalBody,
+  isCreatorProfileCheckError,
+  isDatabaseRecipeTitleRefusal,
+} from '@/lib/marketplace-trust';
 import { recipeKeepsPromptPrivate, titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
@@ -233,10 +247,25 @@ export type PostUpdateRequestBody = {
   sourceTools?: unknown;
   mediaItems?: unknown;
   resourceBundle?: unknown;
+  /** True copies the creation's saved inputs into the recipe sent, as its publish does. */
+  includeGenerationReferences?: unknown;
+};
+
+/** What a post's creation gives its recipe: its exact prompt, and whether it may share its saved inputs. */
+type CreationRecipeSource = {
+  prompt: string | null;
+  archived_at: string | null;
+  moderation_removed_at: string | null;
 };
 
 export type PostUpdateDependencies = {
   getMarketplaceQualityErrorForPostBundle?: typeof getMarketplaceQualityErrorForPostBundle;
+  /** Which of the creation's saved inputs join the recipe, before any byte moves. */
+  planGenerationReferenceCopies?: typeof planGenerationReferenceCopies;
+  /** Their files, copied once every check has passed, right before the write. */
+  copyPlannedGenerationReferences?: typeof copyPlannedGenerationReferences;
+  /** The post's creation as its recipe reads it: its prompt, and whether it was removed or archived. */
+  loadCreationRecipeSource?: typeof loadCreationRecipeSource;
   updatePostWithResourceBundleAtomically?: typeof updatePostWithResourceBundleAtomically;
   replacePostSourceTools?: typeof replacePostSourceTools;
   replacePostMediaItems?: typeof replacePostMediaItems;
@@ -269,6 +298,15 @@ export type PostUpdateRouteResult =
          * next save. Absent only when they could not be read back.
          */
         mediaItems?: Array<{ id: string; mediaKey: string }>;
+        /**
+         * The items the server put into the creation's recipe beside those it
+         * was sent: the exact prompt where the recipe had no prompt item, and
+         * the saved inputs it was asked for. An editor adopts them into its
+         * own. Present when a creation's recipe was saved.
+         */
+        recipeItemsAdded?: PostResourceItem[];
+        /** Saved inputs asked for that are not in the recipe: a copy failed, or the creation shares none. */
+        referencesNotCopied?: number;
       };
     }
   | {
@@ -299,6 +337,9 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
   return {
     getMarketplaceQualityErrorForPostBundle:
       dependencies?.getMarketplaceQualityErrorForPostBundle ?? getMarketplaceQualityErrorForPostBundle,
+    planGenerationReferenceCopies: dependencies?.planGenerationReferenceCopies ?? planGenerationReferenceCopies,
+    copyPlannedGenerationReferences: dependencies?.copyPlannedGenerationReferences ?? copyPlannedGenerationReferences,
+    loadCreationRecipeSource: dependencies?.loadCreationRecipeSource ?? loadCreationRecipeSource,
     updatePostWithResourceBundleAtomically:
       dependencies?.updatePostWithResourceBundleAtomically ?? updatePostWithResourceBundleAtomically,
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
@@ -330,6 +371,15 @@ function inferExtension(fileName: string, mimeType: string): string {
   }
 
   return mimeType.startsWith('video/') ? 'mp4' : 'jpg';
+}
+
+/**
+ * Whether people have the recipe whose row this is, paid or free, or had it:
+ * a recipe removed while people had it is retired, and its row keeps their
+ * count (a later save of a recipe on the post takes the same row up again).
+ */
+function recipeHasHolders(bundle: Pick<BundleStatusRow, 'sales_count' | 'free_unlock_count'> | null): boolean {
+  return Boolean(bundle) && ((bundle?.sales_count ?? 0) + (bundle?.free_unlock_count ?? 0)) > 0;
 }
 
 function normalizeText(value: unknown): string | null {
@@ -401,10 +451,13 @@ function collectScopedMediaKeys(...values: unknown[]): Set<string> {
   return mediaKeys;
 }
 
+/**
+ * The recipe a save sends, by its shape alone. Its content is validated with
+ * whatever the server adds to it (`prepareCreationRecipeBundle`): a recipe of a
+ * creation's saved inputs alone is sent with no item of its own.
+ */
 function parseBundleInput(
   value: unknown,
-  ownerUserId: string,
-  mediaKeys: Iterable<string>
 ): { bundle: PostResourceBundleInput | null; error: string | null } {
   if (value == null) {
     return {
@@ -425,14 +478,6 @@ function parseBundleInput(
     return {
       bundle: null,
       error: 'Choose whether the unlock should be free or paid.',
-    };
-  }
-
-  const validationError = validatePostResourceBundleInput(bundle, { ownerUserId, mediaKeys });
-  if (validationError) {
-    return {
-      bundle: null,
-      error: validationError,
     };
   }
 
@@ -547,6 +592,31 @@ async function loadGenerationTitleSource(
   const row = data as { prompt?: string | null; model?: string | null; category?: string | null; creation_mode?: string | null } | null;
   return row
     ? { prompt: row.prompt ?? null, model: row.model ?? null, category: row.category ?? null, creationMode: row.creation_mode ?? null }
+    : null;
+}
+
+/**
+ * What a post's creation gives its recipe: the exact prompt every creation's
+ * recipe holds, and whether it may share its saved inputs (an operator's
+ * removal and its creator's archive keep them back). Read by the post's link,
+ * as the title source is. A missing row reads as none.
+ */
+async function loadCreationRecipeSource(
+  adminSupabase: SupabaseClient,
+  generationId: string,
+): Promise<CreationRecipeSource | null> {
+  const { data, error } = await adminSupabase
+    .from('generations')
+    .select('prompt, archived_at, moderation_removed_at')
+    .eq('id', generationId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+  const row = data as Partial<CreationRecipeSource> | null;
+  return row
+    ? { prompt: row.prompt ?? null, archived_at: row.archived_at ?? null, moderation_removed_at: row.moderation_removed_at ?? null }
     : null;
 }
 
@@ -1391,17 +1461,53 @@ export async function updateOwnerPostForRoute({
     // reference items in. Those are re-derived on every read, so drop them
     // before validation instead of failing the file-ownership checks on their
     // generation_inputs paths.
-    const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(
+    const { bundle: submittedResourceBundle, error: resourceBundleError } = parseBundleInput(
       stripDerivedGenerationReferenceItems(body.resourceBundle),
-      ownerUserId,
-      availableMediaKeys
     );
     if (resourceBundleError) {
       return { ok: false, status: 400, body: { error: resourceBundleError } };
     }
+    // A creation's recipe, as the publish makes it (#677's review): its exact
+    // prompt where it has no prompt item of its own, and the saved inputs the
+    // creator asked for, planned with no byte moved yet. Then the recipe, those
+    // included, is validated as one; the inputs are copied last, below.
+    const savesCreationRecipe = Boolean(post.generation_id)
+      && hasResourceBundlePayload
+      && Boolean(submittedResourceBundle && submittedResourceBundle.accessMode !== 'none');
+    const creationRecipeSource = savesCreationRecipe && post.generation_id
+      ? await resolvedDependencies.loadCreationRecipeSource(adminSupabase, post.generation_id)
+      : null;
+    const recipePreparation = await prepareCreationRecipeBundle({
+      supabase: adminSupabase,
+      ownerUserId,
+      bundle: submittedResourceBundle,
+      creation: post.generation_id && creationRecipeSource
+        ? { id: post.generation_id, prompt: creationRecipeSource.prompt }
+        : null,
+      includeReferences: body.includeGenerationReferences === true,
+      mayShareCreation: creationMaySharePostInputs(creationRecipeSource),
+      // A recipe people have or had gains no prompt from here (#677's
+      // re-reviews): an older composer sends the recipe back on every save, a
+      // caption fix included, and the prompt would reach them as a revision
+      // nobody saw. Such a recipe stays as sold, retired rows too, since a save
+      // takes the same row up again.
+      addsCreationPrompt: !recipeHasHolders(existingBundle),
+      // A copy the stored recipe keeps is in place already: saving again
+      // copies none of it a second time.
+      storedItems: liveBundle
+        ? normalizePostResourceItems(liveBundle.resource_items, buildStoredBundleForQualityCheck(liveBundle).resources)
+        : [],
+      mediaKeys: availableMediaKeys,
+      dependencies: { planGenerationReferenceCopies: resolvedDependencies.planGenerationReferenceCopies },
+    });
+    if (!recipePreparation.ok) {
+      return { ok: false, status: recipePreparation.status, body: { error: recipePreparation.error } };
+    }
+    let resourceBundle = recipePreparation.bundle;
+    // Measured on what the client wrote; the server's own items are not its text.
     const resourceBundleLengthError = hasResourceBundlePayload
       ? getPostResourceBundleLengthError(
-          resourceBundle,
+          submittedResourceBundle,
           existingBundle ? buildStoredBundleForQualityCheck(existingBundle) : null,
         )
       : null;
@@ -1409,14 +1515,15 @@ export async function updateOwnerPostForRoute({
       return { ok: false, status: 400, body: resourceBundleLengthError };
     }
 
+    // The client's own files: the copies of the creation's inputs are the server's.
     const canonicalResourceFilePaths: string[] = [];
     const resourceConsumptionClaims: UploadConsumptionClaim[] = [];
-    if (hasResourceBundlePayload && resourceBundle) {
+    if (hasResourceBundlePayload && submittedResourceBundle) {
       const resourceFilePaths = Array.from(new Set([
-        ...normalizePostResourceAttachments(resourceBundle.resources?.attachments)
+        ...normalizePostResourceAttachments(submittedResourceBundle.resources?.attachments)
           .filter((attachment) => attachment.kind === 'file' && attachment.storagePath)
           .map((attachment) => attachment.storagePath as string),
-        ...normalizePostResourceItems(resourceBundle.resources?.items, resourceBundle.resources)
+        ...normalizePostResourceItems(submittedResourceBundle.resources?.items, submittedResourceBundle.resources)
           .filter((item) => item.storagePath)
           .map((item) => item.storagePath as string),
       ]));
@@ -1534,7 +1641,7 @@ export async function updateOwnerPostForRoute({
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
       && liveBundle
-      && ((liveBundle.sales_count ?? 0) + (liveBundle.free_unlock_count ?? 0)) > 0
+      && recipeHasHolders(liveBundle)
       ? buildStoredBundleForQualityCheck(liveBundle)
       : null;
     const bundleForPublicValidation = hasResourceBundlePayload
@@ -1676,14 +1783,8 @@ export async function updateOwnerPostForRoute({
         body: {
           error: marketplaceQualityError,
           // What create and publish attach to the same refusal, so a client
-          // offers the same way to fix the profile whichever route refused.
-          ...(isCreatorProfileReadinessError(marketplaceQualityError)
-            ? {
-                field: 'profile',
-                actionHref: '/profile',
-                actionLabel: 'Complete profile and return',
-              }
-            : {}),
+          // offers the same way on whichever route refused.
+          ...getMarketplaceRefusalFields(marketplaceQualityError),
         },
       };
     }
@@ -1860,6 +1961,32 @@ export async function updateOwnerPostForRoute({
       throw error;
     }
 
+    // The creation's saved inputs are copied last: every check has passed, and
+    // the write is next (#677's review), so a refused save pays for no copy.
+    let copiedReferences: CopiedGenerationReferences | null = null;
+    if (recipePreparation.pendingCopies.length > 0) {
+      copiedReferences = await resolvedDependencies.copyPlannedGenerationReferences({
+        supabase: adminSupabase,
+        references: recipePreparation.pendingCopies,
+      });
+      resourceBundle = applyCopiedGenerationReferences(resourceBundle, copiedReferences);
+      // A recipe of the inputs alone has nothing left once none could be copied.
+      if (
+        copiedReferences.failedItemIds.size > 0
+        && validatePostResourceBundleInput(resourceBundle, { ownerUserId, mediaKeys: availableMediaKeys })
+      ) {
+        // The copies made stay: each is at its input's one path, where the
+        // next save finds it (#677's re-review).
+        await Promise.all(resourceConsumptionClaims.map((claim) => (
+          abortNullableUploadByteConsumption(adminSupabase, claim)
+        )));
+        if (preparedMedia) {
+          await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
+        }
+        return { ok: false, status: 500, body: { error: GENERATION_REFERENCES_NOT_COPIED_ERROR } };
+      }
+    }
+
     let updatedPost: Awaited<ReturnType<typeof updatePostWithResourceBundleAtomically>>;
     try {
       if (nextIsNsfw) {
@@ -1892,6 +2019,9 @@ export async function updateOwnerPostForRoute({
         if (preparedMedia) {
           await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
         }
+        // The copies made for it stay (#677's re-review): each is at its
+        // input's one path, where the next save finds it, and a save running
+        // beside this one may already name it in its recipe.
       }
       throw error;
     }
@@ -2012,6 +2142,15 @@ export async function updateOwnerPostForRoute({
       || (!resourceBundle && Boolean(existingBundle?.retired_at));
     const savedBundleStatus = removedRecipe ? null : updatedPost.bundleStatus;
 
+    // What the server did to the creation's recipe beside what it was sent, for
+    // the editor to show: the items it added, and the inputs it could not.
+    const recipeReport = savesCreationRecipe && creationRecipeSource && resourceBundle && resourceBundle.accessMode !== 'none'
+      ? {
+          recipeItemsAdded: readAddedRecipeItems(resourceBundle, recipePreparation.addedItemIds),
+          referencesNotCopied: (copiedReferences?.failedItemIds.size ?? 0) + recipePreparation.refusedReferenceCount,
+        }
+      : {};
+
     return {
       ok: true,
       body: {
@@ -2026,11 +2165,19 @@ export async function updateOwnerPostForRoute({
             : `/showcase/${postId}#recipe`,
         resourceBundleStatus: savedBundleStatus,
         ...(savedMediaItems ? { mediaItems: savedMediaItems } : {}),
+        ...recipeReport,
       },
     };
   } catch (error) {
     if (isSoldResourceBundleMutationError(error)) {
       return createSoldResourceBundleLockedResult();
+    }
+    // The database refused the recipe's title by its own count (#677's
+    // re-review): answered as the route's own check answers it, with the
+    // code the composers offer "Post without recipe" on. Copies made for the
+    // save stay, for the next one.
+    if (isDatabaseRecipeTitleRefusal(error)) {
+      return { ok: false, status: 400, body: getRecipeTitleRefusalBody() };
     }
     logBackendError('failed_to_update_owner_post', { error: error });
     if (isMissingPostResourceBundlesSchemaError(error)) {

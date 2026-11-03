@@ -4,10 +4,11 @@ import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-row
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import {
   buildGenerationReferenceCopyPath,
-  buildGenerationReferenceResourceItems,
+  copyPlannedGenerationReferences,
   findGenerationReferenceCopies,
   loadGenerationRecipeReferenceCopies,
   parseGenerationReferenceCopyPath,
+  planGenerationReferenceCopies,
   type GenerationReferenceCopyRecipe,
 } from '@/lib/post-resource-bundles-server';
 import { holdBackFromRemix, remixSlotWords, splitRemixInputsByCopy } from '@/lib/remix-input-slots-server';
@@ -21,7 +22,7 @@ const GENERATION = 'gen-1';
 const ROW_A = '6f1c2d3e-4a5b-4c6d-8e7f-00000000000a';
 const ROW_B = '6f1c2d3e-4a5b-4c6d-8e7f-00000000000b';
 const FOLDER = `${SELLER}/generation-references/${GENERATION}`;
-/** The copy of row A as buildGenerationReferenceResourceItems names it. */
+/** The copy of row A as buildGenerationReferenceCopyPath names it. */
 const COPY_A = `${FOLDER}/00-reference-image-${ROW_A}.png`;
 const COPY_B = `${FOLDER}/01-reference-image-${ROW_B}.png`;
 
@@ -72,7 +73,7 @@ describe('the copy layout, from its writer to its readers', () => {
   ];
 
   it('reads back every copy the writer files, by its row, and the start’s parser reads its folder', async () => {
-    const uploads: string[] = [];
+    const stored: string[] = [];
     const client = {
       from: () => {
         const query = { select: () => query, eq: () => query, order: async () => ({ data: rows.map((row) => ({ ...row, generation_id: GENERATION_ID, user_id: SELLER_ID, label: null, source_generation_id: null, metadata: {} })), error: null }) };
@@ -80,18 +81,23 @@ describe('the copy layout, from its writer to its readers', () => {
       },
       storage: {
         from: () => ({
-          download: async () => ({ data: new Blob(['media'], { type: 'image/png' }), error: null }),
-          upload: async (filePath: string) => {
-            uploads.push(filePath);
+          info: async () => ({ data: { contentType: 'image/png', size: 5 }, error: null }),
+          copy: async (_from: string, to: string) => {
+            stored.push(to);
             return { error: null };
           },
         }),
       },
     };
 
-    const items = await buildGenerationReferenceResourceItems({ supabase: client as never, ownerUserId: SELLER_ID, generationId: GENERATION_ID });
+    // The writer plans each copy's path, then files it (#677's review: no byte moves before every check).
+    const plan = await planGenerationReferenceCopies({ supabase: client as never, ownerUserId: SELLER_ID, generationId: GENERATION_ID });
+    if (!plan.ok) throw new Error('the plan read no inputs');
+    const copied = await copyPlannedGenerationReferences({ supabase: client as never, references: plan.references });
+    const items = plan.references.map((planned) => planned.item);
 
-    expect(items.map((item) => item.storagePath)).toEqual(uploads);
+    expect(copied.failedItemIds.size).toBe(0);
+    expect(items.map((item) => item.storagePath)).toEqual(stored);
     expect(items.map((item) => item.storagePath)).toEqual(rows.map((row) => buildGenerationReferenceCopyPath(SELLER_ID, GENERATION_ID, row)));
     expect(findGenerationReferenceCopies({ items, ownerUserId: SELLER_ID, generationId: GENERATION_ID, inputRowIds: rows.map((row) => row.id) }))
       .toEqual(new Map(rows.map((row, index) => [row.id, items[index]!.storagePath!])));

@@ -66,15 +66,19 @@ test.describe('publishing a creation opens the full composer', () => {
     // Studio's list and the composer's read of the creation alike.
     await page.route('**/api/generations?**', (route) => json(route, { generations: [CREATION] }));
     await page.route('**/api/posts?**', (route) => json(route, { posts: [] }));
-    await page.route('**/api/showcase/publish', (route) => json(route, {
-      success: true,
-      postId: 'post-e2e-studio',
-      showcasePath: '/showcase/post-e2e-studio',
-      ownerPath: '/post/post-e2e-studio/edit',
-      resourceBundlePath: null,
-      visibility: 'public',
-      resourceBundleStatus: null,
-    }));
+    const published: Array<Record<string, unknown>> = [];
+    await page.route('**/api/showcase/publish', (route) => {
+      published.push(route.request().postDataJSON());
+      return json(route, {
+        success: true,
+        postId: 'post-e2e-studio',
+        showcasePath: '/showcase/post-e2e-studio',
+        ownerPath: '/post/post-e2e-studio/edit',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      });
+    });
     // Where the composer goes once the post is out: this test reads the address, not the post page.
     await page.route('**/showcase/post-e2e-studio**', (route) => route.fulfill({
       status: 200,
@@ -99,6 +103,16 @@ test.describe('publishing a creation opens the full composer', () => {
     await page.getByRole('button', { name: /publish public/i }).first().click();
     // The post's own way back names Studio.
     await expect(page).toHaveURL(/\/showcase\/post-e2e-studio\?returnTo=%2Fcreations$/, COLD_PAGE);
+    // Untouched, a creation's post goes out with a free recipe holding its
+    // exact prompt (owner, 2026-11-03), and without its saved inputs.
+    expect(published).toEqual([
+      expect.objectContaining({
+        generationId: CREATION.id,
+        resourceBundle: expect.objectContaining({ accessMode: 'free' }),
+      }),
+    ]);
+    expect(JSON.stringify(published[0].resourceBundle)).toContain(CREATION.prompt);
+    expect(published[0]).not.toHaveProperty('includeGenerationReferences');
     // The post took the composer's place in history, as the app's composer leaves its stack.
     await page.goBack();
     await expect(page).toHaveURL(/\/creations$/, COLD_PAGE);

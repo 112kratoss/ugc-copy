@@ -972,10 +972,15 @@ describe('/api/showcase/publish route', () => {
       sort_order: 1,
       metadata: null,
     }];
-    downloadMock.mockResolvedValueOnce({
-      data: new Blob(['reference-video'], { type: 'video/mp4' }),
+    // Answered by path, not by turn: the copy runs last, after every check and
+    // after the public copy of the output is read (#677's review), so a reply
+    // queued for "the first download" went to the output instead.
+    downloadMock.mockImplementation(async (...args: unknown[]) => ({
+      data: args[0] === 'user-1/gen-1/01-reference_video.mp4'
+        ? new Blob(['reference-video'], { type: 'video/mp4' })
+        : new Blob(['reference-image'], { type: 'image/png' }),
       error: null,
-    });
+    }));
 
     const { POST } = await import('@/app/api/showcase/publish/route');
     const response = await POST(new Request('http://localhost/api/showcase/publish', {
@@ -1033,6 +1038,18 @@ describe('/api/showcase/publish route', () => {
       contentType: 'video/mp4',
       storagePath: 'user-1/generation-references/gen-1/01-reference-video-input-2.mp4',
     }));
+    // The copy itself: the input read from its own folder and written once
+    // under the creator's references folder, never over a file already there.
+    expect(downloadMock).toHaveBeenCalledWith('user-1/gen-1/01-reference_video.mp4');
+    expect(uploadMock).toHaveBeenCalledWith(
+      'user-1/generation-references/gen-1/01-reference-video-input-2.mp4',
+      expect.any(Blob),
+      expect.objectContaining({ contentType: 'video/mp4', upsert: false }),
+    );
+    expect(data.recipeItemsAdded).toEqual([
+      expect.objectContaining({ id: 'reference-input-2', type: 'reference_video', contentType: 'video/mp4' }),
+    ]);
+    expect(data.referencesNotCopied).toBe(0);
   });
 
   it('keeps references creator-only for private publishes without paid unlocks', async () => {

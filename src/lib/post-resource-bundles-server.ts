@@ -1,6 +1,6 @@
 import { loadNsfwPostIds, hasNsfwReveal } from '@/lib/nsfw-content-server';
 import 'server-only';
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import { unstable_cache } from 'next/cache';
 import { cache } from 'react';
@@ -84,11 +84,24 @@ import { buildGenerationRecipeResourceItems } from '@/lib/generation-paywall';
 import {
   buildLegacyGenerationInputMedia,
   GENERATION_INPUT_MEDIA_COLUMNS,
+  isRecipeCopyableInputRow,
   loadGenerationInputMediaMap,
   mapGenerationInputMediaRowsWithoutUrls,
   type GenerationInputMediaItem,
   type GenerationInputMediaRow,
 } from '@/lib/generation-input-media';
+import { fitsPostResourceFilesBucket } from '@/lib/post-resource-file-upload-service';
+// One rule for the server and both composers: the exact prompt's item and the
+// copies of a creation's saved inputs.
+import {
+  CREATION_PROMPT_ITEM_ID,
+  CREATION_PROMPT_ITEM_TITLE,
+  creationReferenceCopyPath,
+  creationReferenceItemId,
+  creationReferencePathSegment,
+  isLockedCreationPromptItem,
+  needsCreationPromptItem,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import { slugifySourceTool } from '@/lib/source-tools';
 import { getUserOwnedStoredMediaLocation, parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { isOwnOrLinkedAccountId, readLinkedAccountIds, resolveLinkedAccountIds } from '@/lib/account-identity';
@@ -100,7 +113,6 @@ import {
   type GenerationInputOrigin,
 } from '@/lib/generation-input-origin';
 import {
-  generationReferenceCopyFolder,
   parseGenerationReferenceCopyPath,
   RECIPE_FILES_BUCKET,
 } from '@/lib/recipe-file-paths';
@@ -506,18 +518,6 @@ function normalizeBundleDisplayTitle(value: string | null | undefined): string {
   return !title || /^attached unlock$/i.test(title) ? 'Recipe' : title;
 }
 
-function sanitizePathSegment(value: string | null | undefined, fallback: string): string {
-  const sanitized = (value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/_/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-  return sanitized || fallback;
-}
-
 function inferExtensionFromPath(storagePath: string, mediaType: GenerationInputMediaRow['media_type']): string {
   const candidate = storagePath.split('?')[0]?.split('.').pop()?.toLowerCase();
   if (candidate && /^[a-z0-9]{2,5}$/.test(candidate)) {
@@ -577,9 +577,10 @@ function mapGenerationInputRemixUse(row: GenerationInputMediaRow): PostResourceR
 
 /**
  * Where "Include creation references" keeps its copy of one of a creation's saved inputs, in the
- * publisher's recipe files: `<publisher>/generation-references/<generation>/<NN>-<role>-<row id>.<ext>`
- * (the folder is `recipe-file-paths.ts`'s). The layout's one writer. Its readers are
- * `parseGenerationReferenceCopyPath` (a run start importing a copy, the checks of a recipe file's
+ * publisher's recipe files: `<publisher>/generation-references/<generation>/<NN>-<role>-<row id>.<ext>`.
+ * The layout is `creationReferenceCopyPath`'s, one rule with both composers
+ * (`ugc-mobile/lib/creation-recipe/`), in the folder `recipe-file-paths.ts` reads back. Its readers
+ * are `parseGenerationReferenceCopyPath` (a run start importing a copy, the checks of a recipe file's
  * later use) and `findGenerationReferenceCopies` (a remix finding the copies its recipe holds).
  */
 export function buildGenerationReferenceCopyPath(
@@ -587,11 +588,14 @@ export function buildGenerationReferenceCopyPath(
   generationId: string,
   row: Pick<GenerationInputMediaRow, 'id' | 'role' | 'sort_order' | 'storage_path' | 'media_type'>,
 ): string {
-  const sortOrder = Math.max(0, row.sort_order ?? 0).toString().padStart(2, '0');
-  const role = sanitizePathSegment(row.role, 'reference');
-  const id = sanitizePathSegment(row.id, 'input');
-  const extension = inferExtensionFromPath(row.storage_path, row.media_type);
-  return `${generationReferenceCopyFolder(ownerUserId, generationId)}${sortOrder}-${role}-${id}.${extension}`;
+  return creationReferenceCopyPath({
+    ownerUserId,
+    generationId,
+    inputId: row.id,
+    role: row.role,
+    sortOrder: row.sort_order,
+    extension: inferExtensionFromPath(row.storage_path, row.media_type),
+  });
 }
 
 export { parseGenerationReferenceCopyPath };
@@ -600,19 +604,43 @@ function buildReferenceSummary(count: number): string {
   return count === 1 ? '1 saved reference from this creation' : `${count} saved references from this creation`;
 }
 
+/**
+ * Whether a recipe already holds an item: one keeping the same file, or one
+ * under the same id. A copy's id is fixed by its input (`reference-<input
+ * id>`), so an item that kept that id over a file the creator chose instead
+ * holds the input's place; a second item under the id failed the save.
+ */
+function holdsResourceItem(
+  heldPaths: ReadonlySet<string>,
+  heldIds: ReadonlySet<string>,
+  item: Pick<PostResourceItem, 'id' | 'storagePath'>,
+): boolean {
+  return Boolean(
+    (item.storagePath && heldPaths.has(item.storagePath))
+    || (item.id && heldIds.has(item.id))
+  );
+}
+
 function mergeResourceItems(
   existingItems: PostResourceItem[] | undefined,
   referenceItems: PostResourceItem[]
 ): PostResourceItem[] {
-  const merged = [...(existingItems ?? [])];
+  // Read defensively: a recipe's items as a client sent them are kept as sent.
+  const existing = (existingItems ?? []).filter((item): item is PostResourceItem => Boolean(item) && typeof item === 'object');
+  const merged = [...existing];
   const seenStoragePaths = new Set(
     merged
       .map((item) => item.storagePath)
-      .filter((value): value is string => Boolean(value))
+      .filter((value): value is string => typeof value === 'string' && Boolean(value))
+  );
+  const seenIds = new Set(
+    merged
+      .map((item) => item.id)
+      .filter((value): value is string => typeof value === 'string' && Boolean(value))
   );
 
   for (const referenceItem of referenceItems) {
-    if (referenceItem.storagePath && seenStoragePaths.has(referenceItem.storagePath)) {
+    if (holdsResourceItem(seenStoragePaths, seenIds, referenceItem)) {
       continue;
     }
 
@@ -624,12 +652,27 @@ function mergeResourceItems(
     if (referenceItem.storagePath) {
       seenStoragePaths.add(referenceItem.storagePath);
     }
+    if (referenceItem.id) {
+      seenIds.add(referenceItem.id);
+    }
   }
 
   return merged.map((item, index) => ({
     ...item,
     sortOrder: item.sortOrder ?? index,
   }));
+}
+
+/**
+ * A recipe's items as sent, which the server's own are added after: as the
+ * client wrote them where there are any, so the recipe is still validated as
+ * written, else as its older flat fields make them (a prompt, notes, a
+ * workflow), which an added item would otherwise stop the database making.
+ */
+function sentResourceItems(resources: Partial<PostResourceBundleResources>): PostResourceItem[] {
+  return Array.isArray(resources.items) && resources.items.length > 0
+    ? resources.items
+    : normalizePostResourceItems(resources.items, resources);
 }
 
 export function mergeGenerationReferenceItemsIntoBundle(
@@ -651,8 +694,105 @@ export function mergeGenerationReferenceItemsIntoBundle(
       workflowShareUrl: resources.workflowShareUrl ?? null,
       attachments: normalizePostResourceAttachments(resources.attachments),
       allowRemix: Boolean(resources.allowRemix),
-      items: mergeResourceItems(normalizePostResourceItems(resources.items, resources), referenceItems),
+      items: mergeResourceItems(sentResourceItems(resources), referenceItems),
     },
+  };
+}
+
+/**
+ * Every creation's recipe has the creation's exact prompt (owner, 2026-11-03),
+ * on the server as in both composers: a recipe saved without a prompt item of
+ * its own gets the creation's, titled as the composers lock it. A build that
+ * still starts a creation's post on No recipe, a client that could not read the
+ * creation, or a direct call are held to the rule here. A recipe that keeps a
+ * prompt item of its own, however worded, keeps it alone.
+ */
+/**
+ * The recipe without the exact prompt's locked item (its title and its text
+ * the creation's, `isLockedCreationPromptItem`), for a creation that gives its
+ * recipe nothing (#677's re-review): a composer that still sends the card for
+ * one an operator removed or its creator archived has it taken out, as Remix
+ * withholds that prompt too. A prompt the creator rewrote, or wrote under a
+ * title of their own, stays theirs. The same recipe when there is none.
+ */
+export function withoutLockedCreationPromptItem(
+  bundle: PostResourceBundleInput | null,
+  prompt: string | null | undefined,
+): PostResourceBundleInput | null {
+  const items = bundle?.resources?.items;
+  if (!bundle || !Array.isArray(items)) {
+    return bundle;
+  }
+  const kept = items.filter((item) => !(
+    item && typeof item === 'object' && isLockedCreationPromptItem(item, prompt)
+  ));
+  if (kept.length === items.length) {
+    return bundle;
+  }
+  // A recipe whose first item went keeps a first one.
+  const settled = kept.length > 0 && !kept.some((item) => item?.isPrimary)
+    ? kept.map((item, index) => (index === 0 ? { ...item, isPrimary: true } : item))
+    : kept;
+  return { ...bundle, resources: { ...bundle.resources, items: settled } };
+}
+
+export function withCreationPromptItem(
+  bundle: PostResourceBundleInput | null,
+  prompt: string | null | undefined,
+): { bundle: PostResourceBundleInput | null; addedItem: PostResourceItem | null } {
+  const exactPrompt = prompt?.trim() ?? '';
+  if (!bundle || bundle.accessMode === 'none' || !exactPrompt) {
+    return { bundle, addedItem: null };
+  }
+
+  const resources = bundle.resources ?? {};
+  const items = normalizePostResourceItems(resources.items, resources);
+  if (!needsCreationPromptItem(items, exactPrompt)) {
+    return { bundle, addedItem: null };
+  }
+
+  const sent = sentResourceItems(resources);
+  const takenIds = new Set([
+    ...items.map((item) => item.id),
+    ...sent.flatMap((item) => (item && typeof item.id === 'string' ? [item.id] : [])),
+  ]);
+  let id = CREATION_PROMPT_ITEM_ID;
+  for (let suffix = 2; takenIds.has(id); suffix += 1) {
+    id = `${CREATION_PROMPT_ITEM_ID}-${suffix}`;
+  }
+  const promptItem: PostResourceItem = {
+    id,
+    scope: { kind: 'all' },
+    type: 'prompt',
+    role: 'primary',
+    sectionId: null,
+    title: CREATION_PROMPT_ITEM_TITLE,
+    description: null,
+    textContent: exactPrompt,
+    externalUrl: null,
+    storagePath: null,
+    contentType: null,
+    sizeBytes: null,
+    workflowSnapshot: null,
+    sortOrder: sent.length,
+    isPrimary: sent.length === 0,
+    remixUse: 'text_template',
+  };
+
+  return {
+    bundle: {
+      ...bundle,
+      resources: {
+        ...resources,
+        promptText: resources.promptText ?? null,
+        notesMarkdown: resources.notesMarkdown ?? null,
+        workflowShareUrl: resources.workflowShareUrl ?? null,
+        attachments: normalizePostResourceAttachments(resources.attachments),
+        allowRemix: Boolean(resources.allowRemix),
+        items: [...sent, promptItem],
+      },
+    },
+    addedItem: promptItem,
   };
 }
 
@@ -737,27 +877,54 @@ export async function loadGenerationInputOrigins(params: {
  * read knows that input is already in the recipe (S-F8).
  */
 function generationReferenceItemId(inputId: string, index: number): string {
-  return `reference-${sanitizePathSegment(inputId, String(index + 1))}`;
+  return creationReferenceItemId(inputId, index);
 }
 
+/** One of a creation's saved inputs planned into its recipe, before any byte moves. */
+export type PlannedGenerationReference = {
+  /** The item the recipe keeps the input as, under its copy's path. */
+  item: PostResourceItem;
+  /**
+   * The input's own file, which the copy reads. Null where the recipe, as sent
+   * or as stored, holds the copy already, or holds the input's place with a
+   * file the creator chose instead: there is nothing to copy.
+   */
+  source: { bucket: string; filePath: string } | null;
+};
+
+export type GenerationReferencePlan =
+  | { ok: true; references: PlannedGenerationReference[] }
+  // The saved inputs could not be read. Nothing is planned, and the read is
+  // not taken for "none kept".
+  | { ok: false };
+
 /**
- * Copies a creation's saved references into the publisher's resource files.
+ * The first half of "Include creation references": which of a creation's
+ * saved inputs join its recipe, as items under their copies' paths. No byte
+ * moves here. The copy waits until every check of the save has passed
+ * (`copyPlannedGenerationReferences`, #677's review), so a refused save pays
+ * for none of it.
  *
- * The copies are written under the publisher (`ownerUserId`); each reference is
- * read under its own row's owner, which must be the publisher or a guest linked
- * to it. A creation made as a guest before registering is published as the
- * account (02-4), but its references keep the guest's id and sit in the guest's
- * folder, so read under the publisher alone it packaged none of them.
+ * The copies are written under the publisher (`ownerUserId`). Each input is
+ * read from its own row's folder, which must be the publisher's or a guest's
+ * linked to it (`isRecipeCopyableInputRow`, the rule the owner's library read
+ * marks the inputs by). A creation made as a guest before registering is
+ * published as the account (02-4), but its inputs keep the guest's id and sit
+ * in the guest's folder: read under the publisher alone, none was packaged.
  *
- * `onlyRowIds` keeps the copies to those rows: a recipe that leaves the creator's
- * own uploads out shares only the references a remix brought from its original.
+ * `onlyRowIds` keeps the copies to those rows: a recipe that leaves the
+ * creator's own uploads out shares only the references a remix brought from
+ * its original. `heldItems` are the recipe's items as sent and as stored: an
+ * input whose copy is among them needs no second one, so saving the recipe
+ * again moves no bytes for the inputs it holds.
  */
-export async function buildGenerationReferenceResourceItems(params: {
+export async function planGenerationReferenceCopies(params: {
   supabase: SupabaseClient;
   ownerUserId: string;
   generationId: string;
   onlyRowIds?: ReadonlySet<string>;
-}): Promise<PostResourceItem[]> {
+  heldItems?: readonly Pick<PostResourceItem, 'id' | 'storagePath' | 'contentType' | 'sizeBytes'>[];
+}): Promise<GenerationReferencePlan> {
   const { data, error } = await params.supabase
     .from('generation_input_media')
     .select(GENERATION_INPUT_MEDIA_COLUMNS)
@@ -766,59 +933,43 @@ export async function buildGenerationReferenceResourceItems(params: {
 
   if (error) {
     logBackendError('post_resource_generation_refs_load_failed', { error: error });
-    return [];
+    return { ok: false };
   }
 
   const rows = ((data ?? []) as GenerationInputMediaRow[])
     .filter((row) => !params.onlyRowIds || params.onlyRowIds.has(row.id));
-  const items: PostResourceItem[] = [];
-  // The linked guests are asked for only when a row is not the publisher's own.
-  const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId)
+  // The linked guests are asked for only when a row is not the publisher's own,
+  // or reads as a recipe file under the publisher alone: the copyable rule then
+  // judges it by the set the owner's library read offers it by, so what the
+  // composers offer is what is copied.
+  const publisherOnly = new Set([params.ownerUserId]);
+  const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId
+    || isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, publisherOnly))
     ? await resolveLinkedAccountIds(params.supabase, params.ownerUserId)
     : [params.ownerUserId];
-  const publisherIds = new Set(sourceOwnerIds);
+  const heldItems = params.heldItems ?? [];
+  const heldByPath = new Map(heldItems.flatMap((item) => (item.storagePath ? [[item.storagePath, item] as const] : [])));
+  const heldIds = new Set(heldItems.flatMap((item) => (item.id ? [item.id] : [])));
 
+  const references: PlannedGenerationReference[] = [];
   for (const [index, row] of rows.entries()) {
     // A file of someone else's recipe the run used through the publisher's unlock is theirs to use,
-    // never to sell or give on (owner, 2026-11-03), whatever this recipe's switches say.
-    if (isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, publisherIds)) {
+    // never to sell or give on (owner, 2026-11-03), whatever this recipe's switches say: the copyable
+    // rule leaves it out (`isRecipeFileInput`), here and in what the composers offer.
+    if (!isRecipeCopyableInputRow(row, sourceOwnerIds)) {
       continue;
     }
-    const sourceLocation = sourceOwnerIds.includes(row.user_id)
-      ? getUserOwnedStoredMediaLocation(row.storage_path, row.user_id)
-      : null;
-    if (!sourceLocation) {
+    const source = getUserOwnedStoredMediaLocation(row.storage_path, row.user_id);
+    if (!source) {
       continue;
     }
 
     const targetPath = buildGenerationReferenceCopyPath(params.ownerUserId, params.generationId, row);
-
-    try {
-      const { data: blob, error: downloadError } = await params.supabase.storage
-        .from(sourceLocation.bucket)
-        .download(sourceLocation.filePath);
-
-      if (downloadError || !blob) {
-        logBackendError('post_resource_generation_ref_download_failed', { error: downloadError });
-        continue;
-      }
-
-      const contentType = inferReferenceContentType(row.storage_path, row.media_type, blob.type);
-      const { error: uploadError } = await params.supabase.storage
-        .from(POST_RESOURCE_FILES_BUCKET)
-        .upload(targetPath, blob, {
-          cacheControl: '3600',
-          contentType,
-          upsert: true,
-        });
-
-      if (uploadError) {
-        logBackendError('post_resource_generation_ref_copy_failed', { error: uploadError });
-        continue;
-      }
-
-      items.push({
-        id: generationReferenceItemId(row.id, index),
+    const id = generationReferenceItemId(row.id, index);
+    const held = heldByPath.get(targetPath);
+    references.push({
+      item: {
+        id,
         scope: { kind: 'all' },
         type: mapGenerationInputResourceType(row),
         role: mapGenerationInputResourceRole(row.role),
@@ -828,19 +979,291 @@ export async function buildGenerationReferenceResourceItems(params: {
         textContent: null,
         externalUrl: null,
         storagePath: targetPath,
-        contentType,
-        sizeBytes: typeof blob.size === 'number' ? blob.size : null,
+        // The file's own type and size once the copy reads them; until then,
+        // what its name and its kind say.
+        contentType: held?.contentType ?? inferReferenceContentType(row.storage_path, row.media_type, null),
+        sizeBytes: held?.sizeBytes ?? null,
         workflowSnapshot: null,
-        sortOrder: items.length,
+        sortOrder: references.length,
         isPrimary: index === 0,
         remixUse: mapGenerationInputRemixUse(row),
+      },
+      source: held || heldIds.has(id) ? null : source,
+    });
+  }
+
+  return { ok: true, references };
+}
+
+export type CopiedGenerationReferences = {
+  /** Each input copied, or found at its copy's path, by item id: its file's own type and size. */
+  files: Map<string, { contentType: string; sizeBytes: number | null }>;
+  /** The inputs that could not be copied, by item id. */
+  failedItemIds: Set<string>;
+};
+
+function isStorageObjectExistsError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as { status?: unknown; statusCode?: unknown; message?: unknown };
+  return candidate.status === 409
+    || candidate.statusCode === '409'
+    || (typeof candidate.message === 'string' && /already exists|duplicate/i.test(candidate.message));
+}
+
+type ReferenceFileCopy =
+  | { outcome: 'created' | 'present'; contentType: string; sizeBytes: number | null }
+  | { outcome: 'failed' };
+
+/**
+ * One input's file into the recipe files bucket. Where the file's type and
+ * size fit that bucket, the storage service copies it, and the bytes never
+ * pass through here: the bucket's limits are asked first, as an upload is
+ * held to them, and a file it would refuse is no copy. Where the file cannot
+ * be described, it is read and written again, as every copy was before. A
+ * file already at the copy's path is this input's (the path is fixed by the
+ * input) and stands. A copy is never removed again, a refused save's included
+ * (#677's re-review): the next save of the recipe finds it at that path, and a
+ * save running beside the refused one may already name it.
+ */
+async function copyGenerationReferenceFile(
+  supabase: SupabaseClient,
+  source: { bucket: string; filePath: string },
+  targetPath: string,
+  fallbackContentType: string,
+): Promise<ReferenceFileCopy> {
+  const sourceFiles = supabase.storage.from(source.bucket);
+
+  try {
+    const { data: info, error: infoError } = await sourceFiles.info(source.filePath);
+    if (!infoError && info) {
+      const contentType = info.contentType?.trim() || fallbackContentType;
+      const sizeBytes = typeof info.size === 'number' ? info.size : null;
+      if (!fitsPostResourceFilesBucket(contentType, sizeBytes)) {
+        logBackendWarning('post_resource_generation_ref_outside_bucket_limits', { contentType, sizeBytes });
+        return { outcome: 'failed' };
+      }
+      const { error: copyError } = await sourceFiles.copy(source.filePath, targetPath, {
+        destinationBucket: POST_RESOURCE_FILES_BUCKET,
       });
-    } catch (copyError) {
-      logBackendError('post_resource_generation_ref_package_failed', { error: copyError });
+      if (!copyError) {
+        return { outcome: 'created', contentType, sizeBytes };
+      }
+      if (isStorageObjectExistsError(copyError)) {
+        return { outcome: 'present', contentType, sizeBytes };
+      }
+      logBackendWarning('post_resource_generation_ref_storage_copy_failed', { error: copyError });
+    }
+  } catch (copyError) {
+    logBackendWarning('post_resource_generation_ref_storage_copy_failed', { error: copyError });
+  }
+
+  try {
+    const { data: blob, error: downloadError } = await sourceFiles.download(source.filePath);
+    if (downloadError || !blob) {
+      logBackendError('post_resource_generation_ref_download_failed', { error: downloadError });
+      return { outcome: 'failed' };
+    }
+
+    const contentType = blob.type?.trim() ? blob.type : fallbackContentType;
+    const sizeBytes = typeof blob.size === 'number' ? blob.size : null;
+    const { error: uploadError } = await supabase.storage
+      .from(POST_RESOURCE_FILES_BUCKET)
+      .upload(targetPath, blob, {
+        cacheControl: '3600',
+        contentType,
+        upsert: false,
+      });
+    if (!uploadError) {
+      return { outcome: 'created', contentType, sizeBytes };
+    }
+    if (isStorageObjectExistsError(uploadError)) {
+      return { outcome: 'present', contentType, sizeBytes };
+    }
+    logBackendError('post_resource_generation_ref_copy_failed', { error: uploadError });
+    return { outcome: 'failed' };
+  } catch (copyError) {
+    logBackendError('post_resource_generation_ref_package_failed', { error: copyError });
+    return { outcome: 'failed' };
+  }
+}
+
+/**
+ * The second half: the planned inputs' files copied into the recipe files
+ * bucket, one after another, once every check of the save has passed and
+ * right before it writes. An input planned without a source is in the recipe
+ * already and is left as it is.
+ */
+export async function copyPlannedGenerationReferences(params: {
+  supabase: SupabaseClient;
+  references: readonly PlannedGenerationReference[];
+}): Promise<CopiedGenerationReferences> {
+  const copied: CopiedGenerationReferences = { files: new Map(), failedItemIds: new Set() };
+  for (const { item, source } of params.references) {
+    if (!source || !item.id || !item.storagePath) {
+      continue;
+    }
+    const result = await copyGenerationReferenceFile(
+      params.supabase,
+      source,
+      item.storagePath,
+      item.contentType ?? 'application/octet-stream',
+    );
+    if (result.outcome === 'failed') {
+      copied.failedItemIds.add(item.id);
+      continue;
+    }
+    copied.files.set(item.id, { contentType: result.contentType, sizeBytes: result.sizeBytes });
+  }
+  return copied;
+}
+
+/**
+ * The recipe as the copy left it: each copied input's item with its file's
+ * own type and size, and the inputs that could not be copied taken out, since
+ * an item may name only a file that is there.
+ */
+export function applyCopiedGenerationReferences(
+  bundle: PostResourceBundleInput | null,
+  copied: CopiedGenerationReferences,
+): PostResourceBundleInput | null {
+  const items = bundle?.resources?.items;
+  if (!bundle || !Array.isArray(items) || (copied.files.size === 0 && copied.failedItemIds.size === 0)) {
+    return bundle;
+  }
+
+  const kept = items
+    .filter((item) => !(item?.id && copied.failedItemIds.has(item.id)))
+    .map((item) => {
+      const file = item?.id ? copied.files.get(item.id) : undefined;
+      return file ? { ...item, contentType: file.contentType, sizeBytes: file.sizeBytes } : item;
+    });
+  // A recipe of the inputs alone loses its first item with the first input.
+  const settled = kept.length > 0 && !kept.some((item) => item?.isPrimary)
+    ? kept.map((item, index) => (index === 0 ? { ...item, isPrimary: true } : item))
+    : kept;
+  return { ...bundle, resources: { ...bundle.resources, items: settled } };
+}
+
+export const GENERATION_REFERENCES_UNREADABLE_ERROR = 'Could not read this creation’s saved inputs. Try again.';
+export const GENERATION_REFERENCES_NOT_COPIED_ERROR = 'Could not copy this creation’s saved inputs into the recipe. Try again.';
+
+export type CreationRecipeBundlePreparation =
+  | {
+    ok: true;
+    bundle: PostResourceBundleInput | null;
+    /** The items the server put into the recipe beside those sent, by id: the exact prompt, the saved inputs. */
+    addedItemIds: string[];
+    /** The saved inputs whose files the save copies once every check has passed. */
+    pendingCopies: PlannedGenerationReference[];
+    /** Saved inputs asked for that the recipe does not get: the creation is off public view. */
+    refusedReferenceCount: number;
+  }
+  | { ok: false; status: 400 | 500; error: string };
+
+/**
+ * A creation's post's recipe as the publish and the edit save it, by one rule
+ * (#677's review): the creation's exact prompt where the recipe has no prompt
+ * item of its own; where the creator asked and the creation may share them,
+ * its saved inputs, planned under their copies' paths with no byte moved yet;
+ * and then the recipe, those items included, validated as one. A recipe made
+ * of the inputs alone is sent with no item of its own, and the edit refused it
+ * before they were merged in.
+ *
+ * `mayShareCreation` is false for a creation taken off public view, by an
+ * operator's removal or its creator's archive (`creationMaySharePostInputs`):
+ * nothing of it goes into the recipe, neither its exact prompt, which Remix
+ * withholds from such a creation too, nor its saved inputs. Those asked for are
+ * counted as refused, and a locked card a composer sent for it is taken out.
+ * `addsCreationPrompt` is false for a recipe people have or had (#677's
+ * re-reviews, decided there): an older composer sends the recipe back on
+ * every save, so the prompt would reach them as a revision nobody saw. Such a
+ * recipe stays as sold, and its seller adds a prompt item as any other.
+ */
+export async function prepareCreationRecipeBundle(params: {
+  supabase: SupabaseClient;
+  ownerUserId: string;
+  bundle: PostResourceBundleInput | null;
+  /** The post's creation, where the recipe is one's: its id and its prompt. */
+  creation: { id: string; prompt: string | null } | null;
+  includeReferences: boolean;
+  mayShareCreation: boolean;
+  addsCreationPrompt: boolean;
+  onlyRowIds?: ReadonlySet<string>;
+  /** The recipe's items as stored, whose copies need no second one. */
+  storedItems?: readonly PostResourceItem[];
+  mediaKeys?: Iterable<string> | null;
+  dependencies?: {
+    planGenerationReferenceCopies?: typeof planGenerationReferenceCopies;
+    validatePostResourceBundleInput?: typeof validatePostResourceBundleInput;
+  };
+}): Promise<CreationRecipeBundlePreparation> {
+  const plan = params.dependencies?.planGenerationReferenceCopies ?? planGenerationReferenceCopies;
+  const validate = params.dependencies?.validatePostResourceBundleInput ?? validatePostResourceBundleInput;
+  const addedItemIds: string[] = [];
+  let pendingCopies: PlannedGenerationReference[] = [];
+  let refusedReferenceCount = 0;
+  let bundle = params.bundle;
+
+  if (params.creation && bundle && bundle.accessMode !== 'none') {
+    if (!params.mayShareCreation) {
+      // Nothing of a creation off public view, a locked card a composer sent
+      // for it included (#677's re-review).
+      bundle = withoutLockedCreationPromptItem(bundle, params.creation.prompt);
+    } else if (params.addsCreationPrompt) {
+      const withPrompt = withCreationPromptItem(bundle, params.creation.prompt);
+      bundle = withPrompt.bundle;
+      if (withPrompt.addedItem?.id) {
+        addedItemIds.push(withPrompt.addedItem.id);
+      }
+    }
+
+    if (params.includeReferences && bundle) {
+      const resources = bundle.resources ?? {};
+      const sentItems = normalizePostResourceItems(resources.items, resources);
+      const planned = await plan({
+        supabase: params.supabase,
+        ownerUserId: params.ownerUserId,
+        generationId: params.creation.id,
+        ...(params.onlyRowIds ? { onlyRowIds: params.onlyRowIds } : {}),
+        heldItems: [...sentItems, ...(params.storedItems ?? [])],
+      });
+      if (!planned.ok) {
+        return { ok: false, status: 500, error: GENERATION_REFERENCES_UNREADABLE_ERROR };
+      }
+
+      const sentPaths = new Set(sentItems.flatMap((item) => (item.storagePath ? [item.storagePath] : [])));
+      const sentIds = new Set(sentItems.map((item) => item.id));
+      const toAdd = planned.references.filter((reference) => !holdsResourceItem(sentPaths, sentIds, reference.item));
+      if (!params.mayShareCreation) {
+        refusedReferenceCount = toAdd.length;
+      } else if (toAdd.length > 0) {
+        bundle = mergeGenerationReferenceItemsIntoBundle(bundle, toAdd.map((reference) => reference.item));
+        addedItemIds.push(...toAdd.flatMap((reference) => (reference.item.id ? [reference.item.id] : [])));
+        pendingCopies = toAdd.filter((reference) => reference.source);
+      }
     }
   }
 
-  return items;
+  const validationError = validate(bundle ?? null, { ownerUserId: params.ownerUserId, mediaKeys: params.mediaKeys });
+  if (validationError) {
+    return { ok: false, status: 400, error: validationError };
+  }
+
+  return { ok: true, bundle, addedItemIds, pendingCopies, refusedReferenceCount };
+}
+
+/** The items the server put into a saved recipe, as it stores them: what a composer adopts into its own. */
+export function readAddedRecipeItems(
+  bundle: PostResourceBundleInput | null,
+  addedItemIds: readonly string[],
+): PostResourceItem[] {
+  if (addedItemIds.length === 0 || !Array.isArray(bundle?.resources?.items)) {
+    return [];
+  }
+  const added = new Set(addedItemIds);
+  return bundle.resources.items.filter((item) => Boolean(item?.id && added.has(item.id)));
 }
 
 // Trimmed again after the cut, as the list RPC trims what it is sent: a query
@@ -1088,8 +1511,8 @@ function addGenerationRecipeReferenceItems(
   inputMedia: GenerationInputMediaItem[],
 ): PostResourceItem[] {
   // "Include creation references" already stored a copy of an input as
-  // `reference-<input id>` (buildGenerationReferenceResourceItems); listing
-  // the live input beside it showed every reference twice (S-F8).
+  // `reference-<input id>` (planGenerationReferenceCopies); listing the live
+  // input beside it showed every reference twice (S-F8).
   const storedItemIds = new Set(storedItems.map((item) => item.id));
   const unstoredInputMedia = inputMedia.filter((input, index) => (
     !storedItemIds.has(generationReferenceItemId(input.id, index))
@@ -1445,7 +1868,7 @@ export function findGenerationReferenceCopies(params: {
   for (const rowId of params.inputRowIds) {
     // `generationReferenceItemId` without its fallback to the row's place: an
     // id that sanitizes to nothing names no row.
-    const rowSegment = sanitizePathSegment(rowId, '');
+    const rowSegment = creationReferencePathSegment(rowId, '');
     if (!rowSegment || copies.has(rowId)) continue;
     const copy = params.items.find((item) => (
       item.id === `reference-${rowSegment}`
@@ -1459,7 +1882,7 @@ export function findGenerationReferenceCopies(params: {
 /** As long as every other link a remix source hands out: the remix form holds it for its session. */
 const GENERATION_REFERENCE_COPY_URL_TTL_SECONDS = 3600;
 
-/** A recipe's copy of one of its creation's saved inputs (`buildGenerationReferenceResourceItems`). */
+/** A recipe's copy of one of its creation's saved inputs (`planGenerationReferenceCopies`). */
 export interface GenerationReferenceCopy {
   /** Where the copy is kept: `post_resource_files/<publisher>/generation-references/<generation>/<file>`. */
   storagePath: string;

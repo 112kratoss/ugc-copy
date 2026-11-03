@@ -44,8 +44,8 @@ const EXEMPT: Array<{ file: string; token: string; count: number; why: string }>
   {
     file: 'src/app/post/new/NewPostClient.tsx',
     token: 'rounded',
-    count: 2,
-    why: "the two 16px native checkboxes of From this creation, which keep the platform's own small rounded square",
+    count: 1,
+    why: "the 16px native checkbox of From this creation, which keeps the platform's own small rounded square",
   },
   {
     file: 'src/app/welcome-reward-celebration.css',

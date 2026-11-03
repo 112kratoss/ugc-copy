@@ -18,7 +18,15 @@ import {
   getExplicitPublishGeneration,
   getPostComposerDetailErrors,
   getPublicPostQualityError,
+  adoptRecipeItemsAdded,
+  countCreationReferenceFiles,
+  getCreationInputsInRecipe,
   hasCreationPromptCard,
+  hasGenerationReferences,
+  isLockedCreationPromptCard,
+  willAttachGenerationReferences,
+  withCreationPromptCard,
+  withCreationRecipeDefaults,
   TITLE_MAX_LENGTH,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
@@ -39,10 +47,23 @@ import {
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
+  getRecipeTitleHint,
+  isRecipeTitleTooShortRefusal,
+  isRecipeTitleTooShortToPublish,
+  followCreationPromptRule,
+  getCreationRecipePrompt,
   type PostComposerDraft,
 } from '../lib/post-new-view-model';
+import { ApiError } from '../lib/api-client';
+import {
+  RECIPE_TITLE_MIN_LENGTH,
+  RECIPE_TITLE_TOO_SHORT_HINT,
+  RECIPE_TITLE_TOO_SHORT_REFUSAL,
+} from '../lib/post-publish-policy/post-publish-policy';
 import { normalizeAuthReturnTo } from '../lib/auth-navigation';
-import type { GenerationListItem } from '../lib/types';
+import { describeCreationInputsSwitch } from '../lib/creation-recipe/creation-recipe';
+import { getPostComposerDraftSignature } from '../lib/post-composer-draft-resume';
+import type { GenerationListItem, PostResourceItem } from '../lib/types';
 
 function generation(overrides: Partial<GenerationListItem>): GenerationListItem {
   return {
@@ -302,9 +323,9 @@ describe('post new view model', () => {
 
       const typed = creationDraft({ title: 'Dawn fox' });
       expect(followCreationTitleSuggestion(typed, withRecipe(typed), untitled).title).toBe('Dawn fox');
-      // Turning the exact-prompt card on also turns a recipe on: a free one, which
-      // hands its prompt to anyone, so the prompt's title stays (owner, 2026-10-29).
-      const withPromptCard = applyCreationPromptResource(suggested, untitled, true);
+      // The exact-prompt card also turns a recipe on: a free one, which hands
+      // its prompt to anyone, so the prompt's title stays (owner, 2026-10-29).
+      const withPromptCard = applyCreationPromptResource(suggested, untitled);
       expect(withPromptCard.resource.accessMode).toBe('free');
       expect(followCreationTitleSuggestion(suggested, withPromptCard, untitled).title).toBe('Red fox running through fresh snow at dawn');
       // A creation's own title is the creator's, recipe or not.
@@ -474,12 +495,9 @@ describe('post new view model', () => {
     });
   });
 
-  // "Include exact prompt" reads its state from the recipe's cards: resetting it
-  // to defaults on an edit showed it OFF for a post already sharing its prompt,
-  // and flipping it deleted the very card the post was sharing. The card is
-  // found by its text, as on the web: matched by the app's own card id, a
-  // prompt card made on the web read OFF, and switching it on added a second
-  // copy of the prompt.
+  // The card is found by its text, as on the web: matched by the app's own card
+  // id, a prompt card made on the web read as missing, and adding the prompt
+  // made a second copy of it.
   describe("the creation's prompt card", () => {
     const item = generation({ prompt: 'venom hero shot' });
     // As the web makes it: the card type's own title and a random id.
@@ -499,7 +517,7 @@ describe('post new view model', () => {
       expect(hasCreationPromptCard([], item)).toBe(false);
     });
 
-    it('is not added twice, and switching it off takes the one made elsewhere', () => {
+    it('is not added twice', () => {
       const draft = {
         ...getDefaultPostComposerDraft(),
         mode: 'creation' as const,
@@ -508,12 +526,12 @@ describe('post new view model', () => {
         resource: { ...getDefaultPostComposerDraft().resource, accessMode: 'free' as const, cards: [webCard] },
       };
 
-      expect(applyCreationPromptResource(draft, item, true).resource.cards).toEqual([webCard]);
-      expect(applyCreationPromptResource(draft, item, false).resource.cards).toEqual([]);
+      expect(applyCreationPromptResource(draft, item).resource.cards).toEqual([webCard]);
     });
 
-    // The trash button takes only the card; the state read from the cards goes with it.
-    it('reads as gone once its card is removed', () => {
+    // An edit keeps a prompt item the recipe already has (`withCreationPromptCard`),
+    // so a creation's recipe can hold a prompt other than the creation's own.
+    it('reads a recipe without it as a free recipe, not the prompt recipe', () => {
       const guide = createPostComposerResourceCard('guide', { title: 'Lighting notes', textContent: 'Key light at 45 degrees.' });
       const draft = applyCreationPromptResource({
         ...getDefaultPostComposerDraft(),
@@ -521,12 +539,284 @@ describe('post new view model', () => {
         title: 'Venom hero',
         selectedGenerationId: item.id,
         resource: { ...getDefaultPostComposerDraft().resource, accessMode: 'free', cards: [guide] },
-      }, item, true);
+      }, item);
       expect(getPostComposerPackageStatus(draft, item).label).toBe('Prompt recipe ready');
 
       const withoutPrompt = { ...draft, resource: { ...draft.resource, cards: [guide] } };
       expect(hasCreationPromptCard(withoutPrompt.resource.cards, item)).toBe(false);
       expect(getPostComposerPackageStatus(withoutPrompt, item).label).toBe('Free recipe ready');
+    });
+
+    // Locked in the recipe (owner, 2026-11-03): drawn with neither Edit nor Remove.
+    // #677's review: locked by its title and its text together. A card that
+    // kept the title over other words, or holds the words under a title of its
+    // own, stays the creator's to edit.
+    it('is the one locked item, found by its title and its text together', () => {
+      expect(isLockedCreationPromptCard(createPostComposerResourceCard('prompt', {
+        title: 'Exact generation prompt',
+        textContent: 'venom hero shot',
+      }), item)).toBe(true);
+      expect(isLockedCreationPromptCard(webCard, item)).toBe(false);
+      expect(isLockedCreationPromptCard(createPostComposerResourceCard('prompt', {
+        title: 'Exact generation prompt',
+        textContent: 'the prompt a sell link wrote',
+      }), item)).toBe(false);
+      expect(isLockedCreationPromptCard(createPostComposerResourceCard('prompt', { textContent: 'my own prompt' }), item)).toBe(false);
+      expect(isLockedCreationPromptCard(createPostComposerResourceCard('guide', { textContent: 'venom hero shot' }), item)).toBe(false);
+      // A creation with no prompt has nothing to lock.
+      expect(isLockedCreationPromptCard(webCard, generation({ prompt: null }))).toBe(false);
+      expect(isLockedCreationPromptCard(webCard, null)).toBe(false);
+    });
+  });
+
+  // A creation's new post starts on a free recipe with its exact prompt in it
+  // (owner, 2026-11-03), as the web composer does.
+  describe("a creation's recipe defaults", () => {
+    const opened = (overrides: Partial<PostComposerDraft> = {}): PostComposerDraft => ({
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      proofMode: 'media',
+      selectedGenerationId: 'gen-1',
+      ...overrides,
+    });
+
+    it('starts a free recipe holding the exact prompt, with its preview suggested', () => {
+      const draft = withCreationRecipeDefaults(opened(), generation({}));
+      expect(draft.resource.accessMode).toBe('free');
+      expect(draft.resource.cards).toHaveLength(1);
+      expect(draft.resource.cards[0]).toMatchObject({ type: 'prompt', title: 'Exact generation prompt', textContent: 'Make a glossy product photo' });
+      expect(draft.resource.previewText).toBe('Includes the prompt.');
+      // The saved inputs stay the creator's choice.
+      expect(draft.creationPackage.attachGenerationReferences).toBe(false);
+    });
+
+    // An empty recipe would only stop Publish ("Add at least one item.").
+    it('leaves a creation with no prompt on No recipe', () => {
+      const untouched = opened();
+      expect(withCreationRecipeDefaults(untouched, generation({ prompt: '  ' }))).toBe(untouched);
+      expect(withCreationRecipeDefaults(untouched, generation({ prompt: null }))).toBe(untouched);
+    });
+
+    it('leaves a template result, and a recipe already chosen, as they are', () => {
+      const template = opened();
+      expect(withCreationRecipeDefaults(template, generation({
+        origin: 'template',
+        template: { runId: 'run-1', templateId: 'template-1', templateTitle: 'Ghost rider' },
+      }))).toBe(template);
+
+      const paid = opened({ resource: { ...getDefaultPostComposerDraft().resource, accessMode: 'paid' } });
+      expect(withCreationRecipeDefaults(paid, generation({}))).toBe(paid);
+
+      const guide = createPostComposerResourceCard('guide', { textContent: 'Key light at 45 degrees.' });
+      const withItem = opened({ resource: { ...getDefaultPostComposerDraft().resource, cards: [guide] } });
+      expect(withCreationRecipeDefaults(withItem, generation({}))).toBe(withItem);
+    });
+
+    it('adds the exact prompt to an edited recipe only when it has no prompt item', () => {
+      const guide = createPostComposerResourceCard('guide', { textContent: 'Key light at 45 degrees.' });
+      const recipe = { ...getDefaultPostComposerDraft().resource, accessMode: 'free' as const, cards: [guide] };
+      const added = withCreationPromptCard(recipe, ' Make a glossy product photo ');
+      expect(added.cards.map((card) => [card.type, card.title, card.textContent])).toEqual([
+        ['prompt', 'Exact generation prompt', 'Make a glossy product photo'],
+        ['guide', guide.title, 'Key light at 45 degrees.'],
+      ]);
+      // Its own prompt item, however worded, is kept and nothing is added.
+      const own = { ...recipe, cards: [createPostComposerResourceCard('prompt', { textContent: 'An older wording' })] };
+      expect(withCreationPromptCard(own, 'Make a glossy product photo')).toBe(own);
+      // No prompt, nothing to add; and a post with no recipe gets an item only
+      // inside the recipe it can turn on (the access mode is left alone).
+      expect(withCreationPromptCard(recipe, null)).toBe(recipe);
+      const none = getDefaultPostComposerDraft().resource;
+      expect(withCreationPromptCard(none, 'Make a glossy product photo').accessMode).toBe('none');
+    });
+
+  });
+
+  // #677's review: the app's composer reads a creation's recipe by the rules the
+  // server and the web composer read it by (ugc-mobile/lib/creation-recipe).
+  describe('a creation’s recipe, by the shared rule', () => {
+    const creation = (overrides: Partial<GenerationListItem> = {}) => generation({
+      prompt: 'Make a glossy product photo',
+      input_media: [
+        { id: 'input-1', url: 'https://cdn.example.com/a.jpg', kind: 'image', recipeCopyable: true },
+        { id: 'input-2', url: 'https://cdn.example.com/b.mp3', mediaType: 'audio', recipeCopyable: true },
+        // In another account's folder: the server copies none of it.
+        { id: 'input-3', url: 'https://cdn.example.com/c.jpg', kind: 'image', recipeCopyable: false },
+        // From a server that did not say: nothing is promised.
+        { id: 'input-4', url: 'https://cdn.example.com/d.jpg', kind: 'image' },
+      ],
+      ...overrides,
+    });
+    const copyCard = (inputId: string) => createPostComposerResourceCard('reference_media', {
+      attachments: [{
+        id: `reference-${inputId}`,
+        kind: 'file',
+        label: 'Reference',
+        storagePath: `user-1/generation-references/gen-1/00-reference-${inputId}.jpg`,
+      }],
+    });
+    const recipeDraft = (
+      cards: PostComposerDraft['resource']['cards'],
+      overrides: Partial<PostComposerDraft> = {},
+    ): PostComposerDraft => ({
+      ...getDefaultPostComposerDraft(),
+      mode: 'creation',
+      proofMode: 'media',
+      title: 'Hero product image',
+      selectedGenerationId: 'gen-1',
+      resource: {
+        ...getDefaultPostComposerDraft().resource,
+        accessMode: 'free',
+        previewText: 'The product references behind this still.',
+        cards,
+      },
+      ...overrides,
+    });
+
+    // #677's review: zero items with the inputs switched on sent No recipe, and
+    // the save deleted the recipe it meant to fill.
+    it('sends a recipe of the saved inputs alone from an edit, never No recipe', () => {
+      const draft = recipeDraft([], { creationPackage: { attachGenerationReferences: true } });
+      const payload = buildUpdatePostPayload(true, draft, creation());
+
+      expect(payload.resourceBundle).toMatchObject({ accessMode: 'free', resources: { items: [] } });
+      expect(payload).toHaveProperty('includeGenerationReferences', true);
+      // Switched off, the same empty recipe is No recipe, which the save asks about first.
+      expect(buildUpdatePostPayload(true, { ...draft, creationPackage: { attachGenerationReferences: false } }, creation()).resourceBundle)
+        .toEqual({ accessMode: 'none' });
+    });
+
+    // #677's re-reviews: a creation an operator removed or its creator archived
+    // gives its recipe nothing, and a recipe people have or had gains no exact
+    // prompt, by the rule the server and the web read too.
+    it('neither adds nor keeps the exact prompt of a creation off public view, and adds none to a held recipe', () => {
+      const lockedCard = withCreationPromptCard(getDefaultPostComposerDraft().resource, 'Make a glossy product photo').cards[0];
+      const ownPrompt = createPostComposerResourceCard('prompt', { title: 'My prompt', textContent: 'Make a glossy product photo' });
+      const withCards = (cards: PostComposerDraft['resource']['cards']) => recipeDraft(cards).resource;
+      const offView = creation({ archived_at: '2026-11-02T00:00:00.000Z' });
+      const removed = creation({ moderation_removed_at: '2026-11-02T00:00:00.000Z', archived_at: '2026-11-02T00:00:00.000Z' });
+
+      expect(getCreationRecipePrompt(creation())).toBe('Make a glossy product photo');
+      expect(getCreationRecipePrompt(offView)).toBeNull();
+      expect(getCreationRecipePrompt(removed)).toBeNull();
+      expect(followCreationPromptRule(withCards([lockedCard, ownPrompt]), removed, { addsPrompt: true }).cards).toEqual([ownPrompt]);
+      expect(followCreationPromptRule(withCards([]), offView, { addsPrompt: true }).cards).toEqual([]);
+      expect(isLockedCreationPromptCard(lockedCard, offView)).toBe(false);
+
+      const held = withCards([]);
+      expect(followCreationPromptRule(held, creation(), { addsPrompt: false })).toBe(held);
+      expect(followCreationPromptRule(held, creation(), { addsPrompt: true }).cards.map((card) => card.id)).toEqual(['creation-prompt']);
+
+      // A new post of such a creation starts on No recipe, as one with no prompt.
+      const opened = { ...getDefaultPostComposerDraft(), mode: 'creation' as const, proofMode: 'media' as const, selectedGenerationId: 'gen-1' };
+      expect(withCreationRecipeDefaults(opened, offView).resource).toMatchObject({ accessMode: 'none', cards: [] });
+    });
+
+    // #677's review: the default prompt card took a random id on every open, so
+    // an untouched composer reopened over its kept draft read as unsaved work.
+    it('gives the exact prompt’s card one id, so an untouched draft reads the same each time it opens', () => {
+      const opened = { ...getDefaultPostComposerDraft(), mode: 'creation' as const, proofMode: 'media' as const, selectedGenerationId: 'gen-1' };
+      const first = withCreationRecipeDefaults(opened, creation());
+      const second = withCreationRecipeDefaults(opened, creation());
+
+      expect(first.resource.cards.map((card) => card.id)).toEqual(['creation-prompt']);
+      expect(getPostComposerDraftSignature(first)).toBe(getPostComposerDraftSignature(second));
+      expect(withCreationPromptCard(getDefaultPostComposerDraft().resource, 'Make a glossy product photo').cards[0]?.id).toBe('creation-prompt');
+    });
+
+    // #677's review: a rewritten "Exact generation prompt" was frozen, and the
+    // app's text-only check disagreed with the lock.
+    it('locks the exact prompt by its title and its text, and counts the prompt by its text', () => {
+      const exact = createPostComposerResourceCard('prompt', { title: 'Exact generation prompt', textContent: ' Make a glossy product photo ' });
+      const rewritten = createPostComposerResourceCard('prompt', { title: 'Exact generation prompt', textContent: 'Make a glossy photo, redacted' });
+      const ownWords = createPostComposerResourceCard('prompt', { title: 'Prompt or script', textContent: 'Make a glossy product photo' });
+
+      expect(isLockedCreationPromptCard(exact, creation())).toBe(true);
+      expect(isLockedCreationPromptCard(rewritten, creation())).toBe(false);
+      expect(isLockedCreationPromptCard(ownWords, creation())).toBe(false);
+      // The recipe holds the exact prompt wherever its text is; a rewritten one is not it.
+      expect(hasCreationPromptCard([ownWords], creation())).toBe(true);
+      expect(hasCreationPromptCard([rewritten], creation())).toBe(false);
+      expect(getPostComposerPackageStatus(recipeDraft([rewritten]), creation()).label).toBe('Free recipe ready');
+    });
+
+    // #677's review: the strip showed and counted inputs the server never copies.
+    it('offers, shows and counts only the saved inputs the server copies', () => {
+      expect(getCreationInputsInRecipe([], creation()).offered.map((input) => [input.id, input.mediaKind])).toEqual([
+        ['input-1', 'image'],
+        ['input-2', 'audio'],
+      ]);
+      expect(countCreationReferenceFiles(creation())).toBe(2);
+      expect(hasGenerationReferences(creation())).toBe(true);
+      const notCopied = creation({ input_media: [{ id: 'input-3', url: 'https://cdn.example.com/c.jpg', kind: 'image', recipeCopyable: false }] });
+      expect(hasGenerationReferences(notCopied)).toBe(false);
+      expect(countCreationReferenceFiles(notCopied)).toBe(0);
+      expect(willAttachGenerationReferences(notCopied, recipeDraft([], { creationPackage: { attachGenerationReferences: true } }))).toBe(false);
+    });
+
+    // #677's review: one copy read as "Included in this recipe", so a partial
+    // copy could never be completed.
+    it('reads the inputs as included only once each has its copy, and asks for the rest until then', () => {
+      const switchedOn = { creationPackage: { attachGenerationReferences: true } };
+      const partial = getCreationInputsInRecipe([copyCard('input-1')], creation());
+      expect(partial).toMatchObject({ included: 1, allIncluded: false });
+      expect(willAttachGenerationReferences(creation(), recipeDraft([copyCard('input-1')], switchedOn))).toBe(true);
+
+      const whole = getCreationInputsInRecipe([copyCard('input-1'), copyCard('input-2')], creation());
+      expect(whole).toMatchObject({ included: 2, allIncluded: true });
+      expect(willAttachGenerationReferences(creation(), recipeDraft([copyCard('input-1'), copyCard('input-2')], switchedOn))).toBe(false);
+      // Another creation's copies are not this one's.
+      expect(getCreationInputsInRecipe([copyCard('input-1')], creation({ id: 'gen-2' })).included).toBe(0);
+    });
+
+    // #678's follow-up, for whichever of the two merged second: since a remix
+    // draws an empty box for an input it is not given, the switch says so.
+    it('says what leaving the inputs out does, with none in the recipe and with some', () => {
+      expect(describeCreationInputsSwitch(0, 2)).toBe(
+        'Attach the saved inputs above as reusable references. Off unless you choose it: inputs can be personal, and a remix gets an empty box for each one left out.',
+      );
+      expect(describeCreationInputsSwitch(1, 2)).toBe(
+        '1 of 2 are in this recipe already. Attach the rest as reusable references; a remix gets an empty box for each one left out.',
+      );
+    });
+
+    // #677's review: the client never learned what the copy did.
+    it('adopts what the server added to the recipe as cards, and switches the inputs off', () => {
+      const added = (inputId: string): PostResourceItem => ({
+        id: `reference-${inputId}`,
+        scope: { kind: 'all' },
+        type: 'reference_image',
+        role: 'style_reference',
+        sectionId: null,
+        title: `Reference ${inputId}`,
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: `user-1/generation-references/gen-1/00-reference-${inputId}.jpg`,
+        contentType: 'image/jpeg',
+        sizeBytes: 2048,
+        workflowSnapshot: null,
+        sortOrder: 1,
+        isPrimary: false,
+        remixUse: 'reference_only',
+      });
+      const exactPrompt = createPostComposerResourceCard('prompt', { id: 'creation-prompt', title: 'Exact generation prompt', textContent: 'Make a glossy product photo' });
+      const firstCopy = copyCard('input-1');
+      const before = recipeDraft([exactPrompt, firstCopy], { creationPackage: { attachGenerationReferences: true } });
+
+      const after = adoptRecipeItemsAdded(before, [
+        // Held already by its file: not a second card.
+        added('input-1'),
+        added('input-2'),
+        { ...added('prompt'), id: 'creation-prompt-item', type: 'prompt', storagePath: null, textContent: 'Make a glossy product photo', title: 'Exact generation prompt' },
+      ]);
+
+      expect(after.resource.cards.map((card) => card.id)).toEqual(['creation-prompt', firstCopy.id, 'hydrated-item-reference-input-2']);
+      expect(after.resource.cards[2].attachments[0]).toMatchObject({ storagePath: added('input-2').storagePath, contentType: 'image/jpeg' });
+      expect(after.creationPackage.attachGenerationReferences).toBe(false);
+      expect(getCreationInputsInRecipe(after.resource.cards, creation()).allIncluded).toBe(true);
+      // Nothing added, only the switch goes off.
+      expect(adoptRecipeItemsAdded(before, undefined).resource).toBe(before.resource);
     });
   });
 
@@ -1349,7 +1639,7 @@ describe('post new view model', () => {
   it('keeps normal creation posts from auto-attaching saved generation references', () => {
     const item = generation({
       id: 'gen-with-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
     const draft = {
       ...getDefaultPostComposerDraft(),
@@ -1375,7 +1665,7 @@ describe('post new view model', () => {
   it('requests generation references only when the explicit creation package toggle is enabled', () => {
     const item = generation({
       id: 'gen-with-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
     const draft = {
       ...getDefaultPostComposerDraft(),
@@ -1408,7 +1698,7 @@ describe('post new view model', () => {
   it('keeps non-public creation posts without unlocks from auto-attaching generation references', () => {
     const item = generation({
       id: 'gen-private-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
 
     const draft = {
@@ -1427,7 +1717,7 @@ describe('post new view model', () => {
     expect(getPostComposerPreviewStatusLabel(draft, item)).toBe('No recipe added.');
   });
 
-  it('prefills a free resource package from a creation prompt when enabled', () => {
+  it('prefills a free resource package from a creation prompt', () => {
     const item = generation({
       id: 'gen-prompt-package',
       prompt: 'Exact cinematic product prompt',
@@ -1445,7 +1735,7 @@ describe('post new view model', () => {
         promptText: '',
         previewText: '',
       },
-    }, item, true);
+    }, item);
 
     expect(hasCreationPromptCard(draft.resource.cards, item)).toBe(true);
     expect(draft.resource.accessMode).toBe('free');
@@ -1478,7 +1768,7 @@ describe('post new view model', () => {
   it('reports attached creation references as the package status', () => {
     const item = generation({
       id: 'gen-summary',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
     const draft = {
       ...getDefaultPostComposerDraft(),
@@ -1505,7 +1795,7 @@ describe('post new view model', () => {
   it('uses explicit unlock preview labels before auto generation reference labels', () => {
     const item = generation({
       id: 'gen-unlock-inputs',
-      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image' }],
+      input_media: [{ url: 'https://cdn.example.com/input.jpg', kind: 'image', recipeCopyable: true }],
     });
 
     expect(getPostComposerPreviewStatusLabel({
@@ -1704,6 +1994,34 @@ describe('post new view model', () => {
         resourceBundle: { accessMode: 'none' },
       });
       expect(buildUpdatePostPayload(false, draft)).toHaveProperty('resourceBundle', { accessMode: 'none' });
+    });
+
+    // As a publish does: the save copies the creation's saved inputs into the
+    // recipe sent, only when asked and only into a recipe (owner, 2026-11-03).
+    it('asks the save to copy a creation’s inputs only when they are switched on, into a recipe', () => {
+      const recipe = {
+        ...getDefaultPostComposerDraft(),
+        mode: 'creation' as const,
+        proofMode: 'media' as const,
+        title: 'Hero product image',
+        resource: {
+          ...getDefaultPostComposerDraft().resource,
+          accessMode: 'free' as const,
+          cards: [createPostComposerResourceCard('prompt', { textContent: 'Make a glossy product photo' })],
+          previewText: 'Includes the prompt.',
+        },
+      };
+      const switchedOn = { ...recipe, creationPackage: { attachGenerationReferences: true } };
+      const creation = generation({ input_media: [{ id: 'input-1', url: 'https://cdn.example.com/a.jpg', kind: 'image', recipeCopyable: true }] });
+
+      expect(buildUpdatePostPayload(true, switchedOn, creation)).toHaveProperty('includeGenerationReferences', true);
+      expect(buildUpdatePostPayload(true, recipe, creation)).not.toHaveProperty('includeGenerationReferences');
+      // Not into No recipe, not for a post that is not a creation's, and not
+      // without inputs the server copies.
+      expect(buildUpdatePostPayload(true, { ...switchedOn, resource: { ...switchedOn.resource, accessMode: 'none' as const } }, creation))
+        .not.toHaveProperty('includeGenerationReferences');
+      expect(buildUpdatePostPayload(false, switchedOn, creation)).not.toHaveProperty('includeGenerationReferences');
+      expect(buildUpdatePostPayload(true, switchedOn, generation({ input_media: [] }))).not.toHaveProperty('includeGenerationReferences');
     });
 
     it('submits text post edits without duplicating the caption into the body', () => {
@@ -1910,6 +2228,47 @@ describe('the public-post rule, checked before step 2 says Ready to publish', ()
     expect(validatePostComposerDraft(textPostDraft({ title: 'Sample pack', resource: recipe }))).toEqual({ valid: true });
     expect(validatePostComposerDraft(textPostDraft({ title: 'Sample video', resource: recipe })))
       .toEqual({ valid: false, message: messages.placeholder_title });
+  });
+
+  // Owner, 2026-11-03: the listing rule's title minimum stays. Step 2 says it
+  // and offers "Post without recipe" in place of a refusal from the server;
+  // the title field says it whatever the visibility, since it holds once the
+  // post is public.
+  it('holds a public post with a recipe to the listing rule’s title minimum, from the shared rule', () => {
+    const recipe = {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free' as const,
+      previewText: 'Includes the reusable lighting prompt.',
+      cards: [createPostComposerResourceCard('prompt', {
+        title: 'Lighting prompt',
+        textContent: 'Use a large softbox at camera left.',
+      })],
+    };
+    const words = 'Lantern glow at dusk';
+    const short = mediaPostDraft({ title: words.slice(0, RECIPE_TITLE_MIN_LENGTH - 1), resource: recipe });
+
+    expect(validatePostComposerDraft(short)).toEqual({ valid: false, message: RECIPE_TITLE_TOO_SHORT_HINT });
+    expect(isRecipeTitleTooShortToPublish(short)).toBe(true);
+    expect(validatePostComposerDraft({ ...short, title: words.slice(0, RECIPE_TITLE_MIN_LENGTH) })).toEqual({ valid: true });
+    expect(validatePostComposerDraft({ ...short, resource: { ...recipe, accessMode: 'paid', priceTokens: '900' } }))
+      .toEqual({ valid: false, message: RECIPE_TITLE_TOO_SHORT_HINT });
+    // No recipe, or a private post, goes out as it is.
+    const privateShort: PostComposerDraft = { ...short, visibility: 'private' };
+    expect(validatePostComposerDraft({ ...short, resource: { ...recipe, accessMode: 'none' } })).toEqual({ valid: true });
+    expect(validatePostComposerDraft(privateShort)).toEqual({ valid: true });
+    expect(isRecipeTitleTooShortToPublish(privateShort)).toBe(false);
+
+    expect(getRecipeTitleHint(short)).toBe(RECIPE_TITLE_TOO_SHORT_HINT);
+    expect(getRecipeTitleHint(privateShort)).toBe(RECIPE_TITLE_TOO_SHORT_HINT);
+    expect(getRecipeTitleHint({ ...short, resource: { ...recipe, accessMode: 'none' } })).toBeUndefined();
+    expect(getRecipeTitleHint({ ...short, title: '' })).toBeUndefined();
+  });
+
+  it('knows the server’s refusal of that rule by its code alone', () => {
+    expect(isRecipeTitleTooShortRefusal(new ApiError(RECIPE_TITLE_TOO_SHORT_REFUSAL, 400, {}, undefined, 'RECIPE_TITLE_TOO_SHORT')))
+      .toBe(true);
+    expect(isRecipeTitleTooShortRefusal(new ApiError(RECIPE_TITLE_TOO_SHORT_REFUSAL, 400, { field: 'title' }))).toBe(false);
+    expect(isRecipeTitleTooShortRefusal(new Error(RECIPE_TITLE_TOO_SHORT_REFUSAL))).toBe(false);
   });
 });
 
