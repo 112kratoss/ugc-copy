@@ -114,7 +114,7 @@ const listState = vi.hoisted(() => {
 });
 
 // Each fade the screen starts, run to its end by hand.
-type Fade = { toValue: number; stopped: boolean; finish: (result: { finished: boolean }) => void };
+type Fade = { toValue: number; duration?: number; stopped: boolean; finish: (result: { finished: boolean }) => void };
 const animationState = vi.hoisted(() => ({ fades: [] as Fade[] }));
 
 // What each render drew, in order: the list at its opacity, and the opened
@@ -163,8 +163,8 @@ vi.mock('react-native', () => ({
         this.value = value;
       }
     },
-    timing: (_value: unknown, config: { toValue: number }) => {
-      const fade: Fade = { toValue: config.toValue, stopped: false, finish: () => {} };
+    timing: (_value: unknown, config: { toValue: number; duration?: number }) => {
+      const fade: Fade = { toValue: config.toValue, duration: config.duration, stopped: false, finish: () => {} };
       animationState.fades.push(fade);
       return {
         start: (callback?: (result: { finished: boolean }) => void) => {
@@ -323,6 +323,7 @@ vi.mock('@/lib/viewer-media-cache', () => ({ applyPostVisibilityToCaches: vi.fn(
 import { ProfileFeedCardView } from '@/components/profile-feed-card';
 import { ProfileMediaFeedScreen } from '@/components/profile-media-feed';
 import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
+import { appTheme } from '@/lib/theme';
 import { changeGenerationArchive } from '@/lib/use-viewer-action-handlers';
 
 /** One of the owner's public posts, as the Posts library lists it. */
@@ -921,6 +922,8 @@ describe('opening the feed on a card', () => {
 
     const [fade, move] = animationState.fades;
     expect(move.toValue).toBe(90);
+    // Both steps keep the beat of a navigation, from the motion tokens.
+    expect([move.duration, fade.duration]).toEqual([appTheme.motion.duration.navigation, appTheme.motion.duration.navigation]);
     expect(cardFrame().props.style.transform).toEqual([{ translateY: expect.anything() }]);
     // The ground still hides the list while the card moves; then it fades.
     act(() => { move.finish({ finished: true }); });

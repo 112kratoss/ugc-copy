@@ -56,7 +56,7 @@ import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS } from '@/lib/profile-media-query';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { useReducedMotion } from '@/lib/motion';
+import { MotionView, useReducedMotion } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -113,10 +113,11 @@ const LANDING_TICK_MS = 250;
 const LIST_PADDING_TOP = 12;
 
 /**
- * How long the opened card takes to give way to the list once the list has
- * landed on it (`OpeningCard`).
+ * How long each step of the opened card's handover to the list takes once the
+ * list has landed on it (`OpeningCard`). The handover ends the feed's opening,
+ * so it keeps a navigation's beat, as the tab bar's cross-fade does.
  */
-const OPENING_CARD_HANDOVER_MS = 120;
+const OPENING_CARD_HANDOVER_MS = appTheme.motion.duration.navigation;
 
 /**
  * Creations and Posts open here rather than in the reel: owned media is managed,
@@ -865,6 +866,8 @@ function OpeningCard({
   /** Where the card's top was laid out, from the list's top. */
   const drawnTopRef = useRef<number | null>(null);
 
+  // A sequence of its own rather than `useAnimatedState`: the fade has to wait
+  // for the move, and the card can go only once the fade has ended.
   useEffect(() => {
     if (!leaving) {
       // A landing begun again before the handover had run, as when the list
@@ -898,7 +901,7 @@ function OpeningCard({
   }, [landedTop, leaving, onLeft, opacity, reducedMotion, shift]);
 
   return (
-    <Animated.View
+    <MotionView
       testID="profile-media-feed-opening-card"
       pointerEvents="none"
       accessibilityElementsHidden
@@ -916,7 +919,7 @@ function OpeningCard({
       }}
     >
       {place === 'end' ? <View style={{ flexGrow: 1 }} /> : null}
-      <Animated.View
+      <MotionView
         onLayout={(event) => {
           drawnTopRef.current = event.nativeEvent.layout.y + (place === 'padded' ? LIST_PADDING_TOP : 0);
         }}
@@ -941,8 +944,8 @@ function OpeningCard({
             onAction={ignore}
           />
         </MediaZoomSurface>
-      </Animated.View>
-    </Animated.View>
+      </MotionView>
+    </MotionView>
   );
 }
 
