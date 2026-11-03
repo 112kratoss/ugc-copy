@@ -33,7 +33,7 @@ vi.mock('@/lib/auth', () => ({
 
 import { ApiError } from '@/lib/api-client';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
-import { ONE_TIME_POST_READ, retryUnlessRefused } from '@/lib/one-time-post-read';
+import { IncompleteAnswerError, ONE_TIME_POST_READ, retryUnlessRefused } from '@/lib/one-time-post-read';
 import { usePostGenerationSetup } from '@/lib/use-post-generation-setup';
 
 const IMAGE_SETUP = [
@@ -106,11 +106,14 @@ describe('usePostGenerationSetup', () => {
   });
 
   // The server leaves the field out where it could not read the settings: kept as none, the line
-  // would stay away for the session. It fails instead, and is asked again as a dropped read is.
-  it('keeps no answer that could not tell the settings as none', async () => {
+  // would stay away for the session. It fails instead, and is not asked again at once: the same
+  // server would answer the same, and each read spends the post read's rate limit.
+  it('keeps no answer that could not tell the settings as none, and does not ask again', async () => {
     render(feedItem());
     state.getShowcasePost.mockResolvedValue({ success: true, item: { id: 'post-1' } });
-    await expect(state.queryArgs!.queryFn()).rejects.toThrow();
+    const failure = await state.queryArgs!.queryFn().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(IncompleteAnswerError);
+    expect(state.queryArgs!.retry(0, failure)).toBe(false);
   });
 
   // A failed read is not asked again at every remount and every return to the foreground, where the
@@ -130,6 +133,7 @@ describe('usePostGenerationSetup', () => {
     expect(retryUnlessRefused(1, new Error('Network request failed'))).toBe(false);
     expect(retryUnlessRefused(0, new ApiError('Post not found.', 404))).toBe(false);
     expect(retryUnlessRefused(0, new ApiError('Busy', 503))).toBe(true);
+    expect(retryUnlessRefused(0, new IncompleteAnswerError('The post came back without its settings.'))).toBe(false);
   });
 
   it('reads nothing and holds no line for a post with none to show', () => {

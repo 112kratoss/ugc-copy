@@ -46,27 +46,28 @@ import {
 export const PUBLIC_GENERATION_SETUP_COLUMNS = 'model, template_run_id, template_run_step_id';
 
 /**
- * Each setting the line reads, as a path into the creation's workflow_settings
- * (`->` keeps a value's type, `->>` reads it as text), so a read selects these
- * and never the whole record, whose prompts, inputs and outputs no line needs.
+ * Each setting the line reads, as a path into the creation's workflow_settings,
+ * so a read selects these and never the whole record, whose prompts, inputs and
+ * outputs no line needs. `->` keeps each value as the record holds it, so the
+ * line reads from the paths exactly what it would from the whole record.
  */
 const SETTING_PATHS = [
-  ['model', 'model', '->>'],
-  ['aspect_ratio', 'aspectRatio', '->>'],
-  ['resolution', 'resolution', '->>'],
-  ['quality_mode', 'qualityMode', '->>'],
-  ['output_format', 'outputFormat', '->>'],
-  ['google_search', 'googleSearch', '->'],
-  ['mode', 'mode', '->>'],
-  ['duration', 'duration', '->'],
-  ['sound', 'sound', '->'],
-  ['fixed_lens', 'fixedLens', '->'],
-  ['multi_prompts', 'multiPrompts', '->'],
-  ['shots', 'shots', '->'],
-  ['character_orientation', 'characterOrientation', '->>'],
-  ['reference_mode', 'referenceMode', '->>'],
-  ['start_frame', 'startFrame', '->'],
-  ['end_frame', 'endFrame', '->'],
+  ['model', 'model'],
+  ['aspect_ratio', 'aspectRatio'],
+  ['resolution', 'resolution'],
+  ['quality_mode', 'qualityMode'],
+  ['output_format', 'outputFormat'],
+  ['google_search', 'googleSearch'],
+  ['mode', 'mode'],
+  ['duration', 'duration'],
+  ['sound', 'sound'],
+  ['fixed_lens', 'fixedLens'],
+  ['multi_prompts', 'multiPrompts'],
+  ['shots', 'shots'],
+  ['character_orientation', 'characterOrientation'],
+  ['reference_mode', 'referenceMode'],
+  ['start_frame', 'startFrame'],
+  ['end_frame', 'endFrame'],
 ] as const;
 
 /** Lists a rule only counts to two of (none, one, several), read as their first two entries. */
@@ -75,19 +76,31 @@ const COUNTED_LISTS = [
   ['reference_image_urls', 'referenceImageUrls'],
 ] as const;
 
+/**
+ * The roles of the run's inputs, which say whether a picture gave the result
+ * its shape: the starts keep a creator's frames and pictures as the run's inputs
+ * (`generation_input_media`), and in its settings only a remix's. Embedded by the
+ * input's own creation (its `source_generation_id` names another), role alone.
+ */
+const INPUT_ROLES_EMBED = 'setup_inputs:generation_input_media!generation_input_media_generation_id_fkey(role)';
+
 /** The settings paths, aliased, to select beside the columns (`PUBLIC_GENERATION_SETUP_COLUMNS`). */
 export const PUBLIC_GENERATION_SETUP_PATHS = [
-  ...SETTING_PATHS.map(([alias, key, arrow]) => `setup_${alias}:workflow_settings${arrow}${key}`),
+  ...SETTING_PATHS.map(([alias, key]) => `setup_${alias}:workflow_settings->${key}`),
   ...COUNTED_LISTS.flatMap(([alias, key]) => [0, 1].map((index) => `setup_${alias}_${index}:workflow_settings->${key}->${index}`)),
+  INPUT_ROLES_EMBED,
 ].join(', ');
 
 /**
- * A creation as its line is built from: its model, the settings its run stored, and whether it is
- * a template's result. Its kind (image, video, motion) is its model's, as the catalog lists it.
+ * A creation as its line is built from: its model, the settings its run stored, the roles of its
+ * inputs, and whether it is a template's result. Its kind (image, video, motion) is its model's,
+ * as the catalog lists it.
  */
 export type PublicGenerationSetupRow = TemplateRunLink & {
   model?: string | null;
   workflow_settings?: unknown;
+  /** The roles of the run's inputs (`generation_input_media`): `start_frame`, `reference_image`… */
+  input_roles?: readonly string[] | null;
 };
 
 /** A row read with `PUBLIC_GENERATION_SETUP_PATHS`, its settings put back under the names the run stored them by. */
@@ -102,18 +115,23 @@ export function readPublicGenerationSetupRow(answered: object): PublicGeneration
     const entries = [row[`setup_${alias}_0`], row[`setup_${alias}_1`]].filter((value) => value !== null && value !== undefined);
     if (entries.length > 0) settings[key] = entries;
   }
+  const inputs = Array.isArray(row.setup_inputs) ? row.setup_inputs : [];
   return {
     model: typeof row.model === 'string' ? row.model : null,
     template_run_id: typeof row.template_run_id === 'string' ? row.template_run_id : null,
     template_run_step_id: typeof row.template_run_step_id === 'string' ? row.template_run_step_id : null,
     workflow_settings: settings,
+    input_roles: inputs.flatMap((input) => (isRecord(input) && typeof input.role === 'string' ? [input.role] : [])),
   };
 }
 
-/** A refusal of the query's shape: PostgREST's parsing (PGRST1xx), or SQL class 42 (a column or operator it does not know). */
+/**
+ * A refusal of the query's shape: PostgREST's parsing (PGRST1xx) or its schema cache (PGRST2xx, a
+ * relationship it cannot find or tell apart), or SQL class 42 (a column or operator it does not know).
+ */
 function isRefusedSelect(error: unknown): boolean {
   const code = error && typeof error === 'object' && 'code' in error ? String((error as { code: unknown }).code) : '';
-  return code.startsWith('PGRST1') || code.startsWith('42');
+  return code.startsWith('PGRST1') || code.startsWith('PGRST2') || code.startsWith('42');
 }
 
 /**
@@ -163,22 +181,69 @@ export function toPublicGenerationSetupCatalog(snapshot: {
   return { models, byProviderId };
 }
 
+/** How long a derived catalog serves before it is read again: the store's own release cache. */
+const CATALOG_TTL_MS = 60 * 1000;
+/** How long a failed read waits before the next, whatever the requests meanwhile. */
+const CATALOG_RETRY_MS = 15 * 1000;
+
+let catalogCache: { catalog: PublicGenerationSetupCatalog | null; readAt: number; retryAt: number } | null = null;
+let catalogRead: Promise<PublicGenerationSetupCatalog | null> | null = null;
+/** Counts the clears, so a read begun before one never writes after it. */
+let catalogEpoch = 0;
+
+function readPublicGenerationSetupCatalog(): Promise<PublicGenerationSetupCatalog | null> {
+  const epoch = catalogEpoch;
+  const read = catalogRead ?? loadPublishedGenerationModelCatalog({
+    platform: 'web',
+    schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
+  })
+    .then((snapshot) => {
+      const catalog = toPublicGenerationSetupCatalog(snapshot);
+      if (epoch === catalogEpoch) catalogCache = { catalog, readAt: Date.now(), retryAt: 0 };
+      return catalog;
+    }, (error: unknown) => {
+      logBackendError('failed_to_load_public_generation_setup_catalog', { error });
+      // The last good copy goes on serving; without one there is no line until the next try.
+      const kept = epoch === catalogEpoch ? catalogCache : null;
+      if (epoch === catalogEpoch) {
+        catalogCache = { catalog: kept?.catalog ?? null, readAt: kept?.readAt ?? 0, retryAt: Date.now() + CATALOG_RETRY_MS };
+      }
+      return kept?.catalog ?? null;
+    })
+    .finally(() => {
+      if (epoch === catalogEpoch) catalogRead = null;
+    });
+  catalogRead = read;
+  return read;
+}
+
 /**
  * The catalog the line is read against: the release the starts resolve
- * (`loadPublishedGenerationModelCatalog`, cached by the store), as the web
- * lists it, which every live model is on. Null where it cannot be read, and
- * then no line is built (a read leaves it out, as unknown).
+ * (`loadPublishedGenerationModelCatalog`), as the web lists it, which every
+ * live model is on. Every card a feed page hydrates is built against it, so it
+ * is derived once a minute, not per read (the store builds its code catalog and
+ * projects the release on every call): an older copy serves while the next is
+ * read, and a failed read is tried again after a wait, not by every request
+ * meanwhile. Null where none could be read yet, and then no line is built (a
+ * read leaves it out, as unknown).
  */
 export async function loadPublicGenerationSetupCatalog(): Promise<PublicGenerationSetupCatalog | null> {
-  try {
-    return toPublicGenerationSetupCatalog(await loadPublishedGenerationModelCatalog({
-      platform: 'web',
-      schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
-    }));
-  } catch (error) {
-    logBackendError('failed_to_load_public_generation_setup_catalog', { error });
-    return null;
+  const cache = catalogCache;
+  if (!cache) return readPublicGenerationSetupCatalog();
+  const now = Date.now();
+  const due = now - cache.readAt >= CATALOG_TTL_MS && now >= cache.retryAt;
+  if (cache.catalog) {
+    if (due) void readPublicGenerationSetupCatalog();
+    return cache.catalog;
   }
+  return due ? readPublicGenerationSetupCatalog() : null;
+}
+
+/** Forgets the derived catalog, as `clearGenerationModelCatalogStoreCache` does the store's. */
+export function clearPublicGenerationSetupCatalogCache(): void {
+  catalogEpoch += 1;
+  catalogCache = null;
+  catalogRead = null;
 }
 
 type WorkflowSettings = Record<string, unknown>;
@@ -250,18 +315,28 @@ const FRAME_SHAPED_VIDEO_MODELS = new Set([
  * catalog cannot say: a picture the run starts from gives the result its shape,
  * so the ratio the creator had picked never reached the provider. Read off each
  * start's request (generation-services.ts, held there by
- * generation-services.test.ts): Grok Imagine's edit sends the picture alone,
+ * generation-services.test.ts): Grok Imagine's edit sends the pictures alone,
  * without ratio or quality; the frame-shaped video models send no ratio from a
  * frames run, Kling O3 from a single-shot one only; Grok Imagine Video reads no
  * ratio from a single picture, and 1.5 none beside its start frame.
+ *
+ * A creator's frames and pictures are told by the run's inputs (`inputRoles`),
+ * which every start keeps; a remix's frames and named pictures are in its
+ * settings as well.
  */
-function settingsTheRequestLeftOut(modelId: string, settings: WorkflowSettings): ReadonlySet<string> {
+function settingsTheRequestLeftOut(
+  modelId: string,
+  settings: WorkflowSettings,
+  inputRoles: ReadonlySet<string>,
+): ReadonlySet<string> {
   if (modelId === 'grok-imagine-image') {
-    return new Set(listLength(settings.elements) > 0 ? ['aspectRatio', 'qualityMode'] : []);
+    const fromPictures = listLength(settings.elements) > 0 || inputRoles.has('reference_image');
+    return new Set(fromPictures ? ['aspectRatio', 'qualityMode'] : []);
   }
   if (!FRAME_SHAPED_VIDEO_MODELS.has(modelId)) return new Set();
-  const keptStartFrame = isRecord(settings.startFrame);
-  const framesRun = (keptStartFrame || isRecord(settings.endFrame))
+  const keptStartFrame = isRecord(settings.startFrame) || inputRoles.has('start_frame');
+  const keptEndFrame = isRecord(settings.endFrame) || inputRoles.has('end_frame');
+  const framesRun = (keptStartFrame || keptEndFrame)
     && settings.referenceMode !== 'references'
     && settings.referenceMode !== 'elements';
   const multiShot = listLength(settings.multiPrompts) > 0 || listLength(settings.shots) > 0;
@@ -336,7 +411,7 @@ export function buildPublicGenerationSetup(
   if (!model) return [];
 
   const choices = conditionSettings(settings);
-  const leftOut = settingsTheRequestLeftOut(model.descriptor.id, settings);
+  const leftOut = settingsTheRequestLeftOut(model.descriptor.id, settings, new Set(generation.input_roles ?? []));
   const offered = (key: string) => (leftOut.has(key) ? null : offeredControl(model, key, choices));
   const LABELS = GENERATION_SETUP_LABELS;
 

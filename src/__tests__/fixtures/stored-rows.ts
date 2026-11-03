@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { postgrestSelect } from './postgrest-select';
+import { embeddedTable, postgrestSelect, selectFields } from './postgrest-select';
 
 type Row = Record<string, unknown>;
 type Call = (args: Row) => unknown;
@@ -117,7 +117,7 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
   }
 
   function select(table: string, columns: string) {
-    const asked = columns.split(',').map((column) => column.trim()).filter(Boolean);
+    const asked = selectFields(columns);
     const stored = tables[table];
     if (isFailure(stored)) {
       reads.push({ table, columns: asked });
@@ -135,9 +135,12 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
       });
     }
     const known = rowsOf(table)[0];
-    // The column a field reads: `alias:column->path` reads `column`.
+    // The column a field reads: `alias:column->path` reads `column`. An embedded table is no column
+    // of this one: a row answers it from its own list under the table's name, or with none.
     const columnOf = (field: string) => field.slice(field.indexOf(':') + 1).split('->')[0]!;
-    const unknown = known ? asked.filter((field) => field !== '*' && !(columnOf(field) in known)) : [];
+    const unknown = known
+      ? asked.filter((field) => field !== '*' && !embeddedTable(columnOf(field)) && !(columnOf(field) in known))
+      : [];
     if (unknown.length) throw new Error(`column ${table}.${unknown[0]} does not exist`);
     reads.push({ table, columns: asked });
 

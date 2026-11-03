@@ -313,7 +313,7 @@ describe('public post detail read', () => {
       expect(JSON.stringify(detail?.generationSetup)).not.toMatch(/model|nano|bottle|input/i);
       // The page and its metadata select the settings' paths, never the whole record.
       expect(generationSelects).toHaveLength(1);
-      expect(generationSelects[0]).toContain('workflow_settings->>aspectRatio');
+      expect(generationSelects[0]).toContain('workflow_settings->aspectRatio');
       expect(generationSelects[0]).not.toMatch(/workflow_settings(?!->)/);
     });
 

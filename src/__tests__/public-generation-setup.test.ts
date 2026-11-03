@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const logBackendErrorMock = vi.hoisted(() => vi.fn());
 const logBackendWarningMock = vi.hoisted(() => vi.fn());
@@ -25,6 +25,7 @@ import {
   PUBLIC_GENERATION_SETUP_COLUMNS,
   PUBLIC_GENERATION_SETUP_PATHS,
   buildPublicGenerationSetup,
+  clearPublicGenerationSetupCatalogCache,
   loadPublicGenerationSetupCatalog,
   publicPostGenerationSetup,
   readPublicGenerationSetupRow,
@@ -149,6 +150,13 @@ describe('the settings a creation post shows everyone', () => {
         elements: [{ id: 'reference-1', displayName: 'Cat', handle: '@cat', storagePath: 'uploads/user-1/cat.png' }],
       },
     })).toEqual([]);
+    // A picture given without a handle is kept as the run's input alone, never in its settings.
+    expect(setup({
+      category: 'image',
+      model: 'grok-imagine-image',
+      workflow_settings: { model: 'grok-imagine-image', aspectRatio: '2:3', resolution: '1K', qualityMode: 'quality' },
+      input_roles: ['reference_image'],
+    })).toEqual([]);
   });
 
   // No image model offers Google Search grounding any more, and every run stores `false`: a model
@@ -264,42 +272,57 @@ describe('the settings a creation post shows everyone', () => {
   });
 
   // A start frame gives an image-to-video clip its shape on these models: the request carries no
-  // ratio (generation-services.test.ts holds each request to it), so the run shows none.
+  // ratio (generation-services.test.ts holds each request to it), so the run shows none. A
+  // creator's frames are kept as the run's inputs (`input_roles`) and its settings say only
+  // `referenceMode: 'frames'`, as a prompt-only run's do; a remix's frames are in its settings too.
   describe('a clip whose start frame gave it its shape', () => {
     it.each([
-      ['Kling 3.0 Turbo', 'kling-3.0-turbo', { startFrame: frame('start') }],
-      ['MiniMax H3, from its end frame alone', 'minimax-h3', { endFrame: frame('end') }],
-      ['Wan 2.7', 'wan-2.7', { startFrame: frame('start'), endFrame: frame('end') }],
-      ['Wan 3.0', 'wan-3.0', { startFrame: frame('start') }],
-      ['PixVerse V6, between two frames', 'pixverse-v6', { startFrame: frame('start'), endFrame: frame('end') }],
-      ['HappyHorse 1.1', 'happyhorse-1.1', { startFrame: frame('start') }],
-      ['Grok Imagine Video', 'grok-imagine-video', { startFrame: frame('start') }],
-      ['Kling O3, in one shot', 'kling-o3', { startFrame: frame('start') }],
-    ])('shows no ratio on %s', (_name, model, frames) => {
-      const run = (extra: Record<string, unknown>) => setup({
+      ['Kling 3.0 Turbo', 'kling-3.0-turbo', { startFrame: frame('start') }, ['start_frame']],
+      ['MiniMax H3, from its end frame alone', 'minimax-h3', { endFrame: frame('end') }, ['end_frame']],
+      ['Wan 2.7', 'wan-2.7', { startFrame: frame('start'), endFrame: frame('end') }, ['start_frame', 'end_frame']],
+      ['Wan 3.0', 'wan-3.0', { startFrame: frame('start') }, ['start_frame']],
+      ['PixVerse V6, between two frames', 'pixverse-v6', { startFrame: frame('start'), endFrame: frame('end') }, ['start_frame', 'end_frame']],
+      ['HappyHorse 1.1', 'happyhorse-1.1', { startFrame: frame('start') }, ['start_frame']],
+      ['Grok Imagine Video', 'grok-imagine-video', { startFrame: frame('start') }, ['start_frame']],
+      ['Kling O3, in one shot', 'kling-o3', { startFrame: frame('start') }, ['start_frame']],
+    ])('shows no ratio on %s', (_name, model, frames, inputRoles) => {
+      const run = (extra: Record<string, unknown>, roles: string[] = []) => setup({
         category: 'video',
         model,
         workflow_settings: { model, aspectRatio: '16:9', resolution: '720p', duration: 5, ...extra },
+        input_roles: roles,
       });
+      // From the creators: the frames are the run's inputs.
+      expect(run({ referenceMode: 'frames' }, inputRoles).map((entry) => entry.label)).not.toContain('Aspect ratio');
+      // From a remix: the frames are in its settings as well.
       expect(run({ referenceMode: 'frames', ...frames }).map((entry) => entry.label)).not.toContain('Aspect ratio');
       // The same model from a prompt alone keeps the ratio it was sent.
       expect(run({ referenceMode: 'frames' })[0]).toEqual({ label: 'Aspect ratio', value: '16:9' });
+      // Pictures of another kind give no clip its shape.
+      expect(run({ referenceMode: 'frames' }, ['reference_audio'])[0]).toEqual({ label: 'Aspect ratio', value: '16:9' });
     });
 
     it('keeps the ratio a request sent beside a frame', () => {
-      const ratioOf = (model: string, settings: Record<string, unknown>) => setup({
+      const ratioOf = (model: string, settings: Record<string, unknown>, inputRoles: string[] = []) => setup({
         category: 'video',
         model,
         workflow_settings: { model, aspectRatio: '9:16', resolution: '720p', duration: 5, ...settings },
+        input_roles: inputRoles,
       })[0];
       // A Kling O3 multi-shot run sends its ratio with its frame.
       expect(ratioOf('kling-o3', { referenceMode: 'frames', startFrame: frame('start'), multiPrompts: [{ prompt: 'One' }, { prompt: 'Two' }] }))
         .toEqual({ label: 'Aspect ratio', value: '9:16' });
+      expect(ratioOf('kling-o3', { referenceMode: 'frames', multiPrompts: [{ prompt: 'One' }, { prompt: 'Two' }] }, ['start_frame']))
+        .toEqual({ label: 'Aspect ratio', value: '9:16' });
       // Wan 2.7's references run takes a start frame beside its references, and its ratio.
       expect(ratioOf('wan-2.7', { referenceMode: 'references', startFrame: frame('start'), referenceImageUrls: ['https://cdn.test/a.png'] }))
         .toEqual({ label: 'Aspect ratio', value: '9:16' });
+      expect(ratioOf('wan-2.7', { referenceMode: 'references', referenceImageUrls: ['https://cdn.test/a.png'] }, ['reference_image', 'start_frame']))
+        .toEqual({ label: 'Aspect ratio', value: '9:16' });
       // Seedance 2 sends its ratio with its frames.
       expect(ratioOf('seedance-2', { referenceMode: 'frames', startFrame: frame('start'), sound: false }))
+        .toEqual({ label: 'Aspect ratio', value: '9:16' });
+      expect(ratioOf('seedance-2', { referenceMode: 'frames', sound: false }, ['start_frame']))
         .toEqual({ label: 'Aspect ratio', value: '9:16' });
     });
 
@@ -319,6 +342,19 @@ describe('the settings a creation post shows everyone', () => {
         startFrame: frame('start'),
         referenceImageUrls: ['https://cdn.test/a.png', 'https://cdn.test/b.png'],
       })).toBe(false);
+      expect(setup({
+        category: 'video',
+        model: 'grok-imagine-video-1.5',
+        workflow_settings: {
+          model: 'grok-imagine-video-1.5',
+          aspectRatio: '3:2',
+          resolution: '480p',
+          duration: 6,
+          referenceMode: 'references',
+          referenceImageUrls: ['https://cdn.test/a.png', 'https://cdn.test/b.png'],
+        },
+        input_roles: ['reference_image', 'reference_image', 'start_frame'],
+      }).some((entry) => entry.label === 'Aspect ratio')).toBe(false);
     });
   });
 
@@ -453,15 +489,38 @@ describe("reading a creation's settings for its post", () => {
       elements: [{ handle: '@a' }, { handle: '@b' }, { handle: '@c' }],
       outputs: [{ index: 0, storagePath: 'generated/out.mp4' }],
     },
+    generation_input_media: [{ role: 'start_frame', label: 'Start frame', storage_path: 'uploads/user-1/kept-start.png' }],
+    input_roles: ['start_frame'],
   };
 
   it('selects the paths the line reads, never the whole record', () => {
     const select = `${PUBLIC_GENERATION_SETUP_COLUMNS}, ${PUBLIC_GENERATION_SETUP_PATHS}`;
-    expect(select).toMatch(/workflow_settings->>aspectRatio/);
+    expect(select).toMatch(/workflow_settings->aspectRatio/);
     // Every mention of the record is a path into it.
     expect(select.match(/workflow_settings(?!->)/g)).toBeNull();
+    // The run's inputs by role alone, through the input's own creation (its source names another).
+    expect(select).toContain('setup_inputs:generation_input_media!generation_input_media_generation_id_fkey(role)');
     const answered = postgrestSelect(stored, select);
-    expect(JSON.stringify(answered)).not.toMatch(/long prompt|generated\/out|c\.png|@c/);
+    expect(JSON.stringify(answered)).not.toMatch(/long prompt|generated\/out|c\.png|@c|kept-start|Start frame/);
+    expect(answered.setup_inputs).toEqual([{ role: 'start_frame' }]);
+  });
+
+  it("reads a creator's frames from the run's inputs, as the creators' starts keep them", () => {
+    const fromCreator = {
+      model: 'kling-3.0-turbo',
+      category: 'video',
+      template_run_id: null,
+      template_run_step_id: null,
+      workflow_settings: { model: 'kling-3.0-turbo', aspectRatio: '16:9', resolution: '720p', duration: 5, referenceMode: 'frames' },
+      generation_input_media: [{ role: 'start_frame', storage_path: 'uploads/user-1/start.png' }],
+    };
+    const read = readPublicGenerationSetupRow(postgrestSelect(fromCreator, `${PUBLIC_GENERATION_SETUP_COLUMNS}, ${PUBLIC_GENERATION_SETUP_PATHS}`));
+    expect(read.input_roles).toEqual(['start_frame']);
+    expect(formatGenerationSetupLine(setup(read))).toBe('720P · 5s');
+    // Without its inputs the same record keeps the ratio a prompt-only run was sent.
+    const promptOnly = readPublicGenerationSetupRow(postgrestSelect({ ...fromCreator, generation_input_media: [] }, `${PUBLIC_GENERATION_SETUP_COLUMNS}, ${PUBLIC_GENERATION_SETUP_PATHS}`));
+    expect(promptOnly.input_roles).toEqual([]);
+    expect(formatGenerationSetupLine(setup(promptOnly))).toBe('16:9 · 720P · 5s');
   });
 
   it.each([
@@ -496,13 +555,19 @@ describe("reading a creation's settings for its post", () => {
       .resolves.toEqual({ data: [{ id: 'gen-1' }], error: null, withSetup: true });
     expect(selects).toEqual([`id, model, ${PUBLIC_GENERATION_SETUP_PATHS}`]);
 
-    selects.length = 0;
-    logBackendWarningMock.mockClear();
-    const refused = { code: 'PGRST100', message: 'failed to parse select parameter' };
-    await expect(selectWithGenerationSetup('id, model', read([{ data: null, error: refused }, { data: [{ id: 'gen-1' }], error: null }])))
-      .resolves.toEqual({ data: [{ id: 'gen-1' }], error: null, withSetup: false });
-    expect(selects).toEqual([`id, model, ${PUBLIC_GENERATION_SETUP_PATHS}`, 'id, model']);
-    expect(logBackendWarningMock).toHaveBeenCalledWith('public_generation_setup_paths_refused', { error: refused });
+    // A path it cannot parse, a column it does not know, an embed its schema cache cannot place.
+    for (const refused of [
+      { code: 'PGRST100', message: 'failed to parse select parameter' },
+      { code: '42703', message: 'column generations.workflow_settingz does not exist' },
+      { code: 'PGRST201', message: "Could not embed because more than one relationship was found for 'generations' and 'generation_input_media'" },
+    ]) {
+      selects.length = 0;
+      logBackendWarningMock.mockClear();
+      await expect(selectWithGenerationSetup('id, model', read([{ data: null, error: refused }, { data: [{ id: 'gen-1' }], error: null }])))
+        .resolves.toEqual({ data: [{ id: 'gen-1' }], error: null, withSetup: false });
+      expect(selects).toEqual([`id, model, ${PUBLIC_GENERATION_SETUP_PATHS}`, 'id, model']);
+      expect(logBackendWarningMock).toHaveBeenCalledWith('public_generation_setup_paths_refused', { error: refused });
+    }
 
     // Any other failure is the read's own: it is not asked twice.
     selects.length = 0;
@@ -512,17 +577,77 @@ describe("reading a creation's settings for its post", () => {
     expect(selects).toHaveLength(1);
   });
 
-  it('reads the published catalog the starts resolve, and no line at all when it cannot', async () => {
-    expect(catalog.models.get('veo-3.1')?.descriptor.kind).toBe('video');
-    expect(loadPublishedGenerationModelCatalog).toHaveBeenCalledWith({ platform: 'web', schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION });
+  // Every card a feed page hydrates is built against the catalog, and the store builds its code
+  // catalog and projects the release on every call: the line's catalog is derived once a minute,
+  // an older copy serves while the next is read, and a failed read waits before the next try.
+  describe('the catalog the line is read against', () => {
+    const loads = vi.mocked(loadPublishedGenerationModelCatalog);
+    const at = (time: string) => vi.setSystemTime(new Date(`2026-11-03T${time}Z`));
 
-    storeState.failure = new Error('release unavailable');
-    logBackendErrorMock.mockClear();
-    try {
-      await expect(loadPublicGenerationSetupCatalog()).resolves.toBeNull();
-    } finally {
+    beforeEach(() => {
+      clearPublicGenerationSetupCatalogCache();
+      loads.mockClear();
+      logBackendErrorMock.mockClear();
       storeState.failure = null;
-    }
-    expect(logBackendErrorMock).toHaveBeenCalledWith('failed_to_load_public_generation_setup_catalog', { error: expect.any(Error) });
+      vi.useFakeTimers();
+      at('12:00:00');
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      storeState.failure = null;
+    });
+
+    it('reads the published catalog the starts resolve, once a minute', async () => {
+      const first = await loadPublicGenerationSetupCatalog();
+      expect(first?.models.get('veo-3.1')?.descriptor.kind).toBe('video');
+      expect(loads).toHaveBeenCalledWith({ platform: 'web', schemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION });
+      // Within the minute every read, at once or after, is the same copy, read once.
+      const [second, third] = await Promise.all([loadPublicGenerationSetupCatalog(), loadPublicGenerationSetupCatalog()]);
+      expect(second).toBe(first);
+      expect(third).toBe(first);
+      expect(loads).toHaveBeenCalledTimes(1);
+
+      // After it, the copy in hand serves while the next is read.
+      at('12:01:00');
+      expect(await loadPublicGenerationSetupCatalog()).toBe(first);
+      await vi.waitFor(async () => expect(await loadPublicGenerationSetupCatalog()).not.toBe(first));
+      expect(loads).toHaveBeenCalledTimes(2);
+    });
+
+    it('serves the last good copy through a failed read, and tries again only after a wait', async () => {
+      const good = await loadPublicGenerationSetupCatalog();
+      storeState.failure = new Error('release unavailable');
+      at('12:01:00');
+      expect(await loadPublicGenerationSetupCatalog()).toBe(good);
+      await vi.waitFor(() => expect(logBackendErrorMock).toHaveBeenCalledWith('failed_to_load_public_generation_setup_catalog', { error: expect.any(Error) }));
+
+      // The requests meanwhile get the good copy and ask the store nothing.
+      for (const time of ['12:01:01', '12:01:10']) {
+        at(time);
+        expect(await loadPublicGenerationSetupCatalog()).toBe(good);
+      }
+      expect(loads).toHaveBeenCalledTimes(2);
+
+      storeState.failure = null;
+      at('12:01:16');
+      expect(await loadPublicGenerationSetupCatalog()).toBe(good);
+      await vi.waitFor(async () => expect(await loadPublicGenerationSetupCatalog()).not.toBe(good));
+      expect(loads).toHaveBeenCalledTimes(3);
+      expect(logBackendErrorMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('builds no line until a catalog could be read, asking again only after a wait', async () => {
+      storeState.failure = new Error('release unavailable');
+      await expect(loadPublicGenerationSetupCatalog()).resolves.toBeNull();
+      at('12:00:10');
+      await expect(loadPublicGenerationSetupCatalog()).resolves.toBeNull();
+      expect(loads).toHaveBeenCalledTimes(1);
+      expect(logBackendErrorMock).toHaveBeenCalledTimes(1);
+
+      storeState.failure = null;
+      at('12:00:16');
+      expect((await loadPublicGenerationSetupCatalog())?.models.get('veo-3.1')?.descriptor.kind).toBe('video');
+      expect(loads).toHaveBeenCalledTimes(2);
+    });
   });
 });

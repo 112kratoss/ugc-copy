@@ -1,8 +1,16 @@
 import { ApiError } from '@/lib/api-client';
 
-/** A refusal (gone, private, blocked, rate-limited) answers the same again; a dropped connection may not. */
+/** An answer that came back whole but without what the read asked for: asked again, it would say the same. */
+export class IncompleteAnswerError extends Error {}
+
+/**
+ * A refusal (gone, private, blocked, rate-limited) answers the same again, and so does an answer
+ * without what was asked (`IncompleteAnswerError`); a dropped connection may not.
+ */
 export function retryUnlessRefused(failureCount: number, error: unknown): boolean {
-  return failureCount < 1 && !(error instanceof ApiError && error.status >= 400 && error.status < 500);
+  return failureCount < 1
+    && !(error instanceof IncompleteAnswerError)
+    && !(error instanceof ApiError && error.status >= 400 && error.status < 500);
 }
 
 /**

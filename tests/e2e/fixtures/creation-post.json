@@ -96,6 +96,7 @@
     },
     "setup_elements_1": null,
     "setup_reference_image_urls_0": null,
-    "setup_reference_image_urls_1": null
+    "setup_reference_image_urls_1": null,
+    "setup_inputs": [{ "role": "reference_image" }]
   }
 }

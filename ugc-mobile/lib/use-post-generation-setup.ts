@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/lib/auth';
 import { readGenerationSetup, type GenerationSetupEntry } from '@/lib/generation-setup/generation-setup';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
-import { ONE_TIME_POST_READ } from '@/lib/one-time-post-read';
+import { IncompleteAnswerError, ONE_TIME_POST_READ } from '@/lib/one-time-post-read';
 import { shouldReadPostGenerationSetup } from '@/lib/post-details-view-model';
 
 export interface PostGenerationSetup {
@@ -31,7 +31,7 @@ export function usePostGenerationSetup(item: ImmersivePreviewItem, active: boole
     queryKey: ['post-generation-setup', postId],
     queryFn: async () => {
       const setup = readGenerationSetup((await api.getShowcasePost(postId!)).item?.generationSetup);
-      if (!setup) throw new Error('The post came back without its settings.');
+      if (!setup) throw new IncompleteAnswerError('The post came back without its settings.');
       return setup;
     },
     enabled: active && Boolean(postId),
