@@ -195,18 +195,18 @@ describe('listCreditHistory', () => {
   });
 
   it.each([
-    ['an unknown kind', { kind: 'merge' }],
-    ['a fractional amount', { amount: 1.5 }],
-    ['a missing amount', { amount: null }],
-    ['an unreadable time', { occurred_at: 'soon' }],
-    ['an empty title', { title: ' ' }],
-    ['an id the list never writes', { entry_id: 'merge:1' }],
-    ['a detail that is not text', { detail: 42 }],
-  ])('fails the page rather than drop a row with %s', async (_label, overrides) => {
+    ['an unknown kind', { kind: 'merge' }, '(kind; source generation)'],
+    ['a fractional amount', { amount: 1.5 }, '(amount; source generation)'],
+    ['a missing amount', { amount: null }, '(amount; source generation)'],
+    ['an unreadable time', { occurred_at: 'soon' }, '(occurred_at; source generation)'],
+    ['an empty title', { title: ' ' }, '(title; source generation)'],
+    ['an id the list never writes', { entry_id: 'merge:1' }, '(entry_id; source merge)'],
+    ['a detail that is not text', { detail: 42 }, '(detail; source generation)'],
+  ])('fails the page rather than drop a row with %s, naming the field and source', async (_label, overrides, named) => {
     const { client } = clientReturning([row(VIDEO_CHARGE, '2026-10-15T09:10:02+00:00', overrides)]);
 
     await expect(listCreditHistory({ client, userIds: ['account-1'], cursor: null, limit: 30 }))
-      .rejects.toThrow('list_credit_history returned a row outside its contract');
+      .rejects.toThrow(`list_credit_history returned a row outside its contract ${named}`);
   });
 
   it('fails the page when the database answers something other than rows', async () => {
@@ -214,5 +214,98 @@ describe('listCreditHistory', () => {
 
     await expect(listCreditHistory({ client, userIds: ['account-1'], cursor: null, limit: 30 }))
       .rejects.toThrow('list_credit_history returned no rows array');
+  });
+});
+
+describe('listCreditHistory with more linked guests than one database call takes', () => {
+  // Production, 2026-11-04: an account with 156 linked guest identities (157 ids)
+  // got a 500, because list_credit_history refuses more than 100 ids.
+  const ACCOUNT = 'account-1';
+  const GUESTS = Array.from({ length: 156 }, (_, index) => `guest-${index + 1}`);
+  const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+  type OwnedRow = ReturnType<typeof row> & { owner: string };
+
+  /** Answers as the SQL does: the cap, the identity-set check, the keyset and the order. */
+  function databaseHolding(owned: OwnedRow[]) {
+    const rpc = vi.fn(async (_name: string, args: Record<string, unknown>) => {
+      const ids = args.p_user_ids as string[];
+      if (ids.length < 1 || ids.length > 100) {
+        return { data: null, error: { message: 'list_credit_history needs 1 to 100 identity ids' } };
+      }
+      if (ids[0] !== ACCOUNT || ids.slice(1).some((id) => !GUESTS.includes(id))) {
+        return { data: null, error: { message: 'list_credit_history reads one identity and the guests linked to it' } };
+      }
+      const beforeAt = args.p_before_occurred_at as string | null;
+      const beforeId = args.p_before_id as string | null;
+      const data = owned
+        .filter((entry) => ids.includes(entry.owner))
+        .filter((entry) => !beforeAt
+          || Date.parse(entry.occurred_at) < Date.parse(beforeAt)
+          || (Date.parse(entry.occurred_at) === Date.parse(beforeAt) && entry.entry_id < (beforeId as string)))
+        .sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at)
+          || (a.entry_id < b.entry_id ? 1 : -1))
+        .slice(0, args.p_limit as number)
+        .map((entry) => row(entry.entry_id, entry.occurred_at, {
+          kind: entry.kind,
+          amount: entry.amount,
+          title: entry.title,
+          detail: entry.detail,
+        }));
+      return { data, error: null };
+    });
+    return { rpc, client: { rpc } as unknown as SupabaseClient };
+  }
+
+  const owned: OwnedRow[] = [
+    { ...row(`purchase:${uuid(1)}`, '2026-11-01T10:00:00+00:00', { kind: 'purchase', amount: 2000, title: 'Creator pack' }), owner: ACCOUNT },
+    { ...row(`generation:${uuid(2)}:charge`, '2026-10-30T10:00:00.5+00:00'), owner: 'guest-150' },
+    { ...row(`generation:${uuid(3)}:charge`, '2026-10-30T10:00:00.25+00:00'), owner: 'guest-3' },
+    { ...row(`grant:${uuid(4)}`, '2026-10-29T10:00:00+00:00', { kind: 'grant', amount: 100, title: 'Welcome credits' }), owner: 'guest-120' },
+    { ...row(`generation:${uuid(5)}:charge`, '2026-10-28T10:00:00+00:00'), owner: ACCOUNT },
+  ];
+
+  it('reads the whole set in calls the database takes and merges them newest first', async () => {
+    const { rpc, client } = databaseHolding(owned);
+
+    const first = await listCreditHistory({ client, userIds: [ACCOUNT, ...GUESTS], cursor: null, limit: 3 });
+
+    for (const [, args] of rpc.mock.calls) {
+      const ids = args.p_user_ids as string[];
+      expect(ids.length).toBeLessThanOrEqual(100);
+      expect(ids[0]).toBe(ACCOUNT);
+    }
+    expect(new Set(rpc.mock.calls.flatMap(([, args]) => args.p_user_ids as string[]))).toEqual(new Set([ACCOUNT, ...GUESTS]));
+    expect(first.entries.map((entry) => entry.id)).toEqual([
+      `purchase:${uuid(1)}`,
+      `generation:${uuid(2)}:charge`,
+      `generation:${uuid(3)}:charge`,
+    ]);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = await listCreditHistory({
+      client,
+      userIds: [ACCOUNT, ...GUESTS],
+      cursor: decodeCreditHistoryCursor(first.nextCursor as string),
+      limit: 3,
+    });
+    expect(second.entries.map((entry) => entry.id)).toEqual([`grant:${uuid(4)}`, `generation:${uuid(5)}:charge`]);
+    expect(second.nextCursor).toBeNull();
+  });
+
+  it('lists the account\'s own rows once, though every call reads them', async () => {
+    const { client } = databaseHolding(owned);
+
+    const page = await listCreditHistory({ client, userIds: [ACCOUNT, ...GUESTS], cursor: null, limit: 30 });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual(owned.map((entry) => entry.entry_id));
+  });
+
+  it('still makes one call for a set the database takes whole', async () => {
+    const { rpc, client } = databaseHolding(owned);
+
+    await listCreditHistory({ client, userIds: [ACCOUNT, ...GUESTS.slice(0, 99)], cursor: null, limit: 30 });
+
+    expect(rpc).toHaveBeenCalledTimes(1);
   });
 });
