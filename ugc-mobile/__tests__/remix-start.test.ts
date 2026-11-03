@@ -2,8 +2,16 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { showcaseToHomeFeedCard } from '@/lib/home-feed-view-model';
 import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model';
-import { REMIX_UNLOCK_REQUIRED_CODE, showcasePostRemixSourceContext, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
-import type { ShowcaseFeedItem } from '@/lib/types';
+import {
+  REMIX_LAUNCH_PARAM,
+  REMIX_UNLOCK_REQUIRED_CODE,
+  findRemixLaunch,
+  launchShowcaseRemix,
+  showcasePostRemixSourceContext,
+  showcaseRemixCreateHref,
+  startShowcaseRemix,
+} from '@/lib/remix-start';
+import type { RemixSourceBundle, ShowcaseFeedItem } from '@/lib/types';
 
 const REMIX_RESPONSE = { success: true, redirectTo: '/create-video?remix=gen-1&remixPost=post-1' };
 
@@ -107,6 +115,22 @@ describe('startShowcaseRemix', () => {
     const forbidden = apiError('Forbidden', 403);
     const second = createApi({ remix: async () => { throw forbidden; } });
     await expect(startShowcaseRemix({ api: second.api, postId: 'post-1', claimFreeUnlock: false })).rejects.toBe(forbidden);
+  });
+
+  // The source answers behind the start's own gate: read before a free unlock is
+  // recorded, it would be refused as still locked.
+  it('says the source may be read beside the start, after any free unlock', async () => {
+    const open = createApi();
+    await startShowcaseRemix({ api: open.api, postId: 'post-1', claimFreeUnlock: false, onSourceReadable: () => open.calls.push('readable') });
+    expect(open.calls).toEqual(['readable', 'remix:post-1']);
+
+    const free = createApi();
+    await startShowcaseRemix({ api: free.api, postId: 'post-1', claimFreeUnlock: true, onSourceReadable: () => free.calls.push('readable') });
+    expect(free.calls).toEqual(['unlock:post-1', 'readable', 'remix:post-1']);
+
+    const refused = createApi({ unlock: async () => { throw apiError('This bundle requires payment.', 400); } });
+    await expect(startShowcaseRemix({ api: refused.api, postId: 'post-1', claimFreeUnlock: true, onSourceReadable: () => refused.calls.push('readable') })).rejects.toThrow();
+    expect(refused.calls).toEqual(['unlock:post-1']);
   });
 });
 
@@ -224,5 +248,158 @@ describe('showcasePostRemixSourceContext', () => {
     const post = { ...motionPost(), ...fields, title: 'Untitled Creation' } as ShowcaseFeedItem;
     expect(showcasePostRemixSourceContext(post).title).toBe(expected);
     expect(showcaseToHomeFeedCard(post).title).toBe(expected);
+  });
+});
+
+// Home's Make this and the reel's Remix open the creator at the tap, before the
+// start is answered; the creator finds the tap's launch by its link and waits on it.
+describe('launchShowcaseRemix', () => {
+  const SOURCE = { generation: { id: 'gen-1' } } as unknown as RemixSourceBundle;
+  const [item] = buildImmersiveShowcaseItems('showcase-feed', [motionPost()]);
+  /** Where the server's answer for this post opens the creator. */
+  const answerHref = showcaseRemixCreateHref(item, { success: true, redirectTo: '/create-motion?remix=gen-1&remixPost=post-1' })!;
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const launchOf = (href: string) => new URL(href, 'https://magicbooklet.test').searchParams.get(REMIX_LAUNCH_PARAM);
+  /** The remix every tap here launches. */
+  const POST_1 = { generationId: 'gen-1', postId: 'post-1' };
+  const tap = (tapped = item) => {
+    const navigate = vi.fn();
+    const api = { getRemixSourceBundle: vi.fn(async (_generationId: string, _options?: { postId?: string | null }) => SOURCE) };
+    const control = launchShowcaseRemix({ api, item: tapped, navigate });
+    const pushed = navigate.mock.calls[0]?.[0] as string | undefined;
+    return { api, control, navigate, pushed, launch: findRemixLaunch(pushed ? launchOf(pushed) : null, POST_1) };
+  };
+
+  it("opens the creator at once, on the answer's expected link, which names the launch", () => {
+    const { control, navigate, pushed, launch } = tap();
+
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(pushed).toBe(`${answerHref}&${REMIX_LAUNCH_PARAM}=${launchOf(pushed!)}`);
+    // Named by the post, for the creator to show while its source loads.
+    expect(launch).toMatchObject({ answer: null, modelId: 'kling-3.0-motion' });
+    // Each tap's launch is its own.
+    const second = tap();
+    expect(launchOf(second.pushed!)).not.toBe(launchOf(pushed!));
+    expect(second.launch).not.toBe(launch);
+    control.land(answerHref);
+    second.control.land(answerHref);
+  });
+
+  it('carries the creator on when the answer names its link', () => {
+    const { control, navigate, launch } = tap();
+    const listener = vi.fn();
+    launch!.subscribe(listener);
+
+    control.land(answerHref);
+
+    expect(launch!.answer).toEqual({ kind: 'confirmed' });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the creator to the link the answer names when it is another', () => {
+    const { control, launch } = tap();
+
+    control.land('/create/video?remix=gen-1&remixPost=post-1');
+
+    expect(launch!.answer).toEqual({ kind: 'replaced', href: '/create/video?remix=gen-1&remixPost=post-1' });
+  });
+
+  // Any app can open the creator's link: one that names this tap's launch beside another
+  // remix opens as any remix link does, and never restores this one's source into it.
+  it('is found only by a link that names the remix it launched', () => {
+    const { control, pushed, launch } = tap();
+    const id = launchOf(pushed!);
+
+    expect(findRemixLaunch(id, POST_1)).toBe(launch);
+    expect(findRemixLaunch(id, { generationId: 'gen-2', postId: 'post-1' })).toBeNull();
+    expect(findRemixLaunch(id, { generationId: 'gen-1', postId: 'post-2' })).toBeNull();
+    expect(findRemixLaunch(id, undefined)).toBeNull();
+    expect(findRemixLaunch(null, POST_1)).toBeNull();
+    control.land(answerHref);
+  });
+
+  // An answer can beat the creator's first render (an offline start fails at once), so
+  // the creator still finds it as it opens, and follows it then.
+  it('keeps an answer for a creator still opening, and lets it go once that creator has been and gone', () => {
+    const { control, pushed, launch } = tap();
+    control.land('/create/video?remix=gen-1&remixPost=post-1');
+    expect(findRemixLaunch(launchOf(pushed!), POST_1)).toBe(launch);
+
+    const leave = launch!.subscribe(() => undefined);
+    leave();
+    expect(findRemixLaunch(launchOf(pushed!), POST_1)).toBeNull();
+  });
+
+  it('closes the creator, and settles once it has gone', async () => {
+    const { control, launch } = tap();
+    const leave = launch!.subscribe(() => undefined);
+
+    let gone = false;
+    void control.close().then(() => { gone = true; });
+    await flush();
+    expect(launch!.answer).toEqual({ kind: 'closed' });
+    expect(gone).toBe(false);
+
+    leave();
+    await flush();
+    expect(gone).toBe(true);
+    // A second answer changes nothing.
+    control.land(answerHref);
+    expect(launch!.answer).toEqual({ kind: 'closed' });
+  });
+
+  it('settles a close at once when no creator is open to close', async () => {
+    const { control } = tap();
+    let gone = false;
+    void control.close().then(() => { gone = true; });
+    await flush();
+    expect(gone).toBe(true);
+  });
+
+  it('reads the source once it is readable, and lands it only once the start is answered as this remix', async () => {
+    const { api, control, launch } = tap();
+    let landed: unknown = null;
+    void launch!.readSource().then((bundle) => { landed = bundle; });
+    await flush();
+    expect(api.getRemixSourceBundle).not.toHaveBeenCalled();
+
+    control.sourceReadable();
+    await flush();
+    expect(api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+    expect(api.getRemixSourceBundle).toHaveBeenCalledWith('gen-1', { postId: 'post-1' });
+    expect(landed).toBeNull();
+
+    control.land(answerHref);
+    await flush();
+    expect(landed).toBe(SOURCE);
+
+    // A later restore (a retry, a restart) reads again.
+    await expect(launch!.readSource()).resolves.toBe(SOURCE);
+    expect(api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds a failed read until the answer, and lands nothing on a creator the answer takes back', async () => {
+    const { api, control, launch } = tap();
+    const refusal = apiError('Unlock this post to remix it.', 403, REMIX_UNLOCK_REQUIRED_CODE);
+    api.getRemixSourceBundle.mockRejectedValueOnce(refusal);
+    const outcome = vi.fn();
+    void launch!.readSource().then(() => outcome('landed'), () => outcome('failed'));
+    control.sourceReadable();
+    await flush();
+    expect(outcome).not.toHaveBeenCalled();
+
+    void control.close();
+    await flush();
+    expect(outcome).not.toHaveBeenCalled();
+  });
+
+  it('opens on the answer, as before, for a post that cannot name its creation', () => {
+    const { control, navigate, launch } = tap({ ...item, generationId: null });
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(launch).toBeNull();
+    control.land('/create/motion?prompt=A+dancer');
+    expect(navigate).toHaveBeenCalledWith('/create/motion?prompt=A+dancer');
   });
 });

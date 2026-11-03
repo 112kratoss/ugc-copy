@@ -73,7 +73,7 @@ import {
 } from '@/lib/immersive-slide-pages';
 import { getReelFollowAttribution, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
-import { showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
+import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -995,23 +995,23 @@ function ImmersivePreviewViewer() {
     }
 
     const context = getRemixSourceContext(item);
-    const openCreateTool = () => {
-      const fallbackHref = getNativeRemixCreateHref({
-        generationId: item.sourceType !== 'showcase' ? item.generationId : null,
-        recreateTool: item.recreateTool,
-        prompt: item.recreatePrompt,
-        context,
-      });
-      router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
-    };
+    const createToolHref = () => getNativeRemixCreateHref({
+      generationId: item.sourceType !== 'showcase' ? item.generationId : null,
+      recreateTool: item.recreateTool,
+      prompt: item.recreatePrompt,
+      context,
+    }) ?? `/create/${item.recreateTool}`;
 
     const showcasePostId = item.sourceType === 'showcase' ? item.showcasePostId : null;
     if (!showcasePostId) {
-      openCreateTool();
+      router.push(createToolHref() as never);
       return;
     }
 
     const unlock = item.details?.unlock ?? null;
+    // The creator opens now, on the link the start is expected to answer with, and the
+    // answer then carries it on, sends it to its own link or closes it (`launchShowcaseRemix`).
+    const remixLaunch = launchShowcaseRemix({ api, item, navigate: (href) => router.push(href as never) });
     const startRemix = async () => {
       // A free unlock is taken by this same tap. A paid one never is: the rail
       // sends those to the unlock sheet, which calls back here once it is paid —
@@ -1020,13 +1020,17 @@ function ImmersivePreviewViewer() {
         api,
         postId: showcasePostId,
         claimFreeUnlock: item.remixAccess === 'free-unlock',
+        onSourceReadable: remixLaunch.sourceReadable,
       });
       if (started.kind === 'unlock-required') {
         // This slide was loaded before the creator put remix behind an unlock.
         if (unlock) {
+          // The sheet is the reel's, so it waits for the creator to be gone.
+          await remixLaunch.close();
           setUnlockRemixOpenItemId(item.id);
           return;
         }
+        void remixLaunch.close();
         void queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] });
         showMessageDialog({
           title: 'Unlock needed',
@@ -1047,10 +1051,11 @@ function ImmersivePreviewViewer() {
       }
       const nativeHref = showcaseRemixCreateHref(item, response);
       if (nativeHref) {
-        router.push(nativeHref as never);
+        remixLaunch.land(nativeHref);
         return;
       }
       if (response.redirectTo) {
+        void remixLaunch.close();
         // Leaving the app is the viewer's call, not a silent hand-off.
         const webUrl = `${env.siteUrl}${response.redirectTo}`;
         void showConfirmDialog({
@@ -1063,13 +1068,14 @@ function ImmersivePreviewViewer() {
         });
         return;
       }
-      openCreateTool();
+      remixLaunch.land(createToolHref());
     };
     setRemixingItemId(item.id);
     // `.catch` and `.finally` rather than try…finally, which React Compiler
     // cannot compile; this screen re-renders on every swipe.
     void startRemix()
       .catch((error) => {
+        void remixLaunch.close();
         haptic.error();
         showErrorDialog('Could not start remix', error);
       })

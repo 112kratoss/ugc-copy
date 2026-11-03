@@ -29,6 +29,8 @@ export default function CreateToolScreen() {
     sourceTitle?: string | string[];
     sourceCreator?: string | string[];
     sourceThumbnail?: string | string[];
+    // `REMIX_LAUNCH_PARAM`: the Remix tap that opened this creator before its start was answered.
+    remixLaunch?: string | string[];
   };
   const beforeClose = useRef<(() => Promise<boolean>) | null>(null);
   const navigation = useNavigation();
@@ -82,6 +84,7 @@ export default function CreateToolScreen() {
           initialTool={initialTool}
           initialPrompt={initialPrompt}
           remixSource={remixSource}
+          remixLaunchId={firstParam(params.remixLaunch)}
           guided={guided}
           registerBeforeClose={registerBeforeClose}
           onDirtyChange={setDirty}

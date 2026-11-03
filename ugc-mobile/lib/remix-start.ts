@@ -1,6 +1,6 @@
 import type { MagicbookletApiClient } from './api-client';
 import { buildImmersiveShowcaseItems, type ImmersivePreviewItem } from './immersive-preview-view-model';
-import type { ShowcaseFeedItem } from './types';
+import type { RemixSourceBundle, ShowcaseFeedItem } from './types';
 import { getNativeRemixCreateHref, getRemixSourceContext, type RemixSourceContext } from './viewer-actions';
 
 /** The remix endpoint's answer for a post whose remix sits behind an unlock. */
@@ -34,14 +34,22 @@ export async function startShowcaseRemix({
   api,
   postId,
   claimFreeUnlock,
+  onSourceReadable,
 }: {
   api: RemixApi;
   postId: string;
   /** The loaded post says remix sits behind a free unlock this viewer has not taken. */
   claimFreeUnlock: boolean;
+  /**
+   * Told when the remix's source may be read beside the start: at once, or once the
+   * free unlock is recorded. `/api/remix-source` keeps the start's own gate, so a read
+   * sent before the claim would be refused as still locked (`launchShowcaseRemix`).
+   */
+  onSourceReadable?: () => void;
 }): Promise<RemixStartResult> {
   // Claiming twice is harmless: the server answers a repeat as already owned.
   if (claimFreeUnlock) await api.unlockFreeBundle(postId);
+  onSourceReadable?.();
 
   try {
     const response = await api.remixShowcasePost(postId);
@@ -67,6 +75,195 @@ export function showcaseRemixCreateHref(item: ImmersivePreviewItem, response: Re
     prompt: response.prefill?.prompt ?? item.recreatePrompt,
     context: getRemixSourceContext(item),
   });
+}
+
+/**
+ * What the creator a Remix tap launched is told once the start is answered: carry on,
+ * give way to the link the answer names, or close while the tapped screen says why (a
+ * refusal, an unlock to take, a creation the app has no creator for).
+ */
+export type RemixLaunchAnswer =
+  | { kind: 'confirmed' }
+  | { kind: 'replaced'; href: string }
+  | { kind: 'closed' };
+
+/**
+ * The creator's side of a Remix tap's launch (`launchShowcaseRemix`). The creator finds
+ * it by its link's `remixLaunch` (`findRemixLaunch`) and holds what the answer decides
+ * until it comes: the source it restores, its saves and a run.
+ */
+export interface RemixLaunch {
+  /** The remix the tap launched, which the creator's link must name too. */
+  readonly generationId: string;
+  readonly postId: string;
+  /** The original's model as the tapped post names it, for the creator to name while its source loads. */
+  readonly modelId: string | null;
+  /** Null until the start is answered. */
+  readonly answer: RemixLaunchAnswer | null;
+  /** The creator listens for as long as it is open, and stops as it unmounts. */
+  subscribe(listener: () => void): () => void;
+  /**
+   * The source, for the creator's restore. The first read is the one the tap sent
+   * beside the start; a later one (a retry, a restore started again) also waits for any
+   * free unlock. Either lands, or fails, only once the start is answered as this remix,
+   * and never on a creator the answer closes or sends elsewhere, which is leaving.
+   */
+  readSource(): Promise<RemixSourceBundle>;
+}
+
+/** The tap's side of the launch: what the start's answer does to the creator it opened. */
+export interface RemixLaunchControl {
+  /** The start no longer waits on an unlock, so the source read goes out (`startShowcaseRemix`). */
+  sourceReadable(): void;
+  /** The answer's creator link: the creator carries on when it is the link it opened on, and gives way to it when not. */
+  land(href: string): void;
+  /**
+   * The start was refused, or lands nowhere the app can open: the creator closes. Settles
+   * once it has gone, so a sheet of the tapped screen's own opens over that screen: on
+   * iOS a Modal is presented from its screen, and a screen under the creator has none to
+   * present from.
+   */
+  close(): Promise<void>;
+}
+
+/**
+ * The creator link's param that names its launch. Only the tap's own link carries it, so
+ * a creator opened any other way (a link, a return from sign-in, the answer's own link)
+ * opens as every remix link does.
+ */
+export const REMIX_LAUNCH_PARAM = 'remixLaunch';
+
+/** Launches kept for a creator that has not taken its own yet, at most. */
+const LAUNCHES_KEPT = 8;
+const launches = new Map<string, RemixLaunch>();
+let lastLaunchId = 0;
+
+/**
+ * The launch the creator's link names (`REMIX_LAUNCH_PARAM`), while its tap is still
+ * known, and only for the remix it launched: a link that names another tap's launch
+ * opens as any remix link does.
+ */
+export function findRemixLaunch(
+  id: string | null | undefined,
+  source: { generationId?: string | null; postId?: string | null } | undefined,
+): RemixLaunch | null {
+  const launch = id ? launches.get(id) : undefined;
+  return launch && launch.generationId === source?.generationId?.trim() && launch.postId === source?.postId?.trim()
+    ? launch
+    : null;
+}
+
+/**
+ * Opens the creator for a Remix tap at once, on the link the start is expected to answer
+ * with: the post's own tool, creation and row, as the server's link maps
+ * (`showcaseRemixCreateHref`). Waiting for the answer first left the tap with nothing on
+ * screen for 0.75 to 1 s, and up to 4 s, on the Pixel 9a against production
+ * (2026-11-03), and the creator's own reads only began after it. The source is read
+ * beside the start, and the creator holds it until the answer. A post that cannot name
+ * its creation opens on the answer, as before.
+ */
+export function launchShowcaseRemix({
+  api,
+  item,
+  navigate,
+}: {
+  api: Pick<MagicbookletApiClient, 'getRemixSourceBundle'>;
+  /** The post as the reel reads it. */
+  item: ImmersivePreviewItem;
+  /** Opens a creator link (`router.push`). */
+  navigate: (href: string) => void;
+}): RemixLaunchControl {
+  const generationId = item.generationId?.trim();
+  const postId = item.showcasePostId?.trim();
+  const expected = generationId && postId
+    ? showcaseRemixCreateHref(item, {
+        success: true,
+        redirectTo: `/create-${item.recreateTool}?${new URLSearchParams({ remix: generationId, remixPost: postId })}`,
+      })
+    : null;
+  if (!generationId || !postId || !expected) {
+    return { sourceReadable: () => undefined, land: navigate, close: () => Promise.resolve() };
+  }
+
+  const id = String(++lastLaunchId);
+  const listeners = new Set<() => void>();
+  let answer: RemixLaunchAnswer | null = null;
+  // Whether the creator ever listened: until then, one may still be mounting.
+  let taken = false;
+  let creatorGone!: () => void;
+  const gone = new Promise<void>((resolve) => { creatorGone = resolve; });
+  // Answered, with no creator open: the creator has gone, or has yet to come and will
+  // follow the answer as it opens. Once one has come and gone, nothing can ask again.
+  const release = () => {
+    if (!answer || listeners.size > 0) return;
+    creatorGone();
+    if (taken) launches.delete(id);
+  };
+  let answerConfirmed!: (confirmed: boolean) => void;
+  const confirmed = new Promise<boolean>((resolve) => { answerConfirmed = resolve; });
+  // Readable once any free unlock is recorded, or once the start is answered as this remix.
+  let markReadable!: (readable: boolean) => void;
+  const readable = new Promise<boolean>((resolve) => { markReadable = resolve; });
+  const read = () => readable.then((open) => {
+    // Only a creator the answer took back gets here, and it never sees this (`afterAnswer`).
+    if (!open) throw new Error('This remix did not start.');
+    return api.getRemixSourceBundle(generationId, { postId });
+  });
+  // Sent whether or not the creator takes it (a session saved before is resumed instead),
+  // so a failure nobody reads is handled here.
+  const tapRead = read();
+  tapRead.catch(() => undefined);
+  let tapReadTaken = false;
+  const leaving = () => new Promise<never>(() => undefined);
+  const afterAnswer = (source: Promise<RemixSourceBundle>) => source.then(
+    (bundle) => confirmed.then((ok) => (ok ? bundle : leaving())),
+    (error: unknown) => confirmed.then((ok) => (ok ? Promise.reject(error) : leaving())),
+  );
+
+  const launch: RemixLaunch = {
+    generationId,
+    postId,
+    modelId: item.details?.model?.trim() || null,
+    get answer() {
+      return answer;
+    },
+    subscribe(listener) {
+      taken = true;
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+        release();
+      };
+    },
+    readSource() {
+      if (tapReadTaken) return afterAnswer(read());
+      tapReadTaken = true;
+      return afterAnswer(tapRead);
+    },
+  };
+  const settle = (next: RemixLaunchAnswer) => {
+    if (answer) return;
+    answer = next;
+    markReadable(next.kind === 'confirmed');
+    answerConfirmed(next.kind === 'confirmed');
+    listeners.forEach((listener) => listener());
+    release();
+  };
+  // A launch whose creator never came stays only until newer taps push it out.
+  for (const [kept, entry] of launches) {
+    if (launches.size < LAUNCHES_KEPT) break;
+    if (entry.answer) launches.delete(kept);
+  }
+  launches.set(id, launch);
+  navigate(`${expected}&${REMIX_LAUNCH_PARAM}=${id}`);
+  return {
+    sourceReadable: () => markReadable(true),
+    land: (href) => settle(href === expected ? { kind: 'confirmed' } : { kind: 'replaced', href }),
+    close: () => {
+      settle({ kind: 'closed' });
+      return gone;
+    },
+  };
 }
 
 /**

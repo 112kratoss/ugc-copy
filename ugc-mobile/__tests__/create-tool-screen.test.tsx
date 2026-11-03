@@ -83,6 +83,9 @@ vi.mock('@/components/ui', () => ({
 }));
 
 import CreateToolScreen from '../app/create/[tool]';
+import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { REMIX_LAUNCH_PARAM, launchShowcaseRemix } from '../lib/remix-start';
+import type { ShowcaseFeedItem } from '../lib/types';
 import { getNativeRemixCreateHref } from '../lib/viewer-actions';
 
 /**
@@ -218,6 +221,39 @@ describe('create tool route', () => {
       initialPrompt: PROMPT,
       remixSource: { generationId: 'gen-1', ...context },
     });
+  });
+
+  // Home's Make this and the reel's Remix open the creator before the start is answered, and
+  // its link names the tap's launch, which the creator waits on (`launchShowcaseRemix`).
+  it("hands the creator the launch a Remix tap's link names, and no other link one", () => {
+    const navigate = vi.fn();
+    const [item] = buildImmersiveShowcaseItems('showcase-feed', [{
+      id: 'post-1', generationId: 'gen-1', title: 'Night run', prompt: 'A night run', body: '', mediaUrl: null, mediaKind: 'video', mediaItems: [],
+      category: 'video', postFormat: 'media', model: 'seedance-2', saveCount: 0, remixCount: 0, commentCount: 0,
+      createdAt: '2026-11-01T09:00:00.000Z', creator: { id: 'creator-1', username: 'ana', name: 'Ana', avatar: null }, asset: null, canRemix: true,
+    } as unknown as ShowcaseFeedItem]);
+    const launch = launchShowcaseRemix({ api: { getRemixSourceBundle: vi.fn(() => new Promise<never>(() => undefined)) }, item, navigate });
+    const pushed = navigate.mock.calls[0][0] as string;
+    routeState.params = creatorRoute(pushed);
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
+    const launchId = new URL(pushed, 'https://magicbooklet.test').searchParams.get(REMIX_LAUNCH_PARAM);
+    expect(launchId).toBeTruthy();
+    expect(mediaCreationState.props).toMatchObject({
+      initialTool: 'video',
+      remixLaunchId: launchId,
+      remixSource: { generationId: 'gen-1', postId: 'post-1', title: 'Night run', creatorLabel: '@ana' },
+    });
+    launch.land('/create/video?remix=gen-1&remixPost=post-1');
+
+    routeState.params = { tool: 'video', remix: 'gen-1', remixPost: 'post-1' };
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+    expect(mediaCreationState.props?.remixLaunchId).toBeUndefined();
   });
 
   it('passes prompt-only create route params into the native create screen', () => {
