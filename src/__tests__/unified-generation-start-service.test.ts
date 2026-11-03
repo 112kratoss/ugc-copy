@@ -2032,6 +2032,8 @@ describe('a remix’s motion run', () => {
   const remixLink = (path: string) => `${STORAGE}/${path}?token=remix-read`;
   const copyOf = (path: string) => path.replace(`${CREATOR}/${ORIGINAL}`, `${REMIXER}/remix-imports/${ORIGINAL}`);
   const copyLink = (path: string) => `${STORAGE}/${copyOf(path)}?token=copy`;
+  /** The database calls of the last start, readable after one that was refused. */
+  let lastRpcNames: () => string[] = () => [];
 
   beforeEach(() => {
     vi.resetModules();
@@ -2061,8 +2063,11 @@ describe('a remix’s motion run', () => {
     vi.unstubAllGlobals();
   });
 
-  /** The remix started as the motion page posts it, with `picture` over its restored picture. */
-  async function startRemix(picture: Record<string, unknown> = {}) {
+  /**
+   * The remix started as the motion page posts it, with `picture` over its restored picture, under
+   * the caller's client `supabase` (which signs the caller's own files, where a test gives it storage).
+   */
+  async function startRemix({ picture = {}, supabase = {} }: { picture?: Record<string, unknown>; supabase?: unknown } = {}) {
     const { startUnifiedGenerationForRoute: startRoute } = await import('@/lib/unified-generation-start-service');
     const { loadPublishedGenerationModelCatalog } = await import('@/lib/generation-model-catalog-store');
     const { catalog } = await loadPublishedGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
@@ -2085,6 +2090,7 @@ describe('a remix’s motion run', () => {
       }
       return { data: true, error: null };
     });
+    lastRpcNames = () => rpc.mock.calls.map(([fn]) => fn);
     /** The inputs the run keeps, as `generation_input_media` rows. */
     const keptInputs: Array<Record<string, unknown>> = [];
     const adminSupabase = {
@@ -2155,7 +2161,7 @@ describe('a remix’s motion run', () => {
         },
         userId: REMIXER,
         callerIsGuest: false,
-        supabase: {} as never,
+        supabase: supabase as never,
         adminSupabase: adminSupabase as never,
       },
       {
@@ -2188,6 +2194,60 @@ describe('a remix’s motion run', () => {
     });
     expect([...origins.byRowId.values()]).toEqual(['others', 'others']);
     expect(origins.hasOwn).toBe(false);
+  });
+
+  // The picture is held to what the clip is held to when it is measured: a link the provider can
+  // fetch, and a refusal that says what to do, before anything is held. A creator who put another
+  // creator's never-kept upload in its place (a legacy post's) was told media must belong to them;
+  // one whose own file storage would not sign again had it sent as the media proxy's relative link,
+  // which Kie cannot fetch, after the credits were held.
+  it.each([
+    {
+      label: 'another creator’s upload that no remix shares',
+      picture: {
+        url: `${STORAGE}/uploads/${CREATOR}/hero.png?token=t`,
+        storagePath: `uploads/${CREATOR}/hero.png`,
+        sourceGenerationId: null,
+      },
+      signs: true,
+    },
+    {
+      label: 'the remixer’s own, which storage would not sign again',
+      picture: {
+        url: `${STORAGE}/generation_inputs/${REMIXER}/generation-own/00-character_image.png?token=t`,
+        storagePath: `generation_inputs/${REMIXER}/generation-own/00-character_image.png`,
+        sourceGenerationId: null,
+      },
+      signs: false,
+    },
+  ])('refuses $label as a picture to add again, before anything is held', async ({ picture, signs }) => {
+    const { mapGenerationStartRouteError } = await import('@/lib/unified-generation-route-service');
+    const supabase = {
+      storage: {
+        from: vi.fn(() => ({
+          createSignedUrl: vi.fn(async (filePath: string) => (signs
+            ? { data: { signedUrl: `${STORAGE}/${filePath}?token=fresh` }, error: null }
+            : { data: null, error: { message: 'The signing service is unavailable.' } })),
+        })),
+      },
+    };
+
+    const refusal = await startRemix({ picture, supabase }).then(() => null, (error: unknown) => error);
+
+    expect(refusal).toMatchObject({ status: 422, failureCode: 'invalid_input_media' });
+    // What the motion page is answered with, and shows.
+    expect(mapGenerationStartRouteError(refusal, { logEvent: 'motion_start_failed', fallbackMessage: 'Failed.' })).toEqual({
+      ok: false,
+      status: 422,
+      body: {
+        code: 'invalid_input_media',
+        error: 'The character picture could not be used. Add your own character picture, then retry.',
+      },
+    });
+    // The start's claim on its request key is made; the credit hold is not.
+    expect(lastRpcNames()).toContain('claim_generation_start_request');
+    expect(lastRpcNames()).not.toContain('start_generation');
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 

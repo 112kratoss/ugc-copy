@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createRemixSourceRows } from '@/__tests__/fixtures/remix-source-rows';
 import { buildGenerationModelCatalog, CatalogError } from '@/lib/generation-model-catalog';
@@ -424,6 +424,71 @@ describe('startMotionGenerationForRoute', () => {
       referenceVideoUrl: 'https://signed.example.com/reference.mp4',
       resolvedMediaSources: new Map([['https://signed.example.com/reference.mp4', resolvedReference]]),
     }));
+  });
+
+  // The picture is held to what the clip is held to when it is measured: a link the provider can
+  // fetch, and a refusal that says what to do, before anything is held. This route hands the picture
+  // to the motion start, which resolves it, so these run the start itself behind the route.
+  describe('a picture the start cannot send', () => {
+    const STORAGE = 'https://project.supabase.co/storage/v1/object/sign';
+
+    it.each([
+      {
+        label: 'another creator’s upload that no remix shares',
+        picture: `${STORAGE}/uploads/creator-1/hero.png?token=t`,
+        signs: true,
+      },
+      {
+        label: 'the caller’s own, which storage would not sign again',
+        picture: `${STORAGE}/generation_inputs/user-1/gen-0/00-character_image.png?token=t`,
+        signs: false,
+      },
+    ])('refuses $label as a picture to add again, before anything is held', async ({ picture, signs }) => {
+      vi.stubEnv('KIE_AI_API_KEY', 'test-key');
+      vi.stubEnv('KIE_PROVIDER_WEBHOOK_SECRET', 'test-webhook-secret');
+      vi.stubEnv('KIE_WEBHOOK_HMAC_KEY', 'hmac-key');
+      vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com');
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+      vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code');
+      vi.stubGlobal('fetch', vi.fn());
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+      });
+      // A fresh start module, which reads the provider settings stubbed above when it loads.
+      vi.resetModules();
+      const actual = await vi.importActual<typeof import('@/lib/generation-services')>('@/lib/generation-services');
+      startMotionGenerationMock.mockImplementation(actual.startMotionGeneration);
+      const { startMotionGenerationForRoute: startRoute } = await import('@/lib/motion-generation-start-service');
+      const userClient = {
+        ...createClientMock().client,
+        storage: {
+          from: vi.fn(() => ({
+            createSignedUrl: vi.fn(async (filePath: string) => (signs
+              ? { data: { signedUrl: `${STORAGE}/${filePath}?token=fresh` }, error: null }
+              : { data: null, error: { message: 'The signing service is unavailable.' } })),
+          })),
+        },
+      } as unknown as MotionGenerationStartRouteClient;
+      const adminClient = createClientMock();
+
+      const refusal = await startRoute({
+        request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-11' } }),
+        body: motionBody({ characterImageUrl: picture, duration: 6 }),
+        userId: 'user-1',
+        callerIsGuest: false,
+        supabase: userClient,
+        adminSupabase: adminClient.client,
+      }).then(() => null, (error: unknown) => error);
+
+      expect(refusal).toMatchObject({
+        status: 422,
+        failureCode: 'invalid_input_media',
+        message: 'The character picture could not be used. Add your own character picture, then retry.',
+      });
+      expect(adminClient.rpc.mock.calls.map(([fn]) => fn)).not.toContain('start_generation');
+      expect(fetch).not.toHaveBeenCalled();
+    });
   });
 
   it('replays a start already accepted without reading its clip again', async () => {

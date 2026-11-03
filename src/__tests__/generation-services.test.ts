@@ -4289,6 +4289,81 @@ describe('generation services', () => {
     }, remixer)])).toEqual([['character_image', 'others'], ['motion_reference_video', 'others']]);
   });
 
+  // A motion run's picture is held to what its clip is held to when it is measured: a link the
+  // provider can fetch, and a refusal that says what to do, before anything is held. One of another
+  // creator's uploads that no remix shares with the caller (a legacy post's, a guest's) was refused
+  // as media that must belong to them; one of the caller's own that storage would not sign again went
+  // on as the media proxy's relative link, which Kie cannot fetch, after the credits were held.
+  describe('a motion picture it cannot send', () => {
+    const OWN_PICTURE = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-0/00-character_image.png?token=t';
+    const CLIP = 'https://cdn.example.com/reference.mp4';
+
+    it.each([
+      {
+        label: 'another creator’s upload that no remix shares',
+        picture: 'https://project.supabase.co/storage/v1/object/sign/uploads/user-2/hero.png?token=t',
+        signs: true,
+      },
+      {
+        label: 'the caller’s own, which storage would not sign again',
+        picture: OWN_PICTURE,
+        signs: false,
+      },
+    ])('refuses $label in its own words, before anything is held', async ({ picture, signs }) => {
+      const { startMotionGeneration } = await import('@/lib/generation-services');
+      const { supabase: creditSupabase, rpcCalls } = createSupabaseMock();
+      const supabase = {
+        storage: {
+          from: vi.fn(() => ({
+            createSignedUrl: vi.fn(async (filePath: string) => (signs
+              ? { data: { signedUrl: `https://project.supabase.co/storage/v1/object/sign/${filePath}?token=fresh` }, error: null }
+              : { data: null, error: { message: 'The signing service is unavailable.' } })),
+          })),
+        },
+      } as unknown as SupabaseClient;
+
+      await expect(startMotionGeneration({
+        supabase,
+        creditSupabase,
+        userId: 'user-1',
+        prompt: '',
+        model: 'kling-2.6',
+        characterImageUrl: picture,
+        referenceVideoUrl: CLIP,
+        duration: 5,
+        referenceVideoSeconds: 5,
+      })).rejects.toMatchObject({
+        status: 422,
+        failureCode: 'invalid_input_media',
+        message: 'The character picture could not be used. Add your own character picture, then retry.',
+      });
+      expect(rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
+  it('keeps a failure of the service to prepare a motion picture in its own words', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    sharedImportMocks.importSharedGenerationInputMedia.mockResolvedValueOnce({ outcome: 'failed' } as never);
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-2.6',
+      characterImageUrl: 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-2/gen-9/00-character_image.png?token=t',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      duration: 5,
+      referenceVideoSeconds: 5,
+    })).rejects.toMatchObject({
+      status: 500,
+      message: 'We could not prepare the shared reference media. Please try again.',
+    });
+    expect(rpcCalls).toEqual([]);
+  });
+
   it('sends Kling single-shot generations with named video elements', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;
