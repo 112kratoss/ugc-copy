@@ -70,6 +70,10 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
     height: VIEWER_TOP_CONTROL_SIZE,
     borderRadius: VIEWER_TOP_CONTROL_SIZE / 2,
   };
+  // Hidden, it is not there at all: a tap in its corner would act on a control
+  // nobody can see, and a screen reader would land on it.
+  const pointerEvents = shown ? 'auto' : 'none';
+  const importantForAccessibility = shown ? 'auto' : 'no-hide-descendants';
   const content: ViewStyle = {
     width: '100%',
     height: '100%',
@@ -84,6 +88,9 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
         glassEffectStyle={{ style: shown ? 'regular' : 'none', animate: true, animationDuration: APPEARANCE_S }}
         colorScheme={theme.scheme}
         isInteractive
+        pointerEvents={pointerEvents}
+        accessibilityElementsHidden={!shown}
+        importantForAccessibility={importantForAccessibility}
         style={frame}
       >
         <Pressable
@@ -103,7 +110,12 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
   }
 
   return (
-    <Animated.View style={[frame, { opacity: appearance }]}>
+    <Animated.View
+      pointerEvents={pointerEvents}
+      accessibilityElementsHidden={!shown}
+      importantForAccessibility={importantForAccessibility}
+      style={[frame, { opacity: appearance }]}
+    >
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={label}

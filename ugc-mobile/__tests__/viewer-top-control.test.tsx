@@ -139,3 +139,34 @@ describe('whether the reel\'s top controls show', () => {
     expect(material(mount(null).tree)).toBe('regular');
   });
 });
+
+/** The control's own frame: the glass where there is glass, its plain backing otherwise. */
+const frameOf = (tree: renderer.ReactTestRenderer) => host(tree, glass.available ? 'glass-view' : 'animated-view');
+
+// Hidden for up to 700 ms of every zoom into the reel, and from the start of
+// every close: a tap in that corner acted on a control nobody could see, and
+// VoiceOver could land on an invisible "Go back".
+describe('a hidden control', () => {
+  it.each([
+    ['glass', true],
+    ['a plain backing', false],
+  ])('on %s takes no touches and is not read out until it shows', (_surface, available) => {
+    glass.available = available;
+    const controls = createViewerTopControls(false);
+    const { tree } = mount(controls);
+    expect(frameOf(tree).props).toMatchObject({
+      pointerEvents: 'none',
+      accessibilityElementsHidden: true,
+      importantForAccessibility: 'no-hide-descendants',
+    });
+    renderer.act(() => controls.setShown(true));
+    expect(frameOf(tree).props).toMatchObject({
+      pointerEvents: 'auto',
+      accessibilityElementsHidden: false,
+      importantForAccessibility: 'auto',
+    });
+    expect(host(tree, 'pressable').props).toMatchObject({ accessibilityRole: 'button', accessibilityLabel: 'Go back' });
+    renderer.act(() => controls.setShown(false));
+    expect(frameOf(tree).props.pointerEvents).toBe('none');
+  });
+});
