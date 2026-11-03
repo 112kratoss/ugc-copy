@@ -1450,8 +1450,8 @@ function addGenerationRecipeReferenceItems(
   inputMedia: GenerationInputMediaItem[],
 ): PostResourceItem[] {
   // "Include creation references" already stored a copy of an input as
-  // `reference-<input id>` (buildGenerationReferenceResourceItems); listing
-  // the live input beside it showed every reference twice (S-F8).
+  // `reference-<input id>` (planGenerationReferenceCopies); listing the live
+  // input beside it showed every reference twice (S-F8).
   const storedItemIds = new Set(storedItems.map((item) => item.id));
   const unstoredInputMedia = inputMedia.filter((input, index) => (
     !storedItemIds.has(generationReferenceItemId(input.id, index))

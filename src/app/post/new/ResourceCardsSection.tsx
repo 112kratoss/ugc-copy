@@ -168,8 +168,10 @@ function ResourceCardRow({
 }
 
 /**
- * The creation's saved inputs, which the publish route copies into the recipe
- * (A-F9). Read-only: "Include creation references" above adds and removes it.
+ * The creation's saved inputs the recipe does not hold yet, which a publish or
+ * an edit's save copies into it when asked (A-F9). Read-only: "Include creation
+ * references" above adds and removes it; once copied they are the recipe's own
+ * items, listed with the rest.
  */
 function CreationReferencesRow({ count }: { count: number }) {
   return (
@@ -206,7 +208,7 @@ export default function ResourceCardsSection({
   /** The one public text (S6): the creator's own, or the suggestion while they have not written it. */
   previewText: string;
   previewError?: string | null;
-  /** Saved inputs the recipe will carry; 0 leaves their row out. */
+  /** Saved inputs the save will copy in, beyond those the recipe holds; 0 leaves their row out. */
   creationReferenceCount?: number;
   /** Items drawn without Edit and Remove: a creation's exact prompt. */
   lockedCardIds?: ReadonlySet<string>;

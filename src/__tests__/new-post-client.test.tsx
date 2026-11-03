@@ -30,10 +30,12 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => searchParamsState.value,
 }));
 
+// The access token is a field a test can change, as TOKEN_REFRESHED does.
+const authSessionState = vi.hoisted(() => ({ accessToken: 'test-token' }));
 vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({
     session: {
-      access_token: 'test-token',
+      access_token: authSessionState.accessToken,
       user: { id: 'user-1' },
     },
   }),
@@ -236,6 +238,7 @@ describe('NewPostClient', () => {
       storagePath: `uploads/user-1/${file.name}`,
     }));
     searchParamsState.value = new URLSearchParams();
+    authSessionState.accessToken = 'test-token';
     queuedResponses = [];
     fetchMock.mockImplementation(async (url: string | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.href : String(url);
@@ -3022,8 +3025,8 @@ describe('NewPostClient', () => {
             description: '',
             prompt: '',
             input_media: [
-              { storagePath: 'uploads/user-1/character.png', mediaType: 'image' },
-              { storagePath: 'uploads/user-1/reference.mp4', mediaType: 'video' },
+              { id: 'input-character', storagePath: 'uploads/user-1/character.png', mediaType: 'image', recipeCopyable: true },
+              { id: 'input-reference', storagePath: 'uploads/user-1/reference.mp4', mediaType: 'video', recipeCopyable: true },
             ],
             paywallPrefill: {
               resourceKinds: ['files', 'remix'],
@@ -3110,7 +3113,9 @@ describe('NewPostClient', () => {
             model: 'nano-banana-2',
             title: 'Launch still',
             description: 'A polished creator-style launch image.',
-            prompt: 'A polished creator-style launch image.',
+            // No prefill is what a creation with no prompt, inputs or remix gets:
+            // one with a prompt has its exact prompt in its recipe (owner, 2026-11-03).
+            prompt: '',
             paywallPrefill: null,
           },
         ],
@@ -5347,6 +5352,8 @@ describe('NewPostClient', () => {
               sourceGenerationId: null,
               sortOrder: 0,
               metadata: {},
+              // The server copies it into the recipe when asked (#677's review).
+              recipeCopyable: true,
             }],
             paywallPrefill: null,
             ...overrides,
@@ -5559,7 +5566,7 @@ describe('NewPostClient', () => {
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
       });
-      expect(screen.getByText('Exact prompt included.')).toBeInTheDocument();
+      expect(await screen.findByText('Exact prompt included.')).toBeInTheDocument();
       expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
       expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt.');
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
@@ -5747,8 +5754,207 @@ describe('NewPostClient', () => {
         },
       }} />);
 
-      expect(await screen.findByText('Included in this recipe.')).toBeInTheDocument();
+      // The words both composers say (ugc-mobile/lib/creation-recipe).
+      expect(await screen.findByText('Saved inputs included in this recipe.')).toBeInTheDocument();
       expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
+    });
+
+    // #677's review: the creation's load ran again on a token refresh (and on
+    // Retry) and took a Free recipe the creator chose back to No recipe.
+    it('keeps the recipe mode a creator chose when the creation is read again', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ prompt: '' });
+
+      const view = render(<NewPostClient />);
+      await waitFor(() => expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked());
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+      expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+
+      enqueueCreation({ prompt: '' });
+      authSessionState.accessToken = 'refreshed-token';
+      view.rerender(<NewPostClient />);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+        '/api/generations?includeArchived=true&id=gen-recipe-1&limit=1',
+        { headers: { Authorization: 'Bearer refreshed-token' } },
+      ));
+      await act(async () => {});
+
+      expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(true);
+    });
+
+    // #677's review: the caption keyed on the creation having a prompt, not on
+    // the recipe holding it, and a recipe whose own prompt went never got the
+    // exact one back.
+    it('says the exact prompt is in only while it is, and puts it back when the creator’s own prompt goes', async () => {
+      enqueueCreation({ input_media: [] });
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundle: {
+          accessMode: 'free',
+          previewText: 'My own prompt for this still.',
+          resources: {
+            items: [{
+              id: 'own-prompt',
+              scope: { kind: 'all' },
+              type: 'prompt',
+              role: 'primary',
+              sectionId: null,
+              title: 'My prompt',
+              description: null,
+              textContent: 'My own wording for this still',
+              externalUrl: null,
+              storagePath: null,
+              contentType: null,
+              sizeBytes: null,
+              workflowSnapshot: null,
+              sortOrder: 0,
+              isPrimary: true,
+              remixUse: 'text_template',
+            }],
+          },
+        },
+      }} />);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+        '/api/generations?includeArchived=true&id=gen-recipe-1&limit=1',
+        expect.anything(),
+      ));
+      await act(async () => {});
+      // A recipe with a prompt of its own keeps it alone, and does not hold the exact one.
+      expect(screen.queryByText('Exact prompt included.')).not.toBeInTheDocument();
+      expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove My prompt' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+      expect(await screen.findByText('Exact generation prompt')).toBeInTheDocument();
+      expect(screen.getByText('Exact prompt included.')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /remove exact generation prompt/i })).not.toBeInTheDocument();
+    });
+
+    // #677's review: the lock went by the title alone, so a rewritten exact
+    // prompt was frozen.
+    it('leaves a rewritten exact-prompt card the creator’s to edit', async () => {
+      enqueueCreation({ input_media: [] });
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundle: {
+          accessMode: 'free',
+          previewText: 'A redacted prompt for this still.',
+          resources: {
+            items: [{
+              id: 'redacted',
+              scope: { kind: 'all' },
+              type: 'prompt',
+              role: 'primary',
+              sectionId: null,
+              title: 'Exact generation prompt',
+              description: null,
+              textContent: 'A product still, the brand name left out',
+              externalUrl: null,
+              storagePath: null,
+              contentType: null,
+              sizeBytes: null,
+              workflowSnapshot: null,
+              sortOrder: 0,
+              isPrimary: true,
+              remixUse: 'text_template',
+            }],
+          },
+        },
+      }} />);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+        '/api/generations?includeArchived=true&id=gen-recipe-1&limit=1',
+        expect.anything(),
+      ));
+      await act(async () => {});
+      expect(screen.getByRole('button', { name: /edit exact generation prompt/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /remove exact generation prompt/i })).toBeInTheDocument();
+    });
+
+    // #677's review: the strip showed and counted inputs the server never copies.
+    it('shows, counts and offers only the saved inputs the server copies', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({
+        input_media: [
+          { id: 'input-1', mediaType: 'image', label: 'Product', url: 'https://proxy.example.com/generation_inputs/user-1/product.png', storagePath: 'generation_inputs/user-1/product.png', sortOrder: 0, recipeCopyable: true },
+          { id: 'input-2', mediaType: 'audio', role: 'reference_audio', label: 'Voice', url: null, storagePath: 'generation_inputs/user-1/voice.mp3', sortOrder: 1, recipeCopyable: true },
+          // In another account's folder: the server copies none of it.
+          { id: 'input-3', mediaType: 'image', label: 'Theirs', url: 'https://proxy.example.com/generation_inputs/user-2/theirs.png', storagePath: 'generation_inputs/user-2/theirs.png', sortOrder: 2, recipeCopyable: false },
+          // From a server that did not say: nothing is promised.
+          { id: 'input-4', mediaType: 'image', label: 'Unmarked', url: null, storagePath: 'generation_inputs/user-1/unmarked.png', sortOrder: 3 },
+        ],
+      });
+
+      render(<NewPostClient />);
+      const inputs = await screen.findByRole('list', { name: 'Saved inputs' });
+      expect(screen.getByText('2 saved inputs')).toBeInTheDocument();
+      expect(within(inputs).getAllByRole('listitem').map((item) => item.getAttribute('title'))).toEqual(['Product', 'Voice']);
+    });
+
+    // #677's review: the client never learned what the copy did, the box
+    // stayed ticked, and every save copied every input again.
+    it('adopts what an edit’s save added, unticks the box, and names the inputs it could not copy', async () => {
+      enqueueCreation({
+        input_media: [
+          { id: 'input-1', mediaType: 'image', label: 'Product', url: 'https://proxy.example.com/generation_inputs/user-1/product.png', storagePath: 'generation_inputs/user-1/product.png', sortOrder: 0, recipeCopyable: true },
+          { id: 'input-2', mediaType: 'image', label: 'Backdrop', url: 'https://proxy.example.com/generation_inputs/user-1/backdrop.png', storagePath: 'generation_inputs/user-1/backdrop.png', sortOrder: 1, recipeCopyable: true },
+        ],
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-gen-recipe-1',
+          visibility: 'public',
+          recipeItemsAdded: [{
+            id: 'reference-input-1',
+            scope: { kind: 'all' },
+            type: 'reference_image',
+            role: 'style_reference',
+            sectionId: null,
+            title: 'Product',
+            description: null,
+            textContent: null,
+            externalUrl: null,
+            storagePath: 'user-1/generation-references/gen-recipe-1/00-reference-input-1.png',
+            contentType: 'image/png',
+            sizeBytes: 68,
+            workflowSnapshot: null,
+            sortOrder: 1,
+            isPrimary: false,
+            remixUse: 'reference_only',
+          }],
+          referencesNotCopied: 1,
+        }),
+      });
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundle: { accessMode: 'free', previewText: 'The prompt and the product references.', resources: { items: [] } },
+      }} />);
+
+      fireEvent.click(await screen.findByRole('checkbox', { name: /include creation references/i }));
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-recipe-1', expect.objectContaining({ method: 'PUT' })));
+
+      // The copy is the recipe's own item now, and the one it could not make is named.
+      expect(await screen.findByText('1 saved input could not be copied into the recipe. Include it again and save to try once more.')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Edit Product' })).toBeInTheDocument();
+      const includeInputs = screen.getByRole('checkbox', { name: /include creation references/i });
+      expect(includeInputs).not.toBeChecked();
+      expect(screen.getByText('1 of 2 are in this recipe already. Attach the rest as reusable references.')).toBeInTheDocument();
+      // What the save stored is no unsaved work.
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(false);
     });
   });
 
