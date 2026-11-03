@@ -188,9 +188,17 @@ async function renderAlerts(queryClient = newQueryClient()) {
 async function settle() {
   for (let turn = 0; turn < 4; turn += 1) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+      else await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+}
+
+/** Time passes, under fake timers. */
+async function wait(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
 }
 
 async function press(node: renderer.ReactTestInstance | undefined) {
@@ -310,6 +318,14 @@ describe('the push switch (decision D8)', () => {
 });
 
 describe('a first visit (iPhone 17 Pro simulator sweep, 2026-11-03)', () => {
+  // A second on the clock is when the alert types stop waiting for the list.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   // The alert types were drawn under the loading card and jumped down past
   // every row when the list landed. They follow the list, so they wait for it.
   it('draws the alert types once the list has landed, below it, never under the loading card', async () => {
@@ -344,6 +360,54 @@ describe('a first visit (iPhone 17 Pro simulator sweep, 2026-11-03)', () => {
     await settle();
 
     expect(statusTitles(tree)).toEqual(['Could not load alerts', 'Could not load alert preferences']);
+  });
+
+  // Review of PR #679, finding 12: held back for the whole of a slow first
+  // read, or one that times out and is tried again, the switches and the
+  // preferences' Retry were out of reach long after the preferences had
+  // answered. A list that lands within the second still brings them in below it.
+  it('stops holding them back once the list has taken a second, and draws them under the loading card', async () => {
+    mocks.api.listMobileNotifications.mockImplementation(() => new Promise<MobileNotificationsResponse>(() => {}));
+    const { tree } = await renderAlerts();
+
+    await wait(999);
+    expect(texts(tree)).not.toContain('Alert types');
+
+    await wait(1);
+    const drawn = texts(tree);
+    expect(drawn).toContain('Loading alerts');
+    expect(drawn.indexOf('Alert types')).toBeGreaterThan(drawn.indexOf('Loading alerts'));
+  });
+
+  it('stops holding back a preferences error the same way', async () => {
+    mocks.api.getMobileNotificationPreferences.mockRejectedValue(new Error('Network request failed'));
+    mocks.api.listMobileNotifications.mockImplementation(() => new Promise<MobileNotificationsResponse>(() => {}));
+    const { tree } = await renderAlerts();
+    expect(statusTitles(tree)).toEqual([]);
+
+    await wait(1000);
+
+    expect(statusTitles(tree)).toEqual(['Could not load alert preferences']);
+    expect(button(tree, 'Retry preferences')).toBeDefined();
+  });
+
+  // Drawn before the preferences answer, every switch showed off and then
+  // turned on as they did.
+  it('draws the switches once the preferences have answered', async () => {
+    let answer!: (response: { success: boolean; preferences: MobileNotificationPreferences }) => void;
+    mocks.api.getMobileNotificationPreferences.mockImplementation(() => new Promise((resolve) => {
+      answer = resolve;
+    }));
+    const { tree } = await renderAlerts();
+
+    expect(alertTitles(tree)).toHaveLength(12);
+    expect(texts(tree)).not.toContain('Alert types');
+
+    await act(async () => answer({ success: true, preferences: PREFERENCES }));
+    await settle();
+
+    const generation = byType(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Generation');
+    expect(generation?.props.accessibilityState).toEqual({ checked: true, disabled: false });
   });
 });
 

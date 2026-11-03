@@ -76,6 +76,11 @@ const CATEGORY_META: Record<MobileNotificationCategory, { tone: ThemeColorName; 
 const ALERTS_PAGE_SIZE = 50;
 /** A list read longer ago than this is read again when the tab comes back into view. */
 const ALERTS_STALE_MS = 1000 * 20;
+/**
+ * How long the alert types wait for the list's first read before they are
+ * drawn under its loading card. Most reads land well inside it.
+ */
+const ALERT_TYPES_LIST_WAIT_MS = 1000;
 
 /**
  * The server's `before` cursor for the next older page: the last event time of
@@ -163,6 +168,27 @@ export default function StudioScreen() {
   });
 
   const devicePush = useDevicePushRegistration({ api, userId: user?.id });
+
+  // The alert types follow the list, so they wait for its first read: drawn
+  // under the loading card, they jumped down past every row when the list
+  // landed on a first visit (iPhone 17 Pro simulator, 2026-11-03). They wait a
+  // second at most. Held back for the whole of a read that is slower, or that
+  // times out and is tried again, the switches and the preferences' Retry were
+  // out of reach long after the preferences had answered. After a second they
+  // are drawn under the loading card, and only such a read moves them as it lands.
+  const listFirstReadRunning = notificationsQuery.isLoading;
+  const [listOutwaited, setListOutwaited] = useState(false);
+  useEffect(() => {
+    if (!listFirstReadRunning) return undefined;
+    const timer = setTimeout(() => setListOutwaited(true), ALERT_TYPES_LIST_WAIT_MS);
+    return () => {
+      clearTimeout(timer);
+      setListOutwaited(false);
+    };
+  }, [listFirstReadRunning]);
+  // Drawn before the preferences answer, every switch showed off and then
+  // turned on as they did.
+  const alertTypesDue = !preferencesQuery.isPending && (!listFirstReadRunning || listOutwaited);
 
   // While this list is on screen, an arriving alert is announced by the list
   // itself — a banner over it would repeat what the reader is already looking
@@ -353,11 +379,8 @@ export default function StudioScreen() {
                 )}
               </>
             )}
-            {/* The alert types follow the list, so they wait for its first read:
-                drawn under the loading card, they jumped down past every row
-                when the list landed on a first visit (iPhone 17 Pro simulator,
-                2026-11-03). Drawn once it has, they appear where they stay. */}
-            {notificationsQuery.isLoading ? null : preferencesQuery.isError ? (
+            {/* The alert types, once they are due (`alertTypesDue`). */}
+            {!alertTypesDue ? null : preferencesQuery.isError ? (
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock tone="danger" title="Could not load alert preferences" body="Your current preferences have not been changed." />
                 <SecondaryButton label="Retry preferences" onPress={() => void preferencesQuery.refetch()} />
