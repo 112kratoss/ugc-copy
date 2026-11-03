@@ -13,6 +13,7 @@ import { SaveHeart } from '@/components/save-heart';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { describeGenerationSetup, formatGenerationSetupLine } from '@/lib/generation-setup/generation-setup';
 import { formatCompactCount } from '@/lib/home-view-model';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
@@ -400,7 +401,8 @@ export function PostDetailsPage({
               ? `Open ${meta.creatorLabel} profile`
               : [meta.creatorLabel, meta.timeLabel].filter(Boolean).join(' · ')}
             disabled={!canOpenCreator}
-            onPress={() => onCreatorOpen?.(item)}
+            // Their page is read once the finger has rested here (`creatorProfilePress`).
+            {...creatorProfilePress(item.creatorUsername, () => onCreatorOpen?.(item))}
             hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
             style={({ pressed }) => ({
               flexDirection: 'row',

@@ -17,6 +17,7 @@ import {
 } from '../components/comments-sheet';
 import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
 import { ApiError } from '../lib/api-client';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import type { PostComment, PostCommentsResponse } from '../lib/types';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -463,6 +464,25 @@ describe('inline post comments', () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(routerPush).toHaveBeenCalledWith('/creators/batman');
+  });
+
+  // Review of #679: never read for a scroll of the thread that starts on a name.
+  it("reads a comment author's page once the finger has rested on their picture or handle", () => {
+    pages = [page([comment()])];
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const { tree } = renderInline({ onClose: vi.fn() });
+    const handle = pressable(tree.root, 'Open @batman profile');
+    const picture = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true);
+
+    for (const control of [handle, picture]) {
+      expect(control.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+      renderer.act(() => control.props.onPressIn());
+    }
+    expect(prepared).toEqual(['batman', 'batman']);
+    expect(routerPush).not.toHaveBeenCalled();
+
+    removePreparer();
   });
 });
 

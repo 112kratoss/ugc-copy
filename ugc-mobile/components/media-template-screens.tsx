@@ -40,6 +40,7 @@ import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dia
 import { withAiDataConsent } from '@/lib/ai-data-consent';
 import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { haptic } from '@/lib/haptics';
 import {
   hasAllTemplateInputs,
@@ -677,7 +678,8 @@ function TemplateCreatorByline({ template }: { template: MediaTemplateSummary })
       accessibilityRole="link"
       accessibilityLabel={`Created by ${name}`}
       accessibilityHint="Opens their profile"
-      onPress={() => router.push(`/creators/${encodeURIComponent(username)}` as never)}
+      // Their page is read once the finger has rested here (`creatorProfilePress`).
+      {...creatorProfilePress(username, () => router.push(`/creators/${encodeURIComponent(username)}` as never))}
       style={({ pressed }) => ({ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
     >
       {byline}

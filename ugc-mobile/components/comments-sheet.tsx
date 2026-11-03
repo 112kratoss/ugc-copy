@@ -48,6 +48,7 @@ import {
   type PostCommentSort,
 } from '@/lib/comments-view-model';
 import { buildCommentMenu } from '@/lib/comment-menu';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { useReducedMotion } from '@/lib/motion';
 import { actionSheetFromMenu, hasNativeMenuItems, type NativeMenuModel } from '@/lib/native-menu';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -1113,7 +1114,10 @@ function CommentRowView({
   const display = getCommentDisplay(comment);
   // A removed comment has no author, and the profile route needs a handle.
   const authorUsername = display.isDeleted ? null : comment.author?.username ?? null;
-  const openAuthor = authorUsername && onAuthorOpen ? () => onAuthorOpen(authorUsername) : undefined;
+  // Their page is read once the finger has rested on either (`creatorProfilePress`).
+  const authorPress = authorUsername && onAuthorOpen
+    ? creatorProfilePress(authorUsername, () => onAuthorOpen(authorUsername))
+    : null;
   const avatar = <CreatorAvatar uri={comment.author?.avatarUrl ?? null} name={display.authorLabel} size={25} />;
   const authorName = (
     <Text numberOfLines={1} style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
@@ -1131,7 +1135,7 @@ function CommentRowView({
         paddingVertical: appTheme.spacing.gap,
       }}
     >
-      {openAuthor ? (
+      {authorPress ? (
         // The avatar takes the handle's tap, with room around it for a 44pt
         // target. The handle is the one control a screen reader lists, so this
         // one stays out of its way.
@@ -1139,7 +1143,7 @@ function CommentRowView({
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           hitSlop={10}
-          onPress={openAuthor}
+          {...authorPress}
           style={({ pressed }) => ({ alignSelf: 'flex-start', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           {avatar}
@@ -1147,14 +1151,14 @@ function CommentRowView({
       ) : avatar}
       <View style={{ flex: 1, gap: 3 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-          {openAuthor ? (
+          {authorPress ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Open ${display.authorLabel} profile`}
               // Up into the row's padding, and down no further than the gap
               // above the comment, so a tap on its text never opens the profile.
               hitSlop={{ top: appTheme.spacing.gap, bottom: 3 }}
-              onPress={openAuthor}
+              {...authorPress}
               style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               {authorName}

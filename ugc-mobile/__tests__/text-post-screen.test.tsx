@@ -8,6 +8,7 @@ import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ApiError } from '@/lib/api-client';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '@/lib/creator-profile-opening';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 import { getViewerSafetyActions } from '@/lib/viewer-actions';
@@ -354,6 +355,24 @@ describe('a written post', () => {
     expect(byType(tree, 'post-comments')[0]!.props.enabled).toBe(true);
     expect(byType(tree, 'post-details-page')).toHaveLength(1);
     expect(byType(tree, 'viewer-actions-menu')[0]!.props.excludeActions).toEqual([]);
+  });
+
+  // Review of #679: never read for a scroll of the post that starts on the byline.
+  it("reads the creator's page once the finger has rested on the byline, and opens it on the press", () => {
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    mocks.router.push.mockClear();
+    const tree = renderScreen();
+    const byline = pressable(tree, 'Open @maya')!;
+
+    expect(byline.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+    renderer.act(() => byline.props.onPressIn());
+    expect(prepared).toEqual(['maya']);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+    renderer.act(() => byline.props.onPress());
+    expect(mocks.router.push).toHaveBeenCalledWith('/creators/maya');
+
+    removePreparer();
   });
 
   it('answers a tap on the comment composer with its keyboard up, and puts the keyboard away as a swipe begins', () => {

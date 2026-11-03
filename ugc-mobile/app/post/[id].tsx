@@ -35,6 +35,7 @@ import {
 } from '@/lib/immersive-preview-view-model';
 import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
 import { getCommentCountLabel } from '@/lib/comments-view-model';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { readPostDetailsSection } from '@/lib/post-details-view-model';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
@@ -656,7 +657,8 @@ function TextPostContent({
             ? `Open ${content.handle}`
             : [content.handle, content.timeLabel].filter(Boolean).join(' · ')}
           disabled={!item.creatorUsername}
-          onPress={onCreatorOpen}
+          // Their page is read once the finger has rested here (`creatorProfilePress`).
+          {...creatorProfilePress(item.creatorUsername, onCreatorOpen)}
           hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
           style={({ pressed }) => ({ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: CREATOR_ROW_HEIGHT, opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >

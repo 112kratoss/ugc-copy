@@ -130,6 +130,7 @@ vi.mock('@/components/post-resource-bundle-content', () => ({
 }));
 
 import { PostDetailsPage } from '@/components/post-details-page';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '@/lib/creator-profile-opening';
 import { formatUnlockDate } from '@/lib/unlock-library-view-model';
 
 function showcaseItem(overrides: Partial<ImmersivePreviewItem> = {}): ImmersivePreviewItem {
@@ -406,6 +407,23 @@ describe('PostDetailsPage', () => {
     expect(onRecreate).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-1' }));
     expect(onCreatorOpen).toHaveBeenCalledWith(expect.objectContaining({ id: 'post-1' }));
     expect(onComments).toHaveBeenCalledTimes(1);
+  });
+
+  // Review of #679: the creator's page is read once the finger has rested on
+  // their name, never for a scroll of the page that starts there.
+  it("reads the creator's page once the finger has rested on their name, before the press opens it", () => {
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const onCreatorOpen = vi.fn();
+    const tree = render(page({ onCreatorOpen }));
+    const creator = pressable(tree, 'Open @batman profile');
+
+    expect(creator.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+    renderer.act(() => creator.props.onPressIn());
+    expect(prepared).toEqual(['batman']);
+    expect(onCreatorOpen).not.toHaveBeenCalled();
+
+    removePreparer();
   });
 
   it('gives a post without comments an empty value, never none: Android keeps a value set back to undefined', () => {
