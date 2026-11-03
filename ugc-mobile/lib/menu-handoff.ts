@@ -134,7 +134,12 @@ export function useMenuHandoff<Row extends string>({
   return { chosen: handoff?.row ?? null, leaving, handOff, claim };
 }
 
-function focusedRouteKey(navigation: ReturnType<typeof useNavigationContainerRef>) {
+/**
+ * The focused route at the bottom of the tree: a tab as well as a pushed
+ * screen. Typed by shape: the app declares no root param list, which leaves
+ * the container's own route type empty.
+ */
+function focusedRouteKey(navigation: { isReady(): boolean; getCurrentRoute(): { key: string } | undefined }) {
   return navigation.isReady() ? navigation.getCurrentRoute()?.key : undefined;
 }
 

@@ -36,6 +36,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SHEET_DISMISS_DISTANCE, SHEET_DISMISS_VELOCITY } from '@/components/sheet-chrome';
 import { BrandLockup, IconButton } from '@/components/ui';
 import { showMessageDialog } from '@/lib/dialog';
+import { useMenuHandoff } from '@/lib/menu-handoff';
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { formatUsdCents } from '@/lib/home-view-model';
@@ -100,23 +101,30 @@ export function HomeSideMenu({
   // Unknown until the profile request answers: a 0 would read as an empty balance.
   const balanceKnown = credits !== null;
   const reduceMotionEnabled = useReducedMotion();
-  const [rendered, setRendered] = useState(visible);
-  const progress = useRef(createAnimatedValue(visible ? 1 : 0)).current;
+  // A row opens its screen at the tap, and the drawer stays until that screen
+  // has been built under it (`lib/menu-handoff.ts`). It used to close as it
+  // pushed: expo-router builds a pushed screen a render later, so the drawer
+  // slid away first and Home showed until Settings came in, 450–860 ms after
+  // the tap (Pixel 9a emulator, 2026-11-03).
+  const handoff = useMenuHandoff<string>({ visible, onClose });
+  const open = visible && !handoff.leaving;
+  const [rendered, setRendered] = useState(open);
+  const progress = useRef(createAnimatedValue(open ? 1 : 0)).current;
 
   useEffect(() => {
-    if (visible) setRendered(true);
-  }, [visible]);
+    if (open) setRendered(true);
+  }, [open]);
 
   useEffect(() => {
     if (!rendered) return;
 
-    animateProgress(progress, visible ? 1 : 0, reduceMotionEnabled, () => {
-      if (!visible) setRendered(false);
+    animateProgress(progress, open ? 1 : 0, reduceMotionEnabled, () => {
+      if (!open) setRendered(false);
     });
-  }, [progress, reduceMotionEnabled, rendered, visible]);
+  }, [open, progress, reduceMotionEnabled, rendered]);
 
   useEffect(() => {
-    if (IS_TEST_ENVIRONMENT || !visible || !BackHandler.addEventListener) return;
+    if (IS_TEST_ENVIRONMENT || !open || !BackHandler.addEventListener) return;
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       onClose();
@@ -124,27 +132,30 @@ export function HomeSideMenu({
     });
 
     return () => subscription.remove();
-  }, [onClose, visible]);
+  }, [onClose, open]);
 
-  const navigateAndClose = (path: string) => {
-    onClose();
-    router.push(path as never);
+  const openScreen = (path: string) => {
+    handoff.handOff(path, () => router.push(path as never));
   };
+  // A row whose screen is being built stays drawn as pressed until the drawer leaves.
+  const held = (path: string, pressed: boolean) => pressed || handoff.chosen === path;
 
   const handleAuthPress = async () => {
-    // The menu steps aside either way. For a sign-out, the app-wide cover in
-    // components/sign-out-overlay.tsx shows the progress; it draws in the app's
-    // own window, which this menu's Modal would otherwise sit on top of.
-    onClose();
-    if (user) {
-      try {
-        await onSignOut();
-      } catch {
-        showMessageDialog({ title: 'Could not sign out', message: 'Please try again.' });
-      }
+    if (!user) {
+      openScreen('/auth');
       return;
     }
-    router.push('/auth' as never);
+    if (!handoff.claim()) return;
+    // A sign-out opens no screen, so the menu steps aside at once: the
+    // app-wide cover in components/sign-out-overlay.tsx shows the progress; it
+    // draws in the app's own window, which this menu's Modal would otherwise
+    // sit on top of.
+    onClose();
+    try {
+      await onSignOut();
+    } catch {
+      showMessageDialog({ title: 'Could not sign out', message: 'Please try again.' });
+    }
   };
 
   // Revealed by dragging in from the left edge, so it closes by dragging back
@@ -229,7 +240,7 @@ export function HomeSideMenu({
       navigationBarTranslucent
       onRequestClose={onClose}
     >
-      <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1, flexDirection: 'row' }}>
+      <View pointerEvents={open ? 'auto' : 'none'} style={{ flex: 1, flexDirection: 'row' }}>
         <AnimatedView
           importantForAccessibility="no-hide-descendants"
           style={{
@@ -276,16 +287,16 @@ export function HomeSideMenu({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={user ? `Open profile for ${displayName}` : 'Open profile and sign-in options'}
-              onPress={() => navigateAndClose('/profile')}
+              onPress={() => openScreen('/profile')}
               style={({ pressed }) => ({
                 minHeight: 88,
                 borderRadius: appTheme.radii.lg,
                 borderCurve: 'continuous',
                 borderWidth: 1,
-                borderColor: pressed ? theme.colors.primaryStrong : theme.colors.border,
+                borderColor: held('/profile', pressed) ? theme.colors.primaryStrong : theme.colors.border,
                 padding: 14,
-                backgroundColor: pressed ? theme.colors.pressed : theme.colors.panel,
-                opacity: pressed ? appTheme.opacity.pressed : 1,
+                backgroundColor: held('/profile', pressed) ? theme.colors.pressed : theme.colors.panel,
+                opacity: held('/profile', pressed) ? appTheme.opacity.pressed : 1,
               })}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -329,20 +340,20 @@ export function HomeSideMenu({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={balanceKnown ? `${formatCreditAmount(credits)} credits. Open credits` : 'Credits, balance loading. Open credits'}
-              onPress={() => navigateAndClose('/pricing')}
+              onPress={() => openScreen('/pricing')}
               style={({ pressed }) => ({
                 minHeight: 68,
                 borderRadius: appTheme.radii.lg,
                 borderCurve: 'continuous',
                 borderWidth: 1,
-                borderColor: pressed ? hexWithAlpha(theme.colors.amber, 0.34) : theme.colors.border,
+                borderColor: held('/pricing', pressed) ? hexWithAlpha(theme.colors.amber, 0.34) : theme.colors.border,
                 paddingHorizontal: 14,
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: 12,
-                backgroundColor: pressed ? hexWithAlpha(theme.colors.amber, 0.08) : theme.colors.panel,
-                opacity: pressed ? appTheme.opacity.pressed : 1,
+                backgroundColor: held('/pricing', pressed) ? hexWithAlpha(theme.colors.amber, 0.08) : theme.colors.panel,
+                opacity: held('/pricing', pressed) ? appTheme.opacity.pressed : 1,
               })}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
@@ -383,15 +394,15 @@ export function HomeSideMenu({
             </View>
 
             <View style={{ gap: 8 }}>
-              <MenuRow icon={<Layers3 size={21} color={theme.colors.text} />} label="Templates" onPress={() => navigateAndClose('/templates')} />
-              <MenuRow icon={<Gift size={21} color={theme.colors.commerce} />} label="Invite & Earn" onPress={() => navigateAndClose('/invite')} />
-              <MenuRow icon={<LayoutDashboard size={21} color={theme.colors.text} />} label="Recipe Sales" onPress={() => navigateAndClose('/seller-dashboard')} />
+              <MenuRow icon={<Layers3 size={21} color={theme.colors.text} />} label="Templates" chosen={handoff.chosen === '/templates'} onPress={() => openScreen('/templates')} />
+              <MenuRow icon={<Gift size={21} color={theme.colors.commerce} />} label="Invite & Earn" chosen={handoff.chosen === '/invite'} onPress={() => openScreen('/invite')} />
+              <MenuRow icon={<LayoutDashboard size={21} color={theme.colors.text} />} label="Recipe Sales" chosen={handoff.chosen === '/seller-dashboard'} onPress={() => openScreen('/seller-dashboard')} />
               {/* The recipes this account unlocked from other creators, in the
                   glossary's words: "Your Recipes" read like the ones it made. */}
-              <MenuRow icon={<PackageOpen size={21} color={theme.colors.text} />} label={UNLOCKED_RECIPES_LABEL} onPress={() => navigateAndClose(UNLOCKED_RECIPES_PATH)} />
+              <MenuRow icon={<PackageOpen size={21} color={theme.colors.text} />} label={UNLOCKED_RECIPES_LABEL} chosen={handoff.chosen === UNLOCKED_RECIPES_PATH} onPress={() => openScreen(UNLOCKED_RECIPES_PATH)} />
               <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginVertical: 4 }} />
-              <MenuRow icon={<Settings size={21} color={theme.colors.text} />} label="Settings" onPress={() => navigateAndClose('/settings')} />
-              <MenuRow icon={<CircleHelp size={21} color={theme.colors.text} />} label="Help & Support" onPress={() => navigateAndClose('/help')} />
+              <MenuRow icon={<Settings size={21} color={theme.colors.text} />} label="Settings" chosen={handoff.chosen === '/settings'} onPress={() => openScreen('/settings')} />
+              <MenuRow icon={<CircleHelp size={21} color={theme.colors.text} />} label="Help & Support" chosen={handoff.chosen === '/help'} onPress={() => openScreen('/help')} />
             </View>
 
             <View style={{ flex: 1, minHeight: 16 }} />
@@ -412,8 +423,8 @@ export function HomeSideMenu({
                 borderColor: user ? theme.semantic.danger.border : theme.colors.primaryFill,
                 backgroundColor: user
                   ? (pressed ? theme.colors.surfaceStrong : theme.semantic.danger.background)
-                  : (pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill),
-                opacity: pressed ? appTheme.opacity.pressed : 1,
+                  : (held('/auth', pressed) ? theme.colors.primaryFillPressed : theme.colors.primaryFill),
+                opacity: held('/auth', pressed) ? appTheme.opacity.pressed : 1,
               })}
             >
               {user ? <LogOut size={20} color={theme.colors.danger} /> : <LogIn size={20} color={theme.colors.onPrimary} />}
@@ -429,10 +440,13 @@ export function HomeSideMenu({
 function MenuRow({
   icon,
   label,
+  chosen,
   onPress,
 }: {
   icon: React.ReactNode;
   label: string;
+  /** Its screen is being built under the drawer: drawn as pressed until the drawer leaves. */
+  chosen: boolean;
   onPress: () => void;
 }) {
   const theme = useAppTheme();
@@ -449,8 +463,8 @@ function MenuRow({
         alignItems: 'center',
         gap: 12,
         paddingHorizontal: 12,
-        backgroundColor: pressed ? theme.colors.pressed : theme.colors.surface,
-        opacity: pressed ? appTheme.opacity.pressed : 1,
+        backgroundColor: pressed || chosen ? theme.colors.pressed : theme.colors.surface,
+        opacity: pressed || chosen ? appTheme.opacity.pressed : 1,
       })}
     >
       <View style={{ width: 36, height: 36, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>

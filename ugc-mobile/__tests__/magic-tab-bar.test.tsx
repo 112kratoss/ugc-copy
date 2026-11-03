@@ -713,6 +713,18 @@ describe('MagicTabBar create menu hand-off', () => {
     expect(menuOpen(tree)).toBe(false);
   });
 
+  it('leaves at once when a listener prevents the jump', () => {
+    const { tree, navigation } = renderTabBar(4);
+    navigation.emit.mockReturnValue({ defaultPrevented: true });
+    openMenu(tree);
+
+    renderer.act(() => tile(tree, 'Generate').props.onPress());
+
+    expect(navigation.jumpTo).not.toHaveBeenCalled();
+    // Nothing is coming to take over: no wait for the fallback.
+    expect(menuOpen(tree)).toBe(false);
+  });
+
   it('opens one screen for two quick taps', () => {
     const { tree, navigation } = renderTabBar(4);
     openMenu(tree);
