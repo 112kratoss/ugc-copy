@@ -153,6 +153,44 @@ describe('the veil under the zoom', () => {
     expect(feed.cover.get()).toBe(0);
   });
 
+  // A reel whose first load outlives the zoom shows its loading or error shell
+  // (`ViewerShell` in app/viewer.tsx), and the shell binds no transition. Its
+  // cover was still down from the tap when Back faded it, and UIKit's shrink
+  // crossfade played over the lit feed.
+  it('fades from full cover on Back from a reel that never bound its transition', () => {
+    const drop = dropZoomVeil('feed', TILE)!;
+    claimZoomVeil(drop);
+    const set = vi.spyOn(feed.cover, 'set');
+    liftZoomVeil(drop);
+    // Up, then the fade: the test double resolves it at once.
+    expect(set.mock.calls.map(([value]) => value)).toEqual([1, 0]);
+    expect(getZoomVeilOpacity('feed')).toBeNull();
+    set.mockRestore();
+  });
+
+  it('does the same for a gesture close on that shell, which has no transition to follow', () => {
+    const drop = dropZoomVeil('feed', TILE)!;
+    claimZoomVeil(drop);
+    const set = vi.spyOn(feed.cover, 'set');
+    liftZoomVeil(drop, true);
+    expect(set.mock.calls.map(([value]) => value)).toEqual([1, 0]);
+    // The pop that follows the gesture lifts it again, and starts no second fade from black.
+    set.mockClear();
+    liftZoomVeil(drop);
+    expect(set.mock.calls.map(([value]) => value)).toEqual([0]);
+    set.mockRestore();
+  });
+
+  it('leaves the cover down on Back once it has come down without a reel to lift it', () => {
+    vi.useFakeTimers();
+    const drop = dropZoomVeil('feed', TILE)!;
+    vi.advanceTimersByTime(ZOOM_VEIL_DEADLINE_MS);
+    const set = vi.spyOn(feed.cover, 'set');
+    liftZoomVeil(drop);
+    expect(set.mock.calls.map(([value]) => value)).toEqual([0]);
+    set.mockRestore();
+  });
+
   it('fades out over the shrink on Back, even once the reel has left React', () => {
     vi.useFakeTimers();
     const drop = dropZoomVeil('feed', TILE)!;

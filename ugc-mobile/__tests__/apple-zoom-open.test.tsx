@@ -229,6 +229,23 @@ describe('a tile opening under the native zoom', () => {
     expect(feedVeil.cover.get()).toBe(0);
   });
 
+  // A reel whose first load outlives the zoom draws its loading or error shell,
+  // which mounts no `AppleZoomProgress` and so binds no transition. Back from
+  // there faded a cover still at 0 from the tap, over the lit feed.
+  it('covers the feed for Back from a reel that never bound its transition, and fades it from there', () => {
+    const { source } = mountTile();
+    renderer.act(() => source.capture(() => {}));
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} />);
+    });
+    const set = vi.spyOn(feedVeil.cover, 'set');
+    renderer.act(() => { fire('beforeRemove'); });
+    // Up, then the fade, which the test double resolves at once.
+    expect(set.mock.calls.map(([value]) => value)).toEqual([1, 0]);
+    expect(getZoomVeilOpacity('feed')).toBeNull();
+    set.mockRestore();
+  });
+
   it('keeps the veil on the reel\'s own transition for the reel\'s whole life, so a gesture close can follow the finger', () => {
     // Swapping the transition for a plain number detaches its Animated graph,
     // and React Native then drops the native nodes of the transition's values:

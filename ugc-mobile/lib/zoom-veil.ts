@@ -310,6 +310,12 @@ export function liftZoomVeil(drop: ZoomVeilDrop | null, interactive = false) {
   }
   if (state.closing === 'interactive') return;
   state.closing = 'timed';
+  // A reel still waiting to bind its transition — one whose first load
+  // outlived the zoom, closing from its loading or error shell — left the cover
+  // down from the tap. It fades from full cover all the same, as a bound reel's
+  // does: the wrapper, at 0 while it waited, shows it from the commit that
+  // stops it following.
+  if (state.following && !state.transition) state.veil.cover.set(1);
   setFollowing(state, false);
   const delay = state.fillsWindow ? 0 : ZOOM_VEIL_LIFT_DELAY_MS;
   const duration = state.fillsWindow ? ZOOM_VEIL_RETURN_MS : ZOOM_VEIL_LIFT_MS;
