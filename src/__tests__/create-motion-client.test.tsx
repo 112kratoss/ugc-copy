@@ -2533,6 +2533,34 @@ describe('CreateMotionClient a remix kept open past its links’ hour', () => {
     expect(modelChip(view.container)).toHaveTextContent('Kling 2.6');
   });
 
+  // The press waits on a fresh link, and the creator may put a clip of their own in place meanwhile:
+  // theirs stands, and the original does not take its place once the link is in.
+  it('keeps a clip the creator put in while “Use as reference video” waited on a fresh link', async () => {
+    movePageClock();
+    const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    // The read for a fresh link is held until the creator's clip is in.
+    let answerRead: () => void = () => undefined;
+    remixSourceHold = new Promise<void>((resolve) => { answerRead = resolve; });
+    const readsBefore = remixReads().length;
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
+    await waitFor(() => expect(remixReads()).toHaveLength(readsBefore + 1));
+    pickFile(view.container, 'motion-reference-video-input', new File(['spin'], 'spin.mp4', { type: 'video/mp4' }));
+    const objectUrls = vi.mocked(URL.createObjectURL);
+    const own = await waitFor(() => {
+      const at = objectUrls.mock.calls.findIndex(([file]) => (file as File).name === 'spin.mp4');
+      expect(at).toBeGreaterThanOrEqual(0);
+      return objectUrls.mock.results[at]!.value as string;
+    });
+    await act(async () => answerRead());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview video' }));
+    expect(await previewLink('Reference Video')).toBe(own);
+    expect(screen.getByRole('button', { name: 'Use as reference video' })).toBeEnabled();
+  });
+
   it('plays the original past the hour by a link that opens', async () => {
     movePageClock();
     render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
