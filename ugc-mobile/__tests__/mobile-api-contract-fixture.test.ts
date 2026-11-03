@@ -346,6 +346,10 @@ const successCases: Array<{
       { accessToken: 'captured-token' },
     ),
   },
+  {
+    key: 'prepareShowcaseFeedReadAhead',
+    call: (api) => api.prepareShowcaseFeedReadAhead({ sort: 'for-you', category: 'media', offset: 0 }),
+  },
   { key: 'getShowcaseFeedNewest', call: (api) => api.getShowcaseFeedNewest({ category: 'media' }) },
   { key: 'getHomeShelf', call: (api) => api.getHomeShelf() },
   {

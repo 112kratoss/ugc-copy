@@ -181,6 +181,11 @@
       "path": "/api/showcase/feed/events",
       "auth": "optional"
     },
+    "prepareShowcaseFeedReadAhead": {
+      "method": "GET",
+      "path": "/api/showcase/feed",
+      "auth": "required"
+    },
     "getShowcaseFeedNewest": {
       "method": "GET",
       "path": "/api/showcase/feed/newest",

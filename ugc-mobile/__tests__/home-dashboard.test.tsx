@@ -264,6 +264,17 @@ vi.mock('@/lib/persisted-home-feed', () => ({
   schedulePersistHomeFeed: vi.fn(),
 }));
 
+// Explore's read-ahead, scheduled and started as Home asks for it.
+const readAheadMocks = vi.hoisted(() => ({
+  schedule: vi.fn((_start: () => void) => vi.fn()),
+  start: vi.fn(),
+}));
+
+vi.mock('@/lib/explore-read-ahead', () => ({
+  scheduleExploreReadAhead: readAheadMocks.schedule,
+  startExploreReadAhead: readAheadMocks.start,
+}));
+
 vi.mock('@/lib/startup-interactive', () => ({
   reportStartupMilestone: vi.fn(),
 }));
@@ -580,6 +591,48 @@ function sentEvents(): SentEvent[] {
     durationMs: request.durationMs,
   }));
 }
+
+describe("Home's read-ahead of Explore", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navState.focused = true;
+    authState.isLoading = false;
+    authState.identityUserId = 'viewer-1';
+    queryState.pages = [];
+    queryState.dataUpdatedAt = 1;
+  });
+
+  it("schedules Explore's first page to be ranked ahead once its own page has landed, for this identity", () => {
+    const { tree } = renderHome();
+
+    expect(readAheadMocks.schedule).toHaveBeenCalledTimes(1);
+    expect(readAheadMocks.start).not.toHaveBeenCalled();
+    const [start] = readAheadMocks.schedule.mock.calls[0];
+    start();
+    expect(readAheadMocks.start).toHaveBeenCalledWith({
+      api: authState.api,
+      identityUserId: 'viewer-1',
+      queryClient: queryState.client,
+    });
+
+    // Leaving Home cancels one not yet started.
+    const cancel = readAheadMocks.schedule.mock.results[0].value;
+    renderer.act(() => tree.unmount());
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['auth is still settling', () => { authState.isLoading = true; }],
+    ['Home is not in front', () => { navState.focused = false; }],
+    ['there is no identity yet', () => { authState.identityUserId = null; }],
+  ])('schedules nothing while %s', (_case, arrange) => {
+    arrange();
+    const { tree } = renderHome();
+
+    expect(readAheadMocks.schedule).not.toHaveBeenCalled();
+    renderer.act(() => tree.unmount());
+  });
+});
 
 describe('Home screen', () => {
   beforeEach(() => {
