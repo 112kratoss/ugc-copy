@@ -92,6 +92,7 @@ import {
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
+import { listenToTransition } from '@/lib/use-screen-leaving';
 import {
   claimZoomVeil,
   closeZoomVeilHole,
@@ -1376,11 +1377,7 @@ export function useMediaZoomStage({
     if (!nativeZoom || !lentVideo) return;
     const player = lentVideo.player;
     let landed: ReturnType<typeof setTimeout> | undefined;
-    const listen = navigation.addListener as unknown as (
-      type: 'transitionEnd',
-      listener: (event: { data?: { closing?: boolean } }) => void
-    ) => () => void;
-    const unsubscribe = listen('transitionEnd', (event) => {
+    const unsubscribe = listenToTransition(navigation, 'transitionEnd', (event) => {
       if (event.data?.closing) return;
       releaseVideoLoanHold(player);
       clearTimeout(landed);
@@ -1430,10 +1427,6 @@ export function useMediaZoomStage({
   const [reclaimed, setReclaimed] = useState(0);
   useEffect(() => {
     if (!nativeZoom) return;
-    const listen = navigation.addListener as unknown as (
-      type: 'transitionStart' | 'transitionEnd' | 'gestureCancel',
-      listener: (event: { data?: { closing?: boolean } }) => void
-    ) => () => void;
     let gestureClose = false;
     const letGoOf = () => {
       if (!gestureClose) return;
@@ -1446,7 +1439,7 @@ export function useMediaZoomStage({
       }
     };
     const unsubscribers = [
-      listen('transitionStart', (event) => {
+      listenToTransition(navigation, 'transitionStart', (event) => {
         if (event.data?.closing !== true) {
           if (event.data?.closing === false) {
             // The push has begun — UIKit draws the tile's picture above the
@@ -1461,10 +1454,10 @@ export function useMediaZoomStage({
         liftZoomVeil(veil, true);
         handBackForNativeClose();
       }),
-      listen('transitionEnd', (event) => {
+      listenToTransition(navigation, 'transitionEnd', (event) => {
         if (event.data?.closing === false) letGoOf();
       }),
-      listen('gestureCancel', letGoOf),
+      listenToTransition(navigation, 'gestureCancel', letGoOf),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [handBackForNativeClose, nativeZoom, navigation, veil]);
@@ -1645,11 +1638,7 @@ export function useMediaZoomStage({
   // direction; the event is the honest signal, the timer the safety net.
   useEffect(() => {
     if (!zooming || !WAIT_FOR_TRANSITION) return;
-    const listen = navigation.addListener as unknown as (
-      type: 'transitionEnd',
-      listener: (event: { data?: { closing?: boolean } }) => void
-    ) => () => void;
-    const unsubscribe = listen('transitionEnd', (event) => {
+    const unsubscribe = listenToTransition(navigation, 'transitionEnd', (event) => {
       if (!event.data?.closing) markSettled();
     });
     const deadline = setTimeout(markSettled, SETTLE_DEADLINE_MS);
