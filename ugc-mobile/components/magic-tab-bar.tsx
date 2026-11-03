@@ -290,7 +290,7 @@ export function MagicTabBar({
           }}
         />
       ) : <>
-      <TabBarSurface mode={surfaceMode} barHeight={barHeight} fallbackFill={fallbackFill}>
+      <TabBarSurface mode={surfaceMode} barHeight={barHeight} fallbackFill={fallbackFill} hidden={hidden}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: isCompact ? 6 : 8, paddingVertical: isCompact ? 4 : 6 }}>
           <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('index')} />
           <TabButton item={VISIBLE_TABS[1]} active={activeRoute === 'showcase'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('showcase')} />
@@ -820,11 +820,14 @@ function TabBarSurface({
   mode,
   barHeight,
   fallbackFill,
+  hidden,
   children,
 }: {
   mode: TabBarSurfaceMode;
   barHeight: number;
   fallbackFill: string;
+  /** The bar is invisible and inert (`MagicTabBar`'s `hidden`). */
+  hidden: boolean;
   children: ReactNode;
 }) {
   const theme = useAppTheme();
@@ -840,9 +843,20 @@ function TabBarSurface({
     // No backgroundColor: the material is the surface. colorScheme is the
     // app's resolved scheme rather than 'auto': the app can hold a scheme the
     // phone is not in (Settings → Appearance), and the bar follows the app.
+    //
+    // No glass while the bar is hidden, and a new one each time it shows.
+    // Hidden is opacity 0 on the bar's root, which is never flattened (see
+    // MagicTabBar), so on the creator tab the glass sits under that alpha, and
+    // expo-glass-effect applies it again there whenever the dock comes back
+    // into the window (a push over the tabs, then its pop) or the scheme
+    // changes. Glass applied under an alpha of 0 never rendered once the alpha
+    // was back (simulator, 2026-11-03; components/viewer-top-control.tsx).
+    // With no style there is nothing to apply, and showing the bar applies a
+    // new effect at full alpha. Not animated: the bar appears at once, and its
+    // material with it.
     return (
       <GlassView
-        glassEffectStyle="regular"
+        glassEffectStyle={hidden ? 'none' : 'regular'}
         colorScheme={theme.scheme}
         tintColor={theme.tabBar.glassTint}
         style={{ ...shape, borderColor: theme.tabBar.glassBorder }}

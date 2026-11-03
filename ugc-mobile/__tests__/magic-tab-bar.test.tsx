@@ -415,6 +415,35 @@ describe('MagicTabBar', () => {
     expect(liftAlpha).toBeLessThan(tintAlpha);
   });
 
+  // Review of #679, finding 6. Hidden is opacity 0 on the bar's root, which is
+  // never flattened now, so on the creator tab the dock's glass sits under that
+  // alpha, and expo-glass-effect applies it again whenever the dock comes back
+  // into the window, as it does after a push over the tabs and its pop. Glass
+  // applied under an alpha of 0 never renders once the alpha is back (simulator,
+  // 2026-11-03). Hidden, the dock has no glass to apply; shown, it gets a new one.
+  it('takes the glass off the dock while the bar is hidden, and gives it a new one when it shows', async () => {
+    glassState.available = true;
+    const { tree, navigation } = await renderTabBarAsync(2, { hidden: true });
+    const glass = () => tree.root.find((node) => String(node.type) === 'glass-view');
+
+    expect(glass().props.glassEffectStyle).toBe('none');
+
+    // Leaving the creator for Home shows the bar again.
+    renderer.act(() => {
+      tree.update(
+        <MagicTabBar
+          state={{ index: 0, key: 'tabs-key', routeNames: routes.map((route) => route.name), routes, stale: false, type: 'tab', history: [] } as never}
+          descriptors={{} as never}
+          navigation={navigation as never}
+          insets={{ top: 0, right: 0, bottom: 0, left: 0 }}
+        />
+      );
+    });
+
+    // Not animated: the material comes with the bar, which appears at once.
+    expect(glass().props.glassEffectStyle).toBe('regular');
+  });
+
   it('uses a fully opaque adaptive panel when Liquid Glass is unavailable', async () => {
     const { tree } = await renderTabBarAsync();
 
