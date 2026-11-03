@@ -7,8 +7,8 @@ import type { ZoomRect } from './media-zoom-transition';
 
 /**
  * How much of the screen a reel grew out of is covered in black while UIKit's
- * zoom runs (lib/apple-zoom.ts): 1 from the tap for as long as the reel is up,
- * and on into a close for a pushed page; 0 otherwise.
+ * zoom runs (lib/apple-zoom.ts): 1 as the reel grows and for as long as it is
+ * up, and on into a close for a pushed page; 0 otherwise.
  *
  * UIKit crossfades the tile into the reel as the window grows, and the reel
  * back into the tile as it shrinks. A crossfade is two pictures at part
@@ -49,6 +49,20 @@ import type { ZoomRect } from './media-zoom-transition';
  * drives, frozen at "open" — a gesture close then ran over solid black. Back,
  * which the reel does not outlive, fades the veil out on a timer instead.
  *
+ * So the veil is drawn at two opacities multiplied: its wrapper's — that
+ * transition while the veil follows one, 0 while it waits for one, 1
+ * otherwise — and its own `cover`. They change by different roads. `cover`
+ * reaches the UI thread the moment it is set; the wrapper changes only when
+ * React commits, which waits for whatever render holds the JS thread. A tap
+ * used to set `cover` at once, and the wrapper, still at 1, showed it in full
+ * until the commit landed behind the reel's push render: two of seven opens
+ * from Explore on the iPhone 17 Pro simulator went black for 70–90 ms, showed
+ * the lit grid for three frames, and only then zoomed (2026-11-03). The cover
+ * now goes up when the reel binds its transition (`followZoomVeilTransition`),
+ * from an effect that runs after the commit that set the veil waiting, so it
+ * rises under a wrapper already at 0 and shows only as that transition
+ * carries it.
+ *
  * Every screen a reel can grow out of has a veil of its own (`ZoomVeilScope` in
  * components/zoom-veil.tsx), and a tap drops the veil of the screen its tile is
  * on. Only the reel that tap opened lifts, holds or lets go of it
@@ -73,7 +87,11 @@ export interface ZoomVeilHole extends ZoomRect {
 
 /** What one screen's veil is drawn from (components/zoom-veil.tsx). */
 export interface ScreenVeil {
-  /** How much of the screen is covered, while the veil is not following a transition. */
+  /**
+   * How much of the screen is covered, while the veil is not following a
+   * transition. While it follows one, 1 once that transition is bound and 0
+   * before: never more than the wrapper it is drawn under has committed to.
+   */
   cover: SharedValue<number>;
   /** The tapped tile, left clear until the transition begins; null for none. */
   hole: SharedValue<ZoomVeilHole | null>;
@@ -225,7 +243,9 @@ export function dropZoomVeil(owner: string | null, hole: ZoomVeilHole | null): Z
   state.following = true;
   notify(owner);
   state.veil.hole.set(hole);
-  state.veil.cover.set(1);
+  // Down until then too: the wrapper reaches 0 only when React commits the
+  // `following` just set, and `cover` would show at once (see above).
+  state.veil.cover.set(0);
   clearDeadline(state);
   state.deadline = setTimeout(() => {
     state.deadline = null;
@@ -248,14 +268,20 @@ export function closeZoomVeilHole(drop: ZoomVeilDrop | null) {
 }
 
 /**
- * The reel `drop` opened hands its screen's veil its own transition. The
- * returned function takes it back, for a reel leaving React.
+ * The reel `drop` opened hands its screen's veil its own transition, and the
+ * cover goes up under it. The returned function takes it back, for a reel
+ * leaving React.
  */
 export function followZoomVeilTransition(drop: ZoomVeilDrop, transition: ZoomVeilTransition) {
   const state = screenOf(drop);
   if (!state) return () => {};
   state.transition = transition;
   notify(state.owner);
+  // The reel binds from an effect, after the commit that put the wrapper at 0
+  // for the tap, and the wrapper takes the transition at the next: full cover
+  // shows only as far as the transition does. A veil taken down before the
+  // reel bound, by the deadline for one no reel claimed, stays down.
+  if (state.following) state.veil.cover.set(1);
   return () => {
     if (state.transition !== transition) return;
     state.transition = null;
