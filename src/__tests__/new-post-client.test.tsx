@@ -1344,9 +1344,11 @@ describe('NewPostClient', () => {
 
     render(<NewPostClient initialPost={post} />);
 
+    // The exact prompt is fixed in a creation's recipe: drawn, never edited.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /edit exact generation prompt/i })).toBeInTheDocument();
+      expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
     });
+    expect(screen.queryByRole('button', { name: /edit exact generation prompt/i })).not.toBeInTheDocument();
   });
 
   // A free recipe hands its prompt to anyone with one tap, so an untitled creation's post
@@ -2950,7 +2952,7 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     // The prefill lands as items in the list, not as loose textareas; the
-    // prompt is the same item "Include exact prompt" makes.
+    // prompt is the locked item every creation's recipe holds.
     expect(await screen.findByText('Exact generation prompt')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-paid-1&limit=1', {
       headers: { Authorization: 'Bearer test-token' },
@@ -3041,9 +3043,9 @@ describe('NewPostClient', () => {
     )).toBeInTheDocument();
     expect(screen.queryByText(/saved prompt and remix access are ready/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
-    // The prompt's box says there is none, where it said it would add the original.
-    expect(screen.getByRole('checkbox', { name: /include exact prompt/i })).toBeDisabled();
-    expect(screen.getByText('This creation saved no prompt.')).toBeInTheDocument();
+    // "From this creation" names no prompt for a creation that saved none, and offers its references.
+    expect(screen.queryByRole('checkbox', { name: /include exact prompt/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Exact prompt included.')).not.toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /include creation references/i })).not.toBeChecked();
 
     // An empty recipe is still refused at Publish.
@@ -4120,6 +4122,35 @@ describe('NewPostClient', () => {
 
       fireEvent.change(titleInput, { target: { value: 'A title of my own' } });
       expect(leaveWouldPrompt()).toBe(true);
+    });
+
+    // A creation's post starts on Free (owner, 2026-11-03) until the creation
+    // says it is a template result, whose post has no recipe: that is where the
+    // post starts, not a change of the creator's.
+    it('does not count a template result’s recipe falling to none as unsaved work', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-guard-template' });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          generations: [{
+            id: 'gen-guard-template',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'Rider transformation',
+            prompt: 'A rider in neon rain.',
+            origin: 'template',
+            paywallPrefill: null,
+          }],
+        }),
+      });
+
+      render(<NewPostClient />);
+      expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
+      await act(async () => {});
+      expect(screen.queryByRole('radio', { name: /free recipe/i })).not.toBeInTheDocument();
+      expect(leaveWouldPrompt()).toBe(false);
     });
 
     it('lets go once an edit is saved', async () => {
@@ -5424,7 +5455,10 @@ describe('NewPostClient', () => {
       expect(screen.queryByText(/^Suggested/)).not.toBeInTheDocument();
     });
 
-    it('adds the exact prompt as a card and sends the saved references with the recipe', async () => {
+    // A creation's post starts with a free recipe of its exact prompt (owner,
+    // 2026-11-03). The prompt is fixed in it; the saved inputs are shown and
+    // shared only when asked, since they can be personal.
+    it('starts on a free recipe with the exact prompt fixed in it, and sends the inputs only when asked', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
       enqueueCreation();
       enqueueResponse({
@@ -5443,20 +5477,19 @@ describe('NewPostClient', () => {
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
       });
-      // Offered inside a recipe only.
-      expect(screen.queryByRole('checkbox', { name: /include exact prompt/i })).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
 
-      const includePrompt = screen.getByRole('checkbox', { name: /include exact prompt/i });
-      expect(includePrompt).not.toBeChecked();
-      fireEvent.click(includePrompt);
-      expect(includePrompt).toBeChecked();
+      expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
       expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
-      fireEvent.click(includePrompt);
-      expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
-      fireEvent.click(includePrompt);
+      expect(screen.queryByRole('checkbox', { name: /include exact prompt/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /edit exact generation prompt/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /remove exact generation prompt/i })).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
+      const inputs = screen.getByRole('list', { name: 'Saved inputs' });
+      expect(within(inputs).getByRole('img', { name: 'Product' }))
+        .toHaveAttribute('src', 'https://proxy.example.com/generation_inputs/user-1/product.png');
+      const includeInputs = screen.getByRole('checkbox', { name: /include creation references/i });
+      expect(includeInputs).not.toBeChecked();
+      fireEvent.click(includeInputs);
       fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
         target: { value: 'The exact prompt and the product reference behind this still.' },
       });
@@ -5493,9 +5526,8 @@ describe('NewPostClient', () => {
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
       });
-      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-      fireEvent.click(screen.getByRole('checkbox', { name: /include exact prompt/i }));
       expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('list', { name: 'Saved inputs' })).not.toBeInTheDocument();
 
       fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
         target: { value: 'The exact prompt behind this window display still.' },
@@ -5527,9 +5559,7 @@ describe('NewPostClient', () => {
       await waitFor(() => {
         expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
       });
-      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
-      fireEvent.click(screen.getByRole('checkbox', { name: /include exact prompt/i }));
-      expect(screen.getByText('Add the original generation prompt to the recipe.')).toBeInTheDocument();
+      expect(screen.getByText('Exact prompt included.')).toBeInTheDocument();
       expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
       expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt.');
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
@@ -5547,8 +5577,8 @@ describe('NewPostClient', () => {
       ]);
     });
 
-    // A-F9: the creation's saved inputs are what some recipes sell. Ticked on
-    // their own they count as the recipe's item, listed where the items are.
+    // A-F9: the creation's saved inputs are what some recipes sell. Ticked
+    // they count as the recipe's item, listed where the items are.
     it('counts the creation’s references as an item and lists them with the items', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
       enqueueCreation();
@@ -5572,11 +5602,11 @@ describe('NewPostClient', () => {
       expect(screen.queryByText('Creation references · 1 file')).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
       expect(screen.getByText('Creation references · 1 file')).toBeInTheDocument();
-      expect(screen.getByText('1 item ready')).toBeInTheDocument();
+      expect(screen.getByText('2 items ready')).toBeInTheDocument();
       // They read as reference media in the suggestion, as the app writes it.
-      expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes reference media.');
+      expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt and reference media.');
       fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
-        target: { value: 'The product reference behind this window display still.' },
+        target: { value: 'The prompt and product reference behind this window display still.' },
       });
       fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
@@ -5589,10 +5619,136 @@ describe('NewPostClient', () => {
         resourceBundle: {
           accessMode: 'paid',
           priceUsdCents: 900,
-          previewText: 'The product reference behind this window display still.',
-          resources: { allowRemix: false, items: [] },
+          previewText: 'The prompt and product reference behind this window display still.',
+          resources: { allowRemix: false },
         },
       });
+      expect(payload.resourceBundle.resources.items).toMatchObject([{ type: 'prompt' }]);
+    });
+
+    it('starts an upload’s post with no recipe', () => {
+      render(<NewPostClient />);
+
+      expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+    });
+
+    // An empty recipe would only stop Publish ("Add at least one item."), so a
+    // creation with no prompt starts where an upload does, with nothing unsaved.
+    it('starts a creation with no prompt on No recipe', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ prompt: '' });
+
+      render(<NewPostClient />);
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still'));
+      await waitFor(() => expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked());
+      await act(async () => {});
+      expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    });
+
+    // A link's recipe mode is the one the post starts on, prompt or none.
+    it('keeps the recipe mode a link asked for on a creation with no prompt', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1', resourceMode: 'paid' });
+      enqueueCreation({ prompt: '' });
+
+      render(<NewPostClient />);
+      await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still'));
+      await act(async () => {});
+      expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked();
+    });
+
+    // The rule holds in an edit: a creation's recipe saved without a prompt
+    // gets its exact one, as where the editor starts from.
+    it('adds the exact prompt to an edited creation recipe that has none, without counting it as unsaved work', async () => {
+      enqueueCreation({ input_media: [] });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-gen-recipe-1', visibility: 'public' }),
+      });
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundle: { accessMode: 'free', previewText: 'Lighting notes for this still.', resources: { items: [] } },
+      }} />);
+
+      await waitFor(() => expect(screen.getByText('Exact generation prompt')).toBeInTheDocument());
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(false);
+
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-recipe-1', expect.objectContaining({ method: 'PUT' })));
+      const updateCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/posts/post-gen-recipe-1');
+      const payload = JSON.parse(String((updateCall?.[1] as { body: string }).body));
+      expect(payload.resourceBundle.resources.items).toMatchObject([
+        { type: 'prompt', textContent: 'A product still lit like a window display.' },
+      ]);
+    });
+
+    // The inputs used to be offered on a new post only, so a recipe added
+    // later could never carry them (owner, 2026-11-03).
+    it('offers the creation’s inputs in an edit, and has the save copy them when asked', async () => {
+      enqueueCreation();
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-gen-recipe-1', visibility: 'public' }),
+      });
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundle: { accessMode: 'free', previewText: 'The prompt behind this still.', resources: { items: [] } },
+      }} />);
+
+      const includeInputs = await screen.findByRole('checkbox', { name: /include creation references/i });
+      expect(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('img', { name: 'Product' })).toBeInTheDocument();
+      fireEvent.click(includeInputs);
+      fillRequiredTitle();
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-recipe-1', expect.objectContaining({ method: 'PUT' })));
+      const updateCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/posts/post-gen-recipe-1');
+      expect(JSON.parse(String((updateCall?.[1] as { body: string }).body))).toMatchObject({
+        includeGenerationReferences: true,
+        resourceBundle: { accessMode: 'free' },
+      });
+    });
+
+    it('says the inputs are in when the recipe already holds their copies', async () => {
+      enqueueCreation();
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundle: {
+          accessMode: 'free',
+          previewText: 'The product reference behind this still.',
+          resources: {
+            items: [{
+              id: 'reference-input-1',
+              scope: { kind: 'all' },
+              type: 'reference_image',
+              role: 'style_reference',
+              sectionId: null,
+              title: 'Product',
+              description: null,
+              textContent: null,
+              externalUrl: null,
+              storagePath: 'user-1/generation-references/gen-recipe-1/00-reference-input-1.png',
+              contentType: 'image/png',
+              sizeBytes: 68,
+              workflowSnapshot: null,
+              sortOrder: 0,
+              isPrimary: true,
+              remixUse: 'none',
+            }],
+          },
+        },
+      }} />);
+
+      expect(await screen.findByText('Included in this recipe.')).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
     });
   });
 

@@ -25,7 +25,9 @@ import {
 } from '@/lib/post-resource-bundles';
 import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
+  buildGenerationReferenceResourceItems,
   getMarketplaceQualityErrorForPostBundle,
+  mergeGenerationReferenceItemsIntoBundle,
   updatePostWithResourceBundleAtomically,
 } from '@/lib/post-resource-bundles-server';
 import { isOwnerPostTitleFallback } from '@/lib/owner-post-title-fallback';
@@ -233,10 +235,14 @@ export type PostUpdateRequestBody = {
   sourceTools?: unknown;
   mediaItems?: unknown;
   resourceBundle?: unknown;
+  /** True copies the creation's saved inputs into the recipe sent, as its publish does. */
+  includeGenerationReferences?: unknown;
 };
 
 export type PostUpdateDependencies = {
   getMarketplaceQualityErrorForPostBundle?: typeof getMarketplaceQualityErrorForPostBundle;
+  buildGenerationReferenceResourceItems?: typeof buildGenerationReferenceResourceItems;
+  mergeGenerationReferenceItemsIntoBundle?: typeof mergeGenerationReferenceItemsIntoBundle;
   updatePostWithResourceBundleAtomically?: typeof updatePostWithResourceBundleAtomically;
   replacePostSourceTools?: typeof replacePostSourceTools;
   replacePostMediaItems?: typeof replacePostMediaItems;
@@ -299,6 +305,10 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
   return {
     getMarketplaceQualityErrorForPostBundle:
       dependencies?.getMarketplaceQualityErrorForPostBundle ?? getMarketplaceQualityErrorForPostBundle,
+    buildGenerationReferenceResourceItems:
+      dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
+    mergeGenerationReferenceItemsIntoBundle:
+      dependencies?.mergeGenerationReferenceItemsIntoBundle ?? mergeGenerationReferenceItemsIntoBundle,
     updatePostWithResourceBundleAtomically:
       dependencies?.updatePostWithResourceBundleAtomically ?? updatePostWithResourceBundleAtomically,
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
@@ -1391,11 +1401,12 @@ export async function updateOwnerPostForRoute({
     // reference items in. Those are re-derived on every read, so drop them
     // before validation instead of failing the file-ownership checks on their
     // generation_inputs paths.
-    const { bundle: resourceBundle, error: resourceBundleError } = parseBundleInput(
+    const { bundle: submittedResourceBundle, error: resourceBundleError } = parseBundleInput(
       stripDerivedGenerationReferenceItems(body.resourceBundle),
       ownerUserId,
       availableMediaKeys
     );
+    let resourceBundle = submittedResourceBundle;
     if (resourceBundleError) {
       return { ok: false, status: 400, body: { error: resourceBundleError } };
     }
@@ -1433,6 +1444,28 @@ export async function updateOwnerPostForRoute({
           };
         }
         canonicalResourceFilePaths.push(canonicalPath);
+      }
+    }
+
+    // A creation's saved inputs join its recipe when the creator asks, from
+    // the editor too (owner, 2026-11-03): copied as its publish copies them,
+    // after the client's own files are checked, since these are the server's.
+    // A copy keeps its path and id, so asking again replaces what an earlier
+    // save or the publish copied rather than adding to it.
+    if (
+      body.includeGenerationReferences === true
+      && post.generation_id
+      && hasResourceBundlePayload
+      && resourceBundle
+      && resourceBundle.accessMode !== 'none'
+    ) {
+      const referenceItems = await resolvedDependencies.buildGenerationReferenceResourceItems({
+        supabase: adminSupabase,
+        ownerUserId,
+        generationId: post.generation_id,
+      });
+      if (referenceItems.length > 0) {
+        resourceBundle = resolvedDependencies.mergeGenerationReferenceItemsIntoBundle(resourceBundle, referenceItems);
       }
     }
 

@@ -104,6 +104,7 @@ import {
   type PostComposerResourceCardType,
 } from '@/lib/post-composer-resource-cards';
 import ComposerMediaLightbox, { getComposerMediaLabel } from './ComposerMediaLightbox';
+import CreationInputStrip from './CreationInputStrip';
 import ResourceCardEditorDialog from './ResourceCardEditorDialog';
 import RecipeAccessCards from './RecipeAccessCards';
 import ResourceCardsSection, { RECIPE_PREVIEW_MAX_LENGTH } from './ResourceCardsSection';
@@ -468,6 +469,8 @@ interface GenerationDraft {
   origin: 'template' | 'direct' | null;
   /** Saved inputs with a stored file, which publish can copy into the recipe. */
   referenceCount: number;
+  /** Those inputs, drawn in "From this creation" so a creator sees what they would share. */
+  inputMedia: CreationInputPreview[];
   /**
    * Edit mode seeds a draft from the server-rendered post before the
    * generations fetch resolves. The paywall prefill must only conclude
@@ -547,10 +550,40 @@ function createCreationPromptCard(prompt: string): PostComposerResourceCardDraft
   return createPostComposerResourceCard('prompt', { title: CREATION_PROMPT_ITEM_TITLE, textContent: prompt });
 }
 
-// The toggle reads its state from the package itself, so it shows what a
-// prefill or an earlier save already included.
+// Read from the package itself, so it finds what a prefill or an earlier save
+// already included: the prompt's own text, or the item made under its title
+// (a sell link's prefill writes the prompt the creation ran with).
 function isCreationPromptCard(card: PostComposerResourceCardDraft, prompt: string): boolean {
-  return card.type === 'prompt' && card.textContent.trim() === prompt;
+  return card.type === 'prompt'
+    && (card.textContent.trim() === prompt || card.title.trim() === CREATION_PROMPT_ITEM_TITLE);
+}
+
+/** A saved input of a creation, as "From this creation" draws it. */
+interface CreationInputPreview {
+  id: string;
+  mediaType: 'image' | 'video' | 'audio' | 'other';
+  url: string | null;
+  label: string;
+}
+
+/**
+ * The creation's saved inputs that publish can copy into the recipe: those
+ * with a stored file, counted the way the paywall prefill counts them.
+ */
+function readCreationInputPreviews(value: unknown): CreationInputPreview[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((media: Record<string, unknown> | null, index): CreationInputPreview[] => {
+    if (typeof media?.storagePath !== 'string' || media.storagePath.length === 0) return [];
+    const mediaType = media.mediaType === 'image' || media.mediaType === 'video' || media.mediaType === 'audio'
+      ? media.mediaType
+      : 'other';
+    return [{
+      id: typeof media.id === 'string' && media.id ? media.id : `input-${index + 1}`,
+      mediaType,
+      url: typeof media.url === 'string' && media.url ? media.url : null,
+      label: typeof media.label === 'string' && media.label.trim() ? media.label.trim() : `Input ${index + 1}`,
+    }];
+  });
 }
 
 /** A promise publish can wait on, settled by whoever ends the upload first. */
@@ -766,7 +799,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     initialPost?.category && initialPost.category !== 'text'
       ? initialPost.category
       : 'image';
-  const initialResourceAccessMode = normalizePostResourceBundleAccessMode(requestedResourceMode ?? initialBundle.accessMode);
+  // A creation's new post starts with a free recipe, its exact prompt in it
+  // (owner, 2026-11-03); a template result's gives way to none once the
+  // creation says so. An upload starts with none, and a link's mode wins.
+  const initialResourceAccessMode = normalizePostResourceBundleAccessMode(
+    requestedResourceMode ?? (!isEditMode && generationId ? 'free' : initialBundle.accessMode),
+  );
 
   const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));
   // Edit mode seeds from the server-rendered post — generation-backed posts
@@ -951,6 +989,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           paywallPrefill: null,
           origin: null,
           referenceCount: 0,
+          inputMedia: [],
           source: 'seed',
         }
       : null
@@ -1065,12 +1104,21 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const canOfferCreationResources = prefilledGeneration?.source === 'fetched'
     && prefilledGeneration.origin !== 'template';
   const creationPrompt = canOfferCreationResources ? (prefilledGeneration?.prompt.trim() ?? '') : '';
-  // Only the publish route copies a creation's inputs; an edit has no such step.
+  // The publish copies a creation's inputs into its recipe when asked, and an
+  // edit's save does too (owner, 2026-11-03).
   const canIncludeGenerationReferences = canOfferCreationResources
-    && !isEditMode
     && (prefilledGeneration?.referenceCount ?? 0) > 0;
   // Ticked, the creation's saved inputs are an item of the recipe (A-F9).
   const includesCreationReferences = includeGenerationReferences && canIncludeGenerationReferences;
+  // Inputs the publish or an earlier save copied in come back as the recipe's
+  // own file items, kept in the creator's references folder for this
+  // creation: listed with the items, where they can be removed one by one.
+  const hasCopiedCreationReferences = Boolean(generationId) && resourceCards.some((card) => (
+    card.attachments.some((attachment) => (
+      typeof attachment.storagePath === 'string'
+      && attachment.storagePath.includes(`/generation-references/${generationId}/`)
+    ))
+  ));
   const readyResourceCards = useMemo(
     () => resourceCards.filter((card) => resourceCardHasContent(card)),
     [resourceCards]
@@ -1204,8 +1252,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // no recipe at all.
   const recipeIncludesRemix = Boolean(generationId) && prefilledGeneration?.origin !== 'template';
   const hasResourceContent = readyResourceCards.length > 0;
-  const isCreationPromptIncluded = Boolean(creationPrompt)
-    && resourceCards.some((card) => isCreationPromptCard(card, creationPrompt));
+  // The exact prompt's item is fixed: neither edited nor removed.
+  const lockedResourceCardIds = useMemo(() => new Set(
+    creationPrompt
+      ? resourceCards.filter((card) => isCreationPromptCard(card, creationPrompt)).map((card) => card.id)
+      : [],
+  ), [creationPrompt, resourceCards]);
   const parsedResourcePriceTokens = Number.parseInt(resourcePriceTokens.trim() || '0', 10);
   const resourcePriceUsdCents = resourceAccessMode === 'paid' && Number.isFinite(parsedResourcePriceTokens)
     ? Math.round(parsedResourcePriceTokens)
@@ -1353,6 +1405,28 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     prefilledGeneration,
   ]);
 
+  // Every creation's recipe has its exact prompt (owner, 2026-11-03): the Remix
+  // that comes with one fills the prompt in for whoever unlocks it anyway, so
+  // leaving it out never kept it from them. Added once the creation has loaded
+  // (after a sell link's prefill), in an edit too, and where the composer
+  // starts from, so it is never unsaved work of its own. A recipe that already
+  // has a prompt item keeps its own rather than carrying two.
+  useEffect(() => {
+    if (!creationPrompt) return;
+    if ((isGeneratedPaywallIntent || isCreationPaywallManagementIntent) && !didApplyGenerationPaywallPrefill) return;
+    const promptCard = createCreationPromptCard(creationPrompt);
+    const withPrompt = (cards: PostComposerResourceCardDraft[]) => (
+      cards.some((card) => card.type === 'prompt') ? cards : [promptCard, ...cards]
+    );
+    setResourceCards(withPrompt);
+    setSavedSnapshot((saved) => ({ ...saved, resourceCards: withPrompt(saved.resourceCards) }));
+  }, [
+    creationPrompt,
+    didApplyGenerationPaywallPrefill,
+    isCreationPaywallManagementIntent,
+    isGeneratedPaywallIntent,
+  ]);
+
   useEffect(() => {
     if (
       !shouldFocusPriceInput ||
@@ -1431,6 +1505,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           return;
         }
 
+        const creationInputs = readCreationInputPreviews(generation.input_media);
         const nextGeneration: GenerationDraft = {
           id: generation.id,
           title: typeof generation.title === 'string' ? generation.title : '',
@@ -1443,23 +1518,29 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           paywallPrefill: readGenerationPaywallPrefill(generation.paywallPrefill),
           origin: generation.origin === 'template' ? 'template' : generation.origin === 'direct' ? 'direct' : null,
           // Counted the way the paywall prefill counts saved references.
-          referenceCount: Array.isArray(generation.input_media)
-            ? generation.input_media.filter((media: { storagePath?: unknown } | null) => (
-              typeof media?.storagePath === 'string' && media.storagePath.length > 0
-            )).length
-            : 0,
+          referenceCount: creationInputs.length,
+          inputMedia: creationInputs,
           source: 'fetched',
         };
 
         setPrefilledGeneration(nextGeneration);
         setProofMode('media');
         setCategory(nextGeneration.category);
-        // A template result shares its media only (the server refuses a recipe
-        // on one), and its cards give way to a note once it is known: a recipe
-        // picked while it was loading, when the cards were still up, goes too.
+        // A creation's new post starts on a free recipe holding its exact
+        // prompt. A template result shares its media only (the server refuses
+        // a recipe on one), and its cards give way to a note once it is known:
+        // a recipe picked while it was loading, when the cards were still up,
+        // goes too. A creation with no prompt would start on an empty recipe,
+        // which Publish refuses, so it starts on none unless a link chose the
+        // mode or the creator picked another one while it loaded.
         const isTemplateResult = nextGeneration.origin === 'template';
-        if (isTemplateResult && !isEditMode) {
-          setResourceAccessMode('none');
+        const startsOnNoRecipe = !isEditMode
+          && (isTemplateResult || (!requestedResourceMode && !nextGeneration.prompt.trim()));
+        const toStartingMode = (mode: PostResourceBundleAccessMode): PostResourceBundleAccessMode => (
+          isTemplateResult || mode === 'free' ? 'none' : mode
+        );
+        if (startsOnNoRecipe) {
+          setResourceAccessMode(toStartingMode);
         }
         // maxLength caps typing, not a programmatic prefill, so trim here too —
         // otherwise a long generation title submits over-limit and the server
@@ -1487,6 +1568,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           ...saved,
           title: saved.title || prefillTitle,
           ...(creationRow ? { madeWith: snapshotMadeWith([creationRow]) } : {}),
+          // Where the post starts, as the recipe mode above.
+          ...(startsOnNoRecipe ? { resourceAccessMode: toStartingMode(saved.resourceAccessMode) } : {}),
         }));
       } catch (loadError) {
         if (!cancelled) {
@@ -1508,7 +1591,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     return () => {
       cancelled = true;
     };
-  }, [generationId, generationLoadAttempt, isEditMode, session?.access_token]);
+  }, [generationId, generationLoadAttempt, isEditMode, requestedResourceMode, session?.access_token]);
 
   // Its own effect: the router object is not a stable dependency for the
   // load above (a changing identity would refetch the generation forever).
@@ -2391,18 +2474,6 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     resetFeedback();
   };
 
-  const toggleCreationPrompt = (include: boolean) => {
-    if (include) {
-      const promptCard = createCreationPromptCard(creationPrompt);
-      setResourceCards((current) => (
-        current.some((card) => isCreationPromptCard(card, creationPrompt)) ? current : [...current, promptCard]
-      ));
-    } else {
-      setResourceCards((current) => current.filter((card) => !isCreationPromptCard(card, creationPrompt)));
-    }
-    resetFeedback();
-  };
-
   // Removing the last item keeps the recipe's mode (H2, 2026-10-27): it used
   // to switch to No recipe by itself, which an edit's save then deleted.
   // Publish asks for an item instead, as the app does.
@@ -2762,6 +2833,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
               // missing key, so No recipe has to say `{accessMode:'none'}`
               // (asked about above).
               resourceBundle: resourceBundle ?? { accessMode: 'none' },
+              // As on a publish: the server copies the inputs into a recipe sent.
+              ...(includesCreationReferences && resourceBundle
+                ? { includeGenerationReferences: true }
+                : {}),
             }),
           });
         } catch (networkError) {
@@ -3874,44 +3949,45 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                       </p>
                     )}
 
-                    {canOfferCreationResources ? (
+                    {canOfferCreationResources && (creationPrompt || canIncludeGenerationReferences) ? (
                       <div role="group" aria-labelledby="from-this-creation-label" className="rounded-2xl border border-white/8 bg-black/25 p-4 space-y-3">
                         <div id="from-this-creation-label" className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                           From this creation
                         </div>
-                        <label className={`flex items-start gap-3 select-none ${creationPrompt ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
-                          <input
-                            type="checkbox"
-                            checked={isCreationPromptIncluded}
-                            disabled={!creationPrompt}
-                            onChange={(event) => toggleCreationPrompt(event.target.checked)}
-                            className="mt-0.5 h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0 disabled:cursor-not-allowed"
-                          />
-                          <span>
-                            <span className="block text-sm font-semibold text-white">Include exact prompt</span>
-                            <span className="mt-0.5 block text-xs leading-5 text-zinc-400">
-                              {creationPrompt ? 'Add the original generation prompt to the recipe.' : 'This creation saved no prompt.'}
-                            </span>
-                          </span>
-                        </label>
+                        {creationPrompt ? (
+                          <p className="text-xs leading-5 text-zinc-400">
+                            <span className="font-semibold text-white">Exact prompt included.</span>{' '}
+                            Every creation&apos;s recipe has it: the Remix that comes with one fills it in for whoever unlocks it.
+                          </p>
+                        ) : null}
                         {canIncludeGenerationReferences ? (
-                          <label className="flex cursor-pointer items-start gap-3 select-none">
-                            <input
-                              type="checkbox"
-                              checked={includeGenerationReferences}
-                              onChange={(event) => {
-                                setIncludeGenerationReferences(event.target.checked);
-                                resetFeedback();
-                              }}
-                              className="mt-0.5 h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
-                            />
-                            <span>
-                              <span className="block text-sm font-semibold text-white">Include creation references</span>
-                              <span className="mt-0.5 block text-xs leading-5 text-zinc-400">
-                                Attach the saved input media as reusable references.
-                              </span>
-                            </span>
-                          </label>
+                          <div className="space-y-3">
+                            <CreationInputStrip inputs={prefilledGeneration?.inputMedia ?? []} />
+                            {hasCopiedCreationReferences ? (
+                              <p className="text-xs leading-5 text-zinc-400">
+                                <span className="font-semibold text-white">Included in this recipe.</span>{' '}
+                                They are listed with the items below.
+                              </p>
+                            ) : (
+                              <label className="flex cursor-pointer items-start gap-3 select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={includeGenerationReferences}
+                                  onChange={(event) => {
+                                    setIncludeGenerationReferences(event.target.checked);
+                                    resetFeedback();
+                                  }}
+                                  className="mt-0.5 h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
+                                />
+                                <span>
+                                  <span className="block text-sm font-semibold text-white">Include creation references</span>
+                                  <span className="mt-0.5 block text-xs leading-5 text-zinc-400">
+                                    Attach the saved inputs above as reusable references. Off unless you choose it: inputs can be personal.
+                                  </span>
+                                </span>
+                              </label>
+                            )}
+                          </div>
                         ) : null}
                       </div>
                     ) : null}
@@ -3922,6 +3998,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                       previewText={resourcePreviewText}
                       previewError={resourcePreviewError}
                       creationReferenceCount={includesCreationReferences ? prefilledGeneration?.referenceCount ?? 0 : 0}
+                      lockedCardIds={lockedResourceCardIds}
                       includesRemix={recipeIncludesRemix}
                       buyerCount={recipeBuyerCount}
                       onAddCard={openResourceTypePicker}

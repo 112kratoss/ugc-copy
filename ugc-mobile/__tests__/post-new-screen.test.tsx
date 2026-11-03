@@ -35,6 +35,7 @@ const authState = vi.hoisted(() => ({
     // The name-and-handle card checks the handle as it is typed.
     validateProfile: vi.fn(async (_body: { username?: string | null; displayName?: string | null }) => ({ ok: true })),
     listGenerations: vi.fn(),
+    getGenerationDetails: vi.fn(),
     listSourceTools: vi.fn(),
     getOwnerPost: vi.fn(),
     publishGeneration: vi.fn(),
@@ -515,7 +516,10 @@ describe('mobile external post composer', () => {
     expect(text).toContain('Reward useful work');
     expect(text).toContain('Paid recipe');
     expect(text).toContain('Set a credit price');
-    expect(findPressableByText(tree.root, 'No recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+    // A creation's post starts on a free recipe with its exact prompt (owner, 2026-11-03).
+    expect(findPressableByText(tree.root, 'Free recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+    expect(findPressableByText(tree.root, 'No recipe').props.accessibilityState).toEqual({ checked: false, selected: false });
+    expect(text).toContain('Exact generation prompt');
     expect(text).toContain('Publish public');
     expect(text).not.toContain('What is this creation about?');
   });
@@ -552,6 +556,18 @@ describe('mobile external post composer', () => {
     paramsState.params = { generationId: 'gen-1', focus: 'resources' };
     const tree = await renderScreen();
     expect(collectText(tree.root)).toContain('Step 2 of 2 · recipe optional');
+  });
+
+  // The list's summary leaves a creation's saved inputs out, so a composer
+  // that read it never had any to show or offer (2026-11-03).
+  it('reads its creation in full, saved inputs included', async () => {
+    authState.api.getGenerationDetails.mockResolvedValueOnce(generationItem);
+    await renderScreen();
+    const options = queryOptionsState.options.find((candidate) => candidate.queryKey[0] === 'post-new-generations') as
+      { queryFn?: () => Promise<unknown> } | undefined;
+    await expect(options?.queryFn?.()).resolves.toEqual({ generations: [generationItem] });
+    expect(authState.api.getGenerationDetails).toHaveBeenCalledWith('gen-1');
+    expect(authState.api.listGenerations).not.toHaveBeenCalled();
   });
 
   it('waits for the creator to request media instead of opening an unstable system picker during navigation', async () => {
@@ -625,9 +641,10 @@ describe('mobile external post composer', () => {
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Exact reusable prompt'));
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save item').props.onPress());
     const text = collectText(tree.root);
-    expect(text).toContain('1 item');
+    // Next to the creation's own exact prompt, which its recipe starts with.
+    expect(text).toContain('2 items');
     expect(text).toContain('Prompt or script');
-    expect(findTextInputByPlaceholder(tree.root, 'Tell people what they will receive').props.value).toBe('Includes the prompt.');
+    expect(findTextInputByPlaceholder(tree.root, 'Tell people what they will receive').props.value).toBe('Includes 2 prompts.');
   });
 
   it('shows resource-link validation in the editor before Save', async () => {
@@ -703,7 +720,7 @@ describe('mobile external post composer', () => {
     expect(collectText(tree.root)).toContain('project.zip');
 
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save item').props.onPress());
-    expect(collectText(tree.root)).toContain('1 item');
+    expect(collectText(tree.root)).toContain('2 items');
   });
 
   it('keeps resource upload progress and recovery inside the editor sheet', async () => {
@@ -844,7 +861,9 @@ describe('mobile external post composer', () => {
       buttons.find((button) => button.text === 'Discard')?.onPress?.();
       await Promise.resolve();
     });
-    expect(collectText(tree.root)).not.toContain('1 item');
+    // Only the creation's exact prompt, which the recipe started with.
+    expect(collectText(tree.root)).toContain('1 item');
+    expect(collectText(tree.root)).not.toContain('2 items');
   });
 
   describe('the resource sheet', () => {
@@ -965,7 +984,7 @@ describe('mobile external post composer', () => {
       // Saved: the composer has the card and has dropped the editor's copy
       // and its step. The panel is still on its way out with its fields, or
       // it would fall to the height of its title under its own exit.
-      expect(collectText(tree.root)).toContain('1 item');
+      expect(collectText(tree.root)).toContain('2 items');
       expect(collectText(tree.root)).toContain('Contents stay protected until unlock.');
       expect(contentField(tree).props.value).toBe('Exact reusable prompt');
       expect(findPressableByAccessibilityLabel(tree.root, 'Save item')).toBeTruthy();
@@ -2743,65 +2762,145 @@ describe('mobile external post composer', () => {
     const toggle = (tree: renderer.ReactTestRenderer, label: string) => tree.root.findAll((node) => (
       node.props?.label === label && typeof node.props.onValueChange === 'function'
     ))[0];
+    const pressables = (tree: renderer.ReactTestRenderer, label: string) => tree.root.findAll((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityLabel === label
+    ));
+    const gestureEnabled = (tree: renderer.ReactTestRenderer) => (
+      tree.root.findAll((node) => String(node.type) === 'stack-screen')[0].props.options as { gestureEnabled: boolean }
+    ).gestureEnabled;
 
-    it('offers the creation’s references on a new post', async () => {
-      const tree = await renderScreen();
-      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
-
-      expect(toggle(tree, 'Include creation references')).toBeTruthy();
-      expect(toggle(tree, 'Include exact prompt')).toBeTruthy();
+    const creationPost = (resourceBundleInput: unknown) => ({
+      id: 'post-from-creation',
+      title: 'Hero product image',
+      description: null,
+      // The owner post carries its creation's prompt (owner-posts.ts).
+      prompt: 'Exact glossy product prompt',
+      body: '',
+      postFormat: 'media',
+      generationId: 'gen-1',
+      category: 'image',
+      visibility: 'public',
+      sourceTool: 'Magicbooklet',
+      sourceToolSlug: 'magicbooklet',
+      mediaUrl: 'https://cdn.example.com/output.png',
+      mediaKind: 'image',
+      mediaItems: [],
+      resourceBundleInput,
+      hasPaidOrders: false,
     });
 
-    // Only the publish route copies a creation's inputs; on an edit the toggle
-    // did nothing, while the package could promise references it never got.
-    it('does not offer the references on an edit, and reads a prompt card made on the web as included', async () => {
-      paramsState.params = { postId: 'post-from-creation' };
-      postEditState.post = {
-        id: 'post-from-creation',
-        title: 'Hero product image',
-        description: null,
-        body: '',
-        postFormat: 'media',
-        generationId: 'gen-1',
-        category: 'image',
-        visibility: 'public',
-        sourceTool: 'Magicbooklet',
-        sourceToolSlug: 'magicbooklet',
-        mediaUrl: 'https://cdn.example.com/output.png',
-        mediaKind: 'image',
-        mediaItems: [],
-        resourceBundleInput: {
-          accessMode: 'free',
-          previewText: 'Includes the exact reusable prompt.',
-          resources: {
-            // As the web composer saves it: titled by its kind, found by its text.
-            items: [{ id: 'web-prompt', type: 'prompt', title: 'Prompt or script', textContent: 'Exact glossy product prompt', sortOrder: 0 }],
-          },
-        },
-        hasPaidOrders: false,
-      };
+    // Owner, 2026-11-03: a creation's new post starts on a free recipe, its
+    // exact prompt is always in it, and its saved inputs are shown and stay
+    // the creator's choice.
+    it('starts a new post on a free recipe with the exact prompt locked in, and shows the saved inputs', async () => {
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      const text = collectText(tree.root);
+
+      expect(findPressableByText(tree.root, 'Free recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+      expect(text).toContain('Exact generation prompt');
+      expect(text).toContain('From this creation · 27 characters');
+      expect(text.some((line) => line.startsWith('Exact prompt included.'))).toBe(true);
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Recipe preview, required').props.value).toBe('Includes the prompt.');
+      // No switch for it, and its item can be neither removed nor rewritten.
+      expect(toggle(tree, 'Include exact prompt')).toBeUndefined();
+      expect(pressables(tree, 'Remove Exact generation prompt')).toHaveLength(0);
+      expect(pressables(tree, 'Edit Exact generation prompt')).toHaveLength(0);
+
+      expect(text).toContain('1 saved input');
+      expect(tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessibilityLabel === 'Saved input 1')).toHaveLength(1);
+      expect(toggle(tree, 'Include creation references').props.value).toBe(false);
+      // Where the post starts: nothing for the leave guard to keep.
+      expect(gestureEnabled(tree)).toBe(true);
+    });
+
+    it('keeps the recipe on Free with the prompt when the creation has no saved inputs', async () => {
+      generationState.item = { ...generationItem, input_media: [] };
       const tree = await renderScreen();
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
+      expect(collectText(tree.root)).toContain('1 item');
+      expect(collectText(tree.root)).not.toContain('1 saved input');
       expect(toggle(tree, 'Include creation references')).toBeUndefined();
-      expect(toggle(tree, 'Include exact prompt').props.value).toBe(true);
     });
 
-    it('switches Include exact prompt off when its card is removed, and back on with Undo', async () => {
+    // The save copies the inputs too now (owner, 2026-11-03), so an edit offers
+    // them; a prompt card made on the web is the creation's prompt, kept as it is.
+    it('offers the references on an edit, and reads a prompt card made on the web as the locked prompt', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost({
+        accessMode: 'free',
+        previewText: 'Includes the exact reusable prompt.',
+        resources: {
+          // As the web composer saves it: titled by its kind, found by its text.
+          items: [{ id: 'web-prompt', type: 'prompt', title: 'Prompt or script', textContent: 'Exact glossy product prompt', sortOrder: 0 }],
+        },
+      });
+      authState.api.updatePost.mockResolvedValueOnce({ success: true, postId: 'post-from-creation', visibility: 'public' });
       const tree = await renderScreen();
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
-      renderer.act(() => toggle(tree, 'Include exact prompt').props.onValueChange(true));
-      expect(toggle(tree, 'Include exact prompt').props.value).toBe(true);
 
-      // The last card going switches the recipe off; choosing it again shows the toggle as the cards leave it.
-      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Remove Exact generation prompt').props.onPress());
-      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
-      expect(toggle(tree, 'Include exact prompt').props.value).toBe(false);
+      expect(collectText(tree.root)).toContain('1 item');
+      expect(pressables(tree, 'Remove Prompt or script')).toHaveLength(0);
+      expect(toggle(tree, 'Include creation references').props.value).toBe(false);
 
-      renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Undo removing Exact generation prompt').props.onPress());
-      expect(toggle(tree, 'Include exact prompt').props.value).toBe(true);
+      renderer.act(() => toggle(tree, 'Include creation references').props.onValueChange(true));
+      expect(collectText(tree.root)).toContain('1 item and creation references');
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+      const payload = authState.api.updatePost.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+      expect(payload).toMatchObject({ includeGenerationReferences: true, resourceBundle: { accessMode: 'free' } });
+    });
+
+    // A recipe saved before the rule, as the web editor finds it: the prompt is
+    // added where the edit starts, so it is no unsaved change.
+    it('adds the exact prompt to an edited creation recipe that has none, as no unsaved change', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost({
+        accessMode: 'free',
+        previewText: 'A lighting guide for glossy product shots.',
+        resources: {
+          items: [{ id: 'guide', type: 'note', title: 'Lighting guide', textContent: 'Key light at 45 degrees.', sortOrder: 0 }],
+        },
+      });
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      const text = collectText(tree.root);
+      expect(text).toContain('2 items');
+      expect(text).toContain('Exact generation prompt');
+      expect(text).toContain('Lighting guide');
+      expect(pressables(tree, 'Remove Exact generation prompt')).toHaveLength(0);
+      expect(pressables(tree, 'Remove Lighting guide')).toHaveLength(1);
+      expect(gestureEnabled(tree)).toBe(true);
+    });
+
+    it('says the inputs are in when the recipe already holds their copies', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost({
+        accessMode: 'free',
+        previewText: 'Includes the prompt and reference media.',
+        resources: {
+          items: [
+            { id: 'web-prompt', type: 'prompt', title: 'Exact generation prompt', textContent: 'Exact glossy product prompt', sortOrder: 0 },
+            {
+              id: 'reference-input-1',
+              type: 'reference_media',
+              title: 'Reference 1',
+              storagePath: 'user-1/generation-references/gen-1/reference-input-1.jpg',
+              contentType: 'image/jpeg',
+              sortOrder: 1,
+            },
+          ],
+        },
+      });
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(collectText(tree.root)).toContain('Saved inputs included in this recipe. They are listed with the items below.');
+      expect(toggle(tree, 'Include creation references')).toBeUndefined();
+      expect(collectText(tree.root)).toContain('2 items');
     });
   });
 
@@ -3011,10 +3110,11 @@ describe('mobile external post composer', () => {
         ['Paid recipe', 'Set a credit price'],
         ['No recipe', 'Just the post'],
       ]);
+      // A creation's post starts on Free (owner, 2026-11-03).
       expect(radios(tree).map((node) => node.props.accessibilityState)).toEqual([
-        { checked: false, selected: false },
-        { checked: false, selected: false },
         { checked: true, selected: true },
+        { checked: false, selected: false },
+        { checked: false, selected: false },
       ]);
       expect(new Set(radios(tree).map((node) => (node.props.style as { minHeight?: number }).minHeight)).size).toBe(1);
 
@@ -3046,6 +3146,8 @@ describe('mobile external post composer', () => {
     });
 
     it('asks for one Recipe preview, suggested from the items until the creator writes it', async () => {
+      // A creation with no prompt, whose recipe starts with no items.
+      generationState.item = { ...generationItem, prompt: null };
       const tree = await stepTwoWith('Free recipe');
       const text = collectText(tree.root);
       expect(text).toContain('Recipe preview');
@@ -3215,6 +3317,7 @@ describe('mobile external post composer', () => {
     });
 
     it('says Finish the recipe with what is missing, and no list of kinds', async () => {
+      generationState.item = { ...generationItem, prompt: null };
       const tree = await stepTwoWith('Free recipe');
       const text = collectText(tree.root);
       expect(text).toContain('Finish the recipe');
@@ -3223,6 +3326,8 @@ describe('mobile external post composer', () => {
     });
 
     it('counts the creation’s references as what the recipe holds, in a row of their own', async () => {
+      // With no prompt item in the way, the references alone make the recipe.
+      generationState.item = { ...generationItem, prompt: null };
       const tree = await stepTwoWith('Free recipe');
       const toggle = tree.root.findAll((node) => node.props?.label === 'Include creation references' && typeof node.props.onValueChange === 'function')[0];
       renderer.act(() => toggle.props.onValueChange(true));

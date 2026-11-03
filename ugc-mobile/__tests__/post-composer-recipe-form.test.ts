@@ -182,13 +182,10 @@ describe('the Recipe preview follows the items until the creator writes it (S6)'
     expect(followSuggestedRecipePreview(before, on, item).resource.previewText).toBe('Includes the prompt.');
   });
 
-  it('is what Include exact prompt writes', () => {
-    const draft = applyCreationPromptResource(creationDraft({ accessMode: 'none' }), item, true);
+  it('is what a creation’s exact prompt writes', () => {
+    const draft = applyCreationPromptResource(creationDraft({ accessMode: 'none' }), item);
     expect(draft.resource.previewText).toBe('Includes the prompt.');
     expect(draft.resource.cards[0]).toMatchObject({ title: 'Exact generation prompt', textContent: 'Make a glossy product photo' });
-
-    // Switched off again, the suggestion leaves with its item.
-    expect(applyCreationPromptResource(draft, item, false).resource.previewText).toBe('');
   });
 });
 

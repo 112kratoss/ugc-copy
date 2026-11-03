@@ -215,7 +215,9 @@ vi.mock('@/lib/server-helpers', () => ({
 }));
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
+  buildGenerationReferenceResourceItems: vi.fn(async () => []),
   getMarketplaceQualityErrorForPostBundle: getMarketplaceQualityErrorForPostBundleMock,
+  mergeGenerationReferenceItemsIntoBundle: vi.fn((bundle: unknown) => bundle),
   updatePostWithResourceBundleAtomically: updatePostWithResourceBundleAtomicallyMock,
 }));
 

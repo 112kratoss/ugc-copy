@@ -1483,6 +1483,101 @@ describe('updateOwnerPostForRoute', () => {
       expect(dependencies.ensureDurableGenerationMedia).not.toHaveBeenCalled();
     });
 
+    // Owner, 2026-11-03: a creation's saved inputs can join its recipe from
+    // the editor too, copied as its publish copies them.
+    describe('the creation’s saved inputs', () => {
+      const privatePost = { ...generatedPost, visibility: 'private', showcase_asset_path: null };
+      const promptItem = {
+        id: 'recipe-prompt',
+        type: 'prompt',
+        role: 'primary',
+        sectionId: null,
+        title: 'Exact generation prompt',
+        textContent: 'A sunset study in golden light.',
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'text_template',
+      };
+      const copiedInput = {
+        id: 'reference-input-1',
+        scope: { kind: 'all' as const },
+        type: 'reference_image' as const,
+        role: 'style_reference' as const,
+        sectionId: null,
+        title: 'Product',
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: 'user-1/generation-references/generation-1/00-reference-input-1.png',
+        contentType: 'image/png',
+        sizeBytes: 68,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'none' as const,
+      };
+      const recipe = (accessMode: 'free' | 'none') => (accessMode === 'none'
+        ? { accessMode }
+        : {
+          accessMode,
+          previewText: 'The prompt and the product reference.',
+          resources: { allowRemix: false, items: [promptItem] },
+        });
+
+      it('copies them into the recipe when an edit asks', async () => {
+        const { client } = createSupabaseMock({
+          post: privatePost,
+          bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
+          generation: generationRow,
+        });
+        const buildGenerationReferenceResourceItems = vi.fn(async () => [copiedInput]);
+        const dependencies = createDependencies({ buildGenerationReferenceResourceItems });
+
+        const result = await updateOwnerPostForRoute({
+          adminSupabase: client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+          body: { visibility: 'private', includeGenerationReferences: true, resourceBundle: recipe('free') },
+          dependencies,
+        });
+
+        expect(result).toMatchObject({ ok: true });
+        expect(buildGenerationReferenceResourceItems).toHaveBeenCalledWith({
+          supabase: client,
+          ownerUserId: 'user-1',
+          generationId: 'generation-1',
+        });
+        const items = vi.mocked(dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].bundle?.resources?.items ?? [];
+        expect(items.map((item) => [item.id, item.storagePath ?? null])).toEqual([
+          ['recipe-prompt', null],
+          ['reference-input-1', 'user-1/generation-references/generation-1/00-reference-input-1.png'],
+        ]);
+      });
+
+      it('copies none unless asked, and none into no recipe', async () => {
+        const buildGenerationReferenceResourceItems = vi.fn(async () => [copiedInput]);
+        for (const body of [
+          { visibility: 'private', resourceBundle: recipe('free') },
+          { visibility: 'private', includeGenerationReferences: true, resourceBundle: recipe('none') },
+        ]) {
+          const { client } = createSupabaseMock({
+            post: privatePost,
+            bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
+            generation: generationRow,
+          });
+          const result = await updateOwnerPostForRoute({
+            adminSupabase: client,
+            ownerUserId: 'user-1',
+            postId: 'post-1',
+            body,
+            dependencies: createDependencies({ buildGenerationReferenceResourceItems }),
+          });
+          expect(result).toMatchObject({ ok: true });
+        }
+        expect(buildGenerationReferenceResourceItems).not.toHaveBeenCalled();
+      });
+    });
+
     it('refuses to replace the media of a generation-backed post', async () => {
       const { client } = createSupabaseMock({
         post: generatedPost,
