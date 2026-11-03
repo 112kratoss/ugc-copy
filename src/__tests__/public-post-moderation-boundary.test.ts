@@ -251,8 +251,59 @@ describe('public post detail read', () => {
       canRemix: false,
       remixCapability: 'none',
       remixTarget: null,
+      // Its settings are the template author's too.
+      generationSetup: [],
     });
     expect(JSON.stringify(detail)).not.toContain('nano-banana-pro');
+  });
+
+  // Owner's decision, 2026-11-03: a creation's settings are a standard detail of
+  // its post, which the page shows under Made with without any unlock.
+  describe("the creation's settings", () => {
+    const imageCreation = {
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      template_run_id: null,
+      template_run_step_id: null,
+      workflow_settings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+        resolution: '1K',
+        outputFormat: 'jpg',
+        googleSearch: false,
+        elements: [{ id: 'element-1', displayName: 'Bottle', handle: '@bottle', storagePath: 'uploads/user-1/bottle.png' }],
+      },
+    };
+
+    it('reads them with the model, in the one read of the creation, and leaves out the model and inputs', async () => {
+      useClientFor(postRow({ generation_id: 'gen-1', category: 'image' }), imageCreation);
+
+      const detail = await getPublicPostDetail('post-1');
+
+      expect(detail?.generationSetup).toEqual([
+        { label: 'Aspect ratio', value: '9:16' },
+        { label: 'Resolution', value: '1K' },
+        { label: 'Output format', value: 'JPG' },
+        { label: 'Google Search grounding', value: 'Off' },
+      ]);
+      expect(detail?.model).toBe('nano-banana-2');
+      expect(JSON.stringify(detail?.generationSetup)).not.toMatch(/model|nano|bottle|input/i);
+    });
+
+    it('shows none on an upload, which has no creation', async () => {
+      useClientFor(postRow({ generation_id: null, category: 'image', source_kind: 'external' }));
+      await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({ generationSetup: [] });
+    });
+
+    it('shows none on a post under its NSFW cover, whose content it describes', async () => {
+      useClientFor(postRow({ generation_id: 'gen-1', category: 'image', is_nsfw: true }), imageCreation);
+
+      const detail = await getPublicPostDetail('post-1');
+
+      expect(detail).toMatchObject({ isNsfw: true, nsfwRevealed: false, generationSetup: [] });
+      expect(JSON.stringify(detail)).not.toContain('9:16');
+    });
   });
 
   it("keeps an ordinary creation's model and Remix", async () => {

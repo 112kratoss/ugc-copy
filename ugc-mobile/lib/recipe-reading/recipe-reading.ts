@@ -108,8 +108,10 @@ export interface GenerationSetup {
 }
 
 /**
- * The publish flow writes a creation's settings as a fixed shape: a header
- * line, then `Key: Value` lines (`src/lib/generation-paywall.ts`). Values
+ * Until 2026-11-03 the publish flow wrote a creation's settings into its recipe
+ * as a fixed shape: a header line, then `Key: Value` lines. The settings are
+ * public on the post since (../generation-setup/generation-setup.ts), and the
+ * recipes published before keep the note, which still reads as settings. Values
  * carry colons of their own ("Aspect ratio: 9:16"), so each line splits at its
  * first ": " only. Anything that does not match the shape exactly stays text:
  * a creator's own notes are never read as settings.

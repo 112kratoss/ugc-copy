@@ -1147,6 +1147,61 @@ describe('Showcase detail page', () => {
       expect(head).not.toHaveTextContent('Made with');
       expect(head).not.toHaveTextContent('Nano Banana');
     });
+
+    // Owner's decision, 2026-11-03: the creation's settings are a standard
+    // detail, on a quiet line under Made with, for a visitor who unlocked nothing.
+    describe("the creation's settings", () => {
+      const imageSetup = [
+        { label: 'Aspect ratio', value: '9:16' },
+        { label: 'Resolution', value: '1K' },
+        { label: 'Output format', value: 'JPG' },
+        { label: 'Google Search grounding', value: 'Off' },
+      ];
+
+      it('reads them under Made with, each value named for a mouse and a screen reader', async () => {
+        const head = await renderHead({
+          generationSetup: imageSetup,
+          resourceBundle: null,
+        });
+
+        const line = within(head).getByTestId('post-generation-setup');
+        const terms = line.querySelector('[aria-hidden="true"]');
+        expect(terms?.textContent).toBe('9:16·1K·JPG·Search grounding off');
+        expect(within(line).getByText('Search grounding off')).toHaveAttribute('title', 'Google Search grounding');
+        expect(within(line).getByText('9:16')).toHaveAttribute('title', 'Aspect ratio');
+        expect(within(line).getByText(
+          'Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG, Google Search grounding: Off',
+        )).toHaveClass('sr-only');
+        // Under the byline that names the model, above the title.
+        const madeWith = within(head).getByText('Made with Nano Banana 2.0');
+        expect(madeWith.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(line.compareDocumentPosition(within(head).getByRole('heading', { level: 1 })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(line).not.toHaveTextContent(/nano banana|model/i);
+      });
+
+      it('draws no line where the read sends none: an upload, a template result', async () => {
+        const head = await renderHead({ generationSetup: [] });
+        expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+      });
+
+      it('draws none on a text post, whatever it is sent, as it names no model either', async () => {
+        const head = await renderHead({
+          generationSetup: imageSetup,
+          mediaUrl: null,
+          mediaKind: null,
+          category: 'text',
+          postFormat: 'text',
+          body: 'Open with tension.',
+        });
+        expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+      });
+
+      it('draws none on a post under its NSFW cover, whatever it is sent', async () => {
+        const head = await renderHead({ generationSetup: imageSetup, isNsfw: true, nsfwRevealed: false });
+        expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+        expect(head).not.toHaveTextContent('9:16');
+      });
+    });
   });
 
   it('renders text-only posts without a media url', async () => {

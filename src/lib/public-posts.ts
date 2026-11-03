@@ -32,7 +32,13 @@ import {
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import {
+  PUBLIC_GENERATION_SETUP_COLUMNS,
+  buildPublicGenerationSetup,
+  type PublicGenerationSetupRow,
+} from '@/lib/public-generation-setup';
 import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
+import type { GenerationSetupEntry } from '../../ugc-mobile/lib/generation-setup/generation-setup';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -108,6 +114,12 @@ export interface PublicPostDetail {
   canRemix: boolean;
   remixCapability: PostRemixCapability;
   remixTarget: PostRemixTarget;
+  /**
+   * The settings of the creation the post was made from, as everyone may see
+   * them (`buildPublicGenerationSetup`): none for an upload, a text post, a
+   * template's result or a post under its NSFW cover.
+   */
+  generationSetup: GenerationSetupEntry[];
 }
 
 async function fetchPublicPostRow(
@@ -282,18 +294,19 @@ async function loadPublicPostCreator(
 }
 
 /**
- * The creation's model as anyone may see it, and whether it is a template's
- * result, whose model is the template's and whose post offers no Remix.
+ * The creation's model and settings as anyone may see them, and whether it is
+ * a template's result, whose model and settings are the template's and whose
+ * post offers no Remix.
  */
 async function loadPublicPostGeneration(
   adminSupabase: ReturnType<typeof createServiceClient>,
   generationId: string | null,
-): Promise<{ model: string; templateResult: boolean } | null> {
+): Promise<{ model: string; templateResult: boolean; generationSetup: GenerationSetupEntry[] } | null> {
   if (!generationId) return null;
 
-  const { data: generation, error: generationError } = await adminSupabase
+  const { data, error: generationError } = await adminSupabase
     .from('generations')
-    .select('model, template_run_id, template_run_step_id')
+    .select(PUBLIC_GENERATION_SETUP_COLUMNS)
     .eq('id', generationId)
     .maybeSingle();
 
@@ -301,8 +314,13 @@ async function loadPublicPostGeneration(
     logBackendError('failed_to_fetch_post_generation_model', { error: generationError });
     return null;
   }
+  const generation = data as (PublicGenerationSetupRow & { model: string }) | null;
   if (!generation) return null;
-  return { model: shownGenerationModel(generation), templateResult: isTemplateResultGeneration(generation) };
+  return {
+    model: shownGenerationModel(generation),
+    templateResult: isTemplateResultGeneration(generation),
+    generationSetup: buildPublicGenerationSetup(generation),
+  };
 }
 
 export async function getPublicPostDetail(
@@ -403,6 +421,7 @@ export async function getPublicPostDetail(
       canRemix: true,
       remixCapability: 'public',
       remixTarget: resolveRemixTool(generation.category),
+      generationSetup: [],
     };
   }
 
@@ -497,6 +516,8 @@ export async function getPublicPostDetail(
     canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
     remixCapability: remix.capability,
     remixTarget: remix.target,
+    // A text post shows none, as it names no model either.
+    generationSetup: row.post_format === 'text' ? [] : generation?.generationSetup ?? [],
   };
   if (!row.is_nsfw) return detail;
   const revealed = options?.revealNsfw && await hasNsfwReveal(adminSupabase, row.id, viewerUserId);

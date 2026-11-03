@@ -57,20 +57,22 @@ function normalizeOptionalText(value: string): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * What the shared recipe holds: the prompt, the creation's references and its remix. Never its
+ * settings, which its post shows everyone (owner, 2026-11-03), so not the prefill's notes either.
+ */
 function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined): PostResourceKind[] {
   if (!prefill) {
     return [];
   }
 
   const kinds = new Set<PostResourceKind>(prefill.resourceKinds);
+  kinds.delete('notes');
   if ((prefill.referenceCount ?? 0) > 0) {
     kinds.add('files');
   }
   if (prefill.promptText?.trim()) {
     kinds.add('prompt');
-  }
-  if (prefill.notesMarkdown?.trim()) {
-    kinds.add('notes');
   }
   if (prefill.allowRemix) {
     kinds.add('remix');
@@ -122,7 +124,7 @@ function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
   return `Unlock the saved ${listAutoUnlockKinds(kinds)} used to create this result.`;
 }
 
-/** The free recipe packed from the creation's saved setup. */
+/** The free recipe packed from what the creation saved: its prompt, its references and its remix. */
 function buildAutoResourceBundle(prefill: GenerationPaywallPrefill): PostResourceBundleInput {
   const kinds = getAutoUnlockKinds(prefill);
 
@@ -133,7 +135,7 @@ function buildAutoResourceBundle(prefill: GenerationPaywallPrefill): PostResourc
     priceUsdCents: 0,
     resources: {
       promptText: prefill.promptText?.trim() || null,
-      notesMarkdown: prefill.notesMarkdown?.trim() || null,
+      notesMarkdown: null,
       workflowShareUrl: null,
       attachments: [],
       allowRemix: prefill.allowRemix,
@@ -372,7 +374,7 @@ export function usePublishCreation({
       if (!sharedPrefill || autoUnlockKinds.length === 0) {
         setFormError(leavesOwnUploadsOut && !addsOwnUploads && ownUploadCount > 0
           ? 'Without your own uploads this recipe holds nothing yet. Add them, or turn the recipe off.'
-          : 'This creation does not have enough saved setup to make a recipe from yet.');
+          : 'This creation has no saved prompt or references to make a recipe from yet.');
         return false;
       }
 

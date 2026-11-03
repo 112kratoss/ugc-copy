@@ -1301,15 +1301,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     // so a prefilled recipe is editable in exactly the same way as a hand-built
     // one. Built once, outside the updaters, so the recipe and the leave
     // guard's baseline hold the same cards. Its Remix needs no seeding: a
-    // creation post's recipe includes it (S1).
+    // creation post's recipe includes it (S1). Nor its settings, which the post
+    // shows everyone (owner, 2026-11-03): a creator may still add a Model
+    // settings item of their own, and it stays protected.
     const prefilledCards: PostComposerResourceCardDraft[] = [];
     if (paywallPrefill.promptText) {
       prefilledCards.push(createCreationPromptCard(paywallPrefill.promptText));
-    }
-    if (paywallPrefill.notesMarkdown) {
-      prefilledCards.push(createPostComposerResourceCard('guide', {
-        textContent: paywallPrefill.notesMarkdown,
-      }));
     }
     setResourceCards((current) => (current.length > 0 ? current : prefilledCards));
     setSavedSnapshot((saved) => ({
@@ -3751,9 +3748,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 {isGeneratedPaywallIntent ? (
                   <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
                     {isLoadingGeneration
-                      ? 'Preparing the saved prompt and generation setup for this paid recipe.'
+                      ? 'Preparing the saved prompt for this paid recipe.'
                       : hasGenerationPaywallPrefill
-                        ? 'Saved prompt, reusable setup notes, and remix access are ready where this creation supports them. Set the price first, then publish or edit anything below.'
+                        ? 'The saved prompt and remix access are ready where this creation supports them. Its settings show on the post for everyone. Set the price first, then publish or edit anything below.'
                         : 'This creation does not have enough saved inputs to auto-fill a paid recipe yet. The media is still attached, and you can add the prompt or notes as items below.'}
                   </div>
                 ) : isCreationPaywallManagementIntent ? (

@@ -6,7 +6,7 @@ import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 
 type MockProps = { children?: React.ReactNode; label?: string } & Record<string, unknown>;
 
-const { authState, bundleContentProps, mutationOptions, queryOptions, queryState, mutationState, router, showActionSheet } = vi.hoisted(() => ({
+const { authState, bundleContentProps, generationSetupState, mutationOptions, queryOptions, queryState, mutationState, router, showActionSheet } = vi.hoisted(() => ({
   authState: {
     user: { id: 'viewer-1' } as { id: string } | null,
     api: { getMarketplaceResourceDetail: vi.fn(), resolvePostResourceFileUrl: vi.fn() },
@@ -14,6 +14,11 @@ const { authState, bundleContentProps, mutationOptions, queryOptions, queryState
     updateCredits: vi.fn(),
   },
   bundleContentProps: vi.fn(),
+  // What `usePostGenerationSetup` answers, and what it was asked for each render.
+  generationSetupState: {
+    current: { entries: [] as Array<{ label: string; value: string }>, pending: false },
+    calls: [] as Array<{ itemId: string; active: boolean }>,
+  },
   mutationOptions: { current: null as {
     onSuccess?: (result: unknown, variables: unknown) => Promise<void>;
     onError?: (error: unknown, variables: unknown) => void;
@@ -79,6 +84,13 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@/lib/action-sheet', () => ({ showActionSheet }));
+
+vi.mock('@/lib/use-post-generation-setup', () => ({
+  usePostGenerationSetup: (item: { id: string }, active: boolean) => {
+    generationSetupState.calls.push({ itemId: item.id, active });
+    return generationSetupState.current;
+  },
+}));
 
 vi.mock('@/components/generation-references', () => ({
   GenerationOutputs: (props: MockProps) => React.createElement('generation-outputs', props),
@@ -239,6 +251,8 @@ describe('PostDetailsPage', () => {
 
   beforeEach(() => {
     bundleContentProps.mockClear();
+    generationSetupState.current = { entries: [], pending: false };
+    generationSetupState.calls.length = 0;
     queryState.current = { data: undefined, isError: false, error: null, refetch: vi.fn() };
     authState.user = { id: 'viewer-1' };
     authState.credits = 2000;
@@ -247,6 +261,59 @@ describe('PostDetailsPage', () => {
     mutationOptions.current = null;
     router.push.mockClear();
     showActionSheet.mockClear();
+  });
+
+  // Owner, 2026-11-03: a creation's settings are a standard detail, on a quiet
+  // line under Made with, for everyone and before any unlock.
+  describe("the creation's settings", () => {
+    const madeWithPost = () => showcaseItem({ generationId: 'gen-1', details: { ...showcaseItem().details!, model: 'nano-banana-2' } });
+
+    function setupLine(tree: renderer.ReactTestRenderer) {
+      return tree.root.findAll((node) => String(node.type) === 'text'
+        && typeof node.props.accessibilityLabel === 'string'
+        && node.props.accessibilityLabel.startsWith('Generation settings:'))[0];
+    }
+
+    it('draws them under Made with, in the web post page\'s words, each value named for VoiceOver', () => {
+      generationSetupState.current = {
+        entries: [
+          { label: 'Aspect ratio', value: '9:16' },
+          { label: 'Resolution', value: '1K' },
+          { label: 'Output format', value: 'JPG' },
+          { label: 'Google Search grounding', value: 'Off' },
+        ],
+        pending: false,
+      };
+      const tree = render(page({ item: madeWithPost() }));
+
+      const line = setupLine(tree);
+      expect(line.props.children).toBe('9:16 · 1K · JPG · Search grounding off');
+      expect(line.props.accessibilityLabel)
+        .toBe('Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG, Google Search grounding: Off');
+      const values = textValues(tree);
+      const madeWith = values.findIndex((value) => value.includes('Made with Nano Banana 2.0'));
+      expect(madeWith).toBeGreaterThan(-1);
+      expect(values.indexOf('9:16 · 1K · JPG · Search grounding off')).toBe(madeWith + 1);
+      // The theme's colour and the body text it sits under, never a size of its own.
+      expect(line.props.style).toMatchObject({ fontSize: 14 });
+      expect(generationSetupState.calls.at(-1)).toEqual({ itemId: 'post-1', active: true });
+    });
+
+    it('holds the line\'s place while the post\'s read brings them, hidden from VoiceOver', () => {
+      generationSetupState.current = { entries: [], pending: true };
+      const tree = render(page({ item: madeWithPost() }));
+
+      expect(setupLine(tree)).toBeUndefined();
+      const held = tree.root.findAll((node) => String(node.type) === 'text' && node.props.children === ' ');
+      expect(held).toHaveLength(1);
+      expect(held[0].props).toMatchObject({ accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' });
+    });
+
+    it('draws nothing for a post with none', () => {
+      const tree = render(page({ item: madeWithPost() }));
+      expect(setupLine(tree)).toBeUndefined();
+      expect(tree.root.findAll((node) => String(node.type) === 'text' && node.props.children === ' ')).toHaveLength(0);
+    });
   });
 
   it('shows no unlock button and no locked copy while the bundle is still loading', () => {

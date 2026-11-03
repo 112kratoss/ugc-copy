@@ -531,9 +531,10 @@ export function ownUploadsWords(count: number, kinds: Partial<Record<'image' | '
 }
 
 /**
- * What a shared recipe holds, under its switch (the artboard Result): the prompt and settings,
- * the original's references where a remix brought some, and that the creator's own uploads stay
- * out until they add them (owner, 2026-10-29), or go with it once added.
+ * What a shared recipe holds, under its switch (the artboard Result): the prompt, the original's
+ * references where a remix brought some, and that the creator's own uploads stay out until they
+ * add them (owner, 2026-10-29), or go with it once added. Not the settings, which the post shows
+ * everyone (owner, 2026-11-03).
  */
 export function describeSharedRecipe({ otherReferenceCount, ownUploads, addsOwnUploads }: {
   otherReferenceCount: number;
@@ -542,8 +543,8 @@ export function describeSharedRecipe({ otherReferenceCount, ownUploads, addsOwnU
   addsOwnUploads: boolean;
 }): string {
   const holds = otherReferenceCount > 0
-    ? 'The prompt, settings and the original’s references, free, so others can remix it.'
-    : 'The prompt and settings, free, so others can remix it.';
+    ? 'The prompt and the original’s references, free, so others can remix it.'
+    : 'The prompt, free, so others can remix it.';
   if (!ownUploads) return holds;
   const single = ownUploads.startsWith('1 ');
   if (addsOwnUploads) {

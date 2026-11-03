@@ -40,6 +40,7 @@ import {
   type GenerationPreviewInfo,
 } from '@/lib/generation-preview-info';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
+import { loadPublicGenerationSetup } from '@/lib/public-generation-setup';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -1709,10 +1710,14 @@ export async function getShowcaseFeedItemById(options: {
   }
 
   const revealed = options.revealNsfw && await hasNsfwReveal(adminSupabase, postId, viewerUserId);
-  const [item] = await addCreationReferenceCountsToFeedItems(
-    await resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set()),
-    adminSupabase,
-  );
+  // The creation's settings, which a post shows everyone (owner, 2026-11-03): the
+  // app's Details reads them from here, as feed pages leave them out. Read beside
+  // the post's hydration, not after it.
+  const [[item], generationSetup] = await Promise.all([
+    resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set())
+      .then((items) => addCreationReferenceCountsToFeedItems(items, adminSupabase)),
+    loadPublicGenerationSetup(adminSupabase, row.generation_id),
+  ]);
   if (!item) {
     return null;
   }
@@ -1733,7 +1738,9 @@ export async function getShowcaseFeedItemById(options: {
 
   // Comments are public-only on the server; the client reads this to hide them.
   const visibility = (row as { visibility?: string | null }).visibility === 'unlisted' ? 'unlisted' : 'public';
-  return { ...sanitizedItem, visibility };
+  // A post under its NSFW cover, or a text post, shows none.
+  const showsSetup = !(sanitizedItem.isNsfw && !sanitizedItem.nsfwRevealed) && sanitizedItem.postFormat !== 'text';
+  return { ...sanitizedItem, visibility, generationSetup: showsSetup ? generationSetup : [] };
 }
 
 /**

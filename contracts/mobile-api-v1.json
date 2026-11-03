@@ -1031,7 +1031,25 @@
           "isSaved": false,
           "generationId": "generation-1",
           "asset": null,
-          "canRemix": true
+          "canRemix": true,
+          "generationSetup": [
+            {
+              "label": "Aspect ratio",
+              "value": "16:9"
+            },
+            {
+              "label": "Resolution",
+              "value": "1K"
+            },
+            {
+              "label": "Output format",
+              "value": "JPG"
+            },
+            {
+              "label": "Google Search grounding",
+              "value": "Off"
+            }
+          ]
         }
       },
       "responseVariants": {
@@ -1065,7 +1083,8 @@
             "asset": null,
             "canRemix": false,
             "remixCapability": "none",
-            "remixTarget": null
+            "remixTarget": null,
+            "generationSetup": []
           }
         }
       }

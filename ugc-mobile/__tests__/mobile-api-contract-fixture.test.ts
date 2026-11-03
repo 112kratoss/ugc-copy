@@ -12,8 +12,9 @@ import {
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildHomeFeedCards } from '../lib/home-feed-view-model';
+import { formatGenerationSetupLine } from '../lib/generation-setup/generation-setup';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
-import { buildPostDetailsMeta } from '../lib/post-details-view-model';
+import { buildPostDetailsMeta, shouldReadPostGenerationSetup } from '../lib/post-details-view-model';
 import { profileFailedGenerationsQueryOptions, selectFailedCreations } from '../lib/profile-media-query';
 import { getOwnerCreationScopeCounts } from '../lib/profile-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
@@ -148,6 +149,32 @@ it('shows the caption a post read by id carries as its story when it has no body
   expect(withBody.details?.body).toBe('Reusable launch notes.');
   const [withoutBody] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, body: '' }]);
   expect(withoutBody.details?.body).toBe('A clean launch visual.');
+});
+
+// Owner, 2026-11-03: a creation's settings are a standard detail of its post. The
+// read by id carries them; Details draws them under Made with in the web's words.
+it("draws the settings a post read by id carries under its Made with, and none for a template result", async () => {
+  const { item } = await clientForEndpoint('getShowcasePost').getShowcasePost('post-1');
+  expect(item.generationSetup).toEqual([
+    { label: 'Aspect ratio', value: '16:9' },
+    { label: 'Resolution', value: '1K' },
+    { label: 'Output format', value: 'JPG' },
+    { label: 'Google Search grounding', value: 'Off' },
+  ]);
+
+  const [reelItem] = buildImmersiveShowcaseItems('showcase-feed', [item]);
+  expect(reelItem.details?.generationSetup).toEqual(item.generationSetup);
+  expect(formatGenerationSetupLine(reelItem.details?.generationSetup ?? [])).toBe('16:9 · 1K · JPG · Search grounding off');
+  // It brought them, so Details reads nothing more.
+  expect(shouldReadPostGenerationSetup(reelItem)).toBe(false);
+
+  const template = mobileApiContract.endpoints.getShowcasePost.responseVariants.templateResult.item;
+  const [templateItem] = buildImmersiveShowcaseItems('showcase-feed', [template as typeof item]);
+  expect(templateItem.details?.generationSetup).toEqual([]);
+  // A feed page leaves them out, and Details reads the post for them.
+  const [feedItem] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, generationSetup: undefined }]);
+  expect(feedItem.details).not.toHaveProperty('generationSetup');
+  expect(shouldReadPostGenerationSetup(feedItem)).toBe(true);
 });
 
 it("names no model and offers no Remix for a template result's post, on its card, in the reel and in its details", async () => {

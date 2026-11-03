@@ -1,3 +1,4 @@
+import type { GenerationSetupEntry } from './generation-setup/generation-setup';
 import type { SeedanceAssetCollections, SeedanceAssetKind, SeedanceAssetStatus } from './model-catalog/seedance-assets';
 
 export type CreatorToolId = 'image' | 'video' | 'motion';
@@ -1041,6 +1042,13 @@ export interface ShowcaseFeedItem {
   recommendation?: ShowcaseRecommendationMetadata | null;
   /** Set by the by-id read; feed pages list public posts only. */
   visibility?: 'public' | 'unlisted';
+  /**
+   * The settings of the creation the post was made from, which everyone sees
+   * under Made with (owner, 2026-11-03). Set by the by-id read, empty where
+   * there are none to show; feed pages leave it out, and Details reads the
+   * post for it (`usePostGenerationSetup`).
+   */
+  generationSetup?: GenerationSetupEntry[];
 }
 
 export interface ShowcaseFeedResponse {

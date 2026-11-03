@@ -549,6 +549,9 @@ function createServiceClientMock() {
             const rows = run().data.slice(start, end + 1);
             return { data: rows, error: null };
           },
+          async maybeSingle() {
+            return { data: run().data[0] ?? null, error: null };
+          },
           then(resolve: (value: { data: GenerationModelRow[]; error: null }) => void) {
             resolve(run());
           },
@@ -1595,6 +1598,9 @@ describe('showcase feed', () => {
       remixCapability: pinned.remixCapability,
       remixTarget: pinned.remixTarget,
     });
+    // Its settings are the template author's too: the read shows none.
+    expect(item?.generationSetup).toEqual(pinned.generationSetup);
+    expect(pinned.generationSetup).toEqual([]);
   });
 
   it('keeps remix access disabled for unrelated viewers of remix-enabled bundles', async () => {
@@ -2230,8 +2236,51 @@ describe('showcase feed', () => {
       const item = await getShowcaseFeedItemById({ postId: 'post-1', viewerUserId: 'viewer-1' });
 
       const pinned = Object.keys(mobileApiContract.endpoints.getShowcasePost.response.item);
-      expect(pinned).toEqual(expect.arrayContaining(['description', 'creationMode']));
+      expect(pinned).toEqual(expect.arrayContaining(['description', 'creationMode', 'generationSetup']));
       expect(Object.keys(item ?? {})).toEqual(expect.arrayContaining(pinned));
+    });
+
+    // Owner's decision, 2026-11-03: a creation's settings are a standard detail
+    // of its post. The app's Details reads them here; feed pages leave them out.
+    it("carries the creation's settings, which feed pages leave out", async () => {
+      generationModelsState = [{
+        id: 'gen-1',
+        model: 'nano-banana-2',
+        category: 'image',
+        workflow_settings: { model: 'nano-banana-2', aspectRatio: '16:9', resolution: '1K', outputFormat: 'jpg', googleSearch: false },
+      }];
+
+      const { getShowcaseFeedItemById, getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+      const item = await getShowcaseFeedItemById({ postId: 'post-1' });
+
+      // What the contract pins, model and inputs left out; the paid recipe stays locked.
+      expect(item?.generationSetup).toEqual(mobileApiContract.endpoints.getShowcasePost.response.item.generationSetup);
+      expect(item?.asset).toMatchObject({ accessMode: 'paid' });
+      expect(item?.prompt).toBe('');
+
+      const page = await getShowcaseFeedPage({ category: 'all', sort: 'recent', offset: 0, limit: 12 });
+      expect(page.items[0]?.id).toBe('post-1');
+      expect(page.items[0]).not.toHaveProperty('generationSetup');
+    });
+
+    it("shows none for a post with no creation, and none under an NSFW cover", async () => {
+      postsState = [
+        createPostRow({ id: 'post-upload', created_at: '2026-03-20T10:00:00.000Z', generation_id: null }),
+        createPostRow({ id: 'post-nsfw', created_at: '2026-03-20T10:00:00.000Z', generation_id: 'gen-1', is_nsfw: true }),
+      ];
+      generationModelsState = [{
+        id: 'gen-1',
+        model: 'nano-banana-2',
+        category: 'image',
+        workflow_settings: { aspectRatio: '9:16', resolution: '1K' },
+      }];
+      resourceBundlesState = [];
+
+      const { getShowcaseFeedItemById } = await import('@/lib/showcase-feed');
+      await expect(getShowcaseFeedItemById({ postId: 'post-upload' })).resolves.toMatchObject({ generationSetup: [] });
+      const covered = await getShowcaseFeedItemById({ postId: 'post-nsfw' });
+      expect(covered).toMatchObject({ isNsfw: true, nsfwRevealed: false, generationSetup: [] });
+      expect(JSON.stringify(covered)).not.toContain('9:16');
     });
 
     it('holds the caption to the paid-recipe rule the body and prompt follow', async () => {

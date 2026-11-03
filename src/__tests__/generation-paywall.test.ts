@@ -2,13 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildGenerationRecipeResourceItems,
-  buildGenerationPaywallNotes,
   buildGenerationPaywallPrefill,
   hasRecoverableGenerationRemixInputs,
 } from '@/lib/generation-paywall';
 
 describe('generation paywall helpers', () => {
-  it('builds prompt, notes, and remix access for recoverable image generations', () => {
+  it('builds the prompt and remix access for recoverable image generations', () => {
     const prefill = buildGenerationPaywallPrefill({
       category: 'image',
       model: 'nano-banana-2',
@@ -30,64 +29,31 @@ describe('generation paywall helpers', () => {
       },
     });
 
-    expect(prefill).toMatchObject({
+    expect(prefill).toEqual({
       promptText: 'A polished creator product image with warm natural light.',
+      notesMarkdown: null,
       allowRemix: true,
-      resourceKinds: ['prompt', 'notes', 'remix'],
+      resourceKinds: ['prompt', 'remix'],
       referenceCount: 0,
       referenceKindCounts: {},
     });
-    expect(prefill?.notesMarkdown).toContain('Saved generation setup');
-    expect(prefill?.notesMarkdown).toContain('Model: Nano Banana 2.0');
-    expect(prefill?.notesMarkdown).toContain('Aspect ratio: 4:5');
-    expect(prefill?.notesMarkdown).toContain('Inputs: 1 saved reference');
   });
 
-  it('summarizes saved video settings without exposing raw workflow JSON', () => {
-    const notes = buildGenerationPaywallNotes({
-      category: 'video',
-      model: 'bytedance/seedance-2-fast',
-      prompt: 'Match the motion and timing references.',
-      workflowSettings: {
-        model: 'seedance-2-fast',
-        aspectRatio: '16:9',
-        duration: 12,
-        resolution: '480p',
-        sound: true,
-        referenceMode: 'elements',
-        elements: [
-          {
-            id: 'element-1',
-            displayName: 'Hero',
-            handle: '@hero',
-            storagePath: 'uploads/user-1/hero.png',
-          },
-        ],
-        referenceVideoUrls: ['asset-video-1'],
-        referenceAudioUrls: ['asset-audio-1'],
-      },
-    });
+  // The setup is public on the post since 2026-11-03 (owner's decision), so the
+  // sell link, Studio's Manage and Add recipe, the composer and the creators'
+  // publish form, which all start a new recipe from this prefill, no longer put
+  // a protected "Saved generation setup" item into it.
+  it.each([
+    ['an image', { category: 'image', model: 'nano-banana-2', workflowSettings: { aspectRatio: '9:16', resolution: '1K', outputFormat: 'jpg', googleSearch: false } }],
+    ['a video', { category: 'video', model: 'seedance-2-fast', workflowSettings: { model: 'seedance-2-fast', aspectRatio: '16:9', duration: 12, resolution: '480p', sound: true, fixedLens: true } }],
+    ['a motion', { category: 'video', creationMode: 'motion', model: 'kling-2.6', workflowSettings: { creationMode: 'motion', mode: '720p', duration: 8, characterOrientation: 'video' } }],
+  ])('leaves %s creation\'s settings out of a new recipe', (_kind, source) => {
+    const prefill = buildGenerationPaywallPrefill({ ...source, prompt: 'Keep the light warm.' });
 
-    expect(notes).toContain('Model: Seedance 2 Fast');
-    expect(notes).toContain('Duration: 12s');
-    expect(notes).toContain('Reference mode: Named references');
-    expect(notes).toContain('Inputs: 1 named reference, 1 video reference, 1 audio reference');
-    expect(notes).not.toContain('"referenceVideoUrls"');
-  });
-
-  it('maps provider model ids to public catalog labels in saved generation notes', () => {
-    const notes = buildGenerationPaywallNotes({
-      category: 'video',
-      model: 'bytedance/seedance-2-fast',
-      prompt: 'Recreate this video setup.',
-      workflowSettings: {
-        aspectRatio: '16:9',
-        duration: 8,
-      },
-    });
-
-    expect(notes).toContain('Model: Seedance 2 Fast');
-    expect(notes).not.toContain('bytedance/seedance-2-fast');
+    expect(prefill).toMatchObject({ promptText: 'Keep the light warm.', notesMarkdown: null, resourceKinds: ['prompt'] });
+    expect(JSON.stringify(prefill)).not.toMatch(/saved generation setup|aspect ratio|resolution|duration|orientation/i);
+    // A creation whose settings were all it had starts no recipe at all.
+    expect(buildGenerationPaywallPrefill({ ...source, prompt: '' })).toBeNull();
   });
 
   it('prefers the named element handle for public recipe reference labels when available', () => {
@@ -177,7 +143,7 @@ describe('generation paywall helpers', () => {
     };
 
     expect(hasRecoverableGenerationRemixInputs(source)).toBe(true);
-    expect(buildGenerationPaywallPrefill(source)?.notesMarkdown).toContain('Inputs: character image + reference video');
+    expect(buildGenerationPaywallPrefill(source)).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'remix'] });
     expect(hasRecoverableGenerationRemixInputs({ ...source, creationMode: null })).toBe(false);
   });
 
@@ -213,8 +179,7 @@ describe('generation paywall helpers', () => {
 
     expect(hasRecoverableGenerationRemixInputs(source)).toBe(true);
     const prefill = buildGenerationPaywallPrefill(source);
-    expect(prefill).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'notes', 'remix'] });
-    expect(prefill?.notesMarkdown).toContain('Inputs: 2 named subjects');
+    expect(prefill).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'remix'] });
 
     // A subject with no staged picture has nothing a remix could restore.
     expect(hasRecoverableGenerationRemixInputs({
@@ -227,7 +192,7 @@ describe('generation paywall helpers', () => {
     // Nor has a run that recorded no subject, as one made before they were kept.
     const before = { ...source, workflowSettings: { ...source.workflowSettings, klingSubjects: undefined } };
     expect(hasRecoverableGenerationRemixInputs(before)).toBe(false);
-    expect(buildGenerationPaywallPrefill(before)?.notesMarkdown).not.toContain('named subject');
+    expect(buildGenerationPaywallPrefill(before)).toMatchObject({ allowRemix: false, resourceKinds: ['prompt'] });
   });
 
   it('returns null when a generation has no usable prompt, notes, or remix inputs', () => {
@@ -278,7 +243,7 @@ describe('generation paywall helpers', () => {
     });
 
     expect(prefill).toMatchObject({
-      resourceKinds: ['prompt', 'notes', 'files'],
+      resourceKinds: ['prompt', 'files'],
       referenceCount: 2,
       referenceKindCounts: {
         image: 1,

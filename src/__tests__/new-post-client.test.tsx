@@ -2923,6 +2923,8 @@ describe('NewPostClient', () => {
             title: 'Launch still',
             description: 'A polished creator-style launch image.',
             prompt: 'A creator-style product image with warm natural light.',
+            // As an answer from before 2026-11-03 carried it: the creation's
+            // setup, which its post shows everyone now and no recipe takes in.
             paywallPrefill: {
               resourceKinds: ['prompt', 'notes', 'remix'],
               promptText: 'A creator-style product image with warm natural light.',
@@ -2953,13 +2955,15 @@ describe('NewPostClient', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/generations?includeArchived=true&id=gen-paid-1&limit=1', {
       headers: { Authorization: 'Bearer test-token' },
     });
-    expect(screen.getByText(/saved prompt, reusable setup notes, and remix access are ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/the saved prompt and remix access are ready.*its settings show on the post for everyone/i)).toBeInTheDocument();
     // The saved generation seeds items rather than loose fields. Remix comes
     // with the recipe (S1): there is no switch, and a new recipe sends false.
     expect(screen.queryByRole('checkbox', { name: /remix/i })).not.toBeInTheDocument();
     expect(screen.getByText('Remix comes with this recipe: people who unlock it can remix your post.')).toBeInTheDocument();
-    expect(screen.getByText('Guide or notes')).toBeInTheDocument();
-    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt and a written guide.');
+    // The prompt alone: the settings are no item of the recipe (owner, 2026-11-03).
+    expect(screen.queryByText('Guide or notes')).not.toBeInTheDocument();
+    expect(screen.queryByText(/saved generation setup/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt.');
 
     const priceInput = screen.getByRole('spinbutton', { name: /price in credits/i });
     await waitFor(() => {
@@ -2988,10 +2992,10 @@ describe('NewPostClient', () => {
         resources: { allowRemix: false },
       },
     });
-    expect(payload.resourceBundle.resources.items).toMatchObject([
-      { type: 'prompt', title: 'Exact generation prompt', textContent: 'A creator-style product image with warm natural light.' },
-      { type: 'note', textContent: 'Saved generation setup\nModel: Nano Banana 2.0' },
+    expect(payload.resourceBundle.resources.items).toEqual([
+      expect.objectContaining({ type: 'prompt', title: 'Exact generation prompt', textContent: 'A creator-style product image with warm natural light.' }),
     ]);
+    expect(JSON.stringify(payload.resourceBundle)).not.toMatch(/saved generation setup/i);
   });
 
   it('falls back to the manual paid composer when a generation has no usable prefill', async () => {

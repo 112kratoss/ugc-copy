@@ -317,6 +317,36 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
     expect((call?.[1] as RequestInit).headers).toMatchObject({ Authorization: 'Bearer token-1' });
   });
 
+  // Owner, 2026-11-03: the creation's settings show on its post for everyone, so the recipe
+  // takes in no "Saved generation setup", even from an answer that still carried one.
+  it('shares no settings with the recipe, which the post shows everyone', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({
+      details: {
+        ...DETAILS,
+        paywallPrefill: {
+          resourceKinds: ['prompt', 'notes'],
+          promptText: PROMPT,
+          notesMarkdown: 'Saved generation setup\nAspect ratio: 9:16\nDuration: 5s',
+          allowRemix: false,
+        },
+      },
+    });
+    expect(within(form()).getByText('The prompt, free, so others can remix it.')).toBeInTheDocument();
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    const body = publishBody(fetchMock);
+    expect(body).toMatchObject({
+      resourceBundle: {
+        accessMode: 'free',
+        summary: 'Prompt from this creation',
+        resources: { promptText: PROMPT, notesMarkdown: null },
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/saved generation setup|aspect ratio|9:16/i);
+  });
+
   it('publishes the media alone with the recipe off', async () => {
     const fetchMock = installFetch();
     const { onPublished } = renderPanel();
@@ -356,14 +386,14 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
   });
 });
 
-// Owner, 2026-10-29: the recipe shares the prompt, the settings and the original's references;
-// the creator's own uploads stay out unless they add them, and with any in the creation the
-// remix's hand-over, which would give them all away, is off.
+// Owner, 2026-10-29: the recipe shares the prompt and the original's references (its settings show
+// on the post for everyone since 2026-11-03); the creator's own uploads stay out unless they add them,
+// and with any in the creation the remix's hand-over, which would give them all away, is off.
 describe('CreatorPublishPanel: the creator’s own uploads', () => {
   it('leaves them out by default: the original’s references only, and no hand-over', async () => {
     const fetchMock = installFetch();
     const { onPublished } = renderPanel({ details: WITH_UPLOADS });
-    expect(within(form()).getByText('The prompt, settings and the original’s references, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
+    expect(within(form()).getByText('The prompt and the original’s references, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
     expect(within(form()).getByRole('checkbox', { name: 'Add my 2 photos' })).not.toBeChecked();
 
     fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
@@ -388,14 +418,14 @@ describe('CreatorPublishPanel: the creator’s own uploads', () => {
     expect(body).not.toHaveProperty('leaveOutOwnGenerationReferences');
   });
 
-  it('shares the prompt and settings alone where every reference is the creator’s own', async () => {
+  it('shares the prompt alone where every reference is the creator’s own', async () => {
     const fetchMock = installFetch();
     const own: CreationPublishDetails = {
       ...WITH_UPLOADS,
       paywallPrefill: { ...WITH_UPLOADS.paywallPrefill!, referenceCount: 2, ownReferenceCount: 2 },
     };
     const { onPublished } = renderPanel({ details: own });
-    expect(within(form()).getByText('The prompt and settings, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
+    expect(within(form()).getByText('The prompt, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
 
     fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
     await waitFor(() => expect(onPublished).toHaveBeenCalled());
@@ -668,11 +698,11 @@ describe('the recipe’s words', () => {
 
   it('says what goes with the recipe and what stays out', () => {
     expect(describeSharedRecipe({ otherReferenceCount: 0, ownUploads: null, addsOwnUploads: false }))
-      .toBe('The prompt and settings, free, so others can remix it.');
+      .toBe('The prompt, free, so others can remix it.');
     expect(describeSharedRecipe({ otherReferenceCount: 1, ownUploads: '1 photo', addsOwnUploads: false }))
-      .toBe('The prompt, settings and the original’s references, free, so others can remix it. Your 1 photo stays out unless you add it.');
+      .toBe('The prompt and the original’s references, free, so others can remix it. Your 1 photo stays out unless you add it.');
     expect(describeSharedRecipe({ otherReferenceCount: 1, ownUploads: '1 photo', addsOwnUploads: true }))
-      .toBe('The prompt, settings and the original’s references, free, so others can remix it. Your 1 photo goes with it, and remixes get it.');
+      .toBe('The prompt and the original’s references, free, so others can remix it. Your 1 photo goes with it, and remixes get it.');
   });
 });
 

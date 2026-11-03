@@ -8,6 +8,7 @@ import {
     type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import type { GenerationSetupEntry } from '../../ugc-mobile/lib/generation-setup/generation-setup';
 
 export const SHOWCASE_PAGE_SIZE = 12;
 // A full page in the bootstrap keeps the grid from sitting near-empty while
@@ -166,6 +167,13 @@ export interface ShowcaseFeedItem {
     recommendation?: ShowcaseRecommendationContext;
     /** Set by the by-id read; feed pages list public posts only. */
     visibility?: 'public' | 'unlisted';
+    /**
+     * The settings of the creation the post was made from, as everyone may see
+     * them (`buildPublicGenerationSetup`). Set by the by-id read, empty where
+     * there are none to show (and on a post under its NSFW cover); feed pages
+     * leave it out, and the app's Details reads the post for it.
+     */
+    generationSetup?: GenerationSetupEntry[];
 }
 
 interface ShowcaseFeedPageInfo {

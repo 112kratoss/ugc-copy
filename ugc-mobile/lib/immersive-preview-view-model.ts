@@ -2,6 +2,7 @@ import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResource
 
 import { withAppleZoom, type AppleZoomOpen } from './apple-zoom';
 import { getCreationAvailability, type CreationAvailability } from './creation-library';
+import { readGenerationSetup, type GenerationSetupEntry } from './generation-setup/generation-setup';
 import {
   getGenerationKind,
   getGenerationLabel,
@@ -66,6 +67,12 @@ export interface ImmersivePostDetails {
    * Details names it by its display name and never prints the id.
    */
   model?: string | null;
+  /**
+   * The creation's settings, drawn under Made with, when the post came from
+   * its own read (empty where it has none); unset from a feed page, whose
+   * posts Details reads for them (`usePostGenerationSetup`).
+   */
+  generationSetup?: GenerationSetupEntry[];
   creatorLabel: string;
   creatorAvatar: string | null;
   saveCount: number;
@@ -632,6 +639,7 @@ function showcaseToImmersiveItem(
   const canRecreate = remixAccess === 'open' || remixAccess === 'free-unlock';
   // The server takes comments on public posts only.
   const canComment = item.visibility !== 'unlisted';
+  const generationSetup = readGenerationSetup(item.generationSetup);
 
   return {
     id: item.id,
@@ -679,6 +687,7 @@ function showcaseToImmersiveItem(
       sourceLabel: 'Showcase',
       toolLabel: item.sourceTool?.trim() || null,
       model: item.model ?? null,
+      ...(generationSetup ? { generationSetup } : {}),
       creatorLabel,
       creatorAvatar: item.creator.avatar,
       saveCount: item.saveCount,
