@@ -13,10 +13,12 @@ type Handoff<Row extends string> = {
   row: Row;
   /** The focused route when the row was tapped. */
   from: string | undefined;
-  /** Another route has taken over: the menu leaves over it. */
-  landed: boolean;
-  /** Nothing took over: the menu leaves anyway. */
-  stalled: boolean;
+  /**
+   * `waiting` until another route has taken over, then `leaving`: the menu
+   * leaves over it. A navigation that went nowhere, or one the fallback gave
+   * up on, leaves too, with nothing under it.
+   */
+  phase: 'waiting' | 'leaving';
 };
 
 export interface MenuHandoff<Row extends string> {
@@ -92,7 +94,7 @@ export function useMenuHandoff<Row extends string>({
     if (visible && handoff !== null) setHandoff(null);
   }
 
-  const waiting = handoff !== null && !handoff.landed && !handoff.stalled;
+  const waiting = handoff?.phase === 'waiting';
   // Subscribed only while a hand-off waits: the menus are mounted all the
   // time, and every navigation in the app would otherwise render them.
   const subscribe = useCallback(
@@ -106,15 +108,15 @@ export function useMenuHandoff<Row extends string>({
   const focusedRoute = useSyncExternalStore(subscribe, readFocusedRoute, readFocusedRoute);
   // Kept from the render that sees the new route, so a Back that returns to
   // the old one before the menu has closed cannot bring the menu back.
-  if (handoff !== null && !handoff.landed && !handoff.stalled && focusedRoute !== handoff.from) {
-    setHandoff({ ...handoff, landed: true });
+  if (handoff?.phase === 'waiting' && focusedRoute !== handoff.from) {
+    setHandoff({ ...handoff, phase: 'leaving' });
   }
-  const leaving = handoff !== null && (handoff.landed || handoff.stalled);
+  const leaving = handoff?.phase === 'leaving';
 
   useEffect(() => {
     if (!waiting) return;
     const timer = setTimeout(() => {
-      setHandoff((current) => (current === handoff ? { ...current, stalled: true } : current));
+      setHandoff((current) => (current === handoff ? { ...current, phase: 'leaving' } : current));
     }, HANDOFF_FALLBACK_MS);
     return () => clearTimeout(timer);
   }, [handoff, waiting]);
@@ -143,8 +145,8 @@ export function useMenuHandoff<Row extends string>({
     const from = focusedRouteKey(navigation);
     // Set before navigating, so a navigation that throws still ends in the
     // fallback's exit rather than in a menu whose rows no longer answer.
-    setHandoff({ row, from, landed: false, stalled: false });
-    if (navigate() === false) setHandoff({ row, from, landed: false, stalled: true });
+    setHandoff({ row, from, phase: 'waiting' });
+    if (navigate() === false) setHandoff({ row, from, phase: 'leaving' });
   };
 
   return { chosen: handoff?.row ?? null, leaving, handOff, claim };
