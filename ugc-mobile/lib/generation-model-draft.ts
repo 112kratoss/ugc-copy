@@ -64,6 +64,7 @@ import {
   promptLimitFor,
   type PromptLengthMeter,
 } from './model-catalog/provider-prompt-limits';
+import type { RemixInputSlotRole } from './remix-input-slots/remix-input-slots';
 import type {
   GenerationElementDescriptor,
   ImageGenerationRequest,
@@ -492,6 +493,61 @@ export function catalogStandbyReferencesReason(
     return [];
   });
   return reasons.length > 0 ? reasons.join(' ') : null;
+}
+
+/**
+ * The roles a remix's empty slots have a place for on this model, read as its creator draws them
+ * (media-creation-screen's composers, which are handed only these slots): a picture, clip or track
+ * where the reference rail takes its kind (in a multi-shot run, only beside the shots), a frame where
+ * its slot opens, a subject where the model takes named subjects, and a motion run's picture and clip
+ * where their slots open. A slot of any other role has no box on this model: a mention of it says so
+ * (`promptMentionErrors`) until the creator switches back, where its box is drawn as they left it
+ * (owner's request, 2026-11-03).
+ */
+export function catalogRemixSlotRoles(draft: CreationDraft, model: GenerationModelDescriptor): Set<RemixInputSlotRole> {
+  const roles = new Set<RemixInputSlotRole>();
+  const counts = catalogDraftInputCounts(draft, model);
+  const activeSlots = (referenceMode: ReferenceMode) => getActiveCatalogInputSlots(model, {
+    ...getCatalogDraftSettings(draft, model),
+    ...(draft.tool === 'video' ? { referenceMode, isMultiShot: draft.isMultiShot } : {}),
+  }, counts);
+  const opens = (slots: CatalogInputSlot[], matches: (slot: CatalogInputSlot) => boolean) => slots.some((slot) => matches(slot) && slot.max > 0);
+
+  if (draft.tool === 'motion') {
+    const keys = catalogMotionDraftSlotKeys(draft, model);
+    const slots = model.inputModes ? activeSlots('frames') : null;
+    if (!slots || slots.some((slot) => slot.key === keys.image)) roles.add('character_image');
+    if (!slots || slots.some((slot) => slot.key === keys.video)) roles.add('motion_reference_video');
+    return roles;
+  }
+  if (draft.tool === 'image') {
+    const takesPictures = model.inputModes
+      ? opens(activeSlots('frames'), (slot) => slot.key === 'imageReferences')
+      : (model.inputs.imageReferences?.max ?? 0) > 0;
+    if (takesPictures) roles.add('reference_image');
+    return roles;
+  }
+  if (!model.inputModes) {
+    // A descriptor without input modes has no subjects, and sends its references in single shots only.
+    if (model.inputs.startFrame) roles.add('start_frame');
+    if (model.inputs.endFrame) roles.add('end_frame');
+    if (!draft.isMultiShot) {
+      if ((model.inputs.imageReferences?.max ?? 0) > 0) roles.add('reference_image');
+      if ((model.inputs.videoReferences?.max ?? 0) > 0) roles.add('reference_video');
+      if ((model.inputs.audioReferences?.max ?? 0) > 0) roles.add('reference_audio');
+    }
+    return roles;
+  }
+  const frames = activeSlots('frames');
+  if (frames.some((slot) => slot.key === 'startFrame')) roles.add('start_frame');
+  if (frames.some((slot) => slot.key === 'endFrame')) roles.add('end_frame');
+  // The rail asks about the references shape in a single shot, and about the run's own in a story.
+  const rail = activeSlots(draft.isMultiShot ? catalogVideoRunReferenceMode(draft, model) : 'elements');
+  if (opens(rail, (slot) => slot.key === 'imageReferences')) roles.add('reference_image');
+  if (opens(rail, (slot) => slot.role === 'reference' && slot.kind === 'video')) roles.add('reference_video');
+  if (opens(rail, (slot) => slot.key === 'audioReferences')) roles.add('reference_audio');
+  if (catalogSubjectSlot(model)) roles.add('subject');
+  return roles;
 }
 
 /**
@@ -1089,8 +1145,12 @@ export function validateCatalogCreationDraft(
     }
   }
 
-  // A mention of a remix's empty slot asks for the remixer's own input in its box; any other is unknown.
-  errors.push(...promptMentionErrors(unknownPromptMentions(draft, model), draft));
+  // A mention of a remix's empty slot asks for the remixer's own input in its box, or says this model
+  // has no place for it; any other is unknown.
+  errors.push(...promptMentionErrors(unknownPromptMentions(draft, model), draft, {
+    roles: catalogRemixSlotRoles(draft, model),
+    modelName: model.displayName,
+  }));
 
   const hasServerQuote = typeof options.quotedCost === 'number' && Number.isFinite(options.quotedCost);
   const cost = hasServerQuote ? options.quotedCost as number : 0;

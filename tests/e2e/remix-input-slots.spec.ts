@@ -11,8 +11,9 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * at all, and Generate refused the prompt's @mentions as unknown.
  *
  * Vitest draws the boxes; here, that they show and fill in a real browser, through the file field a
- * box opens, and that they fit the column at a phone's width. Each test keeps its screenshots in its
- * output folder (`testInfo.outputPath`).
+ * box opens, and that they fit the column at a phone's width; and that a box survives Enhance and a
+ * switch to a model with no place for it, and its notice can be put away (2026-11-03). Each test keeps
+ * its screenshots in its output folder (`testInfo.outputPath`).
  */
 
 const COLD_PAGE = { timeout: 45_000 };
@@ -43,9 +44,11 @@ function slotRemix(category: string, model: string, prompt: string, inputSlots: 
   };
 }
 
-const notice = (rest: string) => `Settings pre-filled from "Kept back".${rest}`;
-const TWO_KEPT = ' The creator kept 2 inputs to themselves. Add your own in the empty boxes.';
-const ONE_KEPT = ' The creator kept 1 input to themselves. Add your own in the empty box.';
+const REMIX_NOTICE = 'Settings pre-filled from "Kept back".';
+/** The empty boxes' own notice, apart from the remix's since 2026-11-03, so it can be put away. */
+const kept = (count: number) => (count === 1
+  ? 'The creator kept 1 input to themselves. Add your own in the empty box.'
+  : `The creator kept ${count} inputs to themselves. Add your own in the empty boxes.`);
 const slotMessage = (handle: string) => `Add your own for ${handle} in its box, or take ${handle} out of the prompt.`;
 
 async function openRemix(page: Page, creator: string, bundle: unknown) {
@@ -80,7 +83,8 @@ test('the image creator draws a box for each reference it was not given, and the
   await expect(productBox).toContainText('@product');
   await expect(productBox).toContainText('Add your image');
   await expect(references.getByRole('button', { name: 'Add your image for Reference image 2' })).toBeVisible();
-  await expect(page.getByText(notice(TWO_KEPT), { exact: true })).toBeVisible();
+  await expect(page.getByText(kept(2), { exact: true })).toBeVisible();
+  await expect(page.getByText(REMIX_NOTICE, { exact: true })).toBeVisible();
   // The prompt's mention of the empty box says so, in place of an unknown mention.
   await expect(page.getByText(slotMessage('@product'), { exact: true }).first()).toBeVisible();
   await expect(page.getByText(/Unknown element mention/)).toHaveCount(0);
@@ -92,7 +96,7 @@ test('the image creator draws a box for each reference it was not given, and the
   await expect(references.getByAltText('Reference image 1', { exact: true })).toBeVisible();
   await expect(productBox).toHaveCount(0);
   await expect(page.getByText(slotMessage('@product'), { exact: true })).toHaveCount(0);
-  await expect(page.getByText(notice(ONE_KEPT), { exact: true })).toBeVisible();
+  await expect(page.getByText(kept(1), { exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Place @product on a marble counter, soft light');
   await keep(references, 'image-filled.png');
 
@@ -101,6 +105,55 @@ test('the image creator draws a box for each reference it was not given, and the
   await expect(references.getByRole('button', { name: 'Add your image for Reference image 2' })).toBeVisible();
   expect(await sidewaysScroll(page)).toBe(0);
   await keep(references, 'image-filled-phone.png');
+});
+
+// Three edges of 2026-11-03: Enhance could rewrite a box's @handle out of the prompt; a model with no
+// place for a box hid it and read its mention as an unknown one; the boxes' notice could not be put away.
+test('the image creator keeps an empty box through Enhance and a switch of model, and puts its notice away', async ({ page }) => {
+  await openRemix(page, 'create-image', slotRemix('image', 'nano-banana-2', 'Place @product on a marble counter, soft light', [
+    { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
+    { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
+  ], { aspectRatio: '1:1' }));
+
+  const references = page.locator('section[aria-labelledby="create-image-references"]');
+  const productBox = references.getByRole('button', { name: 'Add your image for @product' });
+  // Drawn once the page's script has read the remix: a press from here reaches React.
+  await expect(productBox).toBeVisible(COLD_PAGE);
+
+  // A prompt naming the box is polished around, as one naming a reference is: Enhance keeps @product.
+  await expect(page.getByRole('button', { name: /^Polish, / })).toBeVisible();
+  await expect(page.getByText('Named elements stay locked. This only adds light visual polish around your original @element sentence.')).toBeVisible();
+
+  // A model that takes no picture has no place for the box: it says so, and holds the run.
+  const picker = page.locator('button[aria-haspopup="listbox"]');
+  await picker.click();
+  await page.getByRole('option', { name: /Z-Image/ }).click();
+  await expect(picker).toContainText('Z-Image');
+  const noPlace = 'Z-Image has no place for @product. Switch back, or take @product out of the prompt.';
+  await expect(page.getByText(noPlace, { exact: true }).first()).toBeVisible();
+  await expect(productBox).toHaveCount(0);
+  await expect(page.getByText(/Unknown element mention/)).toHaveCount(0);
+  await expect(page.getByText(/^The creator kept/)).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('image-box-without-a-place.png') });
+
+  // Back on a model that takes pictures, the box is where it was, and its mention asks for it.
+  await picker.click();
+  await page.getByRole('option', { name: /Nano Banana 2\.0/ }).click();
+  await expect(productBox).toBeVisible();
+  await expect(references.getByRole('button', { name: 'Add your image for Reference image 2' })).toBeVisible();
+  await expect(page.getByText(slotMessage('@product'), { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(noPlace, { exact: true })).toHaveCount(0);
+  await expect(page.getByText(kept(2), { exact: true })).toBeVisible();
+
+  // The notice can be put away for the rest of the remix; the boxes, and the remix's own notice, stay.
+  await page.getByRole('button', { name: 'Dismiss remix source notice' }).click();
+  await expect(page.getByText(/^The creator kept/)).toHaveCount(0);
+  await expect(page.getByText(REMIX_NOTICE, { exact: true })).toBeVisible();
+  await expect(productBox).toBeVisible();
+  await page.locator('input[data-remix-slot="slot-2"]').setInputFiles(png('mine.png'));
+  await expect(references.getByAltText('Reference image 2', { exact: true })).toBeVisible();
+  await expect(page.getByText(/^The creator kept/)).toHaveCount(0);
+  await keep(references, 'image-notice-put-away.png');
 });
 
 test('the video creator opens a references run on References, a box among each kind and the start image’s', async ({ page }) => {
@@ -121,7 +174,8 @@ test('the video creator opens a references run on References, a box among each k
   const startBox = inputs.locator('label[for="video-start-frame-input"]');
   await expect(startBox).toContainText('Start frame');
   await expect(startBox).toContainText('Add your image');
-  await expect(page.getByText(notice(' The creator kept 4 inputs to themselves. Add your own in the empty boxes.'), { exact: true })).toBeVisible();
+  await expect(page.getByText(kept(4), { exact: true })).toBeVisible();
+  await expect(page.getByText(REMIX_NOTICE, { exact: true })).toBeVisible();
   await expect(page.getByText(slotMessage('@product'), { exact: true }).first()).toBeVisible();
   await expect(page.getByText(/Unknown element mention/)).toHaveCount(0);
   await keep(inputs, 'video-references-boxes.png');
@@ -131,7 +185,7 @@ test('the video creator opens a references run on References, a box among each k
   await expect(inputs.getByRole('button', { name: 'Insert @product' })).toBeVisible();
   await expect(productBox).toHaveCount(0);
   await expect(page.getByText(slotMessage('@product'), { exact: true })).toHaveCount(0);
-  await expect(page.getByText(notice(' The creator kept 3 inputs to themselves. Add your own in the empty boxes.'), { exact: true })).toBeVisible();
+  await expect(page.getByText(kept(3), { exact: true })).toBeVisible();
 
   // A press on a box opens the picker of its kind.
   const chooser = page.waitForEvent('filechooser');
@@ -153,7 +207,7 @@ test('the video creator draws a subject it was not given as an empty subject und
   await expect(box).toBeVisible(COLD_PAGE);
   const subjects = page.locator('.ui-card', { has: page.getByRole('heading', { name: 'Named subjects' }) });
   await expect(subjects.getByRole('button', { name: 'Add your pictures for @maya' })).toBeVisible();
-  await expect(page.getByText(notice(ONE_KEPT), { exact: true })).toBeVisible();
+  await expect(page.getByText(kept(1), { exact: true })).toBeVisible();
   await expect(page.getByText(slotMessage('@maya'), { exact: true }).first()).toBeVisible();
   await keep(subjects, 'video-subject-box.png');
 
@@ -164,7 +218,8 @@ test('the video creator draws a subject it was not given as an empty subject und
   await expect(subjects.getByPlaceholder('Subject name')).toHaveValue('Subject 1');
   await expect(box).toHaveCount(0);
   await expect(page.getByText(slotMessage('@maya'), { exact: true })).toHaveCount(0);
-  await expect(page.getByText(notice(''), { exact: true })).toBeVisible();
+  await expect(page.getByText(REMIX_NOTICE, { exact: true })).toBeVisible();
+  await expect(page.getByText(/^The creator kept/)).toHaveCount(0);
   await keep(subjects, 'video-subject-filled.png');
 });
 
@@ -177,7 +232,7 @@ test('the motion creator draws a box on the character and the clip it was not gi
   const inputs = page.getByRole('group', { name: 'Required inputs' });
   const characterBox = inputs.locator('label[for="motion-character-image-input"]');
   const clipBox = inputs.locator('label[for="motion-reference-video-input"]');
-  await expect(page.getByText(notice(TWO_KEPT), { exact: true })).toBeVisible(COLD_PAGE);
+  await expect(page.getByText(kept(2), { exact: true })).toBeVisible(COLD_PAGE);
   await expect(characterBox).toContainText('Character image');
   await expect(characterBox).toContainText('Add your image');
   await expect(clipBox).toContainText('Motion video');
@@ -189,7 +244,7 @@ test('the motion creator draws a box on the character and the clip it was not gi
   await expect(inputs.getByRole('button', { name: 'Replace Character image' })).toBeVisible();
   await expect(characterBox).toHaveCount(0);
   await expect(clipBox).toContainText('Motion video');
-  await expect(page.getByText(notice(ONE_KEPT), { exact: true })).toBeVisible();
+  await expect(page.getByText(kept(1), { exact: true })).toBeVisible();
   await keep(inputs, 'motion-character-filled.png');
 
   await page.setViewportSize(PHONE);

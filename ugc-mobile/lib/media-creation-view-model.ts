@@ -18,9 +18,13 @@ import { heldLengthNote, lengthHeldUnderMinimum, lengthReading } from './model-c
 import { readSeedanceAssetCollections, type SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 import {
   parseRemixInputSlotsForTool,
+  readRemixSlotMentions,
   REMIX_INPUT_SLOT_TOOL_ROLES,
-  remixInputSlotHandles,
+  remixInputSlotsByPlace,
+  remixInputSlotsNotice,
   unfilledRemixSlotsMessage,
+  unplacedRemixSlotsMessage,
+  withRemixSlotEnhancerReferences,
   type RemixInputSlot,
   type RemixInputSlotRole,
 } from './remix-input-slots/remix-input-slots';
@@ -348,6 +352,12 @@ export interface RemixSlotDraftFields {
    * remixer's. Absent from every other draft, and from remix sessions saved before slots existed.
    */
   inputSlots?: RemixInputSlot[];
+  /**
+   * The remixer put the slots' notice away (2026-11-03): it stays away for the rest of the remix
+   * session, a resume included, though a box stays empty (`remixDraftSlotsNotice`). The boxes, and a
+   * mention of one, are as they were. Only `true` is kept; never sent, quoted or described in a run.
+   */
+  inputSlotsNoticeDismissed?: boolean;
 }
 
 export interface UploadedMediaInput {
@@ -1217,18 +1227,59 @@ export function unfilledRemixInputSlots(draft: CreationDraft): readonly RemixInp
 }
 
 /**
- * What a prompt's unknown mentions hold a run with. A mention of an empty slot's handle asks for the
- * remixer's own input in its box (`unfilledRemixSlotsMessage`); any other keeps the unknown-mention
- * line, which is the server's own refusal.
+ * Where a draft's model has a place for a remix's empty slots: the roles its creator draws a box for
+ * (`catalogRemixSlotRoles` in lib/generation-model-draft), and the model's name for the words that say
+ * a box has none.
  */
-export function promptMentionErrors(unknown: readonly string[], draft: CreationDraft): string[] {
-  const waiting = new Set(remixInputSlotHandles(unfilledRemixInputSlots(draft)));
-  const others = unknown.filter((handle) => !waiting.has(handle));
-  const slotMessage = unfilledRemixSlotsMessage(unknown.filter((handle) => waiting.has(handle)));
+export interface RemixSlotPlacement {
+  roles: ReadonlySet<RemixInputSlotRole>;
+  modelName: string;
+}
+
+/**
+ * The slots a draft waits on that its model has a place for (`roles`), each drawn as an empty box. One
+ * without a place is drawn nowhere until a switch back to a model that has one, where it is drawn as it
+ * was left; null roles, before the model is in, draw every one.
+ */
+export function placedRemixInputSlots(
+  draft: CreationDraft,
+  roles: ReadonlySet<RemixInputSlotRole> | null,
+): RemixInputSlot[] {
+  return remixInputSlotsByPlace(unfilledRemixInputSlots(draft), roles).placed;
+}
+
+/**
+ * What a prompt's unknown mentions hold a run with. A mention of an empty slot's handle asks for the
+ * remixer's own input in its box (`unfilledRemixSlotsMessage`), or, where the chosen model has no place
+ * for the slot (`placement`), says so (`unplacedRemixSlotsMessage`): the run cannot start with either.
+ * Any other keeps the unknown-mention line, which is the server's own refusal. Without a placement
+ * every slot has its box, as on a draft whose model is not known.
+ */
+export function promptMentionErrors(unknown: readonly string[], draft: CreationDraft, placement?: RemixSlotPlacement): string[] {
+  const slots = remixInputSlotsByPlace(unfilledRemixInputSlots(draft), placement?.roles ?? null);
+  const mentions = readRemixSlotMentions(unknown, slots);
+  const slotMessage = unfilledRemixSlotsMessage(mentions.waiting);
+  const unplacedMessage = unplacedRemixSlotsMessage(mentions.unplaced, placement?.modelName);
   return [
-    ...(others.length > 0 ? [`Unknown element mention${others.length === 1 ? '' : 's'}: ${others.join(', ')}`] : []),
+    ...(mentions.other.length > 0 ? [`Unknown element mention${mentions.other.length === 1 ? '' : 's'}: ${mentions.other.join(', ')}`] : []),
     ...(slotMessage ? [slotMessage] : []),
+    ...(unplacedMessage ? [unplacedMessage] : []),
   ];
+}
+
+/**
+ * The line over a remix whose creator kept inputs to themselves: how many boxes its model draws
+ * (`placedRemixInputSlots`), until the remixer puts it away for the rest of the remix
+ * (`dismissRemixSlotsNotice`), which a box nobody mentions may never need. Null with no box to fill.
+ */
+export function remixDraftSlotsNotice(draft: CreationDraft, roles: ReadonlySet<RemixInputSlotRole> | null): string | null {
+  if (draft.inputSlotsNoticeDismissed === true) return null;
+  return remixInputSlotsNotice(placedRemixInputSlots(draft, roles).length);
+}
+
+/** The draft with its slots' notice put away for the rest of the remix session; its boxes are as they were. */
+export function dismissRemixSlotsNotice<T extends CreationDraft>(draft: T): T {
+  return draft.inputSlotsNoticeDismissed === true ? draft : { ...draft, inputSlotsNoticeDismissed: true };
 }
 
 /** What a slot's fill is called: the words of the handle the prompt mentions it by, or else the slot's own name. */
@@ -2274,6 +2325,16 @@ function attachedVideoRunInputs(draft: VideoCreationDraft): VideoRunEnhancementI
   };
 }
 
+/**
+ * The named references an Enhance request tells the enhancer to keep: those the run sends, then a
+ * remix's empty boxes its prompt mentions (`withRemixSlotEnhancerReferences`), as the web creators
+ * tell it. Told of neither, the enhancer could rewrite "@product" out of a remix's prompt and leave
+ * its box with nothing to answer (2026-11-03).
+ */
+function enhancerReferences(draft: CreationDraft, sent: Array<{ handle: string; displayName: string }>) {
+  return withRemixSlotEnhancerReferences(sent, unfilledRemixInputSlots(draft), draft.prompt);
+}
+
 export function buildPromptEnhancementRequest(
   draft: CreationDraft,
   options: PromptEnhancementRequestOptions = {},
@@ -2287,10 +2348,10 @@ export function buildPromptEnhancementRequest(
       prompt: draft.prompt,
       context: {
         referenceImageCount: references.length,
-        elementReferences: references.map((reference) => ({
+        elementReferences: enhancerReferences(draft, references.map((reference) => ({
           handle: reference.handle ?? '',
           displayName: reference.displayName,
-        })),
+        }))),
         ...(level ? { enhancementLevel: level } : {}),
       },
     };
@@ -2314,7 +2375,7 @@ export function buildPromptEnhancementRequest(
         referenceImageCount: run.referenceImageCount,
         isMultiShot: draft.isMultiShot,
         shotCount: draft.multiPrompts.length,
-        elementReferences: run.elementReferences,
+        elementReferences: enhancerReferences(draft, run.elementReferences),
         ...(frameImageUrls.length > 0 ? { frameImageUrls } : {}),
         ...(level ? { enhancementLevel: level } : {}),
       },
@@ -2332,6 +2393,16 @@ export function buildPromptEnhancementRequest(
       ...(level ? { enhancementLevel: level } : {}),
     },
   };
+}
+
+/**
+ * Whether a request's prompt names a handle its Enhance is told to keep: a reference the run sends,
+ * or a remix's empty box. An image's Enhance then polishes around the sentence that names it
+ * ("Polish", append-only) instead of rewriting it, as the web creator's does, a box's as a reference's.
+ */
+export function promptNamesKeptReference(request: PromptEnhancementRequest): boolean {
+  const named = new Set(extractPromptHandles(request.prompt));
+  return (request.context?.elementReferences ?? []).some((reference) => named.has(reference.handle));
 }
 
 /** A shot's request names its shot, which the app's request type does not carry yet. */

@@ -16,6 +16,7 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
+    StudioRemixSlotsNotice,
     StudioUseOriginalButton,
 } from '@/components/CreatorStudio';
 import {
@@ -78,6 +79,7 @@ import {
 } from '@/lib/remix-source-client';
 import {
     remixInputSlotAction,
+    remixInputSlotsNotice,
     remixInputSlotTitle,
     type RemixInputSlot,
     type RemixInputSlotRole,
@@ -425,6 +427,8 @@ function MotionCreator({
     // by the original's clip, leaves the list.
     const [remixSlots, setRemixSlots] = useState<RemixInputSlot[]>([]);
     const fillRemixSlot = (role: RemixInputSlotRole) => setRemixSlots((slots) => slots.filter((slot) => slot.role !== role));
+    // Their notice, put away for the rest of the remix, which on the web is this page's.
+    const [remixSlotsNoticeDismissed, setRemixSlotsNoticeDismissed] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const nowMs = useTicker(isGenerating) ?? undefined;
 
@@ -671,6 +675,7 @@ function MotionCreator({
                 setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
                 setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
                 setRemixSlots(readRemixInputSlots(bundle));
+                setRemixSlotsNoticeDismissed(false);
 
                 const settings = bundle.workflowSettings as MotionWorkflowSettings | null;
                 if (settings?.model && MOTION_MODELS[settings.model]) {
@@ -1477,6 +1482,8 @@ function MotionCreator({
     const characterRemixSlot = hasCharacterImage ? null : remixSlots.find((slot) => slot.role === 'character_image') ?? null;
     const clipRemixSlot = hasReferenceVideo ? null : remixSlots.find((slot) => slot.role === 'motion_reference_video') ?? null;
     const shownRemixSlotCount = Number(Boolean(characterRemixSlot)) + Number(Boolean(clipRemixSlot));
+    // What the boxes are, until the remixer puts it away for the rest of the remix.
+    const remixSlotsNotice = remixSlotsNoticeDismissed ? null : remixInputSlotsNotice(shownRemixSlotCount);
     // The server refuses a quote without both inputs and a length, so a fresh
     // page opened on that refusal and a Retry that could not help.
     const motionInputsReady = hasCharacterImage && hasReferenceVideo && duration > 0;
@@ -1822,7 +1829,7 @@ function MotionCreator({
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
-                                        description={getRemixNoticeDescription(remixTitle, shownRemixSlotCount, remixRestoreWarning)}
+                                        description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
                                         original={remixVideoUrl ? {
                                             mediaType: 'video',
                                             src: remixVideoUrl,
@@ -1840,6 +1847,11 @@ function MotionCreator({
                                     />
                                 </motion.div>
                             )}
+                            {remixId && !isRemixLoading && remixSlotsNotice ? (
+                                <motion.div key="remix-slots-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioRemixSlotsNotice description={remixSlotsNotice} onDismiss={() => setRemixSlotsNoticeDismissed(true)} />
+                                </motion.div>
+                            ) : null}
                         </AnimatePresence>
 
                         <div role="group" aria-labelledby="create-motion-inputs" className="ui-card p-4">

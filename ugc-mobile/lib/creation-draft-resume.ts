@@ -94,11 +94,18 @@ export type PersistedCreationDrafts = {
  * A saved draft's empty remix slots read back as a remix holds them (`parseRemixInputSlotsForTool`), or none
  * outside a remix session, which holds no slots. A draft saved without the field keeps it absent:
  * that is how a remix session saved before slots existed is told from one whose slots are all filled.
+ * Their notice, put away, stays away for the rest of a remix session (`inputSlotsNoticeDismissed`, only
+ * ever `true`); no other draft keeps it.
  */
 function withSavedInputSlots<T extends CreationDraft>(draft: T, remix: boolean): T {
-  if (!('inputSlots' in draft)) return draft;
-  const { inputSlots, ...rest } = draft;
-  return (remix ? { ...rest, inputSlots: parseRemixInputSlotsForTool(draft.tool, inputSlots) } : rest) as T;
+  if (!('inputSlots' in draft) && !('inputSlotsNoticeDismissed' in draft)) return draft;
+  const { inputSlots, inputSlotsNoticeDismissed, ...rest } = draft;
+  if (!remix) return rest as T;
+  return {
+    ...rest,
+    ...('inputSlots' in draft ? { inputSlots: parseRemixInputSlotsForTool(draft.tool, inputSlots) } : {}),
+    ...(inputSlotsNoticeDismissed === true ? { inputSlotsNoticeDismissed: true } : {}),
+  } as T;
 }
 
 function parsePersistedCreationDrafts(raw: string, { remix }: { remix: boolean }): PersistedCreationDrafts | null {

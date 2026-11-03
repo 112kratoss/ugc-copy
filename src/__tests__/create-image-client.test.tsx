@@ -3212,7 +3212,8 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     expect(emptyBoxes()).toEqual(['Add your image for @product', 'Add your image for Reference image 2']);
     // In the references' own strip, where a reference brought back would be.
     expect(within(box.closest('ul')!).getAllByRole('button')).toHaveLength(2);
-    expect(screen.getByText('Settings pre-filled from "Marble". The creator kept 2 inputs to themselves. Add your own in the empty boxes.')).toBeInTheDocument();
+    expect(screen.getByText('Settings pre-filled from "Marble".')).toBeInTheDocument();
+    expect(screen.getByText('The creator kept 2 inputs to themselves. Add your own in the empty boxes.')).toBeInTheDocument();
     // The prompt's mention of an empty box asks for the remixer's own, in place of an unknown mention, and holds the run.
     expect(slotMessageLines()).toEqual([SLOT_MESSAGE, SLOT_MESSAGE]);
     expect(screen.queryByText(/Unknown element mention/)).toBeNull();
@@ -3236,7 +3237,7 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('Place @product on a marble counter, soft light');
     // The other box waits, unmentioned, and holds nothing back.
     expect(emptyBoxes()).toEqual(['Add your image for Reference image 2']);
-    expect(screen.getByText('Settings pre-filled from "Marble". The creator kept 1 input to themselves. Add your own in the empty box.')).toBeInTheDocument();
+    expect(screen.getByText('The creator kept 1 input to themselves. Add your own in the empty box.')).toBeInTheDocument();
     expect(slotMessageLines()).toEqual([]);
     expect(screen.queryByText(/Unknown element mention/)).toBeNull();
     await waitFor(() => expect(generateButton()).toBeEnabled());
@@ -3286,7 +3287,9 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     expect(emptyBoxes()).toEqual(['Add your image for @product', 'Add your image for Reference image 2']);
   });
 
-  it('leaves its boxes out on a model that takes no references, where nothing could fill them', async () => {
+  // A model with no place for a box hid it, and its mention read "Unknown element mention: @product",
+  // as if the remix had never had it (2026-11-03). It says so now, and the box waits for a switch back.
+  it('says a box has no place on a model that takes no references, and draws it again on a switch back beside what was filled', async () => {
     modelCatalogState.summaries = imageModelSummaries;
     installFetch({ remixBundle: MARBLE_REMIX });
     const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
@@ -3295,9 +3298,75 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     chooseModel(view.container, 'Imagen 4');
 
     await waitFor(() => expect(emptyBoxes()).toEqual([]));
-    expect(screen.getByText('Settings pre-filled from "Marble".')).toBeInTheDocument();
-    // The mention reads as any the run cannot send.
-    expect(screen.getByText(/^Unknown element mention/).textContent).toBe('Unknown element mention: @product');
+    const noPlace = 'Imagen 4 has no place for @product. Switch back, or take @product out of the prompt.';
+    // Under the prompt, then over Generate, as a box's mention is said.
+    expect(screen.queryAllByText(/has no place for/).map((line) => line.textContent)).toEqual([noPlace, noPlace]);
+    expect(screen.queryByText(/Unknown element mention/)).toBeNull();
     expect(slotMessageLines()).toEqual([]);
+    // No box is drawn here, so their notice is not either; the run waits for the mention.
+    await waitFor(() => expect(screen.queryByText(/^The creator kept/)).toBeNull());
+    expect(generateButton()).toBeDisabled();
+
+    chooseModel(view.container, 'Nano Banana 2.0');
+
+    expect(await screen.findByRole('button', { name: 'Add your image for @product' })).toBeInTheDocument();
+    expect(emptyBoxes()).toEqual(['Add your image for @product', 'Add your image for Reference image 2']);
+    expect(slotMessageLines()).toEqual([SLOT_MESSAGE, SLOT_MESSAGE]);
+    expect(screen.queryByText(/has no place for/)).toBeNull();
+    expect(screen.getByText('The creator kept 2 inputs to themselves. Add your own in the empty boxes.')).toBeInTheDocument();
+
+    // A box filled before a switch is the remixer's picture after it, kept for a model that takes it,
+    // and back beside the box still empty.
+    fillBox(view.container, 'slot-2', myPicture());
+    expect(await screen.findByDisplayValue('Reference image 2')).toBeInTheDocument();
+    chooseModel(view.container, 'Imagen 4');
+    await waitFor(() => expect(emptyBoxes()).toEqual([]));
+    expect(screen.getByDisplayValue('Reference image 2')).toBeInTheDocument();
+    chooseModel(view.container, 'Nano Banana 2.0');
+    expect(await screen.findByRole('button', { name: 'Add your image for @product' })).toBeInTheDocument();
+    expect(emptyBoxes()).toEqual(['Add your image for @product']);
+    expect(screen.getByDisplayValue('Reference image 2')).toBeInTheDocument();
+    expect(screen.getByText('The creator kept 1 input to themselves. Add your own in the empty box.')).toBeInTheDocument();
+  });
+
+  // An Enhance could rewrite "@product" out of the prompt and leave its box with nothing to answer
+  // (2026-11-03): the enhancer keeps a handle only where it is told of it, as it is of a reference's.
+  it('has Enhance keep an empty box’s handle, and polish around the sentence that names it', async () => {
+    installFetch({ remixBundle: MARBLE_REMIX });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    await screen.findByRole('button', { name: 'Add your image for @product' });
+    const enhance = () => enhanceButton.props as unknown as {
+      label?: string;
+      context?: { referenceImageCount?: number; elementEnhancementMode?: string; elementReferences?: Array<{ handle: string; displayName: string }> };
+    };
+
+    await waitFor(() => expect(enhance().context?.elementReferences).toEqual([{ handle: '@product', displayName: 'Reference image 1' }]));
+    expect(enhance().label).toBe('Polish');
+    expect(enhance().context).toMatchObject({ referenceImageCount: 0, elementEnhancementMode: 'append-only' });
+    expect(JSON.stringify(enhance().context)).not.toMatch(/slot-\d|Reference image 2/);
+
+    // Taken out of the prompt, the box has no mention to keep, and the prompt is enhanced in full.
+    typePrompt('A bottle on a marble counter, soft light');
+    await waitFor(() => expect(enhance().label).toBe('Enhance'));
+    expect(enhance().context?.elementReferences).toEqual([]);
+    expect(enhance().context).not.toHaveProperty('elementEnhancementMode', 'append-only');
+  });
+
+  // The notice stayed for as long as a box was empty, a box nobody mentions included (2026-11-03).
+  it('puts the boxes’ notice away for the rest of the remix, and keeps the boxes and the remix’s own notice', async () => {
+    installFetch({ remixBundle: MARBLE_REMIX });
+    const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    await screen.findByText('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss remix source notice' }));
+
+    await waitFor(() => expect(screen.queryByText(/^The creator kept/)).toBeNull());
+    expect(screen.getByText('Settings pre-filled from "Marble".')).toBeInTheDocument();
+    expect(emptyBoxes()).toEqual(['Add your image for @product', 'Add your image for Reference image 2']);
+    expect(slotMessageLines()).toEqual([SLOT_MESSAGE, SLOT_MESSAGE]);
+    // A box filled since keeps it away.
+    fillBox(view.container, 'slot-2', myPicture());
+    expect(await screen.findByDisplayValue('Reference image 2')).toBeInTheDocument();
+    expect(screen.queryByText(/^The creator kept/)).toBeNull();
   });
 });

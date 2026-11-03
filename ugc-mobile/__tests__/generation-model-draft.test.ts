@@ -17,6 +17,7 @@ import {
   catalogMultiShotLimits,
   catalogPromptLimitError,
   catalogPromptMeters,
+  catalogRemixSlotRoles,
   catalogRunEnhancementInputs,
   catalogRunInputSlots,
   catalogStandbyReferencesReason,
@@ -41,6 +42,7 @@ import {
   fillRemixInputSlot,
   renameMediaDraft,
   videoDraftReferenceMode,
+  type CreationDraft,
   type ImageCreationDraft,
   type MediaDraft,
   type VideoCreationDraft,
@@ -1730,5 +1732,47 @@ describe('a remix’s empty input slots in a catalog run', () => {
       expect.objectContaining({ slot: 'videoElements', handle: '@dance', url: 'https://cdn.example.com/move.mp4', durationSeconds: 4 }),
     ]);
     expect(JSON.stringify([run, buildCatalogQuoteRequest(filled, kling30, catalog.revision)])).not.toMatch(slotWords);
+  });
+
+  // A box is drawn where its creator draws its kind on the chosen model. A switch to a model with no
+  // place for it hid the box and read its mention as an unknown one (2026-11-03).
+  it('names the boxes each model has a place for, as its creator draws them', () => {
+    const roles = (draft: CreationDraft, model: GenerationModelDescriptor) => [...catalogRemixSlotRoles(draft, model)].sort();
+    expect(roles(createDefaultCreationDraft('image'), slotsImage)).toEqual(['reference_image']);
+    expect(roles(createDefaultCreationDraft('image'), imageModelWithSlots('prompt-only-image', 'Prompt Only', 0))).toEqual([]);
+    // Kling 3.0: its frames, and its clips as video elements beside them; no picture or track.
+    expect(roles(videoDraft(kling30), kling30)).toEqual(['end_frame', 'reference_video', 'start_frame']);
+    expect(roles(videoDraft(klingO3), klingO3)).toEqual(['reference_image', 'start_frame', 'subject']);
+    // A multi-shot run sends its shots and no reference picture.
+    expect(roles(videoDraft(klingO3, { isMultiShot: true }), klingO3)).toEqual(['start_frame', 'subject']);
+    expect(roles(videoDraft(seedance2), seedance2)).toEqual(['end_frame', 'reference_audio', 'reference_image', 'reference_video', 'start_frame']);
+    const motion = createTestGenerationModelCatalog().models.find((model) => model.id === 'kling-3.0')!;
+    expect(roles(createDefaultCreationDraft('motion'), motion)).toEqual(['character_image', 'motion_reference_video']);
+  });
+
+  it('holds the run on a box the chosen model has no place for, in words that say so, and finds the box again on a switch back', () => {
+    const promptOnly = imageModelWithSlots('prompt-only-image', 'Prompt Only', 0);
+    const { draft } = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageSource, catalog);
+    const moved = applyCatalogModelDefaults(draft, promptOnly, catalog.revision);
+    expect(validateCatalogCreationDraft(moved, promptOnly, ready)).toMatchObject({
+      errors: ['Prompt Only has no place for @product. Switch back, or take @product out of the prompt.'],
+      canGenerate: false,
+    });
+    expect(moved.inputSlots).toEqual([productSlot]);
+
+    // Back, the box is drawn again and its mention asks for it to be filled, as before the switch.
+    const back = applyCatalogModelDefaults(moved, slotsImage, catalog.revision);
+    expect(back.inputSlots).toEqual([productSlot]);
+    expect(validateCatalogCreationDraft(back, slotsImage, ready).errors)
+      .toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
+
+    // A Kling 3.0 clip's box on Seedance 2 has a place among its clips; Kling O3 takes no clip.
+    const { draft: dance } = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), videoSource, catalog);
+    const onO3 = applyCatalogModelDefaults(dance, klingO3, catalog.revision);
+    expect(validateCatalogCreationDraft(onO3, klingO3, ready).errors)
+      .toContain('Kling O3 has no place for @dance. Switch back, or take @dance out of the prompt.');
+    const onSeedance = applyCatalogModelDefaults(dance, seedance2, catalog.revision);
+    expect(validateCatalogCreationDraft(onSeedance, seedance2, ready).errors)
+      .toContain('Add your own for @dance in its box, or take @dance out of the prompt.');
   });
 });

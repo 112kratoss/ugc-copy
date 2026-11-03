@@ -143,6 +143,31 @@ describe('creation draft resume', () => {
     expect(ordinaryDrafts && 'inputSlots' in ordinaryDrafts.image).toBe(false);
   });
 
+  // The slots' notice, put away (2026-11-03), stays away for the rest of the remix, a resume included.
+  it('keeps a remix session’s put-away slots notice through a save, and none in the ordinary draft', async () => {
+    useMemoryStorage();
+    const drafts = defaultDrafts();
+    const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
+    const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' })!;
+    await persistCreationDrafts({
+      ...drafts,
+      image: { ...drafts.image, inputSlots: [productSlot], inputSlotsNoticeDismissed: true },
+      remixRestored: true,
+    }, scope);
+    const loaded = await loadPersistedCreationDrafts(scope);
+    expect(loaded?.image).toMatchObject({ inputSlots: [productSlot], inputSlotsNoticeDismissed: true });
+    expect(loaded && 'inputSlotsNoticeDismissed' in loaded.video).toBe(false);
+
+    // Only `true` puts it away; anything else an older or broken write left is read as never put away.
+    await persistCreationDrafts({ ...drafts, image: { ...drafts.image, inputSlots: [productSlot], inputSlotsNoticeDismissed: 'yes' as never } }, scope);
+    expect((await loadPersistedCreationDrafts(scope))?.image).not.toHaveProperty('inputSlotsNoticeDismissed');
+
+    const ordinary = ordinaryDraftScope('reader');
+    await persistCreationDrafts({ ...drafts, image: { ...drafts.image, inputSlotsNoticeDismissed: true } }, ordinary);
+    const ordinaryDrafts = await loadPersistedCreationDrafts(ordinary);
+    expect(ordinaryDrafts && 'inputSlotsNoticeDismissed' in ordinaryDrafts.image).toBe(false);
+  });
+
   it('isolates normal drafts, distinct remix sources, and different accounts', async () => {
     const memory = useMemoryStorage();
     const drafts = defaultDrafts();

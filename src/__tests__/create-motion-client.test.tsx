@@ -2380,6 +2380,9 @@ describe('CreateMotionClient a remix not given the creator\'s inputs', () => {
     ],
   };
   const notice = (rest: string) => `Settings pre-filled from "Rooftop dance".${rest}`;
+  // The boxes' own notice, apart from the remix's (2026-11-03), so it can be put away.
+  const TWO_KEPT = 'The creator kept 2 inputs to themselves. Add your own in the empty boxes.';
+  const ONE_KEPT = 'The creator kept 1 input to themselves. Add your own in the empty box.';
   const characterBox = (container: HTMLElement) => container.querySelector('label[for="motion-character-image-input"]');
   const clipBox = (container: HTMLElement) => container.querySelector('label[for="motion-reference-video-input"]');
 
@@ -2387,7 +2390,8 @@ describe('CreateMotionClient a remix not given the creator\'s inputs', () => {
     remixSourceBody = SLOT_REMIX;
     const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
 
-    expect(await screen.findByText(notice(' The creator kept 2 inputs to themselves. Add your own in the empty boxes.'))).toBeInTheDocument();
+    expect(await screen.findByText(TWO_KEPT)).toBeInTheDocument();
+    expect(screen.getByText(notice(''))).toBeInTheDocument();
     expect(characterBox(view.container)).toHaveTextContent('Character imageAdd your image');
     expect(clipBox(view.container)).toHaveTextContent('Motion videoAdd your video');
     // The run waits for both inputs, as ever, and asks no price for empty boxes.
@@ -2396,12 +2400,13 @@ describe('CreateMotionClient a remix not given the creator\'s inputs', () => {
 
     pickFile(view.container, 'motion-character-image-input', characterImage());
     expect(await screen.findByRole('button', { name: 'Replace Character image' })).toBeInTheDocument();
-    expect(screen.getByText(notice(' The creator kept 1 input to themselves. Add your own in the empty box.'))).toBeInTheDocument();
+    expect(screen.getByText(ONE_KEPT)).toBeInTheDocument();
     expect(clipBox(view.container)).toHaveTextContent('Motion videoAdd your video');
 
     pickFile(view.container, 'motion-reference-video-input', motionClip());
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
     expect(screen.getByText(notice(''))).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/^The creator kept/)).toBeNull());
     await waitFor(() => expect(costShown()).toBe('20 credits'));
     // A remix saves nothing, a box or what fills it.
     expect(persistedMediaMocks.setPersistedFile).not.toHaveBeenCalled();
@@ -2410,7 +2415,7 @@ describe('CreateMotionClient a remix not given the creator\'s inputs', () => {
   it('posts the remixer\'s own character and clip, and nothing of the boxes', async () => {
     remixSourceBody = SLOT_REMIX;
     const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
-    await screen.findByText(notice(' The creator kept 2 inputs to themselves. Add your own in the empty boxes.'));
+    await screen.findByText(TWO_KEPT);
 
     await attachBothInputs(view.container);
     await pressGenerate();
@@ -2427,15 +2432,35 @@ describe('CreateMotionClient a remix not given the creator\'s inputs', () => {
   it('takes the original\'s clip in the clip\'s box, which then goes', async () => {
     remixSourceBody = SLOT_REMIX;
     const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
-    await screen.findByText(notice(' The creator kept 2 inputs to themselves. Add your own in the empty boxes.'));
+    await screen.findByText(TWO_KEPT);
 
     fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
 
     await waitFor(() => expect(clipBox(view.container)).toBeNull());
-    expect(screen.getByText(notice(' The creator kept 1 input to themselves. Add your own in the empty box.'))).toBeInTheDocument();
+    expect(screen.getByText(ONE_KEPT)).toBeInTheDocument();
     // Taken off again, the clip's slot is the page's own empty one: the box went with its fill.
     fireEvent.click(screen.getByRole('button', { name: 'Remove Reference video' }));
     await waitFor(() => expect(clipBox(view.container)).toHaveTextContent('Add the motion clip'));
     expect(clipBox(view.container)).not.toHaveTextContent('Motion video');
+  });
+
+  // The notice stayed for as long as a box was empty (2026-11-03); it can be put away for the remix,
+  // as in the app, while the remix's own notice, with the original and Use as reference, stays.
+  it('puts the boxes’ notice away for the rest of the remix, and keeps the boxes', async () => {
+    remixSourceBody = SLOT_REMIX;
+    const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    await screen.findByText(TWO_KEPT);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss remix source notice' }));
+
+    await waitFor(() => expect(screen.queryByText(/^The creator kept/)).toBeNull());
+    expect(screen.getByText(notice(''))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use as reference video' })).toBeInTheDocument();
+    expect(characterBox(view.container)).toHaveTextContent('Character imageAdd your image');
+    expect(clipBox(view.container)).toHaveTextContent('Motion videoAdd your video');
+    // A box filled since keeps it away.
+    pickFile(view.container, 'motion-character-image-input', characterImage());
+    expect(await screen.findByRole('button', { name: 'Replace Character image' })).toBeInTheDocument();
+    expect(screen.queryByText(/^The creator kept/)).toBeNull();
   });
 });

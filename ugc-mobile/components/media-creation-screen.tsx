@@ -84,6 +84,7 @@ import {
   catalogMultiShotLimits,
   catalogPromptMeters,
   catalogRefusedRunPrice,
+  catalogRemixSlotRoles,
   catalogRunEnhancementInputs,
   catalogRunSlots,
   catalogStandbyReferencesReason,
@@ -123,10 +124,14 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   createSubjectDraft,
+  dismissRemixSlotsNotice,
   fillRemixInputSlot,
   motionClipLengthReading,
   nameUnnamedReferences,
+  placedRemixInputSlots,
   placeName,
+  promptNamesKeptReference,
+  remixDraftSlotsNotice,
   REMIX_RESTORE_WARNING_MESSAGE,
   renameMediaDraft,
   renameSubjectDraft,
@@ -140,13 +145,12 @@ import {
   type ReferenceMode,
   type SubjectDraft,
   type VideoCreationDraft,
-  unfilledRemixInputSlots,
   videoDraftHandles,
   videoDraftReferenceMode,
   videoSubjects,
   withCreatorClipHandle,
 } from '@/lib/media-creation-view-model';
-import { remixInputSlotAction, remixInputSlotsNotice, remixInputSlotTitle, type RemixInputSlot } from '@/lib/remix-input-slots/remix-input-slots';
+import { REMIX_INPUT_SLOTS_NOTICE_LABEL, remixInputSlotAction, remixInputSlotTitle, type RemixInputSlot } from '@/lib/remix-input-slots/remix-input-slots';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '@/lib/media';
 import { readMediaFileLength } from '@/lib/media-file-length';
 import { listFilesInSentence, nameSaysNothing, readableFileName } from '@/lib/media-file-names';
@@ -771,11 +775,12 @@ function imageRunReferences(draft: ImageCreationDraft, model: CreatorCatalogMode
 }
 
 /**
- * A prompt that names a reference the run sends is polished rather than rewritten, as on the web:
- * the enhancer keeps the sentence that names it as written and only adds around it.
+ * A prompt that names a reference the run sends, or a remix's empty box, is polished rather than
+ * rewritten, as on the web: the enhancer keeps the sentence that names it as written and only adds
+ * around it (`promptNamesKeptReference`, read off the request the Enhance sends).
  */
 function imagePromptNamesReference(draft: ImageCreationDraft, model: CreatorCatalogModel | null) {
-  return imageRunReferences(draft, model).some((media) => promptContainsHandle(draft.prompt, media.handle));
+  return promptNamesKeptReference(buildPromptEnhancementRequest({ ...draft, references: imageRunReferences(draft, model) }));
 }
 
 /** "10,000": the prompt counter's numbers. */
@@ -3273,10 +3278,23 @@ function IdentityCreationScreen({
       </View>
     </View>
   ) : null;
+  // A remix's empty boxes this model has a place for, which its composer draws: one without a place
+  // waits in the draft, and a mention of it says so, until a switch back draws it as it was left.
+  const remixSlotRoles = currentModel ? catalogRemixSlotRoles(rawDraft, currentModel) : null;
+  const placedRemixSlots = placedRemixInputSlots(rawDraft, remixSlotRoles);
   // The inputs the source's creator kept to themselves are no failed restore: a retry brings none of
-  // them, so the line says only that their boxes wait for the remixer's own, while any stay empty.
-  const remixSlotsNotice = isRestoringRemix ? null : remixInputSlotsNotice(unfilledRemixInputSlots(rawDraft).length);
-  const remixSlotsBanner = remixSlotsNotice ? <SlimCreatorBanner label="Remix source" body={remixSlotsNotice} /> : null;
+  // them, so the line says only that their boxes wait for the remixer's own, while any stay empty and
+  // until the remixer puts it away for the rest of the remix (2026-11-03): a box nobody mentions may
+  // stay empty for good.
+  const remixSlotsNotice = isRestoringRemix ? null : remixDraftSlotsNotice(rawDraft, remixSlotRoles);
+  const dismissRemixSlots = () => {
+    if (activeTool === 'image') setImageDraft(dismissRemixSlotsNotice);
+    else if (activeTool === 'video') setVideoDraft(dismissRemixSlotsNotice);
+    else setMotionDraft(dismissRemixSlotsNotice);
+  };
+  const remixSlotsBanner = remixSlotsNotice
+    ? <SlimCreatorBanner label={REMIX_INPUT_SLOTS_NOTICE_LABEL} body={remixSlotsNotice} onDismiss={dismissRemixSlots} />
+    : null;
 
   if (activeTool !== 'image') {
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
@@ -3401,7 +3419,7 @@ function IdentityCreationScreen({
               onUploadVideo={() => uploadReferenceVideo('video')}
               onUploadAudio={uploadReferenceAudio}
               onAddSubject={() => void uploadSubject()}
-              inputSlots={unfilledRemixInputSlots(videoDraft)}
+              inputSlots={placedRemixSlots}
               onFillSlot={(slot) => void fillInputSlot('video', slot)}
               upload={upload}
               onCancelUpload={cancelUpload}
@@ -3439,7 +3457,7 @@ function IdentityCreationScreen({
               onChange={(draft) => replaceDraft(draft)}
               onUploadCharacter={() => uploadSingleImage('character')}
               onUploadMotion={() => uploadReferenceVideo('motion')}
-              inputSlots={unfilledRemixInputSlots(motionDraft)}
+              inputSlots={placedRemixSlots}
               onFillSlot={(slot) => void fillInputSlot('motion', slot)}
               upload={upload}
               onCancelUpload={cancelUpload}
@@ -3666,7 +3684,7 @@ function IdentityCreationScreen({
             promptNotes={promptNotes}
             isUploading={isUploading}
             uploadProgress={upload?.target === 'image-references' ? upload : null}
-            inputSlots={unfilledRemixInputSlots(imageDraft)}
+            inputSlots={placedRemixSlots}
             onFillSlot={(slot) => void fillInputSlot('image', slot)}
             slotUpload={upload}
             promptMessage={promptMessage}

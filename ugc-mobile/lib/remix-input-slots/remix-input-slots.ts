@@ -247,6 +247,12 @@ export function remixInputSlotAction(slot: Pick<RemixInputSlot, 'kind' | 'role'>
   return 'Add your image';
 }
 
+/**
+ * The name over that line: the app's banner and the web's notice card. Either can be put away for the
+ * rest of the remix (2026-11-03), as a box nobody mentions may stay empty for good.
+ */
+export const REMIX_INPUT_SLOTS_NOTICE_LABEL = 'Remix source';
+
 /** The line above a remix whose creator kept inputs to themselves; null when none are missing. */
 export function remixInputSlotsNotice(count: number): string | null {
   if (!Number.isFinite(count) || count <= 0) return null;
@@ -255,20 +261,123 @@ export function remixInputSlotsNotice(count: number): string | null {
     : `The creator kept ${count} inputs to themselves. Add your own in the empty boxes.`;
 }
 
+/** "@a", "@a and @b", "@a, @b and @c": each handle once. */
+function listedHandles(handles: readonly string[]): string[] {
+  return [...new Set(handles)];
+}
+
+function handlesInSentence(unique: readonly string[]): string {
+  return unique.length === 1 ? unique[0] : `${unique.slice(0, -1).join(', ')} and ${unique[unique.length - 1]}`;
+}
+
 /**
  * What a prompt that mentions an empty slot says in place of an unknown
  * mention: the run cannot start with it, so the remixer fills the box or takes
  * the mention out.
  */
 export function unfilledRemixSlotsMessage(handles: readonly string[]): string | null {
-  const unique = [...new Set(handles)];
+  const unique = listedHandles(handles);
   if (unique.length === 0) return null;
   if (unique.length === 1) return `Add your own for ${unique[0]} in its box, or take ${unique[0]} out of the prompt.`;
-  const listed = `${unique.slice(0, -1).join(', ')} and ${unique[unique.length - 1]}`;
-  return `Add your own for ${listed} in their boxes, or take them out of the prompt.`;
+  return `Add your own for ${handlesInSentence(unique)} in their boxes, or take them out of the prompt.`;
+}
+
+/**
+ * What a prompt that mentions an empty slot says once the chosen model has no place for its kind (a
+ * switch to a model, or to a setting, that takes no such input): its box is gone from the page, not
+ * from the remix, so the remixer switches back, where the box waits as they left it, or takes the
+ * mention out. It read as an unknown mention until 2026-11-03, as if the remix had never had it.
+ * `modelName` is the chosen model's name, or null where none is known.
+ */
+export function unplacedRemixSlotsMessage(handles: readonly string[], modelName: string | null | undefined): string | null {
+  const unique = listedHandles(handles);
+  if (unique.length === 0) return null;
+  const model = modelName?.trim() || 'This model';
+  const takeOut = unique.length === 1 ? `take ${unique[0]} out of the prompt` : 'take them out of the prompt';
+  return `${model} has no place for ${handlesInSentence(unique)}. Switch back, or ${takeOut}.`;
 }
 
 /** The handles of slots still empty, for a creator's mention check. */
 export function remixInputSlotHandles(slots: readonly Pick<RemixInputSlot, 'handle'>[]): string[] {
   return slots.flatMap((slot) => (slot.handle ? [slot.handle] : []));
+}
+
+/**
+ * A remix's empty slots sorted by whether the chosen model has a place for their role (`placedRoles`,
+ * read off the model by each creator): those it draws a box for, and those it has nowhere to put. A
+ * slot without a place stays the remix's, for a switch back. Null roles, before the model is known,
+ * place every slot.
+ */
+export function remixInputSlotsByPlace<T extends Pick<RemixInputSlot, 'role'>>(
+  slots: readonly T[],
+  placedRoles: ReadonlySet<RemixInputSlotRole> | null,
+): { placed: T[]; unplaced: T[] } {
+  if (!placedRoles) return { placed: [...slots], unplaced: [] };
+  return {
+    placed: slots.filter((slot) => placedRoles.has(slot.role)),
+    unplaced: slots.filter((slot) => !placedRoles.has(slot.role)),
+  };
+}
+
+/** A prompt's unknown mentions as a remix's empty slots read them. */
+export interface RemixSlotMentions {
+  /** Of a box on the page: fill it, or take the mention out (`unfilledRemixSlotsMessage`). */
+  waiting: string[];
+  /** Of a box the chosen model has no place for: switch back, or take the mention out (`unplacedRemixSlotsMessage`). */
+  unplaced: string[];
+  /** Of nothing the remix holds, which keep the creators' unknown-mention words. */
+  other: string[];
+}
+
+/**
+ * A prompt's unknown mentions, sorted by the empty slots that answer them: a box on the page first,
+ * then one the chosen model has no place for (`remixInputSlotsByPlace`), and every other. Each
+ * creator shows the first two in these words (`remixSlotMentionsMessage`) and holds the run on them,
+ * as the server refuses all three.
+ */
+export function readRemixSlotMentions(
+  unknownHandles: readonly string[],
+  slots: { placed: readonly Pick<RemixInputSlot, 'handle'>[]; unplaced?: readonly Pick<RemixInputSlot, 'handle'>[] },
+): RemixSlotMentions {
+  const placed = new Set(remixInputSlotHandles(slots.placed));
+  const unplaced = new Set(remixInputSlotHandles(slots.unplaced ?? []));
+  return {
+    waiting: unknownHandles.filter((handle) => placed.has(handle)),
+    unplaced: unknownHandles.filter((handle) => !placed.has(handle) && unplaced.has(handle)),
+    other: unknownHandles.filter((handle) => !placed.has(handle) && !unplaced.has(handle)),
+  };
+}
+
+/** What the mentions of empty slots say, those of a box on the page first; null when none is mentioned. */
+export function remixSlotMentionsMessage(
+  mentions: Pick<RemixSlotMentions, 'waiting' | 'unplaced'>,
+  modelName: string | null | undefined,
+): string | null {
+  return [
+    unfilledRemixSlotsMessage(mentions.waiting),
+    unplacedRemixSlotsMessage(mentions.unplaced, modelName),
+  ].filter(Boolean).join(' ') || null;
+}
+
+/**
+ * The named references an Enhance request tells the enhancer to keep (`elementReferences`): those the
+ * run sends, then every empty slot that `prompt` (the words being enhanced) mentions, under its handle
+ * and its name, placed or not. The enhancer keeps a handle only where it is told of it, and an Enhance
+ * that rewrote "@product" out of a remix's prompt left its box with nothing to answer (2026-11-03). A
+ * box the words do not mention has nothing to keep, and is no reference the run has. A box once filled
+ * is its reference's, which the run sends under the same handle. Each handle once, the run's first.
+ */
+export function withRemixSlotEnhancerReferences(
+  references: readonly { handle: string; displayName: string }[],
+  slots: readonly Pick<RemixInputSlot, 'handle' | 'name'>[],
+  prompt: string | null | undefined,
+): Array<{ handle: string; displayName: string }> {
+  const mentioned = promptHandles(prompt);
+  const kept = new Set(references.map((reference) => reference.handle));
+  const boxes = slots.flatMap((slot) => {
+    if (!slot.handle || !mentioned.has(slot.handle) || kept.has(slot.handle)) return [];
+    kept.add(slot.handle);
+    return [{ handle: slot.handle, displayName: slot.name }];
+  });
+  return [...references, ...boxes];
 }

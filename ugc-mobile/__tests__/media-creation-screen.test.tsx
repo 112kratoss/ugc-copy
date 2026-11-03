@@ -9414,6 +9414,95 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(hasLabel(tree.root, 'Open details for Character image')).toBe(true);
         expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
       });
+
+      // Three edges of 2026-11-03: Enhance could rewrite a box's @handle out of the prompt; a model with
+      // no place for a box hid it and read its mention as an unknown one; and the boxes' notice could not
+      // be put away while a box nobody mentions stayed empty.
+      it('has Enhance keep an empty box’s handle, polishing around the sentence that names it', async () => {
+        authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'Place @product on a marble counter, glossy reflections.', remainingCredits: 900 });
+        const tree = await openImageRemix();
+
+        await renderer.act(async () => { await labelled(tree.root, 'Polish · 2 credits').props.onPress(); });
+
+        expect(authState.api.enhancePrompt).toHaveBeenCalledWith(expect.objectContaining({
+          prompt: 'Place @product on a marble counter',
+          context: expect.objectContaining({
+            referenceImageCount: 0,
+            elementReferences: [{ handle: '@product', displayName: 'Reference image 1' }],
+            elementEnhancementMode: 'append-only',
+          }),
+        }));
+        expect(JSON.stringify(authState.api.enhancePrompt.mock.calls[0][0])).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Place @product on a marble counter, glossy reflections.');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+      });
+
+      it('says a box the chosen model has no place for waits for a switch back, where it is drawn again beside what was filled', async () => {
+        const full = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14), parityImageModel('prompt-only', 'Prompt Only', 0)]);
+        catalogState.catalog = full;
+        catalogState.summaries = full.models;
+        authState.api.getRemixSourceBundle.mockResolvedValue(imageSlotsSource());
+        const tree = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        const pickModel = async (displayName: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Selected model').props.onPress(); });
+          await renderer.act(async () => { findPressableByLabelPrefix(tree.root, `${displayName}.`).props.onPress(); });
+          await settle();
+        };
+
+        await pickModel('Prompt Only');
+
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(blocker(tree)).toBe('Prompt Only has no place for @product. Switch back, or take @product out of the prompt.');
+        expect(text(tree)).not.toContain('Unknown element mention');
+        // No box is drawn here, so the notice of them is not either.
+        expect(text(tree)).not.toContain('The creator kept');
+        expect(findPressableByLabelPrefix(tree.root, 'Generate').props.disabled).toBe(true);
+
+        await pickModel('Nano Banana 2.0');
+
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(1);
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        // A box filled before a switch is the remixer's picture after it: it waits for a model that
+        // takes it, and is back on the rail beside the box still empty.
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('backdrop.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('backdrop.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your image for Reference image 2').props.onPress(); });
+        await settle();
+        expect(hasLabel(tree.root, 'Open details for Reference image 2')).toBe(true);
+        await pickModel('Prompt Only');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(collectText(tree.root.findByProps({ testID: 'standby-references' }))).toContain('Not sent with this run');
+        await pickModel('Nano Banana 2.0');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(0);
+        expect(hasLabel(tree.root, 'Open details for Reference image 2')).toBe(true);
+        expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+      });
+
+      it('puts the boxes’ notice away for the rest of the remix, a resume included, and keeps the boxes', async () => {
+        const tree = await openImageRemix();
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        await renderer.act(async () => { labelled(tree.root, 'Dismiss Remix source').props.onPress(); });
+        await settle();
+
+        expect(text(tree)).not.toContain('The creator kept');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(1);
+        // The mention still holds the run, in its own words.
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(JSON.parse(memory.get(sessionKey) ?? 'null').image.inputSlotsNoticeDismissed).toBe(true);
+        tree.unmount();
+
+        authState.api.getRemixSourceBundle.mockClear();
+        const resumed = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+        expect(slotBoxes(resumed, 'slot-1')).toHaveLength(1);
+        expect(text(resumed)).not.toContain('The creator kept');
+      });
     });
 
     describe('sign-in from the creator', () => {

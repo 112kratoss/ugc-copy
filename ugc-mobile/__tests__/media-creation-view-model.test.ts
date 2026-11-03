@@ -10,6 +10,7 @@ import {
   buildShotPromptEnhancementRequest,
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
+  dismissRemixSlotsNotice,
   extractPromptHandles,
   fillRemixInputSlot,
   getCreationReadiness,
@@ -21,7 +22,10 @@ import {
   hydrateCreationDraftFromRemixSource,
   motionClipLengthReading,
   nameUnnamedReferences,
+  placedRemixInputSlots,
   promptMentionErrors,
+  promptNamesKeptReference,
+  remixDraftSlotsNotice,
   renameMediaDraft,
   replaceMediaDraftMedia,
   replaceShotPrompt,
@@ -35,7 +39,7 @@ import {
   type MediaDraft,
   type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
-import type { RemixInputSlot } from '../lib/remix-input-slots/remix-input-slots';
+import type { RemixInputSlot, RemixInputSlotRole } from '../lib/remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from '../lib/types';
 
 const repoRoot = process.cwd();
@@ -1409,5 +1413,80 @@ describe('a remix’s empty input slots', () => {
     expect(payload.elements?.map((element) => element.handle)).toEqual(['@product']);
     expect(JSON.stringify(payload)).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
     expect(JSON.stringify(buildPromptEnhancementRequest(filled))).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
+  });
+
+  // An Enhance rewrote "@product" out of a remix's prompt and left its box with nothing to answer
+  // (2026-11-03): the enhancer keeps a handle only where its request names it, as it names a reference's.
+  it('has Enhance keep an empty box’s handle as it keeps a reference’s, and polish around a prompt that names one', () => {
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot, backdropSlot]));
+    const request = buildPromptEnhancementRequest(draft);
+    // Under the box's own name; the box without a handle gives none to keep, and nothing is counted as sent.
+    expect(request.context).toMatchObject({ referenceImageCount: 0, elementReferences: [{ handle: '@product', displayName: 'Reference image 1' }] });
+    expect(JSON.stringify(request)).not.toMatch(/slot-\d|inputSlots/);
+    expect(promptNamesKeptReference(request)).toBe(true);
+    expect(promptNamesKeptReference(buildPromptEnhancementRequest({ ...draft, prompt: 'A bottle on a marble counter' }))).toBe(false);
+
+    // Filled, the handle is the remixer's picture's, which the run sends.
+    const filled = fillRemixInputSlot(draft, 'slot-1', [upload('bottle.png')]);
+    expect(buildPromptEnhancementRequest(filled).context)
+      .toMatchObject({ referenceImageCount: 1, elementReferences: [{ handle: '@product', displayName: 'product' }] });
+    expect(promptNamesKeptReference(buildPromptEnhancementRequest(filled))).toBe(true);
+
+    // A video run keeps a box's handle beside the references it sends, and so does each shot's Enhance.
+    const danceSlot: RemixInputSlot = { id: 'slot-3', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' };
+    const video: VideoCreationDraft = {
+      ...createDefaultCreationDraft('video'),
+      model: 'kling-3.0-video',
+      prompt: 'Open on the door, then @dance spins',
+      inputSlots: [danceSlot],
+    };
+    expect(buildPromptEnhancementRequest(video).context?.elementReferences).toEqual([{ handle: '@dance', displayName: 'Reference video 1' }]);
+    const videoRun = { startFrame: null, endFrame: null, referenceImageCount: 0, hasReferenceVideo: false, elementReferences: [{ handle: '@hero', displayName: 'Hero' }] };
+    expect(buildPromptEnhancementRequest(video, { videoRun }).context?.elementReferences).toEqual([
+      { handle: '@hero', displayName: 'Hero' },
+      { handle: '@dance', displayName: 'Reference video 1' },
+    ]);
+    const story: VideoCreationDraft = { ...video, isMultiShot: true, multiPrompts: [{ id: 'shot-1', prompt: '@dance at dusk', duration: 5 }] };
+    expect(buildShotPromptEnhancementRequest(story, 'shot-1')?.context.elementReferences).toEqual([{ handle: '@dance', displayName: 'Reference video 1' }]);
+  });
+
+  // A switch to a model with no place for a box's kind hid the box, and its mention read as an unknown
+  // one, as if the remix had never had it (2026-11-03).
+  it('says a box the chosen model has no place for waits for a switch back, where it is drawn again', () => {
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot, backdropSlot]));
+    const promptOnly = { roles: new Set<RemixInputSlotRole>(), modelName: 'Z-Image' };
+    const noPlace = 'Z-Image has no place for @product. Switch back, or take @product out of the prompt.';
+    expect(promptMentionErrors(['@product'], draft, promptOnly)).toEqual([noPlace]);
+    expect(promptMentionErrors(['@product', '@missing'], draft, promptOnly)).toEqual(['Unknown element mention: @missing', noPlace]);
+    expect(placedRemixInputSlots(draft, promptOnly.roles)).toEqual([]);
+    // The boxes stay the remix's meanwhile.
+    expect(unfilledRemixInputSlots(draft)).toEqual([productSlot, backdropSlot]);
+
+    const takesPictures = { roles: new Set<RemixInputSlotRole>(['reference_image']), modelName: 'Nano Banana 2' };
+    expect(promptMentionErrors(['@product'], draft, takesPictures)).toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
+    expect(placedRemixInputSlots(draft, takesPictures.roles)).toEqual([productSlot, backdropSlot]);
+    // Before the model is known, every box is drawn, as before.
+    expect(placedRemixInputSlots(draft, null)).toEqual([productSlot, backdropSlot]);
+    expect(promptMentionErrors(['@product'], draft)).toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
+  });
+
+  // The notice stayed for as long as any box was empty, a box nobody mentions included (2026-11-03).
+  it('puts the boxes’ notice away for the rest of the remix, and keeps the boxes and what they hold the run on', () => {
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot, backdropSlot]));
+    expect(remixDraftSlotsNotice(draft, null)).toBe('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+    // It counts the boxes drawn: a model with no place for them shows none, and says so of a mention instead.
+    expect(remixDraftSlotsNotice(draft, new Set())).toBeNull();
+
+    const dismissed = dismissRemixSlotsNotice(draft);
+    expect(dismissed.inputSlotsNoticeDismissed).toBe(true);
+    expect(remixDraftSlotsNotice(dismissed, null)).toBeNull();
+    expect(unfilledRemixInputSlots(dismissed)).toEqual([productSlot, backdropSlot]);
+    expect(validateCreationDraft(dismissed).errors).toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
+    // A box filled since keeps it away, and none of it reaches a run.
+    const filled = fillRemixInputSlot(dismissed, 'slot-1', [upload('bottle.png')]);
+    expect(remixDraftSlotsNotice(filled, null)).toBeNull();
+    expect(JSON.stringify([buildGenerationPayload(filled), buildPromptEnhancementRequest(filled)])).not.toMatch(/inputSlotsNoticeDismissed/);
+    // A draft with no boxes has no notice to put away.
+    expect(remixDraftSlotsNotice(createDefaultCreationDraft('image'), null)).toBeNull();
   });
 });

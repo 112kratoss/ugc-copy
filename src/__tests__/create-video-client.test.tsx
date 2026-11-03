@@ -8085,6 +8085,10 @@ describe('CreateVideoClient Kling video elements', () => {
    */
   describe('a remix not given the creator’s inputs', () => {
     const KEPT_BACK = 'Settings pre-filled from "Kept back".';
+    // The boxes' own notice, apart from the remix's (2026-11-03), so it can be put away.
+    const keptBoxes = (count: number) => (count === 1
+      ? 'The creator kept 1 input to themselves. Add your own in the empty box.'
+      : `The creator kept ${count} inputs to themselves. Add your own in the empty boxes.`);
     const promptField = () => screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/);
     const clip = (name: string) => new File([name], `${name}.mp4`, { type: 'video/mp4' });
     const photo = (name: string) => new File([name], `${name}.png`, { type: 'image/png' });
@@ -8121,7 +8125,8 @@ describe('CreateVideoClient Kling video elements', () => {
       ], { referenceMode: 'frames' }));
       const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
-      expect(await screen.findByText(`${KEPT_BACK} The creator kept 2 inputs to themselves. Add your own in the empty boxes.`)).toBeInTheDocument();
+      expect(await screen.findByText(keptBoxes(2))).toBeInTheDocument();
+      expect(screen.getByText(KEPT_BACK)).toBeInTheDocument();
       expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked();
       const startBox = view.container.querySelector('label[for="video-start-frame-input"]');
       const endBox = view.container.querySelector('label[for="video-end-frame-input"]');
@@ -8134,7 +8139,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       expect(await screen.findByAltText('Start image')).toBeInTheDocument();
       expect(view.container.querySelector('label[for="video-end-frame-input"]')).toHaveTextContent('End frameAdd your image');
-      expect(screen.getByText(`${KEPT_BACK} The creator kept 1 input to themselves. Add your own in the empty box.`)).toBeInTheDocument();
+      expect(screen.getByText(keptBoxes(1))).toBeInTheDocument();
       await waitFor(() => expect(quotedSlots()).toEqual({ startFrame: { count: 1 } }));
 
       // Taken off again, the frame's slot is the page's own empty one: the box went with its fill.
@@ -8154,7 +8159,8 @@ describe('CreateVideoClient Kling video elements', () => {
       ], { referenceMode: 'elements' }));
       const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
 
-      expect(await screen.findByText(`${KEPT_BACK} The creator kept 4 inputs to themselves. Add your own in the empty boxes.`)).toBeInTheDocument();
+      expect(await screen.findByText(keptBoxes(4))).toBeInTheDocument();
+      expect(screen.getByText(KEPT_BACK)).toBeInTheDocument();
       expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
       expect(within(screen.getByRole('list', { name: 'Reference images' })).getByRole('button', { name: 'Add your image for @product' })).toBeInTheDocument();
       expect(within(screen.getByRole('list', { name: 'Reference videos' })).getByRole('button', { name: 'Add your video for Reference video 1' })).toBeInTheDocument();
@@ -8178,7 +8184,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fillBox(view.container, 'slot-3', [clip('mine')]);
       expect(await screen.findByText('4.2s clip')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /^Add your (image|video) for / })).toBeNull();
-      expect(screen.getByText(`${KEPT_BACK} The creator kept 2 inputs to themselves. Add your own in the empty boxes.`)).toBeInTheDocument();
+      expect(screen.getByText(keptBoxes(2))).toBeInTheDocument();
       await waitFor(() => expect(quotedSlots()).toEqual({ imageReferences: { count: 1 }, videoReferences: { count: 1, durationsSeconds: [4.2] } }));
 
       fireEvent.click(generateButton());
@@ -8236,7 +8242,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
       const box = await screen.findByRole('button', { name: 'Add your pictures for @maya' });
       expect(box).toHaveTextContent('@mayaAdd your pictures');
-      expect(screen.getByText(`${KEPT_BACK} The creator kept 1 input to themselves. Add your own in the empty box.`)).toBeInTheDocument();
+      expect(screen.getByText(keptBoxes(1))).toBeInTheDocument();
       const message = 'Add your own for @maya in its box, or take @maya out of the prompt.';
       expect(slotMessageLines()).toEqual([message, message]);
       expect(generateButton()).toBeDisabled();
@@ -8296,6 +8302,97 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByRole('button', { name: 'Add your video for @dance' })).toBeNull();
       expect(slotMessageLines()).toEqual([]);
       await waitFor(() => expect(quotedSlots()).toEqual({ videoElements: { count: 1 } }));
+    });
+
+    // A model with no place for a box's kind hid it, and its mention read as an unknown one, as if the
+    // remix had never had it (2026-11-03). It says so now, and the box waits for a switch back.
+    it('says a box has no place on a model that takes none of its kind, and draws it again on a switch back', async () => {
+      modelCatalogState.summaries = [
+        { id: 'wan-2.7', kind: 'video', displayName: 'Wan 2.7', description: 'Test frame-and-reference combining model' },
+        { id: 'kling-3.0-video', kind: 'video', displayName: 'Kling 3.0 Cinematic', description: 'Test video model' },
+      ];
+      stubRemix(slotRemix('wan-2.7', '@product spins on a turntable.', [
+        { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
+      ], { referenceMode: 'elements' }));
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await screen.findByRole('button', { name: 'Add your image for @product' });
+
+      // Kling 3.0 takes no reference picture, on either side.
+      chooseModel(view.container, 'Kling 3.0 Cinematic');
+
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Add your image for @product' })).toBeNull());
+      const noPlace = 'Kling 3.0 Cinematic has no place for @product. Switch back, or take @product out of the prompt.';
+      // Under the prompt, then beside Generate, which it holds.
+      expect(screen.queryAllByText(/has no place for/).map((line) => line.textContent)).toEqual([noPlace, noPlace]);
+      expect(screen.queryByText(/Unknown element mention/)).toBeNull();
+      await waitFor(() => expect(screen.queryByText(/^The creator kept/)).toBeNull());
+      expect(generateButton()).toBeDisabled();
+
+      chooseModel(view.container, 'Wan 2.7');
+
+      expect(await screen.findByRole('button', { name: 'Add your image for @product' })).toBeInTheDocument();
+      const message = 'Add your own for @product in its box, or take @product out of the prompt.';
+      expect(slotMessageLines()).toEqual([message, message]);
+      expect(screen.queryByText(/has no place for/)).toBeNull();
+      expect(screen.getByText(keptBoxes(1))).toBeInTheDocument();
+    });
+
+    // An Enhance could rewrite a box's @handle out of the prompt and leave the box with nothing to
+    // answer (2026-11-03): the enhancer keeps a handle only where it is told of it.
+    it('has the prompt’s Enhance and a shot’s keep an empty box’s handle', async () => {
+      stubRemix(slotRemix('wan-2.7', '@product spins on a turntable.', [
+        { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
+        { id: 'slot-2', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 1' },
+      ], { referenceMode: 'elements' }));
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await screen.findByRole('button', { name: 'Add your image for @product' });
+      const promptEnhance = () => enhanceButtonPropsMock.mock.calls
+        .map(([props]) => props)
+        .filter((props) => props.context?.shotIndex === undefined)
+        .at(-1);
+
+      await waitFor(() => expect(promptEnhance()?.context?.elementReferences).toEqual([{ handle: '@product', displayName: 'Reference image 1' }]));
+      expect(promptEnhance()?.context?.referenceImageCount).toBe(0);
+      expect(JSON.stringify(promptEnhance()?.context)).not.toMatch(/slot-\d|Reference video 1/);
+
+      // Filled, the handle is the remixer's picture's, which the run sends.
+      fillBox(view.container, 'slot-1', [photo('mine')]);
+      await screen.findByRole('button', { name: 'Insert @product' });
+      await waitFor(() => expect(promptEnhance()?.context?.elementReferences).toEqual([{ handle: '@product', displayName: 'Reference image 1' }]));
+      expect(promptEnhance()?.context?.referenceImageCount).toBe(1);
+    });
+
+    it('has a shot’s Enhance keep the handle of a subject’s empty box', async () => {
+      stubRemix(slotRemix('kling-o3', '', [
+        { id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+      ], { isMultiShot: true, multiPrompts: [{ id: '1', prompt: '@maya walks through the rain.', duration: 5 }] }));
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      await screen.findByRole('button', { name: 'Add your pictures for @maya' });
+
+      const shotEnhance = () => enhanceButtonPropsMock.mock.calls
+        .map(([props]) => props)
+        .filter((props) => props.context?.shotIndex === 0)
+        .at(-1);
+      await waitFor(() => expect(shotEnhance()?.context?.elementReferences).toEqual([{ handle: '@maya', displayName: 'Subject 1' }]));
+    });
+
+    // The notice stayed for as long as a box was empty, a box nobody mentions included (2026-11-03).
+    it('puts the boxes’ notice away for the rest of the remix, and keeps the boxes', async () => {
+      stubRemix(slotRemix('wan-2.7', 'A turntable spins under soft light.', [
+        { id: 'slot-1', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 1' },
+        { id: 'slot-2', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 1' },
+      ], { referenceMode: 'elements' }));
+      render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+      expect(await screen.findByText(keptBoxes(2))).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Dismiss remix source notice' }));
+
+      await waitFor(() => expect(screen.queryByText(/^The creator kept/)).toBeNull());
+      expect(screen.getByText(KEPT_BACK)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add your image for Reference image 1' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add your video for Reference video 1' })).toBeInTheDocument();
+      // Nothing mentions either box, so nothing holds the run.
+      expect(generateButton()).toBeEnabled();
     });
   });
 });

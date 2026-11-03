@@ -7,8 +7,6 @@ import type {
 } from '@/lib/remix-source';
 import {
   parseRemixInputSlots,
-  remixInputSlotHandles,
-  remixInputSlotsNotice,
   type RemixInputSlot,
 } from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
@@ -138,18 +136,14 @@ export function getRemixRestoreWarning(issues: string[]): string | null {
 }
 
 /**
- * The remix notice's words: where the settings came from, then how many of the inputs the
- * creator kept to themselves wait in empty boxes (`remixInputSlotsNotice`), then what could not
- * be restored. A slot is no restore failure, so the two never stand for each other.
+ * The remix notice's words: where the settings came from, then what could not be restored. The
+ * inputs the creator kept to themselves are no restore failure: their empty boxes have a notice of
+ * their own (`StudioRemixSlotsNotice`, `remixInputSlotsNotice`), which the remixer can put away for
+ * the rest of the remix while this one, with the original and Use as reference, stays.
  */
-export function getRemixNoticeDescription(
-  title: string | null,
-  emptySlotCount: number,
-  restoreWarning: string | null,
-): string {
+export function getRemixNoticeDescription(title: string | null, restoreWarning: string | null): string {
   return [
     `Settings pre-filled from ${title ? `"${title}"` : 'the original creation'}.`,
-    remixInputSlotsNotice(emptySlotCount),
     restoreWarning,
   ].filter(Boolean).join(' ');
 }
@@ -166,22 +160,6 @@ export function readRemixInputSlots(bundle: Pick<RemixSourceBundle, 'inputSlots'
 /** The slots once `slotId`'s box is filled. */
 export function withoutRemixInputSlot(slots: readonly RemixInputSlot[], slotId: string): RemixInputSlot[] {
   return slots.filter((slot) => slot.id !== slotId);
-}
-
-/**
- * A prompt's unknown mentions, split: those that name an empty slot on the page, which say
- * `unfilledRemixSlotsMessage` (fill the box, or take the mention out), and every other, which
- * keeps the creators' unknown-mention words.
- */
-export function splitUnfilledSlotMentions(
-  unknownHandles: readonly string[],
-  slots: readonly Pick<RemixInputSlot, 'handle'>[],
-): { slotHandles: string[]; otherHandles: string[] } {
-  const slotHandles = new Set(remixInputSlotHandles(slots));
-  return {
-    slotHandles: unknownHandles.filter((handle) => slotHandles.has(handle)),
-    otherHandles: unknownHandles.filter((handle) => !slotHandles.has(handle)),
-  };
 }
 
 /**

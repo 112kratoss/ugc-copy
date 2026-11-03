@@ -14,7 +14,6 @@ import {
   REMIX_RESTORE_WARNING,
   remixSlotFillNaming,
   remixSlotsInputSide,
-  splitUnfilledSlotMentions,
   withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
@@ -220,31 +219,18 @@ describe('a remix’s empty slots in the web creators', () => {
     expect(withoutRemixInputSlot([product, backdrop], 'slot-9')).toEqual([product, backdrop]);
   });
 
-  it('splits an empty box’s mention from the other unknown ones', () => {
-    expect(splitUnfilledSlotMentions(['@ghost', '@product'], [product, backdrop])).toEqual({
-      slotHandles: ['@product'],
-      otherHandles: ['@ghost'],
-    });
-    // A box with no handle answers no mention.
-    expect(splitUnfilledSlotMentions(['@reference_image_2'], [backdrop])).toEqual({
-      slotHandles: [],
-      otherHandles: ['@reference_image_2'],
-    });
-    expect(splitUnfilledSlotMentions([], [product])).toEqual({ slotHandles: [], otherHandles: [] });
-  });
-
   it('names the remixer’s file after its slot, under the handle the prompt knows', () => {
     expect(remixSlotFillNaming(product)).toEqual({ displayName: 'Reference image 1', handle: '@product' });
     expect(remixSlotFillNaming(backdrop)).toEqual({ displayName: 'Reference image 2', handle: null });
   });
 
-  it('says what the creator kept between where the remix came from and what could not be restored', () => {
-    expect(getRemixNoticeDescription('Harbour', 0, null)).toBe('Settings pre-filled from "Harbour".');
-    expect(getRemixNoticeDescription(null, 0, null)).toBe('Settings pre-filled from the original creation.');
-    expect(getRemixNoticeDescription('Harbour', 1, null))
-      .toBe('Settings pre-filled from "Harbour". The creator kept 1 input to themselves. Add your own in the empty box.');
-    expect(getRemixNoticeDescription('Harbour', 2, REMIX_RESTORE_WARNING))
-      .toBe(`Settings pre-filled from "Harbour". The creator kept 2 inputs to themselves. Add your own in the empty boxes. ${REMIX_RESTORE_WARNING}`);
+  // What the creator kept is a notice of its own, which the remixer can put away for the remix, as
+  // in the app (2026-11-03): the remix's own notice keeps the original and Use as reference.
+  it('says where the remix came from and what could not be restored, and leaves the empty boxes to their own notice', () => {
+    expect(getRemixNoticeDescription('Harbour', null)).toBe('Settings pre-filled from "Harbour".');
+    expect(getRemixNoticeDescription(null, null)).toBe('Settings pre-filled from the original creation.');
+    expect(getRemixNoticeDescription('Harbour', REMIX_RESTORE_WARNING))
+      .toBe(`Settings pre-filled from "Harbour". ${REMIX_RESTORE_WARNING}`);
   });
 
   it('opens the video creator’s inputs where the empty boxes are', () => {
