@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import type { MagicbookletApiClient } from './api-client';
 import { getCreationAvailability } from './creation-library';
+import { keepLibraryMediaAddresses } from './profile-library-stable-media';
 import type {
   GenerationListItem,
   GenerationListResponse,
@@ -24,12 +25,19 @@ export const PROFILE_MEDIA_MIN_FILL_COUNT = 12;
  * on each return to the app. The libraries revalidate their first page on
  * qualifying events instead and merge it by identity (`profile-media-refresh`);
  * pull-to-refresh still collapses to one page first.
+ *
+ * Each read also signs every file again, and a write keeps the addresses the
+ * library already holds for the same files (`keepLibraryMediaAddresses`).
+ * Taken as they came, every picture on a page read again started over under
+ * the reader on each of those events: blank, thumbhash, picture (the card
+ * feed on the Pixel 9a emulator, 2026-11-03).
  */
 export const PROFILE_LIBRARY_QUERY_BEHAVIOUR = {
   staleTime: 1000 * 60,
   refetchOnMount: false,
   refetchOnWindowFocus: false,
   refetchOnReconnect: false,
+  structuralSharing: keepLibraryMediaAddresses,
 } as const;
 
 export function profileGenerationsQueryOptions(
