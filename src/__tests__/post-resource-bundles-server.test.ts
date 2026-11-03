@@ -2919,7 +2919,7 @@ describe('generation references packaged for a publish', () => {
     id: string;
     generation_id: string;
     user_id: string;
-    media_type: 'image';
+    media_type: 'image' | 'video';
     role: string;
     label: string | null;
     storage_path: string;
@@ -2941,11 +2941,21 @@ describe('generation references packaged for a publish', () => {
     metadata: null,
   });
 
+  type StorageOutcome = { error: { message: string; statusCode?: string; status?: number } | null };
+
   /** A service client holding these rows, with `linkedGuestIds` merged into `user-1`. */
-  function referenceClient(rows: ReferenceRow[], linkedGuestIds: string[]) {
+  function referenceClient(rows: ReferenceRow[], linkedGuestIds: string[], options: {
+    rowsError?: { message: string } | null;
+    /** What the storage service says of each source file; absent, it cannot say. */
+    info?: (filePath: string) => { size: number; contentType: string } | null;
+    copy?: (to: string) => StorageOutcome;
+    upload?: (filePath: string) => StorageOutcome;
+  } = {}) {
     const linkedLookups: string[] = [];
     const downloads: string[] = [];
-    const uploads: string[] = [];
+    const uploads: Array<{ path: string; upsert: unknown }> = [];
+    const copies: string[] = [];
+    const removals: string[][] = [];
     const client = {
       from(table: string) {
         if (table === 'profiles') {
@@ -2969,7 +2979,9 @@ describe('generation references packaged for a publish', () => {
               if (column === 'generation_id') generationId = value;
               return query;
             },
-            order: async () => ({ data: rows.filter((row) => row.generation_id === generationId), error: null }),
+            order: async () => (options.rowsError
+              ? { data: null, error: options.rowsError }
+              : { data: rows.filter((row) => row.generation_id === generationId), error: null }),
           };
           return query;
         }
@@ -2977,42 +2989,64 @@ describe('generation references packaged for a publish', () => {
       },
       storage: {
         from: (bucket: string) => ({
+          info: async (filePath: string) => {
+            const info = options.info?.(filePath) ?? null;
+            return info ? { data: info, error: null } : { data: null, error: { message: 'not described' } };
+          },
+          copy: async (filePath: string, to: string, copyOptions?: { destinationBucket?: string }) => {
+            copies.push(`${bucket}/${filePath} -> ${copyOptions?.destinationBucket}/${to}`);
+            const outcome = options.copy?.(to) ?? { error: null };
+            return outcome.error ? { data: null, error: outcome.error } : { data: { path: to }, error: null };
+          },
           download: async (filePath: string) => {
             downloads.push(`${bucket}/${filePath}`);
             return { data: new Blob(['image'], { type: 'image/png' }), error: null };
           },
-          upload: async (filePath: string) => {
-            uploads.push(`${bucket}/${filePath}`);
-            return { error: null };
+          upload: async (filePath: string, _body: unknown, uploadOptions?: { upsert?: unknown }) => {
+            uploads.push({ path: `${bucket}/${filePath}`, upsert: uploadOptions?.upsert });
+            return options.upload?.(filePath) ?? { error: null };
+          },
+          remove: async (paths: string[]) => {
+            removals.push(paths.map((path) => `${bucket}/${path}`));
+            return { data: paths.map((name) => ({ name })), error: null };
           },
         }),
       },
     };
-    return { client: client as never, linkedLookups, downloads, uploads };
+    return { client: client as never, linkedLookups, downloads, uploads, copies, removals };
   }
 
-  it('reads a linked guest’s references from its folder and copies them under the account', async () => {
-    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+  it('reads a linked guest’s references from its folder and plans their copies under the account, moving no bytes', async () => {
+    const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(
       [reference('ref-1', 'guest-1', 'generation_inputs/guest-1/gen-1/hero.png')],
       ['guest-1'],
     );
 
-    const items = await buildGenerationReferenceResourceItems({
+    const plan = await planGenerationReferenceCopies({
       supabase: source.client,
       ownerUserId: 'user-1',
       generationId: 'gen-1',
     });
 
     expect(source.linkedLookups).toEqual(['merged_into_user_id=user-1']);
-    expect(source.downloads).toEqual(['generation_inputs/guest-1/gen-1/hero.png']);
-    expect(items).toHaveLength(1);
-    expect(items[0].storagePath).toMatch(/^user-1\/generation-references\/gen-1\//);
-    expect(source.uploads).toEqual([`post_resource_files/${items[0].storagePath}`]);
+    expect(plan.ok && plan.references).toEqual([{
+      item: expect.objectContaining({
+        id: 'reference-ref-1',
+        type: 'reference_image',
+        storagePath: 'user-1/generation-references/gen-1/00-reference-ref-1.png',
+        contentType: 'image/png',
+      }),
+      source: { bucket: 'generation_inputs', filePath: 'guest-1/gen-1/hero.png' },
+    }]);
+    // A plan is no copy: the bytes move only once every check has passed.
+    expect(source.downloads).toEqual([]);
+    expect(source.uploads).toEqual([]);
+    expect(source.copies).toEqual([]);
   });
 
-  it('copies nothing from a folder outside the account and its linked guests', async () => {
-    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+  it('plans nothing from a folder outside the account and its linked guests', async () => {
+    const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(
       [
         // A row of the linked guest that names someone else's file.
@@ -3023,21 +3057,19 @@ describe('generation references packaged for a publish', () => {
       ['guest-1'],
     );
 
-    const items = await buildGenerationReferenceResourceItems({
+    const plan = await planGenerationReferenceCopies({
       supabase: source.client,
       ownerUserId: 'user-1',
       generationId: 'gen-1',
     });
 
-    expect(items).toEqual([]);
-    expect(source.downloads).toEqual([]);
-    expect(source.uploads).toEqual([]);
+    expect(plan).toEqual({ ok: true, references: [] });
   });
 
   // A recipe that leaves the creator's own uploads out (the web creators' default, owner
   // 2026-10-29) copies only the references a remix brought from its original.
-  it('copies only the rows it is given', async () => {
-    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+  it('plans only the rows it is given', async () => {
+    const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(
       [
         reference('ref-own', 'user-1', 'generation_inputs/user-1/gen-1/face.png'),
@@ -3046,34 +3078,359 @@ describe('generation references packaged for a publish', () => {
       [],
     );
 
-    const items = await buildGenerationReferenceResourceItems({
+    const plan = await planGenerationReferenceCopies({
       supabase: source.client,
       ownerUserId: 'user-1',
       generationId: 'gen-1',
       onlyRowIds: new Set(['ref-original']),
     });
 
-    expect(source.downloads).toEqual(['generation_inputs/user-1/gen-1/dojo.png']);
-    expect(items).toHaveLength(1);
-    expect(items[0].id).toBe('reference-ref-original');
+    expect(plan.ok && plan.references.map((planned) => planned.item.id)).toEqual(['reference-ref-original']);
   });
 
-  it('packages the account’s own references without asking who is linked to it', async () => {
-    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+  it('plans the account’s own references without asking who is linked to it', async () => {
+    const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(
       [reference('ref-1', 'user-1', 'generation_inputs/user-1/gen-1/hero.png')],
       ['guest-1'],
     );
 
-    const items = await buildGenerationReferenceResourceItems({
+    const plan = await planGenerationReferenceCopies({
       supabase: source.client,
       ownerUserId: 'user-1',
       generationId: 'gen-1',
     });
 
     expect(source.linkedLookups).toEqual([]);
+    expect(plan.ok && plan.references).toHaveLength(1);
+  });
+
+  it('says so when the saved inputs cannot be read, rather than plan none', async () => {
+    const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient([], [], { rowsError: { message: 'read failed' } });
+
+    await expect(planGenerationReferenceCopies({ supabase: source.client, ownerUserId: 'user-1', generationId: 'gen-1' }))
+      .resolves.toEqual({ ok: false });
+  });
+
+  // #677's review: the editor re-copied every input on every save.
+  it('needs no copy of an input the recipe holds already, by its file or by its place', async () => {
+    const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [
+        reference('ref-1', 'user-1', 'generation_inputs/user-1/gen-1/hero.png'),
+        reference('ref-2', 'user-1', 'generation_inputs/user-1/gen-1/side.png', 1),
+        reference('ref-3', 'user-1', 'generation_inputs/user-1/gen-1/back.png', 2),
+      ],
+      [],
+    );
+
+    const plan = await planGenerationReferenceCopies({
+      supabase: source.client,
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+      heldItems: [
+        // Its copy, as an earlier save stored it.
+        { id: 'reference-ref-1', storagePath: 'user-1/generation-references/gen-1/00-reference-ref-1.png', contentType: 'image/webp', sizeBytes: 2048 },
+        // Its place, under a file the creator chose instead.
+        { id: 'reference-ref-2', storagePath: 'user-1/resources/my-own.png', contentType: 'image/png', sizeBytes: 10 },
+      ],
+    });
+
+    expect(plan.ok && plan.references.map((planned) => [planned.item.id, planned.source === null])).toEqual([
+      ['reference-ref-1', true],
+      ['reference-ref-2', true],
+      ['reference-ref-3', false],
+    ]);
+    // The held copy keeps the type and size it was stored with.
+    expect(plan.ok && plan.references[0].item).toMatchObject({ contentType: 'image/webp', sizeBytes: 2048 });
+  });
+
+  it('copies inside storage where the recipe bucket takes the file, and reads its type and size from the source', async () => {
+    const { copyPlannedGenerationReferences, planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [reference('ref-1', 'user-1', 'generation_inputs/user-1/gen-1/hero.png')],
+      [],
+      { info: () => ({ size: 4096, contentType: 'image/webp' }) },
+    );
+    const plan = await planGenerationReferenceCopies({ supabase: source.client, ownerUserId: 'user-1', generationId: 'gen-1' });
+    if (!plan.ok) throw new Error('planned nothing');
+
+    const copied = await copyPlannedGenerationReferences({ supabase: source.client, references: plan.references });
+
+    expect(source.copies).toEqual([
+      'generation_inputs/user-1/gen-1/hero.png -> post_resource_files/user-1/generation-references/gen-1/00-reference-ref-1.png',
+    ]);
+    expect(source.downloads).toEqual([]);
+    expect(copied.files.get('reference-ref-1')).toEqual({ contentType: 'image/webp', sizeBytes: 4096 });
+    expect(copied.createdPaths).toEqual(['user-1/generation-references/gen-1/00-reference-ref-1.png']);
+    expect(copied.failedItemIds.size).toBe(0);
+  });
+
+  it('copies no file the recipe bucket would refuse, and reads it not at all', async () => {
+    const { copyPlannedGenerationReferences, planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [
+        reference('ref-big', 'user-1', 'generation_inputs/user-1/gen-1/clip.mp4'),
+        reference('ref-avif', 'user-1', 'generation_inputs/user-1/gen-1/still.avif', 1),
+      ],
+      [],
+      { info: (filePath) => (filePath.endsWith('.mp4')
+        ? { size: 150 * 1024 * 1024, contentType: 'video/mp4' }
+        : { size: 2048, contentType: 'image/avif' }) },
+    );
+    const plan = await planGenerationReferenceCopies({ supabase: source.client, ownerUserId: 'user-1', generationId: 'gen-1' });
+    if (!plan.ok) throw new Error('planned nothing');
+
+    const copied = await copyPlannedGenerationReferences({ supabase: source.client, references: plan.references });
+
+    expect([...copied.failedItemIds]).toEqual(['reference-ref-big', 'reference-ref-avif']);
+    expect(source.copies).toEqual([]);
+    expect(source.downloads).toEqual([]);
+    expect(copied.createdPaths).toEqual([]);
+  });
+
+  it('reads and writes a file again where storage cannot copy it, never over one already there', async () => {
+    const { copyPlannedGenerationReferences, planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [reference('ref-1', 'user-1', 'generation_inputs/user-1/gen-1/hero.png')],
+      [],
+      { info: () => ({ size: 4096, contentType: 'image/png' }), copy: () => ({ error: { message: 'copy unavailable' } }) },
+    );
+    const plan = await planGenerationReferenceCopies({ supabase: source.client, ownerUserId: 'user-1', generationId: 'gen-1' });
+    if (!plan.ok) throw new Error('planned nothing');
+
+    const copied = await copyPlannedGenerationReferences({ supabase: source.client, references: plan.references });
+
     expect(source.downloads).toEqual(['generation_inputs/user-1/gen-1/hero.png']);
-    expect(items).toHaveLength(1);
+    expect(source.uploads).toEqual([{ path: 'post_resource_files/user-1/generation-references/gen-1/00-reference-ref-1.png', upsert: false }]);
+    expect(copied.createdPaths).toEqual(['user-1/generation-references/gen-1/00-reference-ref-1.png']);
+  });
+
+  // The path is fixed by the input, so a file there is this input's: it is used,
+  // and it is not this save's to remove.
+  it('keeps a copy already at the input’s path as it is, and does not count it as written', async () => {
+    const { copyPlannedGenerationReferences, planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [reference('ref-1', 'user-1', 'generation_inputs/user-1/gen-1/hero.png')],
+      [],
+      {
+        info: () => ({ size: 4096, contentType: 'image/png' }),
+        copy: () => ({ error: { message: 'The resource already exists', statusCode: '409' } }),
+      },
+    );
+    const plan = await planGenerationReferenceCopies({ supabase: source.client, ownerUserId: 'user-1', generationId: 'gen-1' });
+    if (!plan.ok) throw new Error('planned nothing');
+
+    const copied = await copyPlannedGenerationReferences({ supabase: source.client, references: plan.references });
+
+    expect(copied.files.get('reference-ref-1')).toEqual({ contentType: 'image/png', sizeBytes: 4096 });
+    expect(copied.createdPaths).toEqual([]);
+    expect(source.downloads).toEqual([]);
+  });
+
+  it('takes the inputs that could not be copied out of the recipe, and keeps a first item', async () => {
+    const { applyCopiedGenerationReferences } = await import('@/lib/post-resource-bundles-server');
+    const bundle = {
+      accessMode: 'free' as const,
+      resources: {
+        items: [
+          { id: 'reference-ref-1', type: 'reference_image', storagePath: 'user-1/generation-references/gen-1/00-reference-ref-1.png', isPrimary: true, sortOrder: 0 },
+          { id: 'reference-ref-2', type: 'reference_image', storagePath: 'user-1/generation-references/gen-1/01-reference-ref-2.png', isPrimary: false, sortOrder: 1 },
+        ],
+      },
+    } as never;
+
+    const applied = applyCopiedGenerationReferences(bundle, {
+      files: new Map([['reference-ref-2', { contentType: 'image/webp', sizeBytes: 12 }]]),
+      failedItemIds: new Set(['reference-ref-1']),
+      createdPaths: [],
+    });
+
+    expect(applied?.resources?.items).toEqual([
+      expect.objectContaining({ id: 'reference-ref-2', contentType: 'image/webp', sizeBytes: 12, isPrimary: true }),
+    ]);
+  });
+
+  it('removes the copies a refused write leaves behind', async () => {
+    const { removeCopiedGenerationReferences } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient([], []);
+
+    await removeCopiedGenerationReferences({ supabase: source.client, paths: ['user-1/generation-references/gen-1/00-reference-ref-1.png'] });
+    await removeCopiedGenerationReferences({ supabase: source.client, paths: [] });
+
+    expect(source.removals).toEqual([['post_resource_files/user-1/generation-references/gen-1/00-reference-ref-1.png']]);
+  });
+
+  // Owner, 2026-11-03: every creation's recipe has its exact prompt, and one with
+  // a prompt item of its own keeps that one.
+  describe('a creation’s exact prompt', () => {
+    const recipe = (items: unknown[], extra: Record<string, unknown> = {}) => ({
+      accessMode: 'free' as const,
+      previewText: 'The lighting notes behind this still.',
+      resources: { items, ...extra },
+    }) as never;
+    const note = { id: 'notes-item-1', type: 'note', role: 'primary', sectionId: null, title: 'Lighting', textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none' };
+
+    it('is added, titled as the composers lock it, to a recipe with no prompt item', async () => {
+      const { withCreationPromptItem } = await import('@/lib/post-resource-bundles-server');
+      const { bundle, addedItem } = withCreationPromptItem(recipe([note]), '  Neon fox in rain  ');
+
+      expect(addedItem).toMatchObject({
+        id: 'creation-prompt-item',
+        type: 'prompt',
+        title: 'Exact generation prompt',
+        textContent: 'Neon fox in rain',
+        remixUse: 'text_template',
+        sortOrder: 1,
+        isPrimary: false,
+      });
+      // The client's own item is kept as it was sent.
+      expect(bundle?.resources?.items).toEqual([note, addedItem]);
+    });
+
+    it('is not added beside a prompt item of the creator’s own, however worded, nor to No recipe, nor without a prompt', async () => {
+      const { withCreationPromptItem } = await import('@/lib/post-resource-bundles-server');
+      const own = { ...note, id: 'own-prompt', type: 'prompt', title: 'My prompt', textContent: 'My own wording' };
+      const sent = recipe([own]);
+      expect(withCreationPromptItem(sent, 'Neon fox in rain')).toEqual({ bundle: sent, addedItem: null });
+      // An older recipe's prompt is its flat field.
+      const legacy = recipe([], { promptText: 'Neon fox in rain, an older wording' });
+      expect(withCreationPromptItem(legacy, 'Neon fox in rain').addedItem).toBeNull();
+      const none = { accessMode: 'none' as const } as never;
+      expect(withCreationPromptItem(none, 'Neon fox in rain')).toEqual({ bundle: none, addedItem: null });
+      expect(withCreationPromptItem(recipe([note]), '   ').addedItem).toBeNull();
+    });
+
+    it('takes an id no item of the recipe has', async () => {
+      const { withCreationPromptItem } = await import('@/lib/post-resource-bundles-server');
+      const { addedItem } = withCreationPromptItem(recipe([{ ...note, id: 'creation-prompt-item' }]), 'Neon fox in rain');
+      expect(addedItem?.id).toBe('creation-prompt-item-2');
+    });
+  });
+
+  // #677's review: the edit validated the recipe before the inputs were merged
+  // in, so a recipe of the inputs alone was refused with 400.
+  describe('the recipe a creation’s post saves', () => {
+    const plannedInput = {
+      item: {
+        id: 'reference-ref-1',
+        scope: { kind: 'all' as const },
+        type: 'reference_image' as const,
+        role: 'style_reference' as const,
+        sectionId: null,
+        title: 'Product',
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: 'user-1/generation-references/gen-1/00-reference-ref-1.png',
+        contentType: 'image/png',
+        sizeBytes: null,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'reference_only' as const,
+      },
+      source: { bucket: 'generation_inputs', filePath: 'user-1/gen-1/hero.png' },
+    };
+    const referencesOnly = {
+      accessMode: 'free' as const,
+      previewText: 'The product reference behind this still.',
+      resources: { promptText: null, notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix: false, sections: [], items: [] },
+    };
+
+    it('validates the recipe with the inputs merged in, so one of the inputs alone is taken', async () => {
+      const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const planGenerationReferenceCopies = vi.fn(async () => ({ ok: true as const, references: [plannedInput] }));
+
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: referencesOnly,
+        creation: { id: 'gen-1', prompt: null },
+        includeReferences: true,
+        mayShareReferences: true,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies },
+      });
+
+      expect(prepared).toMatchObject({
+        ok: true,
+        addedItemIds: ['reference-ref-1'],
+        pendingCopies: [plannedInput],
+        refusedReferenceCount: 0,
+      });
+      expect(prepared.ok && prepared.bundle?.resources?.items).toEqual([expect.objectContaining({ id: 'reference-ref-1' })]);
+      expect(planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'user-1', generationId: 'gen-1' }));
+    });
+
+    it('adds the exact prompt and the inputs together, and copies none of a creation off public view', async () => {
+      const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: referencesOnly,
+        creation: { id: 'gen-1', prompt: 'A product still lit like a window display.' },
+        includeReferences: true,
+        mayShareReferences: false,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput] })) },
+      });
+
+      expect(prepared).toMatchObject({ ok: true, addedItemIds: ['creation-prompt-item'], pendingCopies: [], refusedReferenceCount: 1 });
+    });
+
+    it('refuses a recipe that is still empty once nothing could be added', async () => {
+      const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: referencesOnly,
+        creation: { id: 'gen-1', prompt: null },
+        includeReferences: true,
+        mayShareReferences: true,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [] })) },
+      });
+
+      expect(prepared).toEqual({ ok: false, status: 400, error: 'Add content for at least one unlock item before publishing.' });
+    });
+
+    it('refuses the save when the saved inputs asked for cannot be read', async () => {
+      const { prepareCreationRecipeBundle, GENERATION_REFERENCES_UNREADABLE_ERROR } = await import('@/lib/post-resource-bundles-server');
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: referencesOnly,
+        creation: { id: 'gen-1', prompt: null },
+        includeReferences: true,
+        mayShareReferences: true,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: false as const })) },
+      });
+
+      expect(prepared).toEqual({ ok: false, status: 500, error: GENERATION_REFERENCES_UNREADABLE_ERROR });
+    });
+
+    // #677's review: a card that kept a copy's id under another file got a
+    // second item under that id, and the save failed with 500.
+    it('adds no input whose place an item the client sent holds', async () => {
+      const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const replaced = { ...plannedInput.item, storagePath: 'user-1/resources/my-own.png', title: 'My own product shot' };
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: { ...referencesOnly, resources: { ...referencesOnly.resources, items: [replaced] } },
+        creation: { id: 'gen-1', prompt: null },
+        includeReferences: true,
+        mayShareReferences: true,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput] })) },
+      });
+
+      expect(prepared).toMatchObject({ ok: true, addedItemIds: [], pendingCopies: [] });
+      expect(prepared.ok && prepared.bundle?.resources?.items).toEqual([replaced]);
+    });
   });
 });
 describe('loadGenerationInputOrigins', () => {

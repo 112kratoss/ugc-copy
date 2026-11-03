@@ -251,8 +251,10 @@
             "prompt": "Create a bright launch visual.",
             "input_media": [
               {
+                "id": "input-1",
                 "url": "https://cdn.example.test/reference.png",
-                "kind": "image"
+                "kind": "image",
+                "recipeCopyable": true
               }
             ],
             "linked_post_id": "post-1",
@@ -1355,7 +1357,30 @@
         "showcasePath": "/showcase/post-1",
         "ownerPath": "/posts/post-1",
         "resourceBundlePath": "/marketplace/resources/resource-1",
-        "message": "Published."
+        "message": "Published.",
+        "recipeItemsAdded": [
+          {
+            "id": "reference-input-1",
+            "scope": {
+              "kind": "all"
+            },
+            "type": "reference_image",
+            "role": "style_reference",
+            "sectionId": null,
+            "title": "Reference image 1",
+            "description": null,
+            "textContent": null,
+            "externalUrl": null,
+            "storagePath": "user-1/generation-references/generation-1/00-reference-image-input-1.png",
+            "contentType": "image/png",
+            "sizeBytes": 2048,
+            "workflowSnapshot": null,
+            "sortOrder": 1,
+            "isPrimary": false,
+            "remixUse": "reference_only"
+          }
+        ],
+        "referencesNotCopied": 0
       }
     },
     "createPost": {
@@ -1969,7 +1994,30 @@
       "response": {
         "success": true,
         "postId": "post-1",
-        "visibility": "public"
+        "visibility": "public",
+        "recipeItemsAdded": [
+          {
+            "id": "reference-input-1",
+            "scope": {
+              "kind": "all"
+            },
+            "type": "reference_image",
+            "role": "style_reference",
+            "sectionId": null,
+            "title": "Reference image 1",
+            "description": null,
+            "textContent": null,
+            "externalUrl": null,
+            "storagePath": "user-1/generation-references/generation-1/00-reference-image-input-1.png",
+            "contentType": "image/png",
+            "sizeBytes": 2048,
+            "workflowSnapshot": null,
+            "sortOrder": 1,
+            "isPrimary": false,
+            "remixUse": "reference_only"
+          }
+        ],
+        "referencesNotCopied": 0
       },
       "errors": {
         "postDeleted": {

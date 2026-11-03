@@ -660,6 +660,12 @@ export interface GenerationInputMediaItem {
   metadata?: Record<string, unknown> | null;
   label?: string | null;
   sourceGenerationId?: string | null;
+  /**
+   * The owner's library read only: whether "Include creation references"
+   * copies it into the creation's recipe (servers from 2026-11-03). Absent,
+   * nothing is offered.
+   */
+  recipeCopyable?: boolean | null;
 }
 
 export interface RemixSourceGeneration {
@@ -1681,6 +1687,14 @@ export interface CreatePostResponse {
   ownerPath: string | null;
   resourceBundlePath: string | null;
   message?: string;
+  /**
+   * A creation's publish or save: the items the server put into its recipe
+   * beside those sent (the exact prompt, the saved inputs it was asked for),
+   * which the composer adopts into its own (servers from 2026-11-03).
+   */
+  recipeItemsAdded?: PostResourceItem[];
+  /** Saved inputs asked for that are not in the recipe: a copy failed, or the creation shares none. */
+  referencesNotCopied?: number;
 }
 
 export interface MobileCommerceSyncResponse {

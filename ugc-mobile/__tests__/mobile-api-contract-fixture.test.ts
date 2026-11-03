@@ -9,6 +9,7 @@ import {
   type MagicbookletApiClient,
   type SaveShowcasePostOptions,
 } from '../lib/api-client';
+import { recipeCopyableInputs } from '../lib/creation-recipe/creation-recipe';
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildHomeFeedCards } from '../lib/home-feed-view-model';
@@ -119,6 +120,22 @@ function withAbsoluteMediaRoutes(value: unknown, base: string): unknown {
   }
   return value;
 }
+
+// #677's review: the composers learn what a creation's save put into its
+// recipe beside what they sent, and offer only the saved inputs its copy takes.
+it('hands the composer what a creation’s save added to its recipe, and the inputs the copy takes', async () => {
+  const published = await clientForEndpoint('publishGeneration').publishGeneration({ generationId: 'generation-1', visibility: 'public' });
+  expect(published.recipeItemsAdded).toEqual(mobileApiContract.endpoints.publishGeneration.response.recipeItemsAdded);
+  expect(published.referencesNotCopied).toBe(0);
+
+  const updated = await clientForEndpoint('updatePost').updatePost('post-1', { title: 'Updated post' });
+  expect(updated.recipeItemsAdded).toEqual(mobileApiContract.endpoints.updatePost.response.recipeItemsAdded);
+  expect(updated.referencesNotCopied).toBe(0);
+
+  const { generations } = await clientForEndpoint('listGenerations').listGenerations(false);
+  const offered = recipeCopyableInputs(generations.find((generation) => generation.id === 'generation-1')?.input_media);
+  expect(offered.map((input) => [input.id, input.mediaKind])).toEqual([['input-1', 'image']]);
+});
 
 it('preserves private generation playback without replacing the original download URL', async () => {
   const payload = await clientForEndpoint('listGenerations').listGenerations(false);

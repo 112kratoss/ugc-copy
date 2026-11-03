@@ -18,6 +18,8 @@ import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { DefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 const sourceToolCatalog: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
 ];
@@ -1484,7 +1486,8 @@ describe('updateOwnerPostForRoute', () => {
     });
 
     // Owner, 2026-11-03: a creation's saved inputs can join its recipe from
-    // the editor too, copied as its publish copies them.
+    // the editor too, copied as its publish copies them. #677's review: planned
+    // first, validated with the recipe, copied last, and reported back.
     describe('the creation’s saved inputs', () => {
       const privatePost = { ...generatedPost, visibility: 'private', showcase_asset_path: null };
       const promptItem = {
@@ -1498,83 +1501,263 @@ describe('updateOwnerPostForRoute', () => {
         isPrimary: true,
         remixUse: 'text_template',
       };
-      const copiedInput = {
-        id: 'reference-input-1',
-        scope: { kind: 'all' as const },
-        type: 'reference_image' as const,
-        role: 'style_reference' as const,
-        sectionId: null,
-        title: 'Product',
-        description: null,
-        textContent: null,
-        externalUrl: null,
-        storagePath: 'user-1/generation-references/generation-1/00-reference-input-1.png',
-        contentType: 'image/png',
-        sizeBytes: 68,
-        workflowSnapshot: null,
-        sortOrder: 0,
-        isPrimary: true,
-        remixUse: 'none' as const,
-      };
-      const recipe = (accessMode: 'free' | 'none') => (accessMode === 'none'
+      const copyPath = (inputId: string) => `user-1/generation-references/generation-1/00-reference-${inputId}.png`;
+      const plannedInput = (inputId = 'input-1', title = 'Product') => ({
+        item: {
+          id: `reference-${inputId}`,
+          scope: { kind: 'all' as const },
+          type: 'reference_image' as const,
+          role: 'style_reference' as const,
+          sectionId: null,
+          title,
+          description: null,
+          textContent: null,
+          externalUrl: null,
+          storagePath: copyPath(inputId),
+          contentType: 'image/png',
+          sizeBytes: null,
+          workflowSnapshot: null,
+          sortOrder: 0,
+          isPrimary: true,
+          remixUse: 'reference_only' as const,
+        },
+        source: { bucket: 'generation_inputs', filePath: `user-1/generation-1/${inputId}.png` },
+      });
+      const recipe = (accessMode: 'free' | 'none', items: unknown[] = [promptItem]) => (accessMode === 'none'
         ? { accessMode }
         : {
           accessMode,
           previewText: 'The prompt and the product reference.',
-          resources: { allowRemix: false, items: [promptItem] },
+          resources: { allowRemix: false, items },
         });
+      const copiedAll = (inputIds: string[]) => ({
+        files: new Map(inputIds.map((id) => [`reference-${id}`, { contentType: 'image/webp', sizeBytes: 68 }] as const)),
+        failedItemIds: new Set<string>(),
+        createdPaths: inputIds.map(copyPath),
+      });
 
-      it('copies them into the recipe when an edit asks', async () => {
+      function referenceDependencies(overrides: Partial<PostUpdateDependencies> = {}) {
+        return createDependencies({
+          planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput()] })),
+          copyPlannedGenerationReferences: vi.fn(async () => copiedAll(['input-1'])),
+          removeCopiedGenerationReferences: vi.fn(async () => undefined),
+          ...overrides,
+        });
+      }
+
+      async function save(body: Record<string, unknown>, options: {
+        dependencies?: ReturnType<typeof referenceDependencies>;
+        generation?: Record<string, unknown>;
+        bundle?: Record<string, unknown> | null;
+      } = {}) {
         const { client } = createSupabaseMock({
           post: privatePost,
-          bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
-          generation: generationRow,
+          bundle: options.bundle === undefined ? { id: 'bundle-1', access_mode: 'free', status: 'draft' } : options.bundle,
+          generation: options.generation ?? generationRow,
         });
-        const buildGenerationReferenceResourceItems = vi.fn(async () => [copiedInput]);
-        const dependencies = createDependencies({ buildGenerationReferenceResourceItems });
-
+        const dependencies = options.dependencies ?? referenceDependencies();
         const result = await updateOwnerPostForRoute({
           adminSupabase: client,
           ownerUserId: 'user-1',
           postId: 'post-1',
-          body: { visibility: 'private', includeGenerationReferences: true, resourceBundle: recipe('free') },
+          body: { visibility: 'private', ...body },
           dependencies,
+        });
+        const written = vi.mocked(dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].bundle;
+        return { result, dependencies, client, written };
+      }
+
+      it('copies them into the recipe when an edit asks, and says what it added', async () => {
+        const { result, dependencies, client, written } = await save({
+          includeGenerationReferences: true,
+          resourceBundle: recipe('free'),
         });
 
         expect(result).toMatchObject({ ok: true });
-        expect(buildGenerationReferenceResourceItems).toHaveBeenCalledWith({
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
           supabase: client,
           ownerUserId: 'user-1',
           generationId: 'generation-1',
-        });
-        const items = vi.mocked(dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].bundle?.resources?.items ?? [];
-        expect(items.map((item) => [item.id, item.storagePath ?? null])).toEqual([
-          ['recipe-prompt', null],
-          ['reference-input-1', 'user-1/generation-references/generation-1/00-reference-input-1.png'],
+        }));
+        expect(dependencies.copyPlannedGenerationReferences).toHaveBeenCalledWith({ supabase: client, references: [plannedInput()] });
+        expect((written?.resources?.items ?? []).map((item) => [item.id, item.storagePath ?? null, item.contentType ?? null])).toEqual([
+          ['recipe-prompt', null, null],
+          // With the type and size the copy read from the file.
+          ['reference-input-1', copyPath('input-1'), 'image/webp'],
         ]);
+        expect(result.ok && result.body).toMatchObject({
+          recipeItemsAdded: [expect.objectContaining({ id: 'reference-input-1', storagePath: copyPath('input-1'), sizeBytes: 68 })],
+          referencesNotCopied: 0,
+        });
+      });
+
+      // The app reads these fields by the shared contract's example.
+      it('answers with what the shared contract documents of a creation’s recipe', async () => {
+        const { result } = await save({ includeGenerationReferences: true, resourceBundle: recipe('free') });
+        const documented = mobileApiContract.endpoints.updatePost.response;
+        for (const key of ['recipeItemsAdded', 'referencesNotCopied'] as const) {
+          expect(documented, `the contract lacks "${key}"`).toHaveProperty(key);
+          expect(result.ok && result.body, `the save lacks "${key}"`).toHaveProperty(key);
+        }
+        expect(Object.keys(documented.recipeItemsAdded[0]).sort())
+          .toEqual(Object.keys((result.ok && result.body.recipeItemsAdded?.[0]) || {}).sort());
       });
 
       it('copies none unless asked, and none into no recipe', async () => {
-        const buildGenerationReferenceResourceItems = vi.fn(async () => [copiedInput]);
         for (const body of [
-          { visibility: 'private', resourceBundle: recipe('free') },
-          { visibility: 'private', includeGenerationReferences: true, resourceBundle: recipe('none') },
+          { resourceBundle: recipe('free') },
+          { includeGenerationReferences: true, resourceBundle: recipe('none') },
         ]) {
-          const { client } = createSupabaseMock({
-            post: privatePost,
-            bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
-            generation: generationRow,
-          });
-          const result = await updateOwnerPostForRoute({
-            adminSupabase: client,
-            ownerUserId: 'user-1',
-            postId: 'post-1',
-            body,
-            dependencies: createDependencies({ buildGenerationReferenceResourceItems }),
-          });
+          const { result, dependencies } = await save(body);
           expect(result).toMatchObject({ ok: true });
+          expect(dependencies.planGenerationReferenceCopies).not.toHaveBeenCalled();
+          expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
         }
-        expect(buildGenerationReferenceResourceItems).not.toHaveBeenCalled();
+      });
+
+      // #677's review: the edit validated the recipe before the inputs were
+      // merged in, and refused a recipe of the inputs alone with 400.
+      it('takes a recipe of the inputs alone, validated with them merged in', async () => {
+        const { result, written } = await save({
+          includeGenerationReferences: true,
+          resourceBundle: recipe('free', []),
+        });
+
+        expect(result).toMatchObject({ ok: true });
+        expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['reference-input-1']);
+      });
+
+      // #677's review: the copy ran before every other check, so a refused save
+      // still paid for it.
+      it('copies nothing for a save that a later check refuses', async () => {
+        const dependencies = referenceDependencies({
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => 'Improve this recipe before publishing: Add a useful preview.'),
+        });
+        const { result } = await save({
+          visibility: 'public',
+          includeGenerationReferences: true,
+          resourceBundle: recipe('free'),
+        }, { dependencies });
+
+        expect(result).toMatchObject({ ok: false, status: 400 });
+        expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+
+        const tooLong = referenceDependencies();
+        const refusedTitle = await save({
+          title: 'x'.repeat(TITLE_MAX_LENGTH + 1),
+          includeGenerationReferences: true,
+          resourceBundle: recipe('free'),
+        }, { dependencies: tooLong });
+        expect(refusedTitle.result).toMatchObject({ ok: false, status: 400, body: { field: 'title' } });
+        expect(tooLong.copyPlannedGenerationReferences).not.toHaveBeenCalled();
+      });
+
+      it('removes the copies it wrote when the database refuses the write, and keeps them when the write may have gone through', async () => {
+        const refused = referenceDependencies({
+          updatePostWithResourceBundleAtomically: vi.fn(async () => {
+            throw new DefinitiveSupabaseMutationRejection({ message: 'Improve this unlock before publishing' }, 400);
+          }),
+        });
+        const definite = await save({ includeGenerationReferences: true, resourceBundle: recipe('free') }, { dependencies: refused });
+        expect(definite.result).toMatchObject({ ok: false, status: 500 });
+        expect(refused.removeCopiedGenerationReferences).toHaveBeenCalledWith(expect.objectContaining({
+          paths: [copyPath('input-1')],
+        }));
+
+        const unknown = referenceDependencies({
+          updatePostWithResourceBundleAtomically: vi.fn(async () => {
+            throw new Error('socket hang up');
+          }),
+        });
+        await save({ includeGenerationReferences: true, resourceBundle: recipe('free') }, { dependencies: unknown });
+        expect(unknown.removeCopiedGenerationReferences).not.toHaveBeenCalled();
+      });
+
+      it('leaves out, and counts, the inputs it could not copy', async () => {
+        const dependencies = referenceDependencies({
+          planGenerationReferenceCopies: vi.fn(async () => ({
+            ok: true as const,
+            references: [plannedInput('input-1'), plannedInput('input-2', 'Backdrop')],
+          })),
+          copyPlannedGenerationReferences: vi.fn(async () => ({
+            ...copiedAll(['input-1']),
+            failedItemIds: new Set(['reference-input-2']),
+          })),
+        });
+        const { result, written } = await save({ includeGenerationReferences: true, resourceBundle: recipe('free') }, { dependencies });
+
+        expect(result).toMatchObject({ ok: true, body: { referencesNotCopied: 1 } });
+        expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['recipe-prompt', 'reference-input-1']);
+        expect(result.ok && result.body.recipeItemsAdded?.map((item) => item.id)).toEqual(['reference-input-1']);
+      });
+
+      it('refuses a recipe of the inputs alone when none could be copied, writing nothing', async () => {
+        const dependencies = referenceDependencies({
+          copyPlannedGenerationReferences: vi.fn(async () => ({
+            files: new Map(),
+            failedItemIds: new Set(['reference-input-1']),
+            createdPaths: [],
+          })),
+        });
+        const { result } = await save({ includeGenerationReferences: true, resourceBundle: recipe('free', []) }, { dependencies });
+
+        expect(result).toEqual({
+          ok: false,
+          status: 500,
+          body: { error: 'Could not copy this creation’s saved inputs into the recipe. Try again.' },
+        });
+        expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+      });
+
+      // #677's review: the copy took no account of an operator's removal, which
+      // the read of the recipe honours through `is_public`.
+      it('copies none from a creation an operator removed or its creator archived, and says so', async () => {
+        for (const offView of [
+          { moderation_removed_at: '2026-11-02T00:00:00.000Z', archived_at: '2026-11-02T00:00:00.000Z' },
+          { archived_at: '2026-11-02T00:00:00.000Z' },
+        ]) {
+          const { result, dependencies, written } = await save(
+            { includeGenerationReferences: true, resourceBundle: recipe('free') },
+            { generation: { ...generationRow, ...offView } },
+          );
+
+          expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [], referencesNotCopied: 1 } });
+          expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
+          expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['recipe-prompt']);
+        }
+      });
+
+      // #677's review: the editor re-copied every input on every save.
+      it('hands the stored recipe’s copies to the plan, which then needs none of them again', async () => {
+        const storedCopy = { ...plannedInput().item, contentType: 'image/webp', sizeBytes: 68 };
+        const { dependencies } = await save(
+          { includeGenerationReferences: true, resourceBundle: recipe('free') },
+          { bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft', resource_items: [promptItem, storedCopy] } },
+        );
+
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+          heldItems: expect.arrayContaining([expect.objectContaining({ id: 'reference-input-1', storagePath: copyPath('input-1') })]),
+        }));
+      });
+
+      // Owner, 2026-11-03: every creation's recipe has its exact prompt, on the
+      // server as in the composers (#677's review).
+      it('adds the creation’s exact prompt to a recipe saved without a prompt item, and keeps a recipe’s own', async () => {
+        const note = { id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting', textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none' };
+        const creation = { ...generationRow, prompt: 'A sunset study in golden light.' };
+
+        const added = await save({ resourceBundle: recipe('free', [note]) }, { generation: creation });
+        expect((added.written?.resources?.items ?? []).map((item) => [item.id, item.title, item.textContent])).toEqual([
+          ['notes', 'Lighting', 'Key light at 45 degrees.'],
+          ['creation-prompt-item', 'Exact generation prompt', 'A sunset study in golden light.'],
+        ]);
+        expect(added.result.ok && added.result.body.recipeItemsAdded?.map((item) => item.id)).toEqual(['creation-prompt-item']);
+
+        const own = { ...promptItem, title: 'My prompt', textContent: 'My own wording' };
+        const kept = await save({ resourceBundle: recipe('free', [own]) }, { generation: creation });
+        expect((kept.written?.resources?.items ?? []).map((item) => item.id)).toEqual(['recipe-prompt']);
+        expect(kept.result.ok && kept.result.body.recipeItemsAdded).toEqual([]);
       });
     });
 

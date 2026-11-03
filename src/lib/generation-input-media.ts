@@ -28,6 +28,7 @@ import {
 } from '@/lib/seedance-assets';
 import {
   getCanonicalStoredMediaLocation,
+  getUserOwnedStoredMediaLocation,
   isStorageObjectOwnedByUser,
 } from '@/lib/storage-ownership';
 import {
@@ -69,6 +70,42 @@ export interface GenerationInputMediaItem {
   sourceGenerationId: string | null;
   sortOrder: number;
   metadata: Record<string, unknown>;
+  /**
+   * Whether "Include creation references" copies it into the creation's recipe
+   * (`isRecipeCopyableInputRow`). Only the owner's library read marks it.
+   */
+  recipeCopyable?: boolean;
+}
+
+/**
+ * Whether the server copies a saved input into its creation's recipe when the
+ * creator asks: a row kept by the publisher or a guest linked to them, whose
+ * file sits in that identity's own folder. `ownerIds` is the publisher's
+ * linked set (`resolveLinkedAccountIds`). The copy reads nothing else, so the
+ * composers offer nothing else (`recipeCopyable` on the owner's library read).
+ */
+export function isRecipeCopyableInputRow(
+  row: Pick<GenerationInputMediaRow, 'user_id' | 'storage_path'>,
+  ownerIds: readonly string[],
+): boolean {
+  return ownerIds.includes(row.user_id)
+    && Boolean(getUserOwnedStoredMediaLocation(row.storage_path, row.user_id));
+}
+
+/**
+ * Whether a creation's saved inputs may go into its post's recipe at all: not
+ * while the creation is off public view, by an operator's removal or by its
+ * creator's archive. Both write `is_public = false`, through which the read of
+ * a recipe withholds the creation's inputs from everyone but its owner
+ * (`canViewGenerationRecipeInputs`), so no copy hands them out either. A
+ * creation only not published yet (a private post, a first publish) has
+ * neither mark: its recipe is a draft no one else reads until the post is
+ * public, and the creation goes public with it.
+ */
+export function creationMaySharePostInputs(
+  generation: { archived_at?: string | null; moderation_removed_at?: string | null } | null | undefined,
+): boolean {
+  return Boolean(generation) && !generation?.moderation_removed_at && !generation?.archived_at;
 }
 
 export interface PersistGenerationInputCandidate {
@@ -639,6 +676,11 @@ export async function loadGenerationInputMediaMap(params: {
    * settings name has to hear of it.
    */
   throwOnError?: boolean;
+  /**
+   * The publisher's linked set: each item says whether the recipe copy takes
+   * it (`recipeCopyable`, `isRecipeCopyableInputRow`). Left out, no item says.
+   */
+  recipeCopyableFor?: readonly string[];
 }): Promise<Map<string, GenerationInputMediaItem[]>> {
   const generationIds = Array.from(new Set(params.generationIds.filter(Boolean)));
   const inputMap = new Map<string, GenerationInputMediaItem[]>();
@@ -682,6 +724,9 @@ export async function loadGenerationInputMediaMap(params: {
       }
 
       const item = mapInputMediaRow(row, url, trustedStoragePath);
+      if (params.recipeCopyableFor) {
+        item.recipeCopyable = isRecipeCopyableInputRow(row, params.recipeCopyableFor);
+      }
       const nextItems = inputMap.get(row.generation_id) ?? [];
       nextItems.push(item);
       inputMap.set(row.generation_id, nextItems);

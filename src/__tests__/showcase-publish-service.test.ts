@@ -28,6 +28,8 @@ import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import type { PostResourceBundleInput, PostResourceItem } from '@/lib/post-resource-bundles';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+
 /** The linked-identity lookup: the guest ids merged into the caller's account. */
 function linkedProfilesQuery(linkedGuestIds: string[]) {
   return {
@@ -2200,7 +2202,25 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
     priceUsdCents: 0,
     resources: { promptText: 'Two cats spar in a dim dojo, rim light.', notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix },
   });
-  const referenceItem = { id: 'reference-row-original', type: 'reference_image', storagePath: 'post_resource_files/user-1/gen-remix/a.png' } as PostResourceItem;
+  const referenceItem = {
+    id: 'reference-row-original',
+    scope: { kind: 'all' },
+    type: 'reference_image',
+    role: 'style_reference',
+    sectionId: null,
+    title: 'Dojo',
+    description: null,
+    textContent: null,
+    externalUrl: null,
+    storagePath: 'user-1/generation-references/gen-remix/00-reference-row-original.png',
+    contentType: 'image/png',
+    sizeBytes: null,
+    workflowSnapshot: null,
+    sortOrder: 0,
+    isPrimary: true,
+    remixUse: 'reference_only',
+  } as PostResourceItem;
+  const plannedReference = { item: referenceItem, source: { bucket: 'generation_inputs', filePath: 'user-1/gen-remix/dojo.png' } };
 
   async function publish(body: Record<string, unknown>, origins: { byRowId: Map<string, 'own' | 'others'>; hasOwn: boolean }) {
     const dependencies = {
@@ -2214,8 +2234,13 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
       validatePostResourceBundleInput: vi.fn(() => null),
       getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
       loadGenerationInputOrigins: vi.fn(async () => origins),
-      buildGenerationReferenceResourceItems: vi.fn(async () => [referenceItem]),
-      mergeGenerationReferenceItemsIntoBundle: vi.fn((bundle: PostResourceBundleInput) => bundle),
+      planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedReference] })),
+      copyPlannedGenerationReferences: vi.fn(async () => ({
+        files: new Map([[referenceItem.id as string, { contentType: 'image/png', sizeBytes: 64 }]]),
+        failedItemIds: new Set<string>(),
+        createdPaths: [referenceItem.storagePath as string],
+      })),
+      removeCopiedGenerationReferences: vi.fn(async () => undefined),
       publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
         postId: 'post-remix',
         visibility: 'public' as const,
@@ -2242,7 +2267,7 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
 
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     expect(dependencies.loadGenerationInputOrigins).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'user-1', generationId: 'gen-remix' }));
-    expect(dependencies.buildGenerationReferenceResourceItems).toHaveBeenCalledWith(expect.objectContaining({
+    expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
       onlyRowIds: new Set(['row-original']),
     }));
     expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
@@ -2267,7 +2292,7 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
       { byRowId: new Map([['row-own', 'own']]), hasOwn: true },
     );
 
-    expect(dependencies.buildGenerationReferenceResourceItems).not.toHaveBeenCalled();
+    expect(dependencies.planGenerationReferenceCopies).not.toHaveBeenCalled();
     expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: false }) }),
     }));
@@ -2276,7 +2301,7 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
   it('copies them all, as before, without the flag, and reads no origins for a post with no recipe', async () => {
     const all = await publish({ includeGenerationReferences: true, resourceBundle: recipe(true) }, { byRowId: new Map(), hasOwn: true });
     expect(all.dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
-    expect(all.dependencies.buildGenerationReferenceResourceItems).toHaveBeenCalledWith(expect.not.objectContaining({ onlyRowIds: expect.anything() }));
+    expect(all.dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.not.objectContaining({ onlyRowIds: expect.anything() }));
     expect(all.dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: true }) }),
     }));
@@ -2309,6 +2334,172 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(dependencies.loadGenerationInputOrigins).not.toHaveBeenCalled();
+  });
+});
+
+// #677's review: the publish planned, validated and copied a creation's saved
+// inputs in that order only by accident of where the copy sat; it copied first
+// and checked after, it ignored an operator's removal, and it told the composer
+// nothing of what it added.
+describe('a creation’s recipe as the publish saves it', () => {
+  const generation = {
+    id: 'gen-recipe',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/still.jpg',
+    showcase_asset_path: null,
+    title: 'Window display still',
+    description: null,
+    prompt: 'A product still lit like a window display.',
+  };
+  const note = { id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting', textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none' };
+  const recipe = (items: unknown[]): PostResourceBundleInput => ({
+    accessMode: 'free',
+    summary: 'The lighting behind this still.',
+    previewText: 'The lighting behind this window display still.',
+    priceUsdCents: 0,
+    resources: { promptText: null, notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix: false, items } as never,
+  });
+  const reference = {
+    item: {
+      id: 'reference-input-1',
+      scope: { kind: 'all' },
+      type: 'reference_image',
+      role: 'style_reference',
+      sectionId: null,
+      title: 'Product',
+      description: null,
+      textContent: null,
+      externalUrl: null,
+      storagePath: 'user-1/generation-references/gen-recipe/00-reference-input-1.png',
+      contentType: 'image/png',
+      sizeBytes: null,
+      workflowSnapshot: null,
+      sortOrder: 0,
+      isPrimary: true,
+      remixUse: 'reference_only',
+    } as PostResourceItem,
+    source: { bucket: 'generation_inputs', filePath: 'user-1/gen-recipe/product.png' },
+  };
+
+  async function publish(body: Record<string, unknown>, overrides: Partial<ShowcasePublishServiceDependencies> = {}, generationOverrides: Record<string, unknown> = {}) {
+    const order: string[] = [];
+    const dependencies = {
+      ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+        outputUrl: mediaGeneration.outputUrl,
+        createdLocation: null,
+      })),
+      listSourceToolsCatalog: vi.fn(async () => [
+        { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+      ]),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => {
+        order.push('quality');
+        return null;
+      }),
+      planGenerationReferenceCopies: vi.fn(async () => {
+        order.push('plan');
+        return { ok: true as const, references: [reference] };
+      }),
+      copyPlannedGenerationReferences: vi.fn(async () => {
+        order.push('copy');
+        return {
+          files: new Map([['reference-input-1', { contentType: 'image/png', sizeBytes: 64 }]]),
+          failedItemIds: new Set<string>(),
+          createdPaths: [reference.item.storagePath as string],
+        };
+      }),
+      removeCopiedGenerationReferences: vi.fn(async () => undefined),
+      publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => {
+        order.push('write');
+        return { postId: 'post-recipe', visibility: 'private' as const, bundleId: 'bundle-recipe', bundleStatus: 'draft' as const };
+      }),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      requestPostEmbedding: vi.fn(async () => undefined),
+      ...overrides,
+    } satisfies Partial<ShowcasePublishServiceDependencies>;
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock({ ...generation, ...generationOverrides }).client,
+      body: { generationId: 'gen-recipe', visibility: 'private', title: 'Window display still', ...body },
+      userId: 'user-1',
+      dependencies,
+    });
+    const written = vi.mocked(dependencies.publishGenerationPostWithResourceBundleAtomically).mock.calls[0]?.[0].bundle;
+    return { result, dependencies, order, written };
+  }
+
+  it('adds the exact prompt to a recipe sent without a prompt item, and says so', async () => {
+    const { result, written } = await publish({ resourceBundle: recipe([note]) });
+
+    expect((written?.resources?.items ?? []).map((item) => [item.id, item.title, item.textContent])).toEqual([
+      ['notes', 'Lighting', 'Key light at 45 degrees.'],
+      ['creation-prompt-item', 'Exact generation prompt', 'A product still lit like a window display.'],
+    ]);
+    expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [expect.objectContaining({ id: 'creation-prompt-item' })], referencesNotCopied: 0 } });
+  });
+
+  it('plans the inputs before the checks and copies them after, right before the write', async () => {
+    const { result, order, written } = await publish({ includeGenerationReferences: true, resourceBundle: recipe([note]), visibility: 'public' });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(order).toEqual(['plan', 'quality', 'copy', 'write']);
+    expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes', 'creation-prompt-item', 'reference-input-1']);
+    expect(result.ok && result.body.recipeItemsAdded?.map((item) => [item.id, item.sizeBytes])).toEqual([
+      ['creation-prompt-item', null],
+      ['reference-input-1', 64],
+    ]);
+  });
+
+  it('copies nothing for a publish the quality gate refuses', async () => {
+    const { result, dependencies } = await publish(
+      { includeGenerationReferences: true, resourceBundle: recipe([note]), visibility: 'public' },
+      { getMarketplaceQualityErrorForPostBundle: vi.fn(async () => 'Improve this recipe before publishing: Add a useful preview.') },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
+  });
+
+  it('removes the copies it wrote when the database refuses the write', async () => {
+    const { result, dependencies } = await publish(
+      { includeGenerationReferences: true, resourceBundle: recipe([note]) },
+      {
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => {
+          throw { code: 'P0001', message: 'Improve this unlock before publishing' };
+        }),
+      },
+    );
+
+    expect(result).toMatchObject({ ok: false, status: 500 });
+    expect(dependencies.removeCopiedGenerationReferences).toHaveBeenCalledWith(expect.objectContaining({
+      paths: ['user-1/generation-references/gen-recipe/00-reference-input-1.png'],
+    }));
+  });
+
+  // The app reads these fields by the shared contract's example.
+  it('answers with what the shared contract documents of a creation’s recipe', async () => {
+    const { result } = await publish({ includeGenerationReferences: true, resourceBundle: recipe([note]) });
+    const documented = mobileApiContract.endpoints.publishGeneration.response;
+    for (const key of ['recipeItemsAdded', 'referencesNotCopied'] as const) {
+      expect(documented, `the contract lacks "${key}"`).toHaveProperty(key);
+      expect(result.ok && result.body, `the publish lacks "${key}"`).toHaveProperty(key);
+    }
+    expect(Object.keys(documented.recipeItemsAdded[0]).sort())
+      .toEqual(Object.keys((result.ok && result.body.recipeItemsAdded?.[1]) || {}).sort());
+  });
+
+  it('copies none from a creation an operator removed, and says so', async () => {
+    const { result, dependencies, written } = await publish(
+      { includeGenerationReferences: true, resourceBundle: recipe([note]) },
+      {},
+      { moderation_removed_at: '2026-11-02T00:00:00.000Z', archived_at: '2026-11-02T00:00:00.000Z' },
+    );
+
+    expect(result).toMatchObject({ ok: true, body: { referencesNotCopied: 1 } });
+    expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
+    expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes', 'creation-prompt-item']);
   });
 });
 

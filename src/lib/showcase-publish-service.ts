@@ -12,12 +12,19 @@ import {
 } from '@/lib/durable-generation-media';
 import { isAudioModel } from '@/lib/models';
 import {
-  buildGenerationReferenceResourceItems,
+  applyCopiedGenerationReferences,
+  copyPlannedGenerationReferences,
+  GENERATION_REFERENCES_NOT_COPIED_ERROR,
   getMarketplaceQualityErrorForPostBundle,
   loadGenerationInputOrigins,
-  mergeGenerationReferenceItemsIntoBundle,
+  planGenerationReferenceCopies,
+  prepareCreationRecipeBundle,
   publishGenerationPostWithResourceBundleAtomically,
+  readAddedRecipeItems,
+  removeCopiedGenerationReferences,
+  type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
+import { creationMaySharePostInputs } from '@/lib/generation-input-media';
 import {
   BODY_MAX_LENGTH,
   TITLE_MAX_LENGTH,
@@ -48,6 +55,7 @@ import {
   stripDerivedGenerationReferenceItems,
   validatePostResourceBundleInput,
   type PostResourceBundleInput,
+  type PostResourceItem,
 } from '@/lib/post-resource-bundles';
 import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
@@ -71,7 +79,9 @@ type ShowcaseCategory = GenerationShowcaseCategory;
 export { getCanonicalGenerationShowcaseAssetPath };
 const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
   'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
-const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt, template_run_id, template_run_step_id';
+// `archived_at` and `moderation_removed_at` say whether the creation's saved
+// inputs may go into its recipe (`creationMaySharePostInputs`).
+const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt, template_run_id, template_run_step_id, archived_at, moderation_removed_at';
 // The legacy variant serves schemas that predate `showcase_asset_path`, which
 // also predate the template system — so it omits the template columns too and
 // such rows publish as ordinary generations.
@@ -91,6 +101,8 @@ type GenerationRow = {
   prompt?: string | null;
   template_run_id?: string | null;
   template_run_step_id?: string | null;
+  archived_at?: string | null;
+  moderation_removed_at?: string | null;
 };
 
 type StoredGenerationBundleRow = {
@@ -139,9 +151,13 @@ export type ShowcasePublishServiceDependencies = {
   ensureDurableGenerationMedia: typeof ensureDurableGenerationMedia;
   fetchWithProviderTimeout: typeof fetchWithProviderTimeout;
   openAllowlistedRemoteMedia: typeof openAllowlistedRemoteMedia;
-  buildGenerationReferenceResourceItems: typeof buildGenerationReferenceResourceItems;
+  /** Which of the creation's saved inputs join the recipe, before any byte moves. */
+  planGenerationReferenceCopies: typeof planGenerationReferenceCopies;
+  /** Their files, copied once every check has passed, right before the write. */
+  copyPlannedGenerationReferences: typeof copyPlannedGenerationReferences;
+  /** The copies a refused write leaves behind, removed. */
+  removeCopiedGenerationReferences: typeof removeCopiedGenerationReferences;
   loadGenerationInputOrigins: typeof loadGenerationInputOrigins;
-  mergeGenerationReferenceItemsIntoBundle: typeof mergeGenerationReferenceItemsIntoBundle;
   validatePostResourceBundleInput: typeof validatePostResourceBundleInput;
   getMarketplaceQualityErrorForPostBundle: typeof getMarketplaceQualityErrorForPostBundle;
   publishGenerationPostWithResourceBundleAtomically: typeof publishGenerationPostWithResourceBundleAtomically;
@@ -171,6 +187,15 @@ export type ShowcasePublishServiceResult =
         resourceBundlePath: string | null;
         resourceBundleStatus: 'draft' | 'published' | null;
         message: string;
+        /**
+         * The items the server put into the creation's recipe beside those it
+         * was sent: the exact prompt where the recipe had no prompt item, and
+         * the saved inputs it was asked for. A composer adopts them into its
+         * own. Present when a creation's recipe was saved.
+         */
+        recipeItemsAdded?: PostResourceItem[];
+        /** Saved inputs asked for that are not in the recipe: a copy failed, or the creation shares none. */
+        referencesNotCopied?: number;
       };
     }
   | {
@@ -193,11 +218,10 @@ function resolveDependencies(
     fetchWithProviderTimeout: dependencies?.fetchWithProviderTimeout ?? fetchWithProviderTimeout,
     openAllowlistedRemoteMedia:
       dependencies?.openAllowlistedRemoteMedia ?? openAllowlistedRemoteMedia,
-    buildGenerationReferenceResourceItems:
-      dependencies?.buildGenerationReferenceResourceItems ?? buildGenerationReferenceResourceItems,
+    planGenerationReferenceCopies: dependencies?.planGenerationReferenceCopies ?? planGenerationReferenceCopies,
+    copyPlannedGenerationReferences: dependencies?.copyPlannedGenerationReferences ?? copyPlannedGenerationReferences,
+    removeCopiedGenerationReferences: dependencies?.removeCopiedGenerationReferences ?? removeCopiedGenerationReferences,
     loadGenerationInputOrigins: dependencies?.loadGenerationInputOrigins ?? loadGenerationInputOrigins,
-    mergeGenerationReferenceItemsIntoBundle:
-      dependencies?.mergeGenerationReferenceItemsIntoBundle ?? mergeGenerationReferenceItemsIntoBundle,
     validatePostResourceBundleInput: dependencies?.validatePostResourceBundleInput ?? validatePostResourceBundleInput,
     getMarketplaceQualityErrorForPostBundle:
       dependencies?.getMarketplaceQualityErrorForPostBundle ?? getMarketplaceQualityErrorForPostBundle,
@@ -243,6 +267,27 @@ function normalizeRequestedVisibility(value: unknown, legacyIsPublic?: boolean):
   }
 
   return legacyIsPublic ? 'public' : 'private';
+}
+
+/** A publish whose recipe was the creation's saved inputs alone, none of which could be copied. */
+class GenerationReferencesNotCopiedError extends Error {
+  constructor() {
+    super('The creation’s saved inputs could not be copied into the recipe.');
+    this.name = 'GenerationReferencesNotCopiedError';
+  }
+}
+
+/**
+ * Whether a failed write was refused by the database, and so wrote nothing:
+ * it answers with a code of its own (a raised check, a constraint, PostgREST's
+ * refusal). A dropped connection or a timeout has none, and may have written.
+ */
+function isDatabaseRefusal(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && code.trim().length > 0;
 }
 
 function isSoldResourceBundleMutationError(error: unknown): boolean {
@@ -578,7 +623,7 @@ export async function publishGenerationToShowcaseForRoute({
   const requestedAccessMode = requestedResourceBundle?.accessMode ?? 'none';
   const shouldIncludeGenerationReferences = requestBody.includeGenerationReferences === true;
   let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;
-  let effectiveHasResourceBundlePayload = hasRequestedResourceBundlePayload;
+  const effectiveHasResourceBundlePayload = hasRequestedResourceBundlePayload;
   // Whose each input is, where the recipe leaves the creator's own out: a remix hands every
   // input of a recipe whose switch is on to whoever opens it, so with any of their own among
   // them the switch goes off, whatever the request said. It decides only what is copied and
@@ -596,38 +641,33 @@ export async function publishGenerationToShowcaseForRoute({
     };
   }
 
-  if (
-    shouldIncludeGenerationReferences &&
-    requestedAccessMode !== 'none'
-  ) {
-    const referenceItems = await resolvedDependencies.buildGenerationReferenceResourceItems({
-      supabase: adminSupabase,
-      ownerUserId: userId,
-      generationId,
-      ...(inputOrigins
-        ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin === 'others' ? [rowId] : []))) }
-        : {}),
-    });
-
-    if (referenceItems.length > 0) {
-      if (effectiveResourceBundle) {
-        effectiveResourceBundle = resolvedDependencies.mergeGenerationReferenceItemsIntoBundle(
-          effectiveResourceBundle,
-          referenceItems,
-        );
-        effectiveHasResourceBundlePayload = true;
-      }
-    }
-  }
-
-  const resourceBundleValidationError = effectiveHasResourceBundlePayload
-    ? resolvedDependencies.validatePostResourceBundleInput(effectiveResourceBundle ?? null, {
+  // The recipe as it will be saved: the creation's exact prompt where it has
+  // no prompt item of its own, and the saved inputs asked for, planned with no
+  // byte moved yet, then validated as one (#677's review). The inputs are
+  // copied last, once every other check has passed.
+  const recipePreparation = effectiveHasResourceBundlePayload
+    ? await prepareCreationRecipeBundle({
+        supabase: adminSupabase,
         ownerUserId: userId,
+        bundle: effectiveResourceBundle,
+        creation: { id: generationId, prompt: generation.prompt ?? null },
+        includeReferences: shouldIncludeGenerationReferences && requestedAccessMode !== 'none',
+        mayShareReferences: creationMaySharePostInputs(generation),
+        ...(inputOrigins
+          ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin === 'others' ? [rowId] : []))) }
+          : {}),
         mediaKeys: ['media-1'],
+        dependencies: {
+          planGenerationReferenceCopies: resolvedDependencies.planGenerationReferenceCopies,
+          validatePostResourceBundleInput: resolvedDependencies.validatePostResourceBundleInput,
+        },
       })
     : null;
-  if (resourceBundleValidationError) {
-    return { ok: false, status: 400, body: { error: resourceBundleValidationError } };
+  if (recipePreparation && !recipePreparation.ok) {
+    return { ok: false, status: recipePreparation.status, body: { error: recipePreparation.error } };
+  }
+  if (recipePreparation?.ok) {
+    effectiveResourceBundle = recipePreparation.bundle;
   }
   // Measured on what the client wrote; the generation's merged references are
   // the server's own.
@@ -951,7 +991,25 @@ export async function publishGenerationToShowcaseForRoute({
     output_url: nextOutputUrl,
   };
 
+  // The creation's saved inputs are copied last: every check has passed, and
+  // the write is next (#677's review), so a refused publish pays for no copy.
+  let copiedReferences: CopiedGenerationReferences | null = null;
   try {
+    if (recipePreparation?.ok && recipePreparation.pendingCopies.length > 0) {
+      copiedReferences = await resolvedDependencies.copyPlannedGenerationReferences({
+        supabase: adminSupabase,
+        references: recipePreparation.pendingCopies,
+      });
+      effectiveResourceBundle = applyCopiedGenerationReferences(effectiveResourceBundle, copiedReferences);
+      // A recipe of the inputs alone has nothing left once none could be copied.
+      if (
+        copiedReferences.failedItemIds.size > 0
+        && resolvedDependencies.validatePostResourceBundleInput(effectiveResourceBundle, { ownerUserId: userId, mediaKeys: ['media-1'] })
+      ) {
+        throw new GenerationReferencesNotCopiedError();
+      }
+    }
+
     const publishResult = await resolvedDependencies.publishGenerationPostWithResourceBundleAtomically({
       supabase: adminSupabase,
       generationId,
@@ -964,6 +1022,16 @@ export async function publishGenerationToShowcaseForRoute({
     postId = publishResult.postId;
     resourceBundleStatus = publishResult.bundleStatus;
   } catch (postError) {
+    // The copies this publish wrote go again where nothing was written: the
+    // recipe could not keep them, or the database refused the write. One that
+    // may have gone through keeps them, since its recipe may name them.
+    if (copiedReferences && (postError instanceof GenerationReferencesNotCopiedError || isDatabaseRefusal(postError))) {
+      await resolvedDependencies.removeCopiedGenerationReferences({
+        supabase: adminSupabase,
+        paths: copiedReferences.createdPaths,
+      });
+    }
+
     if (hasShowcaseAssetColumn && nextShowcaseAssetPath && nextShowcaseAssetPath !== generation.showcase_asset_path) {
       const removableDerivativePath = getCanonicalGenerationShowcaseAssetPath(
         nextShowcaseAssetPath,
@@ -986,6 +1054,10 @@ export async function publishGenerationToShowcaseForRoute({
       if (cleanupResult.error) {
         logBackendError('failed_to_delete_private_generation_media_after_publish_failure', { error: cleanupResult.error });
       }
+    }
+
+    if (postError instanceof GenerationReferencesNotCopiedError) {
+      return { ok: false, status: 500, body: { error: GENERATION_REFERENCES_NOT_COPIED_ERROR } };
     }
 
     // The database performs this check while holding the bundle row lock, so a
@@ -1090,6 +1162,15 @@ export async function publishGenerationToShowcaseForRoute({
     }
   }
 
+  // What the server did to the creation's recipe beside what it was sent, for
+  // the composer to show: the items it added, and the inputs it could not.
+  const recipeReport = recipePreparation?.ok && effectiveResourceBundle && effectiveResourceBundle.accessMode !== 'none'
+    ? {
+        recipeItemsAdded: readAddedRecipeItems(effectiveResourceBundle, recipePreparation.addedItemIds),
+        referencesNotCopied: (copiedReferences?.failedItemIds.size ?? 0) + recipePreparation.refusedReferenceCount,
+      }
+    : {};
+
   return {
     ok: true,
     body: {
@@ -1109,6 +1190,7 @@ export async function publishGenerationToShowcaseForRoute({
         effectiveVisibility === 'public'
           ? 'Successfully published to showcase'
           : 'Saved as a private post',
+      ...recipeReport,
     },
   };
 }

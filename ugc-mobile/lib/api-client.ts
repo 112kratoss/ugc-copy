@@ -46,6 +46,7 @@ import type {
   ReferralVisitResponse,
   WelcomeCreditResponse,
   PostResourceBundleInput,
+  PostResourceItem,
   PostResourceFileFinalizeRequest,
   PostResourceFileFinalizeResponse,
   PostResourceFileSignRequest,
@@ -1785,7 +1786,15 @@ export function createApiClient({
         };
       }>(`/api/posts/${postId}`),
     updatePost: (postId: string, body: Record<string, unknown>) =>
-      request<{ success: boolean; postId: string; visibility: string }>(`/api/posts/${postId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+      request<{
+        success: boolean;
+        postId: string;
+        visibility: string;
+        /** A creation's recipe: the items the server put in beside those sent, for the composer to adopt. */
+        recipeItemsAdded?: PostResourceItem[];
+        /** Saved inputs asked for that are not in the recipe. */
+        referencesNotCopied?: number;
+      }>(`/api/posts/${postId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     archivePost: (postId: string) =>
       request<{ success: boolean; archived: boolean }>(`/api/posts/${postId}/archive`, { method: 'POST' }),
     restorePost: (postId: string) =>
