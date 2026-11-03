@@ -24,7 +24,8 @@ export interface MenuHandoff<Row extends string> {
   chosen: Row | null;
   /**
    * True from the render in which the next screen has taken over from the one
-   * under the menu: the menu starts its exit then, over the arriving screen.
+   * under the menu (or none is coming): the menu starts its exit then, over the
+   * arriving screen, and stays closed until it is opened again.
    */
   leaving: boolean;
   /**
