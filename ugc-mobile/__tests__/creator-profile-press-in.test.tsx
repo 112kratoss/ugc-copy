@@ -69,7 +69,7 @@ vi.mock('@/components/showcase-media-preview', () => ({ ShowcaseMediaPreview: ()
 
 import { HomeFeedCardView } from '../components/home-feed-card';
 import { ReelSlideChrome } from '../components/reel-chrome';
-import { setCreatorProfilePreparer } from '../lib/creator-profile-opening';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 
 /** The handles the root preparer was handed, in order. */
 const prepared: string[] = [];
@@ -156,11 +156,15 @@ const creatorRow = (tree: renderer.ReactTestRenderer) => tree.root.find((node) =
 
 // iPhone simulator, 2026-11-03: the page's read began only once it had
 // mounted, and a creator opened from a reel drew a skeleton to +1100–1750 ms.
-describe("a finger landing on a reel slide's creator", () => {
+// Review of #679: read at press-in with no wait, a reel swipe that began on
+// the creator row read their page; the row now waits as a press does
+// (`creatorProfilePress`, whose own test drives React Native's Pressability).
+describe("a finger resting on a reel slide's creator", () => {
   it('starts reading their page before the press opens it', () => {
     const onCreatorOpen = vi.fn();
     const tree = renderReelChrome(reelItem(), onCreatorOpen);
 
+    expect(creatorRow(tree).props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
     renderer.act(() => (creatorRow(tree).props.onPressIn as () => void)());
     expect(prepared).toEqual(['luna']);
     expect(onCreatorOpen).not.toHaveBeenCalled();
@@ -181,7 +185,7 @@ describe("a finger landing on a reel slide's creator", () => {
   });
 });
 
-describe("a finger landing on a Home card's creator", () => {
+describe("a finger resting on a Home card's creator", () => {
   function homeCard(creator: ShowcaseFeedItem['creator']): HomeFeedCard {
     const item: ShowcaseFeedItem = {
       id: 'post-1',
@@ -223,7 +227,7 @@ describe("a finger landing on a Home card's creator", () => {
     } as unknown as HomeFeedCard;
   }
 
-  function renderHomeCard(card: HomeFeedCard) {
+  function renderHomeCard(card: HomeFeedCard, onCreatorOpen = vi.fn()) {
     let tree!: renderer.ReactTestRenderer;
     renderer.act(() => {
       tree = renderer.create(
@@ -234,7 +238,7 @@ describe("a finger landing on a Home card's creator", () => {
           onReadMore={vi.fn()}
           onFeedbackOpen={vi.fn()}
           feedbackMenu={{ quickActions: [], sections: [] }}
-          onCreatorOpen={vi.fn()}
+          onCreatorOpen={onCreatorOpen}
           onSave={vi.fn()}
           onComments={vi.fn()}
           onRemix={vi.fn()}
@@ -246,18 +250,24 @@ describe("a finger landing on a Home card's creator", () => {
     return tree;
   }
 
-  it('starts reading their page under the handle the card opens it with', () => {
-    const tree = renderHomeCard(homeCard({ id: 'creator-1', username: ' luna ', name: 'Luna Studio', avatar: null }));
+  it('starts reading their page under the handle the card opens it with, and opens it on the press', () => {
+    const onCreatorOpen = vi.fn();
+    const tree = renderHomeCard(homeCard({ id: 'creator-1', username: ' luna ', name: 'Luna Studio', avatar: null }), onCreatorOpen);
+    const press = shell.props?.creatorPress as { unstable_pressDelay: number; onPressIn: () => void; onPress: () => void };
 
-    renderer.act(() => (shell.props?.onCreatorPressIn as () => void)());
+    expect(press.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+    renderer.act(() => press.onPressIn());
     expect(prepared).toEqual(['luna']);
+    expect(onCreatorOpen).not.toHaveBeenCalled();
+    renderer.act(() => press.onPress());
+    expect(onCreatorOpen).toHaveBeenCalledTimes(1);
     renderer.act(() => tree.unmount());
   });
 
   it('reads nothing for a creator with no handle, whose page the card cannot open', () => {
     const tree = renderHomeCard(homeCard({ id: 'creator-1', username: null, name: 'Luna Studio', avatar: null }));
 
-    renderer.act(() => (shell.props?.onCreatorPressIn as () => void)());
+    renderer.act(() => (shell.props?.creatorPress as { onPressIn: () => void }).onPressIn());
     expect(prepared).toEqual([]);
     renderer.act(() => tree.unmount());
   });

@@ -3,6 +3,12 @@ import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { FeedCardShell } from '../components/feed-card-shell';
+import {
+  CREATOR_PROFILE_PRESS_DELAY_MS,
+  creatorProfilePress,
+  setCreatorProfilePreparer,
+  type CreatorProfilePress,
+} from '../lib/creator-profile-opening';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -49,8 +55,7 @@ function textOf(node: Instance): string {
 async function renderShell(props: {
   categoryLabel: string;
   modelLabel?: string | null;
-  onCreatorPress?: () => void;
-  onCreatorPressIn?: () => void;
+  creatorPress?: CreatorProfilePress | null;
 }) {
   let tree: renderer.ReactTestRenderer | null = null;
   await act(async () => {
@@ -60,7 +65,7 @@ async function renderShell(props: {
         creatorAvatar={null}
         creatorLabel="@ana"
         creatorName="Ana"
-        onCreatorPress={() => {}}
+        creatorPress={creatorProfilePress('ana', () => {})}
         onMorePress={() => {}}
         moreAccessibilityLabel="More options for A launch frame"
         openAccessibilityLabel="Open A launch frame"
@@ -125,20 +130,35 @@ describe('FeedCardShell metadata line', () => {
 });
 
 describe('FeedCardShell byline', () => {
-  // The creator's page is read as the finger lands (`prepareCreatorProfile`),
-  // and opened only by the press itself.
-  it('says when a finger lands on it, apart from the press that opens the page', async () => {
-    const onCreatorPress = vi.fn();
-    const onCreatorPressIn = vi.fn();
-    const tree = await renderShell({ categoryLabel: 'Image', onCreatorPress, onCreatorPressIn });
+  // The creator's page is read once the finger has rested on the byline, and
+  // opened only by the press itself (`creatorProfilePress`).
+  it('presses as a creator opener: the page read after the wait, opened by the press', async () => {
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const open = vi.fn();
+    const tree = await renderShell({ categoryLabel: 'Image', creatorPress: creatorProfilePress('ana', open) });
     const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === 'Open @ana');
 
+    expect(byline.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
     await act(async () => (byline.props.onPressIn as () => void)());
-    expect(onCreatorPressIn).toHaveBeenCalledTimes(1);
-    expect(onCreatorPress).not.toHaveBeenCalled();
+    expect(prepared).toEqual(['ana']);
+    expect(open).not.toHaveBeenCalled();
 
     await act(async () => (byline.props.onPress as () => void)());
-    expect(onCreatorPress).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(1);
+
+    removePreparer();
+    await act(async () => tree.unmount());
+  });
+
+  it('is plain text, pressing nothing, for a card that opens no creator page', async () => {
+    const tree = await renderShell({ categoryLabel: 'Image', creatorPress: null });
+    const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === '@ana · 2h');
+
+    expect(byline.props.disabled).toBe(true);
+    expect(byline.props.accessibilityRole).toBeUndefined();
+    expect(byline.props.onPressIn).toBeUndefined();
+    expect(byline.props.onPress).toBeUndefined();
 
     await act(async () => tree.unmount());
   });

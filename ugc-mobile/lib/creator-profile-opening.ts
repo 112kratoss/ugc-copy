@@ -9,7 +9,7 @@ import type { CreatorProfileResponse, ShowcaseCreator, ShowcaseFeedItem } from '
  * skeleton until it landed: on the iPhone simulator (2026-11-03) a creator
  * opened from a reel had slid in by about +400 ms and showed its skeleton until
  * +1100–1750 ms, its banner a beat after that. Now the read starts as the
- * finger lands on the creator's avatar or handle (`prepareCreatorProfile`), and
+ * finger rests on the creator's avatar or handle (`creatorProfilePress`), and
  * the page draws who they are from its first frame (`creatorProfileOpening`).
  *
  * Nothing here imports the query or the API client: the reel's chrome and the
@@ -41,11 +41,46 @@ export function setCreatorProfilePreparer(next: (username: string) => void) {
  * table the app's usage is counted from. A read for every slide shown would
  * spend the limit, and the count, on pages nobody opened (checked 2026-11-03:
  * the route writes nothing else, no view count and no ranking state).
+ *
+ * Called by `creatorProfilePress`, which waits for a touch to be a press first.
  */
 export function prepareCreatorProfile(username: string | null | undefined) {
   const handle = username?.trim();
   if (handle) preparer?.(handle);
 }
+
+/**
+ * How long a finger rests on a creator's avatar or handle before their page is
+ * read. A touch that turns into a scroll or a swipe is taken by its list or
+ * pager well within it. Android waits as long (its tap timeout) before it calls
+ * a touch in a scrolling list a press, and the feed card waits as long before
+ * it presses down (`CARD_PRESS_DELAY_MS`).
+ */
+export const CREATOR_PROFILE_PRESS_DELAY_MS = 100;
+
+/**
+ * What anything that opens a creator's page hands its Pressable: the page is
+ * read once the finger has rested on it for `CREATOR_PROFILE_PRESS_DELAY_MS`,
+ * and opened by the press (`open`).
+ *
+ * The read used to start at press-in with no wait, which React Native's
+ * Pressability calls the moment it is given the touch: a feed scroll that began
+ * on a byline, or a reel swipe that began on the creator row, read that
+ * creator's page (review of #679). With the wait, Pressability holds press-in
+ * back. A touch its list or pager takes before then, or one that slides off the
+ * control, never presses in; a tap let go sooner presses in as it lets go, just
+ * before its press, so the read never starts later than the page is pushed. The
+ * pressed look waits as long, as the feed card's does.
+ */
+export function creatorProfilePress(username: string | null | undefined, open: () => void) {
+  return {
+    unstable_pressDelay: CREATOR_PROFILE_PRESS_DELAY_MS,
+    onPressIn: () => prepareCreatorProfile(username),
+    onPress: open,
+  };
+}
+
+export type CreatorProfilePress = ReturnType<typeof creatorProfilePress>;
 
 /**
  * Every cache that holds showcase posts, as `refreshUnlockedBundleCaches`

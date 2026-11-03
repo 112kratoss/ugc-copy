@@ -27,9 +27,9 @@ const ignore = () => {};
  * and the reel's: asked only once the reel was up, the answer took a round trip
  * after it and the pill appeared a second or more into the post.
  *
- * And, as a finger lands on a creator's avatar or handle, reads their page
- * when the app holds none of it (`prepareCreatorProfile`), so the page finds
- * its first read under way or done.
+ * And, as a finger rests on a creator's avatar or handle, reads their page
+ * when the app holds none of it (`creatorProfilePress`), so the page finds its
+ * first read under way or done.
  */
 export function ZoomPostPreparer() {
   const { api, user } = useAuth();

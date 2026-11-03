@@ -108,7 +108,7 @@ import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia } from '@/lib/sho
 import { Reveal } from '@/components/reveal';
 import { SkeletonBone } from '@/components/skeleton';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
-import { prepareCreatorProfile } from '@/lib/creator-profile-opening';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { haptic } from '@/lib/haptics';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { MotionView, useOverlayPresence, usePressMotion } from '@/lib/motion';
@@ -1443,10 +1443,9 @@ const MasonryPin = memo(function MasonryPin({
           accessibilityHint="Opens this creator's profile"
           disabled={!card.item.creator.username}
           hitSlop={{ top: 4, right: 8, bottom: 4, left: 0 }}
-          // Their page's first read starts as the finger lands, as on Home's
-          // cards and the reel's creator row (`prepareCreatorProfile`).
-          onPressIn={() => prepareCreatorProfile(card.item.creator.username)}
-          onPress={() => onOpenCreator(card.item)}
+          // Their page is read once the finger has rested here, as on Home's
+          // cards and the reel's creator row (`creatorProfilePress`).
+          {...creatorProfilePress(card.item.creator.username, () => onOpenCreator(card.item))}
           style={({ pressed }) => ({
             flex: 1,
             minHeight: 40,

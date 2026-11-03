@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 
 import type { NativeMenuTrigger } from '@/components/native-menu';
 import { CreatorAvatar } from '@/components/ui';
+import type { CreatorProfilePress } from '@/lib/creator-profile-opening';
 import { haptic } from '@/lib/haptics';
 import { FEED_CARD_MEDIA_INSET } from '@/lib/feed-card-geometry';
 import { MotionView, usePressMotion } from '@/lib/motion';
@@ -42,8 +43,7 @@ export function FeedCardShell({
   creatorAvatar,
   creatorLabel,
   creatorName,
-  onCreatorPress,
-  onCreatorPressIn,
+  creatorPress,
   onMorePress,
   moreAccessibilityLabel,
   renderMoreMenu,
@@ -70,9 +70,11 @@ export function FeedCardShell({
   creatorAvatar: string | null;
   creatorLabel: string;
   creatorName: string;
-  onCreatorPress?: () => void;
-  /** The finger has landed on the byline: a chance to start reading the creator's page (`prepareCreatorProfile`). */
-  onCreatorPressIn?: () => void;
+  /**
+   * What the byline does: open the creator's page, read once the finger has
+   * rested on it (`creatorProfilePress`). Without it, the byline is text.
+   */
+  creatorPress?: CreatorProfilePress | null;
   onMorePress: () => void;
   moreAccessibilityLabel: string;
   /**
@@ -183,11 +185,10 @@ export function FeedCardShell({
         {/* Labelled in both states: Android never clears a label that goes
             back to undefined, so "Open …" would outlive the link. */}
         <Pressable
-          accessibilityRole={onCreatorPress ? 'button' : undefined}
-          accessibilityLabel={onCreatorPress ? `Open ${creatorLabel}` : `${creatorLabel} · ${timeLabel}`}
-          disabled={!onCreatorPress}
-          onPress={onCreatorPress}
-          onPressIn={onCreatorPressIn}
+          accessibilityRole={creatorPress ? 'button' : undefined}
+          accessibilityLabel={creatorPress ? `Open ${creatorLabel}` : `${creatorLabel} · ${timeLabel}`}
+          disabled={!creatorPress}
+          {...creatorPress}
           hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
           style={({ pressed }) => ({
             flexDirection: 'row',
@@ -195,7 +196,7 @@ export function FeedCardShell({
             gap: 7,
             flex: 1,
             minHeight: CREATOR_ROW_HEIGHT,
-            opacity: pressed && onCreatorPress ? appTheme.opacity.pressed : 1,
+            opacity: pressed && creatorPress ? appTheme.opacity.pressed : 1,
           })}
         >
           <CreatorAvatar uri={creatorAvatar} name={creatorName} size={22} />
