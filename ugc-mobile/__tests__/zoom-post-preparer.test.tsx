@@ -1,26 +1,18 @@
+import { MutationObserver, QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
-
-type PagePrefetch = {
-  queryKey: unknown;
-  initialPageParam: number;
-  staleTime: number;
-  queryFn: (context: { pageParam: number }) => Promise<unknown>;
-};
+import type { CreatorProfileResponse } from '../lib/types';
 
 const { state } = vi.hoisted(() => ({
   state: {
     user: { id: 'reader' } as { id: string } | null,
     preparer: null as ((post: ImmersivePreviewItem) => void) | null,
-    prefetched: [] as unknown[],
-    pagePrefetches: [] as PagePrefetch[],
-    mutating: 0,
     api: {
-      getCreatorFollowState: (() => undefined) as (...args: unknown[]) => unknown,
-      getCreatorProfile: (() => undefined) as (...args: unknown[]) => unknown,
+      getCreatorFollowState: vi.fn(),
+      getCreatorProfile: vi.fn(),
     },
   },
 }));
@@ -32,23 +24,6 @@ vi.mock('@/components/media-zoom', () => ({
       if (state.preparer === preparer) state.preparer = null;
     };
   },
-}));
-vi.mock('@tanstack/react-query', () => ({
-  skipToken: Symbol('skipToken'),
-  useQuery: () => ({ data: undefined }),
-  useQueryClient: () => ({
-    prefetchQuery: async ({ queryKey }: { queryKey: unknown }) => {
-      state.prefetched.push(queryKey);
-    },
-    prefetchInfiniteQuery: async (options: PagePrefetch) => {
-      state.pagePrefetches.push(options);
-    },
-    // No creator page cached: every answer is asked for.
-    getQueriesData: () => [],
-    getQueryState: () => undefined,
-    isMutating: () => state.mutating,
-    setQueryData: vi.fn(),
-  }),
 }));
 vi.mock('@/lib/auth', () => ({
   useAuth: () => ({ user: state.user, api: state.api }),
@@ -67,35 +42,71 @@ vi.mock('react-native-safe-area-context', () => ({
 import { ZoomPostPreparer } from '../components/zoom-post-chrome';
 import { prepareCreatorProfile } from '../lib/creator-profile-opening';
 
+const MINUTE = 60 * 1000;
+const lunaGridKey = ['creator-profile', 'infinite', 'luna'];
+
 function post(creatorId: string, sourceType: ImmersivePreviewItem['sourceType'] = 'showcase') {
   return { id: `post-by-${creatorId}`, creatorId, sourceType } as ImmersivePreviewItem;
 }
 
+/** One page of luna's grid, as the server sends it from `offset`. */
+function gridPage(offset: number): CreatorProfileResponse {
+  return {
+    profile: { id: 'creator-1', username: 'luna' },
+    items: [],
+    pageInfo: { hasMore: offset < 48, nextLimit: null, nextOffset: offset < 48 ? offset + 24 : null, limit: 24, offset },
+    viewer: { isOwner: false, isFollowing: false, blockedByViewer: false },
+  } as unknown as CreatorProfileResponse;
+}
+
+/** Luna's grid as her page keeps it once three pages have loaded. */
+function threePageGrid(): InfiniteData<CreatorProfileResponse, number> {
+  return { pages: [gridPage(0), gridPage(24), gridPage(48)], pageParams: [0, 24, 48] };
+}
+
+// React Query's own client, so what the preparer asks of it is what the app's would do.
+let client: QueryClient;
+
 function mount() {
   let tree: renderer.ReactTestRenderer | null = null;
   renderer.act(() => {
-    tree = renderer.create(<ZoomPostPreparer />);
+    tree = renderer.create(
+      <QueryClientProvider client={client}>
+        <ZoomPostPreparer />
+      </QueryClientProvider>,
+    );
   });
   return tree!;
 }
 
+async function settle() {
+  await renderer.act(async () => {
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+  });
+}
+
+beforeEach(() => {
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  state.api.getCreatorFollowState.mockReset().mockResolvedValue({ following: false });
+  state.api.getCreatorProfile.mockReset().mockImplementation(async (_username: string, { offset }: { offset: number }) => gridPage(offset));
+});
+
 afterEach(() => {
+  client.clear();
   state.user = { id: 'reader' };
   state.preparer = null;
-  state.prefetched = [];
-  state.pagePrefetches = [];
-  state.mutating = 0;
 });
 
 describe('ZoomPostPreparer', () => {
-  it("asks whom the reader follows for another creator's post, and nothing for their own", () => {
+  it("asks whom the reader follows for another creator's post, and nothing for their own", async () => {
     const tree = mount();
 
     state.preparer?.(post('creator-9'));
     state.preparer?.(post('reader'));
     state.preparer?.(post('creator-9', 'generation'));
+    await settle();
 
-    expect(state.prefetched).toEqual([['creator-follow-state', 'creator-9']]);
+    expect(state.api.getCreatorFollowState.mock.calls).toEqual([['creator-9']]);
     renderer.act(() => tree.unmount());
     expect(state.preparer).toBeNull();
   });
@@ -114,34 +125,61 @@ describe("ZoomPostPreparer, for a creator's page", () => {
     "reads the page's first page as a finger lands on its creator, for %s",
     async (_reader, user) => {
       state.user = user;
-      const getCreatorProfile = vi.fn(async () => ({}));
-      state.api.getCreatorProfile = getCreatorProfile;
       const tree = mount();
 
       prepareCreatorProfile('luna');
+      await settle();
 
-      // The page's own query: its key, its page size, its minute of freshness.
-      expect(state.pagePrefetches.map((options) => options.queryKey)).toEqual([['creator-profile', 'infinite', 'luna']]);
-      const [options] = state.pagePrefetches;
-      expect(options).toMatchObject({ initialPageParam: 0, staleTime: 60_000 });
-      await options.queryFn({ pageParam: 0 });
-      expect(getCreatorProfile).toHaveBeenCalledWith('luna', { limit: 24, offset: 0 });
+      // The page's own query: its key and its page size.
+      expect(state.api.getCreatorProfile.mock.calls).toEqual([['luna', { limit: 24, offset: 0 }]]);
+      expect(client.getQueryData(lunaGridKey)).toEqual({ pages: [gridPage(0)], pageParams: [0] });
 
       renderer.act(() => tree.unmount());
+      client.clear();
       prepareCreatorProfile('luna');
-      expect(state.pagePrefetches).toHaveLength(1);
+      await settle();
+      expect(state.api.getCreatorProfile).toHaveBeenCalledTimes(1);
     },
   );
 
-  // A Follow pressed in the reel, say: a page read under it can carry the
-  // answer from before it.
-  it('reads nothing while a change is on its way', () => {
-    state.mutating = 1;
-    const tree = mount();
+  // Review of #679: a held grid older than its minute was read again page by
+  // page at every touch, three requests here, under any reel reading it. The
+  // page refreshes what it holds as it mounts.
+  it.each([['older than its minute', 5 * MINUTE], ['still fresh', 10 * 1000]])(
+    'reads nothing for a grid the app already holds, %s',
+    async (_age, age) => {
+      const held = threePageGrid();
+      client.setQueryData(lunaGridKey, held, { updatedAt: Date.now() - age });
+      mount();
+
+      prepareCreatorProfile('luna');
+      await settle();
+
+      expect(state.api.getCreatorProfile).not.toHaveBeenCalled();
+      expect(client.getQueryData(lunaGridKey)).toBe(held);
+    },
+  );
+
+  it('asks once for a read already under way', async () => {
+    mount();
 
     prepareCreatorProfile('luna');
+    prepareCreatorProfile('luna');
+    await settle();
 
-    expect(state.pagePrefetches).toEqual([]);
-    renderer.act(() => tree.unmount());
+    expect(state.api.getCreatorProfile).toHaveBeenCalledTimes(1);
+  });
+
+  // A Follow pressed in the reel, say: a page read under it can carry the
+  // answer from before it.
+  it('reads nothing while a change is on its way', async () => {
+    void new MutationObserver(client, { mutationFn: () => new Promise(() => undefined) }).mutate();
+    expect(client.isMutating()).toBe(1);
+    mount();
+
+    prepareCreatorProfile('luna');
+    await settle();
+
+    expect(state.api.getCreatorProfile).not.toHaveBeenCalled();
   });
 });

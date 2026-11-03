@@ -28,7 +28,8 @@ const ignore = () => {};
  * after it and the pill appeared a second or more into the post.
  *
  * And, as a finger lands on a creator's avatar or handle, reads their page
- * (`prepareCreatorProfile`), so the page finds its first read under way or done.
+ * when the app holds none of it (`prepareCreatorProfile`), so the page finds
+ * its first read under way or done.
  */
 export function ZoomPostPreparer() {
   const { api, user } = useAuth();
@@ -42,13 +43,18 @@ export function ZoomPostPreparer() {
     });
   }, [api, queryClient, viewerId]);
   // Guests open creator pages too. The page's own query, under its key, page
-  // size and freshness, so a page read in the last minute is not read again.
-  // Not while a change is on its way (a Follow pressed in the reel, say): a
-  // page read under it can carry the answer from before it, and land after the
-  // change has written its own answer into the cached pages.
+  // size and freshness. Only a page the app holds nothing of is read: a held
+  // grid, fresh or not, the page draws at once and refreshes itself as it
+  // mounts. Read here, a grid older than its minute was read again page by
+  // page, at every touch and under any reel reading those pages (review of
+  // #679). Not while a change is on its way (a Follow pressed in the reel,
+  // say): a page read under it can carry the answer from before it, and land
+  // after the change has written its own answer into the cached pages.
   useEffect(() => setCreatorProfilePreparer((username) => {
     if (queryClient.isMutating() > 0) return;
-    void queryClient.prefetchInfiniteQuery(creatorProfileGridQueryOptions(api, username));
+    const options = creatorProfileGridQueryOptions(api, username);
+    if (queryClient.getQueryData(options.queryKey) !== undefined) return;
+    void queryClient.prefetchInfiniteQuery(options);
   }), [api, queryClient]);
   return null;
 }
