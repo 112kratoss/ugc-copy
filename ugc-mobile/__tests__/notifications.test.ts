@@ -8,6 +8,7 @@ const notificationsMocks = vi.hoisted(() => ({
   getPermissionsAsync: vi.fn(),
   requestPermissionsAsync: vi.fn(),
   setBadgeCountAsync: vi.fn(async () => true),
+  getDevicePushTokenAsync: vi.fn(),
   getExpoPushTokenAsync: vi.fn(),
   getLastNotificationResponseAsync: vi.fn(),
   clearLastNotificationResponseAsync: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock('expo-notifications', () => ({
   getPermissionsAsync: notificationsMocks.getPermissionsAsync,
   requestPermissionsAsync: notificationsMocks.requestPermissionsAsync,
   setBadgeCountAsync: notificationsMocks.setBadgeCountAsync,
+  getDevicePushTokenAsync: notificationsMocks.getDevicePushTokenAsync,
   getExpoPushTokenAsync: notificationsMocks.getExpoPushTokenAsync,
   getLastNotificationResponseAsync: notificationsMocks.getLastNotificationResponseAsync,
   clearLastNotificationResponseAsync: notificationsMocks.clearLastNotificationResponseAsync,
@@ -84,6 +86,8 @@ describe('mobile notifications helper', () => {
     vi.resetModules();
     notificationsMocks.getPermissionsAsync.mockReset();
     notificationsMocks.requestPermissionsAsync.mockReset();
+    notificationsMocks.getDevicePushTokenAsync.mockReset();
+    notificationsMocks.getDevicePushTokenAsync.mockResolvedValue({ type: 'ios', data: 'apns-device-token' });
     notificationsMocks.getExpoPushTokenAsync.mockReset();
     notificationsMocks.getLastNotificationResponseAsync.mockReset();
     notificationsMocks.clearLastNotificationResponseAsync.mockReset();
@@ -685,6 +689,125 @@ describe('mobile notifications helper', () => {
       } finally {
         consoleError.mockRestore();
       }
+    });
+
+    // Device sweep, Pixel 9a emulator, 2026-11-03: the first visit to Alerts sent
+    // two simultaneous getExpoPushToken POSTs. Both native modules emit the device
+    // token they resolve to `addPushTokenListener`, so a registration's own
+    // device-token fetch reached the rotation listener, which exchanged it again
+    // while the registration's exchange was still on the wire.
+    describe('one exchange per device token at a time', () => {
+      type ExpoToken = { type: 'expo'; data: string };
+
+      function deferred<T>() {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>((settle) => { resolve = settle; });
+        return { promise, resolve };
+      }
+
+      /** The native side: every device-token fetch is also emitted to the listener. */
+      function deviceTokenFetchEchoes(emit: (token: MockDevicePushToken) => void, token: MockDevicePushToken) {
+        notificationsMocks.getDevicePushTokenAsync.mockImplementation(async () => {
+          emit(token);
+          return token;
+        });
+      }
+
+      /**
+       * Each call is one POST to Expo. Given no device token, expo-notifications
+       * fetches one first, and that fetch is echoed like any other.
+       */
+      function expoAnswers(answer: Promise<ExpoToken>) {
+        notificationsMocks.getExpoPushTokenAsync.mockImplementation(async (options: { devicePushToken?: MockDevicePushToken }) => {
+          if (!options.devicePushToken) await notificationsMocks.getDevicePushTokenAsync();
+          return answer;
+        });
+      }
+
+      it('shares one exchange between a registration and the echo of its own device-token fetch', async () => {
+        notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+        // A first registration on this install: no Expo token stored yet.
+        storeHolds(null);
+        const api = { registerMobilePushToken: vi.fn(async () => ({ success: true })) };
+        const { emit } = await subscribeAndCaptureListener(api);
+        deviceTokenFetchEchoes(emit, apnsDeviceToken);
+        const answer = deferred<ExpoToken>();
+        expoAnswers(answer.promise);
+
+        const { registerForMobilePushNotifications } = await import('../lib/notifications');
+        const registration = registerForMobilePushNotifications(api as never, { requestPermission: false });
+        await settleListener();
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(1);
+
+        answer.resolve({ type: 'expo', data: 'ExponentPushToken[shared]' });
+        await expect(registration).resolves.toEqual({ status: 'registered', expoPushToken: 'ExponentPushToken[shared]' });
+        await settleListener();
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(1);
+        // The listener leaves the API to the registration already sending this token.
+        expect(api.registerMobilePushToken).toHaveBeenCalledTimes(1);
+        expect(api.registerMobilePushToken).toHaveBeenCalledWith(expect.objectContaining({ expoPushToken: 'ExponentPushToken[shared]' }));
+      });
+
+      it('exchanges once for two registrations asked for at once, and each still tells the API', async () => {
+        notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+        storeHolds('ExponentPushToken[same]');
+        notificationsMocks.getDevicePushTokenAsync.mockResolvedValue(apnsDeviceToken);
+        const answer = deferred<ExpoToken>();
+        expoAnswers(answer.promise);
+        const api = { registerMobilePushToken: vi.fn(async () => ({ success: true })) };
+
+        const { registerForMobilePushNotifications } = await import('../lib/notifications');
+        const first = registerForMobilePushNotifications(api as never, { requestPermission: false });
+        const second = registerForMobilePushNotifications(api as never, { requestPermission: false });
+        await settleListener();
+        answer.resolve({ type: 'expo', data: 'ExponentPushToken[same]' });
+
+        await expect(Promise.all([first, second])).resolves.toEqual([
+          { status: 'registered', expoPushToken: 'ExponentPushToken[same]' },
+          { status: 'registered', expoPushToken: 'ExponentPushToken[same]' },
+        ]);
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(1);
+        // Never shared across a sign-out: each registration is sent with the session it was asked under.
+        expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+      });
+
+      it('exchanges a rotated device token on its own while another is being exchanged', async () => {
+        notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+        storeHolds('ExponentPushToken[same]');
+        const api = { registerMobilePushToken: vi.fn(async () => ({ success: true })) };
+        const { emit } = await subscribeAndCaptureListener(api);
+        notificationsMocks.getDevicePushTokenAsync.mockResolvedValue(apnsDeviceToken);
+        const answer = deferred<ExpoToken>();
+        expoAnswers(answer.promise);
+
+        const { registerForMobilePushNotifications } = await import('../lib/notifications');
+        const registration = registerForMobilePushNotifications(api as never, { requestPermission: false });
+        emit({ type: 'ios', data: 'a-different-apns-device-token' });
+        await settleListener();
+
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(2);
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledWith({
+          projectId: 'project-1',
+          devicePushToken: { type: 'ios', data: 'a-different-apns-device-token' },
+        });
+        answer.resolve({ type: 'expo', data: 'ExponentPushToken[same]' });
+        await registration;
+      });
+
+      it('exchanges again once the earlier exchange has settled', async () => {
+        notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+        storeHolds('ExponentPushToken[same]');
+        notificationsMocks.getDevicePushTokenAsync.mockResolvedValue(apnsDeviceToken);
+        notificationsMocks.getExpoPushTokenAsync.mockResolvedValue({ type: 'expo', data: 'ExponentPushToken[same]' });
+        const api = { registerMobilePushToken: vi.fn(async () => ({ success: true })) };
+
+        const { registerForMobilePushNotifications } = await import('../lib/notifications');
+        await registerForMobilePushNotifications(api as never, { requestPermission: false });
+        await registerForMobilePushNotifications(api as never, { requestPermission: false });
+
+        // Nothing is kept: a later check asks Expo again, as it always has.
+        expect(notificationsMocks.getExpoPushTokenAsync).toHaveBeenCalledTimes(2);
+      });
     });
   });
 });

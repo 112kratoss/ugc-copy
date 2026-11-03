@@ -425,10 +425,12 @@ describe('/api/generations route', () => {
     expect(data.generations[0].paywallPrefill).toMatchObject({
       promptText: 'A creator-style product image with warm natural light.',
       allowRemix: true,
-      resourceKinds: ['prompt', 'notes', 'remix', 'files'],
+      resourceKinds: ['prompt', 'remix', 'files'],
       referenceCount: 1,
     });
-    expect(String(data.generations[0].paywallPrefill.notesMarkdown)).toContain('Model: Nano Banana 2.0');
+    // The settings are public on the post since 2026-11-03: a new recipe takes in no saved setup,
+    // and the field that carried it as a note is gone.
+    expect(data.generations[0].paywallPrefill).not.toHaveProperty('notesMarkdown');
   });
 
   it('returns a bounded page with pagination metadata', async () => {
@@ -944,6 +946,9 @@ describe('/api/generations route', () => {
     inputMediaState = [
       row('input-own', 0, 'uploads/user-1/draft/face.png'),
       row('input-original', 1, 'generation_inputs/creator-9/gen-0/00-reference-image.png'),
+      // A file of a seller's recipe the run used through the creator's unlock goes in no recipe of
+      // theirs (owner, 2026-11-03), so the recipe they start from counts it nowhere.
+      row('input-bought', 2, 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png'),
     ];
 
     const { GET } = await import('@/app/api/generations/route');
@@ -987,7 +992,7 @@ describe('/api/generations route', () => {
     expect(data.generations[0].workflow_settings).toBeUndefined();
     expect(data.generations[0].paywallPrefill).toMatchObject({
       allowRemix: true,
-      resourceKinds: ['prompt', 'notes', 'remix', 'files'],
+      resourceKinds: ['prompt', 'remix', 'files'],
       referenceCount: 1,
     });
   });

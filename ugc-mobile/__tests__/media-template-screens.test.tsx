@@ -170,6 +170,7 @@ vi.mock('@/lib/template-run-resume', () => resumeState);
 
 import { MediaTemplateCatalogScreen, MediaTemplateDetailScreen, MediaTemplateRunScreen } from '../components/media-template-screens';
 import { ApiError } from '../lib/api-client';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import {
   normalizeMediaTemplateDetailResponse,
   normalizeMediaTemplateListResponse,
@@ -1071,6 +1072,23 @@ describe('a template’s page (01-3, 01-7, 01-9, 01-10)', () => {
 
     await press(hosts(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Created by Maya')!);
     expect(routerState.push).toHaveBeenCalledWith('/creators/maya');
+  });
+
+  // Review of #679: never read for a scroll of the page that starts on the byline.
+  it("reads the creator's page once the finger has rested on the byline", async () => {
+    authState.api.getMediaTemplate.mockResolvedValue(detail());
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const tree = await mountDetail();
+    const byline = hosts(tree, 'pressable').find((node) => node.props.accessibilityLabel === 'Created by Maya')!;
+
+    expect(byline.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+    await renderer.act(async () => {
+      byline.props.onPressIn();
+    });
+    expect(prepared).toEqual(['maya']);
+
+    removePreparer();
   });
 
   it.each([

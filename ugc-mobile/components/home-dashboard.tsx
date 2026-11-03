@@ -55,7 +55,7 @@ import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dia
 import { haptic } from '@/lib/haptics';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
-import { showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
+import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcaseRemixAccess } from '@/lib/showcase-remix-access';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
@@ -723,18 +723,28 @@ export function HomeDashboard() {
       openUnlockSheet();
       return;
     }
+    // Read as the reel reads the post, so the creator opens as it does from the reel: the
+    // same tool and prompt, and the row naming the source.
+    const remixed = buildImmersiveShowcaseItems('showcase-feed', [item])[0];
+    // The creator opens now, on the link the start is expected to answer with, and the
+    // answer then carries it on, sends it to its own link or closes it (`launchShowcaseRemix`).
+    const remixLaunch = launchShowcaseRemix({ api, item: remixed, navigate: (href) => router.push(href as never) });
     const startRemix = async () => {
       const started = await startShowcaseRemix({
         api,
         postId: item.id,
         claimFreeUnlock: access === 'free-unlock',
+        onSourceReadable: remixLaunch.sourceReadable,
       });
       if (started.kind === 'unlock-required') {
         // This page was loaded before the creator put remix behind an unlock.
         if (item.asset) {
+          // The sheet is this screen's, so it waits for the creator to be gone.
+          await remixLaunch.close();
           openUnlockSheet();
           return;
         }
+        void remixLaunch.close();
         void queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
         showMessageDialog({
           title: 'Unlock needed',
@@ -754,12 +764,11 @@ export function HomeDashboard() {
       }
       const result = started.response;
       recordFeedEvent(item, 'remix_start');
-      // Read as the reel reads the post, so the creator opens as it does from
-      // the reel: the same tool and prompt, and the row naming the source.
-      const href = showcaseRemixCreateHref(buildImmersiveShowcaseItems('showcase-feed', [item])[0], result);
+      const href = showcaseRemixCreateHref(remixed, result);
       if (href) {
-        router.push(href as never);
+        remixLaunch.land(href);
       } else if (result.redirectTo) {
+        void remixLaunch.close();
         const webUrl = `${env.siteUrl}${result.redirectTo}`;
         void showConfirmDialog({
           title: REMIX_NEEDS_WEB_TITLE,
@@ -770,6 +779,7 @@ export function HomeDashboard() {
           if (openWeb) void Linking.openURL(webUrl);
         });
       } else {
+        void remixLaunch.close();
         haptic.error();
         showMessageDialog({
           title: 'Could not start remix',
@@ -782,6 +792,7 @@ export function HomeDashboard() {
     // cannot compile.
     void startRemix()
       .catch((error) => {
+        void remixLaunch.close();
         haptic.error();
         showErrorDialog('Could not start remix', error);
       })

@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
 import { haptic } from '@/lib/haptics';
+import { useMenuHandoff } from '@/lib/menu-handoff';
 import { useCrossFade, usePressMotion, useReducedMotion, useSpringState } from '@/lib/motion';
 import { useTabBarGenerationCount } from '@/lib/use-active-generations';
 import { useTabBarBadge } from '@/lib/use-notification-badge';
@@ -145,16 +146,16 @@ export function MagicTabBar({
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
+  const closeCreateMenu = () => setCreateMenuVisible(false);
+  // A tile opens its screen at the tap, and the menu stays up until that
+  // screen is under it (`lib/menu-handoff.ts`). It used to wait for the
+  // menu's exit, or a 400 ms fallback, before navigating: Generate reached
+  // the creator ~560 ms after the tap, with Profile showing in between
+  // (Pixel 9a emulator, 2026-11-03).
+  const createMenu = useMenuHandoff<CreateMenuActionId>({ visible: createMenuVisible, onClose: closeCreateMenu });
+  const createMenuOpen = createMenuVisible && !createMenu.leaving;
   const createMotion = usePressMotion(false, { scale: CONTROL_PRESS_SCALE });
   const surfaceMode = useTabBarSurfaceMode();
-  const pendingCreateAction = useRef<CreateMenuActionId | null>(null);
-  const pendingActionFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    // Unmounting mid-window (e.g. a root redirect) drops the pending action
-    // on purpose — navigating after an unrelated redirect would fight it.
-    if (pendingActionFallback.current) clearTimeout(pendingActionFallback.current);
-  }, []);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const metrics = getMagicTabBarMetrics(width, bottomInset);
   // The Alerts tab is the only one with anything to announce; a badge on a tab
@@ -187,6 +188,7 @@ export function MagicTabBar({
     }
   };
 
+  /** False when a listener prevented the press and nothing moved. */
   const navigateToCreateTab = () => {
     const createRoute = state.routes.find((route) => route.name === 'creator');
     const event = navigation.emit({
@@ -195,42 +197,25 @@ export function MagicTabBar({
       canPreventDefault: true,
     });
 
-    if (!event.defaultPrevented) {
-      const tabNavigation = navigation as typeof navigation & { jumpTo?: (name: string) => void };
-      if (typeof tabNavigation.jumpTo === 'function') {
-        tabNavigation.jumpTo('creator');
-      } else {
-        navigation.navigate('creator');
-      }
+    if (event.defaultPrevented) return false;
+    const tabNavigation = navigation as typeof navigation & { jumpTo?: (name: string) => void };
+    if (typeof tabNavigation.jumpTo === 'function') {
+      tabNavigation.jumpTo('creator');
+    } else {
+      navigation.navigate('creator');
     }
+    return true;
   };
 
-  const completeCreateMenuAction = () => {
-    if (pendingActionFallback.current) {
-      clearTimeout(pendingActionFallback.current);
-      pendingActionFallback.current = null;
-    }
-
-    const actionId = pendingCreateAction.current;
-    if (!actionId) return;
-    pendingCreateAction.current = null;
-
-    if (actionId === 'create') {
-      navigateToCreateTab();
-      return;
-    }
-
-    router.push(getCreateMenuActionHref('post') as never);
-  };
-
+  // Generate jumps to the creator tab, which changes the route at the tap: the
+  // menu leaves in the render that draws the creator. Post pushes the composer,
+  // which expo-router builds a render later: the menu waits for it.
   const handleCreateMenuAction = (actionId: CreateMenuActionId) => {
-    pendingCreateAction.current = actionId;
-    setCreateMenuVisible(false);
-    // Normally the menu's exit animation calls onExited, which delivers the
-    // action. An interrupted animation (backgrounding, reduce-motion flip)
-    // never completes, so back it up with a timer; delivery is idempotent.
-    if (pendingActionFallback.current) clearTimeout(pendingActionFallback.current);
-    pendingActionFallback.current = setTimeout(completeCreateMenuAction, 400);
+    createMenu.handOff(actionId, () => (
+      actionId === 'create'
+        ? navigateToCreateTab()
+        : router.push(getCreateMenuActionHref('post') as never)
+    ));
   };
 
   return (
@@ -241,7 +226,24 @@ export function MagicTabBar({
       // bar mounted keeps the blur's target hookup stable across transitions,
       // so hide with opacity, not `display: 'none'` — display none detaches
       // the native view and reintroduces the same attach-during-fade window.
-      pointerEvents={hidden ? 'none' : 'auto'}
+      //
+      // Never flattened, for the same reason. Shown, this view carries nothing
+      // Fabric needs a native view for, so it was flattened away; hiding it
+      // (opacity 0, no pointer events, hidden from accessibility) made Fabric
+      // create one and move the bar's children into it
+      // (`ViewShadowNode.cpp`, `formsStackingContext`). The create menu's Modal
+      // is one of them, and a Modal host taken off the window dismisses its
+      // window: Android's `onDetachedFromWindow` drops the Dialog until a later
+      // prop update shows it again, and iOS dismisses when it loses its
+      // superview. Generate hides the bar while the menu is still leaving over
+      // the creator: on the Pixel 9a emulator the menu's window vanished for two
+      // frames, Profile showed bare, and the sheet came back for one frame
+      // mid-exit (2026-11-03). Shown, it is `box-none`: a native view now, it
+      // would otherwise take the touches that landed on the feed through its
+      // empty strips (the overhang above the dock, the side margins, the
+      // home-indicator band) while it was flattened.
+      collapsable={false}
+      pointerEvents={hidden ? 'none' : 'box-none'}
       accessibilityElementsHidden={hidden}
       importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
       style={{
@@ -256,10 +258,10 @@ export function MagicTabBar({
       }}
     >
       <MagicCreateMenu
-        visible={createMenuVisible}
-        onClose={() => setCreateMenuVisible(false)}
+        visible={createMenuOpen}
+        chosen={createMenu.chosen}
+        onClose={closeCreateMenu}
         onAction={handleCreateMenuAction}
-        onExited={completeCreateMenuAction}
         horizontalInset={metrics.horizontalPadding}
         bottomInset={metrics.bottomPadding}
       />
@@ -280,7 +282,7 @@ export function MagicTabBar({
           alertsBadge={alertsBadge}
           isCompact={isCompact}
           runningGenerations={runningGenerations}
-          menuVisible={createMenuVisible}
+          menuVisible={createMenuOpen}
           onNavigate={navigateTo}
           onCreate={() => {
             haptic.medium();
@@ -288,7 +290,7 @@ export function MagicTabBar({
           }}
         />
       ) : <>
-      <TabBarSurface mode={surfaceMode} barHeight={barHeight} fallbackFill={fallbackFill}>
+      <TabBarSurface mode={surfaceMode} barHeight={barHeight} fallbackFill={fallbackFill} hidden={hidden}>
         <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: isCompact ? 6 : 8, paddingVertical: isCompact ? 4 : 6 }}>
           <TabButton item={VISIBLE_TABS[0]} active={activeRoute === 'index'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('index')} />
           <TabButton item={VISIBLE_TABS[1]} active={activeRoute === 'showcase'} iconSize={tabIconSize} labelSize={tabLabelSize} inactiveColor={inactiveColor} onPress={() => navigateTo('showcase')} />
@@ -314,7 +316,7 @@ export function MagicTabBar({
           accessibilityRole="button"
           accessibilityLabel={createControlLabel(runningGenerations)}
           accessibilityHint="Choose whether to create media or publish a post"
-          accessibilityState={{ expanded: createMenuVisible, busy: runningGenerations > 0 }}
+          accessibilityState={{ expanded: createMenuOpen, busy: runningGenerations > 0 }}
           onPress={() => {
             haptic.medium();
             setCreateMenuVisible(true);
@@ -818,11 +820,14 @@ function TabBarSurface({
   mode,
   barHeight,
   fallbackFill,
+  hidden,
   children,
 }: {
   mode: TabBarSurfaceMode;
   barHeight: number;
   fallbackFill: string;
+  /** The bar is invisible and inert (`MagicTabBar`'s `hidden`). */
+  hidden: boolean;
   children: ReactNode;
 }) {
   const theme = useAppTheme();
@@ -838,9 +843,20 @@ function TabBarSurface({
     // No backgroundColor: the material is the surface. colorScheme is the
     // app's resolved scheme rather than 'auto': the app can hold a scheme the
     // phone is not in (Settings → Appearance), and the bar follows the app.
+    //
+    // No glass while the bar is hidden, and a new one each time it shows.
+    // Hidden is opacity 0 on the bar's root, which is never flattened (see
+    // MagicTabBar), so on the creator tab the glass sits under that alpha, and
+    // expo-glass-effect applies it again there whenever the dock comes back
+    // into the window (a push over the tabs, then its pop) or the scheme
+    // changes. Glass applied under an alpha of 0 never rendered once the alpha
+    // was back (simulator, 2026-11-03; components/viewer-top-control.tsx).
+    // With no style there is nothing to apply, and showing the bar applies a
+    // new effect at full alpha. Not animated: the bar appears at once, and its
+    // material with it.
     return (
       <GlassView
-        glassEffectStyle="regular"
+        glassEffectStyle={hidden ? 'none' : 'regular'}
         colorScheme={theme.scheme}
         tintColor={theme.tabBar.glassTint}
         style={{ ...shape, borderColor: theme.tabBar.glassBorder }}

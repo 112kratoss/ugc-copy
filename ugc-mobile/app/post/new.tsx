@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { useNavigation, usePreventRemove } from '@react-navigation/native';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
+import { Image } from 'expo-image';
 import type { ImagePickerAsset } from 'expo-image-picker';
-import { BookOpen, Check, ChevronDown, ChevronRight, CircleMinus, Ellipsis, ExternalLink, FileText, FolderOpen, Globe2, ImageIcon, Images, Lock, Package, Pencil, Play, Plus, Repeat2, ScrollText, Shapes, SlidersHorizontal, Sparkles, Trash2, Upload, Workflow, X } from 'lucide-react-native';
+import { BookOpen, Check, ChevronDown, ChevronRight, CircleMinus, Ellipsis, ExternalLink, FileText, FolderOpen, Globe2, ImageIcon, Images, Lock, Music, Package, Pencil, Play, Plus, Repeat2, ScrollText, Shapes, SlidersHorizontal, Sparkles, Trash2, Upload, Workflow, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,7 +16,7 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { PublicIdentityCard } from '@/components/public-identity-card';
 import { Overlay } from '@/components/overlay-host';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '@/components/sheet-chrome';
-import { showConfirmDialog } from '@/lib/dialog';
+import { showConfirmDialog, showMessageDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
 import { ApiError } from '@/lib/api-client';
@@ -23,6 +24,16 @@ import { useAuth } from '@/lib/auth';
 import { truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
 import { adjustProfileStats, invalidateProfileStats, profileQueryKey } from '@/lib/profile-stats';
 import { useClaimPublicIdentity } from '@/lib/use-claim-public-identity';
+import {
+  CREATION_INPUTS_INCLUDED,
+  CREATION_INPUTS_INCLUDED_DETAIL,
+  CREATION_PROMPT_INCLUDED,
+  CREATION_PROMPT_INCLUDED_DETAIL,
+  describeCreationInputsSwitch,
+  describeUncopiedCreationInputs,
+  needsCreationPromptItem,
+  type GenerationReference,
+} from '@/lib/creation-recipe/creation-recipe';
 import {
   getInitialPublicIdentity,
   isPublicIdentityReady,
@@ -73,7 +84,6 @@ import {
   buildPublishGenerationPostPayload,
   buildUpdatePostPayload,
   buildCreationMadeWithRow,
-  applyCreationPromptResource,
   createPostComposerResourceCard,
   createMadeWithRow,
   getComposerVisibility,
@@ -93,6 +103,9 @@ import {
   getRecipeMoneyLine,
   getRecipePriceError,
   getRecipeRemovalConfirmation,
+  getRecipeTitleHint,
+  isRecipeTitleTooShortRefusal,
+  isRecipeTitleTooShortToPublish,
   POST_COMPOSER_MORE_RESOURCE_CARD_TYPES,
   POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES,
   RECIPE_PREVIEW_MAX_LENGTH,
@@ -121,8 +134,14 @@ import {
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
   type PostComposerValidationOptions,
+  adoptRecipeItemsAdded,
+  getCreationInputsInRecipe,
   hasCreationPromptCard,
-  hasGenerationReferences,
+  isLockedCreationPromptCard,
+  followCreationPromptRule,
+  getCreationRecipePrompt,
+  withCreationRecipeDefaults,
+  withoutStandInCreationPrompt,
   upsertOptimisticOwnerPostInfiniteData,
   type PostComposerDraft,
   type PostComposerDetailErrors,
@@ -320,6 +339,9 @@ function PostDetailsPage({
     : 'Add tool and model';
   // "Suggested" speaks only of a new post's starting title, never of an edit's saved one.
   const titleSuggestionHint = getCreationTitleSuggestionHint(draft, isEditMode ? null : selectedGeneration);
+  // A Free or Paid recipe takes a title of the listing rule's length, said
+  // here before step 2 refuses it (owner, 2026-11-03).
+  const recipeTitleHint = getRecipeTitleHint(draft);
   const titleField = (
     <ComposerFieldShell>
       <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={TITLE_MAX_LENGTH} />
@@ -332,6 +354,7 @@ function PostDetailsPage({
         placeholder="What is this creation about?"
       />
       {titleSuggestionHint ? <AppText variant="caption" color="muted">{titleSuggestionHint}</AppText> : null}
+      {recipeTitleHint ? <AppText variant="caption" color="warning">{recipeTitleHint}</AppText> : null}
       <FieldErrorText message={detailErrors.title} />
     </ComposerFieldShell>
   );
@@ -497,34 +520,34 @@ function PostResourcesPage({
   draft,
   selectedGeneration,
   isTemplateBacked,
-  isEditMode,
   buyerCount,
   packageStatus,
   publishValidation,
   onResourceChange,
   onCreationPackageChange,
-  onTogglePromptResource,
   onAddResource,
   onEditResource,
   onRemoveResource,
   onEditDetails,
+  onPostWithoutRecipe,
+  postWithoutRecipeDisabled,
 }: {
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
   isTemplateBacked: boolean;
-  /** Only the publish route copies a creation's references; an edit has no such step. */
-  isEditMode: boolean;
   /** People who have the loaded recipe, paid or free (an edit's `resourceBundleBuyerCount`). */
   buyerCount: number;
   packageStatus: ReturnType<typeof getPostComposerPackageStatus>;
   publishValidation: PostComposerValidationResult;
   onResourceChange: (patch: Partial<PostComposerDraft['resource']>) => void;
   onCreationPackageChange: (patch: Partial<PostComposerDraft['creationPackage']>) => void;
-  onTogglePromptResource: (enabled: boolean) => void;
   onAddResource: () => void;
   onEditResource: (id: string) => void;
   onRemoveResource: (id: string) => void;
   onEditDetails: () => void;
+  /** Sends the post with No recipe, for a title too short for one (an edit's asks first). */
+  onPostWithoutRecipe: () => void;
+  postWithoutRecipeDisabled: boolean;
 }) {
   const theme = useAppTheme();
   const resourceActive = draft.resource.accessMode !== 'none';
@@ -534,8 +557,12 @@ function PostResourcesPage({
     && (publishValidation.message === RECIPE_PREVIEW_REQUIRED_MESSAGE || publishValidation.message === RECIPE_PREVIEW_QUALITY_MESSAGE)
     ? publishValidation.message
     : undefined;
-  // Only a new post's publish copies the creation's saved inputs.
-  const includesCreationReferences = !isEditMode && willAttachGenerationReferences(selectedGeneration, draft);
+  // What "From this creation" says reads the recipe as it is (#677's review):
+  // the exact prompt only while a card holds it, and the saved inputs the
+  // server copies, "included" only once every one has its copy in the items.
+  const promptIncluded = hasCreationPromptCard(draft.resource.cards, selectedGeneration);
+  const creationInputs = getCreationInputsInRecipe(draft.resource.cards, selectedGeneration);
+  const includesCreationReferences = willAttachGenerationReferences(selectedGeneration, draft);
   const cardCount = draft.resource.cards.length;
   const itemsLabel = cardCount === 0
     ? includesCreationReferences ? 'Creation references' : 'Add at least one item.'
@@ -558,6 +585,16 @@ function PostResourcesPage({
   return (
     <View style={{ gap: 18 }}>
       <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
+      {/* The summary says the title is too short for the recipe, and its title opens step 1 to
+          lengthen it; this is the other way on (owner, 2026-11-03). */}
+      {isRecipeTitleTooShortToPublish(draft) ? (
+        <SecondaryButton
+          label="Post without recipe"
+          accessibilityHint="Sends this post with No recipe."
+          disabled={postWithoutRecipeDisabled}
+          onPress={onPostWithoutRecipe}
+        />
+      ) : null}
       <View style={{ gap: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <AppText heading variant="sectionTitle">Recipe</AppText>
@@ -595,26 +632,32 @@ function PostResourcesPage({
         </ComposerFieldShell>
       ) : null}
 
-      {resourceActive && selectedGeneration ? (
+      {resourceActive && selectedGeneration && (promptIncluded || creationInputs.offered.length > 0) ? (
         <ComposerFieldShell>
-          <CompactFieldLabel label="From this creation" optional />
-          {hasGenerationReferences(selectedGeneration) && !isEditMode ? (
-            <ToggleRow
-              label="Include creation references"
-              body="Attach the saved input media as reusable references."
-              value={draft.creationPackage.attachGenerationReferences}
-              onValueChange={(attachGenerationReferences) => onCreationPackageChange({ attachGenerationReferences })}
-              accent="image"
-            />
+          <CompactFieldLabel label="From this creation" />
+          {promptIncluded ? (
+            <AppText variant="caption" color="muted">
+              {`${CREATION_PROMPT_INCLUDED} ${CREATION_PROMPT_INCLUDED_DETAIL}`}
+            </AppText>
           ) : null}
-          <ToggleRow
-            label="Include exact prompt"
-            body="Add the original generation prompt to the recipe."
-            value={hasCreationPromptCard(draft.resource.cards, selectedGeneration)}
-            onValueChange={onTogglePromptResource}
-            accent="workflow"
-            disabled={!selectedGeneration.prompt?.trim()}
-          />
+          {creationInputs.offered.length > 0 ? (
+            <>
+              <CreationInputThumbnails generationId={selectedGeneration.id} inputs={creationInputs.offered} />
+              {creationInputs.allIncluded ? (
+                <AppText variant="caption" color="muted">
+                  {`${CREATION_INPUTS_INCLUDED} ${CREATION_INPUTS_INCLUDED_DETAIL}`}
+                </AppText>
+              ) : (
+                <ToggleRow
+                  label="Include creation references"
+                  body={describeCreationInputsSwitch(creationInputs.included, creationInputs.offered.length)}
+                  value={draft.creationPackage.attachGenerationReferences}
+                  onValueChange={(attachGenerationReferences) => onCreationPackageChange({ attachGenerationReferences })}
+                  accent="image"
+                />
+              )}
+            </>
+          ) : null}
         </ComposerFieldShell>
       ) : null}
 
@@ -644,6 +687,7 @@ function PostResourcesPage({
                     key={card.id}
                     card={card}
                     mediaItems={draft.mediaItems}
+                    locked={isLockedCreationPromptCard(card, selectedGeneration)}
                     onEdit={() => onEditResource(card.id)}
                     onRemove={() => onRemoveResource(card.id)}
                   />
@@ -672,7 +716,7 @@ function PostResourcesPage({
             )}
 
             {includesCreationReferences ? (
-              <CreationReferencesRow fileCount={countCreationReferenceFiles(selectedGeneration)} />
+              <CreationReferencesRow fileCount={countCreationReferenceFiles(selectedGeneration, draft.resource.cards)} />
             ) : null}
 
             {/* Remix comes with any recipe on a post made from a creation (recipe audit S1): the
@@ -796,8 +840,9 @@ function RecipeAccessCards({
 
 /**
  * What "Include creation references" adds, drawn with the items (recipe audit
- * A-F9): the server copies the creation's saved inputs in at publish, so they
- * have no editor of their own; the toggle above takes them out again.
+ * A-F9): the server copies the creation's saved inputs in at a publish or a
+ * save, so they have no editor of their own until then; the toggle above takes
+ * them out again. Once copied they are the recipe's own items.
  */
 function CreationReferencesRow({ fileCount }: { fileCount: number }) {
   const theme = useAppTheme();
@@ -937,14 +982,69 @@ function PostPublishSummary({
   );
 }
 
+/**
+ * A creation's saved inputs, small, in "From this creation": what "Include
+ * creation references" would hand to whoever unlocks the recipe. Out of view,
+ * the option read as nothing at all. Only the inputs the server copies are
+ * drawn and counted (`getCreationInputsInRecipe`), each by its kind.
+ */
+function CreationInputThumbnails({ generationId, inputs }: { generationId: string; inputs: GenerationReference[] }) {
+  const theme = useAppTheme();
+  if (inputs.length === 0) return null;
+  return (
+    <View style={{ gap: 6 }}>
+      <AppText variant="caption" color="muted">
+        {`${inputs.length} saved ${inputs.length === 1 ? 'input' : 'inputs'}`}
+      </AppText>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {inputs.map((input) => (
+          <View
+            key={input.id}
+            accessible
+            accessibilityLabel={input.label}
+            style={{
+              width: 56,
+              height: 56,
+              overflow: 'hidden',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: appTheme.radii.sm,
+              borderCurve: 'continuous',
+              backgroundColor: theme.colors.surfaceStrong,
+            }}
+          >
+            {input.mediaKind === 'image' && input.url ? (
+              // Keyed by the input, not its signed link, which changes on every read.
+              <Image
+                source={{ uri: input.url, cacheKey: `creation-input:${generationId}:${input.id}` }}
+                style={{ width: 56, height: 56 }}
+                contentFit="cover"
+              />
+            ) : input.mediaKind === 'video' ? (
+              <Play size={appTheme.icon.default} color={theme.colors.textSecondary} />
+            ) : input.mediaKind === 'audio' ? (
+              <Music size={appTheme.icon.default} color={theme.colors.textSecondary} />
+            ) : (
+              <ImageIcon size={appTheme.icon.default} color={theme.colors.textSecondary} />
+            )}
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function ResourceCardRow({
   card,
   mediaItems,
+  locked = false,
   onEdit,
   onRemove,
 }: {
   card: PostComposerResourceCardDraft;
   mediaItems: PostComposerMediaItem[];
+  /** A creation's exact prompt: part of every creation's recipe, neither edited nor removed. */
+  locked?: boolean;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -960,6 +1060,14 @@ function ResourceCardRow({
       : card.externalUrl.trim()
         ? card.type === 'remix_link' ? 'Protected remix link' : 'Protected link'
         : 'Needs content';
+  // One set of lines for both rows: the locked one names where it comes from.
+  const rowText = (
+    <>
+      <AppText variant="label" numberOfLines={1}>{card.title.trim() || typeLabel}</AppText>
+      <AppText variant="caption" color="muted" numberOfLines={1}>{`${locked ? 'From this creation' : typeLabel} · ${contentLabel}`}</AppText>
+      <AppText variant="caption" color="image" numberOfLines={1}>{scopeLabel}</AppText>
+    </>
+  );
 
   return (
     <View
@@ -979,25 +1087,29 @@ function ResourceCardRow({
       <View style={{ width: 44, height: 44, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surfaceStrong }}>
         <ResourceTypeIcon type={card.type} color={theme.colors.textSecondary} />
       </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Edit ${card.title || typeLabel}`}
-        onPress={onEdit}
-        style={({ pressed }) => ({ flex: 1, minWidth: 0, gap: 3, opacity: pressed ? appTheme.opacity.pressed : 1 })}
-      >
-        <AppText variant="label" numberOfLines={1}>{card.title.trim() || typeLabel}</AppText>
-        <AppText variant="caption" color="muted" numberOfLines={1}>{`${typeLabel} · ${contentLabel}`}</AppText>
-        <AppText variant="caption" color="image" numberOfLines={1}>{scopeLabel}</AppText>
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Remove ${card.title || typeLabel}`}
-        hitSlop={6}
-        onPress={onRemove}
-        style={({ pressed }) => ({ width: 44, height: 44, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-      >
-        <Trash2 size={18} color={theme.colors.danger} />
-      </Pressable>
+      {locked ? (
+        <View style={{ flex: 1, minWidth: 0, gap: 3 }}>{rowText}</View>
+      ) : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Edit ${card.title || typeLabel}`}
+          onPress={onEdit}
+          style={({ pressed }) => ({ flex: 1, minWidth: 0, gap: 3, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        >
+          {rowText}
+        </Pressable>
+      )}
+      {locked ? null : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Remove ${card.title || typeLabel}`}
+          hitSlop={6}
+          onPress={onRemove}
+          style={({ pressed }) => ({ width: 44, height: 44, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+        >
+          <Trash2 size={18} color={theme.colors.danger} />
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -1994,7 +2106,7 @@ function NewPostComposer() {
     title: string;
     body?: string;
     /** A way on from the message, drawn as a button under it. */
-    action?: 'complete-profile';
+    action?: 'complete-profile' | 'post-without-recipe';
   } | null>(null);
   const [detailErrors, setDetailErrors] = useState<PostComposerDetailErrors>({});
   // A public post needs a claimed handle and a display name. Read up front, so
@@ -2051,6 +2163,9 @@ function NewPostComposer() {
   // Undo and redo: every removal below is instant, so each one leaves what it
   // took here and offers it back for a moment.
   const [undoEntry, setUndoEntry] = useState<ComposerUndoEntry<PostComposerRemoval> | null>(null);
+  // The removal of a creator's own prompt card that the creation's exact one
+  // took the place of: Undo puts theirs back and lets the exact one go again.
+  const promptReplacedByRemovalRef = useRef<PostComposerRemoval | null>(null);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const scrollYRef = useRef(0);
@@ -2096,10 +2211,15 @@ function NewPostComposer() {
   });
 
   const generationLookupId = generationId ?? postQuery.data?.post?.generationId ?? null;
+  // The one creation, read in full: the list's summary leaves out its saved
+  // inputs, which "From this creation" shows and can copy into the recipe.
   const generationsQuery = useQuery({
     queryKey: ['post-new-generations', user?.id, generationLookupId],
     enabled: Boolean(user && generationLookupId),
-    queryFn: () => api.listGenerations(true, { id: generationLookupId ?? undefined, limit: 1 }),
+    queryFn: async () => {
+      const generation = generationLookupId ? await api.getGenerationDetails(generationLookupId) : null;
+      return { generations: generation ? [generation] : [] };
+    },
   });
 
   const sourceToolsQuery = useQuery({
@@ -2121,6 +2241,10 @@ function NewPostComposer() {
   // People who have the loaded recipe. A recipe they have is edited like any other (recipe audit S2):
   // `hasPaidOrders`, which froze it, is always false from the server now and is not read.
   const recipeBuyerCount = postQuery.data?.post?.resourceBundleBuyerCount ?? 0;
+  // A recipe people have, or had before it was taken off, gains no exact prompt
+  // (#677's re-reviews): it opens as sold. Read from the buyer count where an
+  // older server sends no flag.
+  const recipeEverUnlocked = recipeBuyerCount > 0 || postQuery.data?.post?.resourceBundleEverUnlocked === true;
   const canSubmit = !isPickingMedia
     && !isPickingResourceFile
     // A publish racing draft-media recovery would submit a reclaimed path and
@@ -2133,7 +2257,7 @@ function NewPostComposer() {
     [draft, selectedGeneration]
   );
   const publishValidation = useMemo(
-    () => validateCurrentDraft(draft, selectedGeneration, isEditMode, isEditMode && isGenerationBacked, { grandfatheredTitle: initialTitleRef.current }),
+    () => validateCurrentDraft(draft, selectedGeneration, isEditMode && isGenerationBacked, { grandfatheredTitle: initialTitleRef.current }),
     [draft, isEditMode, isGenerationBacked, selectedGeneration]
   );
   const hasUnsavedChanges = hasHydratedPersistedDraft && (
@@ -2156,12 +2280,15 @@ function NewPostComposer() {
         setDraft((current) => {
           if (current.selectedGenerationId === generationId) return current;
           const category = found.category === 'video' || found.category === 'motion' || found.category === 'ugc-ad' ? 'video' : 'image';
+          // A free recipe with the exact prompt in it, where a new post of a
+          // creation starts (owner, 2026-11-03); its title follows that recipe.
+          const withRecipe = isEditMode ? current : withCreationRecipeDefaults(current, found);
           return {
-            ...current,
+            ...withRecipe,
             mode: 'creation',
             proofMode: 'media',
             selectedGenerationId: found.id,
-            title: current.title || getCreationPostTitleSuggestion(found, current.resource.accessMode).title,
+            title: current.title || getCreationPostTitleSuggestion(found, withRecipe.resource.accessMode).title,
             contentText: '',
             sourceTool: 'Magicbooklet',
             sourceToolSlug: 'magicbooklet',
@@ -2170,7 +2297,36 @@ function NewPostComposer() {
           };
         });
     }
-  }, [explicitGeneration, generationId]);
+  }, [explicitGeneration, generationId, isEditMode]);
+
+  // Every creation's recipe has its exact prompt (owner, 2026-11-03): one left
+  // with no prompt card of its own (the creator removed theirs) gets the
+  // locked one back, by the rule the server holds every save to (#677's
+  // review). Once the composer has its creation: before that, the new post's
+  // defaults and the edit's prefill put it where the composer starts. A
+  // recipe people have or had gets none, and a creation an operator removed
+  // or its creator archived keeps none (#677's re-reviews,
+  // `followCreationPromptRule`).
+  const creationPrompt = getCreationRecipePrompt(selectedGeneration);
+  const hasComposerCreation = isEditMode ? hasPrefilledEdit : Boolean(selectedGeneration);
+  useEffect(() => {
+    if (!hasComposerCreation) return;
+    const rule = { addsPrompt: !recipeEverUnlocked };
+    const resource = followCreationPromptRule(draft.resource, selectedGeneration, rule);
+    if (resource === draft.resource) return;
+    // A change that comes after an edit's starting point (the creation's read
+    // failed or waited as the edit opened, #677's re-review) is where an edit
+    // nobody has touched since starts, as the web folds it into its saved
+    // state.
+    if (
+      isEditMode
+      && initialDraftSignatureRef.current !== null
+      && getPostComposerDraftSignature(draft) === initialDraftSignatureRef.current
+    ) {
+      initialDraftSignatureRef.current = getPostComposerDraftSignature({ ...draft, resource });
+    }
+    setDraft((current) => ({ ...current, resource: followCreationPromptRule(current.resource, selectedGeneration, rule) }));
+  }, [draft, hasComposerCreation, isEditMode, recipeEverUnlocked, selectedGeneration]);
 
   useEffect(() => {
     if (!generationId || !generationsQuery.isSuccess) return;
@@ -2179,10 +2335,27 @@ function NewPostComposer() {
     router.replace(`/showcase/${encodeURIComponent(requested.linked_post_id)}` as never);
   }, [allGenerations, generationId, generationsQuery.isSuccess]);
 
-  // Prefill when postId is provided and post detail resolves
+  // Prefill when postId is provided and post detail resolves. A creation's
+  // post waits for its creation too: the exact prompt its recipe holds is the
+  // creation's, and the post row keeps no copy of it (a compose submission
+  // stores none, #677's review). Taken in here, before the edit's starting
+  // point is read, the prompt is where the edit starts, not an edit of it.
+  // A read that failed, or one waiting for a connection, goes without it.
+  const creationReadSettled = generationsQuery.isSuccess
+    || generationsQuery.isError
+    || generationsQuery.fetchStatus === 'paused';
   useEffect(() => {
     if (postId && postQuery.data?.post && !hasPrefilledEdit) {
       const post = postQuery.data.post;
+      if (post.generationId && !creationReadSettled) return;
+      const postCreation = post.generationId
+        ? generationsQuery.data?.generations.find((item) => item.id === post.generationId) ?? null
+        : null;
+      // A recipe people have or had gains no exact prompt, and a creation off
+      // public view keeps none (#677's re-reviews).
+      const creationPromptRule = {
+        addsPrompt: !((post.resourceBundleBuyerCount ?? 0) > 0 || post.resourceBundleEverUnlocked === true),
+      };
       const resourceBundleInput = post.resourceBundleInput;
       const mode = post.postFormat === 'text' ? 'text' : post.generationId ? 'creation' : 'upload';
       const hydratedResourceCards = resourceBundleInput
@@ -2235,12 +2408,15 @@ function NewPostComposer() {
           type: post.mediaKind === 'video' ? 'video/mp4' : 'image/jpeg',
         } : null,
         mediaItems: hydratePostComposerMediaItems(post),
-        // "Include exact prompt" reads the loaded cards (`hasCreationPromptCard`),
-        // and an edit attaches no creation references: only the publish route
-        // copies them, so the editor does not offer them.
+        // Off, as on a new post: the save copies the creation's saved inputs
+        // into the recipe only when the creator asks (owner, 2026-11-03).
         creationPackage: getDefaultCreationPackageDraft(),
-        // One Recipe preview, starting from the summary listings showed first (recipe audit S6).
-        resource: resourceBundleInput ? foldRecipeSummaryIntoPreview({
+        // One Recipe preview, starting from the summary listings showed first
+        // (recipe audit S6). A creation's recipe has its exact prompt, as on
+        // the web; where the edit starts from, so it is no unsaved change. A
+        // recipe people have or had opens as sold, and a creation off public
+        // view keeps no locked card (#677's re-reviews).
+        resource: followCreationPromptRule(resourceBundleInput ? foldRecipeSummaryIntoPreview({
           accessMode: resourceBundleInput.accessMode || 'none',
           cardAuthoringMode: 'cards',
           selectedKinds: deriveResourceSelections(resourceBundleInput),
@@ -2271,11 +2447,11 @@ function NewPostComposer() {
           // showed 100 tokens and saved 900 through the legacy-USD rule.
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
           priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : '900',
-        }) : getDefaultResourceDraft(),
+        }) : getDefaultResourceDraft(), postCreation, creationPromptRule),
       });
       setHasPrefilledEdit(true);
     }
-  }, [postId, postQuery.data, hasPrefilledEdit, shareAfterPublish]);
+  }, [postId, postQuery.data, hasPrefilledEdit, shareAfterPublish, creationReadSettled, generationsQuery.data]);
 
   useEffect(() => () => {
     for (const controller of activeUploadControllersRef.current) {
@@ -2495,13 +2671,18 @@ function NewPostComposer() {
     return named.draft;
   };
 
+  // What a save sends: the drawn draft, published as the visibility asked, or
+  // the draft handed over whole ("Post without recipe"'s, which the mutation's
+  // own copy of the draft does not have yet).
+  const draftToSend = (sending?: PostComposerDraft['visibility'] | PostComposerDraft): PostComposerDraft => (
+    typeof sending === 'object' ? sending : sending ? { ...draft, visibility: sending } : draft
+  );
   const publishMutation = useMutation({
-    mutationFn: async (targetVisibility?: PostComposerDraft['visibility']) => {
-      const effectiveDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
+    mutationFn: async (sending?: PostComposerDraft['visibility'] | PostComposerDraft) => {
+      const effectiveDraft = draftToSend(sending);
       const validation = validateCurrentDraft(
         effectiveDraft,
         selectedGeneration,
-        isEditMode,
         isEditMode && isGenerationBacked,
         { grandfatheredTitle: initialTitleRef.current },
       );
@@ -2517,7 +2698,7 @@ function NewPostComposer() {
       try {
         if (postId) {
           const isGen = Boolean(postQuery.data?.post?.generationId);
-          const payload = buildUpdatePostPayload(isGen, submittedDraft);
+          const payload = buildUpdatePostPayload(isGen, submittedDraft, selectedGeneration);
           sentPostMedia = 'mediaItems' in payload;
           return await api.updatePost(postId, payload);
         }
@@ -2542,12 +2723,24 @@ function NewPostComposer() {
         throw error;
       }
     },
-    onMutate: (targetVisibility?: PostComposerDraft['visibility']) => {
-      const submittedDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
+    onMutate: (sending?: PostComposerDraft['visibility'] | PostComposerDraft) => {
+      const submittedDraft = draftToSend(sending);
       setPendingPublishVisibility(submittedDraft.visibility);
       return { submittedDraft };
     },
-    onSuccess: (response, _targetVisibility, context) => {
+    onSuccess: (response, _sending, context) => {
+      // What the server put into the recipe beside what was sent is the
+      // composer's own from here, and the switch that asked for the saved
+      // inputs is off again; the ones it could not copy are named (#677's
+      // review). The post page and the editor offer the rest.
+      setDraft((current) => adoptRecipeItemsAdded(current, response.recipeItemsAdded));
+      const referencesNotCopied = response.referencesNotCopied ?? 0;
+      if (referencesNotCopied > 0) {
+        showMessageDialog({
+          title: isEditMode ? 'Saved' : 'Posted',
+          message: describeUncopiedCreationInputs(referencesNotCopied),
+        });
+      }
       setMessage({
         tone: 'success',
         title: isEditMode ? 'Saved' : 'Posted',
@@ -2640,13 +2833,17 @@ function NewPostComposer() {
     },
     onError: (error) => {
       // A public post needs a claimed handle and a display name, and the server
-      // says which refusal that is on all three routes.
+      // says which refusal that is on all three routes; it says the same of a
+      // title too short for the recipe, which "Post without recipe" answers
+      // (owner, 2026-11-03).
       const needsProfile = isPublicIdentityRefusal(error);
+      const titleTooShort = isRecipeTitleTooShortRefusal(error);
       setMessage({
         tone: 'danger',
         title: isEditMode ? 'Could not save' : 'Could not publish',
         body: error instanceof Error ? error.message : 'Try again.',
         ...(needsProfile ? { action: 'complete-profile' as const } : {}),
+        ...(titleTooShort ? { action: 'post-without-recipe' as const } : {}),
       });
       scrollRef.current?.scrollTo({ y: 0, animated: true });
     },
@@ -2794,14 +2991,6 @@ function NewPostComposer() {
     setDraft((current) => followSuggestedRecipePreview(
       current,
       { ...current, creationPackage: { ...current.creationPackage, ...patch } },
-      selectedGeneration,
-    ));
-  };
-
-  const togglePromptResource = (enabled: boolean) => {
-    setDraft((current) => followCreationTitleSuggestion(
-      current,
-      applyCreationPromptResource(current, selectedGeneration, enabled),
       selectedGeneration,
     ));
   };
@@ -3207,10 +3396,18 @@ function NewPostComposer() {
     if (!undoEntry) return;
     const { removal, scrollY } = undoEntry;
     dismissUndo();
+    const dropsStandInPrompt = promptReplacedByRemovalRef.current === removal;
+    promptReplacedByRemovalRef.current = null;
     // Onto the draft as it is now: the offer can be taken mid-typing, and what
     // was typed since the removal stays. An item put back is named again in a
     // Recipe preview that still says what was suggested.
     setDraft((current) => followSuggestedRecipePreview(current, putBackComposerRemoval(current, removal), selectedGeneration));
+    // A creator's own prompt card put back takes its place again from the
+    // creation's exact one, which stood in for it: a recipe with a prompt item
+    // of its own keeps that one alone.
+    if (dropsStandInPrompt) {
+      setDraft((current) => followSuggestedRecipePreview(current, withoutStandInCreationPrompt(current, selectedGeneration), selectedGeneration));
+    }
     setDetailErrors((current) => (
       Object.keys(current).length > 0
         ? getPostComposerDetailErrors(putBackComposerRemoval(draft, removal), { grandfatheredTitle: initialTitleRef.current })
@@ -3424,6 +3621,13 @@ function NewPostComposer() {
     if (isPickingResourceFile && editingResourceId === id) return;
     const taken = takeComposerResourceCard(draft, id);
     if (!taken) return;
+    // The creator's last prompt card: the creation's exact prompt takes its
+    // place, except in a recipe people have or had, which gains none.
+    promptReplacedByRemovalRef.current = !recipeEverUnlocked
+      && needsCreationPromptItem(taken.draft.resource.cards, creationPrompt)
+      && !needsCreationPromptItem(draft.resource.cards, creationPrompt)
+      ? taken.removal
+      : null;
     offerUndo(taken.removal.card.title.trim() || 'item', taken.removal);
     setDraft((current) => {
       const next = takeComposerResourceCard(current, id)?.draft;
@@ -3566,26 +3770,60 @@ function NewPostComposer() {
   // drawn: Undo would take the bar away and change nothing.
   const shownUndoEntry = undoEntry && putBackComposerRemoval(draft, undoEntry.removal) !== draft ? undoEntry : null;
 
-  const submitPost = async () => {
-    setMessage(null);
-    // Saving "No recipe" over the recipe an edit loaded deletes it, or takes it
-    // off sale when people have it: asked first (recipe audit A-F2), and Keep
-    // recipe puts the choice back as it was.
+  // Saving "No recipe" over the recipe an edit loaded deletes it, or takes it
+  // off sale when people have it, so it is asked first (recipe audit A-F2).
+  // Null for anything else: a new post, or a save that keeps a recipe.
+  const getLoadedRecipeRemoval = (nextAccessMode: PostComposerDraft['resource']['accessMode']) => {
     const loadedRecipe = isEditMode ? postQuery.data?.post?.resourceBundleInput ?? null : null;
-    const removal = getRecipeRemovalConfirmation({
-      loadedAccessMode: loadedRecipe?.accessMode ?? null,
-      loadedItemCount: loadedRecipe ? hydratePostComposerResourceCards(loadedRecipe).length : 0,
-      buyerCount: recipeBuyerCount,
-      nextAccessMode: draft.resource.accessMode,
-      // The same condition as the "Remix comes with this recipe" line above.
-      reopensPost: draft.mode === 'creation',
-    });
-    if (removal && loadedRecipe) {
-      const remove = await showConfirmDialog(removal);
-      if (!remove) {
-        updateResource({ accessMode: loadedRecipe.accessMode });
-        return;
-      }
+    return loadedRecipe
+      ? getRecipeRemovalConfirmation({
+          loadedAccessMode: loadedRecipe.accessMode,
+          loadedItemCount: hydratePostComposerResourceCards(loadedRecipe).length,
+          buyerCount: recipeBuyerCount,
+          nextAccessMode,
+          // The same condition as the "Remix comes with this recipe" line above.
+          reopensPost: draft.mode === 'creation',
+        })
+      : null;
+  };
+
+  // "Post without recipe" (owner, 2026-11-03): for a title too short for the
+  // recipe, the recipe goes to No recipe and the post is sent in one press.
+  // An edit that takes off the recipe it loaded asks first, as its save would,
+  // saying who keeps a copy; Keep recipe leaves everything as it was. The
+  // draft it sends is handed to the save, which would otherwise read the one
+  // drawn before the change.
+  const postWithoutRecipe = async () => {
+    const removal = getLoadedRecipeRemoval('none');
+    if (removal && !(await showConfirmDialog(removal))) return;
+    const withoutRecipe = followCreationTitleSuggestion(
+      draft,
+      { ...draft, resource: { ...draft.resource, accessMode: 'none' } },
+      selectedGeneration,
+    );
+    setDraft(withoutRecipe);
+    await submitPost({ sending: withoutRecipe, removalAnswered: true });
+  };
+
+  const submitPost = async ({ sending = draft, removalAnswered = false }: {
+    /** The draft to send, when it is not the one drawn: "Post without recipe"'s. */
+    sending?: PostComposerDraft;
+    /** The removal question was asked on the way here. */
+    removalAnswered?: boolean;
+  } = {}) => {
+    setMessage(null);
+    // Asked by what the save sends, not by the mode shown (#677's review): a
+    // recipe whose last item went is No recipe unless the creation's saved
+    // inputs fill it, and a save of No recipe takes the recipe off the post.
+    const nextAccessMode = isEditMode
+      ? buildUpdatePostPayload(Boolean(postQuery.data?.post?.generationId), sending, selectedGeneration).resourceBundle.accessMode
+      : sending.resource.accessMode;
+    const removal = removalAnswered ? null : getLoadedRecipeRemoval(nextAccessMode);
+    if (removal && !(await showConfirmDialog(removal))) {
+      // Keep recipe puts the choice back as it was.
+      const loadedAccessMode = postQuery.data?.post?.resourceBundleInput?.accessMode;
+      if (loadedAccessMode) updateResource({ accessMode: loadedAccessMode });
+      return;
     }
     if (needsPublicIdentity) {
       setIsSavingIdentity(true);
@@ -3616,13 +3854,19 @@ function NewPostComposer() {
       setIdentitySaveErrors({});
       setIsSavingIdentity(false);
     }
-    setPendingPublishVisibility(draft.visibility);
-    publishMutation.mutate(draft.visibility);
+    setPendingPublishVisibility(sending.visibility);
+    publishMutation.mutate(sending === draft ? sending.visibility : sending);
   };
   // Step 2 is not ready while a public post still lacks the name and handle.
   const stepTwoValidation: PostComposerValidationResult = publishValidation.valid && (identityProblems.displayName || identityProblems.username)
     ? { valid: false, message: 'Add your name and handle to publish publicly.' }
     : publishValidation;
+  // "Post without recipe" waits as Publish does, for everything but the recipe.
+  const postWithoutRecipeDisabled = !canSubmit
+    || isPickingMedia
+    || pendingRetryMedia.length > 0
+    || publishMutation.isPending
+    || isSavingIdentity;
 
   // Pushed over the composer, which stays as it is: the profile editor goes
   // back to it when it saves or closes, and the draft is kept on the device too.
@@ -3686,6 +3930,14 @@ function NewPostComposer() {
                 label="Complete profile"
                 accessibilityHint="Opens your profile. This post stays here."
                 onPress={openProfileEditor}
+              />
+            ) : null}
+            {message.action === 'post-without-recipe' ? (
+              <SecondaryButton
+                label="Post without recipe"
+                accessibilityHint="Sends this post with No recipe."
+                disabled={postWithoutRecipeDisabled}
+                onPress={() => void postWithoutRecipe()}
               />
             ) : null}
           </View>
@@ -3774,17 +4026,17 @@ function NewPostComposer() {
             draft={draft}
             selectedGeneration={selectedGeneration}
             isTemplateBacked={isTemplateBacked}
-            isEditMode={isEditMode}
             buyerCount={recipeBuyerCount}
             packageStatus={packageStatus}
             publishValidation={stepTwoValidation}
             onResourceChange={updateResource}
             onCreationPackageChange={updateCreationPackage}
-            onTogglePromptResource={togglePromptResource}
             onAddResource={() => setResourceSheetMode('type')}
             onEditResource={openResourceCard}
             onRemoveResource={removeResourceCard}
             onEditDetails={() => setComposerStep('details')}
+            onPostWithoutRecipe={() => void postWithoutRecipe()}
+            postWithoutRecipeDisabled={postWithoutRecipeDisabled}
           />
           </>
         )}
@@ -5091,14 +5343,13 @@ function MediaGalleryCard({
 function validateCurrentDraft(
   draft: PostComposerDraft,
   selectedGeneration: GenerationListItem | null,
-  isEditMode: boolean,
   skipGenerationSelection = false,
   options: PostComposerValidationOptions = {},
 ) {
   const result = validatePostComposerDraft(draft, {
     ...options,
-    // Only a new post's publish copies the creation's saved inputs into its recipe.
-    includesCreationReferences: !isEditMode && willAttachGenerationReferences(selectedGeneration, draft),
+    // A publish or an edit's save copies the creation's saved inputs into its recipe.
+    includesCreationReferences: willAttachGenerationReferences(selectedGeneration, draft),
   });
   if (!result.valid) return result;
   if (draft.mode === 'creation' && !selectedGeneration && !skipGenerationSelection) {

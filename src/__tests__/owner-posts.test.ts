@@ -458,6 +458,7 @@ describe('owner posts', () => {
 
     expect(post?.hasPaidOrders).toBe(false);
     expect(post?.resourceBundleBuyerCount).toBe(buyerCount);
+    expect(post?.resourceBundleEverUnlocked).toBe(buyerCount > 0);
     expect(post?.resourceBundleInput.accessMode).toBe(fields.accessMode);
   });
 
@@ -470,6 +471,7 @@ describe('owner posts', () => {
 
     expect(post?.resourceBundleInput).toEqual({ accessMode: 'none' });
     expect(post?.resourceBundleBuyerCount).toBe(0);
+    expect(post?.resourceBundleEverUnlocked).toBe(false);
     expect(post?.hasPaidOrders).toBe(false);
   });
 
@@ -550,6 +552,9 @@ describe('owner posts', () => {
 
     expect(post?.resourceBundleInput).toEqual({ accessMode: 'none' });
     expect(post?.resourceBundleBuyerCount).toBe(0);
+    // Its people still count for the exact prompt (#677's re-reviews): a
+    // recipe added to the post again takes this row up, and gains none.
+    expect(post?.resourceBundleEverUnlocked).toBe(true);
   });
 
   // 03-3 / 03-7: the app found listings by paging every own post and filtering

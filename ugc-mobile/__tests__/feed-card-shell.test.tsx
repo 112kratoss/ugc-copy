@@ -3,6 +3,12 @@ import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { FeedCardShell } from '../components/feed-card-shell';
+import {
+  CREATOR_PROFILE_PRESS_DELAY_MS,
+  creatorProfilePress,
+  setCreatorProfilePreparer,
+  type CreatorProfilePress,
+} from '../lib/creator-profile-opening';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
@@ -46,7 +52,11 @@ function textOf(node: Instance): string {
   return node.children.map((child) => (typeof child === 'string' ? child : textOf(child))).join('');
 }
 
-async function renderShell(props: { categoryLabel: string; modelLabel?: string | null }) {
+async function renderShell(props: {
+  categoryLabel: string;
+  modelLabel?: string | null;
+  creatorPress?: CreatorProfilePress | null;
+}) {
   let tree: renderer.ReactTestRenderer | null = null;
   await act(async () => {
     tree = renderer.create(
@@ -55,7 +65,7 @@ async function renderShell(props: { categoryLabel: string; modelLabel?: string |
         creatorAvatar={null}
         creatorLabel="@ana"
         creatorName="Ana"
-        onCreatorPress={() => {}}
+        creatorPress={creatorProfilePress('ana', () => {})}
         onMorePress={() => {}}
         moreAccessibilityLabel="More options for A launch frame"
         openAccessibilityLabel="Open A launch frame"
@@ -114,6 +124,41 @@ describe('FeedCardShell metadata line', () => {
     expect(hostAbove(line, 'view').props.style).toMatchObject({ flexShrink: 1, maxWidth: '50%' });
     const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === 'Open @ana');
     expect(byline.props.style).toMatchObject({ flex: 1 });
+
+    await act(async () => tree.unmount());
+  });
+});
+
+describe('FeedCardShell byline', () => {
+  // The creator's page is read once the finger has rested on the byline, and
+  // opened only by the press itself (`creatorProfilePress`).
+  it('presses as a creator opener: the page read after the wait, opened by the press', async () => {
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const open = vi.fn();
+    const tree = await renderShell({ categoryLabel: 'Image', creatorPress: creatorProfilePress('ana', open) });
+    const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === 'Open @ana');
+
+    expect(byline.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+    await act(async () => (byline.props.onPressIn as () => void)());
+    expect(prepared).toEqual(['ana']);
+    expect(open).not.toHaveBeenCalled();
+
+    await act(async () => (byline.props.onPress as () => void)());
+    expect(open).toHaveBeenCalledTimes(1);
+
+    removePreparer();
+    await act(async () => tree.unmount());
+  });
+
+  it('is plain text, pressing nothing, for a card that opens no creator page', async () => {
+    const tree = await renderShell({ categoryLabel: 'Image', creatorPress: null });
+    const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === '@ana · 2h');
+
+    expect(byline.props.disabled).toBe(true);
+    expect(byline.props.accessibilityRole).toBeUndefined();
+    expect(byline.props.onPressIn).toBeUndefined();
+    expect(byline.props.onPress).toBeUndefined();
 
     await act(async () => tree.unmount());
   });

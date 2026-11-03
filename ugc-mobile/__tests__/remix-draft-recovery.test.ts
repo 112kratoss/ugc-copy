@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { applyCatalogModelDefaults } from '../lib/generation-model-draft';
-import { createDefaultCreationDraft, renameMediaDraft, type CreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
+import { createDefaultCreationDraft, hydrateCreationDraftFromRemixSource, renameMediaDraft, type CreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
 import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
+import type { RemixInputSlot } from '../lib/remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from '../lib/types';
 import { klingVideoModel } from './generation-model-catalog-v2-fixtures';
 const reference = { id: 'girl', kind: 'image' as const, url: 'https://example.com/girl.jpg', fileName: 'girl.jpg', displayName: 'Girl', handle: '@girl' };
@@ -25,6 +26,117 @@ describe('saved remix reference recovery', () => {
     const current = draft({ prompt: '@new_subject' });
     expect(recoverRemixReferences(current, draft({ references: [reference] }))).toBe(current);
     expect(recoverRemixReferences(draft(), draft())).toEqual(draft());
+  });
+});
+
+// A remix's empty slots (owner, 2026-11-03) stand for inputs its source never gives: a mention of one is
+// no lost reference, and a session saved before slots existed takes the ones its source names now.
+describe('a saved remix with empty slots', () => {
+  const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
+  const backdropSlot: RemixInputSlot = { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' };
+  const imageDraft = (prompt: string, inputSlots?: RemixInputSlot[]) => ({
+    ...createDefaultCreationDraft('image'),
+    prompt,
+    ...(inputSlots ? { inputSlots } : {}),
+  });
+
+  it('reads no source again for a session whose prompt mentions only its empty slots', () => {
+    expect(needsRemixReferenceRecovery(imageDraft('Place @product on a counter', [productSlot]))).toBe(false);
+    // A mention no slot stands for is still a reference the restore lost.
+    expect(needsRemixReferenceRecovery(imageDraft('Place @product beside @logo', [productSlot]))).toBe(true);
+    // A clip without its own handle, beside a mention of an empty slot, has none to take back from the source.
+    const clip = { id: 'spin', kind: 'video' as const, url: 'https://example.com/spin.mp4', fileName: 'spin.mp4', displayName: 'Spin' };
+    const kling: VideoCreationDraft = {
+      ...draft({ model: 'kling-3.0-video', prompt: 'Open on @dance' }),
+      referenceVideos: [clip],
+      inputSlots: [{ id: 'slot-1', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' }],
+    };
+    expect(needsRemixReferenceRecovery(kling)).toBe(false);
+  });
+
+  it('gives a session saved before slots the ones its source names, and keeps a session’s own', () => {
+    const saved = imageDraft('Place @product on a counter');
+    expect(needsRemixReferenceRecovery(saved)).toBe(true);
+    const restored = imageDraft('Place @product on a counter', [productSlot, backdropSlot]);
+
+    expect(recoverRemixReferences(saved, restored).inputSlots).toEqual([productSlot, backdropSlot]);
+    // The remixer filled the first already: the session keeps what is left.
+    expect(recoverRemixReferences(imageDraft('Place @product on a counter', [backdropSlot]), restored).inputSlots).toEqual([backdropSlot]);
+    expect(recoverRemixReferences(imageDraft('Place @product on a counter', []), restored).inputSlots).toEqual([]);
+  });
+
+  // A remix that mentions nothing (a motion run, a frames run) read its source again only while its prompt
+  // mentioned a handle (2026-11-03 re-review): it keeps the unread state, and every later visit reads.
+  it('reads again a remix whose kept-back inputs could not be read on any later visit, and takes what the next read gives', () => {
+    const motionSource = (overrides: Partial<RemixSourceBundle>): RemixSourceBundle => ({
+      generation: { id: 'gen-2', title: 'Dance', prompt: '', category: 'video', model: 'kling-2.6' },
+      result: null,
+      inputs: {},
+      workflowSettings: { model: 'kling-2.6' },
+      restoreIssues: [],
+      ...overrides,
+    });
+    const degraded = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), motionSource({ restoreIssues: ['withheld-inputs'] }));
+    expect(degraded.draft).toMatchObject({ inputSlotsUnread: true });
+    expect(degraded.draft).not.toHaveProperty('inputSlots');
+    expect(needsRemixReferenceRecovery(degraded.draft)).toBe(true);
+
+    // Still unread: the session keeps saying so.
+    const again = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), motionSource({ restoreIssues: ['withheld-inputs'] }));
+    expect(recoverRemixReferences(degraded.draft, again.draft)).toMatchObject({ inputSlotsUnread: true });
+
+    // Read: the copy the recipe holds of the character comes back, and the clip is a box.
+    const character = { kind: 'image' as const, label: 'Character', storagePath: 'post_resource_files/creator-1/generation-references/gen-2/00-character-image-row.png', sourceGenerationId: null, url: 'https://signed.example/character.png' };
+    const clipBox: RemixInputSlot = { id: 'slot-1', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' };
+    const read = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), motionSource({ inputs: { motion: { characterImage: character, referenceVideo: null } }, inputSlots: [clipBox] }));
+    const recovered = recoverRemixReferences(degraded.draft, read.draft);
+    expect(recovered).not.toHaveProperty('inputSlotsUnread');
+    expect(recovered.inputSlots).toEqual([clipBox]);
+    expect(recovered.tool === 'motion' && recovered.characterImage?.url).toBe(character.url);
+    expect(needsRemixReferenceRecovery(recovered)).toBe(false);
+
+    // What the remixer put in a place meanwhile stays theirs.
+    const mine = { ...degraded.draft, characterImage: { id: 'mine', kind: 'image' as const, url: 'https://cdn.example.com/mine.png', fileName: 'mine.png', displayName: 'Mine' } } as CreationDraft;
+    const kept = recoverRemixReferences(mine, read.draft);
+    expect(kept.tool === 'motion' && kept.characterImage?.url).toBe('https://cdn.example.com/mine.png');
+  });
+
+  // A failed read of a buyer's copies turned every input into an empty slot, with no word of it: its
+  // mentions had boxes, so the source was never read again, and the copies never came back (2026-11-03
+  // review). The source now names no slot and says the read failed (`withheld-inputs`), so the session
+  // is a failed restore, read again on its Retry and on its next visit; then the copy comes back as a
+  // reference, and only the input the source truly withholds is a slot.
+  it('reads again a remix whose withheld inputs could not be read, and takes the slots and copies of the read that worked', () => {
+    const source = (overrides: Partial<RemixSourceBundle>): RemixSourceBundle => ({
+      generation: { id: 'gen-1', title: 'Counter', prompt: 'Place @product beside @backdrop', category: 'image', model: 'nano-banana-2' },
+      result: null,
+      inputs: {},
+      workflowSettings: { model: 'nano-banana-2' },
+      restoreIssues: [],
+      ...overrides,
+    });
+    const degraded = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), source({ restoreIssues: ['withheld-inputs'] }));
+    expect(degraded.warning).toBeTruthy();
+    expect(degraded.draft).not.toHaveProperty('inputSlots');
+    expect(needsRemixReferenceRecovery(degraded.draft)).toBe(true);
+
+    const copy = {
+      id: 'row-product',
+      displayName: 'product',
+      handle: '@product',
+      storagePath: 'post_resource_files/creator-1/generation-references/gen-1/00-reference-image-row-product.png',
+      sourceGenerationId: null,
+      url: 'https://signed.example/recipe-copy.png',
+    };
+    const backdropBox: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@backdrop', name: 'Reference image 1' };
+    const read = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), source({ inputs: { image: { elements: [copy] } }, inputSlots: [backdropBox] }));
+    expect(read.warning).toBeNull();
+
+    const recovered = recoverRemixReferences(degraded.draft, read.draft);
+    expect(recovered.inputSlots).toEqual([backdropBox]);
+    expect(recovered.tool === 'image' && recovered.references.map((media) => [media.handle, media.url])).toEqual([['@product', copy.url]]);
+    // Recovered, the session holds the copy and the box: nothing is read again.
+    expect(needsRemixReferenceRecovery(recovered)).toBe(false);
   });
 });
 

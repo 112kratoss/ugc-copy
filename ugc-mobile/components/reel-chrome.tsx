@@ -3,6 +3,7 @@ import { FileText, Globe, Heart, Images, Lock, LockKeyhole, MessageCircle, MoreH
 import { cloneElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ActivityIndicator, Animated, Easing, Pressable, Text, View } from 'react-native';
 
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { getLockedRemixRailLabel, hasImmersiveDetailsPage, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
@@ -354,7 +355,9 @@ export function ReelSlideChrome({
             accessibilityRole="button"
             accessibilityLabel={`Open ${item.creatorLabel} profile`}
             disabled={!canOpenCreator}
-            onPress={() => onCreatorOpen(item)}
+            // Their page is read once the finger has rested here, before the
+            // press opens it, and never for a swipe (`creatorProfilePress`).
+            {...creatorProfilePress(item.creatorUsername, () => onCreatorOpen(item))}
             hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
             style={({ pressed }) => ({
               flexDirection: 'row',

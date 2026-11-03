@@ -12,10 +12,11 @@
 //
 // The data is one creator, owned by the E2E user (`workflow-user`, src/lib/e2e-auth.ts), who has
 // published nothing: the profiles row in fixtures/creator-profile.json, which the specs read too. And
-// one post page's: a text post with a free recipe, by a creator of its own
-// (fixtures/post-with-recipe.json). And one post editor's: an image post of the E2E user's with one
-// picture and no recipe (fixtures/post-composer-saved-twice.json). And Pricing's referral terms: no
-// active program, which Pricing drew from the failed read too.
+// two post pages': a text post with a free recipe, by a creator of its own
+// (fixtures/post-with-recipe.json), and an image post made from a creation, with no recipe, by
+// another creator of its own (fixtures/creation-post.json). And one post editor's: an image post of
+// the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
+// Pricing's referral terms: no active program, which Pricing drew from the failed read too.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -36,6 +37,11 @@ const recipePost = require('../fixtures/post-with-recipe.json');
 // /post/<id>/edit, reads it in getOwnerPostDetail (src/lib/owner-posts.ts).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const ownPost = require('../fixtures/post-composer-saved-twice.json');
+// An image post made from a creation, with no recipe, by a creator of its own: its post page reads
+// the post, its picture, its creator, its recipe (none) and its creation, whose settings the page
+// shows under Made with (getPublicPostDetail, src/lib/public-posts.ts).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const creationPost = require('../fixtures/creation-post.json');
 
 const HOST = 'example.supabase.co';
 
@@ -111,6 +117,42 @@ const READS = [
     path: '/rest/v1/posts',
     filters: { id: `in.(${recipePost.post.id})` },
     answer: () => json([recipePost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // fetchPublicPostRow: the creation post by id.
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: `eq.${creationPost.post.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? creationPost.post : [creationPost.post], { 'content-range': '0-0/1' }),
+  },
+  {
+    // loadPostMediaItemsMap: its one picture, in the public bucket.
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: `in.(${creationPost.post.id})` },
+    answer: () => json(creationPost.media, { 'content-range': `0-${creationPost.media.length - 1}/${creationPost.media.length}` }),
+  },
+  {
+    // loadPublicPostCreator.
+    methods: ['GET'],
+    path: '/rest/v1/profiles',
+    filters: { id: `eq.${creationPost.creator.id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? creationPost.creator : [creationPost.creator], { 'content-range': '0-0/1' }),
+  },
+  {
+    // getPostResourceBundleDetailByPostId: no recipe.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { post_id: `eq.${creationPost.post.id}` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // loadPublicPostGeneration: the creation's model, and the settings its line reads, each under
+    // its alias as PostgREST answers the paths the read selects (PUBLIC_GENERATION_SETUP_PATHS).
+    methods: ['GET'],
+    path: '/rest/v1/generations',
+    filters: { id: `eq.${creationPost.post.generation_id}` },
+    answer: ({ wantsObject }) => json(wantsObject ? creationPost.generation : [creationPost.generation], { 'content-range': '0-0/1' }),
   },
   {
     // fetchOwnerPostRow: the post by id and owner. maybeSingle() asks for a list.

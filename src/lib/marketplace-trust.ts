@@ -13,13 +13,24 @@ import {
 } from '@/lib/post-resource-bundles';
 import { getCreatorProfileReadiness } from '@/lib/profile';
 // One rule for the server and both composers (contracts/public-post-quality-v1.json).
-import { isPlaceholderText } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
+import {
+  countTitleCharacters,
+  isPlaceholderText,
+  RECIPE_TITLE_MIN_LENGTH,
+  RECIPE_TITLE_TOO_SHORT_CODE,
+  RECIPE_TITLE_TOO_SHORT_REFUSAL,
+} from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 // The public-post rule lives with the placeholder rule, in the module the app
 // composer reads as well; the routes and the web composer import it from here.
+// So does the recipe's title minimum, which both composers say by the title.
 export {
   getPublicPostQualityError,
+  isTitleTooShortForRecipe,
   PUBLIC_POST_PLACEHOLDER_TITLE_ERROR,
+  RECIPE_TITLE_TOO_SHORT_CODE,
+  RECIPE_TITLE_TOO_SHORT_HINT,
+  RECIPE_TITLE_TOO_SHORT_REFUSAL,
 } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 
 const CREATOR_PROFILE_READINESS_ERROR_PREFIX = 'Complete your profile before publishing';
@@ -92,6 +103,50 @@ export function isCreatorProfileCheckError(value: string | null | undefined): bo
 }
 
 /**
+ * What the create, publish and edit routes attach to a refusal of the
+ * listing rule, so a client offers the same way on whichever route refused: a
+ * link to finish the profile, or (owner, 2026-11-03) for a title shorter than a
+ * recipe needs, the code both composers answer with "Post without recipe".
+ */
+export function getMarketplaceRefusalFields(error: string): {
+  field?: string;
+  code?: string;
+  actionHref?: string;
+  actionLabel?: string;
+} {
+  if (isCreatorProfileReadinessError(error)) {
+    return { field: 'profile', actionHref: '/profile', actionLabel: 'Complete profile and return' };
+  }
+  if (error === RECIPE_TITLE_TOO_SHORT_REFUSAL) {
+    return { field: 'title', code: RECIPE_TITLE_TOO_SHORT_CODE };
+  }
+  return {};
+}
+
+/**
+ * Whether a failed write is the database refusing the same title rule, from
+ * the recipe's own write (`apply_post_resource_bundle_mutation`: "Improve this
+ * unlock before publishing: Add a clear listing title …"). The routes check
+ * first, so it means their count and the database's differed (#677's
+ * re-review: emoji titles), and they answer it as their own refusal, the
+ * code both composers offer "Post without recipe" on included.
+ */
+export function isDatabaseRecipeTitleRefusal(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as { message?: unknown; details?: unknown; hint?: unknown };
+  return [candidate.message, candidate.details, candidate.hint].some((value) => (
+    typeof value === 'string' && /Improve this unlock before publishing: Add a clear listing title/i.test(value)
+  ));
+}
+
+/** The answer the routes give a title too short for a recipe, theirs or the database's. */
+export function getRecipeTitleRefusalBody(): { error: string; field?: string; code?: string } {
+  return { error: RECIPE_TITLE_TOO_SHORT_REFUSAL, ...getMarketplaceRefusalFields(RECIPE_TITLE_TOO_SHORT_REFUSAL) };
+}
+
+/**
  * A recipe's access as a chip or badge says it: "Free recipe", or its price in
  * one figure. The quote alone printed "$0.50 recipe" for a credits-only recipe,
  * a price no checkout takes, so the price goes through the credits rule; the
@@ -120,11 +175,12 @@ export function assessMarketplaceListingQuality(input: MarketplaceQualityInput):
   const preview = firstUsefulText(input.summary, input.previewText);
   const post = input.post ?? null;
 
-  if (!title || title.length < 6) {
+  // In characters, as the database's listing rule counts them.
+  if (!title || countTitleCharacters(title) < RECIPE_TITLE_MIN_LENGTH) {
     issues.push({
       code: 'missing_title',
       field: 'title',
-      message: 'Add a clear listing title with at least 6 characters.',
+      message: `Add a clear listing title with at least ${RECIPE_TITLE_MIN_LENGTH} characters.`,
     });
   } else if (isPlaceholderText(title)) {
     issues.push({
@@ -204,7 +260,13 @@ export function getMarketplaceQualityError(input: MarketplaceQualityInput): stri
     return null;
   }
 
-  return `Improve this recipe before publishing: ${assessment.issues[0].message}`;
+  const [firstIssue] = assessment.issues;
+  // A title too short for a recipe is said plainly, with the way out both
+  // composers offer (owner, 2026-11-03).
+  if (firstIssue.code === 'missing_title') {
+    return RECIPE_TITLE_TOO_SHORT_REFUSAL;
+  }
+  return `Improve this recipe before publishing: ${firstIssue.message}`;
 }
 
 function normalizeText(value: string | null | undefined): string {

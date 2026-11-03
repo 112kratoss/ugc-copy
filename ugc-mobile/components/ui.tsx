@@ -854,19 +854,17 @@ export function ToggleRow({
   body,
   value,
   onValueChange,
-  disabled = false,
   accent = 'workflow',
 }: {
   label: string;
   body?: string;
   value: boolean;
   onValueChange: (value: boolean) => void;
-  disabled?: boolean;
   accent?: ToolAccent;
 }) {
   const theme = useAppTheme();
   const color = accentColor(accent, theme.colors);
-  const motion = usePressMotion(disabled);
+  const motion = usePressMotion();
   const progress = useAnimatedState(value);
   const thumbTranslate = progress?.interpolate({
     inputRange: [0, 1],
@@ -879,8 +877,7 @@ export function ToggleRow({
         accessibilityRole="switch"
         accessibilityLabel={label}
         accessibilityHint={body}
-        accessibilityState={{ checked: value, disabled }}
-        disabled={disabled}
+        accessibilityState={{ checked: value }}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
         onPress={() => {
@@ -902,7 +899,7 @@ export function ToggleRow({
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: appTheme.spacing.gap,
-          opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+          opacity: pressed ? appTheme.opacity.pressed : 1,
           paddingHorizontal: appTheme.spacing.card,
           paddingVertical: appTheme.spacing.gap,
         })}

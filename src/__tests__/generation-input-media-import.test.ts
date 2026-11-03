@@ -40,6 +40,7 @@ const EXPOSED_POST = {
 const PAID_REMIX_RECIPE = {
   id: 'bundle-9',
   post_id: 'post-9',
+  owner_user_id: CREATOR,
   access_mode: 'paid',
   price_usd_cents: 499,
   status: 'published',
@@ -76,7 +77,7 @@ function failingTable(error: { message: string; code?: string }) {
 
 function createAdminStub(options: AdminStubOptions = {}) {
   const {
-    mediaRows = [{ id: 'media-1', generation_id: 'gen-9', user_id: CREATOR, storage_path: SOURCE_PATH }],
+    mediaRows = [{ id: 'media-1', generation_id: 'gen-9', user_id: CREATOR, storage_path: SOURCE_PATH, metadata: {} }],
     generationRow = SHARING_GENERATION,
     postRows = [EXPOSED_POST],
     bundleRows = [],
@@ -147,7 +148,7 @@ function createDependencies(stub: ReturnType<typeof createAdminStub>, overrides:
 
 function createLinkedGuestStub(overrides: AdminStubOptions = {}) {
   return createAdminStub({
-    mediaRows: [{ id: 'media-4', generation_id: 'gen-4', user_id: GUEST, storage_path: GUEST_SOURCE_PATH }],
+    mediaRows: [{ id: 'media-4', generation_id: 'gen-4', user_id: GUEST, storage_path: GUEST_SOURCE_PATH, metadata: {} }],
     generationRow: { ...SHARING_GENERATION, id: 'gen-4', user_id: GUEST, is_public: false, share_input_media_for_remix: false },
     profileRows: [{ id: GUEST, merged_into_user_id: VIEWER }],
     ...overrides,
@@ -155,6 +156,37 @@ function createLinkedGuestStub(overrides: AdminStubOptions = {}) {
 }
 
 describe('importSharedGenerationInputMedia', () => {
+  // Owner, 2026-11-03: a creator's run that used a seller's recipe file through their unlock keeps it
+  // as an input of their own. A remix of the creator's creation is never handed it, whatever they share.
+  describe('an input that was a file of someone else’s recipe', () => {
+    it.each([
+      ['marked as it was kept', { sourceKind: 'recipe-file', sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png' }],
+      ['known by the seller’s file it came from', { sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png' }],
+      ['known by the run start’s import of it', { sourceUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/${CREATOR}/recipe-imports/gen-0/00-reference-image-row.png?token=x` }],
+    ])('is never imported for anyone else, shared freely or not: %s', async (_, metadata) => {
+      const stub = createAdminStub({
+        mediaRows: [{ id: 'media-1', generation_id: 'gen-9', user_id: CREATOR, storage_path: SOURCE_PATH, metadata }],
+      });
+      const dependencies = createDependencies(stub, { recipeItems: [{ storagePath: SOURCE_PATH }] });
+
+      const result = await importSharedGenerationInputMedia({ source: SOURCE_PATH, viewerUserId: VIEWER, dependencies });
+
+      expect(result).toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+      expect(stub.createSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('is still the creator’s own to use again', async () => {
+      const stub = createLinkedGuestStub({
+        mediaRows: [{ id: 'media-4', generation_id: 'gen-4', user_id: GUEST, storage_path: GUEST_SOURCE_PATH, metadata: { sourceKind: 'recipe-file' } }],
+      });
+
+      const result = await importSharedGenerationInputMedia({ source: GUEST_SOURCE_PATH, viewerUserId: VIEWER, dependencies: createDependencies(stub) });
+
+      expect(result).toMatchObject({ outcome: 'imported' });
+    });
+  });
+
   it('imports a freely shared input into the viewer prefix', async () => {
     const stub = createAdminStub();
     const result = await importSharedGenerationInputMedia({
@@ -530,7 +562,7 @@ describe('importSharedGenerationInputMedia', () => {
 
   it('fails closed on inconsistent ownership between path, row, and generation', async () => {
     const rowMismatch = createAdminStub({
-      mediaRows: [{ id: 'media-1', generation_id: 'gen-9', user_id: 'someone-else', storage_path: SOURCE_PATH }],
+      mediaRows: [{ id: 'media-1', generation_id: 'gen-9', user_id: 'someone-else', storage_path: SOURCE_PATH, metadata: {} }],
     });
     await expect(importSharedGenerationInputMedia({
       source: SOURCE_PATH,

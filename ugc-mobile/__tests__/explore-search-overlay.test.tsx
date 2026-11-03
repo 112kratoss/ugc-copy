@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExploreSearchOverlay } from '../components/explore-search-overlay';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import type {
   CreatorSearchResult,
   PublicSearchResponse,
@@ -532,6 +533,26 @@ describe('ExploreSearchOverlay search', () => {
     expect(mocks.rememberSearchQuery.mock.calls).toEqual([['port']]);
     expect(mocks.router.push).toHaveBeenCalledWith('/creators/jane');
 
+    await act(async () => tree.unmount());
+  });
+
+  // Review of #679: a scroll of the results that starts on a creator's row
+  // read their page.
+  it("reads a found creator's page once the finger has rested on the row", async () => {
+    searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type, { creators: [creator('jane')] }));
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    await typeQuery(tree, 'port');
+    await advance(300);
+    const row = pressableLabelled(tree, "Open Creator jane's profile");
+
+    expect(row.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+    await act(async () => row.props.onPressIn());
+    expect(prepared).toEqual(['jane']);
+    expect(mocks.router.push).not.toHaveBeenCalled();
+
+    removePreparer();
     await act(async () => tree.unmount());
   });
 

@@ -4,8 +4,9 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, Play, RefreshCw, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, Play, RefreshCw, SlidersHorizontal, Sparkles, SquareDashed, X } from 'lucide-react';
 import clsx from 'clsx';
+import { REMIX_INPUT_SLOTS_NOTICE_LABEL } from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
 import {
   getAccentClasses,
@@ -305,6 +306,24 @@ export function StudioRemixNotice({
   );
 }
 
+/**
+ * What a remix's empty boxes are (`remixInputSlotsNotice`): the inputs its creator kept to themselves,
+ * waiting for the remixer's own. A card of its own beside the remix's notice, as the app's banner is,
+ * so the remixer can put it away for the rest of the remix (2026-11-03), when a box nobody mentions
+ * is to stay empty; the remix's own notice, with the original and Use as reference, stays.
+ */
+export function StudioRemixSlotsNotice({ description, onDismiss }: { description: string; onDismiss: () => void }) {
+  return (
+    <StudioNoticeCard
+      icon={SquareDashed}
+      label={REMIX_INPUT_SLOTS_NOTICE_LABEL}
+      description={description}
+      onDismiss={onDismiss}
+      dismissLabel="Dismiss remix source notice"
+    />
+  );
+}
+
 const USE_ORIGINAL_TONES = {
   blue: 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15',
   coral: 'border border-[#ff7a59]/25 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/45 hover:bg-[#ff7a59]/15',
@@ -568,43 +587,6 @@ export function StudioElementHandle({
         </Fragment>
       ))}
     </span>
-  );
-}
-
-/**
- * The chip that puts a reference's @handle into a prompt: its name, then the handle.
- *
- * A chip could not shrink below its text, and a handle cannot break, so a long
- * name made the chip wider than its row: 425px in a 308px row for a name of 34
- * characters, which made the whole page 466px wide on a 390px phone. The chip
- * stops at its row now (max-w-full). The handle is the part the prompt needs,
- * so it keeps its full width and the name is cut to what is left. That order
- * is what flex-1 is for: the name starts from no width and takes only the room
- * the handle does not use. Were both merely allowed to shrink, they would
- * shrink together, and the handle would wrap beside a name that still had
- * room to give. A handle wider than the row by itself wraps the way it does
- * on a reference card.
- */
-export function StudioElementChip({
-  displayName,
-  handle,
-  handleClassName,
-  onInsert,
-}: {
-  displayName: string;
-  handle: string;
-  handleClassName?: string;
-  onInsert: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onInsert}
-      className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-left text-xs font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
-    >
-      <span className="min-w-0 flex-1 truncate text-zinc-400">{displayName}</span>
-      <StudioElementHandle handle={handle} className={handleClassName} />
-    </button>
   );
 }
 

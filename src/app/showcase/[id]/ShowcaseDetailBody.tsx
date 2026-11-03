@@ -18,6 +18,7 @@ import {
 import { getPublicPostMetaDescription, type PublicPostDetail } from '@/lib/public-posts';
 import type { ShowcaseReturnContext } from '@/lib/share';
 
+import PostGenerationSetupLine from './PostGenerationSetupLine';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
 import { buildRecipePanelProps, getRecipeRemixOffer } from './recipe-panel-props';
 import ReportPostButton from './ReportPostButton';
@@ -304,6 +305,13 @@ export default function ShowcaseDetailBody({
                     </span>
                   )}
                 </div>
+
+                {/*
+                  * The creation's settings under Made with: a standard detail everyone sees
+                  * without unlocking anything (owner, 2026-11-03). The read sends none for an
+                  * upload, a text post, a template's result or a post under its cover.
+                  */}
+                <PostGenerationSetupLine entries={detail.generationSetup} />
 
                 {/* On a covered post the gate holds the heading: "Mature content", then the title once revealed. */}
                 {isNsfwCovered ? null : (

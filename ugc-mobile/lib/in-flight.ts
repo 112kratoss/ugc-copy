@@ -12,17 +12,24 @@ const pendingByOwner = new WeakMap<object, Map<string, Promise<unknown>>>();
  * succeeded or failed, so the next caller always gets a fresh read.
  */
 export function dedupeInFlight<T>(owner: object, key: string, load: () => Promise<T>): Promise<T> {
+  const existing = pendingByOwner.get(owner)?.get(key) as Promise<T> | undefined;
+  return existing ?? trackInFlight(owner, key, load());
+}
+
+/**
+ * Records a request under its owner and key while it is on the wire, without
+ * sharing it: for a request every caller has to send for itself, which others
+ * only need to know is under way (`isInFlight`). Dropped when it settles,
+ * whether it succeeded or failed.
+ */
+export function trackInFlight<T>(owner: object, key: string, request: Promise<T>): Promise<T> {
   let pending = pendingByOwner.get(owner);
   if (!pending) {
     pending = new Map();
     pendingByOwner.set(owner, pending);
   }
 
-  const existing = pending.get(key) as Promise<T> | undefined;
-  if (existing) return existing;
-
   const bucket = pending;
-  const request = load();
   bucket.set(key, request);
   const release = () => {
     if (bucket.get(key) === request) bucket.delete(key);
@@ -31,4 +38,9 @@ export function dedupeInFlight<T>(owner: object, key: string, load: () => Promis
   // on this derived promise; callers still receive it on `request`.
   request.then(release, release);
   return request;
+}
+
+/** Whether a request for this owner and key is on the wire. */
+export function isInFlight(owner: object, key: string) {
+  return pendingByOwner.get(owner)?.has(key) ?? false;
 }

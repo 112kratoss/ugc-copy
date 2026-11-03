@@ -214,7 +214,10 @@ vi.mock('@/lib/server-helpers', () => ({
   },
 }));
 
-vi.mock('@/lib/post-resource-bundles-server', () => ({
+// The recipe's own rules run as they are (a creation's prompt, the copy plan,
+// validation); the quality gate and the write are this route's to observe.
+vi.mock('@/lib/post-resource-bundles-server', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/post-resource-bundles-server')>(),
   getMarketplaceQualityErrorForPostBundle: getMarketplaceQualityErrorForPostBundleMock,
   updatePostWithResourceBundleAtomically: updatePostWithResourceBundleAtomicallyMock,
 }));

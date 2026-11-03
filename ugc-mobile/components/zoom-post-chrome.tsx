@@ -8,12 +8,14 @@ import { setZoomPostPreparer } from '@/components/media-zoom';
 import { IconShadow, ReelSlideChrome } from '@/components/reel-chrome';
 import { TopScrim } from '@/components/top-scrim';
 import { useAuth } from '@/lib/auth';
+import { setCreatorProfilePreparer } from '@/lib/creator-profile-opening';
 import { hasImmersiveAudibleMedia, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { drawsPreparedFollowPill, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { creatorFollowStateQueryKey, prefetchCreatorFollowState } from '@/lib/use-creator-follow';
+import { creatorProfileGridQueryOptions } from '@/lib/use-creator-reel-source';
 import { useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
 
@@ -24,6 +26,10 @@ const ignore = () => {};
  * so the Follow pill can be drawn with the post from the window's first frames
  * and the reel's: asked only once the reel was up, the answer took a round trip
  * after it and the pill appeared a second or more into the post.
+ *
+ * And, as a finger rests on a creator's avatar or handle, reads their page
+ * when the app holds none of it (`creatorProfilePress`), so the page finds its
+ * first read under way or done.
  */
 export function ZoomPostPreparer() {
   const { api, user } = useAuth();
@@ -36,6 +42,20 @@ export function ZoomPostPreparer() {
       if (target) void prefetchCreatorFollowState(queryClient, api, target.creatorId);
     });
   }, [api, queryClient, viewerId]);
+  // Guests open creator pages too. The page's own query, under its key, page
+  // size and freshness. Only a page the app holds nothing of is read: a held
+  // grid, fresh or not, the page draws at once and refreshes itself as it
+  // mounts. Read here, a grid older than its minute was read again page by
+  // page, at every touch and under any reel reading those pages (review of
+  // #679). Not while a change is on its way (a Follow pressed in the reel,
+  // say): a page read under it can carry the answer from before it, and land
+  // after the change has written its own answer into the cached pages.
+  useEffect(() => setCreatorProfilePreparer((username) => {
+    if (queryClient.isMutating() > 0) return;
+    const options = creatorProfileGridQueryOptions(api, username);
+    if (queryClient.getQueryData(options.queryKey) !== undefined) return;
+    void queryClient.prefetchInfiniteQuery(options);
+  }), [api, queryClient]);
   return null;
 }
 

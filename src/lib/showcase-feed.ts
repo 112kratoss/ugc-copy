@@ -40,6 +40,7 @@ import {
   type GenerationPreviewInfo,
 } from '@/lib/generation-preview-info';
 import { toUsablePreviewSize } from '@/lib/preview-dimensions';
+import { loadPublicGenerationSetupCatalog, publicPostGenerationSetup } from '@/lib/public-generation-setup';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -676,6 +677,9 @@ export async function resolvePostRowsToFeedItems(
     return profilesMap;
   };
 
+  // Each card carries its post's line (the settings its creator chose, owner 2026-11-03), built
+  // from the creation's read below against the published catalog, which loads beside it.
+  const generationSetupCatalog = generationIds.length > 0 ? loadPublicGenerationSetupCatalog() : null;
   const loadGenerationInfo = (mediaItemsPromise: Promise<Map<string, PostMediaSummary[]>>) =>
     loadGenerationPreviewInfoMap(adminSupabase, generationIds, {
       signPreviewFor: mediaItemsPromise.then((mediaItemsMap) => new Set(
@@ -683,6 +687,7 @@ export async function resolvePostRowsToFeedItems(
           .filter((row) => row.generation_id && coverNeedsGenerationPreview(mediaItemsMap.get(row.id)))
           .map((row) => row.generation_id as string),
       )),
+      ...(generationSetupCatalog ? { generationSetupCatalog } : {}),
     });
 
   const loadSourceTools = async () => {
@@ -793,6 +798,12 @@ export async function resolvePostRowsToFeedItems(
           ? 'manual'
           : post.source_tool ?? 'external';
 
+      // Left out where the creation or the catalog could not be read: unknown, never none.
+      const generationSetup = publicPostGenerationSetup(
+        { postFormat: post.post_format, generationId: post.generation_id },
+        generationInfo?.generationSetup,
+      );
+
       const remix = resolvePostRemixCapability({
         generationId: post.generation_id,
         postFormat: post.post_format,
@@ -852,6 +863,7 @@ export async function resolvePostRowsToFeedItems(
         canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
         remixCapability: remix.capability,
         remixTarget: remix.target,
+        ...(generationSetup ? { generationSetup } : {}),
       };
       return nsfwIds.has(post.id) && !revealedNsfwIds.has(post.id) ? coverNsfwContent(item) : item;
     })
@@ -1709,6 +1721,7 @@ export async function getShowcaseFeedItemById(options: {
   }
 
   const revealed = options.revealNsfw && await hasNsfwReveal(adminSupabase, postId, viewerUserId);
+  // The card carries its creation's settings from its hydration, as every feed card does.
   const [item] = await addCreationReferenceCountsToFeedItems(
     await resolvePostRowsToFeedItems([row], adminSupabase, undefined, undefined, revealed ? new Set([postId]) : new Set()),
     adminSupabase,

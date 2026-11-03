@@ -1,4 +1,6 @@
+import type { GenerationSetupEntry } from './generation-setup/generation-setup';
 import type { SeedanceAssetCollections, SeedanceAssetKind, SeedanceAssetStatus } from './model-catalog/seedance-assets';
+import type { RemixInputSlot } from './remix-input-slots/remix-input-slots';
 
 export type CreatorToolId = 'image' | 'video' | 'motion';
 
@@ -659,6 +661,12 @@ export interface GenerationInputMediaItem {
   metadata?: Record<string, unknown> | null;
   label?: string | null;
   sourceGenerationId?: string | null;
+  /**
+   * The owner's library read only: whether "Include creation references"
+   * copies it into the creation's recipe (servers from 2026-11-03). Absent,
+   * nothing is offered.
+   */
+  recipeCopyable?: boolean | null;
 }
 
 export interface RemixSourceGeneration {
@@ -700,6 +708,12 @@ export interface RemixSourceBundle {
   };
   /** The owner's remix only: the kept rows, with where each input was staged. */
   inputMedia?: GenerationInputMediaItem[];
+  /**
+   * The inputs this remix is not given, as empty slots for the remixer's own
+   * (`lib/remix-input-slots`): absent for the owner and wherever every input
+   * is restored. Not restore failures, so never in `restoreIssues`.
+   */
+  inputSlots?: RemixInputSlot[];
   workflowSettings: Record<string, unknown>;
   restoreIssues: string[];
 }
@@ -1041,6 +1055,14 @@ export interface ShowcaseFeedItem {
   recommendation?: ShowcaseRecommendationMetadata | null;
   /** Set by the by-id read; feed pages list public posts only. */
   visibility?: 'public' | 'unlisted';
+  /**
+   * The settings the post's creator chose for its creation, which everyone sees
+   * under Made with (owner, 2026-11-03). Every card carries them, the by-id read's
+   * too, empty where there are none to show; a card from before, or one whose
+   * settings the server could not read, comes without them, and Details reads
+   * the post for them (`usePostGenerationSetup`).
+   */
+  generationSetup?: GenerationSetupEntry[];
 }
 
 export interface ShowcaseFeedResponse {
@@ -1672,6 +1694,14 @@ export interface CreatePostResponse {
   ownerPath: string | null;
   resourceBundlePath: string | null;
   message?: string;
+  /**
+   * A creation's publish or save: the items the server put into its recipe
+   * beside those sent (the exact prompt, the saved inputs it was asked for),
+   * which the composer adopts into its own (servers from 2026-11-03).
+   */
+  recipeItemsAdded?: PostResourceItem[];
+  /** Saved inputs asked for that are not in the recipe: a copy failed, or the creation shares none. */
+  referencesNotCopied?: number;
 }
 
 export interface MobileCommerceSyncResponse {

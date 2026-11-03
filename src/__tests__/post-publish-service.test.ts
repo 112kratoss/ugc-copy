@@ -38,6 +38,9 @@ import {
 } from '@/lib/post-publish-service';
 import type { SourceToolOption } from '@/lib/source-tools';
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
+import { DefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
+
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const sourceToolCatalog: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -437,6 +440,62 @@ describe('publishPreparedPost', () => {
     });
     expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
+  // Owner, 2026-11-03: the composers answer this refusal with "Post without
+  // recipe", which they find by its code.
+  it('answers a title too short for its recipe with the refusal the fixture pins', async () => {
+    const refusal = mobileApiContract.endpoints.createPost.errors.recipeTitleTooShort;
+    const formData = new FormData();
+    formData.set('title', 'Cat');
+    formData.set('postFormat', 'text');
+    formData.set('body', 'A useful public creator story with enough context.');
+    formData.set('visibility', 'public');
+    const prepared = await preparePostCreationSubmission({
+      formData,
+      userId: 'user-1',
+      sourceToolCatalog,
+    });
+    if (!prepared.ok) throw new Error('Expected prepared submission');
+
+    const createPostWithResourceBundleAtomically = vi.fn();
+    const result = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble(),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => refusal.response.error),
+        createPostWithResourceBundleAtomically,
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+
+    expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(createPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+
+    // #677's re-review: the database counts a title in characters, and refused
+    // one the route's count had let through ("Cat 🐱") with a 500.
+    const refusedByDatabase = await publishPreparedPost({
+      adminSupabase: adminSupabaseDouble(),
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      submission: prepared.submission,
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        createPostWithResourceBundleAtomically: vi.fn(async () => {
+          throw new DefinitiveSupabaseMutationRejection({
+            message: 'Improve this unlock before publishing: Add a clear listing title with at least 6 characters.',
+          }, 400);
+        }),
+        insertPostMediaItems: vi.fn(),
+        insertPostSourceTools: vi.fn(),
+        createPostMediaPreview: vi.fn(),
+      },
+    });
+    expect(refusedByDatabase).toEqual({ ok: false, status: refusal.status, body: refusal.response });
   });
 
   // Unlisted is created private since product decision 12, and private posts

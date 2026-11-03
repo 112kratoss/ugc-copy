@@ -4,12 +4,16 @@ import {
   createRemixElementSeeds,
   createRemixResultReferenceElement,
   createRestoredRemixAssetState,
+  getRemixNoticeDescription,
   getRemixRestoreWarning,
   getRemixResultReferenceLabel,
   getRemixReferenceCapWarning,
   isRemixResultReference,
   joinRemixRestoreWarnings,
+  readRemixInputSlots,
   REMIX_RESTORE_WARNING,
+  remixSlotsInputSide,
+  withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import type { RemixSourceBundle } from '@/lib/remix-source';
@@ -194,5 +198,48 @@ describe('isRemixResultReference', () => {
     // No reference, or no remix.
     expect(isRemixResultReference(null, 'gen-1')).toBe(false);
     expect(isRemixResultReference({ sourceGenerationId: 'gen-1', storagePath: null }, null)).toBe(false);
+  });
+});
+
+// Owner, 2026-11-03: a remix not given the creator's inputs gets an empty box for each, named as
+// the prompt names it, for the remixer's own; the prompt then works unchanged.
+describe('a remix’s empty slots in the web creators', () => {
+  const product = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' } as const;
+  const backdrop = { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' } as const;
+
+  it('reads the slots a bundle names, and none from a bundle without them', () => {
+    expect(readRemixInputSlots({ inputSlots: [product, backdrop, { id: 'slot-3', role: 'storage_path' } as never] }))
+      .toEqual([product, backdrop]);
+    expect(readRemixInputSlots({})).toEqual([]);
+  });
+
+  it('drops a slot once its box is filled', () => {
+    expect(withoutRemixInputSlot([product, backdrop], 'slot-1')).toEqual([backdrop]);
+    expect(withoutRemixInputSlot([product, backdrop], 'slot-9')).toEqual([product, backdrop]);
+  });
+
+  // What the creator kept is a notice of its own, which the remixer can put away for the remix, as
+  // in the app (2026-11-03): the remix's own notice keeps the original and Use as reference.
+  it('says where the remix came from and what could not be restored, and leaves the empty boxes to their own notice', () => {
+    expect(getRemixNoticeDescription('Harbour', null)).toBe('Settings pre-filled from "Harbour".');
+    expect(getRemixNoticeDescription(null, null)).toBe('Settings pre-filled from the original creation.');
+    expect(getRemixNoticeDescription('Harbour', REMIX_RESTORE_WARNING))
+      .toBe(`Settings pre-filled from "Harbour". ${REMIX_RESTORE_WARNING}`);
+  });
+
+  it('opens the video creator’s inputs where the empty boxes are', () => {
+    const start = { role: 'start_frame', handle: null } as const;
+    const clip = { role: 'reference_video', handle: null } as const;
+    expect(remixSlotsInputSide([start, { role: 'end_frame', handle: null }], { clipsBesideSides: false })).toBe('frames');
+    // A model that keeps its start image beside its references (Wan 2.7) shows the frame's box there too.
+    expect(remixSlotsInputSide([start, clip], { clipsBesideSides: false })).toBe('references');
+    expect(remixSlotsInputSide([{ role: 'reference_audio', handle: null }], { clipsBesideSides: false })).toBe('references');
+    // Kling 3.0's clips are named video elements beside either side, and a subject is neither.
+    expect(remixSlotsInputSide([clip], { clipsBesideSides: true })).toBeNull();
+    expect(remixSlotsInputSide([clip, start], { clipsBesideSides: true })).toBe('frames');
+    expect(remixSlotsInputSide([{ role: 'subject', handle: '@lead' }], { clipsBesideSides: false })).toBeNull();
+    expect(remixSlotsInputSide([], { clipsBesideSides: false })).toBeNull();
+    // A clip the prompt names has no place on a model whose clips take no handle: it opens no side.
+    expect(remixSlotsInputSide([{ role: 'reference_video', handle: '@dance' }, start], { clipsBesideSides: false })).toBe('frames');
   });
 });

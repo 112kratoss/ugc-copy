@@ -10,6 +10,7 @@ import {
   buildLegacyGenerationInputMedia,
   findUncapturedInputMediaTypes,
   loadGenerationInputMediaMap,
+  preparedSeedanceAssetIdsFor,
   sanitizeWorkflowSettingsForRemix,
   toRemixAssetDescriptor,
   toRemixerInputMedia,
@@ -36,7 +37,9 @@ import {
   type RemixSourceBundle,
   type RemixSourceResult,
 } from '@/lib/remix-source';
-import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
+import { isRecipeFileInput } from '@/lib/generation-input-origin';
+import { loadGenerationRecipeRemixInputsByPostId } from '@/lib/post-resource-bundles-server';
+import { holdBackFromRemix, remixInputSlotsOf, remixSlotWords, resolveWithheldRemixInputs } from '@/lib/remix-input-slots-server';
 import { createServiceClient, createUserClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   getUserOwnedStoredMediaLocation,
@@ -370,10 +373,9 @@ export async function loadRemixSourceBundle(
   // The run's own kept inputs are read for the owner and for a remix the
   // creator shared them with. A bought recipe's come from its post, below.
   const readsRunInputs = isOwner || access.includeSharedInputMedia;
-  const effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(
-    workflowSettings,
-    isOwner ? 'owner' : readsRunInputs || access.recipeEntitled ? 'with-inputs' : 'without-inputs',
-  );
+  const slotTool = isMotionWorkflow ? 'motion' : category === 'image' ? 'image' : 'video';
+  const slotWords = remixSlotWords(typedGeneration.prompt, workflowSettings);
+  let effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, isOwner ? 'owner' : 'without-inputs');
   const durableInputMediaMap = readsRunInputs
     ? await loadGenerationInputMediaMap({
         supabase: adminSupabase,
@@ -399,21 +401,66 @@ export async function loadRemixSourceBundle(
 
   // Bought recipe media is restored from the post the gate verified, never
   // from the id the caller put in the URL.
-  const recipeInputMedia = !readsRunInputs && access.recipeEntitled && access.post
-    ? await loadGenerationRecipeRemixInputMediaByPostId({
+  const recipeInputs = !readsRunInputs && access.recipeEntitled && access.post
+    ? await loadGenerationRecipeRemixInputsByPostId({
       postId: access.post.id,
       generationId: typedGeneration.id,
       viewerUserId: user.id,
       adminSupabase,
       throwOnError: true,
       })
-    : [];
-  const keptInputMedia = readsRunInputs ? inputMedia : recipeInputMedia;
+    : { inputMedia: [], recipeFiles: [] };
+  // Anyone else is given none of the run's inputs (owner, 2026-11-03): an
+  // empty slot for each, and for someone who bought the post's recipe (a
+  // retired one too: it stays its buyers'), the inputs that recipe holds
+  // copies of instead. Read from the recipe the gate read, never a post the
+  // caller named.
+  const withheldInputs = !readsRunInputs && !access.recipeEntitled
+    ? await resolveWithheldRemixInputs({
+        adminSupabase,
+        generation: typedGeneration,
+        workflowSettings,
+        tool: slotTool,
+        recipe: access.recipe ?? null,
+        viewerUserId: user.id,
+      })
+    : null;
+  // A file of someone else's recipe the creator's run used through their unlock
+  // is theirs alone (owner, 2026-11-03): a remix the creator shares their inputs
+  // with, or whose recipe hands them over, gets an empty slot in its place.
+  // A subject that would be left with fewer pictures than a subject takes is held back whole, for its slot.
+  const creatorIds = new Set(typedGeneration.user_id ? [typedGeneration.user_id] : []);
+  const recipeFileIds = new Set(recipeInputs.recipeFiles.map((item) => item.id));
+  const handOver = isOwner
+    ? { handedOn: inputMedia, heldBack: [] }
+    : readsRunInputs
+      ? holdBackFromRemix(inputMedia, (item) => isRecipeFileInput(item, creatorIds), slotTool)
+      : holdBackFromRemix([...recipeInputs.inputMedia, ...recipeInputs.recipeFiles], (item) => recipeFileIds.has(item.id), slotTool);
+  const keptInputMedia = handOver.handedOn;
+  // Never with a link: a held-back input only names its slot.
+  const heldBackRecipeFiles = handOver.heldBack.map((item) => ({ ...item, url: null }));
+  const inputSlots = withheldInputs?.inputSlots ?? remixInputSlotsOf(heldBackRecipeFiles, { tool: slotTool, words: slotWords });
+  if (!isOwner && (readsRunInputs || access.recipeEntitled)) {
+    // A remix the inputs are handed to is given the prepared assets of the inputs it is handed, each
+    // with the input it was prepared from and in their places among them, which is how a restore pairs
+    // them. An asset id runs the file it was prepared from (2026-11-04 re-review): none goes with a
+    // held-back file, an input never kept, or a recipe file, nor to a recipe that hands over no input.
+    const handedOverIds = new Set(keptInputMedia.map((item) => item.id));
+    const prepared = preparedSeedanceAssetIdsFor(
+      workflowSettings.seedanceAssets,
+      [...keptInputMedia, ...heldBackRecipeFiles],
+      handedOverIds,
+      creatorIds,
+    );
+    if (prepared) effectiveWorkflowSettings = { ...effectiveWorkflowSettings, seedanceAssets: prepared };
+  }
   // What anyone but the owner restores from: each row cut down to its copy and
-  // what a restore reads (`toRemixerInputMedia`).
-  const restoredInputMedia = isOwner ? keptInputMedia : keptInputMedia.map(toRemixerInputMedia);
+  // what a restore reads (`toRemixerInputMedia`), or to the recipe's copy of it.
+  const restoredInputMedia = isOwner
+    ? keptInputMedia
+    : [...keptInputMedia.map(toRemixerInputMedia), ...(withheldInputs?.restoredFromCopies ?? [])];
 
-  const restoreIssues: string[] = [];
+  const restoreIssues: string[] = withheldInputs?.restoreIssue ? [withheldInputs.restoreIssue] : [];
   // Keeping inputs fails one item at a time, so the kept rows can hold less
   // than the recipe used. Say so: otherwise a remix restores the kept part as
   // if it were the whole recipe. Read without signing anything.
@@ -544,6 +591,8 @@ export async function loadRemixSourceBundle(
     // it from, both naming the file. Anyone else restores from `inputs`, which
     // is built below from the same rows cut down to what a restore reads.
     ...(isOwner ? { inputMedia: keptInputMedia } : {}),
+    // Not restore failures: never in `restoreIssues`.
+    ...(inputSlots.length > 0 ? { inputSlots } : {}),
     workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
   };
@@ -616,7 +665,8 @@ export async function loadRemixSourceBundle(
         referenceVideo: referenceVideo ? toRemixAssetDescriptor(referenceVideo) : null,
       };
     }
-  } else if (readsRunInputs) {
+  } else if (readsRunInputs && inputMedia.length === 0) {
+    // Nothing kept and nothing named in the settings' kept shapes: what the settings say alone.
     if (category === 'image') {
       bundle.inputs.image = {
         elements: await resolveElementDescriptors('image-element'),

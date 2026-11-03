@@ -21,6 +21,8 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: draftStor
 
 const routerState = vi.hoisted(() => ({
   push: vi.fn(),
+  // A Remix tap's creator gives way to the link its start answers with.
+  replace: vi.fn(),
 }));
 
 const authState = vi.hoisted(() => ({
@@ -298,6 +300,9 @@ import { createPublishedDefaultsCatalog, createRemixRestoreCatalog, createTestGe
 import { catalogV2 } from './generation-model-catalog-v2-fixtures';
 import type { CatalogInputMode, CatalogInputSlot, GenerationModelCatalog, GenerationModelDescriptor } from '../lib/generation-model-catalog';
 import { creationDraftStorageKey, ordinaryDraftScope, remixDraftScope } from '../lib/creation-draft-resume';
+import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { REMIX_LAUNCH_PARAM, launchShowcaseRemix } from '../lib/remix-start';
+import type { ShowcaseFeedItem } from '../lib/types';
 import { activeGenerationRecordStorageKey } from '../lib/active-generation-record';
 import type { ModelCatalogKind, ModelCatalogSummary } from '../lib/model-catalog/protocol';
 import { PrimaryButton, SecondaryButton } from '../components/ui';
@@ -688,6 +693,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     draftStorage.setItem.mockReset().mockResolvedValue(undefined);
     draftStorage.removeItem.mockReset().mockResolvedValue(undefined);
     routerState.push.mockClear();
+    routerState.replace.mockClear();
     resetCreatorSessionForTests();
     authState.updateCredits.mockClear();
     authState.refreshProfile.mockClear();
@@ -2357,6 +2363,269 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(collectText(tree.root)).not.toContain(RESTORING);
       expect(promptOf(tree)).toBe('A scene of my own');
       expect(generate(tree).props.disabled).toBe(false);
+    });
+  });
+
+  // Home's Make this and the reel's Remix open the creator at the tap, before the start is
+  // answered (`launchShowcaseRemix`); it opened 0.75 to 1 s after it, and up to 4 s, on the
+  // Pixel 9a against production (2026-11-03). From its first frame the creator says its source
+  // is on its way under the original's model, and it takes the read its tap sent. Until the start
+  // is answered as this remix nothing lands, is saved or runs: the answer can still close it, or
+  // send it to the link it names.
+  describe('a remix a tap opened before its start was answered', () => {
+    const RESTORING = 'Restoring the original prompt, settings, and references…';
+    const source = {
+      generation: { id: 'gen-girl', title: 'Original', prompt: 'The girl from @girl is crying', category: 'video', model: 'seedance-2' },
+      result: null,
+      inputs: {
+        video: {
+          referenceMode: 'elements',
+          startFrame: null,
+          endFrame: null,
+          elements: [{ id: 'girl', displayName: 'Girl', handle: '@girl', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', sourceGenerationId: 'gen-girl' }],
+          referenceVideos: [],
+          referenceAudios: [],
+        },
+      },
+      workflowSettings: { model: 'seedance-2', mode: '', aspectRatio: '9:16', resolution: '480p', duration: 4, sound: false, referenceMode: 'elements' },
+      restoreIssues: [],
+    };
+    /** The post as the feed sends it: a Seedance 2 video, remix open. */
+    const post = {
+      id: 'post-girl',
+      generationId: 'gen-girl',
+      title: 'Crying girl',
+      prompt: 'The girl from @girl is crying',
+      body: '',
+      mediaUrl: 'https://cdn.example.com/post-girl.mp4',
+      mediaKind: 'video',
+      mediaItems: [],
+      category: 'video',
+      creationMode: null,
+      postFormat: 'media',
+      model: 'seedance-2',
+      saveCount: 0,
+      remixCount: 0,
+      commentCount: 0,
+      createdAt: '2026-11-01T09:00:00.000Z',
+      creator: { id: 'creator-1', username: 'luna', name: 'Luna', avatar: null },
+      asset: null,
+      canRemix: true,
+    } as unknown as ShowcaseFeedItem;
+    const onClose = vi.fn();
+    /** The creator the tap's link opens, its launch named as the route hands it on. */
+    const editor = (launchId: string | null) => (
+      <MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} remixLaunchId={launchId} onClose={onClose} />
+    );
+    // Past the quote's delay and the autosave's, and past every storage read a load makes.
+    const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
+    const promptOf = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value;
+    const type = (tree: renderer.ReactTestRenderer, prompt: string) => renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.onChangeText(prompt);
+    });
+    const chip = (tree: renderer.ReactTestRenderer) => findPressableByLabelPrefix(tree.root, 'Selected model').props.accessibilityLabel;
+    const action = (tree: renderer.ReactTestRenderer) => tree.root.findByProps({ testID: 'creator-persistent-bar' })
+      .find((node) => String(node.type) === 'pressable' && node.props.accessibilityState?.disabled !== undefined).props;
+    const remixDraftWrites = () => draftStorage.setItem.mock.calls.filter(([key]) => (
+      key === creationDraftStorageKey(remixDraftScope('user-123', { generationId: 'gen-girl', postId: 'post-girl' }))
+    ));
+    /**
+     * A tap on Remix: the tap's side of its launch, which the case answers, the link the answer
+     * is expected to name, and the launch the pushed link names.
+     */
+    const tap = ({ readable = true }: { readable?: boolean } = {}) => {
+      const navigate = vi.fn();
+      const control = launchShowcaseRemix({
+        api: authState.api as unknown as Parameters<typeof launchShowcaseRemix>[0]['api'],
+        item: buildImmersiveShowcaseItems('showcase-feed', [post])[0],
+        navigate,
+      });
+      // The start no longer waits on an unlock (a free one is claimed first).
+      if (readable) control.sourceReadable();
+      const pushed = new URL(navigate.mock.calls[0][0] as string, 'https://magicbooklet.test');
+      const launchId = pushed.searchParams.get(REMIX_LAUNCH_PARAM);
+      pushed.searchParams.delete(REMIX_LAUNCH_PARAM);
+      return { control, href: `${pushed.pathname}${pushed.search}`, launchId };
+    };
+    const open = async (launchId: string | null) => {
+      let tree!: renderer.ReactTestRenderer;
+      await renderer.act(async () => { tree = renderer.create(editor(launchId)); });
+      return tree;
+    };
+
+    beforeEach(() => {
+      catalogState.catalog = createRemixRestoreCatalog();
+      onClose.mockReset();
+    });
+
+    it('names the original’s model from the first frame, takes the tap’s read, and lands it only once the start is answered', async () => {
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      const { control, href, launchId } = tap();
+      const tree = await open(launchId);
+
+      // The catalog opens a new video draft on Kling 3.0, which the chip named until the source landed.
+      expect(collectText(tree.root)).toContain(RESTORING);
+      expect(chip(tree)).toBe('Selected model Seedance 2. Change model');
+      expect(catalogHookCalls.selectedIds).toContain('seedance-2');
+
+      await settle();
+      // The source is in and the start is still out: nothing has landed, been priced or been saved.
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledWith('gen-girl', { postId: 'post-girl' });
+      expect(promptOf(tree)).toBe('');
+      expect(collectText(tree.root)).toContain(RESTORING);
+      expect(chip(tree)).toBe('Selected model Seedance 2. Change model');
+      expect(authState.api.quoteGenerationModel).not.toHaveBeenCalled();
+      expect(action(tree)).toMatchObject({ accessibilityLabel: 'Calculating…', disabled: true });
+      expect(remixDraftWrites()).toEqual([]);
+
+      await renderer.act(async () => { control.land(href); });
+      await settle();
+
+      expect(promptOf(tree)).toBe('The girl from @girl is crying');
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Girl' })).not.toHaveLength(0);
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      expect(chip(tree)).toBe('Selected model Seedance 2. Change model');
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      expect(action(tree)).toMatchObject({ accessibilityLabel: 'Generate · 8 credits', disabled: false });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(routerState.replace).not.toHaveBeenCalled();
+    });
+
+    it('keeps words typed while the start was out', async () => {
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      const { control, href, launchId } = tap();
+      const tree = await open(launchId);
+      await settle();
+
+      type(tree, 'My own scene with @girl');
+      await settle();
+      expect(remixDraftWrites()).toEqual([]);
+
+      await renderer.act(async () => { control.land(href); });
+      await settle();
+
+      expect(promptOf(tree)).toBe('My own scene with @girl');
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Girl' })).not.toHaveLength(0);
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+    });
+
+    it('closes, keeping nothing, when the start is refused, and the tap hears once it is gone', async () => {
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      const { control, launchId } = tap();
+      const tree = await open(launchId);
+      await settle();
+      type(tree, 'Typed before the refusal');
+      await settle();
+
+      let gone = false;
+      await renderer.act(async () => { void control.close().then(() => { gone = true; }); });
+      await settle();
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      // Nothing restored over the screen as it leaves, and nothing kept for the next remix of the post.
+      expect(promptOf(tree)).toBe('Typed before the refusal');
+      expect(remixDraftWrites()).toEqual([]);
+      // The tapped screen's unlock sheet waits for the creator to be gone.
+      expect(gone).toBe(false);
+      renderer.act(() => tree.unmount());
+      await settle();
+      expect(gone).toBe(true);
+    });
+
+    it('gives way to the link the answer names', async () => {
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      const { control, launchId } = tap();
+      const tree = await open(launchId);
+      await settle();
+
+      await renderer.act(async () => { control.land('/create/image?remix=gen-girl&remixPost=post-girl'); });
+      await settle();
+
+      expect(routerState.replace).toHaveBeenCalledTimes(1);
+      expect(routerState.replace).toHaveBeenCalledWith('/create/image?remix=gen-girl&remixPost=post-girl');
+      expect(onClose).not.toHaveBeenCalled();
+      expect(promptOf(tree)).toBe('');
+      expect(remixDraftWrites()).toEqual([]);
+    });
+
+    it('shows a session it saved before at once, and runs and saves nothing until the start is answered', async () => {
+      draftStorage.getItem.mockResolvedValue(JSON.stringify({
+        image: createDefaultCreationDraft('image'),
+        video: {
+          ...createDefaultCreationDraft('video'),
+          model: 'seedance-2',
+          prompt: 'My edited scene: @girl is crying',
+          aspectRatio: '9:16',
+          resolution: '480p',
+          duration: 4,
+          references: [{ id: 'girl', kind: 'image', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', fileName: 'girl.png', displayName: 'Girl', handle: '@girl', sourceGenerationId: 'gen-girl' }],
+        },
+        motion: createDefaultCreationDraft('motion'),
+        updatedAt: '2026-10-04T00:00:00.000Z',
+        remixRestored: true,
+        remixEditedKeys: { video: ['prompt'] },
+        remixOriginal: null,
+      }));
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      const { control, href, launchId } = tap();
+      const tree = await open(launchId);
+      await settle();
+
+      expect(promptOf(tree)).toBe('My edited scene: @girl is crying');
+      expect(collectText(tree.root)).not.toContain(RESTORING);
+      // Priced while the start is out, so it can run the moment the answer comes.
+      expect(action(tree)).toMatchObject({ accessibilityLabel: 'Generate · 8 credits', disabled: true });
+      type(tree, 'My edited scene: @girl is crying again');
+      await settle();
+      expect(remixDraftWrites()).toEqual([]);
+
+      await renderer.act(async () => { control.land(href); });
+      await settle();
+
+      expect(action(tree)).toMatchObject({ accessibilityLabel: 'Generate · 8 credits', disabled: false });
+      expect(promptOf(tree)).toBe('My edited scene: @girl is crying again');
+      expect(remixDraftWrites().length).toBeGreaterThan(0);
+    });
+
+    // A start that fails at once (offline) can answer before the creator's first render, which
+    // takes a few hundred milliseconds on Android: the creator still finds its launch, and follows it.
+    it('follows an answer that came before it opened', async () => {
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      const refused = tap();
+      void refused.control.close();
+      const closed = await open(refused.launchId);
+      await settle();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(promptOf(closed)).toBe('');
+      expect(remixDraftWrites()).toEqual([]);
+
+      const started = tap();
+      started.control.land(started.href);
+      const restored = await open(started.launchId);
+      await settle();
+      expect(promptOf(restored)).toBe('The girl from @girl is crying');
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    // `/api/remix-source` keeps the start's gate, so a read sent before a free unlock is
+    // recorded would be refused as still locked.
+    it('reads the source only once a free unlock the tap takes is recorded', async () => {
+      authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      const { control, href, launchId } = tap({ readable: false });
+      const tree = await open(launchId);
+      await settle();
+      expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+      expect(collectText(tree.root)).toContain(RESTORING);
+
+      await renderer.act(async () => { control.sourceReadable(); });
+      await settle();
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+
+      await renderer.act(async () => { control.land(href); });
+      await settle();
+      expect(promptOf(tree)).toBe('The girl from @girl is crying');
+      expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -9228,6 +9497,281 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.getRemixSourceBundle.mockResolvedValue(sourceOf('gen-6', 'motion', { mediaType: 'image', url: look }));
         const motion = await open(remix('motion', 'gen-6'));
         expect(useButtons(motion)).toHaveLength(0);
+      });
+    });
+
+    // Owner, 2026-11-03: a remix not given its creator's inputs gets an empty box in place of each, named
+    // as its prompt names it, to fill with the remixer's own. It used to open with nothing, and the
+    // prompt's mentions held Generate as "Unknown element mention".
+    describe('a remix’s empty input slots', () => {
+      const slotsRemix = { generationId: 'gen-slots', postId: 'post-slots' };
+      const sessionKey = creationDraftStorageKey(remixDraftScope('user-123', slotsRemix)!);
+      const imageSlotsSource = () => ({
+        generation: { id: 'gen-slots', title: 'Counter', prompt: 'Place @product on a marble counter', category: 'image', model: 'nano-banana-2' },
+        result: null,
+        inputs: { image: { elements: [] } },
+        inputSlots: [
+          { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
+          { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
+        ],
+        workflowSettings: { model: 'nano-banana-2' },
+        restoreIssues: [],
+      });
+      const slotBoxes = (tree: renderer.ReactTestRenderer, id: string) => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.testID === `remix-input-slot-${id}`
+      ));
+      const sentRun = () => authState.api.startGeneration.mock.calls[0][0] as { prompt: string; inputs: Array<Record<string, unknown>> };
+      const openImageRemix = async () => {
+        // A catalog whose model publishes its slots, as production's does: what the run sends is read from them.
+        catalogState.catalog = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14)]);
+        authState.api.getRemixSourceBundle.mockResolvedValue(imageSlotsSource());
+        return open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+      };
+
+      it('draws an empty box for each picture the creator kept, holds Generate on its mention, and fills it with the remixer’s own', async () => {
+        authState.api.startGeneration.mockResolvedValue(started('pred-slots'));
+        const tree = await openImageRemix();
+
+        // Each box is titled as the prompt names it, or else by its name, and says what it takes.
+        const rail = tree.root.findByProps({ testID: 'image-reference-rail' });
+        expect(collectText(rail.findByProps({ testID: 'remix-input-slot-slot-1' }))).toEqual(['@product', 'Add your image']);
+        expect(collectText(rail.findByProps({ testID: 'remix-input-slot-slot-2' }))).toEqual(['Reference image 2', 'Add your image']);
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+        // No restore failed, so nothing offers to retry one.
+        expect(hasLabel(tree.root, 'Retry restore')).toBe(false);
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(text(tree)).not.toContain('Unknown element mention');
+        expect(findPressableByLabelPrefix(tree.root, 'Generate').props.disabled).toBe(true);
+
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('IMG_2201.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('IMG_2201.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your image for @product').props.onPress(); });
+        await settle();
+
+        expect(pickMedia).toHaveBeenCalledWith('image');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        // Named for its slot, so the prompt's mention finds it.
+        expect(hasLabel(tree.root, 'Open details for product')).toBe(true);
+        expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+        expect(text(tree)).not.toContain('Add your own for @product');
+
+        await pressGenerate(tree);
+        expect(sentRun().prompt).toBe('Place @product on a marble counter');
+        expect(sentRun().inputs).toEqual([
+          expect.objectContaining({ slot: 'imageReferences', handle: '@product', url: 'https://cdn.example.com/IMG_2201.png' }),
+        ]);
+        // Neither the run nor any price asked for it carries a slot.
+        const asked = JSON.stringify([sentRun(), ...authState.api.quoteGenerationModel.mock.calls.map(([body]) => body)]);
+        expect(asked).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
+      });
+
+      it('keeps the boxes still to fill with the session, and draws them again on a resume without reading the source', async () => {
+        const first = await openImageRemix();
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('bottle.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('bottle.png'));
+        await renderer.act(async () => { await labelled(first.root, 'Add your image for @product').props.onPress(); });
+        await settle();
+
+        const saved = JSON.parse(memory.get(sessionKey) ?? 'null');
+        expect(saved).toMatchObject({ remixRestored: true });
+        expect(saved.image.inputSlots).toEqual([{ id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' }]);
+        // The fill is the remixer's, so a restore read again keeps it.
+        expect(saved.remixEditedKeys.image).toEqual(expect.arrayContaining(['references', 'inputSlots']));
+        first.unmount();
+
+        authState.api.getRemixSourceBundle.mockClear();
+        const resumed = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+        expect(slotBoxes(resumed, 'slot-1')).toHaveLength(0);
+        expect(slotBoxes(resumed, 'slot-2')).toHaveLength(1);
+        expect(hasLabel(resumed.root, 'Open details for product')).toBe(true);
+        expect(text(resumed)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+      });
+
+      it('draws a Kling 3.0 remix’s kept frame on its own box and its clip on the rail, and sends the clip under the handle its prompt names', async () => {
+        catalogState.catalog = parityCatalog([parityKlingVideo()]);
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-slots', title: 'Dance', prompt: 'Open on the door, then @dance spins', category: 'video', model: 'kling-3.0-video' },
+          result: null,
+          inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+          inputSlots: [
+            { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
+            { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
+          ],
+          workflowSettings: { model: 'kling-3.0-video', referenceMode: 'frames', duration: 5 },
+          restoreIssues: [],
+        });
+        authState.api.startGeneration.mockResolvedValue(started('pred-dance'));
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={slotsRemix} />);
+
+        expect(collectText(tree.root.findByProps({ testID: 'video-start-frame-slot' }))).toEqual(['Start frame', 'Add your image']);
+        const rail = tree.root.findByProps({ testID: 'video-reusable-reference-rail' });
+        expect(collectText(rail.findByProps({ testID: 'remix-input-slot-slot-2' }))).toEqual(['@dance', 'Add your video']);
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+        expect(blocker(tree)).toBe('Add your own for @dance in its box, or take @dance out of the prompt.');
+
+        vi.mocked(pickMedia).mockResolvedValueOnce({ uri: 'file:///move.mp4', fileName: 'move.mp4', mimeType: 'video/mp4', fileSize: 4096, duration: 4000 } as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValueOnce(uploaded('move.mp4', { mimeType: 'video/mp4', kind: 'video', durationSeconds: 4 }));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your video for @dance').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenLastCalledWith('video');
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(0);
+        expect(hasLabel(tree.root, 'Open details for dance')).toBe(true);
+
+        // The frame's own box takes the frame the creator kept.
+        vi.mocked(pickMedia).mockResolvedValueOnce(pickedImage('door.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValueOnce(uploaded('door.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add start frame').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenLastCalledWith('image');
+        expect(text(tree)).not.toContain('The creator kept');
+
+        await pressGenerate(tree);
+        expect(sentRun().prompt).toBe('Open on the door, then @dance spins');
+        expect(sentRun().inputs).toEqual([
+          expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/door.png' }),
+          expect.objectContaining({ slot: 'videoElements', handle: '@dance', url: 'https://cdn.example.com/move.mp4', durationSeconds: 4 }),
+        ]);
+      });
+
+      it('draws a kept subject among the subjects, and makes the pictures picked for it the subject its prompt names', async () => {
+        catalogState.catalog = parityCatalog([parityKlingO3()]);
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-slots', title: 'Maya', prompt: '@maya walks into the rain', category: 'video', model: 'kling-o3' },
+          result: null,
+          inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+          inputSlots: [{ id: 'slot-1', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1' }],
+          workflowSettings: { model: 'kling-o3' },
+          restoreIssues: [],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="video" remixSource={slotsRemix} />);
+        const group = tree.root.findByProps({ testID: 'video-subjects-group' });
+        expect(collectText(group.findByProps({ testID: 'remix-input-slot-slot-1' }))).toEqual(['@maya', 'Add your pictures']);
+
+        vi.mocked(pickMediaList).mockResolvedValue([pickedImage('maya-front.png'), pickedImage('maya-side.png')] as never);
+        vi.mocked(uploadPickedMedia).mockImplementation(async (uri) => uploaded(uri.replace('file:///', '')));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your pictures for @maya').props.onPress(); });
+        await settle();
+        expect(pickMediaList).toHaveBeenCalledWith('image', { allowsMultipleSelection: true });
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(hasLabel(tree.root, 'Open details for maya, @maya')).toBe(true);
+        expect(text(tree)).not.toContain('Add your own for @maya');
+      });
+
+      it('draws a motion remix’s kept character and clip on their own boxes, and fills the character', async () => {
+        authState.api.getRemixSourceBundle.mockResolvedValue({
+          generation: { id: 'gen-slots', title: 'Moves', prompt: '', category: 'video', model: 'kling-3.0' },
+          result: null,
+          inputs: {},
+          inputSlots: [
+            { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
+            { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' },
+          ],
+          workflowSettings: { model: 'kling-3.0' },
+          restoreIssues: [],
+        });
+        const tree = await open(<MediaCreationScreen initialTool="motion" remixSource={slotsRemix} />);
+        expect(collectText(tree.root.findByProps({ testID: 'motion-character-slot' }))).toEqual(['Character image', 'Add your image']);
+        expect(collectText(tree.root.findByProps({ testID: 'motion-video-slot' }))).toEqual(['Motion video', 'Add your video']);
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('me.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('me.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add character image').props.onPress(); });
+        await settle();
+        expect(pickMedia).toHaveBeenCalledWith('image');
+        expect(hasLabel(tree.root, 'Open details for Character image')).toBe(true);
+        expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+      });
+
+      // Three edges of 2026-11-03: Enhance could rewrite a box's @handle out of the prompt; a model with
+      // no place for a box hid it and read its mention as an unknown one; and the boxes' notice could not
+      // be put away while a box nobody mentions stayed empty.
+      it('has Enhance keep an empty box’s handle, polishing around the sentence that names it', async () => {
+        authState.api.enhancePrompt.mockResolvedValue({ enhancedPrompt: 'Place @product on a marble counter, glossy reflections.', remainingCredits: 900 });
+        const tree = await openImageRemix();
+
+        await renderer.act(async () => { await labelled(tree.root, 'Polish · 2 credits').props.onPress(); });
+
+        expect(authState.api.enhancePrompt).toHaveBeenCalledWith(expect.objectContaining({
+          prompt: 'Place @product on a marble counter',
+          context: expect.objectContaining({
+            referenceImageCount: 0,
+            // Named as its fill will be (`remixSlotFillNaming`), as on the web.
+            elementReferences: [{ handle: '@product', displayName: 'product' }],
+            elementEnhancementMode: 'append-only',
+          }),
+        }));
+        expect(JSON.stringify(authState.api.enhancePrompt.mock.calls[0][0])).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
+        expect(tree.root.findByProps({ accessibilityLabel: 'Generation prompt' }).props.value).toBe('Place @product on a marble counter, glossy reflections.');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+      });
+
+      it('says a box the chosen model has no place for waits for a switch back, where it is drawn again beside what was filled', async () => {
+        const full = parityCatalog([parityImageModel('nano-banana-2', 'Nano Banana 2.0', 14), parityImageModel('prompt-only', 'Prompt Only', 0)]);
+        catalogState.catalog = full;
+        catalogState.summaries = full.models;
+        authState.api.getRemixSourceBundle.mockResolvedValue(imageSlotsSource());
+        const tree = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        const pickModel = async (displayName: string) => {
+          renderer.act(() => { findPressableByLabelPrefix(tree.root, 'Selected model').props.onPress(); });
+          await renderer.act(async () => { findPressableByLabelPrefix(tree.root, `${displayName}.`).props.onPress(); });
+          await settle();
+        };
+
+        await pickModel('Prompt Only');
+
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(blocker(tree)).toBe('Prompt Only has no place for @product. Switch back, or take @product out of the prompt.');
+        expect(text(tree)).not.toContain('Unknown element mention');
+        // No box is drawn here, so the notice of them is not either.
+        expect(text(tree)).not.toContain('The creator kept');
+        expect(findPressableByLabelPrefix(tree.root, 'Generate').props.disabled).toBe(true);
+
+        await pickModel('Nano Banana 2.0');
+
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(1);
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        // A box filled before a switch is the remixer's picture after it: it waits for a model that
+        // takes it, and is back on the rail beside the box still empty.
+        vi.mocked(pickMedia).mockResolvedValue(pickedImage('backdrop.png') as never);
+        vi.mocked(uploadPickedMedia).mockResolvedValue(uploaded('backdrop.png'));
+        await renderer.act(async () => { await labelled(tree.root, 'Add your image for Reference image 2').props.onPress(); });
+        await settle();
+        expect(hasLabel(tree.root, 'Open details for Reference image 2')).toBe(true);
+        await pickModel('Prompt Only');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(0);
+        expect(collectText(tree.root.findByProps({ testID: 'standby-references' }))).toContain('Not sent with this run');
+        await pickModel('Nano Banana 2.0');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(0);
+        expect(hasLabel(tree.root, 'Open details for Reference image 2')).toBe(true);
+        expect(text(tree)).toContain('The creator kept 1 input to themselves. Add your own in the empty box.');
+      });
+
+      it('puts the boxes’ notice away for the rest of the remix, a resume included, and keeps the boxes', async () => {
+        const tree = await openImageRemix();
+        expect(text(tree)).toContain('The creator kept 2 inputs to themselves. Add your own in the empty boxes.');
+
+        await renderer.act(async () => { labelled(tree.root, 'Dismiss Remix source').props.onPress(); });
+        await settle();
+
+        expect(text(tree)).not.toContain('The creator kept');
+        expect(slotBoxes(tree, 'slot-1')).toHaveLength(1);
+        expect(slotBoxes(tree, 'slot-2')).toHaveLength(1);
+        // The mention still holds the run, in its own words.
+        expect(blocker(tree)).toBe('Add your own for @product in its box, or take @product out of the prompt.');
+        expect(JSON.parse(memory.get(sessionKey) ?? 'null').image.inputSlotsNoticeDismissed).toBe(true);
+        tree.unmount();
+
+        authState.api.getRemixSourceBundle.mockClear();
+        const resumed = await open(<MediaCreationScreen initialTool="image" remixSource={slotsRemix} />);
+        expect(authState.api.getRemixSourceBundle).not.toHaveBeenCalled();
+        expect(slotBoxes(resumed, 'slot-1')).toHaveLength(1);
+        expect(text(resumed)).not.toContain('The creator kept');
       });
     });
 

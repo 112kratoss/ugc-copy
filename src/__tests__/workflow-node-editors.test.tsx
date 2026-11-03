@@ -828,6 +828,56 @@ describe('WorkflowNodeEditors', () => {
     URL.revokeObjectURL = originalRevokeObjectURL;
   });
 
+  // 2026-11-04 re-review: a new upload into an input kept the asset prepared from the file before it,
+  // still active, and named the new upload as its source. A run sends an active asset in the input's
+  // place, so it ran the old file, and a share read the new upload as the old asset's source. A new
+  // file has no asset until it is prepared.
+  it.each([
+    ['image-input', 'Image', 'Upload image file', new File(['image-bytes'], 'new.png', { type: 'image/png' })],
+    ['video-input', 'Video', 'Upload video file', new File(['video-bytes'], 'new.mp4', { type: 'video/mp4' })],
+    ['audio-input', 'Audio', 'Upload audio file', new File(['audio-bytes'], 'new.mp3', { type: 'audio/mpeg' })],
+  ] as const)('clears the prepared asset of an %s when a new file is uploaded into it', async (kind, assetType, label, file) => {
+    // The clip's length is read in the browser first; read as unknown here, at once.
+    const originalCreateObjectURL = URL.createObjectURL;
+    URL.createObjectURL = vi.fn(() => {
+      throw new Error('No object URLs in this test.');
+    }) as typeof URL.createObjectURL;
+    try {
+      const base = createWorkflowNode(kind, { x: 0, y: 0 });
+      const prepared = {
+        ...base,
+        data: normalizeNodeData(kind, {
+          ...base.data,
+          seedanceAsset: {
+            assetId: 'asset-old',
+            assetType,
+            status: 'active',
+            sourceUrl: 'https://example.com/old-file',
+            error: 'An old provider error',
+            lastCheckedAt: '2026-11-01T00:00:00.000Z',
+          },
+        }),
+      };
+      const view = renderInteractiveInspector(prepared);
+      expect(screen.getByText('asset-old')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText(label), { target: { files: [file] } });
+
+      await waitFor(() => {
+        expect(view.uploadAsset).toHaveBeenCalledWith(file, expect.any(String));
+        expect(screen.getByText('Not prepared yet')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('asset-old')).toBeNull();
+      expect(screen.queryByText('An old provider error')).toBeNull();
+      expect(screen.getAllByText('Idle').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Active')).toBeNull();
+      // Ready to be prepared from the new file.
+      expect(screen.getByRole('button', { name: /prepare asset/i })).toBeEnabled();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+    }
+  });
+
   it('shows workflow prompt mention suggestions for reachable handled refs and inserts the selected handle', () => {
     const promptNode = createWorkflowNode('text-input', { x: 0, y: 0 });
     const handledSource = createWorkflowNode('image-input', { x: 0, y: 140 });

@@ -1,8 +1,36 @@
 import { useNavigation } from 'expo-router';
 import { useEffect, useState } from 'react';
 
+type TransitionEvent = 'transitionStart' | 'transitionEnd' | 'gestureCancel';
 type TransitionListener = (event: { data?: { closing?: boolean } }) => void;
-type Listen = (type: 'transitionStart' | 'transitionEnd' | 'gestureCancel', listener: TransitionListener) => () => void;
+/** A screen's navigation object, as far as listening to it goes. */
+type ScreenNavigation = { addListener: (...args: never[]) => unknown };
+
+/**
+ * Listens for one of the events native-stack sends a screen about its
+ * transitions. Expo Router types `useNavigation()` with the events every
+ * navigator sends, and these three are native-stack's own. Returns the
+ * unsubscribe.
+ */
+export function listenToTransition(navigation: ScreenNavigation, type: TransitionEvent, listener: TransitionListener) {
+  const transitions = navigation as unknown as { addListener: (type: TransitionEvent, listener: TransitionListener) => () => void };
+  return transitions.addListener(type, listener);
+}
+
+/**
+ * Tells `onChange` whether the screen is leaving (`useScreenLeaving`) at each
+ * transition event that can change the answer. Returns the unsubscribe.
+ */
+export function listenForScreenLeaving(navigation: ScreenNavigation, onChange: (leaving: boolean) => void) {
+  const unsubscribers = [
+    listenToTransition(navigation, 'transitionStart', (event) => onChange(event.data?.closing === true)),
+    listenToTransition(navigation, 'transitionEnd', (event) => {
+      if (event.data?.closing === false) onChange(false);
+    }),
+    listenToTransition(navigation, 'gestureCancel', () => onChange(false)),
+  ];
+  return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+}
 
 /**
  * Whether this screen has started to go off screen and has not come back.
@@ -18,16 +46,6 @@ type Listen = (type: 'transitionStart' | 'transitionEnd' | 'gestureCancel', list
 export function useScreenLeaving() {
   const navigation = useNavigation();
   const [leaving, setLeaving] = useState(false);
-  useEffect(() => {
-    const listen = navigation.addListener as unknown as Listen;
-    const unsubscribers = [
-      listen('transitionStart', (event) => setLeaving(event.data?.closing === true)),
-      listen('transitionEnd', (event) => {
-        if (event.data?.closing === false) setLeaving(false);
-      }),
-      listen('gestureCancel', () => setLeaving(false)),
-    ];
-    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [navigation]);
+  useEffect(() => listenForScreenLeaving(navigation, setLeaving), [navigation]);
   return leaving;
 }

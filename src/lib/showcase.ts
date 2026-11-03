@@ -8,6 +8,7 @@ import {
     type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import type { GenerationSetupEntry } from '../../ugc-mobile/lib/generation-setup/generation-setup';
 
 export const SHOWCASE_PAGE_SIZE = 12;
 // A full page in the bootstrap keeps the grid from sitting near-empty while
@@ -166,6 +167,15 @@ export interface ShowcaseFeedItem {
     recommendation?: ShowcaseRecommendationContext;
     /** Set by the by-id read; feed pages list public posts only. */
     visibility?: 'public' | 'unlisted';
+    /**
+     * The settings the post's creator chose for its creation, as everyone may
+     * see them (`buildPublicGenerationSetup`), carried by every card from the
+     * read that hydrates it: empty where there are none to show (a written post,
+     * an upload, a template's result, a post under its NSFW cover), and left out
+     * where the creation or the catalog could not be read, which the app's
+     * Details reads the post again for.
+     */
+    generationSetup?: GenerationSetupEntry[];
 }
 
 interface ShowcaseFeedPageInfo {
@@ -339,16 +349,30 @@ export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPa
 export const SHOWCASE_APP_ONLY_MEDIA_FIELDS = ['preview', 'previewCacheKey', 'displayUrl', 'renditionStatus'] as const;
 
 /**
+ * What the server's cards carry for the app alone: `generationSetup`, the
+ * post's settings line, which the app's Details draws off the card and the web
+ * reads from its post page's own read instead.
+ */
+export const SHOWCASE_APP_ONLY_ITEM_FIELDS = ['generationSetup'] as const;
+
+/**
  * The first feed page Explore hands its client, without
  * SHOWCASE_APP_ONLY_MEDIA_FIELDS: 15 of the 47 KB the twelve posts took in the
- * document on 2026-10-20. `/api/showcase/feed` still sends them.
+ * document on 2026-10-20. Nor SHOWCASE_APP_ONLY_ITEM_FIELDS.
+ * `/api/showcase/feed` still sends them.
  */
 export function toShowcaseBootstrapFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPage {
     return {
         ...feed,
-        items: feed.items.map((item) => (item.mediaItems
-            ? { ...item, mediaItems: item.mediaItems.map(withoutAppOnlyMediaFields) }
-            : item)),
+        items: feed.items.map((item) => {
+            const webItem: ShowcaseFeedItem = item.mediaItems
+                ? { ...item, mediaItems: item.mediaItems.map(withoutAppOnlyMediaFields) }
+                : { ...item };
+            for (const field of SHOWCASE_APP_ONLY_ITEM_FIELDS) {
+                delete webItem[field];
+            }
+            return webItem;
+        }),
     };
 }
 

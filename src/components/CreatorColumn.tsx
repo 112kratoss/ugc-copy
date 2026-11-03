@@ -11,7 +11,6 @@ import clsx from 'clsx';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 import {
   MEDIA_TOOL_IDS,
-  StudioElementChip,
   StudioElementHandle,
   StudioUploadedMediaPreview,
   type StudioMediaPreviewType,
@@ -21,6 +20,7 @@ import { choiceKeyTarget, getAccentClasses, IconButton, type UiAccent } from '@/
 import type { CreatorCanvasPhase } from '@/lib/creator-canvas-phase';
 import { openCreditTopUp, type CreditTopUpNeed } from '@/lib/credit-top-up';
 import { getCreatorTool, type CreatorToolId } from '@/lib/creator-tools';
+import { isValidElementHandle } from '@/lib/image-elements';
 import type { OptionPrice } from '@/lib/use-quote-prices';
 
 /**
@@ -1073,59 +1073,6 @@ export function CreatorBackgroundRunLine({ title }: { title: string }) {
   );
 }
 
-export type CreatorMentionSuggestion = { id: string; displayName: string; handle: string };
-
-/**
- * The panel that typing "@" in a prompt opens: what was typed, and the
- * references whose handle it can become. A group named by its title.
- */
-export function CreatorMentionPanel<T extends CreatorMentionSuggestion>({
-  title,
-  hint,
-  query,
-  suggestions,
-  handleClassName,
-  onInsert,
-}: {
-  title: string;
-  hint: string;
-  query: string;
-  suggestions: readonly T[];
-  /** A suggestion's handle colour: on the video creator a clip's differs from a picture's. */
-  handleClassName: (suggestion: T) => string;
-  onInsert: (handle: string) => void;
-}) {
-  return (
-    <div role="group" aria-label={title} className="rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-          <p className="ui-kicker">{title}</p>
-          <p className="mt-1 text-sm text-[var(--ui-text-muted)]">{hint}</p>
-        </div>
-        {query ? (
-          <StudioElementHandle
-            handle={`@${query}`}
-            className="rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-xs font-semibold text-[var(--ui-text-secondary)]"
-          />
-        ) : null}
-      </div>
-      {suggestions.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {suggestions.map((suggestion) => (
-            <StudioElementChip
-              key={suggestion.id}
-              displayName={suggestion.displayName}
-              handle={suggestion.handle}
-              handleClassName={handleClassName(suggestion)}
-              onInsert={() => onInsert(suggestion.handle)}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 /** A small pill action on a reference: Insert, Copy, Add video. */
 export const CREATOR_REFERENCE_CHIP_CLASS =
   'ui-focus-ring inline-flex min-h-9 shrink-0 items-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 text-xs font-semibold text-[var(--ui-text-primary)] transition-colors hover:bg-[var(--ui-surface-3)] disabled:cursor-not-allowed disabled:opacity-50';
@@ -1491,6 +1438,123 @@ export function CreatorMediaReferenceTile({
   );
 }
 
+/** How a remix's empty slot is drawn: a tile with a picture's frame, a clip's wide one, or a row. */
+export type CreatorRemixSlotFrame = 'square' | 'wide' | 'none';
+
+/**
+ * An input a remix was not given, as an empty, dashed box in its place (owner, 2026-11-03): the
+ * @handle the prompt knows it by, else its name (`remixInputSlotTitle`), and what to add
+ * (`remixInputSlotAction`). A press opens the picker of its kind and a drop hands it files; the
+ * page puts the remixer's file in its place, under its handle, and the box goes. A tile in a
+ * reference strip (`as="li"`, the size of the tiles beside it) or a row of its own (`frame="none"`,
+ * a named subject's).
+ */
+export function CreatorRemixSlotTile({
+  accent,
+  slotId,
+  title,
+  action,
+  accept,
+  multiple = false,
+  frame = 'square',
+  as: Wrapper = 'li',
+  handleClassName,
+  disabled = false,
+  onFiles,
+}: {
+  accent: UiAccent;
+  /** The slot's id, on its file field. */
+  slotId: string;
+  title: string;
+  action: string;
+  /** The file field's types. */
+  accept: string;
+  multiple?: boolean;
+  frame?: CreatorRemixSlotFrame;
+  as?: 'li' | 'div';
+  /** A handle's colour, as the tiles beside it draw theirs. */
+  handleClassName?: string;
+  disabled?: boolean;
+  onFiles: (files: File[]) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const classes = getAccentClasses(accent);
+  const label = dragging ? 'Drop here' : action;
+
+  return (
+    <Wrapper className={clsx('flex min-w-0', Wrapper === 'li' && 'snap-start')}>
+      <button
+        type="button"
+        aria-label={`${action} for ${title}`}
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+        // A drop on the box is the box's alone: the creator's own drop target around a strip (the
+        // image creator's references) would add the file a second time.
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setDragging(false);
+          const files = Array.from(event.dataTransfer.files ?? []);
+          if (files.length > 0 && !disabled) onFiles(files);
+        }}
+        className={clsx(
+          'ui-focus-ring flex w-full min-w-0 rounded-ui-lg border border-dashed p-1.5 text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50',
+          frame === 'none' ? 'min-h-12 items-center gap-2 px-3' : 'flex-col gap-1.5',
+          dragging
+            ? clsx(classes.tileActive, 'text-[var(--ui-text-primary)]')
+            : clsx(classes.tile, 'text-[var(--ui-text-secondary)] hover:text-[var(--ui-text-primary)]')
+        )}
+      >
+        {/* Nothing inside takes the pointer, so a drag over the words is no leave. */}
+        {frame === 'none' ? (
+          <Plus aria-hidden className={clsx('pointer-events-none h-4 w-4 shrink-0', classes.mark)} />
+        ) : (
+          <span
+            className={clsx(
+              'pointer-events-none flex w-full items-center justify-center rounded-ui-md bg-[var(--ui-surface-inset)]',
+              frame === 'wide' ? 'aspect-video' : 'aspect-square'
+            )}
+          >
+            <Plus aria-hidden className={clsx('h-5 w-5', classes.mark)} />
+          </span>
+        )}
+        <span className={clsx('pointer-events-none flex min-w-0 flex-col gap-0.5', frame !== 'none' && 'px-1.5 pb-1')}>
+          {/* A title that is a handle, by the server's own rule, which the mention grammar's parity test holds. */}
+          {isValidElementHandle(title) ? (
+            <StudioElementHandle handle={title} className={clsx('text-xs font-semibold', handleClassName ?? classes.accentText)} />
+          ) : (
+            // The box's title, so two lines of it rather than a cut ("Reference im…").
+            <span className="line-clamp-2 text-sm font-semibold text-[var(--ui-text-primary)] [overflow-wrap:anywhere]" title={title}>{title}</span>
+          )}
+          <span className="text-xs text-[var(--ui-text-muted)]">{label}</span>
+        </span>
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        multiple={multiple}
+        disabled={disabled}
+        tabIndex={-1}
+        data-remix-slot={slotId}
+        className="hidden"
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? []);
+          event.target.value = '';
+          if (files.length > 0) onFiles(files);
+        }}
+      />
+    </Wrapper>
+  );
+}
+
 /** A round, dashed control in the column that adds files in the tool's accent. */
 function addTileClass(accent: UiAccent, dragging: boolean) {
   const classes = getAccentClasses(accent);
@@ -1692,7 +1756,8 @@ export function CreatorInputsCard({
  * One input of fixed role (a start frame, the character image, the reference
  * video): empty, a dashed tile to add it; filled, its preview with Replace and
  * Remove. One file field serves both: the tile's label is for it, and Replace
- * clicks it.
+ * clicks it. A remix not given the input names it on the empty tile instead
+ * (`remixSlot`), in the accent, and the file the remixer adds fills it.
  */
 export function CreatorUploadSlot({
   accent,
@@ -1708,6 +1773,7 @@ export function CreatorUploadSlot({
   icon: Icon,
   emptyLabel,
   emptyHint,
+  remixSlot = null,
   input,
   onPreview,
   onRemove,
@@ -1730,6 +1796,11 @@ export function CreatorUploadSlot({
   icon: LucideIcon;
   emptyLabel: string;
   emptyHint?: string;
+  /**
+   * The input a remix was not given (owner, 2026-11-03): the empty tile says what it was
+   * (`remixInputSlotTitle`) and asks for the remixer's own (`remixInputSlotAction`).
+   */
+  remixSlot?: { title: string; action: string } | null;
   /** The file field; give it an `id`, which the tile's label points at. Replace clicks it. */
   input: Omit<FileInputProps, 'ref'> & { id: string };
   onPreview: () => void;
@@ -1737,6 +1808,7 @@ export function CreatorUploadSlot({
 } & FileDropProps) {
   const classes = getAccentClasses(accent);
   const inputRef = useRef<HTMLInputElement>(null);
+  const namesSlot = Boolean(remixSlot) && !dragging;
   return (
     <div>
       <h3 className="flex items-baseline justify-between gap-2 text-xs font-semibold text-[var(--ui-text-secondary)]">
@@ -1767,15 +1839,26 @@ export function CreatorUploadSlot({
               'peer-disabled:cursor-not-allowed',
               dragging
                 ? clsx(classes.tileActive, 'text-[var(--ui-text-primary)]')
-                : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-secondary)]'
+                : remixSlot
+                  ? clsx(classes.tile, 'text-[var(--ui-text-secondary)] hover:text-[var(--ui-text-primary)]')
+                  : 'border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] text-[var(--ui-text-muted)] hover:text-[var(--ui-text-secondary)]'
             )}
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
             onDrop={onDrop}
           >
-            <Icon aria-hidden className={clsx('h-5 w-5', dragging && classes.mark)} />
-            <span className="text-xs font-semibold">{emptyLabel}</span>
-            {emptyHint ? <span className="text-xs text-[var(--ui-text-faint)]">{emptyHint}</span> : null}
+            <Icon aria-hidden className={clsx('h-5 w-5', (dragging || remixSlot) && classes.mark)} />
+            {namesSlot && remixSlot ? (
+              <>
+                <span className="text-xs font-semibold text-[var(--ui-text-primary)]">{remixSlot.title}</span>
+                <span className="text-xs text-[var(--ui-text-muted)]">{remixSlot.action}</span>
+              </>
+            ) : (
+              <>
+                <span className="text-xs font-semibold">{emptyLabel}</span>
+                {emptyHint ? <span className="text-xs text-[var(--ui-text-faint)]">{emptyHint}</span> : null}
+              </>
+            )}
           </label>
         )}
       </div>

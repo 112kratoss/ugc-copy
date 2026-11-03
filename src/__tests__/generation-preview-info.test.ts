@@ -2,6 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { loadGenerationPreviewInfoMap } from '@/lib/generation-preview-info';
+import {
+  PUBLIC_GENERATION_SETUP_PATHS,
+  loadPublicGenerationSetupCatalog,
+} from '@/lib/public-generation-setup';
+import { postgrestSelect } from './fixtures/postgrest-select';
 
 /**
  * Signing a generation's private preview mints a fresh token every time, and
@@ -145,4 +150,108 @@ describe('loadGenerationPreviewInfoMap', () => {
     expect(map.get('gen-1')?.previewUrl).toContain('token=fresh');
   });
 
+  // A post's line (the settings its creator chose, owner 2026-11-03) comes from this read, which
+  // already holds every card's creation: the feed and the read by id ask for it, with no read of
+  // their own, and it selects the settings' paths, never the whole record.
+  describe("a card's line, from the same read", () => {
+    const stored = {
+      ...generationRow('gen-1'),
+      template_run_id: null,
+      template_run_step_id: null,
+      workflow_settings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+        resolution: '2K',
+        outputFormat: 'png',
+        googleSearch: false,
+        compiledPrompt: 'Everything the creator typed',
+      },
+    };
+
+    function answeringSelects(rows: Array<Record<string, unknown>>, refuse: (select: string) => boolean = () => false) {
+      const selects: string[] = [];
+      const client = {
+        from(table: string) {
+          if (table !== 'generations') throw new Error(`unexpected table ${table}`);
+          return {
+            select: (select: string) => ({
+              in: async () => {
+                selects.push(select);
+                if (refuse(select)) return { data: null, error: { code: 'PGRST100', message: 'failed to parse select parameter' } };
+                return { data: rows.map((row) => postgrestSelect(row, select)), error: null };
+              },
+            }),
+          };
+        },
+        storage: {
+          from: () => ({ createSignedUrl: async (path: string) => ({ data: { signedUrl: `https://storage.test/${path}` }, error: null }) }),
+        },
+      };
+      return { client: client as unknown as SupabaseClient, selects };
+    }
+
+    it("builds each creation's line where the caller asks, in the one read", async () => {
+      const { client, selects } = answeringSelects([stored]);
+
+      const map = await loadGenerationPreviewInfoMap(client, ['gen-1'], {
+        generationSetupCatalog: loadPublicGenerationSetupCatalog(),
+      });
+
+      expect(map.get('gen-1')).toMatchObject({
+        model: 'nano-banana-2',
+        generationSetup: [
+          { label: 'Aspect ratio', value: '9:16' },
+          { label: 'Resolution', value: '2K' },
+          { label: 'Output format', value: 'PNG' },
+        ],
+      });
+      expect(selects).toHaveLength(1);
+      expect(selects[0]).toContain(PUBLIC_GENERATION_SETUP_PATHS);
+      expect(selects[0]).not.toMatch(/workflow_settings(?!->)/);
+    });
+
+    it('reads no settings for a caller that draws no line', async () => {
+      const { client, selects } = answeringSelects([stored]);
+
+      const map = await loadGenerationPreviewInfoMap(client, ['gen-1']);
+
+      expect(map.get('gen-1')).not.toHaveProperty('generationSetup');
+      expect(selects[0]).not.toContain('workflow_settings');
+    });
+
+    // The posters and models come from the same read, so a refusal of the paths costs the cards
+    // their line, which is then unknown, and nothing else.
+    it("keeps the cards' models and posters where the paths are refused, the line left unknown", async () => {
+      const { client, selects } = answeringSelects([stored], (select) => select.includes('workflow_settings'));
+
+      const map = await loadGenerationPreviewInfoMap(client, ['gen-1'], {
+        generationSetupCatalog: loadPublicGenerationSetupCatalog(),
+      });
+
+      expect(selects).toHaveLength(2);
+      expect(map.get('gen-1')).toMatchObject({ model: 'nano-banana-2', previewWidth: 720 });
+      expect(map.get('gen-1')).not.toHaveProperty('generationSetup');
+    });
+
+    it('leaves the line unknown where the catalog cannot be read', async () => {
+      const { client } = answeringSelects([stored]);
+
+      const map = await loadGenerationPreviewInfoMap(client, ['gen-1'], {
+        generationSetupCatalog: Promise.resolve(null),
+      });
+
+      expect(map.get('gen-1')?.model).toBe('nano-banana-2');
+      expect(map.get('gen-1')).not.toHaveProperty('generationSetup');
+    });
+
+    it("gives a template's result no line, as it names no model", async () => {
+      const { client } = answeringSelects([{ ...stored, template_run_id: 'run-1' }]);
+
+      const map = await loadGenerationPreviewInfoMap(client, ['gen-1'], {
+        generationSetupCatalog: loadPublicGenerationSetupCatalog(),
+      });
+
+      expect(map.get('gen-1')).toMatchObject({ model: 'template-workflow', generationSetup: [] });
+    });
+  });
 });

@@ -6,8 +6,8 @@ import { Text, useWindowDimensions, View } from 'react-native';
 import { StableMediaImage } from '@/components/media-preview';
 import { SkeletonBone } from '@/components/skeleton';
 import { AppText, SecondaryButton } from '@/components/ui';
-import { ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { ONE_TIME_POST_READ } from '@/lib/one-time-post-read';
 import { showcasePostRemixSourceContext } from '@/lib/remix-start';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { appTheme } from '@/lib/theme';
@@ -42,11 +42,6 @@ const POSTER_RADIUS = appTheme.radii.sm;
  */
 const POST_ID = /^[\w-]+$/;
 
-/** A refusal (gone, blocked, rate-limited) answers the same again; a dropped connection may not. */
-function retryUnlessRefused(failureCount: number, error: unknown) {
-  return failureCount < 1 && !(error instanceof ApiError && error.status >= 400 && error.status < 500);
-}
-
 /**
  * The row above a remix's prompt: the source's poster, title and creator.
  *
@@ -72,10 +67,7 @@ export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; 
     queryKey: createShowcasePostQueryKey(postId, user?.id),
     queryFn: () => api.getShowcasePost(postId!),
     enabled: reads,
-    staleTime: Infinity,
-    retry: retryUnlessRefused,
-    retryOnMount: false,
-    refetchOnWindowFocus: false,
+    ...ONE_TIME_POST_READ,
   });
 
   // Only this row's own first read: a disabled query still reports the entry another screen is

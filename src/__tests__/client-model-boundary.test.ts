@@ -51,11 +51,13 @@ describe('client model boundary', () => {
     }
   });
 
-  it('derives generated paywall labels from the server catalog instead of browser model lists', () => {
-    const source = readFileSync(join(repoRoot, 'src/lib/generation-paywall.ts'), 'utf8');
+  it('derives a post’s generation setup labels from the server catalog instead of browser model lists', () => {
+    // The setup a post shows (2026-11-03) is what the paywall's notes said, and names a mode as the catalog does.
+    const source = readFileSync(join(repoRoot, 'src/lib/public-generation-setup.ts'), 'utf8');
 
     expect(source).toContain("@/lib/generation-model-catalog");
     expect(source).not.toContain("@/lib/client-generation-models");
+    expect(readFileSync(join(repoRoot, 'src/lib/generation-paywall.ts'), 'utf8')).not.toContain("@/lib/client-generation-models");
   });
 
   it('keeps workflow assistant UI away from the server assistant planner module', () => {

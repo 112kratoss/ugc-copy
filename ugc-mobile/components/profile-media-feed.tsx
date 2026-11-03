@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import {
   AccessibilityInfo,
   ActivityIndicator,
+  Animated,
+  Easing,
   Platform,
   Pressable,
   Share,
@@ -41,16 +43,20 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import {
-  INITIAL_FEED_LANDING,
   buildProfileFeedCards,
+  feedLandingCardPlace,
+  feedLandingScrollArrived,
+  initialFeedLanding,
   reduceFeedLanding,
   shouldScrollToFeedTarget,
+  type FeedLandingCardPlace,
   type ProfileFeedCard,
 } from '@/lib/profile-feed-card-view-model';
 import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS } from '@/lib/profile-media-query';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
+import { MotionView, useReducedMotion } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -102,6 +108,16 @@ function profileMediaFeedReturnPath(source: string, initialId: string, scope: 'a
 
 /** How often a landing checks its budget and retries after layout has advanced. */
 const LANDING_TICK_MS = 250;
+
+/** The list's padding above its first card, which the opened card is drawn under too when it is that card. */
+const LIST_PADDING_TOP = 12;
+
+/**
+ * How long each step of the opened card's handover to the list takes once the
+ * list has landed on it (`OpeningCard`). The handover ends the feed's opening,
+ * so it keeps a navigation's beat, as the tab bar's cross-fade does.
+ */
+const OPENING_CARD_HANDOVER_MS = appTheme.motion.duration.navigation;
 
 /**
  * Creations and Posts open here rather than in the reel: owned media is managed,
@@ -246,13 +262,50 @@ export function ProfileMediaFeedScreen() {
    * another card. Scrolling rather than reordering keeps the cards above it
    * reachable.
    */
-  const [landing, dispatchLanding] = useReducer(reduceFeedLanding, INITIAL_FEED_LANDING);
+  const targetIndex = initialId ? cards.findIndex((card) => card.id === initialId) : -1;
+  const [landing, dispatchLanding] = useReducer(reduceFeedLanding, targetIndex, initialFeedLanding);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [listReady, setListReady] = useState(false);
   const landingSeekingRef = useRef(false);
-  const landingScrollInFlightRef = useRef(false);
+  /** The index the landing scroll in flight is taking the list to; null while none is. */
+  const landingScrollIndexRef = useRef<number | null>(null);
   const landingTargetVisibleRef = useRef(false);
-  const targetIndex = initialId ? cards.findIndex((card) => card.id === initialId) : -1;
+
+  // The opened card stands over the hidden list while the list seeks it
+  // (`OpeningCard`), so the screen comes in with it rather than empty. A card
+  // that arrives after the screen does (fetched on its own, or a cold open) is
+  // first held in a waiting landing for one render, which the `target` effect
+  // then starts; the card stands from that render too, or the top of the list
+  // would show for a frame. It goes at once when the reader takes the list over
+  // or the landing gives up, and after its fade once the list has landed.
+  const openingCard = targetIndex >= 0 ? cards[targetIndex] : null;
+  const openingCardDue = landing.phase === 'seeking' || (landing.phase === 'waiting' && openingCard !== null);
+  const [openingCardShown, setOpeningCardShown] = useState(openingCardDue);
+  if (openingCardDue && !openingCardShown) setOpeningCardShown(true);
+  if (openingCardShown && !openingCardDue && landing.phase !== 'landed') setOpeningCardShown(false);
+  const handOverOpeningCard = useCallback(() => setOpeningCardShown(false), []);
+  // Where the card stands is read from the cards when it is first drawn, and
+  // kept while it stands for that index. Opened on the last card loaded, a page
+  // landing under it moved it from the list's foot to its top while the list
+  // was still landing it on its foot (review of #679, finding 10). A reorder
+  // that starts a landing on another index stands it afresh.
+  const openingCardStands = openingCardShown && openingCard !== null;
+  const [openingCardStand, setOpeningCardStand] = useState(() => (
+    openingCardStands ? { index: targetIndex, place: feedLandingCardPlace(targetIndex, cards.length) } : null
+  ));
+  if (!openingCardStands && openingCardStand) setOpeningCardStand(null);
+  if (openingCardStands && openingCardStand?.index !== targetIndex) {
+    setOpeningCardStand({ index: targetIndex, place: feedLandingCardPlace(targetIndex, cards.length) });
+  }
+  // Where the landed list stands the card, from the list's top: the card's
+  // place among the cards less how far the list has scrolled. FlashList records
+  // a native scroll before it passes the event on, so this is current from the
+  // early reveal's scroll as much as from the promise.
+  const openedCardLandedTop = useCallback(() => {
+    const list = listRef.current;
+    const layout = list?.getLayout(landing.targetIndex);
+    return list && layout ? layout.y + list.getFirstItemOffset() - list.getAbsoluteLastScrollOffset() : null;
+  }, [landing.targetIndex]);
 
   useEffect(() => {
     landingSeekingRef.current = landing.phase === 'seeking';
@@ -272,9 +325,9 @@ export function ProfileMediaFeedScreen() {
   useEffect(() => {
     if (!listReady || !shouldScrollToFeedTarget(landing, cards.length)) return;
     const list = listRef.current;
-    if (!list || landingScrollInFlightRef.current) return;
+    if (!list || landingScrollIndexRef.current !== null) return;
     const index = landing.targetIndex;
-    landingScrollInFlightRef.current = true;
+    landingScrollIndexRef.current = index;
     void list.scrollToIndex({ index, animated: false, viewPosition: 0 })
       .then(() => {
         const visible = list.computeVisibleIndices();
@@ -286,9 +339,27 @@ export function ProfileMediaFeedScreen() {
         });
       })
       .finally(() => {
-        landingScrollInFlightRef.current = false;
+        landingScrollIndexRef.current = null;
       });
   }, [cards.length, landing, layoutRevision, listReady]);
+
+  // The landing scroll's one native move: the feed shows from it rather than
+  // from the promise, which resolves 200 ms later (`feedLandingScrollArrived`).
+  // iOS only until it has been watched on Android, where cards overlapped as a
+  // jump settled (04d55f05d, #175); the promise is what was checked there.
+  const noteLandingScroll = useCallback((nativeOffset: number) => {
+    const index = landingScrollIndexRef.current;
+    const list = listRef.current;
+    if (index === null || !list || !landingSeekingRef.current) return;
+    const layout = list.getLayout(index);
+    if (!layout || !feedLandingScrollArrived(nativeOffset, layout.y + list.getFirstItemOffset())) return;
+    const visible = list.computeVisibleIndices();
+    dispatchLanding({
+      type: 'scroll-complete',
+      index,
+      targetVisible: index >= visible.startIndex && index <= visible.endIndex,
+    });
+  }, []);
 
   useEffect(() => {
     if (landing.phase !== 'seeking') return;
@@ -336,6 +407,22 @@ export function ProfileMediaFeedScreen() {
     lastLoadMoreAtRef.current = 0;
     requestNextPage();
   }, [requestNextPage]);
+
+  // The landing's own scroll to a card near the end of the list reaches its
+  // end, and the page asked for then landed while the list was still seeking
+  // the card (review of #679, finding 10). The end is noted instead, and the
+  // page asked for once the landing is over and the library is not mid-read:
+  // FlashList reports an end once per arrival, so one dropped here would wait
+  // until the reader had left the end and come back.
+  const endReachedWhileSeekingRef = useRef(false);
+  const holdEndReached = useCallback(() => {
+    endReachedWhileSeekingRef.current = true;
+  }, []);
+  useEffect(() => {
+    if (landing.phase === 'seeking' || libraryIsFetching || !endReachedWhileSeekingRef.current) return;
+    endReachedWhileSeekingRef.current = false;
+    requestNextPage();
+  }, [landing.phase, libraryIsFetching, requestNextPage]);
 
   const openItem = useCallback((
     item: ImmersivePreviewItem,
@@ -610,6 +697,7 @@ export function ProfileMediaFeedScreen() {
           acknowledgeListLayout();
         }}
         onContentSizeChange={acknowledgeListLayout}
+        onScroll={Platform.OS === 'ios' ? (event) => noteLandingScroll(event.nativeEvent.contentOffset.y) : undefined}
         onScrollBeginDrag={() => {
           // The reader's own scroll outranks the landing: never yank them back.
           dispatchLanding({ type: 'reader-scrolled' });
@@ -629,7 +717,7 @@ export function ProfileMediaFeedScreen() {
         }}
         viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
         viewabilityConfigCallbackPairs={audioViewabilityPairs}
-        onEndReached={requestNextPage}
+        onEndReached={landing.phase === 'seeking' ? holdEndReached : requestNextPage}
         onEndReachedThreshold={0.6}
         ListFooterComponent={isFetchingNextPage
           ? <FeedFooterLoader />
@@ -639,7 +727,7 @@ export function ProfileMediaFeedScreen() {
         contentContainerStyle={{
           paddingHorizontal: horizontalPadding,
           paddingBottom: bottomInset + 28,
-          paddingTop: 12,
+          paddingTop: LIST_PADDING_TOP,
         }}
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, opacity: landing.phase === 'seeking' ? 0 : 1 }}
@@ -661,13 +749,31 @@ export function ProfileMediaFeedScreen() {
           />
         )}
       />
+      {openingCardShown && openingCard && openingCardStand ? (
+        <OpeningCard
+          card={openingCard}
+          place={openingCardStand.place}
+          cardWidth={cardWidth}
+          horizontalPadding={horizontalPadding}
+          pendingAction={pendingAction}
+          leaving={landing.phase === 'landed'}
+          landedTop={openedCardLandedTop}
+          onLeft={handOverOpeningCard}
+        />
+      ) : null}
       {landing.phase === 'seeking' ? (
+        // While the list seeks the card, it and the card over it are hidden
+        // from screen readers, so this tells them the card is opening, as the
+        // spinner the card replaced did (review of #679, finding 11). It draws
+        // nothing.
         <View
           pointerEvents="none"
-          style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}
-        >
-          <ActivityIndicator accessibilityLabel={`Opening ${noun}`} color={theme.colors.primary} />
-        </View>
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel={`Opening ${noun}`}
+          accessibilityState={{ busy: true }}
+          style={{ position: 'absolute', inset: 0 }}
+        />
       ) : null}
       </View>
       </MediaZoomSurface>
@@ -707,6 +813,151 @@ function leaveFeed() {
   }
   router.replace('/(tabs)/profile' as never);
 }
+
+/**
+ * The card the feed was opened on, drawn where the list will show it once
+ * landed (`feedLandingCardPlace`), with the list's own padding and width, while
+ * the list underneath is hidden seeking it. Without it the page slid in with
+ * only its top bar and the card cut in after: on the iPhone simulator the slide
+ * ended at +415 ms and the card appeared at +370 to 910 ms, later for a deeper
+ * tile, and the Android emulator showed about 0.17 s of blank (2026-11-03). It
+ * also stands in for the spinner a slow landing put over the empty list: over a
+ * card already drawn, a spinner only flashes.
+ *
+ * It is the list's own card component, so it measures as the list's card does
+ * whatever the media's shape and the length of the text, and its video shows
+ * its poster, the clip's first frame. It takes no touches and nothing of it
+ * reaches a screen reader: the list is hidden from both while it seeks, and the
+ * list's card is the one that answers once landed. Until then a screen reader
+ * is told the card is opening, as the spinner told it. It has a
+ * `MediaZoomSurface` of its own because the register of zoom tiles keys on
+ * surface and post: in the list's, its tile would replace the list card's and
+ * take it away on unmount, leaving a reel opened later nothing to close into.
+ * In its own it still takes its media's shape from its zoom source under
+ * UIKit's zoom, as the list's card does.
+ *
+ * It sits on the page's ground, so once the list has landed its fade brings the
+ * list in round the card while the card crosses onto an identical one. The list
+ * can stand the card elsewhere than it was drawn: in a list shorter than the
+ * screen nothing scrolls, and cards after it too short to fill the list stop
+ * the scroll early, neither of which `feedLandingCardPlace` can see. Then the
+ * card first moves to where the list has it, over the ground the list is still
+ * under, so it never shows twice; under Reduce Motion the two cross instead.
+ */
+function OpeningCard({
+  card,
+  place,
+  cardWidth,
+  horizontalPadding,
+  pendingAction,
+  leaving,
+  landedTop,
+  onLeft,
+}: {
+  card: ProfileFeedCard;
+  place: FeedLandingCardPlace;
+  cardWidth: number;
+  horizontalPadding: number;
+  /** The list's, so the card's actions dim as the list card's do. */
+  pendingAction: string | null;
+  /** The list has landed: move to where it stands the card, fade, then `onLeft`. */
+  leaving: boolean;
+  /** Where the landed list stands the card, from the list's top; null when it cannot say. */
+  landedTop: () => number | null;
+  onLeft: () => void;
+}) {
+  const theme = useAppTheme();
+  const reducedMotion = useReducedMotion();
+  const [opacity] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
+  const [shift] = useState(() => new Animated.Value(0, { useNativeDriver: true }));
+  /** Where the card's top was laid out, from the list's top. */
+  const drawnTopRef = useRef<number | null>(null);
+
+  // A sequence of its own rather than `useAnimatedState`: the fade has to wait
+  // for the move, and the card can go only once the fade has ended.
+  useEffect(() => {
+    if (!leaving) {
+      // A landing begun again before the handover had run, as when the list
+      // reorders under the card: the card stands whole, where it was drawn.
+      opacity.setValue(1);
+      shift.setValue(0);
+      return undefined;
+    }
+    const target = landedTop();
+    const drawn = drawnTopRef.current;
+    const distance = target === null || drawn === null ? 0 : target - drawn;
+    const fade = Animated.timing(opacity, {
+      toValue: 0,
+      duration: OPENING_CARD_HANDOVER_MS,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    const handover = reducedMotion || Math.abs(distance) < 1 ? fade : Animated.sequence([
+      Animated.timing(shift, {
+        toValue: distance,
+        duration: OPENING_CARD_HANDOVER_MS,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      fade,
+    ]);
+    handover.start(({ finished }) => {
+      if (finished) onLeft();
+    });
+    return () => handover.stop();
+  }, [landedTop, leaving, onLeft, opacity, reducedMotion, shift]);
+
+  return (
+    <MotionView
+      testID="profile-media-feed-opening-card"
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      // One surface as it fades. Android's per-child alpha would thin the
+      // ground under the card and dim the card halfway through, as it darkened
+      // the reel's dissolve (`zoom-returns-the-video.test.ts`).
+      needsOffscreenAlphaCompositing
+      style={{
+        position: 'absolute',
+        inset: 0,
+        overflow: 'hidden',
+        backgroundColor: theme.colors.background,
+        opacity,
+      }}
+    >
+      {place === 'end' ? <View style={{ flexGrow: 1 }} /> : null}
+      <MotionView
+        onLayout={(event) => {
+          drawnTopRef.current = event.nativeEvent.layout.y + (place === 'padded' ? LIST_PADDING_TOP : 0);
+        }}
+        style={{
+          flexShrink: 0,
+          paddingHorizontal: horizontalPadding,
+          paddingTop: place === 'padded' ? LIST_PADDING_TOP : 0,
+          transform: [{ translateY: shift }],
+        }}
+      >
+        <MediaZoomSurface>
+          <ProfileFeedCardView
+            card={card}
+            contentWidth={cardWidth}
+            showActiveVideo={false}
+            // Its audio player cannot be reached, so it never keeps a sound going.
+            screenFocused={false}
+            pendingAction={pendingAction}
+            onOpen={ignore}
+            onReadMore={ignore}
+            onActionsOpen={ignore}
+            onAction={ignore}
+          />
+        </MediaZoomSurface>
+      </MotionView>
+    </MotionView>
+  );
+}
+
+/** For the opened card's controls, which take no touches. */
+function ignore() {}
 
 function FeedTopBar({ title, topInset }: { title: string; topInset: number }) {
   const theme = useAppTheme();

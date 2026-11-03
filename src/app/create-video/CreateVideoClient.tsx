@@ -23,7 +23,6 @@ import {
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorInputsCard,
-    CreatorMentionPanel,
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
@@ -32,6 +31,7 @@ import {
     CreatorReferencePreview,
     CreatorReferenceStrip,
     CreatorReferenceTile,
+    CreatorRemixSlotTile,
     type CreatorReferencePreviewTarget,
     CreatorRunFailed,
     CreatorRunFailedLine,
@@ -52,6 +52,7 @@ import {
     describeRunFailure,
     type CreatorReferenceKind,
 } from '@/components/CreatorColumn';
+import { CreatorMentionMenu, useCreatorMentionMenu } from '@/components/CreatorMentionMenu';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import { useConfirmation } from '@/components/useConfirmation';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
@@ -94,6 +95,7 @@ import {
     StudioQuoteRetry,
     StudioRemixHydrationNotice,
     StudioRemixNotice,
+    StudioRemixSlotsNotice,
     StudioUseOriginalButton,
 } from '@/components/CreatorStudio';
 import StudioModelPicker from '@/components/StudioModelPicker';
@@ -146,6 +148,7 @@ import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRemixElementSeeds,
+    getRemixNoticeDescription,
     getRemixReferenceCapWarning,
     joinRemixRestoreWarnings,
     REMIX_RESTORE_WARNING,
@@ -153,7 +156,24 @@ import {
     getRemixRestoreWarning,
     getRemixResultReferenceLabel,
     isRemixResultReference,
+    readRemixInputSlots,
+    remixSlotsInputSide,
+    withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
+import {
+    openRemixInputSlots,
+    readRemixSlotMentions,
+    remixInputSlotPlaced,
+    remixSlotAnsweringHandles,
+    remixSlotFillNaming,
+    remixInputSlotAction,
+    remixInputSlotsNotice,
+    remixInputSlotTitle,
+    remixSlotMentionsMessage,
+    withRemixSlotEnhancerReferences,
+    type RemixInputSlot,
+    type RemixInputSlotRole,
+} from '../../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 import {
     getPersistedFile,
     getPersistedImageElementRecords,
@@ -789,6 +809,8 @@ function KlingSubjectsEditor({
     onRename,
     onRefusedFiles,
     onInsert,
+    slots = [],
+    onFillSlot,
 }: {
     subjects: KlingSubjectDraft[];
     limits: SubjectLimits;
@@ -798,6 +820,12 @@ function KlingSubjectsEditor({
     onRefusedFiles: (message: string | null) => void;
     /** Puts a subject's @handle where the creator is writing, as a reference tile's handle does. */
     onInsert: (handle: string) => void;
+    /**
+     * The subjects a remix was not given, each an empty subject under the handle the prompt
+     * mentions it by (owner, 2026-11-03): pictures added to one make it the remixer's own.
+     */
+    slots?: ShownRemixSlot[];
+    onFillSlot?: (slot: ShownRemixSlot, files: File[]) => void;
 }) {
     const KLING_SUBJECT_LIMIT = limits.maxNamed;
     const KLING_SUBJECT_MIN_IMAGES = limits.imagesPerSubject.min;
@@ -882,7 +910,7 @@ function KlingSubjectsEditor({
                 </span>
             </div>
 
-            {subjects.length > 0 && (
+            {(subjects.length > 0 || slots.length > 0) && (
                 <div className="mb-4 space-y-3">
                     {subjects.map((subject) => {
                         const imageCountOk = subject.images.length >= KLING_SUBJECT_MIN_IMAGES
@@ -983,6 +1011,22 @@ function KlingSubjectsEditor({
                             </div>
                         );
                     })}
+                    {slots.map((slot) => (
+                        <CreatorRemixSlotTile
+                            key={slot.id}
+                            as="div"
+                            frame="none"
+                            accent="video"
+                            slotId={slot.id}
+                            title={slot.title}
+                            action={slot.action}
+                            accept="image/*"
+                            multiple
+                            handleClassName="text-emerald-300"
+                            disabled={disabled}
+                            onFiles={(files) => onFillSlot?.(slot, files)}
+                        />
+                    ))}
                 </div>
             )}
 
@@ -1025,6 +1069,8 @@ type PromptMentionCandidate = {
     displayName: string;
     handle: string;
     kind: 'image' | 'video';
+    /** What the "@" menu shows for it: the picture, the clip, or a subject's first picture. */
+    previewUrl: string | null;
 };
 
 function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
@@ -1138,6 +1184,19 @@ function isSupportedKlingVideoFile(file: File): boolean {
         normalizedName.endsWith('.mov')
     );
 }
+
+/** Kling's own limits on a video element, narrower than the upload step's: MP4 or MOV, up to 50 MB. */
+function isKlingVideoElementFile(file: File): boolean {
+    return isSupportedKlingVideoFile(file) && file.size <= KLING_VIDEO_ELEMENT_MAX_BYTES;
+}
+
+/** What the column says of picked files Kling cannot take as video elements. */
+function refusedKlingClipsNotice(names: readonly string[]): string | null {
+    return names.length > 0 ? `${names.join(', ')} can’t be used: Kling video elements are MP4 or MOV files up to 50 MB.` : null;
+}
+
+/** A remix's empty slot as the video creator draws it: its box's words, and what fills it. */
+type ShownRemixSlot = RemixInputSlot & { title: string; action: string };
 
 export interface CreateVideoPrefill {
     remixId?: string | null;
@@ -1383,6 +1442,12 @@ function VideoCreator({
     const [remixResult, setRemixResult] = useState<RemixSourceResult | null>(null);
     const remixVideoUrl = remixResult?.mediaType === 'video' ? remixResult.url : null;
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
+    // The inputs the remix was not given, as empty boxes for the remixer's own (owner, 2026-11-03):
+    // beside the form, never saved, priced or sent. A box filled leaves the list.
+    const [remixSlots, setRemixSlots] = useState<RemixInputSlot[]>([]);
+    const dropRemixSlot = (slotId: string) => setRemixSlots((slots) => withoutRemixInputSlot(slots, slotId));
+    // Their notice, put away for the rest of the remix, which on the web is this page's.
+    const [remixSlotsNoticeDismissed, setRemixSlotsNoticeDismissed] = useState(false);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
     const openReferencePreview = ({ kind, src, name }: CreatorReferencePreviewTarget) => setUploadPreview({ type: kind, src, alt: name, title: name });
@@ -1862,6 +1927,76 @@ function VideoCreator({
     const klingSubjectHandles = supportsNamedSubjects
         ? klingSubjects.map((subject) => subject.handle)
         : [];
+    // A remix's empty boxes, each where its kind is drawn (owner, 2026-11-03): a picture, clip or
+    // track after its kind's references while References shows, a frame in its empty slot (Wan
+    // 2.7's start image under References too), a Kling 3.0 clip among its video elements, a
+    // subject among the named subjects. One whose place is on the other side waits there, and a
+    // mention of it reads as any unknown one. One the model has no place for at all, on either side
+    // with these settings (a switch to a model that takes none of its kind, or to a story, which
+    // sends no reference picture), waits for a switch back, where it is drawn as it was left, and a
+    // mention of it says so (`unplacedRemixSlotsMessage`). So does a clip the prompt mentions by its
+    // handle on a model whose clips take none (any but Kling 3.0): a plain clip answers no mention, and
+    // its box held the run for one its fill could never answer (`remixInputSlotPlaced`, the app's rule).
+    // A box something the remixer holds already answers is no box to fill, by the rule the app reads
+    // too (`remixSlotAnsweringHandles`): a picture or a subject always, a clip where clips take handles
+    // (Kling 3.0's video elements; this page's other clips and its tracks carry none).
+    const openRemixSlots = openRemixInputSlots(remixSlots, remixSlotAnsweringHandles({
+        pictures: elements.map((element) => element.handle),
+        subjects: klingSubjectHandles,
+        clips: klingVideoElements.map((element) => element.handle),
+    }, { clipsTakeHandles: isKlingVideoModel }));
+    const remixSlotHasPlace = (slot: RemixInputSlot) => remixInputSlotPlaced(slot, null, { clipsTakeHandles: isKlingVideoModel });
+    const remixSlotRoleOffered = (role: RemixInputSlotRole): boolean => {
+        switch (role) {
+            case 'reference_image':
+                return Boolean(inputSides.references) && canUseVideoElements;
+            case 'reference_video':
+                return isKlingVideoModel || (Boolean(inputSides.references) && referenceVideoLimit > 0);
+            case 'reference_audio':
+                return Boolean(inputSides.references) && referenceAudioLimit > 0;
+            case 'start_frame':
+                return Boolean(inputSides.frames?.start) || Boolean(inputSides.references?.keepsStart);
+            case 'end_frame':
+                return Boolean(inputSides.frames?.end);
+            case 'subject':
+                return supportsNamedSubjects;
+            default:
+                return false;
+        }
+    };
+    const unplacedRemixSlots = openRemixSlots.filter((slot) => !remixSlotHasPlace(slot) || !remixSlotRoleOffered(slot.role));
+    const showsReferencesSide = inputView.side === 'references';
+    const showsFramesSide = inputView.side === 'frames';
+    const remixSlotRoleShown = (role: RemixInputSlotRole): boolean => {
+        switch (role) {
+            case 'reference_image':
+                return showsReferencesSide && !currentIsMultiShot && canUseVideoElements;
+            case 'reference_video':
+                return isKlingVideoModel || (showsReferencesSide && referenceVideoLimit > 0);
+            case 'reference_audio':
+                return showsReferencesSide && referenceAudioLimit > 0;
+            case 'start_frame':
+                return !(startImageUrl || startImageFile) && (
+                    (showsFramesSide && Boolean(inputSides.frames?.start))
+                    || (showsReferencesSide && Boolean(inputSides.references?.keepsStart))
+                );
+            case 'end_frame':
+                return !(endImageUrl || endImageFile) && showsFramesSide && Boolean(inputSides.frames?.end);
+            case 'subject':
+                return supportsNamedSubjects;
+            default:
+                return false;
+        }
+    };
+    const shownRemixSlots: ShownRemixSlot[] = openRemixSlots
+        .filter((slot) => remixSlotHasPlace(slot) && remixSlotRoleShown(slot.role))
+        .map((slot) => ({ ...slot, title: remixInputSlotTitle(slot), action: remixInputSlotAction(slot) }));
+    const shownSlotsOf = (role: RemixInputSlotRole) => shownRemixSlots.filter((slot) => slot.role === role);
+    // What the boxes on the page are, until the remixer puts it away for the rest of the remix.
+    const remixSlotsNotice = remixSlotsNoticeDismissed ? null : remixInputSlotsNotice(shownRemixSlots.length);
+    // Kling 3.0's clips are its named video elements; any other model's are reference clips.
+    const klingClipSlots = isKlingVideoModel ? shownSlotsOf('reference_video') : [];
+    const referenceClipSlots = isKlingVideoModel ? [] : shownSlotsOf('reference_video');
     const additionalSettings = useAdditionalCatalogSettings(catalogDescriptor, CATALOG_HANDLED_KEYS);
     // One settings object for the price and the run, as the image creator has.
     const runSettings = useMemo(() => ({
@@ -2057,6 +2192,12 @@ function VideoCreator({
     const knownElementMentions = promptHandles.filter((handle) => elementHandles.includes(handle));
     const knownKlingVideoMentions = promptHandles.filter((handle) => klingVideoHandles.includes(handle));
     const staleElementMentions = findUnknownPromptHandles(prompt, [...sentPromptHandles, ...elementHandles]);
+    // A mention of an empty box's handle asks for the remixer's own in that box, or says the model has
+    // no place for it, and holds the run (`runHeld`); any other unknown mention keeps its words, and
+    // Generate refuses it, as the server refuses them all.
+    const slotMentions = readRemixSlotMentions(staleElementMentions, { placed: shownRemixSlots, unplaced: unplacedRemixSlots });
+    const unknownElementMentions = slotMentions.other;
+    const promptSlotsMessage = remixSlotMentionsMessage(slotMentions, videoModel.displayName);
     // What a shot prompt can mention: the references a multi-shot run sends with its
     // shots, which are Kling 3.0's video elements and Kling O3's named subjects. Image
     // references are not among them, because a multi-shot run does not send them. The
@@ -2070,6 +2211,7 @@ function VideoCreator({
                 displayName: element.displayName,
                 handle: element.handle,
                 kind: 'video' as const,
+                previewUrl: element.previewUrl || null,
             }))
             : []),
         ...(supportsNamedSubjects
@@ -2078,6 +2220,7 @@ function VideoCreator({
                 displayName: subject.displayName,
                 handle: klingSubjectHandles[index],
                 kind: 'image' as const,
+                previewUrl: subject.images[0]?.previewUrl || subject.images[0]?.remoteUrl || null,
             }))
             : []),
     ];
@@ -2088,6 +2231,7 @@ function VideoCreator({
     const multiShotUnknownMentions = shotPromptsTakeMentions && currentIsMultiShot
         ? Array.from(new Set(multiPrompts.flatMap((shot) => findUnknownPromptHandles(shot.prompt, shotMentionHandles))))
         : [];
+    const multiShotSlotMentions = readRemixSlotMentions(multiShotUnknownMentions, { placed: shownRemixSlots, unplaced: unplacedRemixSlots });
     // The selected model's own limits on the prompt and each shot (Kie refuses past them),
     // counted as the run sends them: Kling 3.0 counts each mention of one of its video
     // elements as 37 characters. Text past a limit is kept and marked over, after a paste
@@ -2141,8 +2285,11 @@ function VideoCreator({
         return { held: false, text: `${lengthReading(durationSeconds, limits)}s ${noun}` };
     };
     const klingClipLengths = new Map(klingVideoElements.map((element) => [element.id, cardLength(element.id, element.durationSeconds, 'videoElements', 'clip')]));
+    // A mention of a remix's empty box holds the run until the box is filled or the mention goes
+    // (owner, 2026-11-03), in the words under the prompt; a shot's, in the same words.
+    const heldSlotsMessage = currentIsMultiShot ? remixSlotMentionsMessage(multiShotSlotMentions, videoModel.displayName) : promptSlotsMessage;
     // The run waits, with its reason beside Generate: Generate, Start new and Try again are off.
-    const runHeld = Boolean(promptLimitMessage || shortInputMessage);
+    const runHeld = Boolean(promptLimitMessage || shortInputMessage || heldSlotsMessage);
     const hasKnownElementMentions = knownElementMentions.length > 0;
     const hasKnownKlingVideoMentions = knownKlingVideoMentions.length > 0;
     // The saved references the prompt mentions that this run leaves out. The row under
@@ -2155,6 +2302,7 @@ function VideoCreator({
             displayName: element.displayName,
             handle: element.handle,
             kind: 'image' as const,
+            previewUrl: element.previewUrl || null,
         })),
         ...shotMentionCandidates,
     ];
@@ -2184,9 +2332,8 @@ function VideoCreator({
             );
         })
         : [];
-    const shotMentionPanelCopy = isKlingO3Model
-        ? { title: 'Insert subject', pick: 'Pick a named subject for this shot.', none: 'No matching subjects yet.' }
-        : { title: 'Insert video element', pick: 'Pick a Kling video handle for this shot.', none: 'No matching video elements yet.' };
+    // What a shot's "@" menu offers: Kling O3's named subjects, or Kling 3.0's video elements.
+    const shotMentionNoun = isKlingO3Model ? 'subject' : 'video element';
     const showKlingVideoElementEditor = isKlingVideoModel;
     const showElementEditor = !currentIsMultiShot && canUseVideoElements;
     const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && elements.length > 0;
@@ -2249,6 +2396,13 @@ function VideoCreator({
         return frameImageUrls.length > 0 ? { ...base, frameImageUrls } : base;
     };
 
+    // What an Enhance is told to keep beside the references its words may name: the remix's empty
+    // boxes those words mention, placed or not, so a rewrite never takes a box's mention out
+    // (2026-11-03). None at all leaves the field out, as it always did.
+    const enhancerReferencesBeside = (references: Array<{ handle: string; displayName: string }>, words: string) => {
+        const kept = withRemixSlotEnhancerReferences(references, openRemixSlots, words);
+        return kept.length > 0 ? kept : undefined;
+    };
     const buildSinglePromptQualityContext = () => ({
         modelId: selectedModel,
         mode: currentMode,
@@ -2263,7 +2417,7 @@ function VideoCreator({
         hasEndImage: activeReferenceMode === 'frames' && activeSupportsEndFrame && Boolean(endImageFile || endImageUrl),
         referenceImageCount: activeReferenceMode === 'elements' ? runElements.length : 0,
         hasReferenceVideo: hasReferenceVideoForRun,
-        elementReferences: activeReferenceMode === 'elements' || klingVideoElements.length > 0 || klingSubjectsActive
+        elementReferences: enhancerReferencesBeside(activeReferenceMode === 'elements' || klingVideoElements.length > 0 || klingSubjectsActive
             ? [
                 ...(activeReferenceMode === 'elements' ? runElements : []),
                 ...(isKlingVideoModel ? klingVideoElements : []),
@@ -2276,7 +2430,7 @@ function VideoCreator({
                     displayName: subject.displayName,
                 }))
                 : [])
-            : undefined,
+            : [], prompt),
     });
     const buildShotPromptQualityContext = (shot: MultiShot, index: number) => ({
         modelId: selectedModel,
@@ -2291,12 +2445,10 @@ function VideoCreator({
         hasStartImage: Boolean(startImageFile || startImageUrl),
         hasEndImage: Boolean(endImageFile || endImageUrl),
         hasReferenceVideo: hasReferenceVideoForRun,
-        elementReferences: shotMentionCandidates.length > 0
-            ? shotMentionCandidates.map((candidate) => ({
-                handle: candidate.handle,
-                displayName: candidate.displayName,
-            }))
-            : undefined,
+        elementReferences: enhancerReferencesBeside(shotMentionCandidates.map((candidate) => ({
+            handle: candidate.handle,
+            displayName: candidate.displayName,
+        })), shot.prompt),
     });
 
     useEffect(() => {
@@ -2482,8 +2634,16 @@ function VideoCreator({
 
                 const restoredVideoInputs = bundle.inputs.video;
                 const restoredSeedanceAssets = settings?.seedanceAssets ?? null;
-                // The inputs open on the original's side; what comes back holds them there too.
-                setPickedInputSide(restoredVideoInputs?.referenceMode === 'elements' ? 'references' : 'frames');
+                const slots = readRemixInputSlots(bundle);
+                setRemixSlots(slots);
+                setRemixSlotsNoticeDismissed(false);
+                // The inputs open on the original's side; what comes back holds them there too. Where
+                // the remix was not given them, they open where its empty boxes are: References for
+                // a picture, clip or track, Frames for a frame alone.
+                setPickedInputSide(
+                    remixSlotsInputSide(slots, { clipsBesideSides: nextModelId === 'kling-3.0-video' })
+                    ?? (restoredVideoInputs?.referenceMode === 'elements' ? 'references' : 'frames'),
+                );
 
                 // Kling O3's named subjects come back under the handles the prompt
                 // was written with. A picture is sent again as the file the run
@@ -3242,17 +3402,13 @@ function VideoCreator({
 
     const processKlingVideoElementFiles = async (files: FileList | File[]) => {
         const selectedFiles = Array.from(files);
-        // Kling's own limits are narrower than the upload step's: MP4 or MOV, up to 50 MB.
-        const isKlingClip = (file: File) => isSupportedKlingVideoFile(file) && file.size <= KLING_VIDEO_ELEMENT_MAX_BYTES;
-        const validFiles = selectedFiles.filter(isKlingClip);
-        const refusedNames = selectedFiles.filter((file) => !isKlingClip(file)).map((file) => file.name || 'This file');
+        const validFiles = selectedFiles.filter(isKlingVideoElementFile);
+        const refusedNames = selectedFiles.filter((file) => !isKlingVideoElementFile(file)).map((file) => file.name || 'This file');
         const availableSlots = Math.max(0, KLING_VIDEO_ELEMENT_LIMIT - klingVideoElementsRef.current.length);
         const filesToAdd = validFiles.slice(0, availableSlots);
         // Its own line: an error set here used to clear a run's error or background state.
         setPickNotice([
-            refusedNames.length > 0
-                ? `${refusedNames.join(', ')} can’t be used: Kling video elements are MP4 or MOV files up to 50 MB.`
-                : null,
+            refusedKlingClipsNotice(refusedNames),
             droppedPicksNotice(filesToAdd.length, validFiles.length, KLING_VIDEO_ELEMENT_LIMIT, 'video element'),
         ].filter(Boolean).join(' ') || null);
         if (filesToAdd.length === 0) return;
@@ -3322,6 +3478,11 @@ function VideoCreator({
             setEndImageUrl(next?.url ?? null);
             setEndFrameDescriptor(next?.descriptor ?? null);
             setEndFrameStaged(next?.staged ?? null);
+        }
+        // A remix's empty box for the frame, filled by a file or a picture moved in, is filled.
+        if (next) {
+            const role: RemixInputSlotRole = frame === 'start' ? 'start_frame' : 'end_frame';
+            setRemixSlots((slots) => slots.filter((slot) => slot.role !== role));
         }
     };
 
@@ -3583,6 +3744,120 @@ function VideoCreator({
         await saveMediaReferences(kind, current.map((reference) => (reference.id === referenceId ? replaced : reference)));
     };
 
+    // A remix's empty boxes, filled (owner, 2026-11-03): the remixer's own file becomes a reference
+    // of theirs where the box was, under the slot's name and the @handle the prompt mentions it by,
+    // so the prompt works unchanged, and the box goes. The checks of an add hold: a file the upload
+    // step refuses, or one past the model's limit, leaves the box as it is. A frame's box is the
+    // frame's own slot, which `setFrame` empties.
+
+    /** A picture in a reference image's box. */
+    const fillPictureSlot = async (slot: RemixInputSlot, files: File[]) => {
+        const { accepted, refusal } = screenPickedFiles(files, 'image');
+        const [file] = accepted;
+        if (!file) {
+            setPickNotice(refusal);
+            return;
+        }
+        const currentElements = elementsRef.current;
+        if (currentElements.length >= videoElementSupport.maxElements) {
+            setPickNotice(droppedPicksNotice(0, 1, videoElementSupport.maxElements, 'image reference'));
+            return;
+        }
+        setPickNotice(null);
+        const naming = remixSlotFillNaming(slot);
+        const nextElements = hydrateVideoElements([
+            ...currentElements,
+            { ...uploadedPictureSeed(file, naming.displayName), handle: naming.handle },
+        ]);
+        commitElements(nextElements);
+        dropRemixSlot(slot.id);
+        await persistVideoElements(nextElements);
+        await persistSeedanceAssets(nextElements, referenceVideosRef.current, referenceAudiosRef.current);
+    };
+
+    /** A clip or a track in its box, its length read as an add reads it. */
+    const fillMediaSlot = async (kind: 'video' | 'audio', slot: RemixInputSlot, files: File[]) => {
+        const { accepted, refusal } = screenPickedFiles(files, kind);
+        const [file] = accepted;
+        if (!file) {
+            setPickNotice(refusal);
+            return;
+        }
+        const limit = kind === 'video' ? referenceVideoLimit : referenceAudioLimit;
+        if ((kind === 'video' ? referenceVideosRef : referenceAudiosRef).current.length >= limit) {
+            setPickNotice(droppedPicksNotice(0, 1, limit, kind === 'video' ? 'reference clip' : 'reference track'));
+            return;
+        }
+        setPickNotice(null);
+        const naming = remixSlotFillNaming(slot);
+        const seeds = await readPickSeeds((async () => [
+            uploadedMediaSeed(kind, file, naming.displayName, await readVideoDurationSeconds(file)),
+        ])());
+        if (!seeds) return;
+        dropRemixSlot(slot.id);
+        await appendMediaReferences(kind, seeds);
+    };
+
+    /** A clip in a Kling 3.0 video element's box, under the handle the prompt mentions it by. */
+    const fillKlingClipSlot = async (slot: RemixInputSlot, files: File[]) => {
+        const file = files.find(isKlingVideoElementFile);
+        if (!file) {
+            setPickNotice(refusedKlingClipsNotice(files.map((picked) => picked.name || 'This file')));
+            return;
+        }
+        if (klingVideoElementsRef.current.length >= KLING_VIDEO_ELEMENT_LIMIT) {
+            setPickNotice(droppedPicksNotice(0, 1, KLING_VIDEO_ELEMENT_LIMIT, 'video element'));
+            return;
+        }
+        setPickNotice(null);
+        const naming = remixSlotFillNaming(slot);
+        const seeds = await readPickSeeds((async () => [{
+            displayName: naming.displayName,
+            handle: naming.handle,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            source: 'upload' as const,
+            durationSeconds: await readVideoDurationSeconds(file),
+        }])());
+        if (!seeds) return;
+        const nextElements = hydrateKlingVideoElements([...klingVideoElementsRef.current, ...seeds]);
+        commitKlingVideoElements(nextElements);
+        dropRemixSlot(slot.id);
+        await persistKlingVideoElements(nextElements);
+    };
+
+    /** Pictures in a named subject's box: a subject of the remixer's own under the slot's handle. */
+    const fillSubjectSlot = (slot: RemixInputSlot, files: File[]) => {
+        const { maxNamed, imagesPerSubject } = affordances.subjects;
+        if (klingSubjectsRef.current.length >= maxNamed) {
+            setPickNotice(`${videoModel.displayName} supports up to ${maxNamed} named subjects per run.`);
+            return;
+        }
+        const { accepted, refusal } = screenPickedFiles(files, 'image');
+        const added = accepted.slice(0, imagesPerSubject.max);
+        setPickNotice([
+            refusal,
+            accepted.length > added.length
+                ? `Added ${added.length} of ${accepted.length}: a subject takes up to ${imagesPerSubject.max} images.`
+                : null,
+        ].filter(Boolean).join(' ') || null);
+        if (added.length === 0) return;
+        const naming = remixSlotFillNaming(slot);
+        commitKlingSubjects([...klingSubjectsRef.current, {
+            id: `subject-${crypto.randomUUID()}`,
+            displayName: naming.displayName,
+            handle: naming.handle,
+            images: added.map((file) => ({
+                id: `subject-image-${crypto.randomUUID()}`,
+                file,
+                previewUrl: URL.createObjectURL(file),
+                remoteUrl: null,
+                storagePath: null,
+            })),
+        }]);
+        dropRemixSlot(slot.id);
+    };
+
     const addPreparedReferenceId = (kind: 'audio' | 'character') => {
         const draft = (kind === 'audio' ? preparedAudioIdDraft : characterIdDraft).trim();
         if (!draft || !/^[A-Za-z0-9._:-]{3,256}$/.test(draft)) {
@@ -3815,6 +4090,21 @@ function VideoCreator({
             textarea?.setSelectionRange(nextValue.caretIndex, nextValue.caretIndex);
         });
     };
+
+    const mentionMenu = useCreatorMentionMenu({
+        mention: offersPromptMentions ? activeMentionQuery : null,
+        suggestions: mentionSuggestions,
+        onInsert: handleInsertPromptHandle,
+    });
+    // One menu for the shots, which take turns: it is the focused shot's.
+    const shotMentionMenu = useCreatorMentionMenu({
+        mention: shotPromptsTakeMentions ? activeShotMentionQuery : null,
+        scope: activeShotMentionQuery?.shotId,
+        suggestions: shotMentionSuggestions,
+        onInsert: (handle) => {
+            if (activeShotMentionQuery) handleInsertShotHandle(activeShotMentionQuery.shotId, handle);
+        },
+    });
 
     const createSeedanceAssetKey = (kind: 'image' | 'video' | 'audio', id: string) => `${kind}:${id}`;
 
@@ -4528,13 +4818,15 @@ function VideoCreator({
         // Said beside Generate for as long as it holds, so nothing is set here.
         if (runHeld) return;
 
-        if (!currentIsMultiShot && staleElementMentions.length > 0) {
-            setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
+        // A mention of a remix's empty box held the run above; any other unknown one is refused here.
+        if (!currentIsMultiShot && unknownElementMentions.length > 0) {
+            setError(`Unknown element mention${unknownElementMentions.length > 1 ? 's' : ''}: ${unknownElementMentions.join(', ')}`);
             return;
         }
 
-        if (currentIsMultiShot && multiShotUnknownMentions.length > 0) {
-            setError(`Unknown element mention${multiShotUnknownMentions.length > 1 ? 's' : ''}: ${multiShotUnknownMentions.join(', ')}`);
+        const unknownShotMentions = multiShotSlotMentions.other;
+        if (currentIsMultiShot && unknownShotMentions.length > 0) {
+            setError(`Unknown element mention${unknownShotMentions.length > 1 ? 's' : ''}: ${unknownShotMentions.join(', ')}`);
             return;
         }
 
@@ -5118,6 +5410,8 @@ function VideoCreator({
         const title = frame === 'start' ? 'Start image' : 'End image';
         const src = frame === 'start' ? startImageUrl : endImageUrl;
         const setDragging = frame === 'start' ? setIsDraggingStart : setIsDraggingEnd;
+        // The frame a remix was not given: its box names it and asks for the remixer's own.
+        const [remixSlot] = shownSlotsOf(frame === 'start' ? 'start_frame' : 'end_frame');
         return (
             <CreatorUploadSlot
                 accent="video"
@@ -5131,6 +5425,7 @@ function VideoCreator({
                 previewHint="Preview"
                 icon={ImagePlus}
                 emptyLabel="Add"
+                remixSlot={remixSlot ? { title: remixSlot.title, action: remixSlot.action } : null}
                 input={{
                     id: `video-${frame}-frame-input`,
                     accept: 'image/*',
@@ -5240,11 +5535,16 @@ function VideoCreator({
     const shortInputLine = shortInputMessage && !isGenerating ? (
         <p className="text-red-400 [overflow-wrap:anywhere]">{shortInputMessage}</p>
     ) : null;
-    const barStatus = topUpNotice || runStatus || shortInputLine ? (
+    // The same for a mention of a remix's empty box, which a shot's words make too.
+    const heldSlotsLine = heldSlotsMessage && !isGenerating ? (
+        <p className="text-red-400 [overflow-wrap:anywhere]"><StudioElementHandleText text={heldSlotsMessage} /></p>
+    ) : null;
+    const barStatus = topUpNotice || runStatus || shortInputLine || heldSlotsLine ? (
         <div className="space-y-3">
             {topUpNotice}
             {runStatus}
             {shortInputLine}
+            {heldSlotsLine}
         </div>
     ) : null;
 
@@ -5534,7 +5834,7 @@ function VideoCreator({
                             {remixId && !isRemixLoading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
-                                        description={`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
+                                        description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={offersOriginalResult ? (
                                             <StudioUseOriginalButton using={usingOriginalResult} onUse={() => void addOriginalResultAsReferenceVideo()} />
@@ -5542,6 +5842,11 @@ function VideoCreator({
                                     />
                                 </motion.div>
                             )}
+                            {remixId && !isRemixLoading && remixSlotsNotice ? (
+                                <motion.div key="remix-slots-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
+                                    <StudioRemixSlotsNotice description={remixSlotsNotice} onDismiss={() => setRemixSlotsNoticeDismissed(true)} />
+                                </motion.div>
+                            ) : null}
                             {modelNotice ? (
                                 <motion.div key="model-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioModelNotice
@@ -5563,7 +5868,7 @@ function VideoCreator({
 
                         {!currentIsMultiShot ? (
                             <>
-                                <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${videoAccent.outline}`}>
+                                <div className={`relative rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${videoAccent.outline}`}>
                                     <label htmlFor="create-video-prompt" className="ui-kicker block px-4 pt-4">
                                         Prompt
                                     </label>
@@ -5572,8 +5877,7 @@ function VideoCreator({
                                         ref={promptTextareaRef}
                                         value={prompt}
                                         onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart ?? event.target.value.length)}
-                                        onClick={syncPromptCaretState}
-                                        onKeyUp={syncPromptCaretState}
+                                        {...mentionMenu.field({ onCaretMove: syncPromptCaretState })}
                                         placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
                                         maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                         aria-invalid={promptMeter.state === 'over' || undefined}
@@ -5581,12 +5885,12 @@ function VideoCreator({
                                     />
                                     <div className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
                                         <PromptLengthCounter meter={promptMeter} />
-                                        {staleElementMentions.length > 0 ? (
+                                        {unknownElementMentions.length > 0 ? (
                                             <span className="min-w-0 text-right text-rose-300">
-                                                Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
-                                                <StudioElementHandleList handles={staleElementMentions} />
+                                                Unknown element mention{unknownElementMentions.length > 1 ? 's' : ''}:{' '}
+                                                <StudioElementHandleList handles={unknownElementMentions} />
                                             </span>
-                                        ) : standbyElementMentions.length > 0 ? (
+                                        ) : !promptSlotsMessage && standbyElementMentions.length > 0 ? (
                                             // One line at a time, in the order Generate refuses a prompt.
                                             <span className="min-w-0 text-right text-amber-300">
                                                 On standby here:{' '}
@@ -5594,18 +5898,22 @@ function VideoCreator({
                                             </span>
                                         ) : null}
                                     </div>
+                                    {/* A sentence, so a line of its own under the counter rather than beside it. */}
+                                    {promptSlotsMessage ? (
+                                        <p className="px-4 pb-3 text-xs text-rose-300 [overflow-wrap:anywhere]">
+                                            <StudioElementHandleText text={promptSlotsMessage} />
+                                        </p>
+                                    ) : null}
+                                    {mentionMenu.open ? (
+                                        <CreatorMentionMenu
+                                            menu={mentionMenu.menu}
+                                            field={() => promptTextareaRef.current}
+                                            noun="reference"
+                                            prompt={prompt}
+                                            handleClassName={mentionHandleClass}
+                                        />
+                                    ) : null}
                                 </div>
-
-                                {activeMentionQuery && offersPromptMentions ? (
-                                    <CreatorMentionPanel
-                                        title="Insert reference"
-                                        hint={mentionSuggestions.length > 0 ? 'Pick a reference to insert its @mention.' : 'No matching references yet.'}
-                                        query={activeMentionQuery.query}
-                                        suggestions={mentionSuggestions}
-                                        handleClassName={mentionHandleClass}
-                                        onInsert={handleInsertPromptHandle}
-                                    />
-                                ) : null}
 
                                 <EnhancePromptButton
                                     variant="toolbar"
@@ -5639,7 +5947,7 @@ function VideoCreator({
                                     <div role="group"
                                         key={shot.id}
                                         aria-labelledby={`create-video-shot-${shot.id}`}
-                                        className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] p-4 transition-colors duration-150 ${videoAccent.outline}`}
+                                        className={`relative rounded-ui-2xl border bg-[var(--ui-surface-1)] p-4 transition-colors duration-150 ${videoAccent.outline}`}
                                     >
                                         <div className="mb-2 flex items-center justify-between gap-3">
                                             <h2 id={`create-video-shot-${shot.id}`} className="ui-kicker">Shot {index + 1}</h2>
@@ -5671,29 +5979,28 @@ function VideoCreator({
                                             }}
                                             value={shot.prompt}
                                             onChange={(event) => handleShotPromptChange(shot.id, event.target.value, event.target.selectionStart ?? event.target.value.length)}
-                                            onFocus={() => {
-                                                setFocusedShotId(shot.id);
-                                                updateShotMentionState(shot.id, shot.prompt);
-                                            }}
-                                            onClick={() => syncShotPromptCaretState(shot)}
-                                            onKeyUp={() => syncShotPromptCaretState(shot)}
+                                            {...shotMentionMenu.field({
+                                                onCaretMove: () => syncShotPromptCaretState(shot),
+                                                onFocus: () => {
+                                                    setFocusedShotId(shot.id);
+                                                    updateShotMentionState(shot.id, shot.prompt);
+                                                },
+                                                owns: activeShotMentionQuery?.shotId === shot.id,
+                                            })}
                                             placeholder={`Describe shot ${index + 1}...`}
                                             maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                             aria-label={`Shot ${index + 1} prompt`}
                                             aria-invalid={shotMeter(shot.prompt).state === 'over' || undefined}
                                             className={`mb-3 block min-h-[100px] w-full resize-y rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] ${videoAccent.fieldFocus}`}
                                         />
-                                        {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
-                                            <div className="mb-3">
-                                                <CreatorMentionPanel
-                                                    title={shotMentionPanelCopy.title}
-                                                    hint={shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none}
-                                                    query={activeShotMentionQuery.query}
-                                                    suggestions={shotMentionSuggestions}
-                                                    handleClassName={mentionHandleClass}
-                                                    onInsert={(handle) => handleInsertShotHandle(shot.id, handle)}
-                                                />
-                                            </div>
+                                        {shotMentionMenu.open && activeShotMentionQuery?.shotId === shot.id ? (
+                                            <CreatorMentionMenu
+                                                menu={shotMentionMenu.menu}
+                                                field={() => multiShotTextareaRefs.current[shot.id] ?? null}
+                                                noun={shotMentionNoun}
+                                                prompt={shot.prompt}
+                                                handleClassName={mentionHandleClass}
+                                            />
                                         ) : null}
                                         <div className="flex items-center gap-3">
                                             <label htmlFor={`create-video-shot-duration-${shot.id}`} className="text-xs font-bold text-[var(--ui-text-muted)]">
@@ -5809,6 +6116,18 @@ function VideoCreator({
                                                             } : undefined}
                                                         />
                                                     ))}
+                                                    {shownSlotsOf('reference_image').map((slot) => (
+                                                        <CreatorRemixSlotTile
+                                                            key={slot.id}
+                                                            accent="video"
+                                                            slotId={slot.id}
+                                                            title={slot.title}
+                                                            action={slot.action}
+                                                            accept="image/*"
+                                                            handleClassName="text-sky-300"
+                                                            onFiles={(files) => void fillPictureSlot(slot, files)}
+                                                        />
+                                                    ))}
                                                 </CreatorReferenceRow>
                                             ) : null}
                                             {videoReferenceKind ? (
@@ -5838,6 +6157,17 @@ function VideoCreator({
                                                             />
                                                         );
                                                     })}
+                                                    {referenceClipSlots.map((slot) => (
+                                                        <CreatorRemixSlotTile
+                                                            key={slot.id}
+                                                            accent="video"
+                                                            slotId={slot.id}
+                                                            title={slot.title}
+                                                            action={slot.action}
+                                                            accept="video/*"
+                                                            onFiles={(files) => void fillMediaSlot('video', slot, files)}
+                                                        />
+                                                    ))}
                                                 </CreatorReferenceRow>
                                             ) : null}
                                             {audioReferenceKind ? (
@@ -5867,6 +6197,19 @@ function VideoCreator({
                                                             />
                                                         );
                                                     })}
+                                                    {shownSlotsOf('reference_audio').map((slot) => (
+                                                        <CreatorRemixSlotTile
+                                                            key={slot.id}
+                                                            accent="video"
+                                                            slotId={slot.id}
+                                                            title={slot.title}
+                                                            action={slot.action}
+                                                            accept="audio/*"
+                                                            // A track has no frame: its tile is its name over its player.
+                                                            frame="none"
+                                                            onFiles={(files) => void fillMediaSlot('audio', slot, files)}
+                                                        />
+                                                    ))}
                                                 </CreatorReferenceRow>
                                             ) : null}
                                             </div>
@@ -5890,6 +6233,8 @@ function VideoCreator({
                                     onRefusedFiles={setPickNotice}
                                     // Into the prompt, or in multi-shot the shot being written.
                                     onInsert={handleInsertKlingVideoHandle}
+                                    slots={shownSlotsOf('subject')}
+                                    onFillSlot={fillSubjectSlot}
                                 />
                             </div>
                         )}
@@ -5904,7 +6249,7 @@ function VideoCreator({
                                     Named clips. Type @ in the prompt or a shot prompt, or tap a handle, to use one by its name.
                                 </p>
 
-                                {klingVideoElements.length > 0 ? (
+                                {klingVideoElements.length > 0 || klingClipSlots.length > 0 ? (
                                     <CreatorReferenceStrip className="mb-3">
                                         {klingVideoElements.map((element) => (
                                             <CreatorReferenceTile
@@ -5939,6 +6284,19 @@ function VideoCreator({
                                                 note={klingClipLengths.get(element.id)?.held ? (
                                                     <span className="text-red-400">{klingClipLengths.get(element.id)?.text}</span>
                                                 ) : klingClipLengths.get(element.id)?.text ?? 'MP4 or MOV, 50MB max'}
+                                            />
+                                        ))}
+                                        {klingClipSlots.map((slot) => (
+                                            <CreatorRemixSlotTile
+                                                key={slot.id}
+                                                accent="video"
+                                                slotId={slot.id}
+                                                title={slot.title}
+                                                action={slot.action}
+                                                accept="video/mp4,video/quicktime,.mp4,.mov"
+                                                frame="wide"
+                                                handleClassName="text-emerald-300"
+                                                onFiles={(files) => void fillKlingClipSlot(slot, files)}
                                             />
                                         ))}
                                     </CreatorReferenceStrip>

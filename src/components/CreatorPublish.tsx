@@ -531,25 +531,38 @@ export function ownUploadsWords(count: number, kinds: Partial<Record<'image' | '
 }
 
 /**
- * What a shared recipe holds, under its switch (the artboard Result): the prompt and settings,
- * the original's references where a remix brought some, and that the creator's own uploads stay
- * out until they add them (owner, 2026-10-29), or go with it once added.
+ * What a shared recipe holds, under its switch (the artboard Result): the prompt where the
+ * creation saved one (a motion run saves none, and is never told it shares one), the original's
+ * references where a remix brought some, and that the creator's own uploads stay out until they
+ * add them (owner, 2026-10-29), or go with it once added. Not the settings, which the post shows
+ * everyone (owner, 2026-11-03).
  */
-export function describeSharedRecipe({ otherReferenceCount, ownUploads, addsOwnUploads }: {
+export function describeSharedRecipe({ hasPrompt = true, otherReferenceCount, ownUploads, addsOwnUploads }: {
+  /** The creation saved a prompt. */
+  hasPrompt?: boolean;
   otherReferenceCount: number;
   /** "2 photos"; null where the creation holds none of the creator's own. */
   ownUploads: string | null;
   addsOwnUploads: boolean;
 }): string {
-  const holds = otherReferenceCount > 0
-    ? 'The prompt, settings and the original’s references, free, so others can remix it.'
-    : 'The prompt and settings, free, so others can remix it.';
-  if (!ownUploads) return holds;
+  const shared = hasPrompt && otherReferenceCount > 0
+    ? 'The prompt and the original’s references'
+    : hasPrompt
+      ? 'The prompt'
+      : otherReferenceCount > 0
+        ? 'The original’s references'
+        : null;
+  const holds = shared ? `${shared}, free, so others can remix it.` : null;
+  if (!ownUploads) return holds ?? 'Its remix, free, so others can make their own.';
   const single = ownUploads.startsWith('1 ');
   if (addsOwnUploads) {
-    return `${holds} Your ${ownUploads} ${single ? 'goes' : 'go'} with it, and remixes get ${single ? 'it' : 'them'}.`;
+    return holds
+      ? `${holds} Your ${ownUploads} ${single ? 'goes' : 'go'} with it, and remixes get ${single ? 'it' : 'them'}.`
+      : `Your ${ownUploads}, free, so others can remix it.`;
   }
-  return `${holds} Your ${ownUploads} ${single ? 'stays' : 'stay'} out unless you add ${single ? 'it' : 'them'}.`;
+  return holds
+    ? `${holds} Your ${ownUploads} ${single ? 'stays' : 'stay'} out unless you add ${single ? 'it' : 'them'}.`
+    : `It saved no prompt, so the recipe holds nothing until you add your ${ownUploads}.`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -878,6 +891,7 @@ export function CreatorPublishPanel({
               id={`${id}-recipe`}
               label="Share the recipe"
               description={describeSharedRecipe({
+                hasPrompt: draft.hasPrompt,
                 otherReferenceCount: draft.otherReferenceCount,
                 ownUploads: draft.ownUploadCount > 0 ? ownUploadsWords(draft.ownUploadCount, draft.ownUploadKindCounts) : null,
                 addsOwnUploads: draft.addsOwnUploads,

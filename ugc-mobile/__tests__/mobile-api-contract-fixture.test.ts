@@ -10,11 +10,14 @@ import {
   type SaveShowcasePostOptions,
 } from '../lib/api-client';
 import { isCreationLibraryMember } from '../lib/creation-library';
+import { recipeCopyableInputs } from '../lib/creation-recipe/creation-recipe';
+import { isRecipeTitleTooShortRefusal } from '../lib/post-new-view-model';
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildHomeFeedCards } from '../lib/home-feed-view-model';
+import { formatGenerationSetupLine } from '../lib/generation-setup/generation-setup';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
-import { buildPostDetailsMeta } from '../lib/post-details-view-model';
+import { buildPostDetailsMeta, shouldReadPostGenerationSetup } from '../lib/post-details-view-model';
 import {
   profileArchivedGenerationsQueryOptions,
   profileFailedGenerationsQueryOptions,
@@ -124,6 +127,45 @@ function withAbsoluteMediaRoutes(value: unknown, base: string): unknown {
   return value;
 }
 
+// #677's review: the composers learn what a creation's save put into its
+// recipe beside what they sent, and offer only the saved inputs its copy takes.
+it('hands the composer what a creation’s save added to its recipe, and the inputs the copy takes', async () => {
+  const published = await clientForEndpoint('publishGeneration').publishGeneration({ generationId: 'generation-1', visibility: 'public' });
+  expect(published.recipeItemsAdded).toEqual(mobileApiContract.endpoints.publishGeneration.response.recipeItemsAdded);
+  expect(published.referencesNotCopied).toBe(0);
+
+  const updated = await clientForEndpoint('updatePost').updatePost('post-1', { title: 'Updated post' });
+  expect(updated.recipeItemsAdded).toEqual(mobileApiContract.endpoints.updatePost.response.recipeItemsAdded);
+  expect(updated.referencesNotCopied).toBe(0);
+
+  const { generations } = await clientForEndpoint('listGenerations').listGenerations(false);
+  const offered = recipeCopyableInputs(generations.find((generation) => generation.id === 'generation-1')?.input_media);
+  expect(offered.map((input) => [input.id, input.mediaKind])).toEqual([['input-1', 'image']]);
+});
+
+// Owner, 2026-11-03: a title shorter than a recipe needs is refused in plain
+// words on all three routes, and the composer answers with "Post without
+// recipe", which it finds by the refusal's code.
+it('hands the composer the code it offers Post without recipe on, from every route that saves a post', async () => {
+  const calls = {
+    createPost: (api: MagicbookletApiClient) => api.createPost(new FormData()),
+    publishGeneration: (api: MagicbookletApiClient) => api.publishGeneration({ generationId: 'generation-1', visibility: 'public' }),
+    updatePost: (api: MagicbookletApiClient) => api.updatePost('post-1', { title: 'Cat' }),
+  } as const;
+  for (const [key, call] of Object.entries(calls) as Array<[keyof typeof calls, (api: MagicbookletApiClient) => Promise<unknown>]>) {
+    const refusal = mobileApiContract.endpoints[key].errors.recipeTitleTooShort;
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)) as unknown as typeof fetch,
+    });
+    const error = await call(api).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 400, message: refusal.response.error, code: 'RECIPE_TITLE_TOO_SHORT' });
+    expect(isRecipeTitleTooShortRefusal(error)).toBe(true);
+  }
+});
+
 it('preserves private generation playback without replacing the original download URL', async () => {
   const payload = await clientForEndpoint('listGenerations').listGenerations(false);
   const video = payload.generations.find(generation => generation.id === 'private-video-1');
@@ -153,6 +195,51 @@ it('shows the caption a post read by id carries as its story when it has no body
   expect(withBody.details?.body).toBe('Reusable launch notes.');
   const [withoutBody] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, body: '' }]);
   expect(withoutBody.details?.body).toBe('A clean launch visual.');
+});
+
+// Owner, 2026-11-03: a creation's settings are a standard detail of its post. The
+// read by id carries them; Details draws them under Made with in the web's words.
+it("draws the settings a post read by id carries under its Made with, and none for a template result", async () => {
+  const { item } = await clientForEndpoint('getShowcasePost').getShowcasePost('post-1');
+  // Grounding is named only where it was on, which no image model offers any more.
+  expect(item.generationSetup).toEqual([
+    { label: 'Aspect ratio', value: '16:9' },
+    { label: 'Resolution', value: '1K' },
+    { label: 'Output format', value: 'JPG' },
+  ]);
+
+  const [reelItem] = buildImmersiveShowcaseItems('showcase-feed', [item]);
+  expect(reelItem.details?.generationSetup).toEqual(item.generationSetup);
+  expect(formatGenerationSetupLine(reelItem.details?.generationSetup ?? [])).toBe('16:9 · 1K · JPG');
+  // It brought them, so Details reads nothing more.
+  expect(shouldReadPostGenerationSetup(reelItem)).toBe(false);
+
+  const template = mobileApiContract.endpoints.getShowcasePost.responseVariants.templateResult.item;
+  const [templateItem] = buildImmersiveShowcaseItems('showcase-feed', [template as typeof item]);
+  expect(templateItem.details?.generationSetup).toEqual([]);
+  expect(shouldReadPostGenerationSetup(templateItem)).toBe(false);
+  // A card without them (kept from before, or one whose settings the server could not read) is
+  // read for them.
+  const [keptItem] = buildImmersiveShowcaseItems('showcase-feed', [{ ...item, generationSetup: undefined }]);
+  expect(keptItem.details).not.toHaveProperty('generationSetup');
+  expect(shouldReadPostGenerationSetup(keptItem)).toBe(true);
+});
+
+// #675's review: every feed card carries its post's settings from the read that hydrates it, so
+// Details opened from Home, a profile or Saved reads nothing more for them.
+it('draws the settings a feed card carries, from the feed and Saved alike, with nothing more read', async () => {
+  const { items } = await clientForEndpoint('getShowcaseFeed').getShowcaseFeed(
+    { limit: 10, ...mobileApiContract.endpoints.getShowcaseFeed.query },
+    { auth: false },
+  );
+  const [card] = buildImmersiveShowcaseItems('showcase-feed', items);
+  expect(formatGenerationSetupLine(card.details?.generationSetup ?? [])).toBe('16:9 · 1K · JPG');
+  expect(shouldReadPostGenerationSetup(card)).toBe(false);
+
+  const saved = await clientForEndpoint('getSavedMedia').getSavedMedia();
+  const [savedCard] = buildImmersiveShowcaseItems('showcase-feed', saved.items);
+  expect(savedCard.details?.generationSetup).toEqual(card.details?.generationSetup);
+  expect(shouldReadPostGenerationSetup(savedCard)).toBe(false);
 });
 
 it("names no model and offers no Remix for a template result's post, on its card, in the reel and in its details", async () => {

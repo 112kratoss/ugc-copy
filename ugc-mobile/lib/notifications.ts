@@ -8,6 +8,7 @@ import { Platform } from 'react-native';
 
 import type { MagicbookletApiClient } from './api-client';
 import { env } from './env';
+import { dedupeInFlight, isInFlight, trackInFlight } from './in-flight';
 import { ALERTS_LIST_QUERY_KEY, NOTIFICATION_BADGE_QUERY_KEY } from './notification-badge';
 
 const DEVICE_ID_KEY = 'magicbooklet.mobileNotifications.deviceId';
@@ -177,20 +178,49 @@ async function configureAndroidChannel() {
   });
 }
 
+/** The owner of the exchanges on the wire (`dedupeInFlight`), keyed by device token. */
+const expoTokenExchanges = {};
+
+/**
+ * Exchanges a device token for the Expo token the API accepts: one request per
+ * device token while it is on the wire, which every caller asking meanwhile
+ * shares. Both native modules emit the device token they resolve to
+ * `addPushTokenListener`, so each registration's own fetch reached the rotation
+ * listener, which exchanged the same token again at the same moment: the first
+ * visit to Alerts sent two simultaneous `getExpoPushToken` POSTs (device sweep,
+ * Pixel 9a emulator, 2026-11-03). Nothing is kept once it settles.
+ */
+function exchangeForExpoPushToken(projectId: string, devicePushToken: Notifications.DevicePushToken) {
+  const deviceToken = typeof devicePushToken.data === 'string' ? devicePushToken.data : JSON.stringify(devicePushToken.data);
+  return dedupeInFlight(
+    expoTokenExchanges,
+    `${projectId}|${devicePushToken.type}|${deviceToken}`,
+    () => Notifications.getExpoPushTokenAsync({ projectId, devicePushToken }),
+  );
+}
+
+/** The owner of the registrations on the wire (`trackInFlight`), keyed by Expo token. */
+const expoTokenRegistrations = {};
+
 /**
  * Store the token, then tell the API about it. Both registration paths — the
  * cold-start sync and the rotation listener — go through here, so the stored
- * value can never drift from the one the backend was given.
+ * value can never drift from the one the backend was given. Recorded while it
+ * runs, so the listener can leave a token to the registration already sending
+ * it. Never shared, unlike the exchange: each registration is sent with the
+ * session it was asked under, across a sign-out too.
  */
-async function persistAndRegisterExpoPushToken(api: MagicbookletApiClient, expoPushToken: string) {
-  const deviceId = await getStableDeviceId();
-  await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
-  await api.registerMobilePushToken({
-    expoPushToken,
-    platform: Platform.OS === 'ios' ? 'ios' : 'android',
-    deviceId,
-    appVersion: Constants.expoConfig?.version ?? null,
-  });
+function persistAndRegisterExpoPushToken(api: MagicbookletApiClient, expoPushToken: string) {
+  return trackInFlight(expoTokenRegistrations, expoPushToken, (async () => {
+    const deviceId = await getStableDeviceId();
+    await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
+    await api.registerMobilePushToken({
+      expoPushToken,
+      platform: Platform.OS === 'ios' ? 'ios' : 'android',
+      deviceId,
+      appVersion: Constants.expoConfig?.version ?? null,
+    });
+  })());
 }
 
 export async function registerForMobilePushNotifications(
@@ -224,7 +254,11 @@ export async function registerForMobilePushNotifications(
 
   let token: Notifications.ExpoPushToken;
   try {
-    token = await Notifications.getExpoPushTokenAsync({ projectId });
+    // The device token first, as `getExpoPushTokenAsync` fetches it when given
+    // none, then the exchange the rotation listener shares when that fetch's
+    // echo reaches it (`exchangeForExpoPushToken`).
+    const devicePushToken = await Notifications.getDevicePushTokenAsync();
+    token = await exchangeForExpoPushToken(projectId, devicePushToken);
   } catch (error) {
     if (platform === 'android' && isMissingFirebaseSetupError(error)) {
       return { status: 'missing-firebase-setup' };
@@ -521,7 +555,7 @@ async function registerRotatedDevicePushToken(
     return;
   }
 
-  const token = await Notifications.getExpoPushTokenAsync({ projectId, devicePushToken });
+  const token = await exchangeForExpoPushToken(projectId, devicePushToken);
 
   // Expo push tokens are stable per installation: a rolled device token is
   // re-mapped to the same Expo token on Expo's side, so the exchange usually
@@ -530,6 +564,11 @@ async function registerRotatedDevicePushToken(
   // on every launch, not just on a real rotation (see below).
   const storedExpoPushToken = await SecureStore.getItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => null);
   if (storedExpoPushToken === token.data) {
+    return;
+  }
+  // Not yet stored, because the registration whose fetch fired this listener is
+  // still storing and sending it: on a first registration both sent it.
+  if (isInFlight(expoTokenRegistrations, token.data)) {
     return;
   }
 

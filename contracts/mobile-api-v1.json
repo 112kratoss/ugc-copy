@@ -251,8 +251,10 @@
             "prompt": "Create a bright launch visual.",
             "input_media": [
               {
+                "id": "input-1",
                 "url": "https://cdn.example.test/reference.png",
-                "kind": "image"
+                "kind": "image",
+                "recipeCopyable": true
               }
             ],
             "linked_post_id": "post-1",
@@ -818,7 +820,21 @@
                 "currency": "USD"
               }
             },
-            "canRemix": true
+            "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ]
           }
         ],
         "pageInfo": {
@@ -1050,6 +1066,20 @@
             "generationId": "generation-1",
             "asset": null,
             "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ],
             "savedAt": "2026-06-22T06:10:00.000Z"
           }
         ],
@@ -1103,7 +1133,21 @@
           "isSaved": false,
           "generationId": "generation-1",
           "asset": null,
-          "canRemix": true
+          "canRemix": true,
+          "generationSetup": [
+            {
+              "label": "Aspect ratio",
+              "value": "16:9"
+            },
+            {
+              "label": "Resolution",
+              "value": "1K"
+            },
+            {
+              "label": "Output format",
+              "value": "JPG"
+            }
+          ]
         }
       },
       "responseVariants": {
@@ -1137,7 +1181,8 @@
             "asset": null,
             "canRemix": false,
             "remixCapability": "none",
-            "remixTarget": null
+            "remixTarget": null,
+            "generationSetup": []
           }
         }
       }
@@ -1384,7 +1429,40 @@
         "showcasePath": "/showcase/post-1",
         "ownerPath": "/posts/post-1",
         "resourceBundlePath": "/marketplace/resources/resource-1",
-        "message": "Published."
+        "message": "Published.",
+        "recipeItemsAdded": [
+          {
+            "id": "reference-input-1",
+            "scope": {
+              "kind": "all"
+            },
+            "type": "reference_image",
+            "role": "style_reference",
+            "sectionId": null,
+            "title": "Reference image 1",
+            "description": null,
+            "textContent": null,
+            "externalUrl": null,
+            "storagePath": "user-1/generation-references/generation-1/00-reference-image-input-1.png",
+            "contentType": "image/png",
+            "sizeBytes": 2048,
+            "workflowSnapshot": null,
+            "sortOrder": 1,
+            "isPrimary": false,
+            "remixUse": "reference_only"
+          }
+        ],
+        "referencesNotCopied": 0
+      },
+      "errors": {
+        "recipeTitleTooShort": {
+          "status": 400,
+          "response": {
+            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "field": "title",
+            "code": "RECIPE_TITLE_TOO_SHORT"
+          }
+        }
       }
     },
     "createPost": {
@@ -1400,6 +1478,16 @@
         "ownerPath": "/posts/post-1",
         "resourceBundlePath": "/marketplace/resources/resource-1",
         "message": "Post created."
+      },
+      "errors": {
+        "recipeTitleTooShort": {
+          "status": 400,
+          "response": {
+            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "field": "title",
+            "code": "RECIPE_TITLE_TOO_SHORT"
+          }
+        }
       }
     },
     "listSourceTools": {
@@ -1960,6 +2048,7 @@
           },
           "hasPaidOrders": false,
           "resourceBundleBuyerCount": 0,
+          "resourceBundleEverUnlocked": false,
           "archivedAt": null,
           "tombstonedAt": null,
           "generationId": "generation-1",
@@ -1998,7 +2087,30 @@
       "response": {
         "success": true,
         "postId": "post-1",
-        "visibility": "public"
+        "visibility": "public",
+        "recipeItemsAdded": [
+          {
+            "id": "reference-input-1",
+            "scope": {
+              "kind": "all"
+            },
+            "type": "reference_image",
+            "role": "style_reference",
+            "sectionId": null,
+            "title": "Reference image 1",
+            "description": null,
+            "textContent": null,
+            "externalUrl": null,
+            "storagePath": "user-1/generation-references/generation-1/00-reference-image-input-1.png",
+            "contentType": "image/png",
+            "sizeBytes": 2048,
+            "workflowSnapshot": null,
+            "sortOrder": 1,
+            "isPrimary": false,
+            "remixUse": "reference_only"
+          }
+        ],
+        "referencesNotCopied": 0
       },
       "errors": {
         "postDeleted": {
@@ -2006,6 +2118,14 @@
           "response": {
             "error": "This post was deleted. Buyers keep their copy.",
             "code": "POST_DELETED"
+          }
+        },
+        "recipeTitleTooShort": {
+          "status": 400,
+          "response": {
+            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "field": "title",
+            "code": "RECIPE_TITLE_TOO_SHORT"
           }
         }
       }

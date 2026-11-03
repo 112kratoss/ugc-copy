@@ -80,6 +80,20 @@ const ALLOWED_RESOURCE_FILE_TYPES = new Set([
   'audio/ogg',
   'audio/flac',
 ]);
+/**
+ * Whether the recipe files bucket takes a file of this type and size, by the
+ * limits the bucket holds uploads to (`post_resource_files`). A storage-side
+ * copy is not held to them, so a server copy asks here first.
+ */
+export function fitsPostResourceFilesBucket(contentType: string | null | undefined, sizeBytes: number | null | undefined): boolean {
+  const type = contentType?.split(';')[0]?.trim().toLowerCase() ?? '';
+  return ALLOWED_RESOURCE_FILE_TYPES.has(type)
+    && typeof sizeBytes === 'number'
+    && Number.isFinite(sizeBytes)
+    && sizeBytes >= 0
+    && sizeBytes <= MAX_POST_RESOURCE_FILE_SIZE_BYTES;
+}
+
 const BLOCKED_RESOURCE_FILE_EXTENSIONS = new Set([
   '.app',
   '.bat',

@@ -43,16 +43,20 @@ const ModalSurface: React.ComponentType<ModalProps> = IS_TEST_ENVIRONMENT ? Fall
 
 export function MagicCreateMenu({
   visible,
+  chosen = null,
   onClose,
   onAction,
-  onExited,
   horizontalInset = 0,
   bottomInset = 0,
 }: {
   visible: boolean;
+  /**
+   * The tile whose screen is being built under the menu, drawn as pressed
+   * until the menu leaves over it (`lib/menu-handoff.ts`).
+   */
+  chosen?: CreateMenuActionId | null;
   onClose: () => void;
   onAction: (id: CreateMenuActionId) => void;
-  onExited?: () => void;
   horizontalInset?: number;
   bottomInset?: number;
 }) {
@@ -75,10 +79,6 @@ export function MagicCreateMenu({
   useEffect(() => {
     if (visible) setRendered(true);
   }, [visible]);
-
-  useEffect(() => {
-    if (!visible && !rendered) onExited?.();
-  }, [onExited, rendered, visible]);
 
   useEffect(() => {
     if (!rendered) return;
@@ -201,6 +201,7 @@ export function MagicCreateMenu({
               <MenuActionButton
                 key={action.id}
                 action={action}
+                chosen={chosen === action.id}
                 width={actionWidth}
                 onPress={() => onAction(action.id)}
               />
@@ -216,7 +217,17 @@ function CloseMenuButton({ onPress }: { onPress: () => void }) {
   return <IconButton icon={CloseGlyph} label="Close create menu" onPress={onPress} />;
 }
 
-function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction; width: number; onPress: () => void }) {
+function MenuActionButton({
+  action,
+  chosen,
+  width,
+  onPress,
+}: {
+  action: CreateMenuAction;
+  chosen: boolean;
+  width: number;
+  onPress: () => void;
+}) {
   const theme = useAppTheme();
   const isCreate = action.id === 'create';
   const Icon = isCreate ? Sparkles : FilePlus2;
@@ -228,22 +239,27 @@ function MenuActionButton({ action, width, onPress }: { action: CreateMenuAction
       accessibilityLabel={action.label}
       accessibilityHint={action.body}
       onPress={onPress}
-      style={({ pressed }) => ({
-        width,
-        minHeight: 148,
-        alignItems: 'flex-start',
-        justifyContent: 'space-between',
-        gap: 16,
-        borderRadius: appTheme.radii.lg,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: isCreate ? theme.colors.primaryFill : theme.colors.border,
-        padding: 16,
-        backgroundColor: isCreate
-          ? (pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill)
-          : (pressed ? theme.colors.surfaceStrong : theme.colors.panelSoft),
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
+      style={({ pressed }) => {
+        // Still pressed after the finger lifts, while the screen it opens is
+        // being built under the menu: the tap shows as taken until the menu goes.
+        const held = pressed || chosen;
+        return {
+          width,
+          minHeight: 148,
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 16,
+          borderRadius: appTheme.radii.lg,
+          borderCurve: 'continuous',
+          borderWidth: 1,
+          borderColor: isCreate ? theme.colors.primaryFill : theme.colors.border,
+          padding: 16,
+          backgroundColor: isCreate
+            ? (held ? theme.colors.primaryFillPressed : theme.colors.primaryFill)
+            : (held ? theme.colors.surfaceStrong : theme.colors.panelSoft),
+          opacity: held ? appTheme.opacity.pressed : 1,
+        };
+      }}
     >
       <View
         style={{

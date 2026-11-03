@@ -941,6 +941,97 @@ describe('listOwnerGenerationsForRoute', () => {
     for (const key of added) expect(generations[0], `route payload is missing "${key}"`).toHaveProperty(key);
   });
 
+  // #677's review: "From this creation" showed and counted inputs the recipe
+  // copy never takes. The route says which it takes, by the copy's own rule.
+  describe('which saved inputs the recipe copy takes', () => {
+    const inputRow = (id: string, userId: string, storagePath: string, sortOrder: number) => ({
+      id,
+      generation_id: 'gen-inputs',
+      user_id: userId,
+      media_type: 'image',
+      role: 'reference_image',
+      label: null,
+      storage_path: storagePath,
+      source_generation_id: null,
+      sort_order: sortOrder,
+      metadata: {},
+    });
+    const rows = [
+      inputRow('own', OWNER, `generation_inputs/${OWNER}/gen-inputs/own.png`, 0),
+      inputRow('guest', 'guest-1', 'generation_inputs/guest-1/gen-inputs/guest.png', 1),
+      // Another account's file, as a remix's reference kept in its original's folder.
+      inputRow('stranger', 'stranger-1', 'generation_inputs/stranger-1/gen-inputs/theirs.png', 2),
+      // A row of the creator's that names a file outside their folder.
+      inputRow('outside', OWNER, 'generation_inputs/stranger-1/gen-inputs/elsewhere.png', 3),
+    ];
+    const profiles = [{ id: 'guest-1', merged_into_user_id: OWNER }];
+
+    it('marks the creator’s and a linked guest’s own files, and nothing else', async () => {
+      const { generations } = await listStoredLibrary({
+        profiles,
+        generations: [libraryRow({ id: 'gen-inputs' })],
+        posts: [],
+        generation_input_media: rows,
+      }, 'id=gen-inputs&includeArchived=true&limit=1');
+
+      expect((generations[0].input_media as Array<{ id: string; recipeCopyable: boolean }>)
+        .map(({ id, recipeCopyable }) => [id, recipeCopyable])).toEqual([
+        ['own', true],
+        ['guest', true],
+        ['stranger', false],
+        ['outside', false],
+      ]);
+    });
+
+    it('marks none of a creation off public view, by its archive or an operator’s removal', async () => {
+      for (const offView of [
+        { archived_at: '2026-11-01T00:00:00.000Z' },
+        { archived_at: '2026-11-01T00:00:00.000Z', moderation_removed_at: '2026-11-01T00:00:00.000Z' },
+      ]) {
+        const { generations } = await listStoredLibrary({
+          profiles,
+          generations: [libraryRow({ id: 'gen-inputs', ...offView })],
+          posts: [],
+          generation_input_media: rows,
+        }, 'id=gen-inputs&includeArchived=true&limit=1');
+
+        expect((generations[0].input_media as Array<{ recipeCopyable: boolean }>).map((item) => item.recipeCopyable))
+          .toEqual([false, false, false, false]);
+      }
+    });
+
+    // Owner, 2026-11-03 (#678): what the creator bought in someone else's recipe is theirs to use,
+    // never to give on, though its kept row sits in their own folder like any upload of theirs.
+    it('marks no file the creator bought in someone else’s recipe, however its row says so', async () => {
+      const kept = (id: string, sortOrder: number, metadata: Record<string, unknown>) => ({
+        ...inputRow(id, OWNER, `generation_inputs/${OWNER}/gen-inputs/0${sortOrder}-reference-image.png`, sortOrder),
+        metadata,
+      });
+      const { generations } = await listStoredLibrary({
+        profiles,
+        generations: [libraryRow({ id: 'gen-inputs' })],
+        posts: [],
+        generation_input_media: [
+          inputRow('own', OWNER, `generation_inputs/${OWNER}/gen-inputs/own.png`, 0),
+          // Kept from a run start's import of a seller's copy.
+          kept('imported', 1, { sourceStoragePath: `generation_inputs/${OWNER}/recipe-imports/seller-9/gen-0/00-reference-image-row.png` }),
+          // Marked as it was kept, which a run made again from that run's own copy carries on.
+          kept('marked', 2, { sourceKind: 'recipe-file', sourceStoragePath: `generation_inputs/${OWNER}/gen-0/00-reference-image.png` }),
+          // Kept from the seller's file itself.
+          kept('seller-source', 3, { sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/01-reference-image-row.png' }),
+        ],
+      }, 'id=gen-inputs&includeArchived=true&limit=1');
+
+      expect((generations[0].input_media as Array<{ id: string; recipeCopyable: boolean }>)
+        .map(({ id, recipeCopyable }) => [id, recipeCopyable])).toEqual([
+        ['own', true],
+        ['imported', false],
+        ['marked', false],
+        ['seller-source', false],
+      ]);
+    });
+  });
+
   it("answers the contract's failed-only query with the failed runs alone, paged as it pins", async () => {
     const variant = mobileApiContract.endpoints.listGenerations.responseVariants.failedOnly;
     const example = variant.response.generations[0];

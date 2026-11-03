@@ -16,9 +16,9 @@ import {
   CreatorCanvasMedia,
   CreatorColumnBar,
   CreatorColumnLayout,
-  CreatorMentionPanel,
   CreatorReferenceStrip,
   CreatorReferenceTile,
+  CreatorRemixSlotTile,
   CreatorSettingChoices,
   CreatorSettingSwitch,
   CreatorTemplatesTile,
@@ -1006,26 +1006,6 @@ describe('a reference tile', () => {
   });
 });
 
-describe('the mention panel', () => {
-  it('is a group named for its title, offering each match by name and handle', () => {
-    const onInsert = vi.fn();
-    render(
-      <CreatorMentionPanel
-        title="Insert element"
-        hint="Pick an element to insert its @mention."
-        query="he"
-        suggestions={[{ id: 'hero', displayName: 'Hero', handle: '@hero' }]}
-        handleClassName={() => 'text-sky-300'}
-        onInsert={onInsert}
-      />
-    );
-    const group = screen.getByRole('group', { name: 'Insert element' });
-    expect(within(group).getByText('@he')).toBeInTheDocument();
-    fireEvent.click(within(group).getByRole('button', { name: /^Hero\s*@hero$/ }));
-    expect(onInsert).toHaveBeenCalledWith('@hero');
-  });
-});
-
 describe('the add tile', () => {
   it('is a label around its file field, which a locked page can switch off', () => {
     const onChange = vi.fn();
@@ -1083,6 +1063,138 @@ describe('an upload slot', () => {
   it('keeps a locked slot out of reach of the keyboard', () => {
     const view = render(slot({ src: null, disabled: true }));
     expect(view.container.querySelector('#character-input')).toBeDisabled();
+  });
+
+  // Owner, 2026-11-03: the input a remix was not given waits as an empty box for the remixer's own.
+  it('names the input a remix was not given on its empty tile, and asks for the remixer\'s own', () => {
+    const remixSlot = (src: string | null) => (
+      <CreatorUploadSlot
+        accent="motion"
+        title="Character image"
+        height="tall"
+        mediaType="image"
+        src={src}
+        alt="Character"
+        previewHint="Preview image"
+        icon={ImageIcon}
+        emptyLabel="Upload image"
+        remixSlot={{ title: 'Character image', action: 'Add your image' }}
+        input={{ id: 'character-input', accept: 'image/*', onChange: () => {} }}
+        onPreview={() => {}}
+        onRemove={() => {}}
+        dragging={false}
+      />
+    );
+    const view = render(remixSlot(null));
+    const tile = screen.getByText('Add your image').closest('label');
+
+    expect(tile).toHaveAttribute('for', 'character-input');
+    expect(tile).toHaveTextContent('Character imageAdd your image');
+    expect(screen.queryByText('Upload image')).toBeNull();
+    // Dashed in the accent, as the boxes that add files are.
+    expect(tile?.className).toContain('border-dashed');
+    expect(tile?.className).toContain('border-[var(--ui-accent-motion)]/35');
+
+    // Once a file is in, the slot shows it as any other.
+    view.rerender(remixSlot('blob:character'));
+    expect(screen.queryByText('Add your image')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Replace Character' })).toBeInTheDocument();
+  });
+});
+
+// Owner, 2026-11-03: a remix not given the creator's inputs gets an empty box for each, named as the
+// prompt names it, in the strip of its kind.
+describe('a remix\'s empty slot tile', () => {
+  function tile(props: Partial<ComponentPropsWithoutRef<typeof CreatorRemixSlotTile>> = {}) {
+    const onFiles = vi.fn();
+    const view = render(
+      <ul>
+        <CreatorRemixSlotTile
+          accent="image"
+          slotId="slot-1"
+          title="@product"
+          action="Add your image"
+          accept="image/*"
+          onFiles={onFiles}
+          {...props}
+        />
+      </ul>
+    );
+    return { view, onFiles, field: view.container.querySelector<HTMLInputElement>('input[data-remix-slot="slot-1"]')! };
+  }
+
+  it('is a box named for what it wants and the handle the prompt knows it by', () => {
+    const { field } = tile();
+    const box = screen.getByRole('button', { name: 'Add your image for @product' });
+
+    expect(box).toHaveTextContent('@productAdd your image');
+    expect(box.className).toContain('border-dashed');
+    expect(box.closest('li')).toHaveClass('snap-start');
+    expect(field).toHaveAttribute('accept', 'image/*');
+    expect(field).not.toHaveAttribute('multiple');
+  });
+
+  it('goes by its name where the prompt mentions it by no handle', () => {
+    tile({ title: 'Reference image 2' });
+    expect(screen.getByRole('button', { name: 'Add your image for Reference image 2' })).toHaveTextContent('Reference image 2Add your image');
+  });
+
+  it('opens its own picker at a press, and hands the picked files on', () => {
+    const { field, onFiles } = tile();
+    const opened = vi.spyOn(field, 'click').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add your image for @product' }));
+    expect(opened).toHaveBeenCalledTimes(1);
+
+    const photo = new File(['photo'], 'mine.png', { type: 'image/png' });
+    fireEvent.change(field, { target: { files: [photo] } });
+    expect(onFiles).toHaveBeenCalledWith([photo]);
+  });
+
+  it('takes a drop for itself alone, and says so while a file is over it', () => {
+    const onSectionDrop = vi.fn();
+    const onFiles = vi.fn();
+    render(
+      // The image creator's references take a drop of their own around the strip.
+      <section onDrop={onSectionDrop}>
+        <ul>
+          <CreatorRemixSlotTile accent="image" slotId="slot-1" title="@product" action="Add your image" accept="image/*" onFiles={onFiles} />
+        </ul>
+      </section>
+    );
+    const box = screen.getByRole('button', { name: 'Add your image for @product' });
+    const photo = new File(['photo'], 'mine.png', { type: 'image/png' });
+
+    fireEvent.dragOver(box);
+    expect(box).toHaveTextContent('Drop here');
+    fireEvent.drop(box, { dataTransfer: { files: [photo] } });
+
+    expect(onFiles).toHaveBeenCalledWith([photo]);
+    expect(onSectionDrop).not.toHaveBeenCalled();
+    expect(box).toHaveTextContent('Add your image');
+  });
+
+  it('draws a clip\'s wide frame, or a row of its own, and takes several files where asked', () => {
+    const { view } = tile({ frame: 'wide', title: '@dance', action: 'Add your video', accept: 'video/*' });
+    expect(view.container.querySelector('.aspect-video')).not.toBeNull();
+    view.unmount();
+
+    const row = render(
+      <CreatorRemixSlotTile as="div" frame="none" accent="video" slotId="slot-3" title="@maya" action="Add your pictures" accept="image/*" multiple onFiles={() => {}} />
+    );
+    expect(row.container.querySelector('li')).toBeNull();
+    expect(row.container.querySelector('.aspect-square, .aspect-video')).toBeNull();
+    expect(row.container.querySelector('input[data-remix-slot="slot-3"]')).toHaveAttribute('multiple');
+  });
+
+  it('stays shut while its page is locked', () => {
+    const { field, onFiles } = tile({ disabled: true });
+    const box = screen.getByRole('button', { name: 'Add your image for @product' });
+
+    expect(box).toBeDisabled();
+    expect(field).toBeDisabled();
+    fireEvent.drop(box, { dataTransfer: { files: [new File(['photo'], 'mine.png', { type: 'image/png' })] } });
+    expect(onFiles).not.toHaveBeenCalled();
   });
 });
 

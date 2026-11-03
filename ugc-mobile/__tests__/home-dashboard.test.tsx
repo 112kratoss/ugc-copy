@@ -51,11 +51,14 @@ const authState = vi.hoisted(() => ({
     )),
     getShowcasePost: vi.fn(),
     getHomeShelf: vi.fn(),
+    // The server answers with the post's own creation, which the card already names.
     remixShowcasePost: vi.fn((_postId: string) => Promise.resolve({
       success: true,
-      redirectTo: '/create-video?remix=generation-1&remixPost=post-1',
+      redirectTo: '/create-video?remix=generation-post-1&remixPost=post-1',
       prefill: { prompt: 'A paper boat drifting slowly across a sunlit pond', settings: {} },
     })),
+    // The remix's source, read beside the start for the creator the tap opens.
+    getRemixSourceBundle: vi.fn((_generationId: string, _options?: { postId?: string | null }) => Promise.resolve({})),
     unlockFreeBundle: vi.fn(),
     recordShowcaseFeedEvent: vi.fn((_request: SentEvent) => Promise.resolve()),
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
@@ -355,6 +358,7 @@ import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
+import { REMIX_LAUNCH_PARAM, REMIX_UNLOCK_REQUIRED_CODE, findRemixLaunch, type RemixLaunch } from '../lib/remix-start';
 import {
   SHOWCASE_DWELL_VIEWABILITY,
   SHOWCASE_PLAYBACK_VIEWABILITY,
@@ -520,18 +524,30 @@ function cardAt(tree: renderer.ReactTestRenderer, index: number) {
   return cell.props.children.props;
 }
 
-/** The creator route the screen pushed, and the params that route reads. */
-function pushedCreatorRoute() {
-  expect(routerState.push).toHaveBeenCalledTimes(1);
-  const url = new URL(routerState.push.mock.calls[0][0] as string, 'https://magicbooklet.test');
+/** A creator link as its route reads it. */
+function creatorRoute(href: string) {
+  const url = new URL(href, 'https://magicbooklet.test');
   return { pathname: url.pathname, params: Object.fromEntries(url.searchParams) };
 }
 
-/** Where a remix of `shelfPost('post-1')` opens: the server's link, and the row naming the post. */
+/** The creator route the screen pushed, and the params that route reads, its tap's launch aside. */
+function pushedCreatorRoute() {
+  expect(routerState.push).toHaveBeenCalledTimes(1);
+  const { pathname, params: { [REMIX_LAUNCH_PARAM]: _launch, ...params } } = creatorRoute(routerState.push.mock.calls[0][0] as string);
+  return { pathname, params };
+}
+
+/** The launch the pushed creator link names, as the creator it opens finds it. */
+function pushedLaunch() {
+  const { params } = creatorRoute(routerState.push.mock.calls[0][0] as string);
+  return findRemixLaunch(params[REMIX_LAUNCH_PARAM], { generationId: params.remix, postId: params.remixPost });
+}
+
+/** Where a remix of `shelfPost('post-1')` opens: its creation's link, and the row naming the post. */
 const POST_1_REMIX_ROUTE = {
   pathname: '/create/video',
   params: {
-    remix: 'generation-1',
+    remix: 'generation-post-1',
     remixPost: 'post-1',
     sourceTitle: 'Post post-1',
     sourceCreator: '@creatorpost-1',
@@ -1372,7 +1388,8 @@ describe('Home screen', () => {
   // card sent none of them and the creator read "Source creation".
   // Where the server's link cannot be mapped, Home falls back as the reel does
   // (one shared builder): the post's own tool, Motion for a motion post, and
-  // the server's prompt, still under the row naming the post.
+  // the server's prompt, still under the row naming the post. The creator the
+  // tap opened gives way to that link.
   it("falls back to the post's own tool and the server's prompt, as the reel does", async () => {
     authState.api.remixShowcasePost.mockImplementationOnce(() => Promise.resolve({
       success: true,
@@ -1386,12 +1403,20 @@ describe('Home screen', () => {
     }])];
     const { tree } = renderHome();
 
+    let launch: RemixLaunch | null = null;
     await renderer.act(async () => {
       cardAt(tree, 0).onRemix();
+      launch = pushedLaunch();
       await settlePromises();
     });
 
     expect(pushedCreatorRoute()).toEqual({
+      pathname: '/create/motion',
+      params: { ...POST_1_REMIX_ROUTE.params },
+    });
+    const answer = launch!.answer;
+    expect(answer?.kind).toBe('replaced');
+    expect(creatorRoute((answer as { href: string }).href)).toEqual({
       pathname: '/create/motion',
       params: {
         prompt: 'A paper boat at dusk',
@@ -1401,6 +1426,99 @@ describe('Home screen', () => {
         sourceThumbnail: 'https://cdn.example.com/post-1.preview.webp',
       },
     });
+
+    renderer.act(() => tree.unmount());
+  });
+
+  // The tap opened nothing until the start answered: 0.75 to 1 s on the Pixel 9a
+  // against production, and up to 4 s (2026-11-03). The creator now opens at the
+  // tap, with the source read beside the start, and the answer confirms it.
+  it('opens the creator at the tap, while the start is still out', async () => {
+    const answered = deferred<{ success: boolean; redirectTo: string; prefill: { prompt: string; settings: {} } }>();
+    authState.api.remixShowcasePost.mockImplementationOnce(() => answered.promise);
+    queryState.pages = [page([{
+      ...shelfPost('post-1'),
+      recommendation: { deliveryId: 'delivery-remix', position: 0, algorithmVersion: 'for-you-rules-v4' },
+    }])];
+    const { tree } = renderHome();
+
+    await renderer.act(async () => {
+      cardAt(tree, 0).onRemix();
+      await settlePromises();
+    });
+
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
+    expect(authState.api.remixShowcasePost).toHaveBeenCalledWith('post-1');
+    expect(authState.api.getRemixSourceBundle).toHaveBeenCalledWith('generation-post-1', { postId: 'post-1' });
+    const launch = pushedLaunch();
+    expect(launch).toMatchObject({ answer: null, modelId: 'manual' });
+
+    await renderer.act(async () => {
+      answered.resolve({ success: true, redirectTo: '/create-video?remix=generation-post-1&remixPost=post-1', prefill: { prompt: '', settings: {} } });
+      await settlePromises();
+    });
+    expect(launch!.answer).toEqual({ kind: 'confirmed' });
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+
+    renderer.act(() => tree.unmount());
+  });
+
+  it('closes the creator it opened when the start is refused, and says why', async () => {
+    authState.api.remixShowcasePost.mockImplementationOnce(() => Promise.reject(Object.assign(new Error('Creation is private or not found'), { status: 404 })));
+    queryState.pages = [page([{
+      ...shelfPost('post-1'),
+      recommendation: { deliveryId: 'delivery-remix', position: 0, algorithmVersion: 'for-you-rules-v4' },
+    }])];
+    const { tree } = renderHome();
+
+    let launch: RemixLaunch | null = null;
+    await renderer.act(async () => {
+      cardAt(tree, 0).onRemix();
+      launch = pushedLaunch();
+      await settlePromises();
+    });
+
+    expect(pushedCreatorRoute()).toEqual(POST_1_REMIX_ROUTE);
+    expect(launch!.answer).toEqual({ kind: 'closed' });
+    expect(Alert.alert).toHaveBeenCalledWith('Could not start remix', 'Creation is private or not found');
+    expect(authState.api.recordShowcaseFeedEvent).not.toHaveBeenCalled();
+
+    renderer.act(() => tree.unmount());
+  });
+
+  // The unlock sheet is Home's own Modal, which iOS presents from Home's screen:
+  // under the creator there is none to present it from, so it waits for the
+  // creator to be gone.
+  it('offers an unlock the page did not know of once the creator it opened has gone', async () => {
+    const answered = deferred<never>();
+    authState.api.remixShowcasePost.mockImplementationOnce(() => answered.promise);
+    queryState.pages = [page([{
+      ...shelfPost('post-1'),
+      asset: { id: 'bundle-1', postId: 'post-1', title: 'Recipe', accessMode: 'paid', priceUsdCents: 300, previewText: '', allowRemix: true },
+      recommendation: { deliveryId: 'delivery-remix', position: 0, algorithmVersion: 'for-you-rules-v4' },
+    }])];
+    const { tree } = renderHome();
+
+    renderer.act(() => {
+      cardAt(tree, 0).onRemix();
+    });
+    // The creator the tap opened, listening for the answer.
+    const launch = pushedLaunch()!;
+    const leave = launch.subscribe(() => undefined);
+
+    await renderer.act(async () => {
+      answered.reject(Object.assign(new Error('Unlock this post to remix it.'), { status: 403, code: REMIX_UNLOCK_REQUIRED_CODE }));
+      await settlePromises();
+    });
+    expect(launch.answer).toEqual({ kind: 'closed' });
+    expect(hostProps(tree, 'unlock-remix-prompt').visible).toBe(false);
+
+    await renderer.act(async () => {
+      leave();
+      await settlePromises();
+    });
+    expect(hostProps(tree, 'unlock-remix-prompt').visible).toBe(true);
+    expect(Alert.alert).not.toHaveBeenCalled();
 
     renderer.act(() => tree.unmount());
   });

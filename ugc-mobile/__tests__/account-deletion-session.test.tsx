@@ -28,7 +28,7 @@ const state = vi.hoisted(() => ({
   getSession: vi.fn(),
   prepareGuestAccountMerge: vi.fn(),
   probe: vi.fn(),
-  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn() },
+  queryClient: { clear: vi.fn(), fetchQuery: vi.fn(), getQueryCache: () => ({ subscribe: () => () => undefined }), removeQueries: vi.fn(), invalidateQueries: vi.fn(() => Promise.resolve()) },
   refreshSession: vi.fn(),
   replace: vi.fn(),
   sessionResolve: null as null | ((result: unknown) => void),
