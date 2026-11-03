@@ -192,6 +192,13 @@ export interface OwnerPostDetail extends OwnerPostListItem {
   hasPaidOrders: boolean;
   /** People who have this recipe: paid sales plus free unlocks. 0 when there is none. */
   resourceBundleBuyerCount?: number;
+  /**
+   * Whether anyone has unlocked the post's recipe, now or before it was taken
+   * off (a retired recipe keeps its row and its count, and a later recipe on
+   * the post takes that row up again). Such a recipe is never given a
+   * creation's exact prompt by the composers or the server (#677's re-reviews).
+   */
+  resourceBundleEverUnlocked?: boolean;
 }
 
 export type OwnerPostVisibilityFilter = ShowcaseVisibility | 'archived' | 'all';
@@ -919,5 +926,9 @@ export async function getOwnerPostDetail(
     resourceBundleBuyerCount: liveBundle
       ? Math.max(0, liveBundle.salesCount) + Math.max(0, liveBundle.freeUnlockCount ?? 0)
       : 0,
+    // A retired recipe's people count too: the composers add no exact prompt
+    // to a recipe anyone has had (#677's re-reviews).
+    resourceBundleEverUnlocked: Boolean(bundleDetail)
+      && Math.max(0, bundleDetail?.salesCount ?? 0) + Math.max(0, bundleDetail?.freeUnlockCount ?? 0) > 0,
   };
 }

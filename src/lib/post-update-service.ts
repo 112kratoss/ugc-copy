@@ -68,7 +68,12 @@ import {
 import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
-import { getMarketplaceRefusalFields, isCreatorProfileCheckError } from '@/lib/marketplace-trust';
+import {
+  getMarketplaceRefusalFields,
+  getRecipeTitleRefusalBody,
+  isCreatorProfileCheckError,
+  isDatabaseRecipeTitleRefusal,
+} from '@/lib/marketplace-trust';
 import { recipeKeepsPromptPrivate, titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
@@ -259,7 +264,7 @@ export type PostUpdateDependencies = {
   planGenerationReferenceCopies?: typeof planGenerationReferenceCopies;
   /** Their files, copied once every check has passed, right before the write. */
   copyPlannedGenerationReferences?: typeof copyPlannedGenerationReferences;
-  /** The copies a refused write leaves behind, removed. */
+  /** The post's creation as its recipe reads it: its prompt, and whether it was removed or archived. */
   loadCreationRecipeSource?: typeof loadCreationRecipeSource;
   updatePostWithResourceBundleAtomically?: typeof updatePostWithResourceBundleAtomically;
   replacePostSourceTools?: typeof replacePostSourceTools;
@@ -369,11 +374,11 @@ function inferExtension(fileName: string, mimeType: string): string {
 }
 
 /**
- * Whether people have the post's recipe, paid or free: the count both
- * composers say ("3 people have this recipe") and the one a republish of a
- * sold recipe keys on.
+ * Whether people have the recipe whose row this is, paid or free, or had it:
+ * a recipe removed while people had it is retired, and its row keeps their
+ * count (a later save of a recipe on the post takes the same row up again).
  */
-function recipePeopleHave(bundle: Pick<BundleStatusRow, 'sales_count' | 'free_unlock_count'> | null): boolean {
+function recipeHasHolders(bundle: Pick<BundleStatusRow, 'sales_count' | 'free_unlock_count'> | null): boolean {
   return Boolean(bundle) && ((bundle?.sales_count ?? 0) + (bundle?.free_unlock_count ?? 0)) > 0;
 }
 
@@ -1481,11 +1486,12 @@ export async function updateOwnerPostForRoute({
         : null,
       includeReferences: body.includeGenerationReferences === true,
       mayShareCreation: creationMaySharePostInputs(creationRecipeSource),
-      // A recipe people have gains no prompt from here (#677's re-review): an
-      // older composer sends the recipe back on every save, a caption fix
-      // included, and the prompt would reach them as a revision nobody saw.
-      // The composers show the locked card and send it themselves.
-      addsCreationPrompt: !recipePeopleHave(liveBundle),
+      // A recipe people have or had gains no prompt from here (#677's
+      // re-reviews): an older composer sends the recipe back on every save, a
+      // caption fix included, and the prompt would reach them as a revision
+      // nobody saw. Such a recipe stays as sold, retired rows too, since a save
+      // takes the same row up again.
+      addsCreationPrompt: !recipeHasHolders(existingBundle),
       // A copy the stored recipe keeps is in place already: saving again
       // copies none of it a second time.
       storedItems: liveBundle
@@ -1635,7 +1641,7 @@ export async function updateOwnerPostForRoute({
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
       && liveBundle
-      && recipePeopleHave(liveBundle)
+      && recipeHasHolders(liveBundle)
       ? buildStoredBundleForQualityCheck(liveBundle)
       : null;
     const bundleForPublicValidation = hasResourceBundlePayload
@@ -2165,6 +2171,13 @@ export async function updateOwnerPostForRoute({
   } catch (error) {
     if (isSoldResourceBundleMutationError(error)) {
       return createSoldResourceBundleLockedResult();
+    }
+    // The database refused the recipe's title by its own count (#677's
+    // re-review): answered as the route's own check answers it, with the
+    // code the composers offer "Post without recipe" on. Copies made for the
+    // save stay, for the next one.
+    if (isDatabaseRecipeTitleRefusal(error)) {
+      return { ok: false, status: 400, body: getRecipeTitleRefusalBody() };
     }
     logBackendError('failed_to_update_owner_post', { error: error });
     if (isMissingPostResourceBundlesSchemaError(error)) {

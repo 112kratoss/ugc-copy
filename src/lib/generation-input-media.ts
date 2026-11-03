@@ -7,6 +7,11 @@ import {
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
 import { markMediaUploadIntentsConsumed } from '@/lib/media-upload-intents';
+// One rule with both composers: whether a creation gives its recipe anything (#677's re-reviews).
+import {
+  creationMayShareRecipe,
+  type CreationStateLike,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import { buildMediaProxyUrl, isMediaBucket } from '@/lib/media-urls';
 import {
   downloadAllowlistedRemoteMedia,
@@ -94,19 +99,16 @@ export function isRecipeCopyableInputRow(
 
 /**
  * Whether anything of a creation, its exact prompt or its saved inputs, may go
- * into its post's recipe: not once an operator has removed it or its creator
- * has archived it (`moderation_removed_at`, `archived_at`), as Remix withholds
- * such a creation's prompt too. The gate is those two marks and not
- * `is_public`, which other states write as well: a creation behind an NSFW
- * cover is not public either, and not holding its recipe back for that is
- * intended (#677's re-review). A creation only not published yet (a private
- * post, a first publish) has neither mark: its recipe is a draft no one else
- * reads until the post is public, and the creation goes public with it.
+ * into its post's recipe: the rule both composers read too
+ * (`creationMayShareRecipe`, `ugc-mobile/lib/creation-recipe/`), by the two
+ * marks an operator's removal and its creator's archive write, never by
+ * `is_public` (an NSFW cover writes that as well, deliberately not gated). A
+ * creation only not published yet (a private post, a first publish) has
+ * neither mark: its recipe is a draft no one else reads until the post is
+ * public, and the creation goes public with it.
  */
-export function creationMaySharePostInputs(
-  generation: { archived_at?: string | null; moderation_removed_at?: string | null } | null | undefined,
-): boolean {
-  return Boolean(generation) && !generation?.moderation_removed_at && !generation?.archived_at;
+export function creationMaySharePostInputs(generation: CreationStateLike | null | undefined): boolean {
+  return creationMayShareRecipe(generation);
 }
 
 export interface PersistGenerationInputCandidate {

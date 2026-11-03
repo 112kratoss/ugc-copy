@@ -1976,6 +1976,7 @@
           },
           "hasPaidOrders": false,
           "resourceBundleBuyerCount": 0,
+          "resourceBundleEverUnlocked": false,
           "archivedAt": null,
           "tombstonedAt": null,
           "generationId": "generation-1",

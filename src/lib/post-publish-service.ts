@@ -41,7 +41,9 @@ import {
 } from '@/lib/public-ugc-safety';
 import {
   getMarketplaceRefusalFields,
+  getRecipeTitleRefusalBody,
   isCreatorProfileCheckError,
+  isDatabaseRecipeTitleRefusal,
 } from '@/lib/marketplace-trust';
 import {
   getSubmittedMediaKind,
@@ -598,6 +600,11 @@ export async function publishPreparedPost({
     if (publishError instanceof DefinitiveSupabaseMutationRejection) {
       await abortPreparedClaims();
       await cleanupUploadedMedia();
+    }
+    // The database refused the recipe's title by its own count (#677's
+    // re-review): answered as the route's own check answers it.
+    if (isDatabaseRecipeTitleRefusal(publishError)) {
+      return { ok: false, status: 400, body: getRecipeTitleRefusalBody() };
     }
     if (isMissingPostsSchemaError(publishError)) {
       return { ok: false, status: 500, body: { error: MISSING_POSTS_SCHEMA_ERROR } };

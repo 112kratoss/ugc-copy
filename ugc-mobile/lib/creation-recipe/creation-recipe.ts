@@ -69,6 +69,37 @@ export function needsCreationPromptItem(
   return Boolean(trimmed(prompt)) && !items.some((item) => item.type === 'prompt' && Boolean(trimmed(item.textContent)));
 }
 
+// ─── A creation that gives its recipe nothing ───────────────────────────────
+
+/** What the rule below reads of a creation: whether it was removed or archived. */
+export interface CreationStateLike {
+  archived_at?: string | null;
+  moderation_removed_at?: string | null;
+}
+
+/**
+ * Whether anything of a creation, its exact prompt or its saved inputs, may go
+ * into its post's recipe: not once an operator has removed it or its creator
+ * has archived it (`moderation_removed_at`, `archived_at`), as Remix withholds
+ * such a creation's prompt too. The server holds every save to it, taking out
+ * a locked card a composer sent, and both composers neither add nor keep that
+ * card for such a creation (#677's re-reviews). The gate is those two marks
+ * and not `is_public`, which other states write as well: a creation behind an
+ * NSFW cover is not public either, and not holding its recipe back for that is
+ * intended. A creation only not published yet has neither mark.
+ */
+export function creationMayShareRecipe(creation: CreationStateLike | null | undefined): boolean {
+  return Boolean(creation) && !creation?.moderation_removed_at && !creation?.archived_at;
+}
+
+/** Items or cards without the exact prompt's locked one, for a creation that gives its recipe nothing. */
+export function withoutLockedCreationPrompt<T extends CreationRecipeItemLike>(
+  items: readonly T[],
+  prompt: string | null | undefined,
+): T[] {
+  return items.filter((item) => !isLockedCreationPromptItem(item, prompt));
+}
+
 /** "From this creation" while the recipe holds the exact prompt. */
 export const CREATION_PROMPT_INCLUDED = 'Exact prompt included.';
 export const CREATION_PROMPT_INCLUDED_DETAIL = "Every creation's recipe has it: the Remix that comes with one fills it in for whoever unlocks it.";

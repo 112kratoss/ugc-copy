@@ -1655,6 +1655,24 @@ describe('updateOwnerPostForRoute', () => {
       // save beside it could already have found that file at its path and named
       // it in its recipe. Each copy has one path per input, so the next save of
       // the recipe finds it there and copies nothing again.
+      // #677's re-review: the database counts a title in characters, and refused
+      // one the route's count had let through ("Cat 🐱") with a 500.
+      it('answers the database’s refusal of the title as its own, with the code the composers offer Post without recipe on', async () => {
+        const refusal = mobileApiContract.endpoints.updatePost.errors.recipeTitleTooShort;
+        const dependencies = referenceDependencies({
+          updatePostWithResourceBundleAtomically: vi.fn(async () => {
+            throw new DefinitiveSupabaseMutationRejection({
+              message: 'Improve this unlock before publishing: Add a clear listing title with at least 6 characters.',
+            }, 400);
+          }),
+        });
+        const { result, removals } = await save({ includeGenerationReferences: true, resourceBundle: recipe('free') }, { dependencies });
+
+        expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+        // The copy it made waits at its path for the next save.
+        expect(removals.flat()).not.toContain(copyPath('input-1'));
+      });
+
       it('leaves the copies it made in place when the database refuses the write', async () => {
         const refused = referenceDependencies({
           updatePostWithResourceBundleAtomically: vi.fn(async () => {
@@ -1718,11 +1736,15 @@ describe('updateOwnerPostForRoute', () => {
           expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
           expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['recipe-prompt']);
 
-          // #677's re-review: nor its exact prompt, which Remix withholds from
-          // such a creation too.
+          // #677's re-reviews: nor its exact prompt, which Remix withholds from
+          // such a creation too, added here or sent as a composer's locked card.
           const note = { id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting', textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none' };
+          const lockedCard = {
+            id: 'creation-prompt', type: 'prompt', role: 'primary', sectionId: null, title: 'Exact generation prompt',
+            textContent: 'A sunset study in golden light.', sortOrder: 1, isPrimary: false, remixUse: 'text_template',
+          };
           const withoutPrompt = await save(
-            { resourceBundle: recipe('free', [note]) },
+            { resourceBundle: recipe('free', [note, lockedCard]) },
             { generation: { ...generationRow, ...offView, prompt: 'A sunset study in golden light.' } },
           );
           expect(withoutPrompt.result).toMatchObject({ ok: true, body: { recipeItemsAdded: [] } });
@@ -1782,12 +1804,12 @@ describe('updateOwnerPostForRoute', () => {
         ]);
       });
 
-      // #677's re-review (decided there): the server adds the exact prompt to a
-      // recipe on publish, and on an edit only where nobody has the recipe yet.
-      // An older composer sends the recipe back on every save, so a caption fix
-      // of a recipe people have revised it with a prompt the seller had left
-      // out, and switching it off again did not stick.
-      describe('the exact prompt and a recipe people have', () => {
+      // #677's re-reviews (decided there): a recipe people have, or had, gains
+      // no exact prompt from the server. An older composer sends the recipe
+      // back on every save, so a caption fix of a recipe people have revised it
+      // with a prompt the seller had left out, and switching it off again did
+      // not stick. A retired recipe counts: a save takes the same row up again.
+      describe('the exact prompt and a recipe people have or had', () => {
         const noteItem = {
           id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting',
           textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none',
@@ -1807,7 +1829,7 @@ describe('updateOwnerPostForRoute', () => {
           expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
         });
 
-        it('keeps the locked card a composer showed and sent for a recipe people have, and adds nothing beside it', async () => {
+        it('keeps a prompt item the seller sends for a recipe people have, and adds nothing beside it', async () => {
           const lockedCard = {
             id: 'creation-prompt', type: 'prompt', role: 'primary', sectionId: null, title: 'Exact generation prompt',
             textContent: 'A sunset study in golden light.', sortOrder: 1, isPrimary: false, remixUse: 'text_template',
@@ -1819,6 +1841,19 @@ describe('updateOwnerPostForRoute', () => {
 
           expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [] } });
           expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes', 'creation-prompt']);
+        });
+
+        it('adds no prompt to a retired recipe people had, which a save takes up again', async () => {
+          const { result, written } = await save(
+            { resourceBundle: recipe('free', [noteItem]) },
+            {
+              generation: creation,
+              bundle: { ...storedRecipe({ sales_count: 1, free_unlock_count: 0 }), retired_at: '2026-10-30T00:00:00.000Z' },
+            },
+          );
+
+          expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [] } });
+          expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
         });
 
         it('adds the prompt to a recipe nobody has yet', async () => {

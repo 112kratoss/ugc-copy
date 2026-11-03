@@ -59,7 +59,9 @@ import {
 import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
   getMarketplaceRefusalFields,
+  getRecipeTitleRefusalBody,
   isCreatorProfileCheckError,
+  isDatabaseRecipeTitleRefusal,
 } from '@/lib/marketplace-trust';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
@@ -155,7 +157,6 @@ export type ShowcasePublishServiceDependencies = {
   planGenerationReferenceCopies: typeof planGenerationReferenceCopies;
   /** Their files, copied once every check has passed, right before the write. */
   copyPlannedGenerationReferences: typeof copyPlannedGenerationReferences;
-  /** The copies a refused write leaves behind, removed. */
   loadGenerationInputOrigins: typeof loadGenerationInputOrigins;
   validatePostResourceBundleInput: typeof validatePostResourceBundleInput;
   getMarketplaceQualityErrorForPostBundle: typeof getMarketplaceQualityErrorForPostBundle;
@@ -166,6 +167,8 @@ export type ShowcasePublishServiceDependencies = {
   listSourceToolsCatalog: typeof listSourceToolsCatalog;
   loadFrozenSoldGenerationBundleForQuality: typeof loadFrozenSoldGenerationBundleForQuality;
   loadExistingGenerationPostContent: typeof loadExistingGenerationPostContent;
+  /** Whether people have, or had, the recipe of the post the creation already has. */
+  loadGenerationRecipeHolders: typeof loadGenerationRecipeHolders;
   ensureGenerationPostCoverMedia: typeof ensureGenerationPostCoverMedia;
   /** Writes the post's Made with rows in place of any it had. */
   replacePostSourceTools: typeof replacePostSourceTools;
@@ -234,6 +237,7 @@ function resolveDependencies(
       dependencies?.loadFrozenSoldGenerationBundleForQuality ?? loadFrozenSoldGenerationBundleForQuality,
     loadExistingGenerationPostContent:
       dependencies?.loadExistingGenerationPostContent ?? loadExistingGenerationPostContent,
+    loadGenerationRecipeHolders: dependencies?.loadGenerationRecipeHolders ?? loadGenerationRecipeHolders,
     ensureGenerationPostCoverMedia:
       dependencies?.ensureGenerationPostCoverMedia ?? ensureGenerationPostCoverMedia,
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
@@ -375,6 +379,48 @@ async function loadFrozenSoldGenerationBundleForQuality({
       items: Array.isArray(bundle.resource_items) ? bundle.resource_items : [],
     } as NonNullable<PostResourceBundleInput['resources']>,
   };
+}
+
+/**
+ * Whether people have the recipe of the post this creation already has, paid
+ * or free, or had it: a recipe removed while people had it is retired, and
+ * its row keeps their count. A creation with no post yet has none. Such a
+ * recipe gains no exact prompt from a publish, as from an edit (#677's
+ * re-reviews): a publish writes over the creation's post as an edit does.
+ */
+async function loadGenerationRecipeHolders({
+  generationId,
+  ownerUserId,
+  supabase,
+}: {
+  generationId: string;
+  ownerUserId: string;
+  supabase: SupabaseClient;
+}): Promise<boolean> {
+  const { data: post, error: postError } = await supabase
+    .from('posts')
+    .select('id')
+    .eq('generation_id', generationId)
+    .eq('user_id', ownerUserId)
+    .maybeSingle();
+  if (postError) {
+    throw postError;
+  }
+  if (!post || typeof post.id !== 'string') {
+    return false;
+  }
+
+  const { data, error } = await supabase
+    .from('post_resource_bundles')
+    .select('sales_count, free_unlock_count')
+    .eq('post_id', post.id)
+    .eq('owner_user_id', ownerUserId)
+    .maybeSingle();
+  if (error) {
+    throw error;
+  }
+  const counts = data as { sales_count?: number | null; free_unlock_count?: number | null } | null;
+  return Boolean(counts) && ((counts?.sales_count ?? 0) + (counts?.free_unlock_count ?? 0)) > 0;
 }
 
 type ExistingGenerationPostContent = {
@@ -626,6 +672,23 @@ export async function publishGenerationToShowcaseForRoute({
     };
   }
 
+  // A recipe people have or had gains no exact prompt (#677's re-reviews): the
+  // creation's post may already sell one, which this publish writes over. A
+  // read that failed counts as held, since the composers send their own card.
+  let recipeHasHolders = false;
+  if (effectiveHasResourceBundlePayload && requestedAccessMode !== 'none') {
+    try {
+      recipeHasHolders = await resolvedDependencies.loadGenerationRecipeHolders({
+        generationId,
+        ownerUserId: userId,
+        supabase: adminSupabase,
+      });
+    } catch (error) {
+      logBackendError('failed_to_load_generation_recipe_holders', { error });
+      recipeHasHolders = true;
+    }
+  }
+
   // The recipe as it will be saved: the creation's exact prompt where it has
   // no prompt item of its own, and the saved inputs asked for, planned with no
   // byte moved yet, then validated as one (#677's review). The inputs are
@@ -638,8 +701,7 @@ export async function publishGenerationToShowcaseForRoute({
         creation: { id: generationId, prompt: generation.prompt ?? null },
         includeReferences: shouldIncludeGenerationReferences && requestedAccessMode !== 'none',
         mayShareCreation: creationMaySharePostInputs(generation),
-        // A publish makes the recipe, so the rule puts the prompt in.
-        addsCreationPrompt: true,
+        addsCreationPrompt: !recipeHasHolders,
         ...(inputOrigins
           ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin === 'others' ? [rowId] : []))) }
           : {}),
@@ -1034,6 +1096,12 @@ export async function publishGenerationToShowcaseForRoute({
 
     if (postError instanceof GenerationReferencesNotCopiedError) {
       return { ok: false, status: 500, body: { error: GENERATION_REFERENCES_NOT_COPIED_ERROR } };
+    }
+
+    // The database refused the recipe's title by its own count (#677's
+    // re-review): answered as the route's own check answers it.
+    if (isDatabaseRecipeTitleRefusal(postError)) {
+      return { ok: false, status: 400, body: getRecipeTitleRefusalBody() };
     }
 
     // The database performs this check while holding the bundle row lock, so a

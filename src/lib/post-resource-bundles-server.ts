@@ -98,6 +98,7 @@ import {
   CREATION_PROMPT_ITEM_TITLE,
   creationReferenceCopyPath,
   creationReferenceItemId,
+  isLockedCreationPromptItem,
   needsCreationPromptItem,
 } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import { slugifySourceTool } from '@/lib/source-tools';
@@ -681,6 +682,35 @@ export function mergeGenerationReferenceItemsIntoBundle(
  * creation, or a direct call are held to the rule here. A recipe that keeps a
  * prompt item of its own, however worded, keeps it alone.
  */
+/**
+ * The recipe without the exact prompt's locked item (its title and its text
+ * the creation's, `isLockedCreationPromptItem`), for a creation that gives its
+ * recipe nothing (#677's re-review): a composer that still sends the card for
+ * one an operator removed or its creator archived has it taken out, as Remix
+ * withholds that prompt too. A prompt the creator rewrote, or wrote under a
+ * title of their own, stays theirs. The same recipe when there is none.
+ */
+export function withoutLockedCreationPromptItem(
+  bundle: PostResourceBundleInput | null,
+  prompt: string | null | undefined,
+): PostResourceBundleInput | null {
+  const items = bundle?.resources?.items;
+  if (!bundle || !Array.isArray(items)) {
+    return bundle;
+  }
+  const kept = items.filter((item) => !(
+    item && typeof item === 'object' && isLockedCreationPromptItem(item, prompt)
+  ));
+  if (kept.length === items.length) {
+    return bundle;
+  }
+  // A recipe whose first item went keeps a first one.
+  const settled = kept.length > 0 && !kept.some((item) => item?.isPrimary)
+    ? kept.map((item, index) => (index === 0 ? { ...item, isPrimary: true } : item))
+    : kept;
+  return { ...bundle, resources: { ...bundle.resources, items: settled } };
+}
+
 export function withCreationPromptItem(
   bundle: PostResourceBundleInput | null,
   prompt: string | null | undefined,
@@ -1112,10 +1142,11 @@ export type CreationRecipeBundlePreparation =
  * operator's removal or its creator's archive (`creationMaySharePostInputs`):
  * nothing of it goes into the recipe, neither its exact prompt, which Remix
  * withholds from such a creation too, nor its saved inputs. Those asked for are
- * counted as refused. `addsCreationPrompt` is false for an edit of a recipe
- * people have (#677's re-review, decided there): an older composer sends the
- * recipe back on every save, so the prompt would reach them as a revision
- * nobody saw. A composer that shows the locked card sends it itself.
+ * counted as refused, and a locked card a composer sent for it is taken out.
+ * `addsCreationPrompt` is false for a recipe people have or had (#677's
+ * re-reviews, decided there): an older composer sends the recipe back on
+ * every save, so the prompt would reach them as a revision nobody saw. Such a
+ * recipe stays as sold, and its seller adds a prompt item as any other.
  */
 export async function prepareCreationRecipeBundle(params: {
   supabase: SupabaseClient;
@@ -1143,7 +1174,11 @@ export async function prepareCreationRecipeBundle(params: {
   let bundle = params.bundle;
 
   if (params.creation && bundle && bundle.accessMode !== 'none') {
-    if (params.mayShareCreation && params.addsCreationPrompt) {
+    if (!params.mayShareCreation) {
+      // Nothing of a creation off public view, a locked card a composer sent
+      // for it included (#677's re-review).
+      bundle = withoutLockedCreationPromptItem(bundle, params.creation.prompt);
+    } else if (params.addsCreationPrompt) {
       const withPrompt = withCreationPromptItem(bundle, params.creation.prompt);
       bundle = withPrompt.bundle;
       if (withPrompt.addedItem?.id) {

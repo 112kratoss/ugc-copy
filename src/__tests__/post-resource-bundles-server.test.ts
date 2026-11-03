@@ -3399,12 +3399,25 @@ describe('generation references packaged for a publish', () => {
     // #677's re-review: the exact prompt still went into the recipe of a
     // creation an operator removed or its creator archived, which Remix
     // withholds (`remix-access.ts`); only the inputs were held back.
-    it('adds nothing of a creation off public view, its exact prompt included', async () => {
+    // #677's re-reviews: a composer sent the locked card itself, and the server
+    // stored it as it came. It is taken out; a prompt the creator rewrote or
+    // titled as their own stays theirs.
+    it('adds nothing of a creation off public view, and takes out the locked card a composer sent', async () => {
       const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const lockedCard = {
+        ...note,
+        id: 'creation-prompt',
+        type: 'prompt' as const,
+        title: 'Exact generation prompt',
+        textContent: 'A product still lit like a window display.',
+        sortOrder: 1,
+        isPrimary: false,
+        remixUse: 'text_template' as const,
+      };
       const prepared = await prepareCreationRecipeBundle({
         supabase: {} as never,
         ownerUserId: 'user-1',
-        bundle: withNote,
+        bundle: { ...withNote, resources: { ...withNote.resources, items: [note, lockedCard] } },
         creation: { id: 'gen-1', prompt: 'A product still lit like a window display.' },
         includeReferences: true,
         mayShareCreation: false,
@@ -3415,6 +3428,21 @@ describe('generation references packaged for a publish', () => {
 
       expect(prepared).toMatchObject({ ok: true, addedItemIds: [], pendingCopies: [], refusedReferenceCount: 1 });
       expect(prepared.ok && prepared.bundle?.resources?.items).toEqual([note]);
+    });
+
+    it('keeps a prompt the creator rewrote or titled as their own, and a first item, when it takes the locked card out', async () => {
+      const { withoutLockedCreationPromptItem } = await import('@/lib/post-resource-bundles-server');
+      const prompt = 'A product still lit like a window display.';
+      const locked = { ...note, id: 'creation-prompt', type: 'prompt' as const, title: 'Exact generation prompt', textContent: prompt, isPrimary: true };
+      const rewritten = { ...locked, id: 'rewritten', textContent: 'My own wording', isPrimary: false };
+      const ownTitle = { ...locked, id: 'own-title', title: 'My prompt', isPrimary: false };
+      const recipe = { ...withNote, resources: { ...withNote.resources, items: [locked, rewritten, ownTitle] } };
+
+      expect(withoutLockedCreationPromptItem(recipe, prompt)?.resources?.items).toEqual([
+        { ...rewritten, isPrimary: true },
+        ownTitle,
+      ]);
+      expect(withoutLockedCreationPromptItem(withNote, prompt)).toBe(withNote);
     });
 
     // #677's re-review (decided there): an edit of a recipe people have never

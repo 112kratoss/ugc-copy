@@ -42,10 +42,12 @@ import {
   CREATION_PROMPT_CARD_ID,
   CREATION_PROMPT_ITEM_TITLE,
   countCreationInputsInRecipe,
+  creationMayShareRecipe,
   holdsCreationPrompt,
   isLockedCreationPromptItem,
   needsCreationPromptItem,
   recipeCopyableInputs,
+  withoutLockedCreationPrompt,
   type GenerationReference,
 } from '@/lib/creation-recipe/creation-recipe';
 
@@ -1002,7 +1004,40 @@ export function isLockedCreationPromptCard(
   card: PostComposerResourceCardDraft,
   generation: GenerationListItem | null | undefined,
 ): boolean {
-  return isLockedCreationPromptItem(card, generation?.prompt);
+  return isLockedCreationPromptItem(card, getCreationRecipePrompt(generation));
+}
+
+/**
+ * The creation's exact prompt as its recipe reads it: none for a template
+ * result, whose recipe stays protected, or for a creation an operator removed
+ * or its creator archived, which gives its recipe nothing (#677's re-reviews,
+ * `creationMayShareRecipe`, the rule the server and the web read).
+ */
+export function getCreationRecipePrompt(generation: GenerationListItem | null | undefined): string | null {
+  return generation && !isTemplateGeneration(generation) && creationMayShareRecipe(generation)
+    ? generation.prompt ?? null
+    : null;
+}
+
+/**
+ * The creation's prompt rule on the recipe the composer holds (#677's
+ * reviews): a creation an operator removed or its creator archived keeps no
+ * locked card of its prompt, one stored before included; any other creation's
+ * recipe left with no prompt card gets the locked one, unless `addsPrompt` is
+ * false, as for a recipe people have or had, which stays as sold. The same
+ * object when nothing changes.
+ */
+export function followCreationPromptRule(
+  resource: PostComposerResourceDraft,
+  generation: GenerationListItem | null | undefined,
+  options: { addsPrompt: boolean },
+): PostComposerResourceDraft {
+  if (!generation || isTemplateGeneration(generation)) return resource;
+  if (!creationMayShareRecipe(generation)) {
+    const kept = withoutLockedCreationPrompt(resource.cards, generation.prompt);
+    return kept.length === resource.cards.length ? resource : { ...resource, cards: kept };
+  }
+  return options.addsPrompt ? withCreationPromptCard(resource, generation.prompt) : resource;
 }
 
 /**
@@ -1017,9 +1052,10 @@ export function withCreationRecipeDefaults(
   draft: PostComposerDraft,
   generation: GenerationListItem,
 ): PostComposerDraft {
+  // A template result, a creation with no prompt and one off public view
+  // (`getCreationRecipePrompt`) start on No recipe.
   if (
-    isTemplateGeneration(generation)
-    || !generation.prompt?.trim()
+    !getCreationRecipePrompt(generation)?.trim()
     || draft.resource.accessMode !== 'none'
     || draft.resource.cards.length > 0
   ) {
@@ -1059,7 +1095,7 @@ export function withoutStandInCreationPrompt(
   generation: GenerationListItem | null | undefined,
 ): PostComposerDraft {
   const cards = draft.resource.cards;
-  const standIn = cards.find((card) => card.id === CREATION_PROMPT_CARD_ID && isLockedCreationPromptItem(card, generation?.prompt));
+  const standIn = cards.find((card) => card.id === CREATION_PROMPT_CARD_ID && isLockedCreationPromptItem(card, getCreationRecipePrompt(generation)));
   const keepsOwnPrompt = cards.some((card) => card !== standIn && card.type === 'prompt' && card.textContent.trim());
   if (!standIn || !keepsOwnPrompt) return draft;
   return { ...draft, resource: { ...draft.resource, cards: cards.filter((card) => card !== standIn) } };
@@ -1103,7 +1139,7 @@ export function hasCreationPromptCard(
   cards: PostComposerResourceCardDraft[] | null | undefined,
   generation: GenerationListItem | null | undefined,
 ): boolean {
-  return (cards ?? []).some((card) => holdsCreationPrompt(card, generation?.prompt));
+  return (cards ?? []).some((card) => holdsCreationPrompt(card, getCreationRecipePrompt(generation)));
 }
 
 /**
@@ -1920,7 +1956,7 @@ export function applyCreationPromptResource(
   draft: PostComposerDraft,
   selectedGeneration: GenerationListItem | null | undefined,
 ): PostComposerDraft {
-  const prompt = selectedGeneration?.prompt?.trim() ?? '';
+  const prompt = getCreationRecipePrompt(selectedGeneration)?.trim() ?? '';
   const withPrompt = withCreationPromptCard(draft.resource, prompt);
 
   // The Recipe preview is suggested from the items as for any other item

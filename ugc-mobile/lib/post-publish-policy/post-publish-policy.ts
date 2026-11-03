@@ -198,18 +198,29 @@ export const RECIPE_TITLE_TOO_SHORT_HINT = `A recipe needs a title of at least $
 export const RECIPE_TITLE_TOO_SHORT_REFUSAL = `${RECIPE_TITLE_TOO_SHORT_HINT} Make the title longer, or post without the recipe.`;
 
 /**
+ * A title's length as the database's `length()` counts it: in characters
+ * (code points), not the UTF-16 units `String.prototype.length` counts. An
+ * emoji is one character there and two here, so "Cat 🐱" passed both checks
+ * as six and the database refused it as five (#677's re-review).
+ */
+export function countTitleCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
+/**
  * Whether a post's title is shorter than its recipe needs: a Free or Paid
- * recipe and a title with something in it. An empty title is asked for on its
- * own, recipe or not, and a post saved without one is listed under "Recipe".
+ * recipe and a title with something in it, counted as the database counts it
+ * (`countTitleCharacters`). An empty title is asked for on its own, recipe or
+ * not, and a post saved without one is listed under "Recipe".
  */
 export function isTitleTooShortForRecipe(
   title: string | null | undefined,
   accessMode: string | null | undefined,
 ): boolean {
-  const trimmed = title?.trim() ?? '';
+  const length = countTitleCharacters(title?.trim() ?? '');
   return (accessMode === 'free' || accessMode === 'paid')
-    && trimmed.length > 0
-    && trimmed.length < RECIPE_TITLE_MIN_LENGTH;
+    && length > 0
+    && length < RECIPE_TITLE_MIN_LENGTH;
 }
 
 export type CreationTitleSuggestionInput = {

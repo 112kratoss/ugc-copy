@@ -138,7 +138,8 @@ import {
   getCreationInputsInRecipe,
   hasCreationPromptCard,
   isLockedCreationPromptCard,
-  withCreationPromptCard,
+  followCreationPromptRule,
+  getCreationRecipePrompt,
   withCreationRecipeDefaults,
   withoutStandInCreationPrompt,
   upsertOptimisticOwnerPostInfiniteData,
@@ -2240,6 +2241,10 @@ function NewPostComposer() {
   // People who have the loaded recipe. A recipe they have is edited like any other (recipe audit S2):
   // `hasPaidOrders`, which froze it, is always false from the server now and is not read.
   const recipeBuyerCount = postQuery.data?.post?.resourceBundleBuyerCount ?? 0;
+  // A recipe people have, or had before it was taken off, gains no exact prompt
+  // (#677's re-reviews): it opens as sold. Read from the buyer count where an
+  // older server sends no flag.
+  const recipeEverUnlocked = recipeBuyerCount > 0 || postQuery.data?.post?.resourceBundleEverUnlocked === true;
   const canSubmit = !isPickingMedia
     && !isPickingResourceFile
     // A publish racing draft-media recovery would submit a reclaimed path and
@@ -2298,29 +2303,30 @@ function NewPostComposer() {
   // with no prompt card of its own (the creator removed theirs) gets the
   // locked one back, by the rule the server holds every save to (#677's
   // review). Once the composer has its creation: before that, the new post's
-  // defaults and the edit's prefill put it where the composer starts.
-  const creationPrompt = selectedGeneration && !isTemplateGeneration(selectedGeneration) ? selectedGeneration.prompt : null;
+  // defaults and the edit's prefill put it where the composer starts. A
+  // recipe people have or had gets none, and a creation an operator removed
+  // or its creator archived keeps none (#677's re-reviews,
+  // `followCreationPromptRule`).
+  const creationPrompt = getCreationRecipePrompt(selectedGeneration);
   const hasComposerCreation = isEditMode ? hasPrefilledEdit : Boolean(selectedGeneration);
   useEffect(() => {
-    if (!hasComposerCreation || !needsCreationPromptItem(draft.resource.cards, creationPrompt)) return;
-    // An edit's card that comes after its starting point (the creation's read
+    if (!hasComposerCreation) return;
+    const rule = { addsPrompt: !recipeEverUnlocked };
+    const resource = followCreationPromptRule(draft.resource, selectedGeneration, rule);
+    if (resource === draft.resource) return;
+    // A change that comes after an edit's starting point (the creation's read
     // failed or waited as the edit opened, #677's re-review) is where an edit
     // nobody has touched since starts, as the web folds it into its saved
-    // state. Not in a recipe people have: there it is a change they would get,
-    // left unsaved for the seller to save or leave.
+    // state.
     if (
       isEditMode
-      && recipeBuyerCount === 0
       && initialDraftSignatureRef.current !== null
       && getPostComposerDraftSignature(draft) === initialDraftSignatureRef.current
     ) {
-      initialDraftSignatureRef.current = getPostComposerDraftSignature({
-        ...draft,
-        resource: withCreationPromptCard(draft.resource, creationPrompt),
-      });
+      initialDraftSignatureRef.current = getPostComposerDraftSignature({ ...draft, resource });
     }
-    setDraft((current) => ({ ...current, resource: withCreationPromptCard(current.resource, creationPrompt) }));
-  }, [creationPrompt, draft, hasComposerCreation, isEditMode, recipeBuyerCount]);
+    setDraft((current) => ({ ...current, resource: followCreationPromptRule(current.resource, selectedGeneration, rule) }));
+  }, [draft, hasComposerCreation, isEditMode, recipeEverUnlocked, selectedGeneration]);
 
   useEffect(() => {
     if (!generationId || !generationsQuery.isSuccess) return;
@@ -2345,7 +2351,11 @@ function NewPostComposer() {
       const postCreation = post.generationId
         ? generationsQuery.data?.generations.find((item) => item.id === post.generationId) ?? null
         : null;
-      const creationPrompt = postCreation && !isTemplateGeneration(postCreation) ? postCreation.prompt : null;
+      // A recipe people have or had gains no exact prompt, and a creation off
+      // public view keeps none (#677's re-reviews).
+      const creationPromptRule = {
+        addsPrompt: !((post.resourceBundleBuyerCount ?? 0) > 0 || post.resourceBundleEverUnlocked === true),
+      };
       const resourceBundleInput = post.resourceBundleInput;
       const mode = post.postFormat === 'text' ? 'text' : post.generationId ? 'creation' : 'upload';
       const hydratedResourceCards = resourceBundleInput
@@ -2403,11 +2413,10 @@ function NewPostComposer() {
         creationPackage: getDefaultCreationPackageDraft(),
         // One Recipe preview, starting from the summary listings showed first
         // (recipe audit S6). A creation's recipe has its exact prompt, as on
-        // the web; where the edit starts from, so it is no unsaved change,
-        // except in a recipe people have (#677's re-review): the card goes in
-        // after the starting point there, a change they would get, and the
-        // seller saves it or leaves it.
-        resource: withCreationPromptCard(resourceBundleInput ? foldRecipeSummaryIntoPreview({
+        // the web; where the edit starts from, so it is no unsaved change. A
+        // recipe people have or had opens as sold, and a creation off public
+        // view keeps no locked card (#677's re-reviews).
+        resource: followCreationPromptRule(resourceBundleInput ? foldRecipeSummaryIntoPreview({
           accessMode: resourceBundleInput.accessMode || 'none',
           cardAuthoringMode: 'cards',
           selectedKinds: deriveResourceSelections(resourceBundleInput),
@@ -2438,7 +2447,7 @@ function NewPostComposer() {
           // showed 100 tokens and saved 900 through the legacy-USD rule.
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
           priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : '900',
-        }) : getDefaultResourceDraft(), (post.resourceBundleBuyerCount ?? 0) > 0 ? null : creationPrompt),
+        }) : getDefaultResourceDraft(), postCreation, creationPromptRule),
       });
       setHasPrefilledEdit(true);
     }
@@ -3612,8 +3621,10 @@ function NewPostComposer() {
     if (isPickingResourceFile && editingResourceId === id) return;
     const taken = takeComposerResourceCard(draft, id);
     if (!taken) return;
-    // The creator's last prompt card: the creation's exact prompt takes its place.
-    promptReplacedByRemovalRef.current = needsCreationPromptItem(taken.draft.resource.cards, creationPrompt)
+    // The creator's last prompt card: the creation's exact prompt takes its
+    // place, except in a recipe people have or had, which gains none.
+    promptReplacedByRemovalRef.current = !recipeEverUnlocked
+      && needsCreationPromptItem(taken.draft.resource.cards, creationPrompt)
       && !needsCreationPromptItem(draft.resource.cards, creationPrompt)
       ? taken.removal
       : null;

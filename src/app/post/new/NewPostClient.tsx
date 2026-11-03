@@ -118,12 +118,14 @@ import {
   CREATION_PROMPT_INCLUDED_DETAIL,
   CREATION_PROMPT_ITEM_TITLE,
   countCreationInputsInRecipe,
+  creationMayShareRecipe,
   describeCreationInputsSwitch,
   describeUncopiedCreationInputs,
   holdsCreationPrompt,
   isLockedCreationPromptItem,
   needsCreationPromptItem,
   recipeCopyableInputs,
+  withoutLockedCreationPrompt,
   type CreationInputLike,
   type GenerationReference,
 } from '../../../../ugc-mobile/lib/creation-recipe/creation-recipe';
@@ -507,6 +509,11 @@ interface GenerationDraft {
    * (`recipeCopyable`), drawn and counted in "From this creation".
    */
   inputMedia: GenerationReference[];
+  /**
+   * Whether anything of the creation may go into its recipe: not once an
+   * operator removed it or its creator archived it (`creationMayShareRecipe`).
+   */
+  sharesRecipe: boolean;
   /**
    * Edit mode seeds a draft from the server-rendered post before the
    * generations fetch resolves. The paywall prefill must only conclude
@@ -1028,6 +1035,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           paywallPrefill: null,
           origin: null,
           inputMedia: [],
+          sharesRecipe: true,
           source: 'seed',
         }
       : null
@@ -1044,11 +1052,6 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const publishSectionRef = useRef<HTMLDivElement | null>(null);
   const savedPanelRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
-  // "Post without recipe" sends the form again once the recipe reads No
-  // recipe, and an edit's removal question it asked on the way is not asked
-  // twice (owner, 2026-11-03).
-  const resendWithoutRecipeRef = useRef(false);
-  const recipeRemovalAnsweredRef = useRef(false);
   const recipeTitleHintId = useId();
 
   // One object URL per picked file, kept until the file leaves the list. The
@@ -1147,7 +1150,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // has loaded, and never for a template result, whose recipe stays protected.
   const canOfferCreationResources = prefilledGeneration?.source === 'fetched'
     && prefilledGeneration.origin !== 'template';
-  const creationPrompt = canOfferCreationResources ? (prefilledGeneration?.prompt.trim() ?? '') : '';
+  // A creation an operator removed or its creator archived gives its recipe
+  // nothing, its exact prompt included (#677's re-reviews).
+  const creationSharesRecipe = prefilledGeneration?.sharesRecipe !== false;
+  const creationPrompt = canOfferCreationResources && creationSharesRecipe ? (prefilledGeneration?.prompt.trim() ?? '') : '';
   // The publish copies a creation's inputs into its recipe when asked, and an
   // edit's save does too (owner, 2026-11-03): the ones the server copies.
   const offeredCreationInputs = canOfferCreationResources ? prefilledGeneration?.inputMedia ?? [] : [];
@@ -1298,6 +1304,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // A recipe people have stays editable (D1, 2026-10-27): each save is a new
   // version, and they keep the one they got. The composer says how many.
   const recipeBuyerCount = Math.max(0, initialPost?.resourceBundleBuyerCount ?? 0);
+  // A recipe people have, or had before it was taken off: it gains no exact
+  // prompt (#677's re-reviews). Read from the buyer count where an older
+  // server sends no flag.
+  const recipeEverUnlocked = isEditMode && (recipeBuyerCount > 0 || initialPost?.resourceBundleEverUnlocked === true);
   // A creation post's recipe includes its Remix (S1); a template result has
   // no recipe at all.
   const recipeIncludesRemix = Boolean(generationId) && prefilledGeneration?.origin !== 'template';
@@ -1455,17 +1465,15 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // rule the server holds every save to (#677's review). A recipe that keeps a
   // prompt item of its own keeps it alone. Where the saved state lacks it too
   // (the composer's start), it goes there as well, the same card, so it is no
-  // unsaved work of its own; a removal of the creator's own prompt is. In an
-  // edit of a recipe people have it stays unsaved work (#677's re-review): the
-  // server adds nothing to such a recipe, so the card is a change they would
-  // get, shown here for the seller to save or leave.
-  const promptCardIsUnsavedWork = isEditMode && recipeBuyerCount > 0;
+  // unsaved work of its own; a removal of the creator's own prompt is. A
+  // recipe people have, or had, gets none (#677's re-reviews): it stays as
+  // sold and opens clean, and its seller adds a prompt item as any other.
   useEffect(() => {
+    if (recipeEverUnlocked) return;
     if (!needsCreationPromptItem(resourceCards, creationPrompt)) return;
     if ((isGeneratedPaywallIntent || isCreationPaywallManagementIntent) && !didApplyGenerationPaywallPrefill) return;
     const promptCard = createCreationPromptCard(creationPrompt);
     setResourceCards((cards) => (needsCreationPromptItem(cards, creationPrompt) ? [promptCard, ...cards] : cards));
-    if (promptCardIsUnsavedWork) return;
     setSavedSnapshot((saved) => (needsCreationPromptItem(saved.resourceCards, creationPrompt)
       ? { ...saved, resourceCards: [promptCard, ...saved.resourceCards] }
       : saved));
@@ -1474,9 +1482,25 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     didApplyGenerationPaywallPrefill,
     isCreationPaywallManagementIntent,
     isGeneratedPaywallIntent,
-    promptCardIsUnsavedWork,
+    recipeEverUnlocked,
     resourceCards,
   ]);
+
+  // A creation an operator removed or its creator archived keeps no locked
+  // card of its prompt either (#677's re-reviews): one stored before goes, in
+  // the saved state too, since the server takes it out of every save anyway.
+  const withheldCreationPrompt = canOfferCreationResources && !creationSharesRecipe
+    ? prefilledGeneration?.prompt ?? ''
+    : '';
+  useEffect(() => {
+    if (!withheldCreationPrompt.trim()) return;
+    if (!resourceCards.some((card) => isLockedCreationPromptItem(card, withheldCreationPrompt))) return;
+    setResourceCards((cards) => withoutLockedCreationPrompt(cards, withheldCreationPrompt));
+    setSavedSnapshot((saved) => ({
+      ...saved,
+      resourceCards: withoutLockedCreationPrompt(saved.resourceCards, withheldCreationPrompt),
+    }));
+  }, [resourceCards, withheldCreationPrompt]);
 
   useEffect(() => {
     if (
@@ -1573,6 +1597,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           paywallPrefill: readGenerationPaywallPrefill(generation.paywallPrefill),
           origin: generation.origin === 'template' ? 'template' : generation.origin === 'direct' ? 'direct' : null,
           inputMedia: creationInputs,
+          sharesRecipe: creationMayShareRecipe({
+            archived_at: typeof generation.archived_at === 'string' ? generation.archived_at : null,
+            moderation_removed_at: typeof generation.moderation_removed_at === 'string' ? generation.moderation_removed_at : null,
+          }),
           source: 'fetched',
         };
 
@@ -1593,7 +1621,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         startingModeDecidedForRef.current = nextGeneration.id;
         const startsOnNoRecipe = decidesStartingMode
           && !isEditMode
-          && (isTemplateResult || (!requestedResourceMode && !nextGeneration.prompt.trim()));
+          && (isTemplateResult || (!requestedResourceMode && (!nextGeneration.prompt.trim() || !nextGeneration.sharesRecipe)));
         const toStartingMode = (mode: PostResourceBundleAccessMode): PostResourceBundleAccessMode => (
           isTemplateResult || mode === 'free' ? 'none' : mode
         );
@@ -2656,37 +2684,43 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // who have it keep their copy; Keep recipe leaves everything as it was, the
   // refusal included.
   const postWithoutRecipe = async () => {
-    if (isEditMode && storedRecipe.accessMode !== 'none') {
+    if (isSubmitting) {
+      return;
+    }
+    const asksRemoval = isEditMode && storedRecipe.accessMode !== 'none';
+    if (asksRemoval) {
       const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix));
       if (!removes) {
         return;
       }
-      recipeRemovalAnsweredRef.current = true;
     }
-    resendWithoutRecipeRef.current = true;
     changeResourceAccessMode('none');
+    await submitComposer({ withoutRecipe: true, removalAnswered: asksRemoval });
   };
 
-  useEffect(() => {
-    if (!resendWithoutRecipeRef.current || resourceAccessMode !== 'none') {
-      return;
-    }
-    resendWithoutRecipeRef.current = false;
-    formRef.current?.requestSubmit();
-  }, [resourceAccessMode]);
-
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    void submitComposer();
+  };
+
+  /**
+   * The publish or the save. "Post without recipe" sends it with No recipe
+   * whatever the cards show (#677's re-reviews: it waited for the mode to
+   * change, and did nothing when it already read No recipe), having asked the
+   * removal question itself where one applies.
+   */
+  const submitComposer = async ({ withoutRecipe = false, removalAnswered = false }: {
+    withoutRecipe?: boolean;
+    removalAnswered?: boolean;
+  } = {}) => {
     setError(null);
     setCreatedPost(null);
-    // Answered by "Post without recipe" for this submit alone.
-    const recipeRemovalAnswered = recipeRemovalAnsweredRef.current;
-    recipeRemovalAnsweredRef.current = false;
+    const accessModeForSubmit: PostResourceBundleAccessMode = withoutRecipe ? 'none' : resourceAccessMode;
 
     const effectiveVisibility = submitVisibilityRef.current;
     trackProductEvent(isEditMode ? 'post_update_attempt' : 'post_publish_attempt', {
       visibility: effectiveVisibility,
-      recipe_access: resourceAccessMode,
+      recipe_access: accessModeForSubmit,
       proof_mode: proofMode,
       entry_surface: entrySurface ?? 'direct',
     });
@@ -2753,7 +2787,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     let resourceBundle: PostResourceBundleInput | undefined;
     // Every recipe is checked and sent, one people have bought included (D1):
     // its edits are a new version, and they keep the one they got.
-    if (resourceAccessMode !== 'none') {
+    if (accessModeForSubmit !== 'none') {
       // At least one item (S1): Remix is no item, and a creation's saved
       // inputs ticked above are one (A-F9).
       if (!hasResourceContent && !includesCreationReferences) {
@@ -2762,7 +2796,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       }
 
       if (
-        resourceAccessMode === 'paid'
+        accessModeForSubmit === 'paid'
         && (
           !Number.isFinite(parsedResourcePriceTokens)
           || parsedResourcePriceTokens < POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS
@@ -2826,7 +2860,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
 
     // H2 (2026-10-27): an edit's save that takes the recipe off deletes it and
     // its files (or retires it, when people have it), so it asks first.
-    if (isEditMode && storedRecipe.accessMode !== 'none' && resourceAccessMode === 'none' && !recipeRemovalAnswered) {
+    if (isEditMode && storedRecipe.accessMode !== 'none' && accessModeForSubmit === 'none' && !removalAnswered) {
       const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix));
       if (!removes) {
         return;
@@ -2913,7 +2947,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
           resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
           visibility: data.visibility as PostVisibility,
-          resourceAccessMode,
+          resourceAccessMode: accessModeForSubmit,
           resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
             ? data.resourceBundleStatus
             : null,
@@ -3009,7 +3043,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
           resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
           visibility: data.visibility as PostVisibility,
-          resourceAccessMode,
+          resourceAccessMode: accessModeForSubmit,
           resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
             ? data.resourceBundleStatus
             : null,
@@ -3076,7 +3110,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
         resourceBundlePath: (data.resourceBundlePath as string | null) ?? null,
         visibility: data.visibility as PostVisibility,
-        resourceAccessMode,
+        resourceAccessMode: accessModeForSubmit,
         resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
           ? data.resourceBundleStatus
           : null,
@@ -3088,7 +3122,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       const recovery = submitError instanceof ComposerSubmissionError ? submitError.recovery : undefined;
       trackProductEvent(isEditMode ? 'post_update_failed' : 'post_publish_failed', {
         visibility: effectiveVisibility,
-        recipe_access: resourceAccessMode,
+        recipe_access: accessModeForSubmit,
         error_section: section,
       });
       setError({
@@ -4021,6 +4055,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 ) : (
                   <RecipeAccessCards
                     value={resourceAccessMode}
+                    // A choice made while a save is on its way changed what the
+                    // page shows, not what was sent (#677's re-reviews).
+                    disabled={isSubmitting}
                     onChange={(nextMode) => {
                       changeResourceAccessMode(nextMode);
                       // A focus request from Studio is for the mode the page

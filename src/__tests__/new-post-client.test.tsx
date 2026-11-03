@@ -5697,31 +5697,108 @@ describe('NewPostClient', () => {
       ]);
     });
 
-    // #677's re-review (decided there): the server adds nothing to a recipe
-    // people have, so the card the composer adds is a change they would get,
-    // shown and left unsaved until the seller saves it.
-    it('keeps the exact prompt it adds to a recipe people have as unsaved work', async () => {
-      enqueueCreation({ input_media: [] });
-      render(<NewPostClient initialPost={{
-        ...createGenerationRecipePost(),
-        generationId: 'gen-recipe-1',
-        resourceBundleBuyerCount: 2,
-        resourceBundle: {
-          accessMode: 'free',
-          previewText: 'Lighting notes for this still.',
-          resources: {
-            items: [{
-              id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting',
-              textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none',
-            }],
-          },
-        } as EditablePostDraft['resourceBundle'],
-      }} />);
+    // #677's re-reviews (decided there): a recipe people have, or had, is
+    // never given the exact prompt by either composer or the server. It opens
+    // as sold, clean, and its seller adds a prompt item as any other.
+    describe('a recipe people have or had', () => {
+      const notesOnly = {
+        accessMode: 'free',
+        previewText: 'Lighting notes for this still.',
+        resources: {
+          items: [{
+            id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting',
+            textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none',
+          }],
+        },
+      } as EditablePostDraft['resourceBundle'];
+      const opensClean = () => {
+        const unload = new Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(unload);
+        return !unload.defaultPrevented;
+      };
 
-      await waitFor(() => expect(screen.getByText('Exact generation prompt')).toBeInTheDocument());
-      const unload = new Event('beforeunload', { cancelable: true });
-      window.dispatchEvent(unload);
-      expect(unload.defaultPrevented).toBe(true);
+      it('opens a recipe people have as sold, with no exact prompt added and nothing unsaved', async () => {
+        enqueueCreation({ input_media: [] });
+        render(<NewPostClient initialPost={{
+          ...createGenerationRecipePost(),
+          generationId: 'gen-recipe-1',
+          resourceBundleBuyerCount: 2,
+          resourceBundleEverUnlocked: true,
+          resourceBundle: notesOnly,
+        }} />);
+
+        await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
+        await waitFor(() => expect(screen.getByText('Lighting')).toBeInTheDocument());
+        expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
+        expect(opensClean()).toBe(true);
+      });
+
+      it('adds no exact prompt when a retired recipe people had is chosen again', async () => {
+        enqueueCreation({ input_media: [] });
+        render(<NewPostClient initialPost={{
+          ...createGenerationRecipePost(),
+          generationId: 'gen-recipe-1',
+          resourceBundleBuyerCount: 0,
+          resourceBundleEverUnlocked: true,
+          resourceBundle: { accessMode: 'none' } as EditablePostDraft['resourceBundle'],
+        }} />);
+
+        await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
+        fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+        expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /add your first item/i })).toBeInTheDocument();
+      });
+    });
+
+    // #677's re-reviews: the composer put the exact prompt of a creation an
+    // operator removed or its creator archived into the recipe, which the
+    // server then stored as sent. It neither adds nor keeps that card.
+    describe('a creation off public view', () => {
+      it('starts a new post from it with no exact prompt and no recipe', async () => {
+        searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+        enqueueCreation({ input_media: [], archived_at: '2026-11-02T00:00:00.000Z' });
+        render(<NewPostClient />);
+
+        await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still'));
+        expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+        fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+        expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
+      });
+
+      it('takes the stored locked card out of an edit of its post, and counts nothing as unsaved', async () => {
+        enqueueCreation({
+          input_media: [],
+          moderation_removed_at: '2026-11-02T00:00:00.000Z',
+          archived_at: '2026-11-02T00:00:00.000Z',
+        });
+        render(<NewPostClient initialPost={{
+          ...createGenerationRecipePost(),
+          generationId: 'gen-recipe-1',
+          resourceBundle: {
+            accessMode: 'free',
+            previewText: 'Lighting notes for this still.',
+            resources: {
+              items: [
+                {
+                  id: 'creation-prompt', type: 'prompt', role: 'primary', sectionId: null, title: 'Exact generation prompt',
+                  textContent: 'A product still lit like a window display.', sortOrder: 0, isPrimary: true, remixUse: 'text_template',
+                },
+                {
+                  id: 'notes', type: 'note', role: 'supporting', sectionId: null, title: 'Lighting',
+                  textContent: 'Key light at 45 degrees.', sortOrder: 1, isPrimary: false, remixUse: 'none',
+                },
+              ],
+            },
+          } as EditablePostDraft['resourceBundle'],
+        }} />);
+
+        expect(screen.getByText('Exact generation prompt')).toBeInTheDocument();
+        await waitFor(() => expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument());
+        expect(screen.getByText('Lighting')).toBeInTheDocument();
+        const unload = new Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(unload);
+        expect(unload.defaultPrevented).toBe(false);
+      });
     });
 
     // The inputs used to be offered on a new post only, so a recipe added
@@ -6106,6 +6183,50 @@ describe('NewPostClient', () => {
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
         const payload = JSON.parse(String((putCalls()[0][1] as { body: string }).body));
         expect(payload).toMatchObject({ title: 'Cat', resourceBundle: { accessMode: 'none' } });
+      });
+
+      // #677's re-reviews: the one-tap waited for the recipe's mode to change,
+      // and so did nothing where it read No recipe already.
+      it('sends the post at once with No recipe, whatever the cards read', async () => {
+        const refusal = mobileApiContract.endpoints.createPost.errors.recipeTitleTooShort;
+        const postCalls = () => fetchMock.mock.calls.filter(([url, init]) => String(url) === '/api/posts' && init?.method === 'POST');
+        enqueueResponse({ ok: false, status: refusal.status, json: async () => refusal.response });
+        enqueueResponse({
+          ok: true,
+          json: async () => ({ success: true, postId: 'post-text', visibility: 'public', showcasePath: '/showcase/post-text' }),
+        });
+        render(<NewPostClient />);
+        fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
+        fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
+          target: { value: 'A note that stands on its own for the community.' },
+        });
+        fillRequiredTitle();
+        expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+        const alert = await refusalAlert();
+        fireEvent.click(within(alert).getByRole('button', { name: 'Post without recipe' }));
+        await waitFor(() => expect(postCalls()).toHaveLength(2));
+        const sent = (postCalls()[1][1] as { body: FormData }).body;
+        expect(JSON.parse(String(sent.get('resourceBundle')))).toEqual({ accessMode: 'none' });
+      });
+
+      // #677's re-reviews: a choice made while the save was on its way changed
+      // what the page showed, not what was sent.
+      it('holds the recipe cards still while a save is on its way', async () => {
+        let finishPublish: (value: unknown) => void = () => {};
+        await openCreation();
+        enqueueResponse({ ok: true, json: () => new Promise((resolve) => { finishPublish = resolve; }) });
+        render(<NewPostClient />);
+        await titleField();
+        expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeEnabled();
+
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+        await waitFor(() => expect(publishCalls()).toHaveLength(1));
+        for (const name of [/free recipe/i, /paid recipe/i, /no recipe/i]) {
+          expect(screen.getByRole('radio', { name })).toBeDisabled();
+        }
+        await act(async () => finishPublish(PUBLISHED));
       });
     });
   });

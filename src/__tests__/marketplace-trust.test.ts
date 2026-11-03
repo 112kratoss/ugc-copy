@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import publicPostQuality from '../../contracts/public-post-quality-v1.json';
 import {
+  countTitleCharacters,
   DECISIVE_PLACEHOLDER_WORDS,
   isTitleTooShortForRecipe,
   PLACEHOLDER_FILLER_WORDS,
@@ -20,6 +21,7 @@ import {
   getMarketplaceQualityError,
   getMarketplaceRefusalFields,
   getPublicPostQualityError,
+  isDatabaseRecipeTitleRefusal,
   RECIPE_TITLE_TOO_SHORT_CODE,
   RECIPE_TITLE_TOO_SHORT_REFUSAL,
 } from '@/lib/marketplace-trust';
@@ -158,6 +160,30 @@ describe('the title a recipe needs', () => {
     // saved without one under "Recipe".
     expect(isTitleTooShortForRecipe('', 'free')).toBe(false);
     expect(isTitleTooShortForRecipe(null, 'free')).toBe(false);
+  });
+
+  // #677's re-review: "Cat 🐱" is six UTF-16 units and five characters. Both
+  // checks counted six and let it through, and the database, counting
+  // characters, refused it with a 500.
+  it('counts a title in characters, as the database does, in both checks', () => {
+    expect(countTitleCharacters('Cat 🐱')).toBe(5);
+    expect('Cat 🐱'.length).toBe(6);
+    expect(isTitleTooShortForRecipe('Cat 🐱', 'free')).toBe(true);
+    expect(getMarketplaceQualityError(listing('Cat 🐱'))).toBe(RECIPE_TITLE_TOO_SHORT_REFUSAL);
+    expect(isTitleTooShortForRecipe('Cats 🐱', 'free')).toBe(false);
+    expect(getMarketplaceQualityError(listing('Cats 🐱'))).toBeNull();
+  });
+
+  it('knows the database’s refusal of the same rule, and only that one', () => {
+    const raised = (message: string) => ({ code: 'P0001', message });
+    expect(isDatabaseRecipeTitleRefusal(raised(
+      'Improve this unlock before publishing: Add a clear listing title with at least 6 characters.',
+    ))).toBe(true);
+    expect(isDatabaseRecipeTitleRefusal(raised(
+      'Improve this unlock before publishing: Add a useful preview or summary that tells buyers what they will unlock.',
+    ))).toBe(false);
+    expect(isDatabaseRecipeTitleRefusal(new Error('socket hang up'))).toBe(false);
+    expect(isDatabaseRecipeTitleRefusal(null)).toBe(false);
   });
 
   it('holds the database’s listing rule to the same minimum', () => {

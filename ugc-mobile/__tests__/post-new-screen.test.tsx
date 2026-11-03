@@ -2890,10 +2890,10 @@ describe('mobile external post composer', () => {
       expect(gestureEnabled(tree)).toBe(true);
     });
 
-    // #677's re-review (decided there): the server adds nothing to a recipe
-    // people have, so the card the composer adds is a change they would get,
-    // shown and left unsaved until the seller saves it.
-    it('keeps the exact prompt it adds to a recipe people have as an unsaved change', async () => {
+    // #677's re-reviews (decided there): a recipe people have, or had, is
+    // never given the exact prompt by either composer or the server. It opens
+    // as sold, clean, and its seller adds a prompt item as any other.
+    it('opens a recipe people have as sold, with no exact prompt added and nothing unsaved', async () => {
       paramsState.params = { postId: 'post-from-creation' };
       postEditState.post = {
         ...creationPost({
@@ -2904,12 +2904,73 @@ describe('mobile external post composer', () => {
           },
         }),
         resourceBundleBuyerCount: 2,
+        resourceBundleEverUnlocked: true,
       };
       const tree = await renderScreen();
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
 
-      expect(collectText(tree.root)).toContain('Exact generation prompt');
-      expect(gestureEnabled(tree)).toBe(false);
+      expect(collectText(tree.root)).toContain('Lighting guide');
+      expect(collectText(tree.root)).not.toContain('Exact generation prompt');
+      expect(gestureEnabled(tree)).toBe(true);
+    });
+
+    it('adds no exact prompt when a retired recipe people had is chosen again', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = {
+        ...creationPost({ accessMode: 'none' }),
+        resourceBundleBuyerCount: 0,
+        resourceBundleEverUnlocked: true,
+      };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      const free = tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio' && collectText(node)[0] === 'Free recipe'
+      ))[0];
+      renderer.act(() => free.props.onPress());
+
+      expect(collectText(tree.root)).not.toContain('Exact generation prompt');
+      expect(collectText(tree.root)).toContain('Add your first item');
+    });
+
+    // #677's re-reviews: the composer put the exact prompt of a creation an
+    // operator removed or its creator archived into the recipe, which the
+    // server then stored as sent. It neither adds nor keeps that card.
+    it('starts a new post of a creation off public view on No recipe, with no exact prompt', async () => {
+      generationState.item = { ...generationItem, archived_at: '2026-11-02T00:00:00.000Z' };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+      const choice = (label: string) => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio' && collectText(node)[0] === label
+      ))[0];
+
+      expect(choice('No recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+      renderer.act(() => choice('Free recipe').props.onPress());
+      expect(collectText(tree.root)).not.toContain('Exact generation prompt');
+    });
+
+    it('takes the stored locked card out of an edit of a removed creation’s post, and counts nothing as unsaved', async () => {
+      generationState.item = {
+        ...generationItem,
+        moderation_removed_at: '2026-11-02T00:00:00.000Z',
+        archived_at: '2026-11-02T00:00:00.000Z',
+      };
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost({
+        accessMode: 'free',
+        previewText: 'A lighting guide for glossy product shots.',
+        resources: {
+          items: [
+            { id: 'creation-prompt', type: 'prompt', title: 'Exact generation prompt', textContent: 'Exact glossy product prompt', sortOrder: 0 },
+            { id: 'guide', type: 'note', title: 'Lighting guide', textContent: 'Key light at 45 degrees.', sortOrder: 1 },
+          ],
+        },
+      });
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(collectText(tree.root)).toContain('Lighting guide');
+      expect(collectText(tree.root)).not.toContain('Exact generation prompt');
+      expect(gestureEnabled(tree)).toBe(true);
     });
 
     // #677's re-review: a creation read that failed as the edit opened, and

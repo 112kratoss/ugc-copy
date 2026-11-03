@@ -50,6 +50,8 @@ import {
   getRecipeTitleHint,
   isRecipeTitleTooShortRefusal,
   isRecipeTitleTooShortToPublish,
+  followCreationPromptRule,
+  getCreationRecipePrompt,
   type PostComposerDraft,
 } from '../lib/post-new-view-model';
 import { ApiError } from '../lib/api-client';
@@ -681,6 +683,32 @@ describe('post new view model', () => {
       // Switched off, the same empty recipe is No recipe, which the save asks about first.
       expect(buildUpdatePostPayload(true, { ...draft, creationPackage: { attachGenerationReferences: false } }, creation()).resourceBundle)
         .toEqual({ accessMode: 'none' });
+    });
+
+    // #677's re-reviews: a creation an operator removed or its creator archived
+    // gives its recipe nothing, and a recipe people have or had gains no exact
+    // prompt, by the rule the server and the web read too.
+    it('neither adds nor keeps the exact prompt of a creation off public view, and adds none to a held recipe', () => {
+      const lockedCard = withCreationPromptCard(getDefaultPostComposerDraft().resource, 'Make a glossy product photo').cards[0];
+      const ownPrompt = createPostComposerResourceCard('prompt', { title: 'My prompt', textContent: 'Make a glossy product photo' });
+      const withCards = (cards: PostComposerDraft['resource']['cards']) => recipeDraft(cards).resource;
+      const offView = creation({ archived_at: '2026-11-02T00:00:00.000Z' });
+      const removed = creation({ moderation_removed_at: '2026-11-02T00:00:00.000Z', archived_at: '2026-11-02T00:00:00.000Z' });
+
+      expect(getCreationRecipePrompt(creation())).toBe('Make a glossy product photo');
+      expect(getCreationRecipePrompt(offView)).toBeNull();
+      expect(getCreationRecipePrompt(removed)).toBeNull();
+      expect(followCreationPromptRule(withCards([lockedCard, ownPrompt]), removed, { addsPrompt: true }).cards).toEqual([ownPrompt]);
+      expect(followCreationPromptRule(withCards([]), offView, { addsPrompt: true }).cards).toEqual([]);
+      expect(isLockedCreationPromptCard(lockedCard, offView)).toBe(false);
+
+      const held = withCards([]);
+      expect(followCreationPromptRule(held, creation(), { addsPrompt: false })).toBe(held);
+      expect(followCreationPromptRule(held, creation(), { addsPrompt: true }).cards.map((card) => card.id)).toEqual(['creation-prompt']);
+
+      // A new post of such a creation starts on No recipe, as one with no prompt.
+      const opened = { ...getDefaultPostComposerDraft(), mode: 'creation' as const, proofMode: 'media' as const, selectedGenerationId: 'gen-1' };
+      expect(withCreationRecipeDefaults(opened, offView).resource).toMatchObject({ accessMode: 'none', cards: [] });
     });
 
     // #677's review: the default prompt card took a random id on every open, so

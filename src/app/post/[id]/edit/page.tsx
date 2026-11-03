@@ -36,6 +36,7 @@ function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwne
     resourceBundle: post.resourceBundleInput,
     hasPaidOrders: post.hasPaidOrders,
     resourceBundleBuyerCount: post.resourceBundleBuyerCount ?? 0,
+    resourceBundleEverUnlocked: post.resourceBundleEverUnlocked === true,
   };
 }
 

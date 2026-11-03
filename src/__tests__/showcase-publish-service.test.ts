@@ -2416,7 +2416,12 @@ describe('a creation’s recipe as the publish saves it', () => {
     source: { bucket: 'generation_inputs', filePath: 'user-1/gen-recipe/product.png' },
   };
 
-  async function publish(body: Record<string, unknown>, overrides: Partial<ShowcasePublishServiceDependencies> = {}, generationOverrides: Record<string, unknown> = {}) {
+  async function publish(
+    body: Record<string, unknown>,
+    overrides: Partial<ShowcasePublishServiceDependencies> = {},
+    generationOverrides: Record<string, unknown> = {},
+    adminOptions: Parameters<typeof createAdminClientMock>[2] = {},
+  ) {
     const order: string[] = [];
     const dependencies = {
       ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
@@ -2449,7 +2454,7 @@ describe('a creation’s recipe as the publish saves it', () => {
       requestPostEmbedding: vi.fn(async () => undefined),
       ...overrides,
     } satisfies Partial<ShowcasePublishServiceDependencies>;
-    const adminClient = createAdminClientMock({ ...generation, ...generationOverrides });
+    const adminClient = createAdminClientMock({ ...generation, ...generationOverrides }, null, adminOptions);
     const result = await publishGenerationToShowcaseForRoute({
       adminSupabase: adminClient.client,
       body: { generationId: 'gen-recipe', visibility: 'private', title: 'Window display still', ...body },
@@ -2524,11 +2529,16 @@ describe('a creation’s recipe as the publish saves it', () => {
       .toEqual(Object.keys((result.ok && result.body.recipeItemsAdded?.[1]) || {}).sort());
   });
 
-  // #677's re-review: the inputs were held back, but the exact prompt, which
-  // Remix withholds from such a creation, still went in.
-  it('adds nothing of a creation an operator removed, its exact prompt included, and says so', async () => {
+  // #677's re-reviews: the inputs were held back, but the exact prompt, which
+  // Remix withholds from such a creation, still went in, added by the server
+  // or sent as the composer's locked card.
+  it('adds nothing of a creation an operator removed, takes out the locked card sent for it, and says so', async () => {
+    const lockedCard = {
+      id: 'creation-prompt', type: 'prompt', role: 'primary', sectionId: null, title: 'Exact generation prompt',
+      textContent: 'A product still lit like a window display.', sortOrder: 1, isPrimary: false, remixUse: 'text_template',
+    };
     const { result, dependencies, written } = await publish(
-      { includeGenerationReferences: true, resourceBundle: recipe([note]) },
+      { includeGenerationReferences: true, resourceBundle: recipe([note, lockedCard]) },
       {},
       { moderation_removed_at: '2026-11-02T00:00:00.000Z', archived_at: '2026-11-02T00:00:00.000Z' },
     );
@@ -2536,6 +2546,50 @@ describe('a creation’s recipe as the publish saves it', () => {
     expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [], referencesNotCopied: 1 } });
     expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
     expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
+  });
+
+  // #677's re-reviews: a publish writes over the creation's post as an edit
+  // does, so a recipe people have or had gains no exact prompt from it either.
+  it('adds no prompt where the creation’s post has a recipe people have or had, and one where nobody has', async () => {
+    const held = await publish(
+      { resourceBundle: recipe([note]) },
+      {},
+      {},
+      // Retired while people had it: the row keeps their count.
+      { storedPost: { id: 'post-recipe' }, storedBundle: { sales_count: 0, free_unlock_count: 2, retired_at: '2026-10-30T00:00:00.000Z' } },
+    );
+    expect(held.result).toMatchObject({ ok: true, body: { recipeItemsAdded: [] } });
+    expect((held.written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
+
+    const unread = await publish(
+      { resourceBundle: recipe([note]) },
+      { loadGenerationRecipeHolders: vi.fn(async () => { throw new Error('connection reset'); }) },
+    );
+    expect((unread.written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
+
+    const nobody = await publish(
+      { resourceBundle: recipe([note]) },
+      {},
+      {},
+      { storedPost: { id: 'post-recipe' }, storedBundle: { sales_count: 0, free_unlock_count: 0 } },
+    );
+    expect((nobody.written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes', 'creation-prompt-item']);
+  });
+
+  // #677's re-review: the database counts a title in characters, and refused
+  // one the route's count had let through ("Cat 🐱") with a 500.
+  it('answers the database’s refusal of the title as its own, with the code the composers offer Post without recipe on', async () => {
+    const refusal = mobileApiContract.endpoints.publishGeneration.errors.recipeTitleTooShort;
+    const { result } = await publish(
+      { includeGenerationReferences: true, resourceBundle: recipe([note]) },
+      {
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => {
+          throw { code: 'P0001', message: 'Improve this unlock before publishing: Add a clear listing title with at least 6 characters.' };
+        }),
+      },
+    );
+
+    expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
   });
 });
 
