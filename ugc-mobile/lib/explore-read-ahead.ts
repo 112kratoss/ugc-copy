@@ -28,6 +28,16 @@ import type { ShowcaseFeedReadAheadResponse, ShowcaseFeedResponse } from './type
 // (`readAheadSupported` on its For you pages, which Home's lane reads first):
 // one without the mode would answer `readAhead=1` with an ordinary page, served
 // to nobody.
+//
+// At most one read-ahead per identity per launch, whatever comes of it: a
+// ranking, nothing to hold, a failure, or a token that runs out unused. Each
+// one is a whole ranking on the server, and Home settling again (a refetch, a
+// return to the tab) must not buy another. An identity that arrives later in
+// the launch (a sign-in, a sign-out to a guest) may have its own.
+//
+// Guests included, on purpose: a new person is still a guest when they first
+// open Explore, which makes them the ones who meet its skeleton first, and the
+// once-per-launch limit keeps what they cost the same as anyone's.
 
 /** Explore's own lane as it first opens: All, For you, media. */
 export const EXPLORE_READ_AHEAD_FILTERS: ShowcaseFeedFilters = { category: 'media' };
@@ -37,8 +47,6 @@ export const EXPLORE_READ_AHEAD_DELAY_MS = 1_500;
 export const EXPLORE_READ_AHEAD_MAX_AGE_MS = 100_000;
 /** How long Explore waits on a read-ahead still under way before reading the page itself. */
 export const EXPLORE_READ_AHEAD_WAIT_MS = 4_000;
-/** A read-ahead that failed is not asked for again before this. */
-export const EXPLORE_READ_AHEAD_RETRY_MS = 60_000;
 
 type HeldToken = { token: string; expiresAt: number };
 
@@ -50,7 +58,8 @@ type ExploreLaneData = InfiniteData<ShowcaseFeedResponse, ShowcaseFeedPageParam>
 
 let serverHoldsReadAheads = false;
 let entry: Entry | null = null;
-let lastFailedAt = Number.NEGATIVE_INFINITY;
+/** The identities this launch has read ahead for: one each, never a second. */
+const readAheadIdentities = new Set<string>();
 
 function laneOf(filters: ShowcaseFeedFilters | undefined) {
   return JSON.stringify(createShowcaseFeedQueryKey(filters, null).at(-1));
@@ -98,11 +107,11 @@ export function startExploreReadAhead({
   now?: () => number;
 }): boolean {
   const identity = identityUserId?.trim();
-  // The server holds one only for an identity it can rank for (a guest's too).
+  // The server holds one for any identity with a bearer token, a guest's
+  // included (see the note at the top), and for no device without one.
   if (!serverHoldsReadAheads || !identity) return false;
+  if (readAheadIdentities.has(identity)) return false;
   const startedAt = now();
-  if (startedAt - lastFailedAt < EXPLORE_READ_AHEAD_RETRY_MS) return false;
-  if (entry?.identity === identity && (entry.state === 'pending' || entry.expiresAt > startedAt)) return false;
   const laneKey = createShowcaseFeedQueryKey(EXPLORE_READ_AHEAD_FILTERS, identity);
   const lane = queryClient.getQueryState(laneKey);
   // Explore has its page, or is reading it now.
@@ -133,10 +142,10 @@ export function startExploreReadAhead({
     if (entry?.state === 'pending' && entry.request === request) entry = null;
     return null;
   }, () => {
-    lastFailedAt = now();
     if (entry?.state === 'pending' && entry.request === request) entry = null;
     return null;
   });
+  readAheadIdentities.add(identity);
   entry = { identity, state: 'pending', request };
   return true;
 }
@@ -220,5 +229,5 @@ export function clearExploreReadAhead() {
 export function resetExploreReadAheadForTests() {
   serverHoldsReadAheads = false;
   entry = null;
-  lastFailedAt = Number.NEGATIVE_INFINITY;
+  readAheadIdentities.clear();
 }

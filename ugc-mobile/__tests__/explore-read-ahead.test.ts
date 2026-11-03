@@ -5,7 +5,6 @@ import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   EXPLORE_READ_AHEAD_FILTERS,
   EXPLORE_READ_AHEAD_MAX_AGE_MS,
-  EXPLORE_READ_AHEAD_RETRY_MS,
   EXPLORE_READ_AHEAD_WAIT_MS,
   noteShowcaseFeedReadAheadSupport,
   resetExploreReadAheadForTests,
@@ -149,20 +148,34 @@ describe("Explore's read-ahead", () => {
     await expect(stuck).resolves.toBeNull();
   });
 
-  it('holds nothing when there was nothing to hold, and backs off after a failure', async () => {
+  it.each([
+    ['a ranking it held and Explore never claimed', async () => heldAnswer()],
+    ['nothing to hold', async () => ({ readAhead: null })],
+    ['a failure', async () => { throw new Error('offline'); }],
+  ] as const)('reads ahead once per identity per launch, whatever came of it: %s', async (_case, answer) => {
     supported();
     let now = NOW;
-    const empty = api(async () => ({ readAhead: null }));
-    startExploreReadAhead({ api: empty, identityUserId: 'user-1', queryClient, now: () => now });
-    await expect(takeExploreReadAheadToken({ filters: EXPLORE_READ_AHEAD_FILTERS, identityUserId: 'user-1' })).resolves.toBeNull();
+    const client = api(answer as () => Promise<ShowcaseFeedReadAheadResponse>);
 
-    const failing = api(async () => { throw new Error('offline'); });
-    startExploreReadAhead({ api: failing, identityUserId: 'user-1', queryClient, now: () => now });
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-1', queryClient, now: () => now })).toBe(true);
+    await takeExploreReadAheadToken({ filters: { category: 'video' }, identityUserId: 'user-1' });
     await Promise.resolve();
     await Promise.resolve();
-    expect(startExploreReadAhead({ api: failing, identityUserId: 'user-1', queryClient, now: () => now })).toBe(false);
-    now += EXPLORE_READ_AHEAD_RETRY_MS;
-    expect(startExploreReadAhead({ api: failing, identityUserId: 'user-1', queryClient, now: () => now })).toBe(true);
+    // Home settling again, long after any token would have run out.
+    now += 10 * EXPLORE_READ_AHEAD_MAX_AGE_MS;
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-1', queryClient, now: () => now })).toBe(false);
+    expect(client.prepareShowcaseFeedReadAhead).toHaveBeenCalledTimes(1);
+
+    // An identity that arrives later in the launch (a sign-in) has its own.
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-2', queryClient, now: () => now })).toBe(true);
+  });
+
+  it('reads ahead for a guest identity too: new people meet the skeleton first', () => {
+    supported();
+    const client = api();
+
+    expect(startExploreReadAhead({ api: client, identityUserId: 'guest-anonymous-uid', queryClient })).toBe(true);
+    expect(client.prepareShowcaseFeedReadAhead).toHaveBeenCalledTimes(1);
   });
 
   it('draws a page an older server answered with as an ordinary read, so what it marked served is what Explore shows', async () => {

@@ -507,8 +507,9 @@ export function HomeDashboard() {
   }, [activeChipId, feedQuery.dataUpdatedAt, feedQuery.isSuccess, identityUserId, isAuthLoading, queryClient]);
   // Explore's first page, ranked ahead once this page has landed and the app
   // is idle, with nothing written until Explore draws it
-  // (`lib/explore-read-ahead.ts`). Asked again on a later return here only
-  // once the last one has run out and Explore still has no page.
+  // (`lib/explore-read-ahead.ts`). This runs again as Home refetches or comes
+  // back into view, but the module asks once per identity per launch: these
+  // reruns only matter for an identity that arrived since (a sign-in).
   useEffect(() => {
     if (isAuthLoading || !isFocused || !feedQuery.isSuccess || !identityUserId) return;
     return scheduleExploreReadAhead(() => {

@@ -37,6 +37,7 @@ const queryState = vi.hoisted(() => ({
   queries: [] as Array<{ queryKey: readonly unknown[]; queryFn?: () => unknown }>,
   client: {
     getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
+    getQueryState: vi.fn((_key: readonly unknown[]) => undefined),
     invalidateQueries: vi.fn(() => Promise.resolve()),
     setQueriesData: vi.fn(),
     setQueryData: vi.fn(),
@@ -62,6 +63,9 @@ const authState = vi.hoisted(() => ({
     unlockFreeBundle: vi.fn(),
     recordShowcaseFeedEvent: vi.fn((_request: SentEvent) => Promise.resolve()),
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
+    prepareShowcaseFeedReadAhead: vi.fn((_params: Record<string, unknown>) => Promise.resolve({
+      readAhead: null as { token: string; expiresInMs: number } | null,
+    })),
     undoFeedFeedback: vi.fn((_body: Record<string, string>): Promise<UndoAnswer> => (
       Promise.resolve({ ok: true, removed: true })
     )),
@@ -267,13 +271,17 @@ vi.mock('@/lib/persisted-home-feed', () => ({
 // Explore's read-ahead, scheduled and started as Home asks for it.
 const readAheadMocks = vi.hoisted(() => ({
   schedule: vi.fn((_start: () => void) => vi.fn()),
-  start: vi.fn(),
+  start: vi.fn((_options: unknown): unknown => undefined),
+  actual: null as typeof import('../lib/explore-read-ahead') | null,
 }));
 
-vi.mock('@/lib/explore-read-ahead', () => ({
-  scheduleExploreReadAhead: readAheadMocks.schedule,
-  startExploreReadAhead: readAheadMocks.start,
-}));
+vi.mock('@/lib/explore-read-ahead', async (importOriginal) => {
+  readAheadMocks.actual = await importOriginal<typeof import('../lib/explore-read-ahead')>();
+  return {
+    scheduleExploreReadAhead: readAheadMocks.schedule,
+    startExploreReadAhead: readAheadMocks.start,
+  };
+});
 
 vi.mock('@/lib/startup-interactive', () => ({
   reportStartupMilestone: vi.fn(),
@@ -619,6 +627,43 @@ describe("Home's read-ahead of Explore", () => {
     const cancel = readAheadMocks.schedule.mock.results[0].value;
     renderer.act(() => tree.unmount());
     expect(cancel).toHaveBeenCalled();
+  });
+
+  it('reads ahead once a launch, however often Home refetches or comes back into view', async () => {
+    const actual = readAheadMocks.actual!;
+    actual.resetExploreReadAheadForTests();
+    actual.noteShowcaseFeedReadAheadSupport({ sort: 'for-you' }, { readAheadSupported: true });
+    // Started at once, through the real module, each time Home schedules one.
+    readAheadMocks.schedule.mockImplementation((start: () => void) => {
+      start();
+      return vi.fn();
+    });
+    readAheadMocks.start.mockImplementation((options) => (
+      actual.startExploreReadAhead(options as Parameters<typeof actual.startExploreReadAhead>[0])
+    ));
+    try {
+      const { tree } = renderHome();
+      await renderer.act(async () => {});
+      for (const change of [
+        () => { queryState.dataUpdatedAt = 2; },
+        () => { navState.focused = false; },
+        () => { navState.focused = true; },
+        () => { queryState.dataUpdatedAt = 3; },
+      ]) {
+        change();
+        renderer.act(() => tree.update(<HomeDashboard />));
+        await renderer.act(async () => {});
+      }
+
+      // Home did schedule again on each refetch and return; only the first asked.
+      expect(readAheadMocks.schedule.mock.calls.length).toBeGreaterThan(1);
+      expect(authState.api.prepareShowcaseFeedReadAhead).toHaveBeenCalledTimes(1);
+      renderer.act(() => tree.unmount());
+    } finally {
+      readAheadMocks.schedule.mockImplementation(() => vi.fn());
+      readAheadMocks.start.mockImplementation(() => undefined);
+      actual.resetExploreReadAheadForTests();
+    }
   });
 
   it.each([
