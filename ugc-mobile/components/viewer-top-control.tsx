@@ -5,6 +5,7 @@ import { AccessibilityInfo, Animated, Easing, Platform, Pressable, type ViewStyl
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
+import { useViewerTopControlsShown } from '@/lib/viewer-top-controls';
 
 /** How long the control takes to come in or go (seconds, as UIKit's glass animation takes it). */
 const APPEARANCE_S = 0.2;
@@ -15,20 +16,18 @@ type ViewerTopControlProps = {
   topInset: number;
   side: 'left' | 'right';
   selected?: boolean;
-  /**
-   * False while the control should not be seen: under UIKit's zoom into the
-   * reel, until the push has crossfaded (`useAppleZoomTopControlsShown`).
-   */
-  shown?: boolean;
   children: ReactNode;
 };
 
 /** The reel's Back and sound controls share one fixed, accessible glass surface. */
-export function ViewerTopControl({ label, onPress, topInset, side, selected, shown = true, children }: ViewerTopControlProps) {
+export function ViewerTopControl({ label, onPress, topInset, side, selected, children }: ViewerTopControlProps) {
   // The reel's scope is dark in both schemes. The glass has to be told: left on
   // 'auto' it follows the window, and a light-mode window would put light glass
   // over the video.
   const theme = useAppTheme();
+  // Not seen under UIKit's zoom into the reel until the push has crossfaded,
+  // nor once a close has begun (lib/viewer-top-controls.ts).
+  const shown = useViewerTopControlsShown();
   const [glassAvailable] = useState(() => (
     Platform.OS === 'ios' && isLiquidGlassAvailable() && isGlassEffectAPIAvailable()
   ));

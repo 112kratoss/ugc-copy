@@ -159,6 +159,7 @@ import { flattenProfileOwnerPostPages, profileOwnerPostsQueryOptions } from '@/l
 import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profile-library-source';
 import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
+import { createViewerTopControls, ViewerTopControlsContext } from '@/lib/viewer-top-controls';
 import { useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
@@ -237,19 +238,22 @@ export default function ImmersivePreviewViewerScreen() {
   useNavigationBarSurface(isFocused ? 'dark' : null);
   // Out of a tile by UIKit's zoom, Back and sound come in once it has
   // crossfaded to the reel; held here, so the loading shell and the reel that
-  // replaces it share the moment.
+  // replaces it share the moment, and read by those controls alone, so the reel
+  // is not drawn again as they come and go (lib/viewer-top-controls.ts).
   const followsZoom = Boolean(useAppleZoomSourceId());
-  const [topControlsShown, setTopControlsShown] = useState(!followsZoom);
+  const [topControls] = useState(() => createViewerTopControls(!followsZoom));
   return (
     <ThemeScope scheme="dark">
       {isFocused ? <StatusBar style="light" /> : null}
-      {followsZoom ? <AppleZoomTopControlsCue onShownChange={setTopControlsShown} /> : null}
-      <ImmersivePreviewViewer topControlsShown={topControlsShown} />
+      <ViewerTopControlsContext.Provider value={topControls}>
+        {followsZoom ? <AppleZoomTopControlsCue onShownChange={topControls.setShown} /> : null}
+        <ImmersivePreviewViewer />
+      </ViewerTopControlsContext.Provider>
     </ThemeScope>
   );
 }
 
-function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolean }) {
+function ImmersivePreviewViewer() {
   const theme = useAppTheme();
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
@@ -1330,7 +1334,7 @@ function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolea
 
   if (selectionMissing && !savedPosition) {
     return (
-      <ViewerShell topInset={topInset} bottomInset={bottomInset} topControlsShown={topControlsShown}>
+      <ViewerShell topInset={topInset} bottomInset={bottomInset}>
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             title="This isn’t available anymore"
@@ -1344,7 +1348,7 @@ function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolea
 
   if (!items.length && sourceQuery.isLoading) {
     return (
-      <ViewerShell topInset={topInset} bottomInset={bottomInset} topControlsShown={topControlsShown} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
+      <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
         <ActivityIndicator accessibilityLabel="Loading preview" color={theme.colors.primary} />
       </ViewerShell>
     );
@@ -1352,7 +1356,7 @@ function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolea
 
   if (!items.length && sourceQuery.isError) {
     return (
-      <ViewerShell topInset={topInset} bottomInset={bottomInset} topControlsShown={topControlsShown}>
+      <ViewerShell topInset={topInset} bottomInset={bottomInset}>
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             tone="danger"
@@ -1372,7 +1376,7 @@ function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolea
     // Loaded, and nothing left to show: the posts here were removed, or none
     // of them can be drawn in this reel. A final state, so it offers a way on.
     return (
-      <ViewerShell topInset={topInset} bottomInset={bottomInset} topControlsShown={topControlsShown}>
+      <ViewerShell topInset={topInset} bottomInset={bottomInset}>
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             title="Nothing to show here"
@@ -1629,7 +1633,7 @@ function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolea
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
       {detailsOpenForActive ? null : (
-        <ViewerTopControl label="Go back" onPress={zoom.dismiss} topInset={topInset} side="left" shown={topControlsShown}>
+        <ViewerTopControl label="Go back" onPress={zoom.dismiss} topInset={topInset} side="left">
           <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
         </ViewerTopControl>
       )}
@@ -1647,7 +1651,6 @@ function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolea
           }}
           topInset={topInset}
           side="right"
-          shown={topControlsShown}
         >
           <IconShadow>
             {audioMuted
@@ -1745,7 +1748,7 @@ function ImmersivePreviewViewer({ topControlsShown }: { topControlsShown: boolea
  * lands a second view lies under the first, as on the slide, so the frame the
  * first misses does not show the tile's picture (`MediaZoomLentVideo.landing`).
  */
-function ViewerShell({ topInset, bottomInset, topControlsShown, preview = null, video = null, post = null, children }: { topInset: number; bottomInset: number; topControlsShown: boolean; preview?: ZoomPreview | null; video?: MediaZoomLentVideo | null; post?: ImmersivePreviewItem | null; children: React.ReactNode }) {
+function ViewerShell({ topInset, bottomInset, preview = null, video = null, post = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; video?: MediaZoomLentVideo | null; post?: ImmersivePreviewItem | null; children: React.ReactNode }) {
   const audioMuted = useViewerAudioMuted();
   // Only over the tile's own picture: the post is drawn as the reel draws it.
   const chromePost = preview ? post : null;
@@ -1792,7 +1795,7 @@ function ViewerShell({ topInset, bottomInset, topControlsShown, preview = null, 
           <ZoomPostChrome post={chromePost} controls={false} />
         </View>
       ) : null}
-      <ViewerTopControl label="Go back" onPress={leaveViewer} topInset={topInset} side="left" shown={topControlsShown}>
+      <ViewerTopControl label="Go back" onPress={leaveViewer} topInset={topInset} side="left">
         <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
       </ViewerTopControl>
       {chromePost && hasImmersiveAudibleMedia(chromePost) ? (
@@ -1805,7 +1808,6 @@ function ViewerShell({ topInset, bottomInset, topControlsShown, preview = null, 
           }}
           topInset={topInset}
           side="right"
-          shown={topControlsShown}
         >
           <IconShadow>
             {audioMuted
