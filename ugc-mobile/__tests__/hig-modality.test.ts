@@ -193,10 +193,6 @@ describe('HIG modality — sheets, alerts and the way out', () => {
       'components/comments-sheet.tsx',
       // Started from the side menu, a Modal, or from Settings, which has no field.
       'components/sign-out-overlay.tsx',
-      // The side menu itself: still a Modal, hosted through the overlay only so
-      // that a tab-switching row cannot take its window down with the screen it
-      // was opened from. The Modal's own window takes the keys, as it did.
-      'components/home-side-menu.tsx',
     ]);
     const keeping = files
       .filter((entry) => entry.name !== 'app/_layout.tsx')

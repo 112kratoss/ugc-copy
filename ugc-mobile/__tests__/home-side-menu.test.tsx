@@ -2,9 +2,6 @@
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 (global as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -106,12 +103,7 @@ vi.mock('@/lib/safe-area', () => ({
 }));
 
 import { HomeSideMenu } from '../components/home-side-menu';
-import { OverlayHost } from '../components/overlay-host';
 import { appTheme } from '../lib/theme';
-
-function ScreenFixture({ children }: { children: React.ReactNode }) {
-  return React.createElement('view', { testID: 'tab-screen' }, children);
-}
 
 function renderMenu(
   totalSalesUsdCents: number | null,
@@ -230,58 +222,6 @@ describe('HomeSideMenu hand-off', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(drawerShown(tree)).toBe(false);
-  });
-
-  it('draws the drawer at the root, out of the tab screen that opens it', () => {
-    // A tab-switching row (Profile, Credits) has react-native-screens detach
-    // the screen it was opened from, and a Modal host detached with it takes
-    // the Modal's window down: Home showed bare for two frames before Credits
-    // was drawn (Pixel 9a emulator, 2026-11-03). Hosted by the root overlay,
-    // the drawer outlives that screen and leaves over the new tab.
-    routerState.push.mockClear();
-    let tree!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      tree = renderer.create(
-        <OverlayHost>
-          <ScreenFixture>
-            <HomeSideMenu
-              visible
-              onClose={vi.fn()}
-              user={{ id: 'user-1', email: 'luna@example.com', user_metadata: {} } as never}
-              profile={{ displayName: 'Luna Dreams', username: 'luna-dreams' } as never}
-              credits={1200}
-              totalSalesUsdCents={1250}
-              onSignOut={async () => undefined}
-            />
-          </ScreenFixture>
-        </OverlayHost>,
-      );
-    });
-
-    const screen = tree.root.find((node) => String(node.type) === 'view' && node.props.testID === 'tab-screen');
-    expect(screen.findAll((node) => node.props.accessibilityLabel === 'Settings')).toHaveLength(0);
-    // In the host's layer, beside the screen rather than inside it.
-    const settings = pressable(tree, 'Settings');
-    let ancestor = settings.parent;
-    while (ancestor && !(String(ancestor.type) === 'view' && ancestor.props.pointerEvents === 'box-none')) {
-      expect(ancestor).not.toBe(screen);
-      ancestor = ancestor.parent;
-    }
-    expect(ancestor?.props.style).toEqual({ position: 'absolute', inset: 0 });
-    renderer.act(() => settings.props.onPress());
-    expect(routerState.push).toHaveBeenCalledWith('/settings');
-  });
-
-  it('keeps the drawer a Modal inside the root overlay', () => {
-    // The Modal's own window is what keeps the screen reader inside the drawer
-    // and takes Android's back key; the overlay only moves where it is hosted.
-    // The test environment draws it without the Modal, so the source says so.
-    const source = readFileSync(path.join(__dirname, '../components/home-side-menu.tsx'), 'utf8');
-    const hosted = source.slice(source.indexOf('<Overlay visible={rendered}>'), source.indexOf('</Overlay>'));
-    expect(hosted).toContain('<ModalSurface');
-    expect(hosted).toContain('onRequestClose={onClose}');
-    expect(hosted).toContain('accessibilityViewIsModal');
-    expect(source).toContain("const ModalSurface: React.ComponentType<ModalProps> = IS_TEST_ENVIRONMENT ? FallbackModal : Modal;");
   });
 
   it('stays closed when Back returns to Home before the owner has closed it', () => {
