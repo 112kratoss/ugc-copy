@@ -127,10 +127,10 @@ const PROFILE_MEDIA_SWIPE_COMMIT_DISTANCE = 56;
 const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
 // Three rows rise into place when a tab's media lands; later rows mount plain.
 const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
-// The rows a tab switch shows first, whose pictures are cached ahead of it once
-// Profile has had this long to load its own.
-const PROFILE_SWITCH_WARM_COUNT = PROFILE_GALLERY_COLUMNS * 3;
-const PROFILE_SWITCH_WARM_DELAY_MS = 1000;
+// The rows a tab switch shows first, whose previews are cached ahead of it once
+// Profile has stood settled this long.
+const PROFILE_SWITCH_WARM_COUNT = PROFILE_GALLERY_COLUMNS * 2;
+const PROFILE_SWITCH_WARM_DELAY_MS = 2000;
 
 // Drops the page request the gate put off until its cooldown ends.
 function cancelAskAgain(timer: { current: ReturnType<typeof setTimeout> | null }) {
@@ -187,7 +187,7 @@ export function ProfileDashboard({
   const requestNextPageRef = useRef<() => void>(() => undefined);
   const nextPageFailedRef = useRef(false);
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, scale } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
@@ -437,29 +437,35 @@ export function ProfileDashboard({
   // The tabs not on screen have their first pages read already, once the shown
   // one has (`backgroundMediaReady`), but a switch still drew each tile's
   // thumbhash for ~0.5 s while its picture came over the network (device sweep,
-  // Pixel 9a emulator, 2026-11-03). Once Profile has settled, the pictures of
-  // their first rows go into the disk cache under the tiles' own keys, one at a
-  // time (`warmImages`), so a switch draws them from the disk.
+  // Pixel 9a emulator, 2026-11-03). Once Profile has stood settled for a moment
+  // (in view, the shown tab drawn and not being read again), the previews of
+  // their first two rows go into the disk cache under the tiles' own keys, one
+  // at a time (`warmImages`), so a switch draws them from the disk. Previews
+  // only: a tile without one draws its original, a download too large to make
+  // for a tab that may never be opened.
   const switchImages = PROFILE_MEDIA_TABS
     .filter((tab) => tab !== activeTab)
     .flatMap((tab) => cardsByTab[tab].slice(0, PROFILE_SWITCH_WARM_COUNT))
-    .flatMap((card) => profileTileImage(card) ?? []);
+    .flatMap((card) => profileTilePreview(card) ?? []);
   // The effect is keyed by which pictures they are, not by the array listing them.
   const switchImagesKey = JSON.stringify(switchImages);
   const accessToken = session?.access_token ?? null;
-  const switchWarmReady = isFocused && !isMediaLoading && backgroundMediaReady && switchImages.length > 0;
+  const switchWarmReady = isFocused && !isMediaLoading && !activeMediaIsFetching && backgroundMediaReady
+    && switchImages.length > 0;
   useEffect(() => {
     if (!switchWarmReady) return undefined;
     const images = JSON.parse(switchImagesKey) as WarmImage[];
+    // About a tile, in pixels: a third of the page across, at the grid's shape.
+    const tileWidth = (pageWidth / PROFILE_GALLERY_COLUMNS) * scale;
     let stop: (() => void) | null = null;
     const timer = setTimeout(() => {
-      stop = warmImages(images, accessToken);
+      stop = warmImages(images, accessToken, { width: tileWidth, height: tileWidth / PROFILE_GALLERY_ASPECT_RATIO });
     }, PROFILE_SWITCH_WARM_DELAY_MS);
     return () => {
       clearTimeout(timer);
       stop?.();
     };
-  }, [accessToken, switchImagesKey, switchWarmReady]);
+  }, [accessToken, pageWidth, scale, switchImagesKey, switchWarmReady]);
   const activeTabPaging = activeTab === 'Saved'
     ? savedQuery
     : activeTab === 'Creations'
@@ -2031,7 +2037,7 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
  * media", which reached past a state that had already decided otherwise: a
  * creation whose poster job failed would pull its full-size original into a grid
  * cell, which is the egress the 720px derivative exists to avoid. Where there is
- * no poster there is a plate. The switch warm-up asks for exactly these.
+ * no poster there is a plate.
  */
 function profileTileImage(item: ProfileMediaCard): WarmImage | null {
   const url = item.previewState === 'videoPoster'
@@ -2040,6 +2046,16 @@ function profileTileImage(item: ProfileMediaCard): WarmImage | null {
       ? item.previewUrl ?? item.mediaUrl
       : null;
   return url ? { url, cacheKey: item.previewCacheKey ?? item.id } : null;
+}
+
+/**
+ * What the switch warm-up asks for of a tile: the picture it draws, when that
+ * is its preview. An image without one draws its original, which is fetched
+ * when the tile is drawn and not before (review of #679, finding 14).
+ */
+function profileTilePreview(item: ProfileMediaCard): WarmImage | null {
+  const picture = profileTileImage(item);
+  return picture && picture.url === item.previewUrl ? picture : null;
 }
 
 function ProfileGalleryPreview({

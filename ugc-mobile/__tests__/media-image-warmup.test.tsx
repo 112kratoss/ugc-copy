@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const auth = vi.hoisted(() => ({ session: { access_token: 'session-1', expires_at: 10, user: { id: 'owner' } } }));
 const loads = vi.hoisted(() => ({
   calls: [] as Array<{ uri: string; cacheKey?: string; headers?: Record<string, string> }>,
+  /** The options each load was asked with, beside its source. */
+  options: [] as Array<{ maxWidth?: number; maxHeight?: number } | undefined>,
   releases: 0,
   /** Each load waits for the test to finish it, in the order they were asked for. */
   pending: [] as Array<(outcome: 'loaded' | 'failed') => void>,
@@ -12,13 +14,19 @@ const loads = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth', () => ({ useAuth: () => auth }));
 vi.mock('@/lib/env', () => ({ env: { apiBaseUrl: 'https://magicbooklet.com', supabaseUrl: 'https://project.supabase.co' } }));
+const platform = vi.hoisted(() => ({ OS: 'ios' }));
 vi.mock('react-native', () => ({
   AppState: { currentState: 'active', addEventListener: () => ({ remove: () => undefined }) },
+  Platform: platform,
 }));
 vi.mock('expo-image', () => ({
   Image: {
-    loadAsync: (source: { uri: string; cacheKey?: string; headers?: Record<string, string> }) => {
+    loadAsync: (
+      source: { uri: string; cacheKey?: string; headers?: Record<string, string> },
+      options?: { maxWidth?: number; maxHeight?: number },
+    ) => {
       loads.calls.push(source);
+      loads.options.push(options);
       return new Promise((resolve, reject) => {
         loads.pending.push((outcome) => (outcome === 'loaded'
           ? resolve({ release: () => { loads.releases += 1; } })
@@ -50,8 +58,10 @@ beforeEach(async () => {
   vi.resetModules();
   warmup = await import('../lib/media-image-warmup');
   loads.calls = [];
+  loads.options = [];
   loads.releases = 0;
   loads.pending = [];
+  platform.OS = 'ios';
 });
 
 afterEach(() => {
@@ -96,14 +106,43 @@ describe('warmImages', () => {
     await finishNext();
     await finishNext('failed');
 
-    warmup.warmImages([...pictures, { url: 'https://cdn.example.com/a-2.webp', cacheKey: 'a' }], null);
+    warmup.warmImages([...pictures, { url: 'https://cdn.example.com/c.webp', cacheKey: 'c' }], null);
     await settle();
-    // A new link under a known key is another file.
     expect(loads.calls.map((call) => call.uri)).toEqual([
       'https://cdn.example.com/a.webp',
       'https://cdn.example.com/b.webp',
-      'https://cdn.example.com/a-2.webp',
+      'https://cdn.example.com/c.webp',
     ]);
+  });
+
+  // Every read of a library signs its files anew. expo-image finds a picture by
+  // the key it is cached under, so a new signature under a known key is a
+  // picture already on the disk, and asking again only decodes it again.
+  it('does not ask again for a picture whose link was only signed again', async () => {
+    const signed = (signature: string) => `https://project.supabase.co/storage/v1/object/sign/generated_images/owner/a.webp?token=${signature}`;
+    warmup.warmImages([{ url: signed('first-read'), cacheKey: 'owner/previews/a.webp' }], null);
+    await settle();
+    await finishNext();
+
+    warmup.warmImages([{ url: signed('second-read'), cacheKey: 'owner/previews/a.webp' }], null);
+    await settle();
+    expect(loads.calls.map((call) => call.uri)).toEqual([signed('first-read')]);
+  });
+
+  // Android decodes a picture loaded here at its full size unless given one
+  // (`ImageLoadTask` asks Glide for `SIZE_ORIGINAL`), only to let it go.
+  it('decodes a picture at about the tile size on Android, and as it was on iOS', async () => {
+    const tile = { width: 129.6, height: 175.1 };
+    platform.OS = 'android';
+    warmup.warmImages([{ url: 'https://cdn.example.com/a.webp', cacheKey: 'a' }], null, tile);
+    await settle();
+    await finishNext();
+    platform.OS = 'ios';
+    warmup.warmImages([{ url: 'https://cdn.example.com/b.webp', cacheKey: 'b' }], null, tile);
+    await settle();
+    await finishNext();
+
+    expect(loads.options).toEqual([{ maxWidth: 130, maxHeight: 176 }, undefined]);
   });
 
   it('stops before the next picture once stopped', async () => {

@@ -247,13 +247,21 @@ vi.mock('@/lib/auth', () => ({
 
 // What the switch warm-up is handed; its own loading is media-image-warmup.test.tsx's.
 const warmupState = vi.hoisted(() => ({
-  calls: [] as Array<{ images: Array<{ url: string; cacheKey: string }>; accessToken: string | null | undefined }>,
+  calls: [] as Array<{
+    images: Array<{ url: string; cacheKey: string }>;
+    accessToken: string | null | undefined;
+    tile: { width: number; height: number } | undefined;
+  }>,
   stops: 0,
 }));
 
 vi.mock('@/lib/media-image-warmup', () => ({
-  warmImages: (images: Array<{ url: string; cacheKey: string }>, accessToken: string | null | undefined) => {
-    warmupState.calls.push({ images: [...images], accessToken });
+  warmImages: (
+    images: Array<{ url: string; cacheKey: string }>,
+    accessToken: string | null | undefined,
+    tile?: { width: number; height: number },
+  ) => {
+    warmupState.calls.push({ images: [...images], accessToken, tile });
     return () => {
       warmupState.stops += 1;
     };
@@ -3040,23 +3048,65 @@ describe('ProfileDashboard tab switch', () => {
     navigationState.focused = true;
   });
 
-  it('caches the first rows of the tabs not on screen once Profile has settled, as their tiles draw them', () => {
+  it('caches the first two rows of the tabs not on screen once Profile has settled, as their tiles draw them', () => {
     vi.useFakeTimers();
     const tree = renderDashboard();
 
-    renderer.act(() => { vi.advanceTimersByTime(999); });
+    renderer.act(() => { vi.advanceTimersByTime(1_999); });
     expect(warmupState.calls).toHaveLength(0);
     renderer.act(() => { vi.advanceTimersByTime(1); });
     expect(warmupState.calls).toHaveLength(1);
-    const warmed = warmupState.calls[0].images;
+    const { images: warmed, tile } = warmupState.calls[0];
 
     showTab(tree, 'Posts');
     const postPictures = drawnPictures(tree);
     showTab(tree, 'Saved');
     const savedPictures = drawnPictures(tree);
-    // Three rows of each, exactly as the tiles ask for them, and none of the tab on screen.
-    expect(warmed).toEqual([...postPictures.slice(0, 9), ...savedPictures.slice(0, 9)]);
+    // Two rows of each, exactly as the tiles ask for them, and none of the tab on screen.
+    expect(warmed).toEqual([...postPictures.slice(0, 6), ...savedPictures.slice(0, 6)]);
     expect(warmed.some((picture) => picture.url.startsWith('creation-'))).toBe(false);
+    // About a tile, in pixels: a third of the 390-point page across, at the grid's shape.
+    expect(tile?.width).toBe(130);
+    expect(tile?.height).toBeCloseTo(130 / 0.74);
+    renderer.act(() => { tree.unmount(); });
+  });
+
+  // A tile with no preview of its own draws its original: full size, for a tab
+  // that may never be opened (review of #679, finding 14).
+  it('never caches an original: a tile without a preview loads when it is drawn', () => {
+    vi.useFakeTimers();
+    queryState.ownerPosts = posts().map((post, index) => (index % 2 === 0
+      ? { ...post, mediaItems: post.mediaItems.map((media) => ({ ...media, previewUrl: undefined })) }
+      : post));
+    const tree = renderDashboard();
+    renderer.act(() => { vi.advanceTimersByTime(2_000); });
+    const warmed = warmupState.calls[0].images;
+
+    showTab(tree, 'Posts');
+    // The tiles without a preview do draw their originals, when shown.
+    expect(drawnPictures(tree)[0].url).toBe('post-0.png');
+    expect(warmed.filter((picture) => picture.url.startsWith('post-')).map((picture) => picture.url)).toEqual([
+      'post-1.preview.webp',
+      'post-3.preview.webp',
+      'post-5.preview.webp',
+    ]);
+    expect(warmed.some((picture) => !picture.url.endsWith('.preview.webp'))).toBe(false);
+    renderer.act(() => { tree.unmount(); });
+  });
+
+  it('waits while the tab on screen is being read again, and for a moment after', () => {
+    vi.useFakeTimers();
+    queryState.generationsIsFetching = true;
+    const tree = renderDashboard();
+    renderer.act(() => { vi.advanceTimersByTime(5_000); });
+    expect(warmupState.calls).toHaveLength(0);
+
+    queryState.generationsIsFetching = false;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    renderer.act(() => { vi.advanceTimersByTime(1_999); });
+    expect(warmupState.calls).toHaveLength(0);
+    renderer.act(() => { vi.advanceTimersByTime(1); });
+    expect(warmupState.calls).toHaveLength(1);
     renderer.act(() => { tree.unmount(); });
   });
 
@@ -3069,7 +3119,7 @@ describe('ProfileDashboard tab switch', () => {
 
     navigationState.focused = true;
     renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
-    renderer.act(() => { vi.advanceTimersByTime(1_000); });
+    renderer.act(() => { vi.advanceTimersByTime(2_000); });
     expect(warmupState.calls).toHaveLength(1);
 
     navigationState.focused = false;
