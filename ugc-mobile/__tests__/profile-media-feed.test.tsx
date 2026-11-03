@@ -64,6 +64,54 @@ const feedState = vi.hoisted(() => ({
 const nothing = vi.hoisted(() => () => null);
 const passThrough = vi.hoisted(() => ({ children }: { children?: unknown }) => children ?? null);
 
+// The landing as it runs, for the suite that opens the feed on a card. Every
+// other suite keeps it idle, so no opened card stands over the cards it presses.
+const landingMode = vi.hoisted(() => ({ real: false }));
+
+// What the list was last handed, and the handle the screen scrolls it with:
+// every scroll arrives, with the card it went to on screen. `landedTop` is
+// where the list then stands that card, from its top (null: it cannot say).
+const listState = vi.hoisted(() => {
+  const state = {
+    props: null as null | {
+      data?: Array<{ id: string }>;
+      style?: { opacity?: number };
+      pointerEvents?: string;
+      accessibilityElementsHidden?: boolean;
+      onLoad?: () => void;
+      onScrollBeginDrag?: () => void;
+    },
+    scrolledTo: [] as number[],
+    landedTop: null as number | null,
+    handle: {
+      scrollToIndex: ({ index }: { index: number }) => {
+        state.scrolledTo.push(index);
+        return Promise.resolve();
+      },
+      computeVisibleIndices: () => {
+        const index = state.scrolledTo.at(-1) ?? 0;
+        return { startIndex: index, endIndex: index };
+      },
+      // Every card 500 tall, under the list's 12 of padding.
+      getLayout: (index: number) => (state.landedTop === null ? undefined : { x: 0, y: index * 500, width: 362, height: 500 }),
+      getFirstItemOffset: () => 12,
+      getAbsoluteLastScrollOffset: () => {
+        if (state.landedTop === null) return 0;
+        return (state.scrolledTo.at(-1) ?? 0) * 500 + 12 - state.landedTop;
+      },
+    },
+  };
+  return state;
+});
+
+// Each fade the screen starts, run to its end by hand.
+type Fade = { toValue: number; stopped: boolean; finish: (result: { finished: boolean }) => void };
+const animationState = vi.hoisted(() => ({ fades: [] as Fade[] }));
+
+// What each render drew, in order: the list at its opacity, and the opened
+// card standing over it (the one card drawn for a screen out of reach).
+const drawLog = vi.hoisted(() => ({ entries: [] as string[] }));
+
 vi.mock('expo-router', () => ({
   router: routerState,
   useLocalSearchParams: () => routerState.params,
@@ -77,9 +125,18 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('@shopify/flash-list', () => ({
-  FlashList: ({ data, renderItem }: { data?: Array<{ id: string }>; renderItem: (info: { item: unknown; index: number }) => unknown }) => (
-    data?.map((item, index) => renderItem({ item, index })) ?? null
-  ),
+  FlashList: ({ ref, ...props }: {
+    ref?: { current: unknown } | null;
+    data?: Array<{ id: string }>;
+    renderItem: (info: { item: unknown; index: number }) => unknown;
+  }) => {
+    listState.props = props;
+    drawLog.entries.push(`list@${(props as { style?: { opacity?: number } }).style?.opacity}`);
+    if (ref) ref.current = listState.handle;
+    return props.data?.map((item, index) => (
+      React.createElement(React.Fragment, { key: item.id }, props.renderItem({ item, index }) as React.ReactNode)
+    )) ?? null;
+  },
 }));
 
 vi.mock('react-native-safe-area-context', () => ({
@@ -89,6 +146,47 @@ vi.mock('react-native-safe-area-context', () => ({
 vi.mock('react-native', () => ({
   AccessibilityInfo: { announceForAccessibility: vi.fn() },
   ActivityIndicator: nothing,
+  Animated: {
+    View: passThrough,
+    Value: class {
+      constructor(public value: number) {}
+      setValue(value: number) {
+        this.value = value;
+      }
+    },
+    timing: (_value: unknown, config: { toValue: number }) => {
+      const fade: Fade = { toValue: config.toValue, stopped: false, finish: () => {} };
+      animationState.fades.push(fade);
+      return {
+        start: (callback?: (result: { finished: boolean }) => void) => {
+          fade.finish = (result) => callback?.(result);
+        },
+        // As React Native's: a stopped animation reports that it did not finish.
+        stop: () => {
+          fade.stopped = true;
+          fade.finish({ finished: false });
+        },
+      };
+    },
+    sequence: (animations: Array<{ start: (callback?: (result: { finished: boolean }) => void) => void; stop: () => void }>) => ({
+      start: (callback?: (result: { finished: boolean }) => void) => {
+        const run = (index: number) => {
+          if (index === animations.length) {
+            callback?.({ finished: true });
+            return;
+          }
+          animations[index].start((result) => (result.finished ? run(index + 1) : callback?.(result)));
+        };
+        run(0);
+      },
+      stop: () => animations.forEach((animation) => animation.stop()),
+    }),
+  },
+  Easing: {
+    cubic: (t: number) => t,
+    out: (easing: (t: number) => number) => easing,
+    inOut: (easing: (t: number) => number) => easing,
+  },
   Platform: {
     get OS() {
       return platformState.os;
@@ -125,8 +223,13 @@ vi.mock('@/components/feed-pagination-footer', () => ({ FeedLoadMoreErrorFooter:
 vi.mock('@/components/media-zoom', () => ({ MediaZoomSurface: passThrough }));
 vi.mock('@/components/zoom-veil', () => ({ ZoomVeilScope: passThrough }));
 vi.mock('@/components/profile-feed-card', () => ({
-  ProfileFeedCardView: ({ card, onAction }: { card: { id: string }; onAction: (action: string) => void }) => {
-    feedState.cards.set(card.id, { onAction });
+  ProfileFeedCardView: ({ card, onAction, screenFocused }: {
+    card: { id: string };
+    onAction: (action: string) => void;
+    screenFocused: boolean;
+  }) => {
+    if (screenFocused) feedState.cards.set(card.id, { onAction });
+    else drawLog.entries.push(`opened:${card.id}`);
     return null;
   },
 }));
@@ -150,7 +253,11 @@ vi.mock('@/lib/safe-area', () => ({
   resolvedTopInset: (inset: number) => inset,
 }));
 vi.mock('@/lib/theme-context', () => ({
-  useAppTheme: () => ({ colors: { background: '#fff', muted: '#666', primary: '#f60', text: '#111' } }),
+  useAppTheme: () => ({
+    colors: { background: '#fff', muted: '#666', primary: '#f60', text: '#111' },
+    // The notice a landing that gave up puts above the list.
+    semantic: { warning: { background: '#fff4e0', border: '#f0c070', foreground: '#7a4a00' } },
+  }),
 }));
 vi.mock('@/lib/post-lifecycle', () => ({
   changePostVisibility: vi.fn(),
@@ -158,15 +265,23 @@ vi.mock('@/lib/post-lifecycle', () => ({
   resolveLinkedLifecyclePost: vi.fn(),
   toPostLifecyclePost: (post: unknown) => post,
 }));
-vi.mock('@/lib/profile-feed-card-view-model', () => ({
-  FEED_LANDING_SPINNER_DELAY_MS: 600,
-  INITIAL_FEED_LANDING: { phase: 'idle', targetIndex: -1 },
-  buildProfileFeedCards: (items: Array<{ id: string }>) => items.map((item) => ({ id: item.id, item })),
-  feedLandingScrollArrived: () => false,
-  initialFeedLanding: () => ({ phase: 'idle', targetIndex: -1 }),
-  reduceFeedLanding: (state: unknown) => state,
-  shouldScrollToFeedTarget: () => false,
-}));
+vi.mock('@/lib/profile-feed-card-view-model', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/profile-feed-card-view-model')>();
+  const idle = { phase: 'idle', targetIndex: -1 };
+  return {
+    INITIAL_FEED_LANDING: idle,
+    buildProfileFeedCards: (items: Array<{ id: string }>) => items.map((item) => ({ id: item.id, item })),
+    feedLandingCardPlace: actual.feedLandingCardPlace,
+    feedLandingScrollArrived: () => false,
+    initialFeedLanding: (index: number) => (landingMode.real ? actual.initialFeedLanding(index) : idle),
+    reduceFeedLanding: (state: Parameters<typeof actual.reduceFeedLanding>[0], event: Parameters<typeof actual.reduceFeedLanding>[1]) => (
+      landingMode.real ? actual.reduceFeedLanding(state, event) : state
+    ),
+    shouldScrollToFeedTarget: (state: Parameters<typeof actual.shouldScrollToFeedTarget>[0], cardCount: number) => (
+      landingMode.real && actual.shouldScrollToFeedTarget(state, cardCount)
+    ),
+  };
+});
 vi.mock('@/lib/profile-library-head', () => ({ refreshProfileLibraryHead: vi.fn() }));
 vi.mock('@/lib/use-profile-library-source', () => ({
   useProfileLibrarySource: () => ({
@@ -196,6 +311,7 @@ vi.mock('@/lib/use-profile-media-revalidation', () => ({
 vi.mock('@/lib/use-viewer-action-handlers', () => ({ changeGenerationArchive: vi.fn() }));
 vi.mock('@/lib/viewer-media-cache', () => ({ applyPostVisibilityToCaches: vi.fn() }));
 
+import { ProfileFeedCardView } from '@/components/profile-feed-card';
 import { ProfileMediaFeedScreen } from '@/components/profile-media-feed';
 import { refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import { changeGenerationArchive } from '@/lib/use-viewer-action-handlers';
@@ -236,6 +352,12 @@ beforeEach(() => {
   feedState.callbacksFor = null;
   feedState.cards.clear();
   feedState.commentsSheet = null;
+  landingMode.real = false;
+  listState.props = null;
+  listState.scrolledTo = [];
+  listState.landedTop = null;
+  animationState.fades = [];
+  drawLog.entries = [];
 });
 
 afterEach(() => {
@@ -570,5 +692,189 @@ describe("a guest's card feed", () => {
     expect(revalidationState.options).toMatchObject({ enabled: true });
     await act(async () => { await revalidationState.options!.refresh(); });
     expect(refreshProfileLibraryHead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'owner-1', library: 'Creations' }));
+  });
+});
+
+// Opened on a card, the list is hidden while it seeks the card, so the card is
+// drawn where the list will show it from the first render: the page came in
+// empty and the card cut in after (2026-11-03). It answers nothing, and gives
+// way to the list once the list has landed.
+describe('opening the feed on a card', () => {
+  const library = ['gen-1', 'gen-2', 'gen-3', 'gen-4'].map((id) => creation(id));
+
+  function openOn(id: string) {
+    landingMode.real = true;
+    routerState.params = { source: 'profile-creations', initialId: id };
+    libraryState.items = library;
+    libraryState.selection = 'found';
+    renderFeed();
+  }
+
+  const openingCards = () => trees.at(-1)!.root.findAll((node) => node.props.testID === 'profile-media-feed-opening-card');
+  const openedCard = () => openingCards()[0].findByType(ProfileFeedCardView);
+  /** The view the opened card is laid out in, with the list's padding round it. */
+  const cardFrame = () => openingCards()[0].findAll((node) => node.props.style?.paddingHorizontal !== undefined)[0];
+  const listCard = (index: number) => listState.props!.data![index];
+
+  /** The list's first layout, which starts its landing; every scroll arrives on the card. */
+  async function listLaidOut() {
+    await act(async () => { listState.props!.onLoad!(); });
+  }
+
+  it('draws the opened card over the list while the list is hidden seeking it', () => {
+    openOn('gen-3');
+
+    expect(listState.props).toMatchObject({ style: { opacity: 0 }, pointerEvents: 'none', accessibilityElementsHidden: true });
+    expect(openingCards()).toHaveLength(1);
+    // The list's own card, as wide as the list draws it, its video held at its poster.
+    expect(openedCard().props.card).toBe(listCard(2));
+    expect(openedCard().props).toMatchObject({ contentWidth: 362, showActiveVideo: false, screenFocused: false });
+  });
+
+  it('takes no touches and keeps out of screen readers, which find the list’s card once landed', () => {
+    openOn('gen-3');
+
+    expect(openingCards()[0].props).toMatchObject({
+      pointerEvents: 'none',
+      accessibilityElementsHidden: true,
+      importantForAccessibility: 'no-hide-descendants',
+    });
+  });
+
+  it.each([
+    // The first card is never scrolled: it keeps the list's top padding.
+    ['gen-1', 12, false],
+    // A later card is scrolled to the top of the list, its padding with it.
+    ['gen-3', 0, false],
+    // The scroll stops at the end of the cards: the last stands on the list's foot.
+    ['gen-4', 0, true],
+  ])('stands %s where the list will show it', (id, paddingTop, onFoot) => {
+    openOn(id);
+
+    expect(cardFrame().props.style).toMatchObject({ paddingTop, paddingHorizontal: 14 });
+    expect(openingCards()[0].findAll((node) => node.props.style?.flexGrow === 1)).toHaveLength(onFoot ? 1 : 0);
+  });
+
+  it('stands a card that arrives after the screen from the render that first holds it', () => {
+    landingMode.real = true;
+    routerState.params = { source: 'profile-creations', initialId: 'gen-3' };
+    // Fetched on its own: the screen comes up before the card does.
+    libraryState.items = [];
+    libraryState.selection = 'loading';
+    renderFeed();
+    expect(listState.props).toBeNull();
+
+    libraryState.items = library;
+    libraryState.selection = 'found';
+    rerenderFeed();
+
+    // That render's landing still waits for the card; the top of the list must
+    // not show from under it for a frame before the landing starts.
+    expect(drawLog.entries.slice(0, 4)).toEqual(['list@1', 'opened:gen-3', 'list@0', 'opened:gen-3']);
+    expect(openingCards()).toHaveLength(1);
+  });
+
+  it('draws nothing over a feed opened without a card', () => {
+    landingMode.real = true;
+    routerState.params = { source: 'profile-creations' };
+    libraryState.items = library;
+    renderFeed();
+
+    expect(openingCards()).toHaveLength(0);
+    expect(listState.props).toMatchObject({ style: { opacity: 1 } });
+  });
+
+  it('stays over the landed list until its fade has run, then goes', async () => {
+    openOn('gen-3');
+    await listLaidOut();
+
+    expect(listState.scrolledTo).toEqual([2]);
+    expect(listState.props).toMatchObject({ style: { opacity: 1 }, pointerEvents: 'auto' });
+    expect(openingCards()).toHaveLength(1);
+    expect(animationState.fades).toMatchObject([{ toValue: 0, stopped: false }]);
+
+    act(() => { animationState.fades[0].finish({ finished: true }); });
+    expect(openingCards()).toHaveLength(0);
+  });
+
+  it('only fades where the landed list stands the card where it was drawn', async () => {
+    openOn('gen-3');
+    act(() => { cardFrame().props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 500 } } }); });
+    listState.landedTop = 0;
+    await listLaidOut();
+
+    expect(animationState.fades.map((fade) => fade.toValue)).toEqual([0]);
+  });
+
+  it('moves to where the list stopped short before fading, so it never shows twice', async () => {
+    // Cards after it too short to fill the list: the scroll stopped 90 early.
+    openOn('gen-3');
+    act(() => { cardFrame().props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 500 } } }); });
+    listState.landedTop = 90;
+    await listLaidOut();
+
+    const [fade, move] = animationState.fades;
+    expect(move.toValue).toBe(90);
+    expect(cardFrame().props.style.transform).toEqual([{ translateY: expect.anything() }]);
+    // The ground still hides the list while the card moves; then it fades.
+    act(() => { move.finish({ finished: true }); });
+    expect(openingCards()).toHaveLength(1);
+    expect(fade.toValue).toBe(0);
+    act(() => { fade.finish({ finished: true }); });
+    expect(openingCards()).toHaveLength(0);
+  });
+
+  it('gives way the same over the first card, which the list lands on without a scroll', async () => {
+    openOn('gen-1');
+    await listLaidOut();
+
+    expect(listState.scrolledTo).toEqual([]);
+    expect(listState.props).toMatchObject({ style: { opacity: 1 } });
+    act(() => { animationState.fades[0].finish({ finished: true }); });
+    expect(openingCards()).toHaveLength(0);
+  });
+
+  it('goes at once when the reader scrolls the list during its fade', async () => {
+    openOn('gen-3');
+    await listLaidOut();
+
+    act(() => { listState.props!.onScrollBeginDrag!(); });
+    expect(openingCards()).toHaveLength(0);
+  });
+
+  it('stands whole again when a reorder starts the landing over during its fade', async () => {
+    openOn('gen-3');
+    await listLaidOut();
+
+    // A refresh put a new creation above the card before the reader moved.
+    libraryState.items = [creation('gen-0'), ...library];
+    await act(async () => { trees.at(-1)!.update(<ProfileMediaFeedScreen />); });
+
+    expect(animationState.fades[0].stopped).toBe(true);
+    expect(listState.scrolledTo).toEqual([2, 3]);
+    expect(openingCards()).toHaveLength(1);
+    expect(openedCard().props.card).toBe(listCard(3));
+    expect(openingCards()[0].props.style.opacity.value).toBe(1);
+    // And gives way again once the list has landed afresh.
+    expect(animationState.fades).toHaveLength(2);
+    act(() => { animationState.fades[1].finish({ finished: true }); });
+    expect(openingCards()).toHaveLength(0);
+  });
+
+  it('goes when the landing gives up, leaving the list and its notice', () => {
+    vi.useFakeTimers();
+    try {
+      openOn('gen-3');
+      // Past the landing's three-second budget, with the list never laid out.
+      act(() => { vi.advanceTimersByTime(4000); });
+
+      expect(openingCards()).toHaveLength(0);
+      expect(listState.props).toMatchObject({ style: { opacity: 1 }, pointerEvents: 'auto' });
+      expect(trees.at(-1)!.root.findAll((node) => (
+        node.props.accessibilityLabel === "Couldn't scroll to the creation you opened. Tap to try again."
+      ))).not.toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

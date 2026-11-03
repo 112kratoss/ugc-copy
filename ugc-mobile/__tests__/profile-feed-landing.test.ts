@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FEED_LANDING_BUDGET_MS,
   INITIAL_FEED_LANDING,
+  feedLandingCardPlace,
   feedLandingScrollArrived,
   initialFeedLanding,
   reduceFeedLanding,
@@ -161,14 +162,32 @@ describe("the landing scroll's arrival", () => {
     expect(feedLandingScrollArrived(0, 1824)).toBe(false);
   });
 
-  it('is what the feed shows from, with a spinner only for a slow landing', () => {
+  it('is what the feed shows from', () => {
     const feed = readFileSync('components/profile-media-feed.tsx', 'utf8');
     expect(feed).toContain('useReducer(reduceFeedLanding, targetIndex, initialFeedLanding)');
     // On iOS; Android keeps the promise until the early reveal has been watched there.
     expect(feed).toContain("onScroll={Platform.OS === 'ios' ? (event) => noteLandingScroll(event.nativeEvent.contentOffset.y) : undefined}");
-    expect(feed).toContain("landing.phase === 'seeking' && landingSpinnerDue");
     // Never `initialScrollIndex`: on Android it overlapped the cards (FlashList #1797,
     // docs/audits/creations-feed-landing-fix-2026-09-16.md).
     expect(feed).not.toContain('initialScrollIndex=');
+  });
+});
+
+// The feed draws the opened card here while the list is hidden seeking it, so
+// a wrong answer is a card that jumps as the list takes over.
+describe('where the opened card stands once landed', () => {
+  it('keeps the first card under the list’s top padding, since nothing scrolls to it', () => {
+    expect(feedLandingCardPlace(0, 1)).toBe('padded');
+    expect(feedLandingCardPlace(0, 30)).toBe('padded');
+  });
+
+  it('puts any later card at the top of the list, its padding scrolled away', () => {
+    expect(feedLandingCardPlace(1, 30)).toBe('top');
+    expect(feedLandingCardPlace(28, 30)).toBe('top');
+  });
+
+  it('stands the last card on the list’s foot, where FlashList stops the scroll', () => {
+    expect(feedLandingCardPlace(29, 30)).toBe('end');
+    expect(feedLandingCardPlace(1, 2)).toBe('end');
   });
 });

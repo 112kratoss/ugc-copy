@@ -133,11 +133,26 @@ export function feedLandingScrollArrived(nativeOffset: number, targetOffset: num
 }
 
 /**
- * How long a landing may run before the feed puts a spinner over the empty
- * list. A landing usually ends while the screen is still sliding in, and a
- * spinner shown for that moment only flashes.
+ * Where the card a feed opens on stands once the list has landed on it, which
+ * is where the feed draws that card while the list is still hidden seeking it
+ * (`components/profile-media-feed.tsx`). Read from FlashList 2.3.2's
+ * `scrollToIndex` (2026-11-03). The first card is never scrolled, so it keeps
+ * the list's top padding (`padded`). Any other is scrolled to its own top plus
+ * the list's first-item offset, which takes the padding off the screen with it
+ * (`top`). That scroll stops at the end of the cards (`getMaxScrollOffset`
+ * counts neither the footer nor the bottom padding), so the last card, when it
+ * is shorter than the list, stands with its foot on the list's (`end`). Two
+ * cases this cannot see stand a card elsewhere: a list shorter than the screen
+ * does not scroll at all, and a card whose followers are too short to fill the
+ * list under it stops early. The feed's handover moves the card there rather
+ * than letting it jump.
  */
-export const FEED_LANDING_SPINNER_DELAY_MS = 600;
+export type FeedLandingCardPlace = 'padded' | 'top' | 'end';
+
+export function feedLandingCardPlace(targetIndex: number, cardCount: number): FeedLandingCardPlace {
+  if (targetIndex <= 0) return 'padded';
+  return targetIndex === cardCount - 1 ? 'end' : 'top';
+}
 
 export interface ProfileFeedCard {
   id: string;
