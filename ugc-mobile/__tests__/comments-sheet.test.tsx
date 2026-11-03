@@ -814,6 +814,26 @@ describe('comments sheet', () => {
     expect(routerPush).toHaveBeenLastCalledWith('/creators/batman');
   });
 
+  // Review of #679, B6: the reel keys its sheet by post, so a reel that moved
+  // on while an author's profile was being built took the sheet away before it
+  // left. Its owner went on holding it open: the video blocked, and the sheet
+  // back when the post returned.
+  it("closes in its owner's state when it is taken away while an author's profile is built", () => {
+    pages = [page([comment()])];
+    const onClose = vi.fn();
+    const tree = renderSheet({ onClose });
+
+    renderer.act(() => {
+      pressable(tree.root, 'Open @batman profile').props.onPress();
+    });
+    expect(routerPush).toHaveBeenCalledWith('/creators/batman');
+    expect(onClose).not.toHaveBeenCalled();
+
+    renderer.act(() => tree.unmount());
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   // Review of #679: the hand-off's `handOff` was new on every render here,
   // where the compiler skips the sheet, so every keystroke in the composer
   // gave each row a new author handler.

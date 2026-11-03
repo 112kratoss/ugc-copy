@@ -68,7 +68,8 @@ export interface MenuHandoff<Row extends string> {
  * later task. A jump to a tab (`jumpTo`) changes the route at the tap, and the
  * menu leaves in the same render as the tab arrives.
  *
- * `onClose` runs once the menu is leaving, so the owner's own state follows.
+ * `onClose` runs once the menu is leaving, so the owner's own state follows,
+ * and runs as the menu unmounts if it goes while its hand-off still waits.
  */
 export function useMenuHandoff<Row extends string>({
   visible,
@@ -126,6 +127,22 @@ export function useMenuHandoff<Row extends string>({
     closedForRef.current = handoff;
     onClose();
   }, [handoff, leaving, onClose]);
+
+  // A menu can go while its hand-off waits: the reel keys its comments sheet
+  // by post, so a reel that moves on to another post, or loses this one,
+  // unmounts it. It never leaves then, and the owner would go on holding it
+  // open: the reel's video blocked, the sheet back when the post returns. The
+  // unmount tells the owner instead, once, with its latest `onClose`.
+  const lastHandoffRef = useRef<{ handoff: Handoff<Row>; onClose: () => void } | null>(null);
+  useEffect(() => {
+    lastHandoffRef.current = handoff === null ? null : { handoff, onClose };
+  }, [handoff, onClose]);
+  useEffect(() => () => {
+    const last = lastHandoffRef.current;
+    if (last === null || closedForRef.current === last.handoff) return;
+    closedForRef.current = last.handoff;
+    last.onClose();
+  }, []);
 
   // Freed when the menu opens again, not when it closes: a touch that reached
   // a row before the menu's exit was drawn can arrive after the close.

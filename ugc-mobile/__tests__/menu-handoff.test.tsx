@@ -68,6 +68,66 @@ beforeEach(() => {
 });
 
 /**
+ * Review of #679, B6: a menu taken off screen while its hand-off waits never
+ * leaves, so its owner was never told to close. The reel keys its comments
+ * sheet by post: one unmounted there kept the reel's video blocked, and the
+ * sheet came back when the post did.
+ */
+describe('useMenuHandoff when the menu goes mid hand-off', () => {
+  it('tells the owner, once, with its latest close', () => {
+    const firstClose = vi.fn();
+    const latestClose = vi.fn();
+    const menu = renderHandoff({ visible: true, onClose: firstClose });
+
+    renderer.act(() => menu.latest().handOff('/settings', pushSettings));
+    // The owner re-rendered while the screen was being built.
+    menu.update({ visible: true, onClose: latestClose });
+    menu.unmount();
+
+    expect(firstClose).not.toHaveBeenCalled();
+    expect(latestClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the owner nothing more once the menu has left', () => {
+    const onClose = vi.fn();
+    const menu = renderHandoff({ visible: true, onClose });
+
+    renderer.act(() => menu.latest().handOff('/settings', pushSettings));
+    renderer.act(() => container.land('settings-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // The owner's close is what takes some menus off screen (Home's sheet).
+    menu.unmount();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the owner nothing more after a navigation that went nowhere', () => {
+    const onClose = vi.fn();
+    const menu = renderHandoff({ visible: true, onClose });
+
+    renderer.act(() => menu.latest().handOff('creator', () => false));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    menu.unmount();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the owner nothing when no screen was handed off', () => {
+    const onClose = vi.fn();
+    renderHandoff({ visible: true, onClose }).unmount();
+
+    // Sign out takes the menu's one choice and closes the menu itself.
+    const signingOut = renderHandoff({ visible: true, onClose });
+    renderer.act(() => {
+      expect(signingOut.latest().claim()).toBe(true);
+    });
+    signingOut.unmount();
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * Review of #679: `handOff` and `claim` were new functions on every render
  * wherever the compiler did not memoize this hook. The comments sheet, which
  * the compiler skips, lists `handOff` among its callbacks' dependencies, so
