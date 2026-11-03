@@ -211,10 +211,24 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   // The drag rides on top of the slide translation, which is why this one folds
   // the offset into its own transform instead of appending a second one.
   const sheetDrag = useSheetDismissDrag({ onDismiss: onClose, visible: shown });
+  // The slide's and the scrim's nodes are built once per opening, not on every
+  // render. The sheet re-renders on every keystroke in its composer, and
+  // mid-slide: its owner's close lands a render after its exit over an
+  // author's profile has begun, and nodes built anew there are connected to
+  // the views again under the running slide (the side menu stopped for 72 ms
+  // that way, components/home-side-menu.tsx). The compiler skips this
+  // component, so the memos are written out.
+  //
   // The scrim thins as the sheet is pulled away, on top of its own entrance.
-  const backdropOpacity = sheetDrag.backdropOpacity && typeof Animated.multiply === 'function'
-    ? Animated.multiply(slide, sheetDrag.backdropOpacity)
-    : slide;
+  const backdropOpacity = useMemo(() => (
+    sheetDrag.backdropOpacity && typeof Animated.multiply === 'function'
+      ? Animated.multiply(slide, sheetDrag.backdropOpacity)
+      : slide
+  ), [sheetDrag.backdropOpacity, slide]);
+  const sheetTranslateY = useMemo(() => {
+    const entry = slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] });
+    return sheetDrag.translateY ? Animated.add(entry, sheetDrag.translateY) : entry;
+  }, [sheetDrag.translateY, slide, windowHeight]);
 
 
   const commentsQueryKey = createPostCommentsQueryKey(postId, sort, user?.id);
@@ -886,14 +900,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         // The slide lives on the panel rather than a wrapper: an extra view in
         // between would become the percentage height's containing block, and an
         // auto-sized parent leaves `78%` with nothing to resolve against.
-        transform: [{
-          translateY: sheetDrag.translateY
-            ? Animated.add(
-                slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
-                sheetDrag.translateY,
-              )
-            : slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
-        }],
+        transform: [{ translateY: sheetTranslateY }],
         height: '78%',
         borderTopLeftRadius: appTheme.radii.xl,
         borderTopRightRadius: appTheme.radii.xl,

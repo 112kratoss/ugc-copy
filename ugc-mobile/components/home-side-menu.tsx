@@ -209,26 +209,39 @@ export function HomeSideMenu({
     },
   }), [dragX]);
 
-  const backdropOpacity = progress
-    ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.64 * theme.dim.scale] })
-    : 0.64;
+  // The slide's and the backdrop's nodes are built once per opening, not on
+  // every render. The drawer re-renders mid-slide: its owner's close lands a
+  // render after its exit over the chosen screen has begun, and nodes built
+  // anew there are connected to the views again under the running slide.
+  // Drawn from the root, where that came on every exit, the drawer was filmed
+  // stopping for 72 ms on its way out (Pixel 9a emulator, 2026-11-03). The
+  // compiler skips this component, so the memos are written out.
+  const backdropOpacity = useMemo(() => (
+    progress
+      ? progress.interpolate({ inputRange: [0, 1], outputRange: [0, 0.64 * theme.dim.scale] })
+      : 0.64
+  ), [progress, theme.dim.scale]);
   // No opacity ramp on the panel itself. The old 0.86 -> 1 fade existed to
   // paper over a drawer that barely moved; a surface that slides in from the
   // edge should not also dissolve into place. The backdrop still fades.
-  const entryTranslateX = progress
-    ? progress.interpolate({
-        inputRange: [0, 1],
-        // Its own width plus slop for the shadow. The panel casts
-        // `16px 0 40px`, so parking it at exactly -drawerWidth would leave
-        // roughly 56pt of shadow spilling across the closed screen.
-        outputRange: [-(drawerWidth + DRAWER_HIDDEN_SLOP), 0],
-      })
-    : 0;
+  const entryTranslateX = useMemo(() => (
+    progress
+      ? progress.interpolate({
+          inputRange: [0, 1],
+          // Its own width plus slop for the shadow. The panel casts
+          // `16px 0 40px`, so parking it at exactly -drawerWidth would leave
+          // roughly 56pt of shadow spilling across the closed screen.
+          outputRange: [-(drawerWidth + DRAWER_HIDDEN_SLOP), 0],
+        })
+      : 0
+  ), [drawerWidth, progress]);
   // Folded into one transform entry rather than stacked: a JS-driven value
   // beside a native-driven one on the same view does not compose.
-  const drawerTranslateX = progress && dragX
-    ? Animated.add(entryTranslateX, dragX)
-    : entryTranslateX;
+  const drawerTranslateX = useMemo(() => (
+    progress && dragX
+      ? Animated.add(entryTranslateX, dragX)
+      : entryTranslateX
+  ), [dragX, entryTranslateX, progress]);
 
   return (
     <ModalSurface

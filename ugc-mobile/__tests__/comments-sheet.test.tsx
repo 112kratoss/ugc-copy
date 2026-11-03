@@ -48,6 +48,8 @@ const mocks = vi.hoisted(() => ({
   routerSetParams: vi.fn(),
   blockUser: vi.fn(),
   announce: vi.fn(),
+  /** True while a test keeps the sheet's slides running, as they are mid-exit. */
+  animationsHold: false,
 }));
 const {
   listPostComments,
@@ -83,15 +85,23 @@ vi.mock('react-native', () => ({
   Alert: { alert: mocks.alert },
   Animated: {
     View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+    // Each interpolation and sum is a node of its own, as React Native's are,
+    // so a test can tell a node kept from one built again.
     Value: class {
       constructor(private value: number) {}
       setValue(next: number) { this.value = next; }
-      interpolate() { return this.value; }
+      interpolate(config: unknown) { return { interpolates: this, config }; }
     },
-    timing: () => ({ start: (done?: (r: { finished: boolean }) => void) => done?.({ finished: true }), stop: () => {} }),
+    timing: () => ({
+      start: (done?: (r: { finished: boolean }) => void) => {
+        if (!mocks.animationsHold) done?.({ finished: true });
+      },
+      stop: () => {},
+    }),
     spring: () => ({ start: () => {}, stop: () => {} }),
-    // The sheet composes its slide with the drag offset.
-    add: (a: unknown, _b: unknown) => a,
+    // The sheet composes its slide with the drag offset, and its scrim with the drag's fade.
+    add: (a: unknown, b: unknown) => ({ add: [a, b] }),
+    multiply: (a: unknown, b: unknown) => ({ multiply: [a, b] }),
   },
   Easing: { in: (fn: unknown) => fn, out: (fn: unknown) => fn, cubic: 'cubic' },
   // The sheet's grabber owns a swipe-to-dismiss responder; the double only
@@ -330,6 +340,19 @@ function composerInput(root: renderer.ReactTestInstance) {
   return root.find((node) => String(node.type) === 'textinput');
 }
 
+/** The sheet's sliding panel: the one view sized as a share of the screen. */
+function sheetPanel(root: renderer.ReactTestInstance) {
+  return root.find((node) => String(node.type) === 'view'
+    && (node.props.style as { height?: unknown } | undefined)?.height === '78%');
+}
+
+/** The scrim behind the sheet, which fades with its slide. */
+function sheetScrim(root: renderer.ReactTestInstance) {
+  return root.find((node) => String(node.type) === 'view'
+    && (node.props.style as { inset?: unknown } | undefined)?.inset === 0
+    && 'opacity' in (node.props.style as object));
+}
+
 /** The rows a comment's ••• offers, as the action sheet a build without native menus shows. */
 function commentOptions(root: renderer.ReactTestInstance, authorLabel: string) {
   const presented: ActionSheetRequest[] = [];
@@ -375,6 +398,7 @@ beforeEach(() => {
   replyQueryState = {};
   container.routeKey = 'viewer-key';
   container.listeners.clear();
+  mocks.animationsHold = false;
   for (const mock of [
     listPostComments,
     createPostComment,
@@ -832,6 +856,36 @@ describe('comments sheet', () => {
     renderer.act(() => tree.unmount());
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Review of #679, B2: the sheet slides out over the profile once it has been
+  // built, and its owner's close re-renders it a render after the slide has
+  // started. Built on every render, the slide's and the scrim's nodes were
+  // built again there, mid-exit, and connected to the views again under the
+  // running slide. They are built once per opening now.
+  it("keeps the nodes its slide and scrim run on through its owner's late close", () => {
+    mocks.animationsHold = true;
+    pages = [page([comment()])];
+    const onClose = vi.fn();
+    const tree = renderSheet({ onClose });
+    const nodes = () => ({
+      slide: (sheetPanel(tree.root).props.style as { transform: Array<{ translateY: unknown }> }).transform[0].translateY,
+      scrim: (sheetScrim(tree.root).props.style as { opacity: unknown }).opacity,
+    });
+    const opened = nodes();
+
+    renderer.act(() => {
+      pressable(tree.root, 'Open @batman profile').props.onPress();
+    });
+    renderer.act(() => container.land('creator-batman-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // The owner's close lands with the slide out under way.
+    renderer.act(() => {
+      tree.update(sheetElement({ onClose, visible: false }));
+    });
+
+    expect(nodes().slide).toBe(opened.slide);
+    expect(nodes().scrim).toBe(opened.scrim);
   });
 
   // Review of #679: the hand-off's `handOff` was new on every render here,
