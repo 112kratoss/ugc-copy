@@ -743,7 +743,7 @@ function MotionCreator({
         let url = remixSourceBundle.result.url;
         // The link the remix was read with lasts an hour: past it the clip's length could not be
         // read, and Generate stayed held until a reload. One about to lapse is renewed first.
-        if (isSignedMediaUrlExpiring(url, Date.now())) {
+        if (isSignedMediaUrlExpiring(url)) {
             const clipAtPress = referenceVideoRef.current;
             setIsAddingOriginal(true);
             try {

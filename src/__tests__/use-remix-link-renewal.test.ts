@@ -48,8 +48,8 @@ function remixReads() {
   }));
 }
 
-function renew({ formAccount = 'user-1', remixId = 'gen-1' as string | null, originalResult = null as string | null } = {}) {
-  return renderHook(() => useRemixLinkRenewal({ remixId, remixPostId: 'post-1', formAccount, pageToken: 'page-token', originalResult })).result.current;
+function renew({ formAccount = 'user-1', originalResult = null as string | null } = {}) {
+  return renderHook(() => useRemixLinkRenewal({ remixId: 'gen-1', remixPostId: 'post-1', formAccount, pageToken: 'page-token', originalResult })).result.current;
 }
 
 beforeEach(() => {
@@ -65,14 +65,6 @@ afterEach(() => {
 });
 
 describe('useRemixLinkRenewal', () => {
-  it('gives a link that lasts back as it is, reading nothing', async () => {
-    const link = signedStorageLink(CLIP);
-    await expect(renew()(link)).resolves.toBe(link);
-    // Nor a link that does not lapse, on any page.
-    await expect(renew()('blob:clip')).resolves.toBe('blob:clip');
-    expect(remixReads()).toEqual([]);
-  });
-
   it('renews a lapsed link by reading the remix again with the browser’s session, for the same file', async () => {
     const lapsed = signedStorageLink(CLIP);
     advancePastTheHour();
@@ -189,11 +181,4 @@ describe('useRemixLinkRenewal', () => {
     expect(remixReads()).toHaveLength(2);
   });
 
-  it('renews nothing off a remix page', async () => {
-    const lapsed = signedStorageLink(CLIP);
-    advancePastTheHour();
-
-    await expect(renew({ remixId: null })(lapsed)).resolves.toBe(lapsed);
-    expect(remixReads()).toEqual([]);
-  });
 });

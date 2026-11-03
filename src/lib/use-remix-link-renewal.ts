@@ -38,12 +38,11 @@ async function fetchRemixAnswer(
   { remixId, remixPostId, formAccount, pageToken }: RemixRead,
   signal: AbortSignal,
 ): Promise<RemixSourceBundle | null> {
-  if (!remixId) return null;
   try {
     const { data: { session } } = await supabase.auth.getSession();
     const accessToken = session && session.user.id === formAccount ? session.access_token : pageToken;
     if (!accessToken || signal.aborted) return null;
-    const params = new URLSearchParams({ id: remixId });
+    const params = new URLSearchParams({ id: remixId ?? '' });
     if (remixPostId) params.set('postId', remixPostId);
     const response = await fetch(`/api/remix-source?${params.toString()}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -78,11 +77,12 @@ async function readRemixAnswer(read: RemixRead): Promise<RemixSourceBundle | nul
  * A remix page's links, renewed where they are used. The remix source signs a remix's media for
  * an hour and a form reads its remix once (#664), so past the hour "Use as reference" read no
  * length from the original's clip and a preview drew nothing. A link about to lapse is swapped,
- * at the press or the preview that uses it, for the same file's link in a fresh read of the
- * remix: the same gate as the form's own read, whose answer is used for its links alone, so the
- * form keeps everything the creator changed. The asks made while a read is out share it, whatever
- * it answers; one made after it reads again, as no answer is kept past its read. A read that fails,
- * or stalls past REMIX_LINK_READ_TIMEOUT_MS, leaves each link as it was.
+ * at the press or the preview that uses it, for the same file's link in a fresh read of the remix:
+ * the same gate as the form's own read, whose answer is used for its links alone, so the form
+ * keeps everything the creator changed. Each press and preview asks only on a remix page, and only
+ * for a link `isSignedMediaUrlExpiring` calls lapsing. The asks made while a read is out share it,
+ * whatever it answers; one made after it reads again, as no answer is kept past its read. A read
+ * that fails, or stalls past REMIX_LINK_READ_TIMEOUT_MS, leaves each link as it was.
  */
 export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken, originalResult }: RemixRead): RenewRemixLink {
   const readRef = useRef<RemixRead>({ remixId, remixPostId, formAccount, pageToken, originalResult });
@@ -93,7 +93,6 @@ export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageTok
 
   return useCallback<RenewRemixLink>(async (link) => {
     const read = readRef.current;
-    if (!read.remixId || !isSignedMediaUrlExpiring(link, Date.now())) return link;
     // The read out is shared only by asks for its own remix and account: another account's form is
     // answered by its own read, through its own gate.
     const key = JSON.stringify([read.remixId, read.remixPostId, read.formAccount]);
@@ -110,6 +109,6 @@ export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageTok
     }
     const answer = await readOut.answer;
     const renewed = answer ? renewedRemixLink(link, answer, read.originalResult) : null;
-    return renewed && !isSignedMediaUrlExpiring(renewed, Date.now()) ? renewed : link;
+    return renewed && !isSignedMediaUrlExpiring(renewed) ? renewed : link;
   }, []);
 }

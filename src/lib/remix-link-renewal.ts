@@ -24,7 +24,7 @@ function isSameStoredFile(first: string, second: string): boolean {
 /**
  * The links a remix's answer opens its media by, as it signed them: each `url` of the original's
  * result and of the inputs it restores. Never its settings', which name the links the run read
- * long ago, nor what a kept input records of its source (`sourceUrl`, the link its run read).
+ * long ago.
  */
 function remixAnswerLinks(answer: RemixSourceBundle): string[] {
   const links: string[] = [];
@@ -44,7 +44,6 @@ function remixAnswerLinks(answer: RemixSourceBundle): string[] {
   };
   collect(answer.result);
   collect(answer.inputs);
-  collect(answer.inputMedia);
   return links;
 }
 

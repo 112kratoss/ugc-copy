@@ -19,13 +19,6 @@ function answerSignedAt(signedAt: number): RemixSourceBundle {
         referenceVideo: { kind: 'video', label: 'Clip', storagePath: 'generation_inputs/user-1/gen-1/01.mp4', url: signedStorageLink('generation_inputs/user-1/gen-1/01.mp4', signedAt) },
       },
     },
-    inputMedia: [{
-      id: 'row-1', generationId: 'gen-1', mediaType: 'image', role: 'character_image', label: 'Character image',
-      url: signedStorageLink('generation_inputs/user-1/gen-1/00.png', signedAt),
-      storagePath: 'generation_inputs/user-1/gen-1/00.png', sourceGenerationId: null, sortOrder: 0,
-      // What the run read, signed when it ran: never a link to renew with.
-      metadata: { sourceUrl: signedStorageLink('uploads/user-1/hero.png', signedAt - 30 * HOUR_MS) },
-    }],
     // The links the run read, long lapsed: never a link to renew with.
     workflowSettings: {
       referenceVideoUrls: [signedStorageLink('uploads/user-1/old-clip.mp4', signedAt - 30 * HOUR_MS)],
@@ -64,10 +57,9 @@ describe('a remix link renewed', () => {
     expect(renewedRemixLink(lapsed.result!.url!, fresh)).toBe(fresh.result!.url);
     expect(renewedRemixLink(lapsed.inputs.motion!.referenceVideo!.url!, fresh)).toBe(fresh.inputs.motion!.referenceVideo!.url);
     expect(renewedRemixLink(lapsed.inputs.motion!.characterImage!.url!, fresh)).toBe(fresh.inputs.motion!.characterImage!.url);
-    // A file the answer hands out under no link of its own: the settings' and the rows' records
-    // name it, but only by the links the run read.
+    // A file the answer hands out under no link of its own: the settings name it, but only by the
+    // links the run read.
     expect(renewedRemixLink(signedStorageLink('uploads/user-1/old-clip.mp4', SIGNED_AT), fresh)).toBeNull();
-    expect(renewedRemixLink(signedStorageLink('uploads/user-1/hero.png', SIGNED_AT), fresh)).toBeNull();
   });
 
   it('takes the answer’s own result for a link to the original, posted since or not', () => {

@@ -3400,7 +3400,7 @@ function VideoCreator({
         // The link the remix was read with lasts an hour: past it the clip's length could not be read,
         // and the clip came in with none. One about to lapse is renewed first.
         let url = original;
-        if (isSignedMediaUrlExpiring(original, Date.now())) {
+        if (isSignedMediaUrlExpiring(original)) {
             setIsAddingOriginal(true);
             try {
                 url = await renewRemixLink(original);

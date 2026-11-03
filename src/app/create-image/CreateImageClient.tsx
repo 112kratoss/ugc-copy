@@ -1143,7 +1143,7 @@ function ImageCreator({
         let resultUrl = remixSourceBundle.result?.url ?? null;
         // The link the remix was read with lasts an hour: past it the picture was drawn from a link
         // storage refuses. One about to lapse is renewed first.
-        if (resultUrl && isSignedMediaUrlExpiring(resultUrl, Date.now())) {
+        if (resultUrl && isSignedMediaUrlExpiring(resultUrl)) {
             setIsAddingOriginal(true);
             try {
                 resultUrl = await renewRemixLink(resultUrl);

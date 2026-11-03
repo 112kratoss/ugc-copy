@@ -30,7 +30,7 @@ function StudioPreviewMedia({
 }) {
   // Read once, as it opens: null while a lapsing link waits for its renewal.
   const [shown, setShown] = useState<string | null>(() => (
-    renewSrc && isSignedMediaUrlExpiring(src, Date.now()) ? null : src
+    renewSrc && isSignedMediaUrlExpiring(src) ? null : src
   ));
   useEffect(() => {
     if (shown !== null || !renewSrc) return;
