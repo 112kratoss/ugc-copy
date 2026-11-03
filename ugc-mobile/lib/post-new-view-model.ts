@@ -23,12 +23,16 @@ import type {
 import { formatUsdCents } from '@/lib/home-view-model';
 import { formatCreditAmount } from '@/lib/pricing';
 import { homeModelLabel } from '@/lib/home-feed-view-model';
+import { ApiError } from '@/lib/api-client';
 import {
   describeTitleSuggestion,
   followTitleForPromptPrivacy,
   getPublicPostQualityError,
   isPlaceholderText,
+  isTitleTooShortForRecipe,
   PUBLIC_POST_PLACEHOLDER_TITLE_ERROR,
+  RECIPE_TITLE_TOO_SHORT_CODE,
+  RECIPE_TITLE_TOO_SHORT_HINT,
   recipeKeepsPromptPrivate,
   suggestCreationPostTitle,
 } from '@/lib/post-publish-policy/post-publish-policy';
@@ -581,6 +585,29 @@ export const RECIPE_NEEDS_AN_ITEM_MESSAGE = 'Add at least one item to the recipe
 export const RECIPE_PREVIEW_REQUIRED_MESSAGE = 'Add a recipe preview.';
 export const RECIPE_PREVIEW_QUALITY_MESSAGE = `Write a recipe preview of at least ${RECIPE_PREVIEW_MIN_USEFUL_LENGTH} characters that says what people get.`;
 export const RECIPE_PRICE_RULE_MESSAGE = `Paid recipes start at ${MIN_RESOURCE_PRICE_TOKENS} credits, in steps of 10.`;
+
+/**
+ * The hint under the title while a Free or Paid recipe has a shorter title
+ * than the listing rule takes (owner, 2026-11-03), whatever the visibility:
+ * the rule holds once the post is public.
+ */
+export function getRecipeTitleHint(draft: Pick<PostComposerDraft, 'title' | 'resource'>): string | undefined {
+  return isTitleTooShortForRecipe(draft.title, draft.resource.accessMode) ? RECIPE_TITLE_TOO_SHORT_HINT : undefined;
+}
+
+/**
+ * Whether the server would refuse this post for its title, as it does a
+ * public post whose Free or Paid recipe has a title under the minimum: step 2
+ * says so and offers "Post without recipe" in place of Publish.
+ */
+export function isRecipeTitleTooShortToPublish(draft: Pick<PostComposerDraft, 'title' | 'resource' | 'visibility'>): boolean {
+  return draft.visibility === 'public' && isTitleTooShortForRecipe(draft.title, draft.resource.accessMode);
+}
+
+/** The server's refusal of the same rule, by its code on the create, publish and update routes alike. */
+export function isRecipeTitleTooShortRefusal(error: unknown): boolean {
+  return error instanceof ApiError && error.code === RECIPE_TITLE_TOO_SHORT_CODE;
+}
 
 /** What a seller keeps of each sale, and the balance a payout starts from ($100: 10,000 credits). */
 const RECIPE_CREATOR_SHARE_PERCENT = 85;
@@ -1400,12 +1427,14 @@ export function validatePostComposerDraft(
 }
 
 /**
- * The first thing a chosen recipe still needs, or null when it can go out: an
- * item (or the creation's references), its Recipe preview, a useful one on a
- * public post, then a price the server takes.
+ * The first thing a chosen recipe still needs, or null when it can go out: on
+ * a public post a title as long as the listing rule takes (its first check on
+ * the server), an item (or the creation's references), its Recipe preview, a
+ * useful one on a public post, then a price the server takes.
  */
 function getRecipeProblem(draft: PostComposerDraft, options: PostComposerValidationOptions): string | null {
   if (draft.resource.accessMode === 'none') return null;
+  if (isRecipeTitleTooShortToPublish(draft)) return RECIPE_TITLE_TOO_SHORT_HINT;
   if (countRecipeItems(draft.resource) === 0 && !options.includesCreationReferences) {
     return RECIPE_NEEDS_AN_ITEM_MESSAGE;
   }

@@ -324,6 +324,7 @@ vi.mock('expo-file-system', () => ({
 }));
 
 import NewPostScreen from '../app/post/new';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { ApiError } from '../lib/api-client';
 import { pickMediaList, pickResourceDocument, pickResourcePhotos, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
 import {
@@ -332,6 +333,7 @@ import {
   type PostComposerDraft,
   type PostComposerMediaItem,
 } from '../lib/post-new-view-model';
+import { RECIPE_TITLE_TOO_SHORT_HINT } from '../lib/post-publish-policy/post-publish-policy';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -3544,6 +3546,111 @@ describe('mobile external post composer', () => {
         });
         expect(alertState.alert).not.toHaveBeenCalled();
         expect(mutationState.mutate).toHaveBeenCalledWith('public');
+      });
+    });
+
+    // Owner, 2026-11-03: the listing rule's title minimum stays. It is said
+    // under the title, in step 2's summary in place of "Ready to publish", and
+    // "Post without recipe" sends the post with No recipe in one press; an
+    // edit that takes off the recipe the post has asks first, as its save does.
+    describe('a title shorter than a recipe needs', () => {
+      const SHORT = 'Cat';
+      const titleInput = (tree: renderer.ReactTestRenderer) => findTextInputByAccessibilityLabel(tree.root, 'Title, required');
+      const postWithoutRecipeButtons = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Post without recipe'
+      ));
+      async function postWithoutRecipe(tree: renderer.ReactTestRenderer) {
+        await renderer.act(async () => {
+          postWithoutRecipeButtons(tree)[0].props.onPress();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      async function answer(label: string) {
+        const buttons = alertState.alert.mock.calls.at(-1)?.[2] as Array<{ text: string; onPress?: () => void }>;
+        await renderer.act(async () => {
+          buttons.find((button) => button.text === label)?.onPress?.();
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      }
+      const sentWithoutRecipe = expect.objectContaining({
+        title: SHORT,
+        visibility: 'public',
+        resource: expect.objectContaining({ accessMode: 'none' }),
+      });
+
+      it('says the minimum under the title while the recipe is free or paid', async () => {
+        const tree = await renderScreen();
+        expect(collectText(tree.root)).not.toContain(RECIPE_TITLE_TOO_SHORT_HINT);
+
+        renderer.act(() => titleInput(tree).props.onChangeText(SHORT));
+        expect(collectText(tree.root)).toContain(RECIPE_TITLE_TOO_SHORT_HINT);
+        renderer.act(() => titleInput(tree).props.onChangeText('Cat at dusk'));
+        expect(collectText(tree.root)).not.toContain(RECIPE_TITLE_TOO_SHORT_HINT);
+      });
+
+      it('holds Publish, says why in the summary, and posts without the recipe in one press', async () => {
+        generationState.item = { ...generationItem, title: SHORT };
+        const tree = await stepTwo();
+        const text = collectText(tree.root);
+        expect(text).toContain('Needs attention');
+        expect(text).toContain(RECIPE_TITLE_TOO_SHORT_HINT);
+        expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
+        expect(postWithoutRecipeButtons(tree)).toHaveLength(1);
+
+        await postWithoutRecipe(tree);
+        expect(alertState.alert).not.toHaveBeenCalled();
+        expect(mutationState.mutate).toHaveBeenCalledTimes(1);
+        expect(mutationState.mutate).toHaveBeenCalledWith(sentWithoutRecipe);
+        // The save sends that draft, not the one its mutation was drawn with.
+        const context = mutationState.options?.onMutate?.(mutationState.mutate.mock.calls[0][0] as never) as { submittedDraft?: PostComposerDraft };
+        expect(context.submittedDraft?.resource.accessMode).toBe('none');
+        expect(radio(tree, 'No recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+        expect(postWithoutRecipeButtons(tree)).toHaveLength(0);
+      });
+
+      it('answers the server’s refusal of that rule with the same press', async () => {
+        const refusal = mobileApiContract.endpoints.publishGeneration.errors.recipeTitleTooShort;
+        const tree = await stepTwo();
+        expect(postWithoutRecipeButtons(tree)).toHaveLength(0);
+        renderer.act(() => mutationState.options?.onError?.(
+          new ApiError(refusal.response.error, refusal.status, refusal.response, undefined, refusal.response.code),
+          'public',
+        ));
+
+        expect(collectText(tree.root)).toContain('Could not publish');
+        expect(collectText(tree.root)).toContain(refusal.response.error);
+        await postWithoutRecipe(tree);
+        expect(mutationState.mutate).toHaveBeenCalledWith(expect.objectContaining({
+          resource: expect.objectContaining({ accessMode: 'none' }),
+        }));
+      });
+
+      it('asks before an edit takes off a recipe people have, and saves without it only when told', async () => {
+        paramsState.params = { postId: 'post-with-recipe' };
+        postEditState.post = recipePost({ title: SHORT, resourceBundleBuyerCount: 3 });
+        const tree = await stepTwo();
+        expect(findPressableByAccessibilityLabel(tree.root, 'Save changes').props.disabled).toBe(true);
+
+        await postWithoutRecipe(tree);
+        expect(alertState.alert).toHaveBeenLastCalledWith(
+          'Remove this recipe?',
+          'Its 2 items and files will be deleted. The 3 people who have it keep their copy; it comes off sale.',
+          expect.any(Array),
+          expect.any(Object),
+        );
+        await answer('Keep recipe');
+        expect(mutationState.mutate).not.toHaveBeenCalled();
+        expect(radio(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+
+        await postWithoutRecipe(tree);
+        await answer('Remove recipe');
+        // Asked once for that press: the save it sends does not ask again.
+        expect(alertState.alert).toHaveBeenCalledTimes(2);
+        expect(mutationState.mutate).toHaveBeenCalledTimes(1);
+        expect(mutationState.mutate).toHaveBeenCalledWith(sentWithoutRecipe);
       });
     });
 

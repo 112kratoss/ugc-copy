@@ -1445,6 +1445,39 @@ describe('publishGenerationToShowcaseForRoute', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
+  // Owner, 2026-11-03: the composers answer this refusal with "Post without
+  // recipe", which they find by its code.
+  it('answers a title too short for its recipe with the refusal the fixture pins', async () => {
+    const refusal = mobileApiContract.endpoints.publishGeneration.errors.recipeTitleTooShort;
+    const adminClient = createAdminClientMock({
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: null,
+      description: null,
+      prompt: 'Lantern glow at dusk',
+    });
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn();
+
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: adminClient.client,
+      body: { generationId: 'gen-1', visibility: 'public', title: 'Cat' },
+      userId: 'user-1',
+      dependencies: {
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => refusal.response.error),
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
   // Recipe text reaches buyers like the caption does. The route checked the
   // post's own text and the originating prompt, but not the recipe's — neither
   // a resubmitted one nor the stored one a visibility flip can republish.

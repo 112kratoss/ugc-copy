@@ -40,8 +40,8 @@ import {
   PUBLIC_UGC_SAFETY_ERROR,
 } from '@/lib/public-ugc-safety';
 import {
+  getMarketplaceRefusalFields,
   isCreatorProfileCheckError,
-  isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
 import {
   getSubmittedMediaKind,
@@ -194,20 +194,13 @@ export async function publishPreparedPost({
     : null;
 
   if (marketplaceQualityError) {
-    const needsProfileRepair = isCreatorProfileReadinessError(marketplaceQualityError);
     const profileCheckFailed = isCreatorProfileCheckError(marketplaceQualityError);
     return {
       ok: false,
       status: profileCheckFailed ? 500 : 400,
       body: {
         error: marketplaceQualityError,
-        ...(needsProfileRepair
-          ? {
-              field: 'profile',
-              actionHref: '/profile',
-              actionLabel: 'Complete profile and return',
-            }
-          : {}),
+        ...getMarketplaceRefusalFields(marketplaceQualityError),
       },
     };
   }

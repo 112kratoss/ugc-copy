@@ -9,7 +9,9 @@ import NewPostClient from '@/app/post/new/NewPostClient';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { RECIPE_TITLE_TOO_SHORT_HINT, RECIPE_TITLE_TOO_SHORT_REFUSAL } from '@/lib/marketplace-trust';
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 // One router object for every render: the composer's effects list the router
 // as a dependency, and a fresh object per render reruns them on every render.
@@ -5955,6 +5957,129 @@ describe('NewPostClient', () => {
       const unload = new Event('beforeunload', { cancelable: true });
       window.dispatchEvent(unload);
       expect(unload.defaultPrevented).toBe(false);
+    });
+
+    // Owner, 2026-11-03: the title minimum stays, said plainly by the title
+    // before Publish, and a refusal offers "Post without recipe".
+    describe('a title shorter than a recipe needs', () => {
+      const PUBLISHED = {
+        success: true,
+        postId: 'post-recipe-short',
+        showcasePath: '/showcase/post-recipe-short',
+        resourceBundlePath: null,
+        visibility: 'public',
+        resourceBundleStatus: null,
+      };
+      const publishCalls = () => fetchMock.mock.calls.filter(([url]) => String(url) === '/api/showcase/publish');
+      const publishBody = (index: number) => JSON.parse(String((publishCalls()[index][1] as RequestInit).body));
+      const openCreation = async () => {
+        searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+        enqueueCreation({ input_media: [] });
+      };
+      const titleField = async () => {
+        const titleInput = screen.getByRole('textbox', { name: /^title/i });
+        await waitFor(() => expect(titleInput).toHaveValue('Window display still'));
+        return titleInput;
+      };
+      const refusalAlert = async () => (await screen.findByText(RECIPE_TITLE_TOO_SHORT_REFUSAL)).closest('[role="alert"]') as HTMLElement;
+
+      it('says the minimum by the title while a free or paid recipe has a shorter title, and nowhere else', async () => {
+        await openCreation();
+        render(<NewPostClient />);
+        const titleInput = await titleField();
+        expect(screen.queryByText(RECIPE_TITLE_TOO_SHORT_HINT)).not.toBeInTheDocument();
+
+        fireEvent.change(titleInput, { target: { value: 'Cat' } });
+        expect(screen.getByText(RECIPE_TITLE_TOO_SHORT_HINT)).toBeInTheDocument();
+        expect(titleInput).toHaveAccessibleDescription(RECIPE_TITLE_TOO_SHORT_HINT);
+
+        fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+        expect(screen.queryByText(RECIPE_TITLE_TOO_SHORT_HINT)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+        expect(screen.getByText(RECIPE_TITLE_TOO_SHORT_HINT)).toBeInTheDocument();
+        fireEvent.change(titleInput, { target: { value: 'Cat at dusk' } });
+        expect(screen.queryByText(RECIPE_TITLE_TOO_SHORT_HINT)).not.toBeInTheDocument();
+      });
+
+      it('refuses Publish in plain words, and posts without the recipe in one press', async () => {
+        await openCreation();
+        enqueueResponse({ ok: true, json: async () => PUBLISHED });
+        render(<NewPostClient />);
+        fireEvent.change(await titleField(), { target: { value: 'Cat' } });
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+        const alert = await refusalAlert();
+        expect(alert).not.toHaveTextContent(/improve this recipe/i);
+        expect(publishCalls()).toHaveLength(0);
+
+        fireEvent.click(within(alert).getByRole('button', { name: 'Post without recipe' }));
+        await waitFor(() => expect(publishCalls()).toHaveLength(1));
+        expect(publishBody(0)).toMatchObject({
+          generationId: 'gen-recipe-1',
+          title: 'Cat',
+          visibility: 'public',
+          resourceBundle: { accessMode: 'none' },
+        });
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      });
+
+      it('answers the server’s refusal of the title the same way', async () => {
+        const refusal = mobileApiContract.endpoints.publishGeneration.errors.recipeTitleTooShort;
+        await openCreation();
+        enqueueResponse({ ok: false, status: refusal.status, json: async () => refusal.response });
+        enqueueResponse({ ok: true, json: async () => PUBLISHED });
+        render(<NewPostClient />);
+        await titleField();
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+        const alert = await refusalAlert();
+        expect(publishBody(0).resourceBundle).toMatchObject({ accessMode: 'free' });
+        // Said by the title, with Made With left folded.
+        expect(screen.getByRole('button', { name: /^made with/i })).toHaveAttribute('aria-expanded', 'false');
+
+        fireEvent.click(within(alert).getByRole('button', { name: 'Post without recipe' }));
+        await waitFor(() => expect(publishCalls()).toHaveLength(2));
+        expect(publishBody(1).resourceBundle).toEqual({ accessMode: 'none' });
+      });
+
+      // An edit that takes off the recipe the post has deletes it, or retires it
+      // where people have it, so the button asks first, as every such save does.
+      it('asks before an edit takes off a recipe people have, and saves without it only when told', async () => {
+        const putCalls = () => fetchMock.mock.calls.filter(([url, init]) => String(url).startsWith('/api/posts/') && init?.method === 'PUT');
+        enqueueResponse({
+          ok: true,
+          json: async () => ({ success: true, postId: 'post-private-resource-title', visibility: 'public' }),
+        });
+        render(
+          <>
+            <NewPostClient initialPost={{ ...createLegacyPrivateResourcePost(), resourceBundleBuyerCount: 2 }} />
+            <FeedbackViewport />
+          </>
+        );
+        fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value: 'Cat' } });
+        expect(screen.getByText(RECIPE_TITLE_TOO_SHORT_HINT)).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+
+        const alert = await refusalAlert();
+        fireEvent.click(within(alert).getByRole('button', { name: 'Post without recipe' }));
+        const question = await screen.findByRole('alertdialog', { name: 'Remove this recipe?' });
+        expect(question).toHaveAccessibleDescription(
+          'Its 1 item and files will be deleted. The 2 people who have it keep their copy; it comes off sale.',
+        );
+        fireEvent.click(within(question).getByRole('button', { name: 'Keep recipe' }));
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+        expect(putCalls()).toHaveLength(0);
+        expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+        expect(alert).toBeInTheDocument();
+
+        fireEvent.click(within(alert).getByRole('button', { name: 'Post without recipe' }));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove recipe' }));
+        await waitFor(() => expect(putCalls()).toHaveLength(1));
+        // Asked once: the save it sends does not ask again.
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        const payload = JSON.parse(String((putCalls()[0][1] as { body: string }).body));
+        expect(payload).toMatchObject({ title: 'Cat', resourceBundle: { accessMode: 'none' } });
+      });
     });
   });
 

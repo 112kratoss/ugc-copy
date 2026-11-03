@@ -10,6 +10,7 @@ import {
   type SaveShowcasePostOptions,
 } from '../lib/api-client';
 import { recipeCopyableInputs } from '../lib/creation-recipe/creation-recipe';
+import { isRecipeTitleTooShortRefusal } from '../lib/post-new-view-model';
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildHomeFeedCards } from '../lib/home-feed-view-model';
@@ -135,6 +136,29 @@ it('hands the composer what a creation’s save added to its recipe, and the inp
   const { generations } = await clientForEndpoint('listGenerations').listGenerations(false);
   const offered = recipeCopyableInputs(generations.find((generation) => generation.id === 'generation-1')?.input_media);
   expect(offered.map((input) => [input.id, input.mediaKind])).toEqual([['input-1', 'image']]);
+});
+
+// Owner, 2026-11-03: a title shorter than a recipe needs is refused in plain
+// words on all three routes, and the composer answers with "Post without
+// recipe", which it finds by the refusal's code.
+it('hands the composer the code it offers Post without recipe on, from every route that saves a post', async () => {
+  const calls = {
+    createPost: (api: MagicbookletApiClient) => api.createPost(new FormData()),
+    publishGeneration: (api: MagicbookletApiClient) => api.publishGeneration({ generationId: 'generation-1', visibility: 'public' }),
+    updatePost: (api: MagicbookletApiClient) => api.updatePost('post-1', { title: 'Cat' }),
+  } as const;
+  for (const [key, call] of Object.entries(calls) as Array<[keyof typeof calls, (api: MagicbookletApiClient) => Promise<unknown>]>) {
+    const refusal = mobileApiContract.endpoints[key].errors.recipeTitleTooShort;
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)) as unknown as typeof fetch,
+    });
+    const error = await call(api).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 400, message: refusal.response.error, code: 'RECIPE_TITLE_TOO_SHORT' });
+    expect(isRecipeTitleTooShortRefusal(error)).toBe(true);
+  }
 });
 
 it('preserves private generation playback without replacing the original download URL', async () => {

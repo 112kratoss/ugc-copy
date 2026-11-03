@@ -29,14 +29,18 @@ import { useAuth } from '@/components/AuthProvider';
 import PublicIdentityFields from '@/components/PublicIdentityFields';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
-import { SegmentedControl, type SegmentedControlOption } from '@/components/DesignSystem';
+import { Button, SegmentedControl, type SegmentedControlOption } from '@/components/DesignSystem';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { readGenerationPaywallPrefill } from '@/lib/creation-publish-details';
 import {
   assessMarketplaceListingQuality,
   getPublicPostQualityError,
   isCreatorProfileReadinessError,
+  isTitleTooShortForRecipe,
   PUBLIC_POST_PLACEHOLDER_TITLE_ERROR,
+  RECIPE_TITLE_TOO_SHORT_CODE,
+  RECIPE_TITLE_TOO_SHORT_HINT,
+  RECIPE_TITLE_TOO_SHORT_REFUSAL,
 } from '@/lib/marketplace-trust';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import {
@@ -280,11 +284,18 @@ function creationMadeWithRow(shownModel: string): MadeWithRow {
   };
 }
 
+/**
+ * A way on from a refusal drawn as a button under it: "Post without recipe"
+ * for a title shorter than a recipe needs (owner, 2026-11-03).
+ */
+type ComposerRecovery = 'post-without-recipe';
+
 interface ComposerError {
   section: 'post' | 'story' | 'resources' | 'publish';
   message: string;
   actionHref?: string;
   actionLabel?: string;
+  recovery?: ComposerRecovery;
 }
 
 interface ComposerMediaItem {
@@ -374,17 +385,20 @@ class ComposerSubmissionError extends Error {
   readonly section: ComposerError['section'];
   readonly actionHref?: string;
   readonly actionLabel?: string;
+  readonly recovery?: ComposerRecovery;
 
   constructor(
     message: string,
     section: ComposerError['section'],
-    action?: { href: string; label: string }
+    action?: { href: string; label: string },
+    recovery?: ComposerRecovery,
   ) {
     super(message);
     this.name = 'ComposerSubmissionError';
     this.section = section;
     this.actionHref = action?.href;
     this.actionLabel = action?.label;
+    this.recovery = recovery;
   }
 }
 
@@ -405,10 +419,14 @@ function getRefusalSection(field: string | undefined): ComposerError['section'] 
 }
 
 function getSubmissionError(
-  data: { error?: string; field?: string; actionHref?: string; actionLabel?: string },
+  data: { error?: string; field?: string; code?: string; actionHref?: string; actionLabel?: string },
   fallback: string
 ) {
   const message = data.error || fallback;
+  // Said by the title, where the client's own check says it, with the way on.
+  if (data.code === RECIPE_TITLE_TOO_SHORT_CODE) {
+    return new ComposerSubmissionError(message, 'post', undefined, 'post-without-recipe');
+  }
   const needsProfileRepair = data.field === 'profile' || isCreatorProfileReadinessError(message);
   return new ComposerSubmissionError(
     message,
@@ -1026,6 +1044,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const publishSectionRef = useRef<HTMLDivElement | null>(null);
   const savedPanelRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  // "Post without recipe" sends the form again once the recipe reads No
+  // recipe, and an edit's removal question it asked on the way is not asked
+  // twice (owner, 2026-11-03).
+  const resendWithoutRecipeRef = useRef(false);
+  const recipeRemovalAnsweredRef = useRef(false);
+  const recipeTitleHintId = useId();
 
   // One object URL per picked file, kept until the file leaves the list. The
   // URLs were rebuilt for every file on every change (a reorder, an upload
@@ -1336,6 +1360,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       : null;
   const publicPostTitle = title.trim() || (trimmedBody ? trimmedBody.split(/[.!?\n]/)[0]?.trim() ?? '' : '');
   const hasTitle = title.trim().length > 0;
+  // Said by the title while it is shorter than a Free or Paid recipe needs,
+  // before Publish refuses it (owner, 2026-11-03).
+  const titleTooShortForRecipe = isTitleTooShortForRecipe(title, resourceAccessMode);
   const completionChecklist = [
     {
       label: 'Title added',
@@ -2450,6 +2477,11 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             {error.actionLabel ?? 'Complete profile in a new tab'}
           </Link>
         ) : null}
+        {error.recovery === 'post-without-recipe' ? (
+          <Button variant="secondary" className="mt-3" onClick={() => void postWithoutRecipe()}>
+            Post without recipe
+          </Button>
+        ) : null}
       </div>
     );
   };
@@ -2605,10 +2637,45 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     }
   };
 
+  // A title shorter than a recipe needs is refused by the title, plainly, with
+  // the way on (owner, 2026-11-03).
+  const refuseShortRecipeTitle = () => {
+    setError({ section: 'post', message: RECIPE_TITLE_TOO_SHORT_REFUSAL, recovery: 'post-without-recipe' });
+    focusComposerSection('post');
+  };
+
+  // "Post without recipe": the recipe goes to No recipe and the post is sent
+  // again, in one press. An edit that takes off the recipe the post has asks
+  // first, as every save that removes one does (H2), and says that the people
+  // who have it keep their copy; Keep recipe leaves everything as it was, the
+  // refusal included.
+  const postWithoutRecipe = async () => {
+    if (isEditMode && storedRecipe.accessMode !== 'none') {
+      const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix));
+      if (!removes) {
+        return;
+      }
+      recipeRemovalAnsweredRef.current = true;
+    }
+    resendWithoutRecipeRef.current = true;
+    changeResourceAccessMode('none');
+  };
+
+  useEffect(() => {
+    if (!resendWithoutRecipeRef.current || resourceAccessMode !== 'none') {
+      return;
+    }
+    resendWithoutRecipeRef.current = false;
+    formRef.current?.requestSubmit();
+  }, [resourceAccessMode]);
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
     setCreatedPost(null);
+    // Answered by "Post without recipe" for this submit alone.
+    const recipeRemovalAnswered = recipeRemovalAnsweredRef.current;
+    recipeRemovalAnsweredRef.current = false;
 
     const effectiveVisibility = submitVisibilityRef.current;
     trackProductEvent(isEditMode ? 'post_update_attempt' : 'post_publish_attempt', {
@@ -2735,6 +2802,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       ));
       if (!submittedMarketplaceAssessment.eligible && listingIssues.length > 0) {
         const firstIssue = listingIssues[0];
+        if (firstIssue?.code === 'missing_title') {
+          refuseShortRecipeTitle();
+          return;
+        }
         stopWithError(
           firstIssue?.code === 'missing_preview'
             ? RECIPE_PREVIEW_QUALITY_ERROR
@@ -2749,7 +2820,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
 
     // H2 (2026-10-27): an edit's save that takes the recipe off deletes it and
     // its files (or retires it, when people have it), so it asks first.
-    if (isEditMode && storedRecipe.accessMode !== 'none' && resourceAccessMode === 'none') {
+    if (isEditMode && storedRecipe.accessMode !== 'none' && resourceAccessMode === 'none' && !recipeRemovalAnswered) {
       const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix));
       if (!removes) {
         return;
@@ -3008,6 +3079,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       leaveForPublishedPost(published);
     } catch (submitError) {
       const section = submitError instanceof ComposerSubmissionError ? submitError.section : 'publish';
+      const recovery = submitError instanceof ComposerSubmissionError ? submitError.recovery : undefined;
       trackProductEvent(isEditMode ? 'post_update_failed' : 'post_publish_failed', {
         visibility: effectiveVisibility,
         recipe_access: resourceAccessMode,
@@ -3018,15 +3090,17 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         message: submitError instanceof Error ? submitError.message : 'Failed to publish post.',
         actionHref: submitError instanceof ComposerSubmissionError ? submitError.actionHref : undefined,
         actionLabel: submitError instanceof ComposerSubmissionError ? submitError.actionLabel : undefined,
+        recovery,
       });
       // Refused for the profile: ask for the name and handle here, beside the
       // link to the profile.
       if (submitError instanceof ComposerSubmissionError && submitError.actionHref === buildProfileRepairHref()) {
         setProfileRefused(true);
       }
-      // The server refuses a post-section field only over Made With, whose
-      // rows are folded away by default.
-      if (section === 'post') {
+      // Otherwise the server refuses a post-section field only over Made With,
+      // whose rows are folded away by default; a title too short for the
+      // recipe is said by the title.
+      if (section === 'post' && !recovery) {
         setIsMadeWithOpen(true);
       }
       // The bar that pressed publish can be a screen away from the section.
@@ -3613,11 +3687,17 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     maxLength={TITLE_MAX_LENGTH}
                     aria-label={`Title, required, maximum ${TITLE_MAX_LENGTH} characters`}
                     aria-required="true"
+                    aria-describedby={titleTooShortForRecipe ? recipeTitleHintId : undefined}
                     placeholder="What is this creation about?"
                     className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white outline-none transition focus:border-sky-400/40 focus:bg-white/[0.05]"
                   />
                   {titleSuggestionHint ? (
                     <span className="mt-2 block text-xs leading-5 text-zinc-500">{titleSuggestionHint}</span>
+                  ) : null}
+                  {titleTooShortForRecipe ? (
+                    <span id={recipeTitleHintId} className="mt-2 block text-xs leading-5 text-amber-200">
+                      {RECIPE_TITLE_TOO_SHORT_HINT}
+                    </span>
                   ) : null}
                 </label>
 

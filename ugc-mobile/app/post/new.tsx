@@ -103,6 +103,9 @@ import {
   getRecipeMoneyLine,
   getRecipePriceError,
   getRecipeRemovalConfirmation,
+  getRecipeTitleHint,
+  isRecipeTitleTooShortRefusal,
+  isRecipeTitleTooShortToPublish,
   POST_COMPOSER_MORE_RESOURCE_CARD_TYPES,
   POST_COMPOSER_PRIMARY_RESOURCE_CARD_TYPES,
   RECIPE_PREVIEW_MAX_LENGTH,
@@ -335,6 +338,9 @@ function PostDetailsPage({
     : 'Add tool and model';
   // "Suggested" speaks only of a new post's starting title, never of an edit's saved one.
   const titleSuggestionHint = getCreationTitleSuggestionHint(draft, isEditMode ? null : selectedGeneration);
+  // A Free or Paid recipe takes a title of the listing rule's length, said
+  // here before step 2 refuses it (owner, 2026-11-03).
+  const recipeTitleHint = getRecipeTitleHint(draft);
   const titleField = (
     <ComposerFieldShell>
       <CompactFieldLabel label="Title" required valueLength={draft.title.length} maxLength={TITLE_MAX_LENGTH} />
@@ -347,6 +353,7 @@ function PostDetailsPage({
         placeholder="What is this creation about?"
       />
       {titleSuggestionHint ? <AppText variant="caption" color="muted">{titleSuggestionHint}</AppText> : null}
+      {recipeTitleHint ? <AppText variant="caption" color="warning">{recipeTitleHint}</AppText> : null}
       <FieldErrorText message={detailErrors.title} />
     </ComposerFieldShell>
   );
@@ -521,6 +528,8 @@ function PostResourcesPage({
   onEditResource,
   onRemoveResource,
   onEditDetails,
+  onPostWithoutRecipe,
+  postWithoutRecipeDisabled,
 }: {
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
@@ -535,6 +544,9 @@ function PostResourcesPage({
   onEditResource: (id: string) => void;
   onRemoveResource: (id: string) => void;
   onEditDetails: () => void;
+  /** Sends the post with No recipe, for a title too short for one (an edit's asks first). */
+  onPostWithoutRecipe: () => void;
+  postWithoutRecipeDisabled: boolean;
 }) {
   const theme = useAppTheme();
   const resourceActive = draft.resource.accessMode !== 'none';
@@ -572,6 +584,16 @@ function PostResourcesPage({
   return (
     <View style={{ gap: 18 }}>
       <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
+      {/* The summary says the title is too short for the recipe, and its title opens step 1 to
+          lengthen it; this is the other way on (owner, 2026-11-03). */}
+      {isRecipeTitleTooShortToPublish(draft) ? (
+        <SecondaryButton
+          label="Post without recipe"
+          accessibilityHint="Sends this post with No recipe."
+          disabled={postWithoutRecipeDisabled}
+          onPress={onPostWithoutRecipe}
+        />
+      ) : null}
       <View style={{ gap: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <AppText heading variant="sectionTitle">Recipe</AppText>
@@ -2083,7 +2105,7 @@ function NewPostComposer() {
     title: string;
     body?: string;
     /** A way on from the message, drawn as a button under it. */
-    action?: 'complete-profile';
+    action?: 'complete-profile' | 'post-without-recipe';
   } | null>(null);
   const [detailErrors, setDetailErrors] = useState<PostComposerDetailErrors>({});
   // A public post needs a claimed handle and a display name. Read up front, so
@@ -2621,9 +2643,15 @@ function NewPostComposer() {
     return named.draft;
   };
 
+  // What a save sends: the drawn draft, published as the visibility asked, or
+  // the draft handed over whole ("Post without recipe"'s, which the mutation's
+  // own copy of the draft does not have yet).
+  const draftToSend = (sending?: PostComposerDraft['visibility'] | PostComposerDraft): PostComposerDraft => (
+    typeof sending === 'object' ? sending : sending ? { ...draft, visibility: sending } : draft
+  );
   const publishMutation = useMutation({
-    mutationFn: async (targetVisibility?: PostComposerDraft['visibility']) => {
-      const effectiveDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
+    mutationFn: async (sending?: PostComposerDraft['visibility'] | PostComposerDraft) => {
+      const effectiveDraft = draftToSend(sending);
       const validation = validateCurrentDraft(
         effectiveDraft,
         selectedGeneration,
@@ -2667,12 +2695,12 @@ function NewPostComposer() {
         throw error;
       }
     },
-    onMutate: (targetVisibility?: PostComposerDraft['visibility']) => {
-      const submittedDraft = targetVisibility ? { ...draft, visibility: targetVisibility } : draft;
+    onMutate: (sending?: PostComposerDraft['visibility'] | PostComposerDraft) => {
+      const submittedDraft = draftToSend(sending);
       setPendingPublishVisibility(submittedDraft.visibility);
       return { submittedDraft };
     },
-    onSuccess: (response, _targetVisibility, context) => {
+    onSuccess: (response, _sending, context) => {
       // What the server put into the recipe beside what was sent is the
       // composer's own from here, and the switch that asked for the saved
       // inputs is off again; the ones it could not copy are named (#677's
@@ -2777,13 +2805,17 @@ function NewPostComposer() {
     },
     onError: (error) => {
       // A public post needs a claimed handle and a display name, and the server
-      // says which refusal that is on all three routes.
+      // says which refusal that is on all three routes; it says the same of a
+      // title too short for the recipe, which "Post without recipe" answers
+      // (owner, 2026-11-03).
       const needsProfile = isPublicIdentityRefusal(error);
+      const titleTooShort = isRecipeTitleTooShortRefusal(error);
       setMessage({
         tone: 'danger',
         title: isEditMode ? 'Could not save' : 'Could not publish',
         body: error instanceof Error ? error.message : 'Try again.',
         ...(needsProfile ? { action: 'complete-profile' as const } : {}),
+        ...(titleTooShort ? { action: 'post-without-recipe' as const } : {}),
       });
       scrollRef.current?.scrollTo({ y: 0, animated: true });
     },
@@ -3708,32 +3740,60 @@ function NewPostComposer() {
   // drawn: Undo would take the bar away and change nothing.
   const shownUndoEntry = undoEntry && putBackComposerRemoval(draft, undoEntry.removal) !== draft ? undoEntry : null;
 
-  const submitPost = async () => {
-    setMessage(null);
-    // Saving "No recipe" over the recipe an edit loaded deletes it, or takes it
-    // off sale when people have it: asked first (recipe audit A-F2), and Keep
-    // recipe puts the choice back as it was.
+  // Saving "No recipe" over the recipe an edit loaded deletes it, or takes it
+  // off sale when people have it, so it is asked first (recipe audit A-F2).
+  // Null for anything else: a new post, or a save that keeps a recipe.
+  const getLoadedRecipeRemoval = (nextAccessMode: PostComposerDraft['resource']['accessMode']) => {
     const loadedRecipe = isEditMode ? postQuery.data?.post?.resourceBundleInput ?? null : null;
+    return loadedRecipe
+      ? getRecipeRemovalConfirmation({
+          loadedAccessMode: loadedRecipe.accessMode,
+          loadedItemCount: hydratePostComposerResourceCards(loadedRecipe).length,
+          buyerCount: recipeBuyerCount,
+          nextAccessMode,
+          // The same condition as the "Remix comes with this recipe" line above.
+          reopensPost: draft.mode === 'creation',
+        })
+      : null;
+  };
+
+  // "Post without recipe" (owner, 2026-11-03): for a title too short for the
+  // recipe, the recipe goes to No recipe and the post is sent in one press.
+  // An edit that takes off the recipe it loaded asks first, as its save would,
+  // saying who keeps a copy; Keep recipe leaves everything as it was. The
+  // draft it sends is handed to the save, which would otherwise read the one
+  // drawn before the change.
+  const postWithoutRecipe = async () => {
+    const removal = getLoadedRecipeRemoval('none');
+    if (removal && !(await showConfirmDialog(removal))) return;
+    const withoutRecipe = followCreationTitleSuggestion(
+      draft,
+      { ...draft, resource: { ...draft.resource, accessMode: 'none' } },
+      selectedGeneration,
+    );
+    setDraft(withoutRecipe);
+    await submitPost({ sending: withoutRecipe, removalAnswered: true });
+  };
+
+  const submitPost = async ({ sending = draft, removalAnswered = false }: {
+    /** The draft to send, when it is not the one drawn: "Post without recipe"'s. */
+    sending?: PostComposerDraft;
+    /** The removal question was asked on the way here. */
+    removalAnswered?: boolean;
+  } = {}) => {
+    setMessage(null);
     // Asked by what the save sends, not by the mode shown (#677's review): a
     // recipe whose last item went is No recipe unless the creation's saved
     // inputs fill it, and a save of No recipe takes the recipe off the post.
     const nextAccessMode = isEditMode
-      ? buildUpdatePostPayload(Boolean(postQuery.data?.post?.generationId), draft, selectedGeneration).resourceBundle.accessMode
-      : draft.resource.accessMode;
-    const removal = getRecipeRemovalConfirmation({
-      loadedAccessMode: loadedRecipe?.accessMode ?? null,
-      loadedItemCount: loadedRecipe ? hydratePostComposerResourceCards(loadedRecipe).length : 0,
-      buyerCount: recipeBuyerCount,
-      nextAccessMode,
-      // The same condition as the "Remix comes with this recipe" line above.
-      reopensPost: draft.mode === 'creation',
-    });
-    if (removal && loadedRecipe) {
-      const remove = await showConfirmDialog(removal);
-      if (!remove) {
-        updateResource({ accessMode: loadedRecipe.accessMode });
-        return;
-      }
+      ? buildUpdatePostPayload(Boolean(postQuery.data?.post?.generationId), sending, selectedGeneration).resourceBundle.accessMode
+      : sending.resource.accessMode;
+    const removal = removalAnswered ? null : getLoadedRecipeRemoval(nextAccessMode);
+    if (removal && !(await showConfirmDialog(removal))) {
+      // Keep recipe puts the choice back as it was.
+      const loadedAccessMode = postQuery.data?.post?.resourceBundleInput?.accessMode;
+      if (loadedAccessMode) updateResource({ accessMode: loadedAccessMode });
+      return;
     }
     if (needsPublicIdentity) {
       setIsSavingIdentity(true);
@@ -3764,13 +3824,19 @@ function NewPostComposer() {
       setIdentitySaveErrors({});
       setIsSavingIdentity(false);
     }
-    setPendingPublishVisibility(draft.visibility);
-    publishMutation.mutate(draft.visibility);
+    setPendingPublishVisibility(sending.visibility);
+    publishMutation.mutate(sending === draft ? sending.visibility : sending);
   };
   // Step 2 is not ready while a public post still lacks the name and handle.
   const stepTwoValidation: PostComposerValidationResult = publishValidation.valid && (identityProblems.displayName || identityProblems.username)
     ? { valid: false, message: 'Add your name and handle to publish publicly.' }
     : publishValidation;
+  // "Post without recipe" waits as Publish does, for everything but the recipe.
+  const postWithoutRecipeDisabled = !canSubmit
+    || isPickingMedia
+    || pendingRetryMedia.length > 0
+    || publishMutation.isPending
+    || isSavingIdentity;
 
   // Pushed over the composer, which stays as it is: the profile editor goes
   // back to it when it saves or closes, and the draft is kept on the device too.
@@ -3834,6 +3900,14 @@ function NewPostComposer() {
                 label="Complete profile"
                 accessibilityHint="Opens your profile. This post stays here."
                 onPress={openProfileEditor}
+              />
+            ) : null}
+            {message.action === 'post-without-recipe' ? (
+              <SecondaryButton
+                label="Post without recipe"
+                accessibilityHint="Sends this post with No recipe."
+                disabled={postWithoutRecipeDisabled}
+                onPress={() => void postWithoutRecipe()}
               />
             ) : null}
           </View>
@@ -3931,6 +4005,8 @@ function NewPostComposer() {
             onEditResource={openResourceCard}
             onRemoveResource={removeResourceCard}
             onEditDetails={() => setComposerStep('details')}
+            onPostWithoutRecipe={() => void postWithoutRecipe()}
+            postWithoutRecipeDisabled={postWithoutRecipeDisabled}
           />
           </>
         )}

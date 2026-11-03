@@ -2336,6 +2336,37 @@ describe('updateOwnerPostForRoute', () => {
     expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
   });
 
+  // Owner, 2026-11-03: the composers answer this refusal with "Post without
+  // recipe" (an edit's asks first where the post has a recipe), which they
+  // find by its code.
+  it('answers a title too short for its recipe with the refusal the fixture pins', async () => {
+    const refusal = mobileApiContract.endpoints.updatePost.errors.recipeTitleTooShort;
+    const { client } = createSupabaseMock({ bundle: null });
+    const dependencies = {
+      listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => refusal.response.error),
+      updatePostWithResourceBundleAtomically: vi.fn(),
+      replacePostSourceTools: vi.fn(async () => undefined),
+      replacePostMediaItems: vi.fn(async () => undefined),
+      createPostMediaPreview: vi.fn(async () => null),
+    } satisfies PostUpdateDependencies;
+
+    const result = await updateOwnerPostForRoute({
+      adminSupabase: client,
+      ownerUserId: 'user-1',
+      postId: 'post-1',
+      body: {
+        title: 'Cat',
+        body: 'A public proof post with enough detail for visitors.',
+        visibility: 'public',
+      },
+      dependencies,
+    });
+
+    expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
   // replace_post_media deletes and re-inserts every row, so a save gives each
   // item a new id. A page that stays open after saving needs those ids, and to
   // know which new upload became which row, for its next save.

@@ -59,8 +59,8 @@ import {
 } from '@/lib/post-resource-bundles';
 import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import {
+  getMarketplaceRefusalFields,
   isCreatorProfileCheckError,
-  isCreatorProfileReadinessError,
 } from '@/lib/marketplace-trust';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
@@ -863,20 +863,13 @@ export async function publishGenerationToShowcaseForRoute({
     : null;
 
   if (marketplaceQualityError) {
-    const needsProfileRepair = isCreatorProfileReadinessError(marketplaceQualityError);
     const profileCheckFailed = isCreatorProfileCheckError(marketplaceQualityError);
     return {
       ok: false,
       status: profileCheckFailed ? 500 : 400,
       body: {
         error: marketplaceQualityError,
-        ...(needsProfileRepair
-          ? {
-              field: 'profile',
-              actionHref: '/profile',
-              actionLabel: 'Complete profile and return',
-            }
-          : {}),
+        ...getMarketplaceRefusalFields(marketplaceQualityError),
       },
     };
   }

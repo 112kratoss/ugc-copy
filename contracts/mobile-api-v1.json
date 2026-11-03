@@ -1381,6 +1381,16 @@
           }
         ],
         "referencesNotCopied": 0
+      },
+      "errors": {
+        "recipeTitleTooShort": {
+          "status": 400,
+          "response": {
+            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "field": "title",
+            "code": "RECIPE_TITLE_TOO_SHORT"
+          }
+        }
       }
     },
     "createPost": {
@@ -1396,6 +1406,16 @@
         "ownerPath": "/posts/post-1",
         "resourceBundlePath": "/marketplace/resources/resource-1",
         "message": "Post created."
+      },
+      "errors": {
+        "recipeTitleTooShort": {
+          "status": 400,
+          "response": {
+            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "field": "title",
+            "code": "RECIPE_TITLE_TOO_SHORT"
+          }
+        }
       }
     },
     "listSourceTools": {
@@ -2025,6 +2045,14 @@
           "response": {
             "error": "This post was deleted. Buyers keep their copy.",
             "code": "POST_DELETED"
+          }
+        },
+        "recipeTitleTooShort": {
+          "status": 400,
+          "response": {
+            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "field": "title",
+            "code": "RECIPE_TITLE_TOO_SHORT"
           }
         }
       }

@@ -47,8 +47,17 @@ import {
   POST_COMPOSER_RESOURCE_CARD_OPTIONS,
   POST_COMPOSER_SOURCE_OPTIONS,
   validatePostComposerDraft,
+  getRecipeTitleHint,
+  isRecipeTitleTooShortRefusal,
+  isRecipeTitleTooShortToPublish,
   type PostComposerDraft,
 } from '../lib/post-new-view-model';
+import { ApiError } from '../lib/api-client';
+import {
+  RECIPE_TITLE_MIN_LENGTH,
+  RECIPE_TITLE_TOO_SHORT_HINT,
+  RECIPE_TITLE_TOO_SHORT_REFUSAL,
+} from '../lib/post-publish-policy/post-publish-policy';
 import { normalizeAuthReturnTo } from '../lib/auth-navigation';
 import { getPostComposerDraftSignature } from '../lib/post-composer-draft-resume';
 import type { GenerationListItem, PostResourceItem } from '../lib/types';
@@ -2179,6 +2188,47 @@ describe('the public-post rule, checked before step 2 says Ready to publish', ()
     expect(validatePostComposerDraft(textPostDraft({ title: 'Sample pack', resource: recipe }))).toEqual({ valid: true });
     expect(validatePostComposerDraft(textPostDraft({ title: 'Sample video', resource: recipe })))
       .toEqual({ valid: false, message: messages.placeholder_title });
+  });
+
+  // Owner, 2026-11-03: the listing rule's title minimum stays. Step 2 says it
+  // and offers "Post without recipe" in place of a refusal from the server;
+  // the title field says it whatever the visibility, since it holds once the
+  // post is public.
+  it('holds a public post with a recipe to the listing rule’s title minimum, from the shared rule', () => {
+    const recipe = {
+      ...getDefaultPostComposerDraft().resource,
+      accessMode: 'free' as const,
+      previewText: 'Includes the reusable lighting prompt.',
+      cards: [createPostComposerResourceCard('prompt', {
+        title: 'Lighting prompt',
+        textContent: 'Use a large softbox at camera left.',
+      })],
+    };
+    const words = 'Lantern glow at dusk';
+    const short = mediaPostDraft({ title: words.slice(0, RECIPE_TITLE_MIN_LENGTH - 1), resource: recipe });
+
+    expect(validatePostComposerDraft(short)).toEqual({ valid: false, message: RECIPE_TITLE_TOO_SHORT_HINT });
+    expect(isRecipeTitleTooShortToPublish(short)).toBe(true);
+    expect(validatePostComposerDraft({ ...short, title: words.slice(0, RECIPE_TITLE_MIN_LENGTH) })).toEqual({ valid: true });
+    expect(validatePostComposerDraft({ ...short, resource: { ...recipe, accessMode: 'paid', priceTokens: '900' } }))
+      .toEqual({ valid: false, message: RECIPE_TITLE_TOO_SHORT_HINT });
+    // No recipe, or a private post, goes out as it is.
+    const privateShort: PostComposerDraft = { ...short, visibility: 'private' };
+    expect(validatePostComposerDraft({ ...short, resource: { ...recipe, accessMode: 'none' } })).toEqual({ valid: true });
+    expect(validatePostComposerDraft(privateShort)).toEqual({ valid: true });
+    expect(isRecipeTitleTooShortToPublish(privateShort)).toBe(false);
+
+    expect(getRecipeTitleHint(short)).toBe(RECIPE_TITLE_TOO_SHORT_HINT);
+    expect(getRecipeTitleHint(privateShort)).toBe(RECIPE_TITLE_TOO_SHORT_HINT);
+    expect(getRecipeTitleHint({ ...short, resource: { ...recipe, accessMode: 'none' } })).toBeUndefined();
+    expect(getRecipeTitleHint({ ...short, title: '' })).toBeUndefined();
+  });
+
+  it('knows the server’s refusal of that rule by its code alone', () => {
+    expect(isRecipeTitleTooShortRefusal(new ApiError(RECIPE_TITLE_TOO_SHORT_REFUSAL, 400, {}, undefined, 'RECIPE_TITLE_TOO_SHORT')))
+      .toBe(true);
+    expect(isRecipeTitleTooShortRefusal(new ApiError(RECIPE_TITLE_TOO_SHORT_REFUSAL, 400, { field: 'title' }))).toBe(false);
+    expect(isRecipeTitleTooShortRefusal(new Error(RECIPE_TITLE_TOO_SHORT_REFUSAL))).toBe(false);
   });
 });
 

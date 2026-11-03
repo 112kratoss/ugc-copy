@@ -69,7 +69,7 @@ import {
 import { type PostMediaRenditionStatus } from '@/lib/post-media-rendition';
 import { defaultPostMediaKey, normalizePostMediaKey } from '@/lib/post-media-key';
 import { POST_VIDEO_DURATION_LIMIT_MESSAGE, POST_VIDEO_MAX_DURATION_SECONDS } from '@/lib/post-video-limits';
-import { isCreatorProfileCheckError, isCreatorProfileReadinessError } from '@/lib/marketplace-trust';
+import { getMarketplaceRefusalFields, isCreatorProfileCheckError } from '@/lib/marketplace-trust';
 import { recipeKeepsPromptPrivate, titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration, type TemplateRunLink } from '@/lib/template-result';
@@ -1766,14 +1766,8 @@ export async function updateOwnerPostForRoute({
         body: {
           error: marketplaceQualityError,
           // What create and publish attach to the same refusal, so a client
-          // offers the same way to fix the profile whichever route refused.
-          ...(isCreatorProfileReadinessError(marketplaceQualityError)
-            ? {
-                field: 'profile',
-                actionHref: '/profile',
-                actionLabel: 'Complete profile and return',
-              }
-            : {}),
+          // offers the same way on whichever route refused.
+          ...getMarketplaceRefusalFields(marketplaceQualityError),
         },
       };
     }
