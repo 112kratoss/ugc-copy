@@ -15,22 +15,29 @@ export function signedStorageLink(objectPath: string, signedAtMs = Date.now()): 
   return `https://project.supabase.co/storage/v1/object/sign/${objectPath}?token=${token}`;
 }
 
+/** The project's public buckets (supabase/migrations): storage serves no other by a public link. */
+const PUBLIC_BUCKETS = new Set(['showcase_media', 'profiles']);
+
 /**
- * Whether storage still opens a link: it refuses one whose token's `exp` has passed ("exp" claim
- * timestamp check failed), so a page kept open past the hour holds links that no longer open.
- * A link without a token (a public showcase link, a blob) always opens. A fragment (the remix
- * notice's `#t=0.1`) is not part of the request.
+ * Whether storage still opens a link, as it decides: a signed link by its token, which must name
+ * the object the link asks for (its `url` claim) and not have passed its `exp` ("exp" claim
+ * timestamp check failed: a page kept open past the hour holds links that no longer open), and a
+ * public link only into a public bucket. What is not a storage link (a picked file's blob) opens.
+ * A fragment (the remix notice's `#t=0.1`) is not part of the request.
  */
 export function storageOpens(link: string, nowMs = Date.now()): boolean {
-  let token: string | null = null;
+  const object = storedObjectOf(link);
+  if (!object) return true;
+  const request = link.split('#')[0];
+  if (/\/storage\/v1\/object\/public\//.test(request.split('?')[0])) return PUBLIC_BUCKETS.has(object.split('/')[0]);
   try {
-    token = new URL(link.split('#')[0]).searchParams.get('token');
+    const token = new URL(request).searchParams.get('token');
+    const claims = JSON.parse(Buffer.from(token?.split('.')[1] ?? '', 'base64url').toString()) as { url?: unknown; exp?: unknown };
+    return claims.url === object && typeof claims.exp === 'number' && claims.exp * 1000 > nowMs;
   } catch {
-    return true;
+    // No token, or one storage cannot read.
+    return false;
   }
-  if (!token) return true;
-  const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString()) as { exp?: unknown };
-  return typeof claims.exp === 'number' && claims.exp * 1000 > nowMs;
 }
 
 /** The stored object a storage link opens (`bucket/path`), whatever its token. */
