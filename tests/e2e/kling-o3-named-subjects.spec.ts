@@ -164,14 +164,14 @@ async function subjectCardHandles(page: Page): Promise<string[]> {
   return (await subjectCards(page)).map((card) => card.handle);
 }
 
-/** The panel that typing "@" in the prompt opens: its title and the references to insert. */
+/** The rows of the menu that typing "@" in the prompt opens: the references to insert. */
 function mentionPanel(page: Page) {
-  return page.getByRole('group', { name: 'Insert reference', exact: true });
+  return page.getByRole('listbox', { name: 'References', exact: true });
 }
 
-/** The panel that typing "@" in a shot prompt opens: its title and the subjects to insert. */
+/** The rows of the menu that typing "@" in a shot prompt opens: the subjects to insert. */
 function shotMentionPanel(page: Page) {
-  return page.getByRole('group', { name: 'Insert subject', exact: true });
+  return page.getByRole('listbox', { name: 'Subjects', exact: true });
 }
 
 /** Switches to shot prompts. A dev server reload puts the page back on its single prompt. */
@@ -307,9 +307,9 @@ test.describe('Kling O3 named subjects', () => {
     await withNamedSubject(page, 'Hero creator', async () => {
       await expect(page.getByText('@hero_creator', { exact: true }).first()).toBeVisible({ timeout: 5_000 });
 
-      // Half typed, the handle keeps the "@" panel open with the subject in it.
+      // Half typed, the handle keeps the "@" menu open with the subject in it.
       await prompt.fill('A scene with @hero');
-      await expect(mentionPanel(page).getByRole('button', { name: /@hero_creator/ })).toBeVisible({ timeout: 5_000 });
+      await expect(mentionPanel(page).getByRole('option', { name: /@hero_creator/ })).toBeVisible({ timeout: 5_000 });
 
       // Typed in full, it is a mention the prompt knows. The character count shows
       // that the page has taken the new prompt in, so a missing warning means none.
@@ -319,15 +319,15 @@ test.describe('Kling O3 named subjects', () => {
     });
   });
 
-  // The "@" panel also finds a reference by its name, and a name starts with a
-  // capital. The panel shut at the first capital typed after "@".
-  test('keeps the "@" panel open at a capital letter and inserts the handle from it', async ({ page }) => {
+  // The "@" menu also finds a reference by its name, and a name starts with a
+  // capital. The panel before it shut at the first capital typed after "@".
+  test('keeps the "@" menu open at a capital letter and inserts the handle from it', async ({ page }) => {
     await page.goto('/create-video?model=kling-o3');
     const prompt = page.getByPlaceholder(/^Describe the .* scene/);
 
     await withNamedSubject(page, 'Hero creator', async () => {
       await prompt.fill('A scene with @H');
-      const suggestion = mentionPanel(page).getByRole('button', { name: /@hero_creator/ });
+      const suggestion = mentionPanel(page).getByRole('option', { name: /@hero_creator/ });
       await expect(suggestion).toBeVisible({ timeout: 5_000 });
 
       // Picking the subject replaces what was typed with the handle as it is written.
@@ -340,37 +340,38 @@ test.describe('Kling O3 named subjects', () => {
   // A press focuses its button on the way down. The column scrolled a control
   // focused just above its sticky bar clear of it, which moved the suggestion out
   // from under the pointer before the press ended: no click, nothing inserted, and
-  // the test above failed now and then (2026-10-26). Only the keyboard's focus is
-  // scrolled clear now. The pointer is put down with page.mouse, since a locator's
-  // click scrolls first.
-  test('inserts a suggestion pressed just above the bar, where the page does not move', async ({ page }) => {
+  // the test above failed now and then (2026-10-26). The "@" menu's rows never take
+  // the focus (the prompt keeps it), and a menu with no room left over the bar goes
+  // over the line typed on instead. The pointer is put down with page.mouse, since
+  // a locator's click scrolls first.
+  test('inserts a row pressed in a menu the bar left no room under, where the page does not move', async ({ page }) => {
     await page.goto('/create-video?model=kling-o3');
     const prompt = page.getByPlaceholder(/^Describe the .* scene/);
 
     await withNamedSubject(page, 'Hero creator', async () => {
       await prompt.fill('A scene with @H');
-      const suggestion = mentionPanel(page).getByRole('button', { name: /@hero_creator/ });
+      const suggestion = mentionPanel(page).getByRole('option', { name: /@hero_creator/ });
       await expect(suggestion).toBeVisible({ timeout: 5_000 });
 
-      // The window made as tall as puts the bar's top 2px under the suggestion.
+      // The window made as tall as puts the bar's top just under the prompt's first line.
       const viewport = page.viewportSize()!;
-      const { bottom, barGap } = await suggestion.evaluate((button) => {
+      const { lineBottom, barGap } = await prompt.evaluate((field) => {
         window.scrollTo(0, 0);
         const bar = document.querySelector('[data-creator-bar]')!.getBoundingClientRect();
-        return { bottom: button.getBoundingClientRect().bottom, barGap: window.innerHeight - bar.top };
+        return { lineBottom: field.getBoundingClientRect().top + 40, barGap: window.innerHeight - bar.top };
       });
-      await page.setViewportSize({ width: viewport.width, height: Math.round(bottom + 2 + barGap) });
-      const press = await suggestion.evaluate((button) => {
-        const box = button.getBoundingClientRect();
-        const bar = document.querySelector('[data-creator-bar]')!.getBoundingClientRect();
-        return { x: box.left + box.width / 2, y: box.bottom - 4, barTop: bar.top, bottom: box.bottom, scrollY: window.scrollY };
+      await page.setViewportSize({ width: viewport.width, height: Math.round(lineBottom + 24 + barGap) });
+      const menu = page.locator('[data-mention-menu]');
+      await expect(menu).toHaveAttribute('data-side', 'above', { timeout: 5_000 });
+      const press = await suggestion.evaluate((row) => {
+        const box = row.getBoundingClientRect();
+        return { x: box.left + box.width / 2, y: box.top + box.height / 2, scrollY: window.scrollY };
       });
-      expect(press.barTop - press.bottom).toBeGreaterThanOrEqual(0);
-      expect(press.barTop - press.bottom).toBeLessThan(8);
 
       await page.mouse.click(press.x, press.y);
 
       await expect(prompt).toHaveValue('A scene with @hero_creator', { timeout: 5_000 });
+      await expect(prompt).toBeFocused();
       expect(await page.evaluate(() => window.scrollY)).toBe(press.scrollY);
       await page.setViewportSize(viewport);
     });
@@ -389,7 +390,7 @@ test.describe('Kling O3 named subjects', () => {
 
       // The name is "Hero creator", so this is how a creator starts to look for it.
       await shot.fill('Open on @H', { timeout: 5_000 });
-      const suggestion = shotMentionPanel(page).getByRole('button', { name: /@hero_creator/ });
+      const suggestion = shotMentionPanel(page).getByRole('option', { name: /@hero_creator/ });
       await expect(suggestion).toBeVisible({ timeout: 5_000 });
 
       // Picking the subject replaces what was typed with the handle as it is written.

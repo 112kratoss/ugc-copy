@@ -16,7 +16,6 @@ import {
   CreatorCanvasMedia,
   CreatorColumnBar,
   CreatorColumnLayout,
-  CreatorMentionPanel,
   CreatorReferenceStrip,
   CreatorReferenceTile,
   CreatorRemixSlotTile,
@@ -1004,26 +1003,6 @@ describe('a reference tile', () => {
     expect(screen.queryByRole('button', { name: /^Copy/ })).toBeNull();
     // The name being typed shows over the saved one.
     expect(screen.getByRole('textbox', { name: 'Name of Hero' })).toHaveValue('Her');
-  });
-});
-
-describe('the mention panel', () => {
-  it('is a group named for its title, offering each match by name and handle', () => {
-    const onInsert = vi.fn();
-    render(
-      <CreatorMentionPanel
-        title="Insert element"
-        hint="Pick an element to insert its @mention."
-        query="he"
-        suggestions={[{ id: 'hero', displayName: 'Hero', handle: '@hero' }]}
-        handleClassName={() => 'text-sky-300'}
-        onInsert={onInsert}
-      />
-    );
-    const group = screen.getByRole('group', { name: 'Insert element' });
-    expect(within(group).getByText('@he')).toBeInTheDocument();
-    fireEvent.click(within(group).getByRole('button', { name: /^Hero\s*@hero$/ }));
-    expect(onInsert).toHaveBeenCalledWith('@hero');
   });
 });
 
