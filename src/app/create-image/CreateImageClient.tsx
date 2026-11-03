@@ -1123,6 +1123,8 @@ function ImageCreator({
         updateMentionState(prompt);
     };
 
+    // A press of "Use as reference" under way: it waits on a fresh link to the original past its hour.
+    const [isAddingOriginal, setIsAddingOriginal] = useState(false);
     const handleUseOriginalResultAsReference = async () => {
         if (!remixSourceBundle) {
             return;
@@ -1142,7 +1144,12 @@ function ImageCreator({
         // The link the remix was read with lasts an hour: past it the picture was drawn from a link
         // storage refuses. One about to lapse is renewed first.
         if (resultUrl && isSignedMediaUrlExpiring(resultUrl, Date.now())) {
-            resultUrl = await renewRemixLink(resultUrl);
+            setIsAddingOriginal(true);
+            try {
+                resultUrl = await renewRemixLink(resultUrl);
+            } finally {
+                setIsAddingOriginal(false);
+            }
             if (unmountSignal.current.aborted || refused()) return;
         }
 
@@ -2277,7 +2284,7 @@ function ImageCreator({
                                         source={remixSourcePost}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={canUseOriginalResultAsReference ? (
-                                            <StudioUseOriginalButton using={hasOriginalResultReference} onUse={() => void handleUseOriginalResultAsReference()} />
+                                            <StudioUseOriginalButton using={hasOriginalResultReference} pending={isAddingOriginal} onUse={() => void handleUseOriginalResultAsReference()} />
                                         ) : undefined}
                                     />
                                 </motion.div>

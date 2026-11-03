@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { AriaRole, ComponentType, KeyboardEvent, ReactNode, Ref } from 'react';
+import { Loader2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -327,6 +328,7 @@ export function Button({
   icon: Icon,
   iconPosition = 'end',
   disabled = false,
+  pending = false,
   id,
   ariaLabel,
   ariaExpanded,
@@ -343,6 +345,12 @@ export function Button({
   icon?: LucideIcon;
   iconPosition?: 'start' | 'end';
   disabled?: boolean;
+  /**
+   * A button's press is under way, as the app's buttons wait (design-mobile.md, Glyphs): it takes
+   * no other press, is busy for a screen reader, and the spinner takes its glyph's place (before
+   * the words of one with none). The words are the caller's: what it is doing ("Adding…").
+   */
+  pending?: boolean;
   /** For a button something else hands the focus back to. */
   id?: string;
   ariaLabel?: string;
@@ -360,14 +368,23 @@ export function Button({
     variant === 'secondary' && 'ui-button-secondary',
     variant === 'ghost' && 'ui-button-ghost',
     variant === 'accent' && accentClasses.button,
-    disabled && 'pointer-events-none opacity-55',
+    (disabled || pending) && 'pointer-events-none',
+    disabled && 'opacity-55',
     className
   );
+  const glyph = (position: 'start' | 'end') => {
+    if (pending) {
+      return position === (Icon ? iconPosition : 'start')
+        ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden />
+        : null;
+    }
+    return Icon && iconPosition === position ? <Icon className="h-4 w-4" aria-hidden /> : null;
+  };
   const content = (
     <>
-      {Icon && iconPosition === 'start' ? <Icon className="h-4 w-4" aria-hidden /> : null}
+      {glyph('start')}
       {children}
-      {Icon && iconPosition === 'end' ? <Icon className="h-4 w-4" aria-hidden /> : null}
+      {glyph('end')}
     </>
   );
 
@@ -383,7 +400,8 @@ export function Button({
     <button
       id={id}
       type={type}
-      disabled={disabled}
+      disabled={disabled || pending}
+      aria-busy={pending || undefined}
       aria-label={ariaLabel}
       aria-expanded={ariaExpanded}
       aria-controls={ariaControls}

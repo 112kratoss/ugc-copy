@@ -11,6 +11,7 @@ import { remixingNotice } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 import { REMIX_INPUT_SLOTS_NOTICE_LABEL } from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
 import {
+  Button,
   getAccentClasses,
   Kicker,
   MediaFrame,
@@ -342,41 +343,36 @@ export function StudioRemixSlotsNotice({ description, onDismiss }: { description
   );
 }
 
-const USE_ORIGINAL_TONES = {
-  blue: 'border border-blue-400/20 bg-blue-500/10 text-blue-100 hover:border-blue-300/40 hover:bg-blue-500/15',
-  coral: 'border border-[#ff7a59]/25 bg-[#ff7a59]/10 text-[#ffb09c] hover:border-[#ff7a59]/45 hover:bg-[#ff7a59]/15',
-} as const;
-
 /**
- * A remix notice's offer of the original result as a reference (StudioRemixNotice's `action`),
- * which reads "Using original result" and stands down while the run holds it.
+ * A remix notice's offer of the original result as a reference (StudioRemixNotice's `action`), a
+ * `Button`: it reads "Using original result" and stands down while the run holds it, and while its
+ * press is under way (`pending`: the press reads a fresh link to the original first, which may
+ * take up to twelve seconds) it says so, busy, taking no second press.
  */
 export function StudioUseOriginalButton({
   using,
+  pending = false,
   onUse,
   label = 'Use as reference',
-  icon: Icon = Sparkles,
-  tone = 'blue',
+  icon = Sparkles,
 }: {
   using: boolean;
+  pending?: boolean;
   onUse: () => void;
   label?: string;
   icon?: LucideIcon;
-  tone?: keyof typeof USE_ORIGINAL_TONES;
 }) {
+  const underWay = pending && !using;
   return (
-    <button
-      type="button"
-      onClick={onUse}
+    <Button
+      icon={using ? CheckCircle2 : icon}
+      iconPosition="start"
       disabled={using}
-      className={clsx(
-        'inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition',
-        using ? 'cursor-default border border-emerald-400/20 bg-emerald-500/10 text-emerald-100' : USE_ORIGINAL_TONES[tone]
-      )}
+      pending={underWay}
+      onClick={onUse}
     >
-      <Icon className="h-4 w-4" />
-      {using ? 'Using original result' : label}
-    </button>
+      {using ? 'Using original result' : underWay ? 'Adding the original…' : label}
+    </Button>
   );
 }
 

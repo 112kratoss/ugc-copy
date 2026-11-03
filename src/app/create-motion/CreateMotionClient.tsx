@@ -732,6 +732,8 @@ function MotionCreator({
         void fetchRemixData();
     }, [formAccount, remixId, remixPostId, session?.access_token, unmountSignal]);
 
+    // A press of "Use as reference video" under way: it waits on a fresh link to the original past its hour.
+    const [isAddingOriginal, setIsAddingOriginal] = useState(false);
     const handleUseOriginalResultAsReferenceVideo = async () => {
         if (remixSourceBundle?.result?.mediaType !== 'video' || !remixSourceBundle.result.url) {
             return;
@@ -743,7 +745,12 @@ function MotionCreator({
         // read, and Generate stayed held until a reload. One about to lapse is renewed first.
         if (isSignedMediaUrlExpiring(url, Date.now())) {
             const clipAtPress = referenceVideoRef.current;
-            url = await renewRemixLink(url);
+            setIsAddingOriginal(true);
+            try {
+                url = await renewRemixLink(url);
+            } finally {
+                setIsAddingOriginal(false);
+            }
             // Gone, or another clip put in its place meanwhile: the creator's choice stands.
             if (unmountSignal.current.aborted || referenceVideoRef.current !== clipAtPress) return;
         }
@@ -1856,10 +1863,10 @@ function MotionCreator({
                                         action={canUseOriginalResultAsReferenceVideo ? (
                                             <StudioUseOriginalButton
                                                 using={isUsingOriginalResultAsReferenceVideo}
+                                                pending={isAddingOriginal}
                                                 onUse={() => void handleUseOriginalResultAsReferenceVideo()}
                                                 label="Use as reference video"
                                                 icon={Play}
-                                                tone="coral"
                                             />
                                         ) : undefined}
                                     />

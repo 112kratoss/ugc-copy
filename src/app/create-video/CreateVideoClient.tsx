@@ -3390,6 +3390,8 @@ function VideoCreator({
      * with the length its post measured, or else measured as an upload is, since the quote is
      * told each clip's length.
      */
+    // A press of "Use as reference" under way: it waits on a fresh link to the original past its hour.
+    const [isAddingOriginal, setIsAddingOriginal] = useState(false);
     const addOriginalResultAsReferenceVideo = async () => {
         const original = remixVideoUrl;
         const unwanted = () => referenceVideosRef.current.some((reference) => isRemixResultReference(reference, remixId))
@@ -3397,9 +3399,15 @@ function VideoCreator({
         if (!original || !remixId || unwanted()) return;
         // The link the remix was read with lasts an hour: past it the clip's length could not be read,
         // and the clip came in with none. One about to lapse is renewed first.
-        const url = isSignedMediaUrlExpiring(original, Date.now())
-            ? await renewRemixLink(original)
-            : original;
+        let url = original;
+        if (isSignedMediaUrlExpiring(original, Date.now())) {
+            setIsAddingOriginal(true);
+            try {
+                url = await renewRemixLink(original);
+            } finally {
+                setIsAddingOriginal(false);
+            }
+        }
         const seeds = await readPickSeeds((async () => keptReferenceSeeds([{
             kind: 'video',
             url,
@@ -3408,7 +3416,8 @@ function VideoCreator({
             sourceGenerationId: remixId,
             durationSeconds: remixResult?.durationSeconds ?? await readVideoDurationSeconds(url) ?? undefined,
         }]))());
-        // A second press made while the clip's length was read: the first has added it by now.
+        // A second press made while the clip's length was read (the first has added it by now), or
+        // a model chosen meanwhile that takes no more clips.
         if (!seeds || unwanted()) return;
         await appendMediaReferences('video', seeds);
     };
@@ -5865,7 +5874,7 @@ function VideoCreator({
                                         source={remixSourcePost}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={offersOriginalResult ? (
-                                            <StudioUseOriginalButton using={usingOriginalResult} onUse={() => void addOriginalResultAsReferenceVideo()} />
+                                            <StudioUseOriginalButton using={usingOriginalResult} pending={isAddingOriginal} onUse={() => void addOriginalResultAsReferenceVideo()} />
                                         ) : undefined}
                                     />
                                 </motion.div>
