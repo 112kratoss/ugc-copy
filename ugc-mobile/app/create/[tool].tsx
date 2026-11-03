@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useNavigation, usePreventRemove, useRoute } from '@react-navigation/native';
 import { router, Stack } from 'expo-router';
 
@@ -6,7 +6,15 @@ import { AiDataConsentOnOpen } from '@/components/ai-data-consent-on-open';
 import { ContentPolicyGate } from '@/components/content-policy-gate';
 import { MediaCreationScreen } from '@/components/media-creation-screen';
 import { PrimaryButton, Screen, SecondaryButton, SectionTitle } from '@/components/ui';
+import { findRemixLaunch } from '@/lib/remix-start';
 import type { CreatorToolId } from '@/lib/types';
+
+const subscribeToNoRemixLaunch = () => () => undefined;
+
+function closeCreateRoute() {
+  if (router.canGoBack()) router.back();
+  else router.replace('/(tabs)' as never);
+}
 
 function isTool(value: unknown): value is CreatorToolId {
   return value === 'image' || value === 'video' || value === 'motion';
@@ -43,6 +51,21 @@ export default function CreateToolScreen() {
       if (leave) navigation.dispatch(data.action);
     });
   });
+  // A Remix tap opens this route before its start is answered. The creator follows the
+  // answer, but on a first run the community rules stand in front of it and it is not
+  // open: a refused start then sat under its dialog, and an unlock sheet opened under
+  // this route. The route takes the way out whenever the creator has not
+  // (`claimExit`; an open creator's effects run first).
+  const [remixLaunch] = useState(() => findRemixLaunch(firstParam(params.remixLaunch), {
+    generationId: firstParam(params.remix),
+    postId: firstParam(params.remixPost),
+  }));
+  const remixAnswer = useSyncExternalStore(remixLaunch?.subscribe ?? subscribeToNoRemixLaunch, () => remixLaunch?.answer ?? null);
+  useEffect(() => {
+    if (!remixLaunch || !remixAnswer || remixAnswer.kind === 'confirmed' || !remixLaunch.claimExit()) return;
+    if (remixAnswer.kind === 'replaced') router.replace(remixAnswer.href as never);
+    else closeCreateRoute();
+  }, [remixAnswer, remixLaunch]);
   const initialToolParam = firstParam(params.tool);
   if (!isTool(initialToolParam)) {
     return (
@@ -88,10 +111,7 @@ export default function CreateToolScreen() {
           guided={guided}
           registerBeforeClose={registerBeforeClose}
           onDirtyChange={setDirty}
-          onClose={() => {
-            if (router.canGoBack()) router.back();
-            else router.replace('/(tabs)' as never);
-          }}
+          onClose={closeCreateRoute}
         />
       </ContentPolicyGate>
     </>

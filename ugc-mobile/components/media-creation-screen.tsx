@@ -1462,9 +1462,11 @@ function IdentityCreationScreen({
   useEffect(() => {
     if (!remixAnswer || remixAnswer.kind === 'confirmed' || followedRemixAnswer.current === remixAnswer) return;
     followedRemixAnswer.current = remixAnswer;
+    // Taken once, by this creator or by its route (`claimExit`).
+    if (!remixLaunch?.claimExit()) return;
     if (remixAnswer.kind === 'replaced') router.replace(remixAnswer.href as never);
     else onClose?.();
-  }, [onClose, remixAnswer]);
+  }, [onClose, remixAnswer, remixLaunch]);
 
   useEffect(() => {
     if (!catalog) return;

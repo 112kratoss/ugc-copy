@@ -109,6 +109,12 @@ export interface RemixLaunch {
    * and never on a creator the answer closes or sends elsewhere, which is leaving.
    */
   readSource(): Promise<RemixSourceBundle>;
+  /**
+   * True once only: for whoever takes the answer's way out (the replace or the close).
+   * The creator does when it is open, its effects running before its route's; the route
+   * does while the community rules stand in front of the creator, which is not open yet.
+   */
+  claimExit(): boolean;
 }
 
 /** The tap's side of the launch: what the start's answer does to the creator it opened. */
@@ -214,6 +220,7 @@ export function launchShowcaseRemix({
   const tapRead = read();
   tapRead.catch(() => undefined);
   let tapReadTaken = false;
+  let exitClaimed = false;
   const leaving = () => new Promise<never>(() => undefined);
   const afterAnswer = (source: Promise<RemixSourceBundle>) => source.then(
     (bundle) => confirmed.then((ok) => (ok ? bundle : leaving())),
@@ -239,6 +246,11 @@ export function launchShowcaseRemix({
       if (tapReadTaken) return afterAnswer(read());
       tapReadTaken = true;
       return afterAnswer(tapRead);
+    },
+    claimExit() {
+      if (exitClaimed) return false;
+      exitClaimed = true;
+      return true;
     },
   };
   const settle = (next: RemixLaunchAnswer) => {
