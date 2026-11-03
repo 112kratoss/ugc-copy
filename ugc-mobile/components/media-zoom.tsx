@@ -93,6 +93,7 @@ import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
 import { listenToTransition } from '@/lib/use-screen-leaving';
+import { signedMediaIdentity } from '@/lib/use-stable-signed-url';
 import {
   claimZoomVeil,
   closeZoomVeilHole,
@@ -752,10 +753,16 @@ const MediaZoomCarriedContext = createContext<MediaZoomCarried | null>(null);
  * For the reel's video slide: the player the tile lent, when this slide plays
  * the same file — to use in place of building one. Null for every other slide,
  * and for this one too once a hand-off could not adopt it.
+ *
+ * The same file under another signature is still the same file. A library read
+ * re-signs every address it hands over, the tile's and the reel's among them:
+ * matched address for address, a read landing while the reel played dropped
+ * the lent player for one of the slide's own, and the clip started over.
  */
 export function useMediaZoomLentVideo(url: string) {
   const lent = useContext(MediaZoomLentVideoContext);
-  return lent && lent.video.url === url ? lent : null;
+  if (!lent) return null;
+  return lent.video.url === url || signedMediaIdentity(lent.video.url) === signedMediaIdentity(url) ? lent : null;
 }
 
 const reportNothing = () => {};
