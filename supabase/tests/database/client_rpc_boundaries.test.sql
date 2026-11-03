@@ -7,8 +7,8 @@ select is((select string_agg(p.proname, ',' order by p.proname)
   from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.prosecdef
     and has_function_privilege('authenticated',p.oid,'EXECUTE')),
-  'current_identity_admission,current_identity_is_active,current_identity_is_registered,current_identity_owns_generation,current_identity_state,initialize_workflow_canvas_run,start_workflow_canvas_run',
-  'only the reviewed seven privileged public functions are client callable');
+  'current_identity_admission,current_identity_is_active,current_identity_is_registered,current_identity_owns_generation,current_identity_state,generation_input_object_readable,initialize_workflow_canvas_run,start_workflow_canvas_run',
+  'only the reviewed eight privileged public functions are client callable');
 select is((select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and p.prosecdef and has_function_privilege('anon',p.oid,'EXECUTE')),
   0::bigint,'no privileged public function is callable without authentication');
@@ -32,6 +32,9 @@ select is((public.current_identity_admission()->>'session_valid')::boolean,true,
 select is(public.current_identity_owns_generation('e7300001-0000-4000-8000-000000000001'),true,'generation ownership: own generation');
 select is(public.current_identity_owns_generation('e7300002-0000-4000-8000-000000000002'),false,'generation ownership: another user generation');
 select is(public.current_identity_owns_generation(null),false,'generation ownership: no generation');
+-- Callable because the generation_inputs read policy calls it (20261103232019); it answers only of the caller's own folder.
+select is(public.generation_input_object_readable('e7100002-0000-4000-8000-000000000002/e7300002-0000-4000-8000-000000000002/00-reference-image.png'),false,'generation input read: another user''s folder');
+select is(public.generation_input_object_readable('e7100001-0000-4000-8000-000000000001/e7300001-0000-4000-8000-000000000001/00-reference-image.png'),true,'generation input read: an own input of no recipe');
 select throws_ok($q$select * from public.initialize_workflow_canvas_run('e7200002-0000-4000-8000-000000000002','e7100002-0000-4000-8000-000000000002','start','node',null,'{}','blocked', '[{"nodeId":"start"}]')$q$,'P0001','cannot start a workflow run for another user','initialize: forged subject denied');
 select throws_ok($q$select * from public.initialize_workflow_canvas_run('e7200002-0000-4000-8000-000000000002','e7100001-0000-4000-8000-000000000001','start','node',null,'{}','blocked', '[{"nodeId":"start"}]')$q$,'P0001','workflow canvas not found for this user','initialize: foreign canvas denied');
 select throws_ok($q$select * from public.start_workflow_canvas_run('e7200002-0000-4000-8000-000000000002','e7100002-0000-4000-8000-000000000002','start','node',null,'{}','blocked')$q$,'P0001','cannot start a workflow run for another user','start: forged subject denied');
