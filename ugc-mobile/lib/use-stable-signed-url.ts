@@ -2,8 +2,8 @@ import { useRef } from 'react';
 import { env } from './env';
 import { getPrivateMediaExpiry } from './media-url-expiry';
 
-/** Adopt a fresh signature this close to the held one expiring. */
-const ADOPT_WITHIN_MS = 60_000;
+/** Adopt a fresh signature this close to the held one expiring. `StableMediaImage` times its own move by it. */
+export const ADOPT_WITHIN_MS = 60_000;
 
 /**
  * The object a URL addresses. A signed Storage URL is identified by its path,

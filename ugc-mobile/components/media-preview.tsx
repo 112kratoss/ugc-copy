@@ -2,12 +2,14 @@ import { rememberDecodedImageAspectRatio } from '@/lib/decoded-image-aspect-rati
 import { Image, type ImageProps } from 'expo-image';
 import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { ImageOff, Play } from 'lucide-react-native';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 
 import { useAppForeground } from '@/lib/app-foreground';
+import { env } from '@/lib/env';
 import { describeImageError, recordMediaDiagnostic } from '@/lib/media-diagnostics';
 import { imageRetryDelayMs } from '@/lib/media-performance';
+import { getPrivateMediaExpiry } from '@/lib/media-url-expiry';
 import {
   MEDIA_DISPLAY_DEADLINE_MS,
   MEDIA_RECOVERY_WAIT_MS,
@@ -18,6 +20,7 @@ import {
   type MediaRecoverySlot,
 } from '@/lib/media-recovery';
 import { useMediaSource } from '@/lib/use-media-source';
+import { ADOPT_WITHIN_MS, shouldAdoptSignedUrl, signedMediaIdentity } from '@/lib/use-stable-signed-url';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
@@ -172,16 +175,27 @@ type StableMediaImageProps = {
 };
 
 export function StableMediaImage(props: StableMediaImageProps) {
-  // A new source ends any pending renewal for the previously selected image.
-  return <StableMediaImageSession key={`${props.cacheKey}|${props.url}`} {...props} />;
+  // One session draws one file under one cache key, and a new one ends any
+  // pending renewal for the image before it. A new signature of the same file
+  // is the same session: every read of a signed list signs each file again,
+  // and keyed on the whole address each read started every picture on it
+  // over, blank, then thumbhash, then picture, under the reader (a Creations
+  // card on the Pixel 9a emulator, 2026-11-03). The session decides when to
+  // take the newer address. Worked out once per address: it parses the URL.
+  const file = useMemo(() => signedMediaIdentity(props.url), [props.url]);
+  return <StableMediaImageSession key={`${props.cacheKey}|${file}`} {...props} />;
 }
 
 const NO_PROGRESS = { attemptKey: '', progressed: false, loaded: false };
 /** The silent retries of a latched stall: how many so far, whether one is loading now, and when the plate went up. */
 const NO_AUTO_RETRY = { sourceId: '', count: 0, loading: false, latchedAt: 0 };
+/** setTimeout's longest wait; a longer one fires at once. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 function StableMediaImageSession({
-  url: initialUrl,
+  // The parent's address for this file now, which a read of its list may have
+  // signed again since the session began; `url` below is the one drawn.
+  url: parentUrl,
   cacheKey,
   thumbhash,
   contentFit = 'cover',
@@ -194,7 +208,10 @@ function StableMediaImageSession({
   watchdog = false,
   diagnosticsSurface = 'app',
 }: StableMediaImageProps) {
-  const [url, setUrl] = useState(initialUrl);
+  // The address drawn: the parent's at first, then a renewal's
+  // (`resolveRetryUrl`), or the parent's newer signature of the same file once
+  // this one fails or nears its end (below).
+  const [url, setUrl] = useState(parentUrl);
   const [renewing, setRenewing] = useState(false);
   const [renewalFailed, setRenewalFailed] = useState(false);
   const pending = useRef(false);
@@ -202,9 +219,9 @@ function StableMediaImageSession({
   // Failure is keyed to the (cacheKey, url) pair, not cacheKey alone: parents
   // like ShowcaseMediaSlide keep the cacheKey stable while swapping the url to
   // a fallback source, and that swap must release the latch so the fallback
-  // actually gets attempted. Comparing against the current props (rather than
-  // a boolean) keeps recycled list instances from leaking one item's failure
-  // onto another.
+  // actually gets attempted (a fallback is another file, so another session).
+  // Comparing against the address drawn (rather than a boolean) keeps recycled
+  // list instances from leaking one item's failure onto another.
   const { source, requestKey } = useMediaSource(url);
   const sourceId = `${cacheKey}|${url}|${requestKey}`;
   const [failedSourceId, setFailedSourceId] = useState<string | null>(null);
@@ -233,6 +250,41 @@ function StableMediaImageSession({
     && foreground
     && displayedAttemptKey !== attemptKey
     && (!latched || retryingBehindPlate);
+
+  // The parent's newer signature of the file drawn, when it has handed one
+  // over. The address drawn stays while it has life left, and with it the
+  // picture; the newer one is taken as that one nears its end — the rule the
+  // reel's player keeps its address by (`shouldAdoptSignedUrl`, #118) — or at
+  // once when it has failed, where a fresh signature is worth a try. Never in
+  // place of a renewal under way, and never an older signature than the one drawn.
+  const laterSigning = useMemo(() => {
+    if (parentUrl === url || signedMediaIdentity(parentUrl) !== signedMediaIdentity(url)) return null;
+    const drawn = getPrivateMediaExpiry(url, env.supabaseUrl);
+    const offered = getPrivateMediaExpiry(parentUrl, env.supabaseUrl);
+    return drawn && offered && offered.expiresAt > drawn.expiresAt ? parentUrl : null;
+  }, [parentUrl, url]);
+  if (laterSigning && latched && !renewing) setUrl(laterSigning);
+  const [lifeCheck, setLifeCheck] = useState(0);
+  useEffect(() => {
+    if (!laterSigning || renewing) return undefined;
+    const drawn = getPrivateMediaExpiry(url, env.supabaseUrl);
+    if (!drawn) return undefined;
+    const timer = setTimeout(() => {
+      if (shouldAdoptSignedUrl(url, laterSigning, Date.now(), env.supabaseUrl)) setUrl(laterSigning);
+      // A wait longer than setTimeout's longest fired early: wait for the rest.
+      else setLifeCheck((check) => check + 1);
+    }, Math.min(MAX_TIMER_MS, Math.max(0, drawn.expiresAt - ADOPT_WITHIN_MS - Date.now())));
+    return () => clearTimeout(timer);
+  }, [laterSigning, lifeCheck, renewing, url]);
+
+  // The zoom looks a picture's decoded shape up by the parent's address
+  // (`useDecodedImageAspectRatio`): a newer address for a picture already
+  // decoded is filed under its shape too, as reloading it used to file it.
+  const decodedSize = useRef<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const size = decodedSize.current;
+    if (size) rememberDecodedImageAspectRatio(parentUrl, size.width, size.height);
+  }, [parentUrl]);
 
   useEffect(() => {
     latestOnError.current = onError;
@@ -399,7 +451,8 @@ function StableMediaImageSession({
         progress.current = { ...progressFor(attemptKey), progressed: true };
       } : undefined}
       onLoad={(event) => {
-        rememberDecodedImageAspectRatio(initialUrl, event.source.width, event.source.height);
+        decodedSize.current = { width: event.source.width, height: event.source.height };
+        rememberDecodedImageAspectRatio(parentUrl, event.source.width, event.source.height);
         if (watchdog) progress.current = { ...progressFor(attemptKey), loaded: true };
         onLoad?.(event);
       }}
