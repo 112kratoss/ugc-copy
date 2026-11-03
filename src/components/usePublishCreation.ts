@@ -59,7 +59,8 @@ function normalizeOptionalText(value: string): string | undefined {
 
 /**
  * What the shared recipe holds: the prompt, the creation's references and its remix. Never its
- * settings, which its post shows everyone (owner, 2026-11-03), so not the prefill's notes either.
+ * settings, which its post shows everyone (owner, 2026-11-03): the prefill carries none
+ * (`readGenerationPaywallPrefill` leaves an older answer's notes out).
  */
 function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined): PostResourceKind[] {
   if (!prefill) {
@@ -67,7 +68,6 @@ function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined
   }
 
   const kinds = new Set<PostResourceKind>(prefill.resourceKinds);
-  kinds.delete('notes');
   if ((prefill.referenceCount ?? 0) > 0) {
     kinds.add('files');
   }
@@ -135,7 +135,6 @@ function buildAutoResourceBundle(prefill: GenerationPaywallPrefill): PostResourc
     priceUsdCents: 0,
     resources: {
       promptText: prefill.promptText?.trim() || null,
-      notesMarkdown: null,
       workflowShareUrl: null,
       attachments: [],
       allowRemix: prefill.allowRemix,
@@ -486,6 +485,8 @@ export function usePublishCreation({
     recipeAccess,
     setRecipeAccess,
     hasAutoUnlock,
+    /** The creation saved a prompt for the recipe to share (a motion run saves none). */
+    hasPrompt: Boolean(paywallPrefill?.promptText?.trim()),
     ownUploadCount,
     otherReferenceCount,
     ownUploadKindCounts: leavesOwnUploadsOut ? paywallPrefill?.ownReferenceKindCounts ?? paywallPrefill?.referenceKindCounts ?? null : null,

@@ -31,7 +31,7 @@ import type { ConfirmationRequest } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
 import { SegmentedControl, type SegmentedControlOption } from '@/components/DesignSystem';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
-import { isGenerationPaywallPrefill } from '@/lib/creation-publish-details';
+import { readGenerationPaywallPrefill } from '@/lib/creation-publish-details';
 import {
   assessMarketplaceListingQuality,
   getPublicPostQualityError,
@@ -699,6 +699,38 @@ function hasUsableGenerationPaywallPrefill(prefill: GenerationPaywallPrefill | n
   return Boolean(prefill && prefill.resourceKinds.length > 0);
 }
 
+/**
+ * What the paid composer tells the seller of a creation's recipe: its saved prompt and remix
+ * where it has them, and plainly what to add where it saved no prompt (a motion run), whose recipe
+ * starts empty, so nothing promises a prompt that is not there. Its settings are no item of it:
+ * the post shows them, to everyone, or once a viewer reveals an NSFW post (owner, 2026-11-03).
+ */
+function paidCreationRecipeNotice({
+  loading,
+  prefill,
+  offersReferences,
+  isNsfw,
+}: {
+  loading: boolean;
+  prefill: GenerationPaywallPrefill | null;
+  /** "Include creation references" is offered below. */
+  offersReferences: boolean;
+  isNsfw: boolean;
+}): string {
+  if (loading) return 'Preparing this creation’s paid recipe.';
+  if (!prefill || !hasUsableGenerationPaywallPrefill(prefill)) {
+    return 'This creation does not have enough saved inputs to auto-fill a paid recipe yet. The media is still attached, and you can add the prompt or notes as items below.';
+  }
+  const settings = isNsfw
+    ? 'Its settings show on the post once a viewer reveals it.'
+    : 'Its settings show on the post for everyone.';
+  if (!prefill.promptText?.trim()) {
+    const add = offersReferences ? 'include its references below, or add an item' : 'add an item below';
+    return `This creation saved no prompt, so its recipe starts empty: ${add}. ${settings} Set the price, then publish.`;
+  }
+  return `The saved prompt and remix access are ready where this creation supports them. ${settings} Set the price first, then publish or edit anything below.`;
+}
+
 interface NewPostClientProps {
   initialPost?: EditablePostDraft | null;
   /**
@@ -1163,7 +1195,6 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const savedVisibility = savedSnapshot.visibility;
   const displayVisibility = isEditMode ? savedVisibility : visibility;
   const generationPaywallPrefill = prefilledGeneration?.paywallPrefill ?? null;
-  const hasGenerationPaywallPrefill = hasUsableGenerationPaywallPrefill(generationPaywallPrefill);
   const shouldFocusPriceInput =
     requestedFocusTarget === 'price' && (isGeneratedPaywallIntent || isCreationPaywallManagementIntent);
   // A recipe people have stays editable (D1, 2026-10-27): each save is a new
@@ -1409,9 +1440,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           outputUrl: typeof generation.output_url === 'string' ? generation.output_url : null,
           category: formatGeneratedCategory(generation.category),
           model: typeof generation.model === 'string' ? generation.model : 'magicbooklet',
-          paywallPrefill: isGenerationPaywallPrefill(generation.paywallPrefill)
-            ? generation.paywallPrefill
-            : null,
+          paywallPrefill: readGenerationPaywallPrefill(generation.paywallPrefill),
           origin: generation.origin === 'template' ? 'template' : generation.origin === 'direct' ? 'direct' : null,
           // Counted the way the paywall prefill counts saved references.
           referenceCount: Array.isArray(generation.input_media)
@@ -3747,11 +3776,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
 
                 {isGeneratedPaywallIntent ? (
                   <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
-                    {isLoadingGeneration
-                      ? 'Preparing the saved prompt for this paid recipe.'
-                      : hasGenerationPaywallPrefill
-                        ? 'The saved prompt and remix access are ready where this creation supports them. Its settings show on the post for everyone. Set the price first, then publish or edit anything below.'
-                        : 'This creation does not have enough saved inputs to auto-fill a paid recipe yet. The media is still attached, and you can add the prompt or notes as items below.'}
+                    {paidCreationRecipeNotice({
+                      loading: isLoadingGeneration,
+                      prefill: generationPaywallPrefill,
+                      offersReferences: canIncludeGenerationReferences,
+                      isNsfw,
+                    })}
                   </div>
                 ) : isCreationPaywallManagementIntent ? (
                   <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
@@ -3860,7 +3890,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                           <span>
                             <span className="block text-sm font-semibold text-white">Include exact prompt</span>
                             <span className="mt-0.5 block text-xs leading-5 text-zinc-400">
-                              Add the original generation prompt to the recipe.
+                              {creationPrompt ? 'Add the original generation prompt to the recipe.' : 'This creation saved no prompt.'}
                             </span>
                           </span>
                         </label>

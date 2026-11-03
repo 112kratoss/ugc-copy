@@ -428,8 +428,9 @@ describe('/api/generations route', () => {
       resourceKinds: ['prompt', 'remix', 'files'],
       referenceCount: 1,
     });
-    // The settings are public on the post since 2026-11-03: a new recipe takes in no saved setup.
-    expect(data.generations[0].paywallPrefill.notesMarkdown).toBeNull();
+    // The settings are public on the post since 2026-11-03: a new recipe takes in no saved setup,
+    // and the field that carried it as a note is gone.
+    expect(data.generations[0].paywallPrefill).not.toHaveProperty('notesMarkdown');
   });
 
   it('returns a bounded page with pagination metadata', async () => {

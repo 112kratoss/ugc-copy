@@ -7440,7 +7440,6 @@ describe('CreateVideoClient Kling video elements', () => {
       const recipe: GenerationPaywallPrefill = {
         resourceKinds: ['prompt'],
         promptText: PROMPT,
-        notesMarkdown: null,
         allowRemix: false,
       };
       fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {

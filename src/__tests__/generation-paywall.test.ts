@@ -10,7 +10,6 @@ describe('generation paywall helpers', () => {
   it('builds the prompt and remix access for recoverable image generations', () => {
     const prefill = buildGenerationPaywallPrefill({
       category: 'image',
-      model: 'nano-banana-2',
       prompt: 'A polished creator product image with warm natural light.',
       workflowSettings: {
         model: 'nano-banana-2',
@@ -31,7 +30,6 @@ describe('generation paywall helpers', () => {
 
     expect(prefill).toEqual({
       promptText: 'A polished creator product image with warm natural light.',
-      notesMarkdown: null,
       allowRemix: true,
       resourceKinds: ['prompt', 'remix'],
       referenceCount: 0,
@@ -44,13 +42,15 @@ describe('generation paywall helpers', () => {
   // publish form, which all start a new recipe from this prefill, no longer put
   // a protected "Saved generation setup" item into it.
   it.each([
-    ['an image', { category: 'image', model: 'nano-banana-2', workflowSettings: { aspectRatio: '9:16', resolution: '1K', outputFormat: 'jpg', googleSearch: false } }],
-    ['a video', { category: 'video', model: 'seedance-2-fast', workflowSettings: { model: 'seedance-2-fast', aspectRatio: '16:9', duration: 12, resolution: '480p', sound: true, fixedLens: true } }],
-    ['a motion', { category: 'video', creationMode: 'motion', model: 'kling-2.6', workflowSettings: { creationMode: 'motion', mode: '720p', duration: 8, characterOrientation: 'video' } }],
+    ['an image', { category: 'image', workflowSettings: { model: 'nano-banana-2', aspectRatio: '9:16', resolution: '1K', outputFormat: 'jpg', googleSearch: false } }],
+    ['a video', { category: 'video', workflowSettings: { model: 'seedance-2-fast', aspectRatio: '16:9', duration: 12, resolution: '480p', sound: true, fixedLens: true } }],
+    ['a motion', { category: 'video', creationMode: 'motion', workflowSettings: { creationMode: 'motion', model: 'kling-2.6', mode: '720p', duration: 8, characterOrientation: 'video' } }],
   ])('leaves %s creation\'s settings out of a new recipe', (_kind, source) => {
     const prefill = buildGenerationPaywallPrefill({ ...source, prompt: 'Keep the light warm.' });
 
-    expect(prefill).toMatchObject({ promptText: 'Keep the light warm.', notesMarkdown: null, resourceKinds: ['prompt'] });
+    expect(prefill).toMatchObject({ promptText: 'Keep the light warm.', resourceKinds: ['prompt'] });
+    // The field that carried the settings as a note is gone (no installed client read it).
+    expect(prefill).not.toHaveProperty('notesMarkdown');
     expect(JSON.stringify(prefill)).not.toMatch(/saved generation setup|aspect ratio|resolution|duration|orientation/i);
     // A creation whose settings were all it had starts no recipe at all.
     expect(buildGenerationPaywallPrefill({ ...source, prompt: '' })).toBeNull();
@@ -90,7 +90,6 @@ describe('generation paywall helpers', () => {
     expect(
       hasRecoverableGenerationRemixInputs({
         category: 'motion',
-        model: 'kling-3.0/motion-control',
         prompt: 'Match the performer energy.',
         workflowSettings: {
           characterImage: {
@@ -105,7 +104,6 @@ describe('generation paywall helpers', () => {
     expect(
       hasRecoverableGenerationRemixInputs({
         category: 'motion',
-        model: 'kling-3.0/motion-control',
         prompt: 'Match the performer energy.',
         workflowSettings: {
           characterImage: {
@@ -130,7 +128,6 @@ describe('generation paywall helpers', () => {
     const source = {
       category: 'video',
       creationMode: 'motion',
-      model: 'kling-2.6',
       prompt: 'Match the performer energy.',
       workflowSettings: {
         model: 'kling-2.6',
@@ -154,7 +151,6 @@ describe('generation paywall helpers', () => {
   it('counts the named subjects of a Kling O3 run as inputs a remix can restore', () => {
     const source = {
       category: 'video',
-      model: 'kling-o3',
       prompt: '@lead lifts @bottle and smiles at the camera.',
       workflowSettings: {
         model: 'kling-o3',
@@ -199,7 +195,6 @@ describe('generation paywall helpers', () => {
     expect(
       buildGenerationPaywallPrefill({
         category: null,
-        model: null,
         prompt: '   ',
         workflowSettings: null,
       })
@@ -209,7 +204,6 @@ describe('generation paywall helpers', () => {
   it('adds safe saved reference metadata from durable input media', () => {
     const prefill = buildGenerationPaywallPrefill({
       category: 'image',
-      model: 'nano-banana-2',
       prompt: 'Use the saved references to rebuild the look.',
       workflowSettings: {
         model: 'nano-banana-2',
@@ -269,7 +263,6 @@ describe('generation paywall helpers', () => {
     });
     const source = {
       category: 'video',
-      model: 'seedance-2-mini',
       prompt: 'Two cats spar in a dim dojo.',
       workflowSettings: { model: 'seedance-2-mini' },
       inputMedia: [input('original-1', 'image'), input('own-1', 'image'), input('own-2', 'video')],

@@ -2998,6 +2998,98 @@ describe('NewPostClient', () => {
     expect(JSON.stringify(payload.resourceBundle)).not.toMatch(/saved generation setup/i);
   });
 
+  // A motion run, or any creation that saved no prompt: its prefill holds references and a
+  // remix, and nothing on the composer may promise a prompt it does not have (#675's review).
+  it("starts a prompt-less creation's paid recipe empty and says what to add instead", async () => {
+    searchParamsState.value = new URLSearchParams({
+      generationId: 'gen-motion-1',
+      publishIntent: 'paid-generation',
+      resourceMode: 'paid',
+    });
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [
+          {
+            id: 'gen-motion-1',
+            output_url: 'https://proxy.example.com/generated_videos/user-1/dance.mp4',
+            category: 'video',
+            creationMode: 'motion',
+            model: 'kling-2.6',
+            title: 'Dance loop',
+            description: '',
+            prompt: '',
+            input_media: [
+              { storagePath: 'uploads/user-1/character.png', mediaType: 'image' },
+              { storagePath: 'uploads/user-1/reference.mp4', mediaType: 'video' },
+            ],
+            paywallPrefill: {
+              resourceKinds: ['files', 'remix'],
+              promptText: null,
+              allowRemix: true,
+              referenceCount: 2,
+            },
+          },
+        ],
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    expect(await screen.findByText(
+      'This creation saved no prompt, so its recipe starts empty: include its references below, or add an item. Its settings show on the post for everyone. Set the price, then publish.',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/saved prompt and remix access are ready/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
+    // The prompt's box says there is none, where it said it would add the original.
+    expect(screen.getByRole('checkbox', { name: /include exact prompt/i })).toBeDisabled();
+    expect(screen.getByText('This creation saved no prompt.')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /include creation references/i })).not.toBeChecked();
+
+    // An empty recipe is still refused at Publish.
+    fillRequiredTitle();
+    fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+    expect((await screen.findAllByText('Add at least one item to the recipe.')).length).toBeGreaterThan(0);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).not.toContain('/api/showcase/publish');
+  });
+
+  // A mature post's content stays under its cover until a viewer reveals it, its settings too.
+  it("tells the seller an NSFW creation's settings show once a viewer reveals the post", async () => {
+    searchParamsState.value = new URLSearchParams({
+      generationId: 'gen-paid-2',
+      publishIntent: 'paid-generation',
+      resourceMode: 'paid',
+    });
+    enqueueResponse({
+      ok: true,
+      json: async () => ({
+        generations: [
+          {
+            id: 'gen-paid-2',
+            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+            category: 'image',
+            model: 'nano-banana-2',
+            title: 'Launch still',
+            description: '',
+            prompt: 'A creator-style product image with warm natural light.',
+            paywallPrefill: {
+              resourceKinds: ['prompt'],
+              promptText: 'A creator-style product image with warm natural light.',
+              allowRemix: false,
+            },
+          },
+        ],
+      }),
+    });
+
+    render(<NewPostClient />);
+
+    expect(await screen.findByText(/its settings show on the post for everyone/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /mark as nsfw/i }));
+    expect(screen.queryByText(/for everyone/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/its settings show on the post once a viewer reveals it/i)).toBeInTheDocument();
+  });
+
   it('falls back to the manual paid composer when a generation has no usable prefill', async () => {
     searchParamsState.value = new URLSearchParams({
       generationId: 'gen-paid-empty',

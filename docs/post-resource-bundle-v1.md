@@ -23,8 +23,11 @@ The resource bundle is the reusable "how".
   free or paid, **includes the post's Remix**: the owner and anyone who unlocked
   it can remix; everyone else is asked to unlock first (`unlock_required`, and
   `/api/remix-source` answers 403 `REMIX_UNLOCK_REQUIRED`), so the creation's
-  prompt and settings never go to someone who has not unlocked a recipe that
-  sells them. A free recipe is claimed by the Remix tap itself. Every read
+  prompt never goes to someone who has not unlocked a recipe that sells it. Its
+  settings are not sold: since 2026-11-03 the post shows them to everyone, on a
+  line under Made with (`buildPublicGenerationSetup`), and a recipe made from
+  the creation no longer takes them in as a note (the recipes published before
+  keep theirs). A free recipe is claimed by the Remix tap itself. Every read
   reports such a recipe with `allowRemix: true` and `remix` among its kinds,
   whatever its stored switch says (2026-10-27); a post without a recipe, an
   upload and a template result are unchanged

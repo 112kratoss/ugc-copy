@@ -15,16 +15,16 @@ import {
   normalizeRemixMediaAssetDescriptor,
 } from '@/lib/remix-source';
 
+/**
+ * What a recipe made from a creation starts from, on the owner's library entry (`/api/generations`).
+ * Until 2026-11-03 it carried `notesMarkdown` too, the creation's "Saved generation setup", which
+ * every new recipe took in as a protected note; the settings are the post's now, for everyone
+ * (`buildPublicGenerationSetup`, owner's decision), and the field is gone. No installed app reads
+ * the prefill, and a page running older code takes an answer without it as one with no notes.
+ */
 export interface GenerationPaywallPrefill {
   resourceKinds: PostResourceKind[];
   promptText: string | null;
-  /**
-   * Null from this server, and read by no client since 2026-11-03. It held the creation's "Saved
-   * generation setup", which every recipe made from the creation took in as a protected item; the
-   * setup is public on the post now (`buildPublicGenerationSetup`, owner's decision), so a new
-   * recipe no longer carries it. Still sent, as null, so a page running older code adds none either.
-   */
-  notesMarkdown: string | null;
   allowRemix: boolean;
   referenceCount?: number;
   referenceKindCounts?: Partial<Record<GenerationInputMediaType, number>>;
@@ -42,7 +42,6 @@ export interface GenerationPaywallPrefillSource {
   category: string | null | undefined;
   /** The generation's creation_mode: how a catalog-path motion generation says it is one. */
   creationMode?: string | null;
-  model: string | null | undefined;
   prompt: string | null | undefined;
   workflowSettings: Record<string, unknown> | null | undefined;
   inputMedia?: GenerationInputMediaItem[] | null;
@@ -307,7 +306,6 @@ export function buildGenerationPaywallPrefill(
   return {
     resourceKinds: effectiveResourceKinds,
     promptText,
-    notesMarkdown: null,
     allowRemix,
     referenceCount,
     referenceKindCounts,

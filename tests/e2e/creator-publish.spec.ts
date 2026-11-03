@@ -89,7 +89,7 @@ function priceOf(run: Run) {
 }
 
 /** The creation's library entry: its own title and the recipe its setup makes. */
-const RECIPE = { resourceKinds: ['prompt'], promptText: PROMPT, notesMarkdown: null, allowRemix: false };
+const RECIPE = { resourceKinds: ['prompt'], promptText: PROMPT, allowRemix: false };
 
 type Answers = {
   /** A first post: the profile still has the signup handle and no name. */
