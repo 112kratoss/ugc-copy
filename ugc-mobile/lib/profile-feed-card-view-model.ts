@@ -56,6 +56,18 @@ export const INITIAL_FEED_LANDING: FeedLanding = {
   phase: 'waiting', targetIndex: -1, startedAt: null, attempt: 0,
 };
 
+/**
+ * The landing a feed starts with. A tapped card already in the list is sought
+ * from the first render, so the list is hidden from its first frame and no
+ * second render of the whole feed stands between it and its first layout
+ * (~80 ms on the simulator). Its budget starts at the first tick.
+ */
+export function initialFeedLanding(targetIndex: number): FeedLanding {
+  return targetIndex >= 0
+    ? { phase: 'seeking', targetIndex, startedAt: null, attempt: 0 }
+    : INITIAL_FEED_LANDING;
+}
+
 export function reduceFeedLanding(state: FeedLanding, event: FeedLandingEvent): FeedLanding {
   // The reader's own scroll outranks the landing for the rest of the visit.
   if (state.phase === 'released') return state;
@@ -85,7 +97,8 @@ export function reduceFeedLanding(state: FeedLanding, event: FeedLandingEvent): 
         ? { ...state, phase: 'landed' }
         : state;
     case 'tick':
-      if (state.phase !== 'seeking' || state.startedAt === null) return state;
+      if (state.phase !== 'seeking') return state;
+      if (state.startedAt === null) return { ...state, startedAt: event.now };
       return event.now - state.startedAt >= FEED_LANDING_BUDGET_MS
         ? { ...state, phase: 'failed' }
         : { ...state, attempt: state.attempt + 1 };
@@ -103,6 +116,42 @@ export function reduceFeedLanding(state: FeedLanding, event: FeedLandingEvent): 
  */
 export function shouldScrollToFeedTarget(state: FeedLanding, cardCount: number) {
   return state.phase === 'seeking' && state.targetIndex > 0 && state.targetIndex < cardCount;
+}
+
+/**
+ * Whether a native scroll has put the target card at the top of the list.
+ * FlashList's `scrollToIndex` renders its way to the card in steps that leave
+ * the native list where it was, and moves it once, at the end; its promise then
+ * resolves a further 200 ms later. That one move is the landing, so the feed
+ * shows from it: on an iPhone 17 Pro simulator the tapped card appeared 0.54 s
+ * after the tap while the feed waited for the promise (2026-11-03).
+ * `targetOffset` is the card's top plus the list's first-item offset, as
+ * FlashList scrolls to it with `viewPosition: 0`.
+ */
+export function feedLandingScrollArrived(nativeOffset: number, targetOffset: number) {
+  return Math.abs(nativeOffset - targetOffset) < 1;
+}
+
+/**
+ * Where the card a feed opens on stands once the list has landed on it, which
+ * is where the feed draws that card while the list is still hidden seeking it
+ * (`components/profile-media-feed.tsx`). Read from FlashList 2.3.2's
+ * `scrollToIndex` (2026-11-03). The first card is never scrolled, so it keeps
+ * the list's top padding (`padded`). Any other is scrolled to its own top plus
+ * the list's first-item offset, which takes the padding off the screen with it
+ * (`top`). That scroll stops at the end of the cards (`getMaxScrollOffset`
+ * counts neither the footer nor the bottom padding), so the last card, when it
+ * is shorter than the list, stands with its foot on the list's (`end`). Two
+ * cases this cannot see stand a card elsewhere: a list shorter than the screen
+ * does not scroll at all, and a card whose followers are too short to fill the
+ * list under it stops early. The feed's handover moves the card there rather
+ * than letting it jump.
+ */
+export type FeedLandingCardPlace = 'padded' | 'top' | 'end';
+
+export function feedLandingCardPlace(targetIndex: number, cardCount: number): FeedLandingCardPlace {
+  if (targetIndex <= 0) return 'padded';
+  return targetIndex === cardCount - 1 ? 'end' : 'top';
 }
 
 export interface ProfileFeedCard {

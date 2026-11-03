@@ -4,6 +4,7 @@ import React from 'react';
 import renderer from 'react-test-renderer';
 import type { InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
+import { router } from 'expo-router';
 import { AccessibilityInfo, Alert } from 'react-native';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -240,6 +241,7 @@ vi.mock('@/lib/motion', () => ({
 
 import ShowcaseScreen, { partitionAspectRatiosByViewport } from '../app/(tabs)/showcase';
 import { resetAutoplayPreferenceForTests, type AutoplayPreference } from '../lib/autoplay-preference';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '../lib/feed-video-activation';
 import { haptic } from '../lib/haptics';
 import { resolvedBottomInset, resolvedTopInset } from '../lib/safe-area';
@@ -1288,6 +1290,35 @@ describe('Showcase screen', () => {
 
   // Autoplay previews → Never keeps every tile on its poster, as Reduce Motion
   // does, without changing which tile the grid elects (product decision D3).
+  // Review of #679: read at press-in with no wait, a scroll of the grid that
+  // began on a byline read that creator's page.
+  it("reads a tile's creator once the finger has rested on the byline, and opens their page on the press", () => {
+    // Drawn for real here, and the reel's copy of the post reads the body.
+    queryState.pages = [{ items: [{ ...feedItem(), body: '' }], pageInfo: { hasMore: false, nextOffset: null } }];
+    vi.mocked(router.push).mockClear();
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const list = flashListProps();
+    const tile = renderAlone(
+      <FeedVideoActivationContext.Provider value={createFeedVideoActivationStore()}>
+        {list.renderItem({ item: list.data[0], index: 0, target: 'Cell' })}
+      </FeedVideoActivationContext.Provider>
+    );
+    const byline = tile.root.find((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityHint === "Opens this creator's profile"
+    ));
+
+    expect(byline.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+    renderer.act(() => byline.props.onPressIn());
+    expect(prepared).toEqual(['creator']);
+    expect(router.push).not.toHaveBeenCalledWith('/creators/creator');
+    renderer.act(() => byline.props.onPress());
+    expect(router.push).toHaveBeenCalledWith('/creators/creator');
+
+    removePreparer();
+    renderer.act(() => tile.unmount());
+  });
+
   it('keeps the play badge on an elected tile that Never holds on its poster', () => {
     const base = feedItem();
     queryState.pages = [{

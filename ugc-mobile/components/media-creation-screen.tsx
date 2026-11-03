@@ -17,7 +17,7 @@ import {
   Wand2,
   X,
 } from 'lucide-react-native';
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import { ActivityIndicator, AppState, Keyboard, Modal, Pressable, ScrollView, Switch, Text, TextInput, useWindowDimensions, View, type TextStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -44,6 +44,7 @@ import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
 import { holdsRemixOriginal, remixOriginalMedia, remixOriginalOf, remixOriginalPlace, replacedRemixOriginal, storedRemixOriginal, withRenewedRemixOriginal, type RemixOriginal, type RemixOriginalPlace } from '@/lib/remix-original-reference';
+import { findRemixLaunch, type RemixLaunchAnswer } from '@/lib/remix-start';
 import { APP_CREATOR_OPENINGS } from '@/lib/app-creator-opening/app-creator-opening';
 import { creatorParameterSummary } from '@/lib/creator-parameter-summary';
 import { recordCreatorSession } from '@/lib/creator-session-diagnostics';
@@ -983,6 +984,9 @@ function createMobileGenerationIdempotencyKey(prefix: CreatorToolId) {
 /** What the remix banner says when only an account can read the source. */
 const REMIX_RESTORE_SIGN_IN_MESSAGE = 'Sign in to restore remix source media.';
 
+/** A creator no Remix tap opened has no start to hear from. */
+const subscribeToNoRemixLaunch = () => () => undefined;
+
 /** The answer of a route the server keeps for accounts, to a guest's token. */
 function isRegistrationRequiredError(error: unknown) {
   return error instanceof ApiError && error.status === 403 && error.code === 'REGISTRATION_REQUIRED';
@@ -993,6 +997,8 @@ type MediaCreationScreenProps = {
   insideTab?: boolean;
   initialPrompt?: string | null;
   remixSource?: RemixSourceSeed;
+  /** The Remix tap that opened this creator before its start was answered, as its link names it (`REMIX_LAUNCH_PARAM`). */
+  remixLaunchId?: string | null;
   guided?: boolean;
   onClose?: () => void;
   registerBeforeClose?: (guard: (() => Promise<boolean>) | null) => void;
@@ -1028,6 +1034,7 @@ function IdentityCreationScreen({
   insideTab = false,
   initialPrompt,
   remixSource,
+  remixLaunchId,
   guided = false,
   onClose,
   registerBeforeClose,
@@ -1156,6 +1163,12 @@ function IdentityCreationScreen({
   const remixSourceId = remixSource?.generationId?.trim() || null;
   const remixOriginalKnown = Boolean(remixSourceId && remixOriginalRead?.sourceId === remixSourceId);
   const remixOriginal = remixOriginalKnown ? remixOriginalRead!.original : null;
+  // A Remix tap opens this creator before its start is answered (`launchShowcaseRemix`). The
+  // source it restores, its saves and a run wait for the answer, which can still send the
+  // creator to another link or close it while the tapped screen says why.
+  const [remixLaunch] = useState(() => findRemixLaunch(remixLaunchId, remixSource));
+  const remixAnswer = useSyncExternalStore(remixLaunch?.subscribe ?? subscribeToNoRemixLaunch, () => remixLaunch?.answer ?? null);
+  const remixStartHeld = Boolean(remixLaunch) && remixAnswer?.kind !== 'confirmed';
   const remixScope = remixDraftScope(identityUserId, remixSource);
   // Every saved draft is kept under an identity, a registered account or a
   // guest session. With no identity yet there is no one to keep it for, so
@@ -1188,8 +1201,9 @@ function IdentityCreationScreen({
   const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
   const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
   // The screen is interactive from mount, so the restore needs its own visible
-  // in-flight state — an empty form reads as finished, not as loading.
-  const [isRestoringRemix, setIsRestoringRemix] = useState(false);
+  // in-flight state — an empty form reads as finished, not as loading. A creator a
+  // Remix tap opened is restoring from its first frame: its source is already on its way.
+  const [isRestoringRemix, setIsRestoringRemix] = useState(() => Boolean(remixLaunch));
   // Mirrors each draft's prompt so the restore can tell whether the creator
   // typed while the bundle was still in flight.
   // Seeded from the drafts themselves, not from blanks: the restore effect below
@@ -1210,7 +1224,9 @@ function IdentityCreationScreen({
   const pinnedStarterIds = guidedDraft.catalogRevision ? [] : guidedStarterIds;
   const catalogQuery = useGenerationModelCatalog(api, {
     kind: activeTool,
-    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...pinnedStarterIds],
+    // The model a Remix tap's source was made on loads beside the start, so its name is on the
+    // chip while the source loads and the restore finds its details in.
+    selectedIds: [imageDraft.model, videoDraft.model, motionDraft.model, ...pinnedStarterIds, ...(remixLaunch?.modelId ? [remixLaunch.modelId] : [])],
     pickerOpen: modelPickerVisible,
   });
   const catalog = catalogQuery.catalog;
@@ -1304,6 +1320,9 @@ function IdentityCreationScreen({
           && needsRemixReferenceRecovery(persisted[initialTool], { now: Date.now(), storageBaseUrl: env.supabaseUrl }));
         resumedRemixRef.current = Boolean(remixScope && persisted.remixRestored && !recoveringRemixReferences.current);
         remixResolvedRef.current = resumedRemixRef.current;
+        // A resumed session restores nothing, so a Remix tap's creator stops saying it does. A
+        // restore already out (effects run again over a kept screen) still owns the state.
+        if (resumedRemixRef.current && !remixHydrationKeyRef.current) setIsRestoringRemix(false);
         savedRemixEdits.current = persisted.remixEditedKeys ?? {};
         const storedOriginal = remixScope && remixSourceId ? storedRemixOriginal(persisted.remixOriginal) : undefined;
         remixOriginalSavedFor.current = storedOriginal !== undefined ? remixSourceId : null;
@@ -1326,14 +1345,21 @@ function IdentityCreationScreen({
         ? ''
         : JSON.stringify(persisted ? { image: persisted.image, video: persisted.video, motion: persisted.motion } : latestDrafts.current);
       setDraftsHydrated(true);
-    }).catch(() => { if (active) setDraftLoadError(true); });
+    }).catch(() => {
+      if (!active) return;
+      setDraftLoadError(true);
+      // Nothing is restored over a draft that could not be read; its own banner says so.
+      if (!remixHydrationKeyRef.current) setIsRestoringRemix(false);
+    });
     return () => { active = false; };
   }, [draftScope, initialPrompt, draftLoadAttempt]);
 
   const saveLatestDraft = async () => {
     // Without a scope nothing is saved, and the fingerprint stays as it was so
-    // the work still reads as unsaved when an identity arrives.
-    if (!draftsHydrated || !draftScope) return;
+    // the work still reads as unsaved when an identity arrives. Nor is a remix whose
+    // start is still out: refused, it leaves nothing behind for a later remix of the post
+    // to resume.
+    if (!draftsHydrated || !draftScope || remixStartHeld) return;
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = null;
     // If a keystroke lands during a slow write, flush that newer snapshot too.
@@ -1371,7 +1397,9 @@ function IdentityCreationScreen({
   useEffect(() => { saveLatestDraftRef.current = saveLatestDraft; });
 
   useEffect(() => {
-    if (!draftsHydrated || isRestoringRemix || closingRef.current) return;
+    // A remix whose start is still out has nothing to save yet, so its exit is not held either:
+    // the answer can close it.
+    if (!draftsHydrated || isRestoringRemix || remixStartHeld || closingRef.current) return;
     // Sticky: from the first edit onward this session's exit has something to
     // save, and the route keeps the native pop gesture off until it closes.
     if (!dirty && JSON.stringify({ image: imageDraft, video: videoDraft, motion: motionDraft }) !== lastSavedFingerprint.current) {
@@ -1381,7 +1409,7 @@ function IdentityCreationScreen({
       void saveLatestDraftRef.current().then(() => setDraftSaveError(null), () => setDraftSaveError('Your latest changes could not be saved. Retry before closing.'));
     }, 350);
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
-  }, [dirty, draftsHydrated, imageDraft, motionDraft, videoDraft, isRestoringRemix]);
+  }, [dirty, draftsHydrated, imageDraft, motionDraft, videoDraft, isRestoringRemix, remixStartHeld]);
 
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
@@ -1426,6 +1454,19 @@ function IdentityCreationScreen({
     if (registerBeforeClose) onClose?.(); // The route guard also covers native gestures.
     else if (await prepareClose()) onClose?.();
   };
+
+  // Where a Remix tap's start sends the creator it opened: on to the link the answer
+  // names, or away while the tapped screen says why. Nothing was saved or run while the
+  // answer was out, so the creator leaves with nothing to keep.
+  const followedRemixAnswer = useRef<RemixLaunchAnswer | null>(null);
+  useEffect(() => {
+    if (!remixAnswer || remixAnswer.kind === 'confirmed' || followedRemixAnswer.current === remixAnswer) return;
+    followedRemixAnswer.current = remixAnswer;
+    // Taken once, by this creator or by its route (`claimExit`).
+    if (!remixLaunch?.claimExit()) return;
+    if (remixAnswer.kind === 'replaced') router.replace(remixAnswer.href as never);
+    else onClose?.();
+  }, [onClose, remixAnswer, remixLaunch]);
 
   useEffect(() => {
     if (!catalog) return;
@@ -1485,7 +1526,18 @@ function IdentityCreationScreen({
   const currentOpening = !remixSource?.generationId && currentDraft.model === APP_CREATOR_OPENINGS[currentDraft.tool].modelId
     ? APP_CREATOR_OPENINGS[currentDraft.tool]
     : null;
-  const modelChipName = currentModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model)
+  // While a Remix tap's source lands, the chip names the model it was made on, as the tapped post
+  // named it, over the one the screen put the draft on meanwhile; a model picked by hand is named.
+  const landingModelId = isRestoringRemix && activeTool === initialTool
+    && (currentDraft.model === APP_CREATOR_OPENINGS[activeTool].modelId || currentDraft.model === catalog?.defaults[activeTool])
+    ? remixLaunch?.modelId ?? null
+    : null;
+  const landingModelName = landingModelId
+    ? (catalog ? getCatalogModel(catalog, landingModelId)?.displayName : null)
+      ?? catalogQuery.summaries.find((summary) => summary.id === landingModelId)?.displayName
+      ?? 'Loading model settings…'
+    : null;
+  const modelChipName = landingModelName ?? currentModel?.displayName ?? (catalogQuery.missingIds.includes(currentDraft.model)
     ? 'Choose another model'
     : currentOpening?.displayName ?? 'Loading model settings…');
   // A motion quote needs both inputs: asked without them, the server refuses it, and that
@@ -1493,11 +1545,14 @@ function IdentityCreationScreen({
   const motionInputsMissing = currentDraft.tool === 'motion' && (!currentDraft.characterImage || !currentDraft.referenceVideo);
   // A new draft is priced once the network confirms the revision it is settled on.
   const awaitingRevision = revisionUnconfirmed && !currentDraft.catalogRevision;
+  // A Remix tap's creator prices the draft its source lands, never the one it opened on meanwhile:
+  // that price would stand beside the original's model on the chip, and the restore asks again.
+  const priceHeldForRemix = Boolean(remixLaunch) && isRestoringRemix;
   const quoteRequest = useMemo(
-    () => currentCatalogModel && catalog && !motionInputsMissing && !awaitingRevision
+    () => currentCatalogModel && catalog && !motionInputsMissing && !awaitingRevision && !priceHeldForRemix
       ? buildCatalogQuoteRequest(currentDraft, currentCatalogModel, catalog.revision)
       : null,
-    [awaitingRevision, catalog, currentCatalogModel, currentDraft, motionInputsMissing]
+    [awaitingRevision, catalog, currentCatalogModel, currentDraft, motionInputsMissing, priceHeldForRemix]
   );
   const quoteKey = quoteRequest ? JSON.stringify(quoteRequest) : null;
   // Only the price is kept from a quote. The run is built from the draft as this request was
@@ -1640,7 +1695,7 @@ function IdentityCreationScreen({
   // A model still loading its details (a pick from the What's new strip, which leaves Generate in view)
   // is not in the draft yet: a run started now would go to the model before it.
   const modelPickLoading = Boolean(modelPick && !modelPick.error);
-  const generateDisabled = !draftsHydrated || isRestoringRemix || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || appOutOfDate || validation.errors.length > 0;
+  const generateDisabled = !draftsHydrated || isRestoringRemix || remixStartHeld || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || appOutOfDate || validation.errors.length > 0;
   const openAuthForCurrentDraft = () => {
     router.push({
       pathname: '/auth',
@@ -1778,6 +1833,7 @@ function IdentityCreationScreen({
     // session is not back yet. Signing in is then the way to get one.
     if (!identityUserId) {
       setRemixRestoreWarning(REMIX_RESTORE_SIGN_IN_MESSAGE);
+      setIsRestoringRemix(false);
       return;
     }
 
@@ -1808,7 +1864,9 @@ function IdentityCreationScreen({
       }),
     ).draft;
 
-    void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })
+    // A Remix tap's creator takes the read its tap sent beside the start, and nothing it
+    // reads lands before the start is answered as this remix (`RemixLaunch.readSource`).
+    void (remixLaunch ? remixLaunch.readSource() : api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null }))
       .then(async (bundle) => {
         const modelId = typeof bundle.workflowSettings.model === 'string' ? bundle.workflowSettings.model : bundle.generation.model;
         const restoredCatalog = await loadCatalogDetails([modelId]);
@@ -1893,7 +1951,7 @@ function IdentityCreationScreen({
       // is back, and marked resolved, before this cleanup runs.
       setIsRestoringRemix(false);
     };
-  }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId, revisionUnconfirmed]);
+  }, [api, catalog, catalogQuery.missingIds, loadCatalogDetails, draftsHydrated, guidedScreen, initialTool, linkPrompt, remixLaunch, remixSource?.generationId, remixSource?.postId, remixRetry, identityUserId, revisionUnconfirmed]);
 
   // A resumed remix does not read its source again (above). Its session keeps the original it was
   // offered; one saved before sessions kept it does not say, so its source is asked once, for the
@@ -1904,12 +1962,13 @@ function IdentityCreationScreen({
     if (remixOriginalAskedRef.current === generationId) return;
     remixOriginalAskedRef.current = generationId;
     let active = true;
-    void api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null }).then(
+    // A Remix tap's creator asks it through the tap's launch, as its restore would.
+    void (remixLaunch ? remixLaunch.readSource() : api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })).then(
       (bundle) => { if (active) setRemixOriginalRead({ sourceId: generationId, original: remixOriginalOf(bundle) }); },
       () => { remixOriginalAskedRef.current = null; },
     );
     return () => { active = false; };
-  }, [api, draftsHydrated, identityUserId, remixOriginalKnown, remixSource?.generationId, remixSource?.postId]);
+  }, [api, draftsHydrated, identityUserId, remixLaunch, remixOriginalKnown, remixSource?.generationId, remixSource?.postId]);
 
   // That read kept with the session, once: its next resume asks the source nothing.
   useEffect(() => {
@@ -2921,6 +2980,8 @@ function IdentityCreationScreen({
 
   const generate = async ({ newRun = false }: { newRun?: boolean } = {}) => {
     if (activeGenerationRequestKeyRef.current) return;
+    // A remix whose start is still out runs nothing from any button: the answer may yet close it.
+    if (remixStartHeld) return;
     if (pollingInterrupted) {
       setWorkspaceVisible(true);
       return;
@@ -3265,6 +3326,9 @@ function IdentityCreationScreen({
     void reportGenerationOutput({ api, generationId: lastGenerationId, details: 'Reported from the mobile creator result.' });
   };
 
+  // A Remix tap's creator is restoring from its first frame, but says so only once its saved
+  // drafts are read: a session it resumes restores nothing, and the line would flash over it.
+  const remixRestoreShown = isRestoringRemix && draftsHydrated;
   // Both layouts draw it. Under the sign-in line (another creator's source,
   // read as a guest, or no identity at all) a retry gets the same answer, so
   // the way on is signing in, which comes back to this remix.
@@ -3377,7 +3441,7 @@ function IdentityCreationScreen({
           {catalogNotice ? (
             <SlimCreatorBanner label="Model updated" body={catalogNotice} onDismiss={() => setCatalogNotice(null)} />
           ) : null}
-          {isRestoringRemix ? (
+          {remixRestoreShown ? (
             <SlimCreatorBanner
               label="Remix source"
               body="Restoring the original prompt, settings, and references…"
@@ -3654,7 +3718,7 @@ function IdentityCreationScreen({
           {catalogNotice ? (
             <SlimCreatorBanner label="Model updated" body={catalogNotice} onDismiss={() => setCatalogNotice(null)} />
           ) : null}
-          {isRestoringRemix ? (
+          {remixRestoreShown ? (
             <SlimCreatorBanner
               label="Remix source"
               body="Restoring the original prompt, settings, and references…"

@@ -1,10 +1,19 @@
 import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { useEffect, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Platform, Pressable, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, Animated, Platform, Pressable, type ViewStyle } from 'react-native';
 
+import { useAnimatedState, useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
+import { useViewerTopControlsShown } from '@/lib/viewer-top-controls';
+
+/**
+ * How long the control takes to come in or go: a state change, the length
+ * `useAnimatedState` fades its icon over, in seconds as UIKit's glass
+ * animation takes it.
+ */
+const APPEARANCE_S = appTheme.motion.duration.state / 1000;
 
 type ViewerTopControlProps = {
   label: string;
@@ -21,10 +30,20 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
   // 'auto' it follows the window, and a light-mode window would put light glass
   // over the video.
   const theme = useAppTheme();
+  // Not seen under UIKit's zoom into the reel until the push has crossfaded,
+  // nor once a close has begun (lib/viewer-top-controls.ts).
+  const shown = useViewerTopControlsShown();
   const [glassAvailable] = useState(() => (
     Platform.OS === 'ios' && isLiquidGlassAvailable() && isGlassEffectAPIAvailable()
   ));
   const [reduceTransparency, setReduceTransparency] = useState(false);
+  // Glass is not faded with opacity: under an ancestor whose opacity changed it
+  // never rendered its effect again (simulator, 2026-11-03). It materialises
+  // through its own style instead, and only what it holds fades. Both are cut
+  // under Reduce Motion, as every state change in the app is.
+  const appearance = useAnimatedState(shown);
+  const reducedMotion = useReducedMotion();
+  const opacity = appearance ?? (shown ? 1 : 0);
 
   useEffect(() => {
     if (!glassAvailable) return;
@@ -48,6 +67,10 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
     height: VIEWER_TOP_CONTROL_SIZE,
     borderRadius: VIEWER_TOP_CONTROL_SIZE / 2,
   };
+  // Hidden, it is not there at all: a tap in its corner would act on a control
+  // nobody can see, and a screen reader would land on it.
+  const pointerEvents = shown ? 'auto' : 'none';
+  const importantForAccessibility = shown ? 'auto' : 'no-hide-descendants';
   const content: ViewStyle = {
     width: '100%',
     height: '100%',
@@ -58,7 +81,15 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
 
   if (glass) {
     return (
-      <GlassView glassEffectStyle="regular" colorScheme={theme.scheme} isInteractive style={frame}>
+      <GlassView
+        glassEffectStyle={{ style: shown ? 'regular' : 'none', animate: !reducedMotion, animationDuration: APPEARANCE_S }}
+        colorScheme={theme.scheme}
+        isInteractive
+        pointerEvents={pointerEvents}
+        accessibilityElementsHidden={!shown}
+        importantForAccessibility={importantForAccessibility}
+        style={frame}
+      >
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={label}
@@ -69,27 +100,32 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
           onPress={onPress}
           style={content}
         >
-          {children}
+          <Animated.View style={{ opacity }}>{children}</Animated.View>
         </Pressable>
       </GlassView>
     );
   }
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        ...frame,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'rgba(0,0,0,0.3)',
-        opacity: pressed ? appTheme.opacity.pressed : 1,
-      })}
+    <Animated.View
+      pointerEvents={pointerEvents}
+      accessibilityElementsHidden={!shown}
+      importantForAccessibility={importantForAccessibility}
+      style={[frame, { opacity }]}
     >
-      {children}
-    </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ selected }}
+        onPress={onPress}
+        style={({ pressed }) => ({
+          ...content,
+          backgroundColor: 'rgba(0,0,0,0.3)',
+          opacity: pressed ? appTheme.opacity.pressed : 1,
+        })}
+      >
+        {children}
+      </Pressable>
+    </Animated.View>
   );
 }

@@ -19,6 +19,7 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { CreatorAvatar, SecondaryButton, StatusBlock } from '@/components/ui';
 import { MotionView, useOverlayPresence } from '@/lib/motion';
 import { BackGlyph } from '@/lib/platform-glyphs';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { ApiError, type MagicbookletApiClient } from '@/lib/api-client';
 import {
   clearSearchHistory,
@@ -176,10 +177,12 @@ function CreatorRow({ creator, onOpen }: { creator: CreatorSearchResult; onOpen:
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`Open ${creator.displayName}'s profile${creator.isFollowing ? ', following' : ''}`}
-      onPress={() => {
+      // Their page is read once the finger has rested here, never for a scroll
+      // of the results that starts on the row (`creatorProfilePress`).
+      {...creatorProfilePress(creator.username, () => {
         onOpen();
         router.push(`/creators/${encodeURIComponent(creator.username)}` as never);
-      }}
+      })}
       style={({ pressed }) => ({
         minHeight: 76,
         flexDirection: 'row',

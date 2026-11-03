@@ -49,13 +49,14 @@ afterEach(() => {
 });
 
 describe('the veil under the zoom', () => {
-  it('goes up around the tile at the tap, covers it once the push begins, and comes down as the close begins', () => {
+  it('goes up around the tile under the reel\'s transition, covers it once the push begins, and comes down as the close begins', () => {
     vi.useFakeTimers();
-    const drop = dropZoomVeil('feed', TILE);
-    // The test double resolves every timing at once.
-    expect(feed.cover.get()).toBe(1);
+    const drop = dropZoomVeil('feed', TILE)!;
     expect(feed.hole.get()).toEqual(TILE);
     claimZoomVeil(drop);
+    followZoomVeilTransition(drop, transition('reel'));
+    // The test double resolves every timing at once.
+    expect(feed.cover.get()).toBe(1);
     closeZoomVeilHole(drop);
     expect(feed.hole.get()).toBeNull();
     vi.advanceTimersByTime(ZOOM_VEIL_DEADLINE_MS + 1);
@@ -72,6 +73,55 @@ describe('the veil under the zoom', () => {
     const unfollow = followZoomVeilTransition(drop, opening);
     expect(getZoomVeilOpacity('feed')).toBe(opening);
     unfollow();
+    expect(getZoomVeilOpacity('feed')).toBeNull();
+  });
+
+  // The veil shows its wrapper's opacity times `cover`. The UI thread takes a
+  // new `cover` at once, while the wrapper changes only when React commits the
+  // screen's veil again (components/zoom-veil.tsx), which the reel's push
+  // render can hold back. With `cover` raised at the tap, the wrapper still at
+  // 1 showed it in full: the feed went black for 70–90 ms before two of seven
+  // zooms from Explore on the iPhone 17 Pro simulator (2026-11-03).
+  it('shows nothing while the screen has not yet redrawn its veil for the tap, however long that takes', () => {
+    const shown = (wrapper: ReturnType<typeof getZoomVeilOpacity>) => (wrapper === null ? 1 : wrapper === 0 ? 0 : 1) * feed.cover.get();
+    // What the wrapper was committed at before the tap, and stays at until the
+    // next commit: its own cover's, at full opacity.
+    const beforeTheTap = getZoomVeilOpacity('feed');
+    expect(beforeTheTap).toBeNull();
+    const drop = dropZoomVeil('feed', TILE)!;
+    expect(shown(beforeTheTap)).toBe(0);
+
+    // The reel binds its transition from an effect, after the commit that put
+    // the wrapper at 0; the cover goes up under that, and the wrapper takes the
+    // transition at the commit after.
+    const waiting = getZoomVeilOpacity('feed');
+    expect(waiting).toBe(0);
+    const reel = transition('reel');
+    followZoomVeilTransition(drop, reel);
+    expect(shown(waiting)).toBe(0);
+    expect(feed.cover.get()).toBe(1);
+    expect(getZoomVeilOpacity('feed')).toBe(reel);
+  });
+
+  it('starts every drop clear, whatever an earlier reel left the cover at', () => {
+    const first = dropZoomVeil('feed', TILE)!;
+    claimZoomVeil(first);
+    followZoomVeilTransition(first, transition('first reel'));
+    expect(feed.cover.get()).toBe(1);
+
+    dropZoomVeil('feed', TILE);
+    expect(feed.cover.get()).toBe(0);
+    expect(getZoomVeilOpacity('feed')).toBe(0);
+  });
+
+  it('keeps a veil down that came down before its reel bound a transition', () => {
+    vi.useFakeTimers();
+    const drop = dropZoomVeil('feed', TILE)!;
+    vi.advanceTimersByTime(ZOOM_VEIL_DEADLINE_MS);
+    expect(getZoomVeilOpacity('feed')).toBeNull();
+
+    followZoomVeilTransition(drop, transition('late reel'));
+    expect(feed.cover.get()).toBe(0);
     expect(getZoomVeilOpacity('feed')).toBeNull();
   });
 
@@ -101,6 +151,44 @@ describe('the veil under the zoom', () => {
     expect(getZoomVeilOpacity('feed')).toBeNull();
     // The test double resolves the delayed fade at once.
     expect(feed.cover.get()).toBe(0);
+  });
+
+  // A reel whose first load outlives the zoom shows its loading or error shell
+  // (`ViewerShell` in app/viewer.tsx), and the shell binds no transition. Its
+  // cover was still down from the tap when Back faded it, and UIKit's shrink
+  // crossfade played over the lit feed.
+  it('fades from full cover on Back from a reel that never bound its transition', () => {
+    const drop = dropZoomVeil('feed', TILE)!;
+    claimZoomVeil(drop);
+    const set = vi.spyOn(feed.cover, 'set');
+    liftZoomVeil(drop);
+    // Up, then the fade: the test double resolves it at once.
+    expect(set.mock.calls.map(([value]) => value)).toEqual([1, 0]);
+    expect(getZoomVeilOpacity('feed')).toBeNull();
+    set.mockRestore();
+  });
+
+  it('does the same for a gesture close on that shell, which has no transition to follow', () => {
+    const drop = dropZoomVeil('feed', TILE)!;
+    claimZoomVeil(drop);
+    const set = vi.spyOn(feed.cover, 'set');
+    liftZoomVeil(drop, true);
+    expect(set.mock.calls.map(([value]) => value)).toEqual([1, 0]);
+    // The pop that follows the gesture lifts it again, and starts no second fade from black.
+    set.mockClear();
+    liftZoomVeil(drop);
+    expect(set.mock.calls.map(([value]) => value)).toEqual([0]);
+    set.mockRestore();
+  });
+
+  it('leaves the cover down on Back once it has come down without a reel to lift it', () => {
+    vi.useFakeTimers();
+    const drop = dropZoomVeil('feed', TILE)!;
+    vi.advanceTimersByTime(ZOOM_VEIL_DEADLINE_MS);
+    const set = vi.spyOn(feed.cover, 'set');
+    liftZoomVeil(drop);
+    expect(set.mock.calls.map(([value]) => value)).toEqual([0]);
+    set.mockRestore();
   });
 
   it('fades out over the shrink on Back, even once the reel has left React', () => {
@@ -155,8 +243,11 @@ describe('the veil under the zoom', () => {
     vi.useFakeTimers();
     dropZoomVeil('feed', TILE);
     vi.advanceTimersByTime(ZOOM_VEIL_DEADLINE_MS - 1);
-    expect(feed.cover.get()).toBe(1);
+    // Still waiting for a reel's transition, the tile still clear.
+    expect(getZoomVeilOpacity('feed')).toBe(0);
+    expect(feed.hole.get()).toEqual(TILE);
     vi.advanceTimersByTime(1);
+    expect(getZoomVeilOpacity('feed')).toBeNull();
     expect(feed.cover.get()).toBe(0);
     expect(feed.hole.get()).toBeNull();
   });
@@ -220,13 +311,15 @@ describe('a veil per screen', () => {
     const earlier = dropZoomVeil('feed', TILE)!;
     const later = dropZoomVeil('feed', TILE)!;
     claimZoomVeil(later);
+    const laterReel = transition('later reel');
+    followZoomVeilTransition(later, laterReel);
     // The earlier reel, leaving late, takes nothing down with it.
     releaseZoomVeil(earlier);
     liftZoomVeil(earlier);
     clearZoomVeil(earlier);
     expect(feed.cover.get()).toBe(1);
     expect(followZoomVeilTransition(earlier, transition('earlier reel'))).toBeTypeOf('function');
-    expect(getZoomVeilOpacity('feed')).toBe(0);
+    expect(getZoomVeilOpacity('feed')).toBe(laterReel);
   });
 
   it('tells only the screen whose veil changed', () => {
@@ -247,7 +340,8 @@ describe('a veil per screen', () => {
     unregisterOld();
     const drop = dropZoomVeil('creator', TILE);
     expect(drop).not.toBeNull();
-    expect(replacement.cover.get()).toBe(1);
+    expect(replacement.hole.get()).toEqual(TILE);
+    expect(creator.hole.get()).toBeNull();
     unregisterNew();
     expect(dropZoomVeil('creator', TILE)).toBeNull();
   });

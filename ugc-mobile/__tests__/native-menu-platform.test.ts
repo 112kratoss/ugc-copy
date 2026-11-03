@@ -70,6 +70,12 @@ describe('the iOS menu', () => {
     expect(ios).toMatch(/size=\{trigger\.iconSize\}\s*color=\{trigger\.iconColor\}/);
   });
 
+  it('sits where React Native puts it, wherever in a list it was first laid out', () => {
+    // A host laid out below a list's fold kept the home indicator's inset and
+    // drew its ••• 17 pt above the row once scrolled up (2026-11-03).
+    expect(ios).toMatch(/<Host\b[^>]*ignoreSafeArea="all"/);
+  });
+
   it('never evaluates Expo UI in a binary without it', () => {
     expect(ios).toMatch(/if \(!isNativeMenuAvailable\(\) \|\| !hasNativeMenuItems\(props\.model\)\)/);
     expect(ios).not.toMatch(/^import .*'@expo\/ui/m);

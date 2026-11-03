@@ -79,6 +79,7 @@ import {
   type ProfilePostsScope,
   type ProfileScopeOption,
 } from '@/lib/profile-view-model';
+import { warmImages, type WarmImage } from '@/lib/media-image-warmup';
 import { refreshProfileFailedCreationsHead, refreshProfileLibraryHead } from '@/lib/profile-library-head';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import {
@@ -126,6 +127,10 @@ const PROFILE_MEDIA_SWIPE_COMMIT_DISTANCE = 56;
 const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
 // Three rows rise into place when a tab's media lands; later rows mount plain.
 const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
+// The rows a tab switch shows first, whose previews are cached ahead of it once
+// Profile has stood settled this long.
+const PROFILE_SWITCH_WARM_COUNT = PROFILE_GALLERY_COLUMNS * 2;
+const PROFILE_SWITCH_WARM_DELAY_MS = 2000;
 
 // Drops the page request the gate put off until its cooldown ends.
 function cancelAskAgain(timer: { current: ReturnType<typeof setTimeout> | null }) {
@@ -144,7 +149,7 @@ export function ProfileDashboard({
   justPublishedPostId?: string | null;
 } = {}) {
   const theme = useAppTheme();
-  const { user, api, credits, creditsUpdatedAt, isGuest, identityUserId } = useAuth();
+  const { user, api, session, credits, creditsUpdatedAt, isGuest, identityUserId } = useAuth();
   // A guest's own creations are its library too, keyed by its identity: the
   // server serves a guest its creations, and Posts and Saved stay behind
   // sign-in (02-1). For an account this is its id.
@@ -182,7 +187,7 @@ export function ProfileDashboard({
   const requestNextPageRef = useRef<() => void>(() => undefined);
   const nextPageFailedRef = useRef(false);
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, scale } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
@@ -402,7 +407,13 @@ export function ProfileDashboard({
     savedHasMore: savedQuery.hasNextPage,
     savedLoaded: Boolean(savedQuery.data),
   });
-  const tabCards = activeTab === 'Saved' ? savedCards : activeTab === 'Creations' ? creationCards : postCards;
+  // A tab added later is given its own cards here, or nothing compiles.
+  const cardsByTab: Record<ProfileMediaTab, ProfileMediaCard[]> = {
+    Creations: creationCards,
+    Posts: postCards,
+    Saved: savedCards,
+  };
+  const tabCards = cardsByTab[activeTab];
   // Each tab's chips and empty state read only that tab's scopes, and its chips
   // set only its own: Posts can never be handed Failed. Saved has no chips. The
   // empty state names the tab shown, narrowed rather than retyped, so it cannot
@@ -422,6 +433,39 @@ export function ProfileDashboard({
     // The Failed scope waits on its first page only with nothing to draw meanwhile.
     || (activeTab === 'Creations' && creationsQuery.isLoading && creationCards.length === 0)
     || (activeTab === 'Posts' && postsQuery.isLoading);
+
+  // The tabs not on screen have their first pages read already, once the shown
+  // one has (`backgroundMediaReady`), but a switch still drew each tile's
+  // thumbhash for ~0.5 s while its picture came over the network (device sweep,
+  // Pixel 9a emulator, 2026-11-03). Once Profile has stood settled for a moment
+  // (in view, the shown tab drawn and not being read again), the previews of
+  // their first two rows go into the disk cache under the tiles' own keys, one
+  // at a time (`warmImages`), so a switch draws them from the disk. Previews
+  // only: a tile without one draws its original, a download too large to make
+  // for a tab that may never be opened.
+  const switchImages = PROFILE_MEDIA_TABS
+    .filter((tab) => tab !== activeTab)
+    .flatMap((tab) => cardsByTab[tab].slice(0, PROFILE_SWITCH_WARM_COUNT))
+    .flatMap((card) => profileTilePreview(card) ?? []);
+  // The effect is keyed by which pictures they are, not by the array listing them.
+  const switchImagesKey = JSON.stringify(switchImages);
+  const accessToken = session?.access_token ?? null;
+  const switchWarmReady = isFocused && !isMediaLoading && !activeMediaIsFetching && backgroundMediaReady
+    && switchImages.length > 0;
+  useEffect(() => {
+    if (!switchWarmReady) return undefined;
+    const images = JSON.parse(switchImagesKey) as WarmImage[];
+    // About a tile, in pixels: a third of the page across, at the grid's shape.
+    const tileWidth = (pageWidth / PROFILE_GALLERY_COLUMNS) * scale;
+    let stop: (() => void) | null = null;
+    const timer = setTimeout(() => {
+      stop = warmImages(images, accessToken, { width: tileWidth, height: tileWidth / PROFILE_GALLERY_ASPECT_RATIO });
+    }, PROFILE_SWITCH_WARM_DELAY_MS);
+    return () => {
+      clearTimeout(timer);
+      stop?.();
+    };
+  }, [accessToken, pageWidth, scale, switchImagesKey, switchWarmReady]);
   const activeTabPaging = activeTab === 'Saved'
     ? savedQuery
     : activeTab === 'Creations'
@@ -634,6 +678,7 @@ export function ProfileDashboard({
   return (
     <ProfileMediaList
       activeTab={activeTab}
+      viewKey={tabScope.join(':')}
       cards={tabCards}
       contentBottomPadding={tabBarMetrics.contentBottomOverlapPadding}
       emptyTitle={getProfileMediaEmptyTitle(...tabScope)}
@@ -720,6 +765,7 @@ export function ProfileDashboard({
 
 function ProfileMediaList({
   activeTab,
+  viewKey = activeTab,
   cards,
   contentBottomPadding,
   emptyBody,
@@ -748,6 +794,8 @@ function ProfileMediaList({
   topInset,
 }: {
   activeTab: ProfileMediaTab;
+  /** The tab and scope shown (`Creations:active`): a new one is a switch. */
+  viewKey?: string;
   cards: ProfileMediaCard[];
   contentBottomPadding: number;
   emptyBody?: string;
@@ -786,6 +834,18 @@ function ProfileMediaList({
   const contentWidth = pageWidth - horizontalPadding * 2;
   const cardWidth = Math.floor((contentWidth - PROFILE_GALLERY_GAP * (PROFILE_GALLERY_COLUMNS - 1)) / PROFILE_GALLERY_COLUMNS);
   const cardHeight = Math.round(cardWidth / PROFILE_GALLERY_ASPECT_RATIO);
+  // The first rows rise into place when the media they show lands: on the list's
+  // first view, and on any view it then waited for. A switch to a tab or scope
+  // already loaded draws its tiles at once, in the frame the pill moves in.
+  // FlashList keeps cells by item type, so a switch mounts fresh cells for each
+  // type the last view lacked (a video among pictures, a text post), and each of
+  // those among the first nine rose in over up to 690 ms after the pill had moved
+  // (the device sweep of 2026-11-03 saw the grid follow the pill by ~0.35 s).
+  const [reveal, setReveal] = useState({ viewKey, rises: true });
+  const tilesRise = reveal.viewKey === viewKey ? reveal.rises || isLoading : isLoading;
+  if (reveal.viewKey !== viewKey || reveal.rises !== tilesRise) {
+    setReveal({ viewKey, rises: tilesRise });
+  }
   const swipeResponder = useMemo(
     () => PanResponder.create({
       onMoveShouldSetPanResponder: (_, gestureState) => isProfileMediaSwipeGesture(gestureState),
@@ -896,7 +956,7 @@ function ProfileMediaList({
         renderItem={({ item, index }) => (
           <Reveal
             index={index}
-            enabled={index < PROFILE_GALLERY_REVEAL_COUNT}
+            enabled={tilesRise && index < PROFILE_GALLERY_REVEAL_COUNT}
             style={{
               width: cardWidth,
               marginRight: index % PROFILE_GALLERY_COLUMNS === PROFILE_GALLERY_COLUMNS - 1 ? 0 : PROFILE_GALLERY_GAP,
@@ -1970,6 +2030,34 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
   );
 }
 
+/**
+ * The picture a tile draws, under the key it is cached by, or null for a tile
+ * that draws a plate. `previewState` is the whole answer, so the tile does not
+ * second-guess it. It used to fall through to "any image card can paint its own
+ * media", which reached past a state that had already decided otherwise: a
+ * creation whose poster job failed would pull its full-size original into a grid
+ * cell, which is the egress the 720px derivative exists to avoid. Where there is
+ * no poster there is a plate.
+ */
+function profileTileImage(item: ProfileMediaCard): WarmImage | null {
+  const url = item.previewState === 'videoPoster'
+    ? item.previewUrl
+    : item.previewState === 'image'
+      ? item.previewUrl ?? item.mediaUrl
+      : null;
+  return url ? { url, cacheKey: item.previewCacheKey ?? item.id } : null;
+}
+
+/**
+ * What the switch warm-up asks for of a tile: the picture it draws, when that
+ * is its preview. An image without one draws its original, which is fetched
+ * when the tile is drawn and not before (review of #679, finding 14).
+ */
+function profileTilePreview(item: ProfileMediaCard): WarmImage | null {
+  const picture = profileTileImage(item);
+  return picture && picture.url === item.previewUrl ? picture : null;
+}
+
 function ProfileGalleryPreview({
   item,
   height,
@@ -1980,23 +2068,13 @@ function ProfileGalleryPreview({
   watchdog?: boolean;
 }) {
   const theme = useAppTheme();
-  // `previewState` is the whole answer to what a tile draws, so the tile does
-  // not second-guess it. It used to fall through to "any image card can paint
-  // its own media", which reached past a state that had already decided
-  // otherwise: a creation whose poster job failed would pull its full-size
-  // original into a grid cell, which is the egress the 720px derivative exists
-  // to avoid. Where there is no poster there is a plate.
-  const previewMediaUrl = item.previewState === 'videoPoster'
-    ? item.previewUrl
-    : item.previewState === 'image'
-      ? item.previewUrl ?? item.mediaUrl
-      : null;
-  if (previewMediaUrl) {
+  const picture = profileTileImage(item);
+  if (picture) {
     return (
       <View style={{ width: '100%', height, overflow: 'hidden', backgroundColor: theme.colors.surfaceInset }}>
         <StableMediaImage
-          url={previewMediaUrl}
-          cacheKey={item.previewCacheKey ?? item.id}
+          url={picture.url}
+          cacheKey={picture.cacheKey}
           thumbhash={item.previewThumbhash}
           contentFit="cover"
           transition={120}

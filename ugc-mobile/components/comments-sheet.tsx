@@ -48,6 +48,7 @@ import {
   type PostCommentSort,
 } from '@/lib/comments-view-model';
 import { buildCommentMenu } from '@/lib/comment-menu';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { useReducedMotion } from '@/lib/motion';
 import { actionSheetFromMenu, hasNativeMenuItems, type NativeMenuModel } from '@/lib/native-menu';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -58,6 +59,7 @@ import { SheetGrabber, useSheetDismissDrag } from '@/components/sheet-chrome';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
+import { useMenuHandoff } from '@/lib/menu-handoff';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CommentReportReason } from '@/lib/api-client';
@@ -156,54 +158,77 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const composerRef = useRef<TextInput>(null);
   const commentsOffsetRef = useRef(0);
 
+  // An author's profile or sign-in, opened from the sheet, is pushed at the tap
+  // and the sheet stays until that screen has been built under it, then leaves
+  // over it (`lib/menu-handoff.ts`). Closed first, it left a render before the
+  // screen was built, since expo-router builds a pushed screen a render later:
+  // the post showed bare in between, and on Home, which unmounts the sheet as
+  // it closes, at once. Inline, on the post page, nothing covers the page.
+  const handoff = useMenuHandoff<string>({ visible: presentation === 'sheet' && visible, onClose });
+  const shown = visible && !handoff.leaving;
+
   // A visible Modal used to consume the back key before any listener ran. The
   // sheet is an ordinary view now, so it has to claim the key itself — gated on
   // being open so the screen underneath keeps it the rest of the time.
-  useHardwareBack(visible && presentation === 'sheet', onClose);
+  useHardwareBack(shown && presentation === 'sheet', onClose);
 
   // The Modal this replaced animated itself with `animationType="slide"`. An
   // overlay is an ordinary view, so the sheet owns that motion now — including
   // staying mounted through its exit, which a bare `visible` unmount would cut
   // off mid-flight.
   const { height: windowHeight } = useWindowDimensions();
-  const [presented, setPresented] = useState(visible);
-  const slide = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const [presented, setPresented] = useState(shown);
+  const slide = useRef(new Animated.Value(shown ? 1 : 0)).current;
 
   useEffect(() => {
-    if (visible) setPresented(true);
-  }, [visible]);
+    if (shown) setPresented(true);
+  }, [shown]);
 
   useEffect(() => {
     if (!presented || presentation !== 'sheet') return;
 
     if (reducedMotion) {
-      slide.setValue(visible ? 1 : 0);
-      if (!visible) setPresented(false);
+      slide.setValue(shown ? 1 : 0);
+      if (!shown) setPresented(false);
       return;
     }
 
     const animation = Animated.timing(slide, {
-      toValue: visible ? 1 : 0,
-      duration: visible ? 280 : 200,
+      toValue: shown ? 1 : 0,
+      duration: shown ? 280 : 200,
       // Decelerate in, accelerate out: the sheet arrives settling and leaves
       // like it was let go.
-      easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
+      easing: shown ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic),
       useNativeDriver: true,
     });
     animation.start(({ finished }) => {
-      if (finished && !visible) setPresented(false);
+      if (finished && !shown) setPresented(false);
     });
 
     return () => animation.stop();
-  }, [presentation, presented, reducedMotion, slide, visible]);
+  }, [presentation, presented, reducedMotion, shown, slide]);
 
   // The drag rides on top of the slide translation, which is why this one folds
   // the offset into its own transform instead of appending a second one.
-  const sheetDrag = useSheetDismissDrag({ onDismiss: onClose, visible });
+  const sheetDrag = useSheetDismissDrag({ onDismiss: onClose, visible: shown });
+  // The slide's and the scrim's nodes are built once per opening, not on every
+  // render. The sheet re-renders on every keystroke in its composer, and
+  // mid-slide: its owner's close lands a render after its exit over an
+  // author's profile has begun, and nodes built anew there are connected to
+  // the views again under the running slide (the side menu stopped for 72 ms
+  // that way, components/home-side-menu.tsx). The compiler skips this
+  // component, so the memos are written out.
+  //
   // The scrim thins as the sheet is pulled away, on top of its own entrance.
-  const backdropOpacity = sheetDrag.backdropOpacity && typeof Animated.multiply === 'function'
-    ? Animated.multiply(slide, sheetDrag.backdropOpacity)
-    : slide;
+  const backdropOpacity = useMemo(() => (
+    sheetDrag.backdropOpacity && typeof Animated.multiply === 'function'
+      ? Animated.multiply(slide, sheetDrag.backdropOpacity)
+      : slide
+  ), [sheetDrag.backdropOpacity, slide]);
+  const sheetTranslateY = useMemo(() => {
+    const entry = slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] });
+    return sheetDrag.translateY ? Animated.add(entry, sheetDrag.translateY) : entry;
+  }, [sheetDrag.translateY, slide, windowHeight]);
 
 
   const commentsQueryKey = createPostCommentsQueryKey(postId, sort, user?.id);
@@ -314,14 +339,19 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     const rootReplyId = replyComment
       ? replyComment.parentId ?? replyComment.id
       : null;
-    onClose();
-    router.push({
+    const signIn = () => router.push({
       pathname: '/auth',
       params: {
         returnTo: getCommentAuthReturnTo(authReturnTo, postId, rootReplyId),
       },
     } as never);
-  }, [authReturnTo, onClose, postId]);
+    if (presentation === 'sheet') {
+      handoff.handOff('/auth', signIn);
+      return;
+    }
+    onClose();
+    signIn();
+  }, [authReturnTo, handoff.handOff, onClose, postId, presentation]);
 
   const requireSignIn = useCallback((replyComment?: PostComment | null) => {
     if (user) return true;
@@ -330,11 +360,16 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   }, [openSignIn, user]);
 
   const openAuthorProfile = useCallback((username: string) => {
+    const href = `/creators/${encodeURIComponent(username)}`;
     // Left open, the sheet would still cover the post when the reader comes
-    // back from the profile, so it closes first, as it does for sign-in.
-    if (presentation === 'sheet') onClose();
-    router.push(`/creators/${encodeURIComponent(username)}` as never);
-  }, [onClose, presentation]);
+    // back from the profile, so it closes, as it does for sign-in: once the
+    // profile has been built under it.
+    if (presentation === 'sheet') {
+      handoff.handOff(href, () => router.push(href as never));
+      return;
+    }
+    router.push(href as never);
+  }, [handoff.handOff, presentation]);
 
   const toggleReplies = useCallback((parentId: string) => {
     setExpandedIds((current) => {
@@ -865,14 +900,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         // The slide lives on the panel rather than a wrapper: an extra view in
         // between would become the percentage height's containing block, and an
         // auto-sized parent leaves `78%` with nothing to resolve against.
-        transform: [{
-          translateY: sheetDrag.translateY
-            ? Animated.add(
-                slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
-                sheetDrag.translateY,
-              )
-            : slide.interpolate({ inputRange: [0, 1], outputRange: [windowHeight, 0] }),
-        }],
+        transform: [{ translateY: sheetTranslateY }],
         height: '78%',
         borderTopLeftRadius: appTheme.radii.xl,
         borderTopRightRadius: appTheme.radii.xl,
@@ -1093,7 +1121,10 @@ function CommentRowView({
   const display = getCommentDisplay(comment);
   // A removed comment has no author, and the profile route needs a handle.
   const authorUsername = display.isDeleted ? null : comment.author?.username ?? null;
-  const openAuthor = authorUsername && onAuthorOpen ? () => onAuthorOpen(authorUsername) : undefined;
+  // Their page is read once the finger has rested on either (`creatorProfilePress`).
+  const authorPress = authorUsername && onAuthorOpen
+    ? creatorProfilePress(authorUsername, () => onAuthorOpen(authorUsername))
+    : null;
   const avatar = <CreatorAvatar uri={comment.author?.avatarUrl ?? null} name={display.authorLabel} size={25} />;
   const authorName = (
     <Text numberOfLines={1} style={{ color: theme.colors.textSecondary, ...appTheme.type.caption, fontWeight: '800', flexShrink: 1 }}>
@@ -1111,7 +1142,7 @@ function CommentRowView({
         paddingVertical: appTheme.spacing.gap,
       }}
     >
-      {openAuthor ? (
+      {authorPress ? (
         // The avatar takes the handle's tap, with room around it for a 44pt
         // target. The handle is the one control a screen reader lists, so this
         // one stays out of its way.
@@ -1119,7 +1150,7 @@ function CommentRowView({
           accessibilityElementsHidden
           importantForAccessibility="no-hide-descendants"
           hitSlop={10}
-          onPress={openAuthor}
+          {...authorPress}
           style={({ pressed }) => ({ alignSelf: 'flex-start', opacity: pressed ? appTheme.opacity.pressed : 1 })}
         >
           {avatar}
@@ -1127,14 +1158,14 @@ function CommentRowView({
       ) : avatar}
       <View style={{ flex: 1, gap: 3 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.compact }}>
-          {openAuthor ? (
+          {authorPress ? (
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Open ${display.authorLabel} profile`}
               // Up into the row's padding, and down no further than the gap
               // above the comment, so a tap on its text never opens the profile.
               hitSlop={{ top: appTheme.spacing.gap, bottom: 3 }}
-              onPress={openAuthor}
+              {...authorPress}
               style={({ pressed }) => ({ flexShrink: 1, opacity: pressed ? appTheme.opacity.pressed : 1 })}
             >
               {authorName}

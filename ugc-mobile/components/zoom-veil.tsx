@@ -40,6 +40,11 @@ const AnimatedPath = Animated.createAnimatedComponent(Path);
  * at all where the zoom does not run. A rounded cutout leaves the tapped tile
  * clear until the transition takes its picture over, without exposing the
  * light grid at its corners.
+ *
+ * What shows is the wrapper's opacity times the path's `cover`. The wrapper's
+ * changes wait for React to commit and `cover`'s do not, so lib/zoom-veil.ts
+ * raises `cover` for a reel only once the wrapper has committed to 0, waiting
+ * for that reel's transition.
  */
 function ZoomVeil({ owner, veil }: { owner: string; veil: ScreenVeil }) {
   const subscribe = useCallback((listener: () => void) => subscribeToZoomVeilOpacity(owner, listener), [owner]);

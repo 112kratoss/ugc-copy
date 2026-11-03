@@ -15,9 +15,9 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
-import { AppleZoomProgress } from '@/components/apple-zoom-progress';
+import { AppleZoomProgress, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
-import { MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
+import { MediaZoomCarriedPicture, MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
@@ -73,7 +73,7 @@ import {
 } from '@/lib/immersive-slide-pages';
 import { getReelFollowAttribution, getReelFollowTarget } from '@/lib/reel-overlay-view-model';
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
-import { showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
+import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
@@ -159,6 +159,7 @@ import { flattenProfileOwnerPostPages, profileOwnerPostsQueryOptions } from '@/l
 import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profile-library-source';
 import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
+import { createViewerTopControls, ViewerTopControlsContext } from '@/lib/viewer-top-controls';
 import { useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
@@ -235,10 +236,19 @@ const ViewerLeavingContext = createContext(false);
 export default function ImmersivePreviewViewerScreen() {
   const isFocused = useIsFocused();
   useNavigationBarSurface(isFocused ? 'dark' : null);
+  // Out of a tile by UIKit's zoom, Back and sound come in once it has
+  // crossfaded to the reel; held here, so the loading shell and the reel that
+  // replaces it share the moment, and read by those controls alone, so the reel
+  // is not drawn again as they come and go (lib/viewer-top-controls.ts).
+  const followsZoom = Boolean(useAppleZoomSourceId());
+  const [topControls] = useState(() => createViewerTopControls(!followsZoom));
   return (
     <ThemeScope scheme="dark">
       {isFocused ? <StatusBar style="light" /> : null}
-      <ImmersivePreviewViewer />
+      <ViewerTopControlsContext.Provider value={topControls}>
+        {followsZoom ? <AppleZoomTopControlsCue onShownChange={topControls.setShown} /> : null}
+        <ImmersivePreviewViewer />
+      </ViewerTopControlsContext.Provider>
     </ThemeScope>
   );
 }
@@ -985,23 +995,23 @@ function ImmersivePreviewViewer() {
     }
 
     const context = getRemixSourceContext(item);
-    const openCreateTool = () => {
-      const fallbackHref = getNativeRemixCreateHref({
-        generationId: item.sourceType !== 'showcase' ? item.generationId : null,
-        recreateTool: item.recreateTool,
-        prompt: item.recreatePrompt,
-        context,
-      });
-      router.push((fallbackHref ?? `/create/${item.recreateTool}`) as never);
-    };
+    const createToolHref = () => getNativeRemixCreateHref({
+      generationId: item.sourceType !== 'showcase' ? item.generationId : null,
+      recreateTool: item.recreateTool,
+      prompt: item.recreatePrompt,
+      context,
+    }) ?? `/create/${item.recreateTool}`;
 
     const showcasePostId = item.sourceType === 'showcase' ? item.showcasePostId : null;
     if (!showcasePostId) {
-      openCreateTool();
+      router.push(createToolHref() as never);
       return;
     }
 
     const unlock = item.details?.unlock ?? null;
+    // The creator opens now, on the link the start is expected to answer with, and the
+    // answer then carries it on, sends it to its own link or closes it (`launchShowcaseRemix`).
+    const remixLaunch = launchShowcaseRemix({ api, item, navigate: (href) => router.push(href as never) });
     const startRemix = async () => {
       // A free unlock is taken by this same tap. A paid one never is: the rail
       // sends those to the unlock sheet, which calls back here once it is paid —
@@ -1010,13 +1020,17 @@ function ImmersivePreviewViewer() {
         api,
         postId: showcasePostId,
         claimFreeUnlock: item.remixAccess === 'free-unlock',
+        onSourceReadable: remixLaunch.sourceReadable,
       });
       if (started.kind === 'unlock-required') {
         // This slide was loaded before the creator put remix behind an unlock.
         if (unlock) {
+          // The sheet is the reel's, so it waits for the creator to be gone.
+          await remixLaunch.close();
           setUnlockRemixOpenItemId(item.id);
           return;
         }
+        void remixLaunch.close();
         void queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] });
         showMessageDialog({
           title: 'Unlock needed',
@@ -1037,10 +1051,11 @@ function ImmersivePreviewViewer() {
       }
       const nativeHref = showcaseRemixCreateHref(item, response);
       if (nativeHref) {
-        router.push(nativeHref as never);
+        remixLaunch.land(nativeHref);
         return;
       }
       if (response.redirectTo) {
+        void remixLaunch.close();
         // Leaving the app is the viewer's call, not a silent hand-off.
         const webUrl = `${env.siteUrl}${response.redirectTo}`;
         void showConfirmDialog({
@@ -1053,13 +1068,14 @@ function ImmersivePreviewViewer() {
         });
         return;
       }
-      openCreateTool();
+      remixLaunch.land(createToolHref());
     };
     setRemixingItemId(item.id);
     // `.catch` and `.finally` rather than try…finally, which React Compiler
     // cannot compile; this screen re-renders on every swipe.
     void startRemix()
       .catch((error) => {
+        void remixLaunch.close();
         haptic.error();
         showErrorDialog('Could not start remix', error);
       })
@@ -2149,6 +2165,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         <MediaSlidePage
           active={videoPlaybackActive}
           slideActive={active}
+          onScreen={active}
           prepareVideo={prepareVideo}
           authReturnTo={authReturnTo}
           bottomInset={bottomInset}
@@ -2209,7 +2226,8 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
             active={active && currentHorizontalIndex === pageIndex && (page.type !== 'media' || videoPlaybackActive)}
             slideActive={active}
             // The page on screen is where the zoom's close shrinks the reel out of.
-            zoomTarget={active && currentHorizontalIndex === pageIndex}
+            zoomTarget
+            onScreen={active && currentHorizontalIndex === pageIndex}
             prepareVideo={prepareVideo && preparedMediaIndex === pageIndex}
             authReturnTo={authReturnTo}
             bottomInset={bottomInset}
@@ -2400,6 +2418,7 @@ function MediaSlidePage({
   initialSection,
   slideActive,
   zoomTarget = false,
+  onScreen = false,
   prepareVideo,
   authReturnTo,
   bottomInset,
@@ -2423,8 +2442,13 @@ function MediaSlidePage({
   initialSection?: PostDetailsSection;
   /** The reader is on this slide, overlays included -- see ActiveVideo's rewind. */
   slideActive: boolean;
-  /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
+  /** While on screen, this page marks where the zoom's close shrinks out of (iOS 18). */
   zoomTarget?: boolean;
+  /**
+   * This page is the one on screen, on the slide the reader is on: a media page
+   * draws the tapped tile's picture there until its own has painted.
+   */
+  onScreen?: boolean;
   prepareVideo: boolean;
   /** Where the Details page's "Sign in to unlock" comes back to. */
   authReturnTo: string;
@@ -2481,6 +2505,7 @@ function MediaSlidePage({
           active={active}
           slideActive={slideActive}
           zoomTarget={zoomTarget}
+          onScreen={onScreen}
           prepareVideo={prepareVideo}
           onDoubleTapSave={onDoubleTapSave}
           width={width}
@@ -2527,6 +2552,7 @@ function ImmersiveMedia({
   active,
   slideActive,
   zoomTarget = false,
+  onScreen = false,
   prepareVideo,
   onDoubleTapSave,
   width,
@@ -2536,8 +2562,10 @@ function ImmersiveMedia({
   mediaItem: ShowcaseMediaItem;
   active: boolean;
   slideActive: boolean;
-  /** This page is the one on screen: it marks where the zoom's close shrinks out of (iOS 18). */
+  /** While on screen, this page marks where the zoom's close shrinks out of (iOS 18). */
   zoomTarget?: boolean;
+  /** This page is the one on screen, on the slide the reader is on; see `MediaSlidePage`. */
+  onScreen?: boolean;
   prepareVideo: boolean;
   onDoubleTapSave: (position: DoubleTapSavePosition) => void;
   width: number;
@@ -2610,7 +2638,13 @@ function ImmersiveMedia({
 
   // Where the media sits on the page, for UIKit's zoom to grow the tile into
   // and shrink the reel back out of (lib/apple-zoom.ts).
-  const zoomTargetRect = zoomTarget ? <AppleZoomTarget rect={mediaRectInScreen({ width, height }, mediaAspectRatio)} /> : null;
+  const zoomTargetRect = zoomTarget && onScreen ? <AppleZoomTarget rect={mediaRectInScreen({ width, height }, mediaAspectRatio)} /> : null;
+
+  // The tapped tile's picture, over this page's own until that has painted,
+  // when the reel opened on this post. It goes straight over the picture, so
+  // everything drawn over that — the video's view, its badges, and the rail,
+  // caption and Back the slide and the reel add on top — is over it as well.
+  const carriedPicture = onScreen ? <MediaZoomCarriedPicture itemId={postId} /> : null;
 
   if (mediaItem.mediaKind === 'video') {
     return (
@@ -2632,6 +2666,7 @@ function ImmersiveMedia({
             style={{ position: 'absolute', width, height }}
           />
         ) : null}
+        {carriedPicture}
         {prepareVideo && mediaItem.url ? (
           <ActiveVideo
             key={mediaItem.id}
@@ -2685,6 +2720,7 @@ function ImmersiveMedia({
           recyclingKey={`viewer:${mediaItem.id}`}
           style={{ width, height }}
         />
+        {carriedPicture}
         {zoomTargetRect}
       </DoubleTapPressable>
     );

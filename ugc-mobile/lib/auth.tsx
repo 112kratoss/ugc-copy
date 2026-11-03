@@ -1327,6 +1327,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     linkedGuestUserIdsRef.current.set(accountUserId, linked);
   };
 
+  /**
+   * A sign-in has landed. Creator pages and follow states are kept without the
+   * viewer in their key, and the ones read before it say whether a guest, or
+   * nobody, follows or owns each creator: a page read in the last minute showed
+   * the account Follow for a creator it follows, and the reel's Follow pill
+   * took its answer from such a page (review of #679). Every way out of a
+   * session forgets them as well (`tearDownLocalSession`).
+   *
+   * Only the ones nothing on screen reads are dropped. A reel opened from a
+   * creator's page reads that page's grid, and a guest signs in from the reel
+   * itself (a like, a Follow): removing the grid under it emptied the reel into
+   * its loading shell and lost the post past the first page. Those are read
+   * again in place instead, as the account.
+   */
+  const forgetViewerlessCreatorQueries = () => {
+    queryClient.removeQueries({ predicate: isViewerlessCreatorQuery, type: 'inactive' });
+    void queryClient.invalidateQueries({ predicate: isViewerlessCreatorQuery, type: 'active' });
+  };
+
   const runPasswordSignIn = async (email: string, password: string) => {
     if (!isSupabaseConfigured) {
       throw new Error(`Configure mobile auth first: ${missingEnvKeys.join(', ')}`);
@@ -1351,6 +1370,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     feedIdentityTransition?.commit();
     rememberLinkedGuest(previousSession);
+    forgetViewerlessCreatorQueries();
 
     await redeemGuestMerge();
     await refreshProfile();
@@ -1379,6 +1399,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     feedIdentityTransition?.commit();
     rememberLinkedGuest(previousSession);
+    forgetViewerlessCreatorQueries();
 
     await redeemGuestMerge();
     await refreshProfile();
@@ -1406,6 +1427,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     feedIdentityTransition?.commit();
     rememberLinkedGuest(previousSession);
+    forgetViewerlessCreatorQueries();
 
     await redeemGuestMerge();
     await refreshProfile();

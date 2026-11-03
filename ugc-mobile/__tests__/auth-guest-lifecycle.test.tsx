@@ -42,6 +42,7 @@ const state = vi.hoisted(() => {
         },
       }),
       removeQueries: vi.fn(),
+      invalidateQueries: vi.fn(() => Promise.resolve()),
     },
     replace: vi.fn(),
     // The device keychain, as expo-secure-store holds it.
@@ -1288,6 +1289,81 @@ describe("a guest's deletion and the tickets on this phone (D5)", () => {
 
     await expect(readGuestMergeTickets()).resolves.toEqual([]);
     expect(latest.current?.identityUserId).toBe('guest-2');
+    unmount();
+  });
+});
+
+// Review of #679: creator pages and follow states are cached without the viewer
+// in their key, and a sign-in kept the ones a guest had read. A creator page
+// read in the last minute then showed the account Follow for a creator it
+// follows, and the reel's Follow pill took its answer from those pages.
+describe('the creator pages read before a sign-in', () => {
+  type RemoveQueriesFilter = { predicate: (query: { queryKey: readonly unknown[] }) => boolean; type?: string };
+
+  const signIns = {
+    password: (session: ReturnType<typeof sessionFor>) => {
+      signInLandsOn(session);
+      return (auth: ReturnType<typeof useAuth> | null) => auth?.signInWithPassword('a@example.com', 'correct-Horse-1');
+    },
+    Google: (session: ReturnType<typeof sessionFor>) => {
+      state.signInWithGoogleOAuth.mockImplementation(async () => {
+        state.authCallback?.('SIGNED_IN', session);
+      });
+      return (auth: ReturnType<typeof useAuth> | null) => auth?.signInWithGoogle();
+    },
+    Apple: (session: ReturnType<typeof sessionFor>) => {
+      state.platform = 'ios';
+      vi.mocked(signInWithNativeApple).mockImplementation(async () => {
+        state.authCallback?.('SIGNED_IN', session);
+        return { authorizationCode: 'apple-code', appleUser: 'apple-user' };
+      });
+      return (auth: ReturnType<typeof useAuth> | null) => auth?.signInWithApple('login');
+    },
+  };
+
+  it.each(Object.keys(signIns) as Array<keyof typeof signIns>)(
+    "are forgotten once an account's session lands, with %s",
+    async (method) => {
+      const signIn = signIns[method](accountA());
+      const { latest, unmount } = await mount(guestSession());
+      expect(state.queryClient.removeQueries).not.toHaveBeenCalled();
+
+      await renderer.act(async () => {
+        await signIn(latest.current);
+      });
+      await flush();
+
+      expect(latest.current?.user?.id).toBe('account-a');
+      // One removal, by the first key part, as a sign-out makes it: every
+      // handle's grid and every creator's follow state, and nothing else.
+      expect(state.queryClient.removeQueries).toHaveBeenCalledOnce();
+      const [{ predicate, type }] = state.queryClient.removeQueries.mock.calls[0] as [RemoveQueriesFilter];
+      expect(predicate({ queryKey: ['creator-profile', 'infinite', 'luna'] })).toBe(true);
+      expect(predicate({ queryKey: ['creator-follow-state', 'creator-7'] })).toBe(true);
+      expect(predicate({ queryKey: ['profile', 'account-a'] })).toBe(false);
+      expect(predicate({ queryKey: ['showcase-feed', 'infinite', 'account-a'] })).toBe(false);
+      // A grid a reel on screen reads is kept and read again as the account:
+      // removed, it emptied the reel the guest signed in from.
+      expect(type).toBe('inactive');
+      expect(state.queryClient.invalidateQueries).toHaveBeenCalledWith({ predicate, type: 'active' });
+      unmount();
+    },
+  );
+
+  it('are kept when the sign-in is refused, the guest still the one reading them', async () => {
+    state.signInWithPassword.mockResolvedValue({
+      data: { session: null, user: null },
+      error: Object.assign(new Error('Invalid login credentials'), { status: 400 }),
+    });
+    const { latest, unmount } = await mount(guestSession());
+
+    await renderer.act(async () => {
+      await latest.current?.signInWithPassword('a@example.com', 'wrong').catch(() => undefined);
+    });
+    await flush();
+
+    expect(latest.current?.identityUserId).toBe('guest-1');
+    expect(state.queryClient.removeQueries).not.toHaveBeenCalled();
     unmount();
   });
 });

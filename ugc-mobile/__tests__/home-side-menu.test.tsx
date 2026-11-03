@@ -10,7 +10,35 @@ type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string
 
 const routerState = vi.hoisted(() => ({ push: vi.fn() }));
 
-vi.mock('expo-router', () => ({ router: routerState }));
+/**
+ * The navigation container as the drawer's hand-off reads it
+ * (`lib/menu-handoff.ts`): the focused route, and the `state` event the real
+ * container emits once a navigation has been committed. `land` is that event.
+ */
+const container = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const fake = {
+    routeKey: 'index-key',
+    listeners,
+    ref: {
+      isReady: () => true,
+      getCurrentRoute: () => ({ key: fake.routeKey, name: fake.routeKey.replace(/-key$/, '') }),
+      addListener: (_type: string, callback: () => void) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    },
+    land(routeKey: string) {
+      fake.routeKey = routeKey;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+  return fake;
+});
+
+vi.mock('expo-router', () => ({ router: routerState, useNavigationContainerRef: () => container.ref }));
 
 // Under test the drawer draws without its Modal or animation (IS_TEST_ENVIRONMENT).
 vi.mock('react-native', () => ({
@@ -75,19 +103,29 @@ vi.mock('@/lib/safe-area', () => ({
 }));
 
 import { HomeSideMenu } from '../components/home-side-menu';
+import { appTheme } from '../lib/theme';
 
-function renderMenu(totalSalesUsdCents: number | null) {
+function renderMenu(
+  totalSalesUsdCents: number | null,
+  {
+    onClose = vi.fn(),
+    onSignOut = async () => undefined,
+    signedIn = true,
+  }: { onClose?: () => void; onSignOut?: () => Promise<void>; signedIn?: boolean } = {},
+) {
+  container.routeKey = 'index-key';
+  container.listeners.clear();
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
     tree = renderer.create(
       <HomeSideMenu
         visible
-        onClose={vi.fn()}
-        user={{ id: 'user-1', email: 'luna@example.com', user_metadata: {} } as never}
-        profile={{ displayName: 'Luna Dreams', username: 'luna-dreams' } as never}
+        onClose={onClose}
+        user={signedIn ? { id: 'user-1', email: 'luna@example.com', user_metadata: {} } as never : null}
+        profile={signedIn ? { displayName: 'Luna Dreams', username: 'luna-dreams' } as never : null}
         credits={1200}
         totalSalesUsdCents={totalSalesUsdCents}
-        onSignOut={async () => undefined}
+        onSignOut={onSignOut}
       />,
     );
   });
@@ -148,6 +186,119 @@ describe('HomeSideMenu library row', () => {
     const row = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Unlocked recipes');
     renderer.act(() => row.props.onPress());
     expect(routerState.push).toHaveBeenCalledWith('/unlocks');
+  });
+});
+
+/**
+ * A row opens its screen at the tap and the drawer leaves over it once it has
+ * been built (`lib/menu-handoff.ts`). It used to close as it pushed, and since
+ * expo-router builds a pushed screen a render later, the drawer slid away first
+ * and Home showed until Settings came in, 450–860 ms after the tap (Pixel 9a
+ * emulator, 2026-11-03).
+ */
+describe('HomeSideMenu hand-off', () => {
+  const pressable = (tree: renderer.ReactTestRenderer, label: string) => (
+    tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === label)
+  );
+  const drawerShown = (tree: renderer.ReactTestRenderer) => (
+    tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Settings').length > 0
+  );
+
+  it('pushes at the tap and stays, the row held, until the screen is built under it', () => {
+    routerState.push.mockClear();
+    const onClose = vi.fn();
+    const tree = renderMenu(1250, { onClose });
+
+    renderer.act(() => pressable(tree, 'Settings').props.onPress());
+
+    expect(routerState.push).toHaveBeenCalledWith('/settings');
+    // Neither closed nor told to close before Settings exists.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(drawerShown(tree)).toBe(true);
+    expect(pressable(tree, 'Settings').props.style.opacity).toBe(appTheme.opacity.pressed);
+    expect(pressable(tree, 'Help & Support').props.style.opacity).toBe(1);
+
+    renderer.act(() => container.land('settings-key'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(drawerShown(tree)).toBe(false);
+  });
+
+  it('stays closed when Back returns to Home before the owner has closed it', () => {
+    routerState.push.mockClear();
+    // The owner's close lands in a later render than the drawer's exit; until
+    // then `visible` is still true.
+    const onClose = vi.fn();
+    const tree = renderMenu(1250, { onClose });
+
+    renderer.act(() => pressable(tree, 'Settings').props.onPress());
+    renderer.act(() => container.land('settings-key'));
+    expect(drawerShown(tree)).toBe(false);
+
+    renderer.act(() => container.land('index-key'));
+
+    expect(drawerShown(tree)).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // Nothing is listened to once the hand-off has landed.
+    expect(container.listeners.size).toBe(0);
+  });
+
+  it('opens one screen for two quick taps, on any rows', () => {
+    routerState.push.mockClear();
+    const tree = renderMenu(1250);
+    const settings = pressable(tree, 'Settings');
+    const help = pressable(tree, 'Help & Support');
+
+    renderer.act(() => {
+      settings.props.onPress();
+      help.props.onPress();
+      settings.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(routerState.push).toHaveBeenCalledWith('/settings');
+  });
+
+  it('holds the profile and credits cards the same way', () => {
+    routerState.push.mockClear();
+    const tree = renderMenu(1250);
+
+    renderer.act(() => pressable(tree, 'Open profile for Luna Dreams').props.onPress());
+
+    expect(routerState.push).toHaveBeenCalledWith('/profile');
+    expect(pressable(tree, 'Open profile for Luna Dreams').props.style.opacity).toBe(appTheme.opacity.pressed);
+    expect(pressable(tree, '1,200 credits. Open credits').props.style.opacity).toBe(1);
+  });
+
+  it('hands a guest\'s Sign in to the sign-in screen the same way', () => {
+    routerState.push.mockClear();
+    const onClose = vi.fn();
+    const tree = renderMenu(null, { onClose, signedIn: false });
+
+    renderer.act(() => {
+      void pressable(tree, 'Sign in').props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledWith('/auth');
+    expect(onClose).not.toHaveBeenCalled();
+    renderer.act(() => container.land('auth-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('steps aside at once for a sign-out, which opens no screen, and takes no row after it', async () => {
+    routerState.push.mockClear();
+    const onClose = vi.fn();
+    const onSignOut = vi.fn(async () => undefined);
+    const tree = renderMenu(1250, { onClose, onSignOut });
+
+    await renderer.act(async () => {
+      await pressable(tree, 'Sign out').props.onPress();
+    });
+    renderer.act(() => pressable(tree, 'Settings').props.onPress());
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onSignOut).toHaveBeenCalledTimes(1);
+    expect(routerState.push).not.toHaveBeenCalled();
   });
 });
 

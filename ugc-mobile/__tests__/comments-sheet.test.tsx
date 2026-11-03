@@ -17,6 +17,7 @@ import {
 } from '../components/comments-sheet';
 import { registerActionSheetPresenter, type ActionSheetRequest } from '../lib/action-sheet';
 import { ApiError } from '../lib/api-client';
+import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
 import type { PostComment, PostCommentsResponse } from '../lib/types';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -47,6 +48,8 @@ const mocks = vi.hoisted(() => ({
   routerSetParams: vi.fn(),
   blockUser: vi.fn(),
   announce: vi.fn(),
+  /** True while a test keeps the sheet's slides running, as they are mid-exit. */
+  animationsHold: false,
 }));
 const {
   listPostComments,
@@ -82,15 +85,23 @@ vi.mock('react-native', () => ({
   Alert: { alert: mocks.alert },
   Animated: {
     View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+    // Each interpolation and sum is a node of its own, as React Native's are,
+    // so a test can tell a node kept from one built again.
     Value: class {
       constructor(private value: number) {}
       setValue(next: number) { this.value = next; }
-      interpolate() { return this.value; }
+      interpolate(config: unknown) { return { interpolates: this, config }; }
     },
-    timing: () => ({ start: (done?: (r: { finished: boolean }) => void) => done?.({ finished: true }), stop: () => {} }),
+    timing: () => ({
+      start: (done?: (r: { finished: boolean }) => void) => {
+        if (!mocks.animationsHold) done?.({ finished: true });
+      },
+      stop: () => {},
+    }),
     spring: () => ({ start: () => {}, stop: () => {} }),
-    // The sheet composes its slide with the drag offset.
-    add: (a: unknown, _b: unknown) => a,
+    // The sheet composes its slide with the drag offset, and its scrim with the drag's fade.
+    add: (a: unknown, b: unknown) => ({ add: [a, b] }),
+    multiply: (a: unknown, b: unknown) => ({ multiply: [a, b] }),
   },
   Easing: { in: (fn: unknown) => fn, out: (fn: unknown) => fn, cubic: 'cubic' },
   // The sheet's grabber owns a swipe-to-dismiss responder; the double only
@@ -144,8 +155,36 @@ vi.mock('@/lib/motion', async (importOriginal) => ({
 vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 34, left: 0 }),
 }));
+/**
+ * The navigation container as the sheet's hand-off reads it
+ * (`lib/menu-handoff.ts`): the focused route, and the `state` event the real
+ * container emits once a navigation has been committed. `land` is that event.
+ */
+const container = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const fake = {
+    routeKey: 'viewer-key',
+    listeners,
+    ref: {
+      isReady: () => true,
+      getCurrentRoute: () => ({ key: fake.routeKey, name: fake.routeKey.replace(/-key$/, '') }),
+      addListener: (_type: string, callback: () => void) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    },
+    land(routeKey: string) {
+      fake.routeKey = routeKey;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+  return fake;
+});
 vi.mock('expo-router', () => ({
   router: { push: mocks.routerPush, setParams: mocks.routerSetParams },
+  useNavigationContainerRef: () => container.ref,
 }));
 vi.mock('lucide-react-native', () => ({
   MoreHorizontal: (props: MockProps) => React.createElement('icon-more', props),
@@ -301,6 +340,19 @@ function composerInput(root: renderer.ReactTestInstance) {
   return root.find((node) => String(node.type) === 'textinput');
 }
 
+/** The sheet's sliding panel: the one view sized as a share of the screen. */
+function sheetPanel(root: renderer.ReactTestInstance) {
+  return root.find((node) => String(node.type) === 'view'
+    && (node.props.style as { height?: unknown } | undefined)?.height === '78%');
+}
+
+/** The scrim behind the sheet, which fades with its slide. */
+function sheetScrim(root: renderer.ReactTestInstance) {
+  return root.find((node) => String(node.type) === 'view'
+    && (node.props.style as { inset?: unknown } | undefined)?.inset === 0
+    && 'opacity' in (node.props.style as object));
+}
+
 /** The rows a comment's ••• offers, as the action sheet a build without native menus shows. */
 function commentOptions(root: renderer.ReactTestInstance, authorLabel: string) {
   const presented: ActionSheetRequest[] = [];
@@ -344,6 +396,9 @@ beforeEach(() => {
   replyPages = [];
   queryState = {};
   replyQueryState = {};
+  container.routeKey = 'viewer-key';
+  container.listeners.clear();
+  mocks.animationsHold = false;
   for (const mock of [
     listPostComments,
     createPostComment,
@@ -433,6 +488,25 @@ describe('inline post comments', () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(routerPush).toHaveBeenCalledWith('/creators/batman');
+  });
+
+  // Review of #679: never read for a scroll of the thread that starts on a name.
+  it("reads a comment author's page once the finger has rested on their picture or handle", () => {
+    pages = [page([comment()])];
+    const prepared: string[] = [];
+    const removePreparer = setCreatorProfilePreparer((username) => prepared.push(username));
+    const { tree } = renderInline({ onClose: vi.fn() });
+    const handle = pressable(tree.root, 'Open @batman profile');
+    const picture = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true);
+
+    for (const control of [handle, picture]) {
+      expect(control.props.unstable_pressDelay).toBe(CREATOR_PROFILE_PRESS_DELAY_MS);
+      renderer.act(() => control.props.onPressIn());
+    }
+    expect(prepared).toEqual(['batman', 'batman']);
+    expect(routerPush).not.toHaveBeenCalled();
+
+    removePreparer();
   });
 });
 
@@ -529,13 +603,16 @@ describe('comments sheet', () => {
       pressable(tree.root, 'Reply to @batman').props.onPress();
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
     expect(routerPush).toHaveBeenCalledWith({
       pathname: '/auth',
       params: {
         returnTo: '/viewer?source=showcase-feed&initialId=post-1&comments=post-1&replyTo=comment-1',
       },
     });
+    // Sign-in is built a render after the tap; the sheet closes over it.
+    expect(onClose).not.toHaveBeenCalled();
+    renderer.act(() => container.land('auth-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows a successful reply immediately and writes it into an existing cache', async () => {
@@ -724,7 +801,7 @@ describe('comments sheet', () => {
     expect(presented[0].actions.every((action) => action.destructive)).toBe(true);
   });
 
-  it("opens a comment author's profile from the handle or the avatar, closing the sheet first", () => {
+  it("opens a comment author's profile from the handle or the avatar, closing the sheet over it", () => {
     pages = [page([comment()])];
     const onClose = vi.fn();
     const tree = renderSheet({ onClose });
@@ -733,11 +810,22 @@ describe('comments sheet', () => {
       pressable(tree.root, 'Open @batman profile').props.onPress();
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    // Pushed at the tap; the sheet stays over the post until the profile has
+    // been built under it, a render later, and only then closes. Closed first,
+    // it left the post bare in between (on Home, which unmounts it, at once).
     expect(routerPush).toHaveBeenCalledWith('/creators/batman');
-    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(routerPush.mock.invocationCallOrder[0]);
+    expect(onClose).not.toHaveBeenCalled();
+    renderer.act(() => container.land('creator-batman-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
 
     // The avatar takes the same tap; the handle is the one a screen reader lists.
+    renderer.act(() => {
+      tree.update(sheetElement({ onClose, visible: false }));
+    });
+    container.routeKey = 'viewer-key';
+    renderer.act(() => {
+      tree.update(sheetElement({ onClose }));
+    });
     const avatarTarget = tree.root.find(
       (node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true
     );
@@ -748,6 +836,90 @@ describe('comments sheet', () => {
     });
     expect(routerPush).toHaveBeenCalledTimes(2);
     expect(routerPush).toHaveBeenLastCalledWith('/creators/batman');
+  });
+
+  // Review of #679, B6: the reel keys its sheet by post, so a reel that moved
+  // on while an author's profile was being built took the sheet away before it
+  // left. Its owner went on holding it open: the video blocked, and the sheet
+  // back when the post returned.
+  it("closes in its owner's state when it is taken away while an author's profile is built", () => {
+    pages = [page([comment()])];
+    const onClose = vi.fn();
+    const tree = renderSheet({ onClose });
+
+    renderer.act(() => {
+      pressable(tree.root, 'Open @batman profile').props.onPress();
+    });
+    expect(routerPush).toHaveBeenCalledWith('/creators/batman');
+    expect(onClose).not.toHaveBeenCalled();
+
+    renderer.act(() => tree.unmount());
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Review of #679, B2: the sheet slides out over the profile once it has been
+  // built, and its owner's close re-renders it a render after the slide has
+  // started. Built on every render, the slide's and the scrim's nodes were
+  // built again there, mid-exit, and connected to the views again under the
+  // running slide. They are built once per opening now.
+  it("keeps the nodes its slide and scrim run on through its owner's late close", () => {
+    mocks.animationsHold = true;
+    pages = [page([comment()])];
+    const onClose = vi.fn();
+    const tree = renderSheet({ onClose });
+    const nodes = () => ({
+      slide: (sheetPanel(tree.root).props.style as { transform: Array<{ translateY: unknown }> }).transform[0].translateY,
+      scrim: (sheetScrim(tree.root).props.style as { opacity: unknown }).opacity,
+    });
+    const opened = nodes();
+
+    renderer.act(() => {
+      pressable(tree.root, 'Open @batman profile').props.onPress();
+    });
+    renderer.act(() => container.land('creator-batman-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // The owner's close lands with the slide out under way.
+    renderer.act(() => {
+      tree.update(sheetElement({ onClose, visible: false }));
+    });
+
+    expect(nodes().slide).toBe(opened.slide);
+    expect(nodes().scrim).toBe(opened.scrim);
+  });
+
+  // Review of #679: the hand-off's `handOff` was new on every render here,
+  // where the compiler skips the sheet, so every keystroke in the composer
+  // gave each row a new author handler.
+  it("keeps each row's author handler while the reader types", () => {
+    pages = [page([comment()])];
+    const tree = renderSheet();
+    const authorHandler = () => tree.root.find((node) => (
+      typeof node.props.onAuthorOpen === 'function' && node.props.comment?.id === 'comment-1'
+    )).props.onAuthorOpen;
+    const before = authorHandler();
+
+    renderer.act(() => {
+      composerInput(tree.root).props.onChangeText('So good');
+    });
+
+    expect(authorHandler()).toBe(before);
+  });
+
+  it('opens one screen for two quick taps on authors', () => {
+    pages = [page([comment()])];
+    const tree = renderSheet();
+    const handle = pressable(tree.root, 'Open @batman profile');
+    const avatar = tree.root.find(
+      (node) => String(node.type) === 'pressable' && node.props.accessibilityElementsHidden === true
+    );
+
+    renderer.act(() => {
+      handle.props.onPress();
+      avatar.props.onPress();
+    });
+
+    expect(routerPush).toHaveBeenCalledTimes(1);
   });
 
   it('opens the author of a reply too', () => {
@@ -962,13 +1134,14 @@ describe('comments sheet', () => {
       await flushPromises();
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
     expect(routerPush).toHaveBeenCalledWith({
       pathname: '/auth',
       params: {
         returnTo: '/viewer?source=showcase-feed&initialId=post-1&comments=post-1&replyTo=comment-1',
       },
     });
+    renderer.act(() => container.land('auth-key'));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('names one reply in the singular and reports whether the replies are open', () => {

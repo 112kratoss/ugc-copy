@@ -13,6 +13,7 @@ export function isAuthenticatedMediaProxy(url: string, apiBaseUrl: string): bool
   }
 }
 
+/** The source to load `url` from. The session goes with it only to our media route, whatever token is passed. */
 export function buildMediaSource(url: string, apiBaseUrl: string, accessToken?: string | null): {
   uri: string;
   headers?: Record<string, string>;

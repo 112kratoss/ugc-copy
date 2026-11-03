@@ -40,9 +40,11 @@ const mediaCreationState = vi.hoisted(() => ({
 
 const navigationState = vi.hoisted(() => ({ dispatch: vi.fn(), prevent: vi.fn() }));
 // The community-rules gate has its own tests (content-policy-gate.test.tsx);
-// here it passes straight through to the screen under test.
+// here it passes straight through to the screen under test, unless a case puts
+// the rules in front of it (a first run).
+const gateState = vi.hoisted(() => ({ rulesShown: false }));
 vi.mock('@/components/content-policy-gate', () => ({
-  ContentPolicyGate: ({ children }: { children: unknown }) => children,
+  ContentPolicyGate: ({ children }: { children: unknown }) => (gateState.rulesShown ? null : children),
 }));
 
 // The question it puts has its own tests (ai-data-consent-on-open.test.tsx);
@@ -82,7 +84,12 @@ vi.mock('@/components/ui', () => ({
   SecondaryButton: () => null,
 }));
 
+import { router } from 'expo-router';
+
 import CreateToolScreen from '../app/create/[tool]';
+import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { REMIX_LAUNCH_PARAM, launchShowcaseRemix } from '../lib/remix-start';
+import type { ShowcaseFeedItem } from '../lib/types';
 import { getNativeRemixCreateHref } from '../lib/viewer-actions';
 
 /**
@@ -105,6 +112,9 @@ describe('create tool route', () => {
     navigationState.dispatch.mockClear();
     navigationState.prevent.mockClear();
     aiDataConsentState.mounted = 0;
+    gateState.rulesShown = false;
+    vi.mocked(router.back).mockClear();
+    vi.mocked(router.replace).mockClear();
   });
 
   // App Review, 2026-10-05: the question was asked only at Generate, which a
@@ -218,6 +228,98 @@ describe('create tool route', () => {
       initialPrompt: PROMPT,
       remixSource: { generationId: 'gen-1', ...context },
     });
+  });
+
+  // Home's Make this and the reel's Remix open the creator before the start is answered, and
+  // its link names the tap's launch, which the creator waits on (`launchShowcaseRemix`).
+  it("hands the creator the launch a Remix tap's link names, and no other link one", () => {
+    const navigate = vi.fn();
+    const [item] = buildImmersiveShowcaseItems('showcase-feed', [{
+      id: 'post-1', generationId: 'gen-1', title: 'Night run', prompt: 'A night run', body: '', mediaUrl: null, mediaKind: 'video', mediaItems: [],
+      category: 'video', postFormat: 'media', model: 'seedance-2', saveCount: 0, remixCount: 0, commentCount: 0,
+      createdAt: '2026-11-01T09:00:00.000Z', creator: { id: 'creator-1', username: 'ana', name: 'Ana', avatar: null }, asset: null, canRemix: true,
+    } as unknown as ShowcaseFeedItem]);
+    const launch = launchShowcaseRemix({ api: { getRemixSourceBundle: vi.fn(() => new Promise<never>(() => undefined)) }, item, navigate });
+    const pushed = navigate.mock.calls[0][0] as string;
+    routeState.params = creatorRoute(pushed);
+
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+
+    const launchId = new URL(pushed, 'https://magicbooklet.test').searchParams.get(REMIX_LAUNCH_PARAM);
+    expect(launchId).toBeTruthy();
+    expect(mediaCreationState.props).toMatchObject({
+      initialTool: 'video',
+      remixLaunchId: launchId,
+      remixSource: { generationId: 'gen-1', postId: 'post-1', title: 'Night run', creatorLabel: '@ana' },
+    });
+    launch.land('/create/video?remix=gen-1&remixPost=post-1');
+
+    routeState.params = { tool: 'video', remix: 'gen-1', remixPost: 'post-1' };
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+    expect(mediaCreationState.props?.remixLaunchId).toBeUndefined();
+  });
+
+  // Review of #679's fixes: on a first run the community rules stand in front of the
+  // creator, which is not open to follow a refused start. Its dialog then sat over the
+  // rules, and an unlock sheet opened under this route.
+  it('takes a refused start out itself while the community rules stand in front of the creator', async () => {
+    gateState.rulesShown = true;
+    const navigate = vi.fn();
+    const [item] = buildImmersiveShowcaseItems('showcase-feed', [{
+      id: 'post-1', generationId: 'gen-1', title: 'Night run', prompt: 'A night run', body: '', mediaUrl: null, mediaKind: 'video', mediaItems: [],
+      category: 'video', postFormat: 'media', model: 'seedance-2', saveCount: 0, remixCount: 0, commentCount: 0,
+      createdAt: '2026-11-01T09:00:00.000Z', creator: { id: 'creator-1', username: 'ana', name: 'Ana', avatar: null }, asset: null, canRemix: true,
+    } as unknown as ShowcaseFeedItem]);
+    const launch = launchShowcaseRemix({ api: { getRemixSourceBundle: vi.fn(() => new Promise<never>(() => undefined)) }, item, navigate });
+    routeState.params = creatorRoute(navigate.mock.calls[0][0] as string);
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<CreateToolScreen />);
+    });
+    expect(mediaCreationState.props).toBeNull();
+
+    let gone = false;
+    await renderer.act(async () => {
+      void launch.close().then(() => {
+        gone = true;
+      });
+    });
+
+    expect(router.back).toHaveBeenCalledOnce();
+    // The tapped screen's own sheet waits for this route to have gone.
+    expect(gone).toBe(false);
+    await renderer.act(async () => {
+      tree.unmount();
+    });
+    expect(gone).toBe(true);
+  });
+
+  it('leaves the way out to a creator that is open, so the route goes back once', async () => {
+    const navigate = vi.fn();
+    const [item] = buildImmersiveShowcaseItems('showcase-feed', [{
+      id: 'post-1', generationId: 'gen-1', title: 'Night run', prompt: 'A night run', body: '', mediaUrl: null, mediaKind: 'video', mediaItems: [],
+      category: 'video', postFormat: 'media', model: 'seedance-2', saveCount: 0, remixCount: 0, commentCount: 0,
+      createdAt: '2026-11-01T09:00:00.000Z', creator: { id: 'creator-1', username: 'ana', name: 'Ana', avatar: null }, asset: null, canRemix: true,
+    } as unknown as ShowcaseFeedItem]);
+    const launch = launchShowcaseRemix({ api: { getRemixSourceBundle: vi.fn(() => new Promise<never>(() => undefined)) }, item, navigate });
+    routeState.params = creatorRoute(navigate.mock.calls[0][0] as string);
+    renderer.act(() => {
+      renderer.create(<CreateToolScreen />);
+    });
+    // The creator (a stand-in here) takes the way out first, as its effects run before the route's.
+    const { remixLaunchId, remixSource } = mediaCreationState.props as { remixLaunchId: string; remixSource: { generationId: string; postId: string } };
+    const creatorsLaunch = (await import('../lib/remix-start')).findRemixLaunch(remixLaunchId, remixSource)!;
+    expect(creatorsLaunch.claimExit()).toBe(true);
+
+    await renderer.act(async () => {
+      void launch.close();
+    });
+
+    expect(router.back).not.toHaveBeenCalled();
   });
 
   it('passes prompt-only create route params into the native create screen', () => {

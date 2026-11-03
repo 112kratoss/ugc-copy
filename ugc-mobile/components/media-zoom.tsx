@@ -92,6 +92,8 @@ import {
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
+import { listenToTransition } from '@/lib/use-screen-leaving';
+import { signedMediaIdentity } from '@/lib/use-stable-signed-url';
 import {
   claimZoomVeil,
   closeZoomVeilHole,
@@ -727,13 +729,40 @@ export interface MediaZoomLentVideo {
 const MediaZoomLentVideoContext = createContext<MediaZoomLentVideo | null>(null);
 
 /**
+ * The tapped tile's picture, carried into the reel until the slide it belongs
+ * to has painted its own; see `MediaZoomCarriedPicture`.
+ */
+export interface MediaZoomCarried {
+  /** The post it is the picture of: the one the reel opened on. */
+  itemId: string;
+  preview: ZoomPreview;
+  /** Its fade as the slide's own picture takes over (`CARRIED_FADE_MS`). */
+  style: StyleProp<ViewStyle>;
+  /** It has been drawn: the reel's window is on screen. */
+  reportDrawn: () => void;
+  /**
+   * For the slide drawing it, for as long as it does: the reel waits for the
+   * copy to be drawn only while a slide is drawing it. Returns the release.
+   */
+  claim: () => () => void;
+}
+
+const MediaZoomCarriedContext = createContext<MediaZoomCarried | null>(null);
+
+/**
  * For the reel's video slide: the player the tile lent, when this slide plays
  * the same file — to use in place of building one. Null for every other slide,
  * and for this one too once a hand-off could not adopt it.
+ *
+ * The same file under another signature is still the same file. A library read
+ * re-signs every address it hands over, the tile's and the reel's among them:
+ * matched address for address, a read landing while the reel played dropped
+ * the lent player for one of the slide's own, and the clip started over.
  */
 export function useMediaZoomLentVideo(url: string) {
   const lent = useContext(MediaZoomLentVideoContext);
-  return lent && lent.video.url === url ? lent : null;
+  if (!lent) return null;
+  return lent.video.url === url || signedMediaIdentity(lent.video.url) === signedMediaIdentity(url) ? lent : null;
 }
 
 const reportNothing = () => {};
@@ -1115,13 +1144,14 @@ export interface MediaZoomStageValue {
   clipStyle: StyleProp<ViewStyle>;
   pageStyle: StyleProp<ViewStyle>;
   chromeStyle: StyleProp<ViewStyle>;
-  /** The tile's picture, held over the reel's media until the reel has drawn its own. */
-  carried: ZoomPreview | null;
+  /**
+   * The tile's picture, for the slide of the post the reel opened on to draw
+   * over its own media until that has painted (`MediaZoomCarriedPicture`).
+   * Null once it has, and for a tile that lent its playing video instead.
+   */
+  carried: MediaZoomCarried | null;
   /** The tile's playing video, for the slide that plays it; see `useMediaZoomLentVideo`. */
   lentVideo: MediaZoomLentVideo | null;
-  carriedStyle: StyleProp<ViewStyle>;
-  /** The carried picture has been drawn: the reel's window is on screen. */
-  reportCarriedDrawn: () => void;
   reportPainted: () => void;
   /** Closes the reel: shrinks it back into the current post's tile, then leaves. */
   dismiss: () => void;
@@ -1213,6 +1243,15 @@ export function useMediaZoomStage({
   const [carried, setCarried] = useState<ZoomPreview | null>(carriedPreview);
   const carryingRef = useRef(Boolean(carriedPreview));
   const carriedOpacity = useSharedValue(carriedPreview ? 1 : 0);
+  // How many slides are drawing that copy (`MediaZoomCarriedPicture`): only a
+  // media page of the post the reel opened on does.
+  const copiesDrawnRef = useRef(0);
+  const claimCarried = useCallback(() => {
+    copiesDrawnRef.current += 1;
+    return () => {
+      copiesDrawnRef.current -= 1;
+    };
+  }, []);
 
   const [opened, setOpened] = useState(!zooming);
   const interactive = useSharedValue(zooming ? 0 : 1);
@@ -1359,11 +1398,7 @@ export function useMediaZoomStage({
     if (!nativeZoom || !lentVideo) return;
     const player = lentVideo.player;
     let landed: ReturnType<typeof setTimeout> | undefined;
-    const listen = navigation.addListener as unknown as (
-      type: 'transitionEnd',
-      listener: (event: { data?: { closing?: boolean } }) => void
-    ) => () => void;
-    const unsubscribe = listen('transitionEnd', (event) => {
+    const unsubscribe = listenToTransition(navigation, 'transitionEnd', (event) => {
       if (event.data?.closing) return;
       releaseVideoLoanHold(player);
       clearTimeout(landed);
@@ -1413,10 +1448,6 @@ export function useMediaZoomStage({
   const [reclaimed, setReclaimed] = useState(0);
   useEffect(() => {
     if (!nativeZoom) return;
-    const listen = navigation.addListener as unknown as (
-      type: 'transitionStart' | 'transitionEnd' | 'gestureCancel',
-      listener: (event: { data?: { closing?: boolean } }) => void
-    ) => () => void;
     let gestureClose = false;
     const letGoOf = () => {
       if (!gestureClose) return;
@@ -1429,7 +1460,7 @@ export function useMediaZoomStage({
       }
     };
     const unsubscribers = [
-      listen('transitionStart', (event) => {
+      listenToTransition(navigation, 'transitionStart', (event) => {
         if (event.data?.closing !== true) {
           if (event.data?.closing === false) {
             // The push has begun — UIKit draws the tile's picture above the
@@ -1444,10 +1475,10 @@ export function useMediaZoomStage({
         liftZoomVeil(veil, true);
         handBackForNativeClose();
       }),
-      listen('transitionEnd', (event) => {
+      listenToTransition(navigation, 'transitionEnd', (event) => {
         if (event.data?.closing === false) letGoOf();
       }),
-      listen('gestureCancel', letGoOf),
+      listenToTransition(navigation, 'gestureCancel', letGoOf),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [handBackForNativeClose, nativeZoom, navigation, veil]);
@@ -1628,11 +1659,7 @@ export function useMediaZoomStage({
   // direction; the event is the honest signal, the timer the safety net.
   useEffect(() => {
     if (!zooming || !WAIT_FOR_TRANSITION) return;
-    const listen = navigation.addListener as unknown as (
-      type: 'transitionEnd',
-      listener: (event: { data?: { closing?: boolean } }) => void
-    ) => () => void;
-    const unsubscribe = listen('transitionEnd', (event) => {
+    const unsubscribe = listenToTransition(navigation, 'transitionEnd', (event) => {
       if (!event.data?.closing) markSettled();
     });
     const deadline = setTimeout(markSettled, SETTLE_DEADLINE_MS);
@@ -1651,9 +1678,12 @@ export function useMediaZoomStage({
   }, [markDrawn, zooming]);
 
   // With no picture carried, the reel having a slide in place is the signal
-  // that its window has something in it.
+  // that its window has something in it. So it is with a picture no slide
+  // draws: an audio, text or status page, or Details, has nothing for it to lie
+  // over, and the reel waited for the deadline instead. The slide that draws
+  // the copy mounts with the list, a frame before the reel is `ready`.
   useEffect(() => {
-    if (!zooming || !ready || carryingRef.current) return;
+    if (!zooming || !ready || (carryingRef.current && copiesDrawnRef.current > 0)) return;
     const grace = setTimeout(markDrawn, DRAWN_GRACE_MS);
     return () => clearTimeout(grace);
   }, [markDrawn, ready, zooming]);
@@ -1877,6 +1907,13 @@ export function useMediaZoomStage({
   });
 
   const carriedStyle = useAnimatedStyle(() => ({ opacity: carriedOpacity.value }));
+  // Handed to the slides through the stage (`MediaZoomCarriedPicture`), so it
+  // keeps one identity while it lasts: a new one re-renders the slide drawing it.
+  const carriedPicture = useMemo<MediaZoomCarried | null>(() => (
+    carried && origin
+      ? { itemId: origin.itemId, preview: carried, style: carriedStyle, reportDrawn: reportCarriedDrawn, claim: claimCarried }
+      : null
+  ), [carried, carriedStyle, claimCarried, origin, reportCarriedDrawn]);
 
   const lentVideoValue = useMemo<MediaZoomLentVideo | null>(() => (
     lentVideo && videoHandoff !== 'failed'
@@ -1900,10 +1937,8 @@ export function useMediaZoomStage({
     clipStyle,
     pageStyle,
     chromeStyle,
-    carried,
-    carriedStyle,
+    carried: carriedPicture,
     lentVideo: lentVideoValue,
-    reportCarriedDrawn,
     reportPainted,
     dismiss,
     veil,
@@ -1915,6 +1950,9 @@ export function useMediaZoomStage({
  * window is the reel's own ground, which comes up as the window fills the
  * screen and goes again as it shrinks, so the screen the reel came from is
  * what the movement plays over.
+ *
+ * The tile's picture the reel carries is drawn by the slide it belongs to
+ * (`MediaZoomCarriedPicture`), not here over the whole page.
  */
 export function MediaZoomStage({
   stage,
@@ -1953,35 +1991,19 @@ export function MediaZoomStage({
         >
           <MediaZoomChromeContext.Provider value={stage.chromeStyle}>
             <MediaZoomPaintContext.Provider value={stage.reportPainted}>
-              <MediaZoomOpenedContext.Provider value={stage.opened}>
-                <MediaZoomLandedContext.Provider value={stage.landed && stage.drawn}>
-                  <MediaZoomLentVideoContext.Provider value={stage.lentVideo}>
-                    <MediaZoomUncoveringContext.Provider value={stage.uncovering}>
-                      {children}
-                    </MediaZoomUncoveringContext.Provider>
-                  </MediaZoomLentVideoContext.Provider>
-                </MediaZoomLandedContext.Provider>
-              </MediaZoomOpenedContext.Provider>
+              <MediaZoomCarriedContext.Provider value={stage.carried}>
+                <MediaZoomOpenedContext.Provider value={stage.opened}>
+                  <MediaZoomLandedContext.Provider value={stage.landed && stage.drawn}>
+                    <MediaZoomLentVideoContext.Provider value={stage.lentVideo}>
+                      <MediaZoomUncoveringContext.Provider value={stage.uncovering}>
+                        {children}
+                      </MediaZoomUncoveringContext.Provider>
+                    </MediaZoomLentVideoContext.Provider>
+                  </MediaZoomLandedContext.Provider>
+                </MediaZoomOpenedContext.Provider>
+              </MediaZoomCarriedContext.Provider>
             </MediaZoomPaintContext.Provider>
           </MediaZoomChromeContext.Provider>
-          {/* The tile's own picture, laid where the reel draws its media, until
-              the reel has drawn it. Being drawn is also how the reel says its
-              window is on screen at all. */}
-          {stage.carried ? (
-            <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, stage.carriedStyle]}>
-              <Image
-                source={{ uri: stage.carried.url, cacheKey: stage.carried.cacheKey ?? undefined }}
-                placeholder={stage.carried.thumbhash ? { thumbhash: stage.carried.thumbhash } : undefined}
-                placeholderContentFit="contain"
-                contentFit="contain"
-                cachePolicy="memory-disk"
-                priority="high"
-                transition={0}
-                onDisplay={stage.reportCarriedDrawn}
-                style={StyleSheet.absoluteFill}
-              />
-            </Animated.View>
-          ) : null}
         </Animated.View>
       </Animated.View>
     </Animated.View>
@@ -2265,6 +2287,51 @@ export function MediaZoomFlightLayer({
         </Animated.View>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * The tapped tile's picture, drawn by the reel's slide for the post it opened
+ * on, in the place that slide draws its own media, until the slide's own has
+ * painted (`useMediaZoomPaintReport`) or `CARRIED_DEADLINE_MS` has passed. Being
+ * drawn is also how the reel says its window is on screen at all, so the slide
+ * claims it while it draws it: a reel whose opened page draws none (audio,
+ * text, status) goes by its grace instead.
+ *
+ * The slide lays it directly over its own picture and under everything drawn
+ * over that picture: the video's view and badges, then the rail, caption, top
+ * shade and Back. Drawn by the stage over the whole reel instead, it hid all of
+ * those for as long as the slide's picture took to paint — a larger rendition
+ * than the tile's, which starts loading only as the slide mounts — and on the
+ * Pixel 9a emulator a creation opened from Profile still had Publish and
+ * Details missing, and Recreate half covered, 2.5 s after the tap (2026-11-03).
+ *
+ * Over the slide's picture, not under it: until that picture has loaded, its
+ * frame draws the post's thumbhash, a blur that would hide the sharp copy
+ * beneath. Nor can the blur be left out only while the copy is up, because
+ * expo-image starts a load over when its placeholder changes (Android's
+ * `rerenderIfNeeded`), and the slide's picture would load twice.
+ */
+export function MediaZoomCarriedPicture({ itemId }: { itemId: string }) {
+  const context = useContext(MediaZoomCarriedContext);
+  const carried = context?.itemId === itemId ? context : null;
+  const claim = carried?.claim;
+  useEffect(() => claim?.(), [claim]);
+  if (!carried) return null;
+  return (
+    <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, carried.style]}>
+      <Image
+        source={{ uri: carried.preview.url, cacheKey: carried.preview.cacheKey ?? undefined }}
+        placeholder={carried.preview.thumbhash ? { thumbhash: carried.preview.thumbhash } : undefined}
+        placeholderContentFit="contain"
+        contentFit="contain"
+        cachePolicy="memory-disk"
+        priority="high"
+        transition={0}
+        onDisplay={carried.reportDrawn}
+        style={StyleSheet.absoluteFill}
+      />
+    </Animated.View>
   );
 }
 

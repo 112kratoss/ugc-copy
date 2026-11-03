@@ -46,6 +46,8 @@ const authState = vi.hoisted(() => ({
     getProfile: vi.fn(() => new Promise<never>(() => undefined)),
     getShowcaseFeed: vi.fn(),
     getShowcasePost: vi.fn(),
+    // The remix's source, read beside the start for the creator the tap opens.
+    getRemixSourceBundle: vi.fn(() => Promise.resolve({})),
     saveShowcasePost: vi.fn(),
     recordShowcaseFeedEvent: vi.fn((_request: { eventType: string; deliveryId?: string; postId?: string }) => Promise.resolve()),
     shareShowcasePost: vi.fn((_postId: string, _options: { sourceSurface: string }) => Promise.resolve()),
@@ -158,6 +160,7 @@ vi.mock('@/components/viewer-actions-menu', () => ({
 }));
 
 vi.mock('@/components/media-zoom', () => ({
+  MediaZoomCarriedPicture: nothing,
   MediaZoomChrome: passThrough,
   MediaZoomStage: passThrough,
   peekOpeningPost: () => null,
@@ -178,7 +181,7 @@ vi.mock('@/components/apple-zoom', () => ({
   useAppleZoomRetarget: () => undefined,
   useAppleZoomSourceId: () => null,
 }));
-vi.mock('@/components/apple-zoom-progress', () => ({ AppleZoomProgress: nothing }));
+vi.mock('@/components/apple-zoom-progress', () => ({ AppleZoomProgress: nothing, AppleZoomTopControlsCue: nothing }));
 vi.mock('@/components/app-scheme-scope', () => ({ AppSchemeScope: passThrough }));
 vi.mock('@/components/audio-creation-player', () => ({ AudioCreationPlayer: nothing }));
 vi.mock('@/components/comments-sheet', () => ({ CommentsSheet: nothing }));
@@ -300,7 +303,7 @@ import type { FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { focusedRouteReturnPath } from '@/lib/auth-navigation';
 import { haptic } from '@/lib/haptics';
 import { immersiveViewerReturnPath, type ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
-import { startShowcaseRemix } from '@/lib/remix-start';
+import { REMIX_LAUNCH_PARAM, findRemixLaunch, startShowcaseRemix } from '@/lib/remix-start';
 import {
   filterAnonymousSessionShowcaseFeedItems,
   resetAnonymousShowcaseFeedRemovalsForTests,
@@ -704,8 +707,78 @@ describe("the reel's Remix", () => {
         sourceTitle: 'Post post-b',
         sourceCreator: '@luna',
         sourceThumbnail: 'https://cdn.example.com/post-b-poster.webp',
+        // The tap's launch, which the creator waits on for the start's answer.
+        [REMIX_LAUNCH_PARAM]: expect.any(String),
       },
     });
+  });
+
+  // The creator opened only once the start answered: 0.75 to 1 s on the Pixel 9a
+  // against production, up to 4 s (2026-11-03). It now opens at the tap, and the
+  // answer confirms it there (`openShowcaseRemix`).
+  it('opens the creator at the tap, while the start is still out', async () => {
+    const started = deferred<Awaited<ReturnType<typeof startShowcaseRemix>>>();
+    vi.mocked(startShowcaseRemix).mockReturnValueOnce(started.promise);
+    seedLane('viewer-1', lanePosts().map((post) => (
+      post.id === 'post-b' ? { ...post, generationId: 'gen-b', canRemix: true } : post
+    )));
+    await renderReel('post-b');
+
+    await act(async () => {
+      (screenState.callbacksFor!(activeItem()).onRecreate as () => void)();
+    });
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    const url = new URL(routerState.push.mock.calls[0][0] as string, 'https://magicbooklet.test');
+    expect([url.pathname, url.searchParams.get('remix'), url.searchParams.get('remixPost')]).toEqual(['/create/image', 'gen-b', 'post-b']);
+    expect(startShowcaseRemix).toHaveBeenCalledWith(expect.objectContaining({
+      postId: 'post-b',
+      claimFreeUnlock: false,
+      onSourceReadable: expect.any(Function),
+    }));
+    const launch = findRemixLaunch(url.searchParams.get(REMIX_LAUNCH_PARAM), { generationId: 'gen-b', postId: 'post-b' });
+    expect(launch?.answer).toBeNull();
+
+    await act(async () => {
+      started.resolve({ kind: 'started', response: { success: true, redirectTo: '/create-image?remix=gen-b&remixPost=post-b' }, claimedFreeUnlock: false });
+    });
+    await settle();
+
+    expect(launch?.answer).toEqual({ kind: 'confirmed' });
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+  });
+
+  // The unlock sheet is the reel's own Modal, which iOS presents from the reel's
+  // screen: under the creator there is none to present it from.
+  it('offers an unlock the slide did not know of once the creator it opened has gone', async () => {
+    vi.mocked(startShowcaseRemix).mockResolvedValueOnce({ kind: 'unlock-required' });
+    seedLane('viewer-1', lanePosts().map((post) => (
+      post.id === 'post-b'
+        ? {
+            ...post,
+            generationId: 'gen-b',
+            canRemix: true,
+            asset: { id: 'bundle-b', postId: 'post-b', title: 'Recipe', accessMode: 'paid', priceUsdCents: 300, previewText: '', allowRemix: true },
+          }
+        : post
+    )));
+    const tree = await renderReel('post-b');
+    const unlockSheet = () => tree.root.find((node) => node.type === nothing && 'onUnlocked' in node.props).props;
+
+    let leave = () => undefined as void;
+    await act(async () => {
+      (screenState.callbacksFor!(activeItem()).onRecreate as () => void)();
+      // The creator the tap opened, listening for the answer.
+      const pushed = new URL(routerState.push.mock.calls[0][0] as string, 'https://magicbooklet.test');
+      leave = findRemixLaunch(pushed.searchParams.get(REMIX_LAUNCH_PARAM), { generationId: 'gen-b', postId: 'post-b' })!.subscribe(() => undefined);
+    });
+    await settle();
+    expect(unlockSheet().visible).toBe(false);
+
+    await act(async () => { leave(); });
+    await settle();
+    expect(unlockSheet().visible).toBe(true);
+    expect(dialogs.error).not.toHaveBeenCalled();
   });
 });
 

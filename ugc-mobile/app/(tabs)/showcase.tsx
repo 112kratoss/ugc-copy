@@ -108,6 +108,7 @@ import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia } from '@/lib/sho
 import { Reveal } from '@/components/reveal';
 import { SkeletonBone } from '@/components/skeleton';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
+import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { haptic } from '@/lib/haptics';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { MotionView, useOverlayPresence, usePressMotion } from '@/lib/motion';
@@ -481,6 +482,14 @@ export default function ShowcaseScreen() {
   ]);
   // Keyed by identity like Home's lane: the first request waits for the stored
   // session, or a cold start ranks the lane twice (see home-dashboard).
+  //
+  // Not read ahead from Home, though a first visit draws the skeleton for ~2 s
+  // (device sweep, 2026-11-03): a ranked lane's first page opens a feed session
+  // and stamps its deliveries served (`persist_ranked_feed_session`), and the
+  // next ranking reads those back as `served_recently`, so posts read ahead and
+  // never seen would be pushed down for this reader and counted as shown.
+  // Reading ahead needs a page the server ranks without marking it served until
+  // the app draws it.
   const showcaseQuery = useInfiniteQuery({ ...laneQueryOptions, enabled: !isAuthLoading });
   const feedSession = useMemo(
     () => getShowcaseFeedSessionContext(showcaseQuery.data?.pages),
@@ -1434,7 +1443,9 @@ const MasonryPin = memo(function MasonryPin({
           accessibilityHint="Opens this creator's profile"
           disabled={!card.item.creator.username}
           hitSlop={{ top: 4, right: 8, bottom: 4, left: 0 }}
-          onPress={() => onOpenCreator(card.item)}
+          // Their page is read once the finger has rested here, as on Home's
+          // cards and the reel's creator row (`creatorProfilePress`).
+          {...creatorProfilePress(card.item.creator.username, () => onOpenCreator(card.item))}
           style={({ pressed }) => ({
             flex: 1,
             minHeight: 40,
