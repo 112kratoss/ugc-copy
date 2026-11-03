@@ -463,9 +463,9 @@ function PostBody({
     return (
         <div className="flex flex-col gap-1">
             <p
-                // `cursor-auto` restores the I-beam the card's pointer cursor would
-                // otherwise hide, so the body still reads as selectable text.
-                className="cursor-auto whitespace-pre-wrap text-sm leading-6 text-[var(--ui-text-muted)]"
+                // Keeps the card's pointer cursor: a click here opens the post like
+                // the rest of the card, and dragging still selects the text.
+                className="whitespace-pre-wrap text-sm leading-6 text-[var(--ui-text-muted)]"
                 // `canExpand` is part of the condition, not just `expanded`: a
                 // restored scroll snapshot can carry an expanded id for a card
                 // that no longer offers the toggle, which would otherwise leave
