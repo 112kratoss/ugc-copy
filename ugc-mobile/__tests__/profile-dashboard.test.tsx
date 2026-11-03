@@ -245,6 +245,21 @@ vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
 }));
 
+// What the switch warm-up is handed; its own loading is media-image-warmup.test.tsx's.
+const warmupState = vi.hoisted(() => ({
+  calls: [] as Array<{ images: Array<{ url: string; cacheKey: string }>; accessToken: string | null | undefined }>,
+  stops: 0,
+}));
+
+vi.mock('@/lib/media-image-warmup', () => ({
+  warmImages: (images: Array<{ url: string; cacheKey: string }>, accessToken: string | null | undefined) => {
+    warmupState.calls.push({ images: [...images], accessToken });
+    return () => {
+      warmupState.stops += 1;
+    };
+  },
+}));
+
 // The offer's own behaviour is covered with a real query client in
 // media-creation-screen.test.tsx; here only where the dashboard places it.
 vi.mock('@/components/push-offer-card', () => ({
@@ -376,6 +391,7 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 import { ProfileDashboard } from '../components/profile-dashboard';
+import { Reveal } from '../components/reveal';
 import { resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-view-model';
 import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS, PROFILE_MEDIA_MIN_FILL_COUNT } from '../lib/profile-media-query';
@@ -2944,5 +2960,164 @@ describe('ProfileDashboard public page and handle', () => {
 
     expect(wallet.findAll((node) => node.type === 'text' && node.props.children === '–')).toHaveLength(1);
     expect(wallet.findAll((node) => node.type === 'text' && node.props.children === '$9.99')).toHaveLength(0);
+  });
+});
+
+// Device sweep, Pixel 9a emulator, 2026-11-03: Creations → Posts → Saved moved
+// the pill ~0.35 s before the grid, and the new grid then drew thumbhashes for
+// ~0.5 s while its pictures came over the network.
+describe('ProfileDashboard tab switch', () => {
+  const pictureCount = 12;
+  const creations = () => Array.from({ length: pictureCount }, (_, index) => ({
+    id: `creation-${index}`, status: 'succeeded', output_url: `creation-${index}.jpg`, preview_url: `creation-${index}.webp`,
+    category: 'image', title: `Creation ${index}`, created_at: '2026-10-13T09:00:00Z',
+  }));
+  const posts = () => Array.from({ length: pictureCount }, (_, index) => ({
+    id: `post-${index}`, title: `Post ${index}`, createdAt: '2026-06-10T00:00:00Z', visibility: 'public',
+    mediaUrl: `post-${index}.png`, mediaKind: 'image', body: 'Post body', category: 'image', postFormat: 'media',
+    mediaItems: [{ id: `post-${index}-media`, url: `post-${index}.png`, previewUrl: `post-${index}.preview.webp`, mediaKind: 'image', gridReady: true }],
+  }));
+  const saved = () => Array.from({ length: pictureCount }, (_, index) => ({
+    id: `saved-${index}`, mediaUrl: `saved-${index}.png`, mediaKind: 'image', title: `Saved ${index}`, prompt: '', body: '',
+    mediaItems: [{ id: `saved-${index}-media`, url: `saved-${index}.png`, previewUrl: `saved-${index}.preview.webp`, mediaKind: 'image', gridReady: true }],
+    creator: { name: 'Luna', username: 'luna' }, isSaved: true, saveCount: 1,
+  }));
+  const failedRuns = (count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `failed-${index}`, status: 'failed', output_url: null, category: 'image', title: `Failure ${index}`, created_at: '2026-10-13T08:00:00Z',
+  }));
+
+  function renderDashboard(initialTab: 'Creations' | 'Posts' | 'Saved' = 'Creations') {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab={initialTab} />);
+    });
+    return tree;
+  }
+
+  function showTab(tree: renderer.ReactTestRenderer, tab: 'Creations' | 'Posts' | 'Saved') {
+    const segment = tree.root.find((node) => (
+      String(node.type) === 'pressable' && isTabSegment(node) && node.props.accessibilityLabel === tab
+    ));
+    renderer.act(() => { segment.props.onPress(); });
+  }
+
+  /** The pictures the grid's tiles draw, in order, as each asks expo-image for it. */
+  function drawnPictures(tree: renderer.ReactTestRenderer) {
+    return tree.root.findAll((node) => String(node.type) === 'stable-media-image')
+      .map((node) => ({ url: node.props.url as string, cacheKey: node.props.cacheKey as string }));
+  }
+
+  const risingTiles = (tree: renderer.ReactTestRenderer) => tree.root.findAllByType(Reveal)
+    .filter((node) => node.props.enabled).length;
+
+  beforeEach(() => {
+    navigationState.focused = true;
+    warmupState.calls = [];
+    warmupState.stops = 0;
+    queryState.profileData = { id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png' };
+    queryState.profileError = null;
+    queryState.generations = creations();
+    queryState.ownerPosts = posts();
+    queryState.savedItems = saved();
+    queryState.generationPages = null;
+    queryState.ownerPostPages = null;
+    queryState.savedPages = null;
+    queryState.generationsHasNextPage = false;
+    queryState.ownerPostsHasNextPage = false;
+    queryState.savedMediaHasNextPage = false;
+    // The shown tab has answered, so the other two are read in the background.
+    queryState.generationsIsFetched = true;
+    queryState.ownerPostsIsFetched = true;
+    queryState.savedMediaIsFetched = true;
+    queryState.generationsIsFetching = false;
+    queryState.generationsIsStale = false;
+    queryState.failedPages = null;
+    queryState.failedIsLoading = false;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    navigationState.focused = true;
+  });
+
+  it('caches the first rows of the tabs not on screen once Profile has settled, as their tiles draw them', () => {
+    vi.useFakeTimers();
+    const tree = renderDashboard();
+
+    renderer.act(() => { vi.advanceTimersByTime(999); });
+    expect(warmupState.calls).toHaveLength(0);
+    renderer.act(() => { vi.advanceTimersByTime(1); });
+    expect(warmupState.calls).toHaveLength(1);
+    const warmed = warmupState.calls[0].images;
+
+    showTab(tree, 'Posts');
+    const postPictures = drawnPictures(tree);
+    showTab(tree, 'Saved');
+    const savedPictures = drawnPictures(tree);
+    // Three rows of each, exactly as the tiles ask for them, and none of the tab on screen.
+    expect(warmed).toEqual([...postPictures.slice(0, 9), ...savedPictures.slice(0, 9)]);
+    expect(warmed.some((picture) => picture.url.startsWith('creation-'))).toBe(false);
+    renderer.act(() => { tree.unmount(); });
+  });
+
+  it('caches nothing while Profile is out of view, and stops when it leaves', () => {
+    vi.useFakeTimers();
+    navigationState.focused = false;
+    const tree = renderDashboard();
+    renderer.act(() => { vi.advanceTimersByTime(5_000); });
+    expect(warmupState.calls).toHaveLength(0);
+
+    navigationState.focused = true;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    renderer.act(() => { vi.advanceTimersByTime(1_000); });
+    expect(warmupState.calls).toHaveLength(1);
+
+    navigationState.focused = false;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    expect(warmupState.stops).toBe(1);
+    renderer.act(() => { tree.unmount(); });
+  });
+
+  it('caches nothing before the shown tab has answered', () => {
+    vi.useFakeTimers();
+    queryState.generationsIsFetched = false;
+    const tree = renderDashboard();
+    renderer.act(() => { vi.advanceTimersByTime(5_000); });
+
+    expect(warmupState.calls).toHaveLength(0);
+    renderer.act(() => { tree.unmount(); });
+  });
+
+  it('lets the rows of the first view rise, and draws a switch to a loaded tab at once', () => {
+    const tree = renderDashboard();
+    expect(risingTiles(tree)).toBe(9);
+
+    showTab(tree, 'Posts');
+    expect(drawnPictures(tree)[0]?.url).toBe('post-0.preview.webp');
+    expect(risingTiles(tree)).toBe(0);
+
+    showTab(tree, 'Creations');
+    expect(risingTiles(tree)).toBe(0);
+  });
+
+  it('lets the rows rise when a view it waited for lands', () => {
+    queryState.profileData = {
+      id: 'user-123', username: 'luna-dreams', displayName: 'Luna Dreams', avatarUrl: 'avatar.png',
+      stats: { creations: pictureCount, failedCreations: 2, archivedCreations: 0, posts: 0, archivedPosts: 0, saved: 0 },
+    } as never;
+    queryState.failedIsLoading = true;
+    const tree = renderDashboard();
+    showTab(tree, 'Posts');
+    showTab(tree, 'Creations');
+    expect(risingTiles(tree)).toBe(0);
+
+    // The Failed scope's own first page is still on its way: the skeleton stands.
+    renderer.act(() => { findPressableByText(tree.root, 'Failed (2)').props.onPress(); });
+    expect(tree.root.findAllByType(Reveal)).toHaveLength(0);
+
+    queryState.failedPages = [{ generations: failedRuns(2), pagination: { limit: 24, hasMore: false, nextCursor: null } }];
+    queryState.failedIsLoading = false;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    expect(risingTiles(tree)).toBe(2);
   });
 });
