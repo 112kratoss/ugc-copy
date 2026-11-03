@@ -226,8 +226,29 @@ describe('listCreditHistory with more linked guests than one database call takes
 
   type OwnedRow = ReturnType<typeof row> & { owner: string };
 
-  /** Answers as the SQL does: the cap, the identity-set check, the keyset and the order. */
-  function databaseHolding(owned: OwnedRow[]) {
+  /**
+   * A database time to the microsecond, as one comparable string: the fake orders
+   * as the SQL does, where Date.parse would keep milliseconds only.
+   */
+  function databaseTime(value: string): string {
+    const match = /^(.+T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?\+00:00$/.exec(value);
+    if (!match) throw new Error(`fixture time not in UTC database form: ${value}`);
+    return `${match[1]}.${(match[2] ?? '').padEnd(6, '0')}`;
+  }
+
+  /** occurred_at DESC, entry_id COLLATE "C" DESC. */
+  function databaseOrder(a: { occurred_at: string; entry_id: string }, b: { occurred_at: string; entry_id: string }): number {
+    const [aTime, bTime] = [databaseTime(a.occurred_at), databaseTime(b.occurred_at)];
+    if (aTime !== bTime) return aTime < bTime ? 1 : -1;
+    if (a.entry_id === b.entry_id) return 0;
+    return a.entry_id < b.entry_id ? 1 : -1;
+  }
+
+  /**
+   * Answers as the SQL does: the cap, the identity-set check, the keyset and the
+   * order. `failFor` makes the call for a set holding that id answer an error.
+   */
+  function databaseHolding(owned: OwnedRow[], { failFor }: { failFor?: string } = {}) {
     const rpc = vi.fn(async (_name: string, args: Record<string, unknown>) => {
       const ids = args.p_user_ids as string[];
       if (ids.length < 1 || ids.length > 100) {
@@ -236,15 +257,16 @@ describe('listCreditHistory with more linked guests than one database call takes
       if (ids[0] !== ACCOUNT || ids.slice(1).some((id) => !GUESTS.includes(id))) {
         return { data: null, error: { message: 'list_credit_history reads one identity and the guests linked to it' } };
       }
+      if (failFor && ids.includes(failFor)) {
+        return { data: null, error: { message: 'canceling statement due to statement timeout' } };
+      }
       const beforeAt = args.p_before_occurred_at as string | null;
       const beforeId = args.p_before_id as string | null;
+      const cursor = beforeAt ? { occurred_at: beforeAt, entry_id: beforeId as string } : null;
       const data = owned
         .filter((entry) => ids.includes(entry.owner))
-        .filter((entry) => !beforeAt
-          || Date.parse(entry.occurred_at) < Date.parse(beforeAt)
-          || (Date.parse(entry.occurred_at) === Date.parse(beforeAt) && entry.entry_id < (beforeId as string)))
-        .sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at)
-          || (a.entry_id < b.entry_id ? 1 : -1))
+        .filter((entry) => !cursor || databaseOrder(entry, cursor) > 0)
+        .sort(databaseOrder)
         .slice(0, args.p_limit as number)
         .map((entry) => row(entry.entry_id, entry.occurred_at, {
           kind: entry.kind,
@@ -307,5 +329,59 @@ describe('listCreditHistory with more linked guests than one database call takes
     await listCreditHistory({ client, userIds: [ACCOUNT, ...GUESTS.slice(0, 99)], cursor: null, limit: 30 });
 
     expect(rpc).toHaveBeenCalledTimes(1);
+  });
+
+  // guest-1…guest-99 go in the first call, guest-100…guest-156 in the second.
+  const closeCalls: OwnedRow[] = [
+    { ...row(`generation:${uuid(11)}:charge`, '2026-10-27T10:00:00.000001+00:00'), owner: 'guest-3' },
+    { ...row(`generation:${uuid(12)}:charge`, '2026-10-27T10:00:00.000002+00:00'), owner: 'guest-150' },
+    // Three rows at the same microsecond, from both calls: entry_id in byte order decides.
+    { ...row(`grant:${uuid(13)}`, '2026-10-26T10:00:00.5+00:00', { kind: 'grant', amount: 100, title: 'Welcome credits' }), owner: 'guest-5' },
+    { ...row(`generation:${uuid(14)}:charge`, '2026-10-26T10:00:00.500000+00:00'), owner: 'guest-140' },
+    { ...row(`adjustment:${uuid(15)}`, '2026-10-26T10:00:00.5+00:00', { kind: 'adjustment', amount: 50, title: 'Adjustment' }), owner: ACCOUNT },
+    { ...row(`generation:${uuid(16)}:charge`, '2026-10-25T10:00:00+00:00'), owner: ACCOUNT },
+  ];
+  const closeCallsOrder = [
+    `generation:${uuid(12)}:charge`,
+    `generation:${uuid(11)}:charge`,
+    `grant:${uuid(13)}`,
+    `generation:${uuid(14)}:charge`,
+    `adjustment:${uuid(15)}`,
+    `generation:${uuid(16)}:charge`,
+  ];
+
+  async function readEveryPage(client: SupabaseClient, limit: number): Promise<string[]> {
+    const ids: string[] = [];
+    let cursor: ReturnType<typeof decodeCreditHistoryCursor> = null;
+    for (let page = 0; page < 10; page += 1) {
+      const answer = await listCreditHistory({ client, userIds: [ACCOUNT, ...GUESTS], cursor, limit });
+      ids.push(...answer.entries.map((entry) => entry.id));
+      if (!answer.nextCursor) return ids;
+      cursor = decodeCreditHistoryCursor(answer.nextCursor);
+    }
+    throw new Error('the history never ended');
+  }
+
+  it('merges rows from different calls to the microsecond, then by entry id in byte order', async () => {
+    const { client } = databaseHolding(closeCalls);
+
+    const page = await listCreditHistory({ client, userIds: [ACCOUNT, ...GUESTS], cursor: null, limit: 30 });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual(closeCallsOrder);
+  });
+
+  it.each([1, 2, 3, 4, 5])('pages across rows of the same time, %i a page, neither skipping nor repeating one', async (limit) => {
+    const { client } = databaseHolding(closeCalls);
+
+    expect(await readEveryPage(client, limit)).toEqual(closeCallsOrder);
+  });
+
+  it('fails the whole page when one of the calls fails, rather than list part of the history', async () => {
+    const { rpc, client } = databaseHolding(owned, { failFor: 'guest-150' });
+
+    await expect(listCreditHistory({ client, userIds: [ACCOUNT, ...GUESTS], cursor: null, limit: 30 }))
+      .rejects.toThrow('list_credit_history failed: canceling statement due to statement timeout');
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect((rpc.mock.calls[1][1].p_user_ids as string[])).toContain('guest-150');
   });
 });
