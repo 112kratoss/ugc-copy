@@ -14,6 +14,34 @@ const routerState = vi.hoisted(() => ({
   push: vi.fn(),
 }));
 
+/**
+ * The navigation container as the create menu's hand-off reads it
+ * (`lib/menu-handoff.ts`): the focused route, and the `state` event the real
+ * container emits once a navigation has been committed. `land` is that event.
+ */
+const container = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const fake = {
+    routeKey: 'home-key',
+    listeners,
+    ref: {
+      isReady: () => true,
+      getCurrentRoute: () => ({ key: fake.routeKey, name: fake.routeKey.replace(/-key$/, '') }),
+      addListener: (_type: string, callback: () => void) => {
+        listeners.add(callback);
+        return () => {
+          listeners.delete(callback);
+        };
+      },
+    },
+    land(routeKey: string) {
+      fake.routeKey = routeKey;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+  return fake;
+});
+
 const glassState = vi.hoisted(() => ({
   available: false,
   reduceTransparency: false,
@@ -23,6 +51,7 @@ const glassState = vi.hoisted(() => ({
 
 vi.mock('expo-router', () => ({
   router: routerState,
+  useNavigationContainerRef: () => container.ref,
 }));
 
 vi.mock('react-native', () => ({
@@ -117,7 +146,7 @@ vi.mock('@/lib/use-active-generations', () => ({
 }));
 
 import { MagicTabBar } from '../components/magic-tab-bar';
-import { themes } from '../lib/theme';
+import { appTheme, themes } from '../lib/theme';
 
 const routes = [
   { key: 'home-key', name: 'index' },
@@ -128,10 +157,15 @@ const routes = [
 ];
 
 function renderTabBar(activeIndex = 0, { hidden = false }: { hidden?: boolean } = {}) {
+  container.routeKey = routes[activeIndex].key;
   const navigation = {
     emit: vi.fn(() => ({ defaultPrevented: false })),
     navigate: vi.fn(),
-    jumpTo: vi.fn(),
+    // The real container's store takes a jump at once; its `state` event comes
+    // after the commit, which a jump's hand-off does not wait for.
+    jumpTo: vi.fn((name: string) => {
+      container.routeKey = routes.find((route) => route.name === name)?.key ?? name;
+    }),
   };
   const state = {
     index: activeIndex,
@@ -207,6 +241,7 @@ function adaptiveLayers(tree: ReturnType<typeof renderer.create>) {
 describe('MagicTabBar', () => {
   beforeEach(() => {
     routerState.push.mockClear();
+    container.listeners.clear();
     glassState.available = false;
     glassState.reduceTransparency = false;
     glassState.platform = 'ios';
@@ -618,5 +653,134 @@ function findBadgeOvals(tree: ReturnType<typeof renderer.create>) {
 
     expect(routerState.push).toHaveBeenCalledWith('/post/new');
     expect(navigation.jumpTo).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The menu's tiles hand off to their screens at the tap (`lib/menu-handoff.ts`).
+ * They used to wait for the menu's exit, or a 400 ms fallback, before
+ * navigating: Generate reached the creator ~560 ms after the tap, with Profile
+ * showing in between (Pixel 9a emulator, 2026-11-03).
+ */
+describe('MagicTabBar create menu hand-off', () => {
+  beforeEach(() => {
+    routerState.push.mockClear();
+    container.listeners.clear();
+    glassState.platform = 'ios';
+    badgeValue = null;
+    runningGenerations = 0;
+  });
+
+  const menuOpen = (tree: ReturnType<typeof renderer.create>) => (
+    tree.root.findAllByProps({ accessibilityLabel: 'Close create menu' }).length > 0
+  );
+  const tile = (tree: ReturnType<typeof renderer.create>, label: string) => (
+    tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === label)
+  );
+  const openMenu = (tree: ReturnType<typeof renderer.create>) => {
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.onPress();
+    });
+  };
+
+  it('jumps to the creator at the tap and leaves in the same render', () => {
+    const { tree, navigation } = renderTabBar(4);
+    openMenu(tree);
+
+    renderer.act(() => tile(tree, 'Generate').props.onPress());
+
+    // Not after an exit or a timer: the jump and the menu's exit are one commit.
+    expect(navigation.jumpTo).toHaveBeenCalledWith('creator');
+    expect(menuOpen(tree)).toBe(false);
+    expect(tree.root.findByProps({ accessibilityLabel: 'Open create menu' }).props.accessibilityState.expanded).toBe(false);
+  });
+
+  it('pushes the composer at the tap and stays, Post held, until the composer is built under it', () => {
+    const { tree } = renderTabBar(4);
+    openMenu(tree);
+
+    renderer.act(() => tile(tree, 'Post').props.onPress());
+
+    expect(routerState.push).toHaveBeenCalledWith('/post/new');
+    // expo-router builds the pushed screen a render after the tap: until then
+    // the menu covers the screen it was opened over, the tapped tile still lit.
+    expect(menuOpen(tree)).toBe(true);
+    expect(tile(tree, 'Post').props.style.opacity).toBe(appTheme.opacity.pressed);
+    expect(tile(tree, 'Generate').props.style.opacity).toBe(1);
+
+    renderer.act(() => container.land('post-new-key'));
+
+    expect(menuOpen(tree)).toBe(false);
+  });
+
+  it('opens one screen for two quick taps', () => {
+    const { tree, navigation } = renderTabBar(4);
+    openMenu(tree);
+
+    const post = tile(tree, 'Post');
+    const generate = tile(tree, 'Generate');
+    renderer.act(() => {
+      // Both delivered before React renders the first: the second finds the
+      // menu's one choice taken.
+      post.props.onPress();
+      post.props.onPress();
+      generate.props.onPress();
+    });
+
+    expect(routerState.push).toHaveBeenCalledTimes(1);
+    expect(navigation.jumpTo).not.toHaveBeenCalled();
+  });
+
+  it('listens to the navigator only while a hand-off waits', () => {
+    const { tree } = renderTabBar(4);
+    openMenu(tree);
+    // Mounted for as long as the tabs are: every navigation in the app would
+    // otherwise render the bar.
+    expect(container.listeners.size).toBe(0);
+
+    renderer.act(() => tile(tree, 'Post').props.onPress());
+    expect(container.listeners.size).toBe(1);
+
+    renderer.act(() => container.land('post-new-key'));
+    expect(container.listeners.size).toBe(0);
+  });
+
+  it('leaves anyway when nothing takes over', () => {
+    vi.useFakeTimers();
+    try {
+      const { tree } = renderTabBar(4);
+      openMenu(tree);
+
+      renderer.act(() => tile(tree, 'Post').props.onPress());
+      expect(menuOpen(tree)).toBe(true);
+
+      renderer.act(() => {
+        vi.advanceTimersByTime(399);
+      });
+      expect(menuOpen(tree)).toBe(true);
+      renderer.act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(menuOpen(tree)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('opens fresh after a hand-off, with nothing held from the last one', () => {
+    const { tree } = renderTabBar(4);
+    openMenu(tree);
+    renderer.act(() => tile(tree, 'Post').props.onPress());
+    renderer.act(() => container.land('post-new-key'));
+    // Back from the composer: the tabs are in front again.
+    renderer.act(() => container.land('profile-key'));
+    expect(menuOpen(tree)).toBe(false);
+
+    openMenu(tree);
+    expect(menuOpen(tree)).toBe(true);
+    expect(tile(tree, 'Post').props.style.opacity).toBe(1);
+
+    renderer.act(() => tile(tree, 'Post').props.onPress());
+    expect(routerState.push).toHaveBeenCalledTimes(2);
   });
 });
