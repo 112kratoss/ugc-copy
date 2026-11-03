@@ -233,6 +233,15 @@ const queryState = vi.hoisted(() => ({
   failedIsStale: false,
   fetchNextFailed: vi.fn(() => Promise.resolve()),
   refetchFailed: vi.fn(() => Promise.resolve()),
+  // The Archived scope's own query (`archived=only`), kept as the Failed one is.
+  archivedQuery: null as null | { queryKey: unknown[]; enabled: boolean; queryFn?: (context: { pageParam: unknown }) => unknown },
+  archivedPages: null as Array<Record<string, unknown>> | null,
+  archivedQueryRenders: [] as Array<{ queryKey: unknown[]; enabled: boolean }>,
+  archivedHasNextPage: false,
+  archivedIsLoading: false,
+  archivedIsStale: false,
+  fetchNextArchived: vi.fn(() => Promise.resolve()),
+  refetchArchived: vi.fn(() => Promise.resolve()),
   invalidateQueries: vi.fn(() => Promise.resolve()),
   getQueryData: vi.fn((): unknown => undefined),
   setQueryData: vi.fn(),
@@ -321,6 +330,23 @@ vi.mock('@tanstack/react-query', () => ({
         isLoading: queryState.failedIsLoading,
         isStale: queryState.failedIsStale,
         refetch: queryState.refetchFailed,
+      };
+    }
+    if (queryKey[0] === 'profile-archived-generations') {
+      // Its request is left to the test that asks about it (`archivedQuery.queryFn`).
+      queryState.archivedQuery = { queryKey, enabled, queryFn };
+      queryState.archivedQueryRenders.push({ queryKey, enabled });
+      return {
+        data: queryState.archivedPages ? { pages: queryState.archivedPages, pageParams: [initialPageParam] } : undefined,
+        fetchNextPage: queryState.fetchNextArchived,
+        hasNextPage: queryState.archivedHasNextPage,
+        isFetchNextPageError: false,
+        isFetchingNextPage: false,
+        isFetched: Boolean(queryState.archivedPages),
+        isFetching: false,
+        isLoading: queryState.archivedIsLoading,
+        isStale: queryState.archivedIsStale,
+        refetch: queryState.refetchArchived,
       };
     }
     if (queryKey[0] === 'profile-owner-posts') {
@@ -925,6 +951,14 @@ describe('ProfileDashboard media tiles routing', () => {
     queryState.failedIsStale = false;
     queryState.fetchNextFailed.mockClear();
     queryState.refetchFailed.mockClear();
+    queryState.archivedQuery = null;
+    queryState.archivedPages = null;
+    queryState.archivedQueryRenders = [];
+    queryState.archivedHasNextPage = false;
+    queryState.archivedIsLoading = false;
+    queryState.archivedIsStale = false;
+    queryState.fetchNextArchived.mockClear();
+    queryState.refetchArchived.mockClear();
     queryState.invalidateQueries.mockClear();
     queryState.getQueryData.mockReset();
     authState.api.getSavedMedia.mockClear();
@@ -2845,6 +2879,155 @@ describe('ProfileDashboard media tiles routing', () => {
 
       expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
       expect(authState.api.listGenerations).toHaveBeenCalledWith(false, { limit: 24, status: 'failed' });
+    });
+  });
+
+  describe('the Archived scope', () => {
+    // Archived pictures: as many tiles under Archived.
+    const archivedRuns = (count: number) => Array.from({ length: count }, (_, index) => ({
+      id: `archived-${index}`, status: 'succeeded', output_url: `archived-${index}.jpg`, preview_url: `archived-${index}.webp`,
+      category: 'image', title: `Archived ${index}`, created_at: '2026-10-12T09:00:00Z', archived_at: '2026-10-13T10:00:00Z',
+    }));
+    const renderDashboard = () => {
+      let tree: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+      });
+      return tree!;
+    };
+    const archivedTiles = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+      String(node.type) === 'pressable'
+      && typeof node.props.accessibilityLabel === 'string'
+      && node.props.accessibilityLabel.startsWith('Creation, Archived ')
+    ));
+    const withArchivedTotal = (archivedCreations: number) => ({
+      ...queryState.profileData!,
+      stats: { creations: 60, failedCreations: 0, archivedCreations, posts: 0, archivedPosts: 0, saved: 0 },
+    }) as never;
+
+    afterEach(() => {
+      // The describes after this one do not reset these.
+      queryState.generationsHasNextPage = false;
+    });
+
+    it('lists the archived creations its own pages bring, and reads no page of the library to find them', () => {
+      // A large library whose first page holds no archived creation: the scope
+      // used to read the library on, a page per cooldown, until fourteen came.
+      queryState.generationsHasNextPage = true;
+      queryState.generations = readyRuns(24);
+      queryState.profileData = withArchivedTotal(14);
+      const tree = renderDashboard();
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (14)').props.onPress(); });
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+      queryState.archivedPages = [{ generations: archivedRuns(14), pagination: { limit: 24, hasMore: false, nextCursor: null } }];
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+
+      expect(archivedTiles(tree)).toHaveLength(14);
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+    });
+
+    it('asks for archived runs alone, and only once the scope is opened', async () => {
+      const tree = renderDashboard();
+      expect(queryState.archivedQuery).toMatchObject({ queryKey: ['profile-archived-generations', 'user-123'], enabled: false });
+
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (0)').props.onPress(); });
+      expect(queryState.archivedQuery?.enabled).toBe(true);
+
+      authState.api.listGenerations.mockClear();
+      await queryState.archivedQuery?.queryFn?.({ pageParam: null });
+      // Archived runs asked for as well as alone: a server from before the
+      // filter answers the whole library, and the scope keeps its own.
+      expect(authState.api.listGenerations).toHaveBeenCalledWith(true, { cursor: undefined, limit: 24, archived: 'only' });
+    });
+
+    it('draws what the library has loaded while its first page comes, and keeps only archived creations of its pages', () => {
+      queryState.generations = [...readyRuns(2), ...archivedRuns(2)];
+      queryState.archivedIsLoading = true;
+      const tree = renderDashboard();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (2)').props.onPress(); });
+      expect(archivedTiles(tree)).toHaveLength(2);
+      expect(tree.root.findAllByProps({ children: 'No archived creations' })).toHaveLength(0);
+
+      // A server from before the filter: the page is the library's.
+      queryState.archivedIsLoading = false;
+      queryState.archivedPages = [{ generations: [...readyRuns(3), ...archivedRuns(1)], pagination: { limit: 24, hasMore: false, nextCursor: null } }];
+      renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+      expect(archivedTiles(tree)).toHaveLength(1);
+      expect(tree.root.findAllByProps({ accessibilityLabel: 'Creation, Ready 0, Not posted' })).toHaveLength(0);
+    });
+
+    it('reads further pages of archived runs alone while they are too few to fill the screen', () => {
+      queryState.generationsHasNextPage = true;
+      queryState.generations = readyRuns(PROFILE_MEDIA_MIN_FILL_COUNT);
+      queryState.profileData = withArchivedTotal(20);
+      queryState.archivedPages = [{ generations: archivedRuns(2), pagination: { limit: 24, hasMore: true, nextCursor: '24' } }];
+      queryState.archivedHasNextPage = true;
+      const tree = renderDashboard();
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (20)').props.onPress(); });
+
+      expect(queryState.fetchNextArchived).toHaveBeenCalledTimes(1);
+      expect(queryState.fetchNextGenerations).not.toHaveBeenCalled();
+    });
+
+    it('collapses and reads its own pages again on a pull, and the totals with them', async () => {
+      queryState.archivedPages = [{ generations: archivedRuns(2) }];
+      const tree = renderDashboard();
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (2)').props.onPress(); });
+      queryState.setQueryData.mockClear();
+
+      await renderer.act(async () => { tree.root.findByProps({ accessibilityLabel: 'Refresh Creations' }).props.onPress(); });
+
+      // No Rendering strip over Archived, so the library is left as it is.
+      expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual([['profile-archived-generations', 'user-123']]);
+      expect(queryState.refetchArchived).toHaveBeenCalledTimes(1);
+      expect(queryState.refetchGenerations).not.toHaveBeenCalled();
+      expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
+    });
+
+    it('reads its own first page again when it revalidates, and the totals with it', async () => {
+      queryState.archivedPages = [{ generations: archivedRuns(2) }];
+      queryState.archivedIsStale = true;
+      queryState.getQueryData.mockImplementation(() => ({ pages: queryState.archivedPages, pageParams: [null] }));
+      authState.api.listGenerations.mockImplementation(async () => ({ generations: [], pagination: { limit: 24, hasMore: false, nextCursor: null } }));
+      try {
+        const tree = renderDashboard();
+        queryState.setQueryData.mockClear();
+
+        await renderer.act(async () => { findPressableByText(tree.root, 'Archived (2)').props.onPress(); });
+
+        expect(queryState.setQueryData.mock.calls.map(([key]) => key)).toEqual([['profile-archived-generations', 'user-123']]);
+        expect(authState.api.listGenerations).toHaveBeenCalledWith(true, { limit: 24, archived: 'only' });
+        expect(queryState.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['profile', 'user-123'] });
+      } finally {
+        authState.api.listGenerations.mockReset();
+      }
+    });
+
+    it('keeps its query on once opened, which a stale query turned back on would read again page by page', () => {
+      const tree = renderDashboard();
+      expect(queryState.archivedQuery?.enabled).toBe(false);
+
+      renderer.act(() => { findPressableByText(tree.root, 'Archived (0)').props.onPress(); });
+      renderer.act(() => { findPressableByText(tree.root, 'Active (1)').props.onPress(); });
+      expect(queryState.archivedQuery?.enabled).toBe(true);
+      renderer.act(() => { tabSegment(tree, 'Posts').props.onPress(); });
+      expect(queryState.archivedQuery?.enabled).toBe(true);
+
+      const signedIn = authState.user;
+      try {
+        authState.user = { id: 'user-456', email: 'other@example.com' };
+        renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+        const otherLibrary = queryState.archivedQueryRenders.filter((render) => render.queryKey[1] === 'user-456');
+        expect(otherLibrary.length).toBeGreaterThan(0);
+        expect(otherLibrary.every((render) => !render.enabled)).toBe(true);
+      } finally {
+        authState.user = signedIn;
+      }
     });
   });
 });

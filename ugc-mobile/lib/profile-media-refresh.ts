@@ -166,6 +166,67 @@ function createdAtKey(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * One creation as it now stands, archived or not, or null once deleted, written
+ * into the Creations Archived scope's loaded pages.
+ *
+ * Those are offset pages of archived runs alone, so a run that joins or leaves
+ * them ahead of the reader's boundary moves every later row by one on the
+ * server, and the next page's cursor moves with it: otherwise that page would
+ * repeat a row or skip one. A run archived anew takes its place in the
+ * newest-first order when the loaded rows reach it, and otherwise comes with
+ * its own page. A restored run keeps its row, unarchived, which the scope
+ * leaves out, so a card feed opened on it still holds it where it was.
+ */
+export function applyArchivedScopeChange(
+  current: InfiniteData<GenerationListResponse, string | null>,
+  generationId: string,
+  next: GenerationListItem | null,
+): InfiniteData<GenerationListResponse, string | null> {
+  if (!current.pages.length) return current;
+  const cached = current.pages.flatMap((page) => page.generations ?? []).find((item) => item.id === generationId);
+  if (!cached && !next?.archived_at) return current;
+  const shift = Number(Boolean(next?.archived_at)) - Number(Boolean(cached?.archived_at));
+
+  let pages = current.pages;
+  if (cached) {
+    pages = pages.map((page) => ({
+      ...page,
+      generations: (page.generations ?? []).flatMap((item) => (item.id !== generationId ? [item] : next ? [next] : [])),
+    }));
+  } else if (next?.archived_at) {
+    const placed = placeNewestFirst(pages, next);
+    if (!placed) return current;
+    pages = placed;
+  }
+  return { ...current, pages: shift ? shiftNextCursor(pages, shift) : pages };
+}
+
+/** The pages with `item` before the first older row, or at the end of a last page that has nothing after it. */
+function placeNewestFirst(pages: GenerationListResponse[], item: GenerationListItem): GenerationListResponse[] | null {
+  const key = createdAtKey(item.created_at);
+  for (let index = 0; index < pages.length; index += 1) {
+    const items = pages[index].generations ?? [];
+    const older = items.findIndex((row) => createdAtKey(row.created_at) < key);
+    if (older < 0 && (index < pages.length - 1 || pages[index].pagination?.hasMore)) continue;
+    const at = older < 0 ? items.length : older;
+    return pages.map((page, pageIndex) => (pageIndex === index
+      ? { ...page, generations: [...items.slice(0, at), item, ...items.slice(at)] }
+      : page));
+  }
+  return null;
+}
+
+function shiftNextCursor(pages: GenerationListResponse[], shift: number): GenerationListResponse[] {
+  const last = pages.length - 1;
+  const pagination = pages[last].pagination;
+  const offset = pagination?.nextCursor ? Number(pagination.nextCursor) : Number.NaN;
+  if (!pagination || !Number.isInteger(offset)) return pages;
+  return pages.map((page, index) => (index === last
+    ? { ...page, pagination: { ...pagination, nextCursor: String(Math.max(0, offset + shift)) } }
+    : page));
+}
+
 export const PROFILE_GENERATION_PAGES: ProfilePageAdapter<GenerationListResponse, GenerationListItem> = {
   items: (page) => page.generations ?? [],
   withItems: (page, generations) => ({ ...page, generations }),

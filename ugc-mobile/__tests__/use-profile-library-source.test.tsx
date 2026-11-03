@@ -227,6 +227,34 @@ describe('useProfileLibrarySource', () => {
     expect(api.listGenerations).not.toHaveBeenCalled();
   });
 
+  // The grid's Archived scope pages archived runs alone, and its tiles open here.
+  it('holds archived creations from the pages the Archived scope reads, through their cursor, and never the library', async () => {
+    const archivedAt = '2026-09-10T00:00:00.000Z';
+    const api = stubApi({
+      listGenerations: vi.fn(async (_includeArchived: boolean, options: { cursor?: string; archived?: string }) => {
+        if (options.archived !== 'only') throw new Error('the library was read');
+        return options.cursor === '24'
+          ? generationPage([generation('archived-older', { archived_at: archivedAt })], null)
+          // A restored row stays on the page it was on, unarchived, and is left out.
+          : generationPage([generation('archived-one', { archived_at: archivedAt }), generation('restored'), generation('tapped', { archived_at: archivedAt })], '24');
+      }),
+    });
+
+    const library = await renderLibrary({ api, source: 'profile-creations', initialId: 'tapped', postsScope: 'archived' });
+    const ready = await library.until((result) => result.selection === 'found');
+
+    expect(ready.items.map((item) => item.id)).toEqual(['archived-one', 'tapped']);
+    expect(api.listGenerations).toHaveBeenCalledWith(true, { cursor: undefined, limit: 24, archived: 'only' });
+
+    await renderer.act(async () => {
+      await library.latest.current!.fetchNextPage();
+    });
+    const paged = await library.until((result) => result.items.length === 3);
+    expect(paged.items.map((item) => item.id)).toEqual(['archived-one', 'tapped', 'archived-older']);
+    expect(api.listGenerations).toHaveBeenCalledWith(true, { cursor: '24', limit: 24, archived: 'only' });
+    expect(library.client.getQueryData(['profile-generations', 'user-1'])).toBeUndefined();
+  });
+
   // 02-1: a guest's creations are its library, under its identity, which the
   // Profile grid keys them by; a guest holds no account and reads no posts.
   describe('for a guest', () => {

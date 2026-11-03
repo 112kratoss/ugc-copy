@@ -757,6 +757,83 @@ describe('listOwnerGenerationsForRoute', () => {
     });
   });
 
+  describe('archived=only', () => {
+    // Newest first, as the route orders them: archived runs between active
+    // ones, an archived failure among them, and a run still rendering.
+    const archivedAt = '2026-10-15T09:00:00.000Z';
+    const library = [
+      libraryRow({ id: 'made-1', created_at: '2026-10-14T08:09:00.000Z' }),
+      libraryRow({ id: 'archived-1', archived_at: archivedAt, created_at: '2026-10-14T08:08:00.000Z' }),
+      libraryRow({ id: 'failed-1', status: 'failed', created_at: '2026-10-14T08:07:00.000Z' }),
+      libraryRow({ id: 'archived-failure', status: 'failed', archived_at: archivedAt, created_at: '2026-10-14T08:06:00.000Z' }),
+      libraryRow({ id: 'archived-2', archived_at: archivedAt, created_at: '2026-10-14T08:05:00.000Z' }),
+      libraryRow({ id: 'rendering', status: 'processing', created_at: '2026-10-14T08:04:00.000Z' }),
+      libraryRow({ id: 'archived-3', archived_at: archivedAt, created_at: '2026-10-14T08:03:00.000Z' }),
+    ];
+
+    async function listPage(query: string, posts: Array<Record<string, unknown>> = []) {
+      const stored = createStoredRows({
+        profiles: [{ id: 'someone-else', merged_into_user_id: null }],
+        generations: library,
+        posts,
+        post_resource_bundles: [],
+      });
+      const payload = await listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase: () => stored.client,
+        searchParams: new URLSearchParams(query),
+      });
+      return { ids: payload.generations.map((generation) => generation.id), pagination: payload.pagination, generations: payload.generations };
+    }
+
+    it('cuts each page from the archived runs alone', async () => {
+      await expect(listPage('detail=summary&includeArchived=true&archived=only&limit=2')).resolves.toMatchObject({
+        ids: ['archived-1', 'archived-failure'],
+        pagination: { limit: 2, hasMore: true, nextCursor: '2' },
+      });
+      await expect(listPage('detail=summary&includeArchived=true&archived=only&limit=2&cursor=2')).resolves.toMatchObject({
+        ids: ['archived-2', 'archived-3'],
+        pagination: { limit: 2, hasMore: false, nextCursor: null },
+      });
+    });
+
+    it('names archived runs itself, so includeArchived left out or false cannot empty it, nor its linked posts', async () => {
+      const archivedPost = { id: 'post-1', user_id: OWNER, generation_id: 'archived-2', title: 'Put away', visibility: 'private', archived_at: archivedAt };
+      for (const query of ['detail=summary&archived=only', 'detail=summary&includeArchived=false&archived=only']) {
+        const { ids, generations } = await listPage(query, [archivedPost]);
+        expect(ids).toEqual(['archived-1', 'archived-failure', 'archived-2', 'archived-3']);
+        expect(generations.find((generation) => generation.id === 'archived-2')).toMatchObject({
+          linked_post_id: 'post-1',
+          linked_post_archived_at: archivedAt,
+        });
+      }
+    });
+
+    it('narrows to the archived failures beside status=failed, and narrows the status poll the same way', async () => {
+      await expect(listPage('detail=summary&archived=only&status=failed')).resolves.toMatchObject({ ids: ['archived-failure'] });
+      await expect(listPage('detail=status&archived=only')).resolves.toMatchObject({
+        ids: ['archived-1', 'archived-failure', 'archived-2', 'archived-3'],
+      });
+    });
+
+    it('refuses any other value before reading anything', async () => {
+      for (const value of ['true', 'false', 'none', '']) {
+        const stored = createStoredRows({ generations: library });
+        const getAdminSupabase = vi.fn(() => stored.client);
+
+        await expect(listOwnerGenerationsForRoute({
+          userId: OWNER,
+          supabase: stored.client,
+          getAdminSupabase,
+          searchParams: new URLSearchParams({ archived: value }),
+        })).rejects.toThrow('archived must be one of: only.');
+        expect(getAdminSupabase).not.toHaveBeenCalled();
+        expect(stored.reads).toEqual([]);
+      }
+    });
+  });
+
   it('sends the bundle a linked post sells, read once for the page', async () => {
     const post = (id: string, generationId: string) => ({
       id,
@@ -882,6 +959,40 @@ describe('listOwnerGenerationsForRoute', () => {
         libraryRow({ id: 'made-before', created_at: '2026-10-13T08:00:00.000Z' }),
       ],
       posts: [],
+    });
+
+    const payload = await listOwnerGenerationsForRoute({
+      userId: OWNER,
+      supabase: stored.client,
+      getAdminSupabase: () => stored.client,
+      searchParams: new URLSearchParams(variant.query),
+    });
+
+    expect(payload.generations.map(({ id, status, archived_at }) => ({ id, status, archived_at }))).toEqual(
+      variant.response.generations.map(({ id, status, archived_at }) => ({ id, status, archived_at })),
+    );
+    expect(payload.pagination).toEqual(variant.response.pagination);
+  });
+
+  it("answers the contract's archived-only query with the archived runs alone, paged as it pins", async () => {
+    const variant = mobileApiContract.endpoints.listGenerations.responseVariants.archivedOnly;
+    const example = variant.response.generations[0];
+    const stored = createStoredRows({
+      profiles: [{ id: 'someone-else', merged_into_user_id: null }],
+      generations: [
+        libraryRow({ id: 'made-after', created_at: '2026-10-13T10:00:00.000Z' }),
+        libraryRow({
+          id: example.id,
+          status: example.status,
+          category: example.category,
+          created_at: example.created_at,
+          output_url: example.output_url,
+          archived_at: example.archived_at,
+        }),
+        libraryRow({ id: 'made-before', created_at: '2026-10-11T08:00:00.000Z' }),
+      ],
+      posts: [],
+      post_resource_bundles: [],
     });
 
     const payload = await listOwnerGenerationsForRoute({

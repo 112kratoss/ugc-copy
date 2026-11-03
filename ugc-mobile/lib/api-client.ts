@@ -413,6 +413,12 @@ export interface GenerationListOptions {
    * ignores it and answers the whole library, so the scope filters again.
    */
   status?: 'failed';
+  /**
+   * `only` is the Creations Archived scope, whose pages the server cuts from
+   * archived runs alone. Sent beside `includeArchived`, so a server released
+   * before the filter answers the whole library, which the scope filters again.
+   */
+  archived?: 'only';
 }
 
 export interface SaveShowcasePostResponse {
@@ -1290,6 +1296,7 @@ export function createApiClient({
         limit: options.limit,
         cursor: options.cursor,
         status: options.status,
+        archived: options.archived,
       })}`);
       return {
         ...response,

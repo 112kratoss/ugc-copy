@@ -402,6 +402,68 @@
               "nextCursor": null
             }
           }
+        },
+        "archivedOnly": {
+          "query": {
+            "detail": "summary",
+            "includeArchived": "true",
+            "limit": "24",
+            "archived": "only"
+          },
+          "coverage": "Archived runs of every status, newest first, under the library's template-step rule. Each page is cut from them alone, so the Archived scope reads no unarchived runs. archived=only implies includeArchived=true; the app sends both, so a server from before the filter answers with the whole library, which the scope filters itself. Any other value is refused: errors.invalidArchivedFilter.",
+          "response": {
+            "generations": [
+              {
+                "id": "archived-image-1",
+                "output_url": "https://cdn.example.test/archived-image-1.png",
+                "output_urls": [
+                  "https://cdn.example.test/archived-image-1.png"
+                ],
+                "preview_url": "https://cdn.example.test/archived-image-1-preview.png",
+                "previewUrl": "https://cdn.example.test/archived-image-1-preview.png",
+                "media": {
+                  "id": "archived-image-1",
+                  "kind": "image",
+                  "url": "https://cdn.example.test/archived-image-1.png",
+                  "previewUrl": "https://cdn.example.test/archived-image-1-preview.png",
+                  "thumbhash": null,
+                  "cacheKey": "media:archived-image-1",
+                  "expiresAt": null,
+                  "width": 720,
+                  "height": 960,
+                  "durationSeconds": null,
+                  "status": "ready",
+                  "gridReady": true
+                },
+                "creationMode": null,
+                "status": "succeeded",
+                "created_at": "2026-10-12T09:00:00.000Z",
+                "completed_at": "2026-10-12T09:01:00.000Z",
+                "duration": null,
+                "cost": 8,
+                "refunded": false,
+                "error_message": null,
+                "model": "Nano Banana 2.0",
+                "category": "image",
+                "title": "Old cover",
+                "description": null,
+                "prompt": "A muted cover for an old launch.",
+                "input_media": [],
+                "linked_post_id": null,
+                "linked_post_title": null,
+                "linked_post_visibility": null,
+                "linked_post_archived_at": null,
+                "linked_post_bundle": null,
+                "archived_at": "2026-10-20T08:00:00.000Z",
+                "moderation_removed_at": null
+              }
+            ],
+            "pagination": {
+              "limit": 24,
+              "hasMore": false,
+              "nextCursor": null
+            }
+          }
         }
       },
       "errors": {
@@ -412,6 +474,16 @@
           },
           "response": {
             "error": "status must be one of: failed.",
+            "code": "INVALID_GENERATIONS_QUERY"
+          }
+        },
+        "invalidArchivedFilter": {
+          "status": 400,
+          "query": {
+            "archived": "true"
+          },
+          "response": {
+            "error": "archived must be one of: only.",
             "code": "INVALID_GENERATIONS_QUERY"
           }
         }

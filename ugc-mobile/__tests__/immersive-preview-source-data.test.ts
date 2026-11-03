@@ -8,7 +8,7 @@ import {
   readCachedImmersiveSourceData,
   readCachedImmersiveSourceSnapshot,
 } from '../lib/immersive-preview-source-data';
-import { profileFailedGenerationsQueryKey } from '../lib/profile-media-query';
+import { profileArchivedGenerationsQueryKey, profileFailedGenerationsQueryKey } from '../lib/profile-media-query';
 import { SHOWCASE_FEED_PAGE_SIZE } from '../lib/showcase-feed-query';
 import type { CreatorProfileResponse, GenerationListItem, ShowcaseFeedItem } from '../lib/types';
 
@@ -520,5 +520,23 @@ describe('immersive preview source data', () => {
     expect(snapshot?.data.generations?.map((item) => item.id)).toEqual(['gen-1']);
     // A viewer opened on it is as fresh as the library, not as old as the Failed pages.
     expect(snapshot?.updatedAt).toBe(2_000);
+  });
+
+  it("opens an archived creation the library has not reached from the Archived scope's own pages", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['profile-generations', 'user-1'], {
+      pages: [{ generations: [generation('gen-1')] }],
+      pageParams: [null],
+    });
+    queryClient.setQueryData(profileArchivedGenerationsQueryKey('user-1'), {
+      pages: [{ generations: [generation('archived-40', { archived_at: '2026-10-01T00:00:00.000Z' })] }],
+      pageParams: [null],
+    });
+
+    const data = readCachedImmersiveSourceData(queryClient, 'studio-creations', 'user-1', 'archived-40');
+
+    expect(data?.generations?.map((item) => item.id)).toEqual(['gen-1', 'archived-40']);
+    // Without it in hand, a run the library lacks is left to the network.
+    expect(readCachedImmersiveSourceData(queryClient, 'studio-creations', 'user-1', 'archived-41')).toBeUndefined();
   });
 });

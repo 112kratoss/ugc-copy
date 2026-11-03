@@ -9,12 +9,17 @@ import {
   type MagicbookletApiClient,
   type SaveShowcasePostOptions,
 } from '../lib/api-client';
+import { isCreationLibraryMember } from '../lib/creation-library';
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildHomeFeedCards } from '../lib/home-feed-view-model';
 import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildPostDetailsMeta } from '../lib/post-details-view-model';
-import { profileFailedGenerationsQueryOptions, selectFailedCreations } from '../lib/profile-media-query';
+import {
+  profileArchivedGenerationsQueryOptions,
+  profileFailedGenerationsQueryOptions,
+  selectFailedCreations,
+} from '../lib/profile-media-query';
 import { getOwnerCreationScopeCounts } from '../lib/profile-view-model';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
 import { getShowcaseRemixAccess } from '../lib/showcase-remix-access';
@@ -633,6 +638,43 @@ describe('mobile shared API v1 contract fixture', () => {
     });
 
     const error = await api.listGenerations(false, { status: 'failed' }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: refusal.status, message: refusal.response.error });
+  });
+
+  // The Creations Archived scope pages archived runs alone, the same way.
+  it("asks for the Archived scope's pages as the contract pins, and reads them as sent", async () => {
+    const variant = mobileApiContract.endpoints.listGenerations.responseVariants.archivedOnly;
+    const asked: URL[] = [];
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async (input: RequestInfo | URL) => {
+        asked.push(new URL(String(input)));
+        return jsonResponse(variant.response);
+      }) as unknown as typeof fetch,
+    });
+
+    const page = await profileArchivedGenerationsQueryOptions(api, 'user-1').queryFn({ pageParam: null });
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0].pathname).toBe(mobileApiContract.endpoints.listGenerations.path);
+    expect(Object.fromEntries(asked[0].searchParams)).toEqual(variant.query);
+    expect(page).toEqual(variant.response);
+    expect(page.generations.filter((item) => isCreationLibraryMember(item, 'archived')).map((item) => item.id))
+      .toEqual(['archived-image-1']);
+  });
+
+  it("reads a refused archive filter as a typed API error with the server's words", async () => {
+    const refusal = mobileApiContract.endpoints.listGenerations.errors.invalidArchivedFilter;
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)) as unknown as typeof fetch,
+    });
+
+    const error = await api.listGenerations(true, { archived: 'only' }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: refusal.status, message: refusal.response.error });

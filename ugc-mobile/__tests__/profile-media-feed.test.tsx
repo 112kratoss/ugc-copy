@@ -326,6 +326,22 @@ describe("an archived creation's card", () => {
       archive: false,
     });
   });
+
+  // The feed reads the Archived scope's own pages, so it revalidates those.
+  it("revalidates the Archived scope's pages, never the library's, and a Posts feed its own", async () => {
+    routerState.params = { source: 'profile-creations', initialId: 'gen-archived', scope: 'archived' };
+    libraryState.items = [creation('gen-archived', { archivedAt: '2026-10-01T00:00:00.000Z' })];
+    renderFeed();
+
+    await act(async () => { await revalidationState.options!.refresh(); });
+    expect(refreshProfileLibraryHead).toHaveBeenCalledWith(expect.objectContaining({ library: 'Creations', archived: true }));
+
+    vi.mocked(refreshProfileLibraryHead).mockClear();
+    routerState.params = { source: 'profile-posts', scope: 'archived' };
+    renderFeed();
+    await act(async () => { await revalidationState.options!.refresh(); });
+    expect(refreshProfileLibraryHead).toHaveBeenCalledWith(expect.objectContaining({ library: 'Posts', archived: false }));
+  });
 });
 
 describe('a creation deleted from the feed', () => {

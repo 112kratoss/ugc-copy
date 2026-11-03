@@ -79,7 +79,11 @@ import {
   type ProfilePostsScope,
   type ProfileScopeOption,
 } from '@/lib/profile-view-model';
-import { refreshProfileFailedCreationsHead, refreshProfileLibraryHead } from '@/lib/profile-library-head';
+import {
+  refreshProfileArchivedCreationsHead,
+  refreshProfileFailedCreationsHead,
+  refreshProfileLibraryHead,
+} from '@/lib/profile-library-head';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
@@ -88,6 +92,8 @@ import {
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
   formatRenderingStartedLabel,
+  profileArchivedGenerationsQueryKey,
+  profileArchivedGenerationsQueryOptions,
   profileFailedGenerationsQueryKey,
   profileFailedGenerationsQueryOptions,
   profileGenerationsQueryOptions,
@@ -170,6 +176,8 @@ export function ProfileDashboard({
   // every page it holds again. Kept as the owner, not a flag, so the render in
   // which another library takes over never turns that library's query on.
   const [failedScopeOwner, setFailedScopeOwner] = useState<string | undefined>(undefined);
+  // The same for the Archived scope's query.
+  const [archivedScopeOwner, setArchivedScopeOwner] = useState<string | undefined>(undefined);
   const [postsScope, setPostsScope] = useState<ProfilePostsScope>('active');
   const [backgroundMediaReady, setBackgroundMediaReady] = useState(false);
   const queryClient = useQueryClient();
@@ -210,7 +218,14 @@ export function ProfileDashboard({
     ...profileFailedGenerationsQueryOptions(api, creationsUserId),
     enabled: Boolean(creationsUserId && failedScopeOwner === creationsUserId),
   });
-  const creationsQuery = creationsScope === 'failed' ? failedGenerationsQuery : generationsQuery;
+  // The Archived scope pages archived runs alone, kept on the same way.
+  const archivedGenerationsQuery = useInfiniteQuery({
+    ...profileArchivedGenerationsQueryOptions(api, creationsUserId),
+    enabled: Boolean(creationsUserId && archivedScopeOwner === creationsUserId),
+  });
+  const creationsQuery = creationsScope === 'failed'
+    ? failedGenerationsQuery
+    : creationsScope === 'archived' ? archivedGenerationsQuery : generationsQuery;
 
   const postsQuery = useInfiniteQuery({
     ...profileOwnerPostsQueryOptions(api, user?.id),
@@ -247,7 +262,7 @@ export function ProfileDashboard({
     setPostsScope('active');
   }, [user?.id]);
 
-  // The Failed scope pages a query of its own, whose page count the last request's says nothing about.
+  // The Failed and Archived scopes page queries of their own, whose page counts the last request's says nothing about.
   useEffect(() => {
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
@@ -274,26 +289,33 @@ export function ProfileDashboard({
         refreshProfileLibraryHead({ api, queryClient, userId: creationsUserId, library: 'Creations' }),
         refreshProfileFailedCreationsHead({ api, queryClient, userId: creationsUserId }),
       ])
-      : refreshProfileLibraryHead({
-        api,
-        queryClient,
-        userId: creationsUserId,
-        library: library as ProfileMediaTab,
-      })),
+      // No Rendering strip over Archived: its own first page is all it reads.
+      : library === 'Archived'
+        ? refreshProfileArchivedCreationsHead({ api, queryClient, userId: creationsUserId })
+        : refreshProfileLibraryHead({
+          api,
+          queryClient,
+          userId: creationsUserId,
+          library: library as ProfileMediaTab,
+        })),
     [api, queryClient, creationsUserId]
   );
   // The events that read the runs again read the Creations scope totals with
   // them: a run that failed while the reader was in a creator never passed
   // through the Rendering strip, which reads them as a run leaves it.
   const revalidateMediaHead = useCallback((library: string) => {
-    if (library === 'Creations' || library === 'Failed') void invalidateProfileStats(queryClient, user?.id);
+    if (library === 'Creations' || library === 'Failed' || library === 'Archived') {
+      void invalidateProfileStats(queryClient, user?.id);
+    }
     return refreshMediaHead(library);
   }, [queryClient, refreshMediaHead, user?.id]);
   useProfileMediaRevalidation({
     // A guest has only its Creations to keep fresh.
     enabled: isFocused && (Boolean(user) || (guestCreations && activeTab === 'Creations')),
-    // The Failed scope's pages are a library of their own, with their own schedule.
-    scope: activeTab === 'Creations' && creationsScope === 'failed' ? 'Failed' : activeTab,
+    // The Failed and Archived scopes' pages are libraries of their own, with their own schedules.
+    scope: activeTab === 'Creations' && creationsScope === 'failed'
+      ? 'Failed'
+      : activeTab === 'Creations' && creationsScope === 'archived' ? 'Archived' : activeTab,
     hasData: Boolean(activeMediaData),
     isFetching: activeMediaIsFetching,
     isStale: activeMediaIsStale,
@@ -311,7 +333,18 @@ export function ProfileDashboard({
     [generationsQuery.data]
   );
   const activeCreationCards = useMemo(() => allCreationCards.filter((card) => !card.isArchived), [allCreationCards]);
-  const archivedCreationCards = useMemo(() => allCreationCards.filter((card) => card.isArchived), [allCreationCards]);
+  // The Archived scope's creations: its own pages once they have come, and
+  // until then the archived ones the library has loaded. Filtered either way: a
+  // server from before `archived=only` sends every run, and a run restored from
+  // a card feed keeps its row there, unarchived.
+  const archivedCreationCards = useMemo(
+    () => (archivedGenerationsQuery.data
+      ? flattenProfileGenerationPages(archivedGenerationsQuery.data.pages)
+        .map(generationToProfileMediaCard)
+        .filter((card) => card.isGridReady && card.isArchived)
+      : allCreationCards.filter((card) => card.isArchived)),
+    [allCreationCards, archivedGenerationsQuery.data]
+  );
   const renderingCreations = useMemo(
     () => selectRenderingCreations(flattenProfileGenerationPages(generationsQuery.data?.pages)),
     [generationsQuery.data]
@@ -527,6 +560,7 @@ export function ProfileDashboard({
   const changeCreationsScope = useCallback((scope: ProfileCreationsScope) => {
     setCreationsScope(scope);
     if (scope === 'failed') setFailedScopeOwner(creationsUserId);
+    if (scope === 'archived') setArchivedScopeOwner(creationsUserId);
   }, [creationsUserId]);
   const handleMediaSwipe = useCallback((direction: ProfileMediaSwipeDirection) => {
     setActiveTab((currentTab) => getProfileMediaSwipeTarget(currentTab, direction));
@@ -556,7 +590,11 @@ export function ProfileDashboard({
     }
     if (activeTab === 'Creations') {
       queryClient.setQueryData<InfiniteData<GenerationListResponse>>(
-        creationsScope === 'failed' ? profileFailedGenerationsQueryKey(creationsUserId) : ['profile-generations', creationsUserId],
+        creationsScope === 'failed'
+          ? profileFailedGenerationsQueryKey(creationsUserId)
+          : creationsScope === 'archived'
+            ? profileArchivedGenerationsQueryKey(creationsUserId)
+            : ['profile-generations', creationsUserId],
         truncateInfiniteDataToFirstPage
       );
       // The scope chips' totals ride on the profile: a pull reads them again with the runs.

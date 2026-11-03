@@ -8,6 +8,7 @@ import {
   PROFILE_REVALIDATION_COOLDOWN_MS,
   PROFILE_REVALIDATION_MAX_DELAY_MS,
   PROFILE_SAVED_MEDIA_PAGES,
+  applyArchivedScopeChange,
   canRevalidateProfileMedia,
   mergeRefreshedFirstPage,
   profileRevalidationDelayMs,
@@ -224,4 +225,77 @@ it('keeps the existing cursor continuation when new posts move the head', () => 
   const tail = page('older', 'stable-tail');
   const merged = mergeRefreshedFirstPage({ pages: [page('head', 'old-head'), tail], pageParams: [0, 'old-head'] }, page('new', 'new-head'), 0, PROFILE_OWNER_POST_PAGES);
   expect(merged.pages[1].pageInfo?.nextCursor).toBe('stable-tail');
+});
+
+describe('applyArchivedScopeChange', () => {
+  // Offset pages of archived runs alone, newest first: a run's minute is its age.
+  const archived = (id: string, minute: number) => ({ ...generation(id, minute), archived_at: '2026-09-17T09:00:00.000Z' });
+  const offsetPage = (items: GenerationListItem[], nextCursor: string | null): GenerationListResponse => ({
+    generations: items,
+    pagination: { limit: 3, hasMore: nextCursor !== null, nextCursor },
+  });
+  const twoPages = () => library(
+    offsetPage([archived('a-50', 50), archived('a-40', 40), archived('a-30', 30)], '3'),
+    offsetPage([archived('a-20', 20), archived('a-10', 10), archived('a-05', 5)], '6'),
+  );
+  const nextCursor = (data: InfiniteData<GenerationListResponse, string | null>) => data.pages.at(-1)?.pagination?.nextCursor;
+
+  it('takes a run archived anew in at its place among the loaded rows, and starts the next page one later', () => {
+    const changed = applyArchivedScopeChange(twoPages(), 'new', archived('new', 25));
+
+    expect(ids(changed)).toEqual(['a-50', 'a-40', 'a-30', 'new', 'a-20', 'a-10', 'a-05']);
+    expect(changed.pages[1].generations[0].id).toBe('new');
+    expect(nextCursor(changed)).toBe('7');
+  });
+
+  it('leaves a run archived anew past the loaded rows to its own page', () => {
+    const before = twoPages();
+    const changed = applyArchivedScopeChange(before, 'old', archived('old', 1));
+
+    expect(changed).toBe(before);
+  });
+
+  it('ends the last page with it when nothing follows that page', () => {
+    const whole = library(offsetPage([archived('a-50', 50), archived('a-40', 40)], null));
+    const changed = applyArchivedScopeChange(whole, 'old', archived('old', 1));
+
+    expect(ids(changed)).toEqual(['a-50', 'a-40', 'old']);
+    expect(nextCursor(changed)).toBeNull();
+  });
+
+  it('keeps a restored run where it was, unarchived, and starts the next page one earlier', () => {
+    const changed = applyArchivedScopeChange(twoPages(), 'a-40', { ...archived('a-40', 40), archived_at: null });
+
+    expect(ids(changed)).toEqual(['a-50', 'a-40', 'a-30', 'a-20', 'a-10', 'a-05']);
+    expect(changed.pages[0].generations[1].archived_at).toBeNull();
+    expect(nextCursor(changed)).toBe('5');
+  });
+
+  it('takes a deleted run out, and moves the cursor only for one that was still archived', () => {
+    const deleted = applyArchivedScopeChange(twoPages(), 'a-20', null);
+    expect(ids(deleted)).toEqual(['a-50', 'a-40', 'a-30', 'a-10', 'a-05']);
+    expect(nextCursor(deleted)).toBe('5');
+
+    // Restored first, then deleted: it had already left the server's set.
+    const restored = applyArchivedScopeChange(twoPages(), 'a-20', { ...archived('a-20', 20), archived_at: null });
+    const thenDeleted = applyArchivedScopeChange(restored, 'a-20', null);
+    expect(ids(thenDeleted)).toEqual(['a-50', 'a-40', 'a-30', 'a-10', 'a-05']);
+    expect(nextCursor(thenDeleted)).toBe('5');
+  });
+
+  it('archives a restored row again in place, starting the next page where it started before', () => {
+    const restored = applyArchivedScopeChange(twoPages(), 'a-40', { ...archived('a-40', 40), archived_at: null });
+    const again = applyArchivedScopeChange(restored, 'a-40', archived('a-40', 40));
+
+    expect(ids(again)).toEqual(ids(twoPages()));
+    expect(again.pages[0].generations[1].archived_at).not.toBeNull();
+    expect(nextCursor(again)).toBe('6');
+  });
+
+  it('changes nothing for a run it neither holds nor gains', () => {
+    const before = twoPages();
+
+    expect(applyArchivedScopeChange(before, 'elsewhere', null)).toBe(before);
+    expect(applyArchivedScopeChange(before, 'elsewhere', { ...generation('elsewhere', 25), archived_at: null })).toBe(before);
+  });
 });
