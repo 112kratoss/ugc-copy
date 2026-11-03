@@ -7,8 +7,11 @@ import type { RemixSourceBundle } from '@/lib/remix-source';
 import { supabase } from '@/lib/supabase';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 
-/** A link to the same file that opens now: the link itself while it lasts. */
-export type RenewRemixLink = (link: string, options?: { result?: boolean }) => Promise<string>;
+/**
+ * A link that opens now to what `link` opened: the same file, or for a link to the original, the
+ * original as it is now (its post's copy, once it is posted). The link itself where none is found.
+ */
+export type RenewRemixLink = (link: string) => Promise<string>;
 
 type RemixRead = {
   remixId: string | null;
@@ -17,6 +20,8 @@ type RemixRead = {
   formAccount: string | null;
   /** The page's session token, used where the browser's session is another account's or none. */
   pageToken: string | null;
+  /** The form's link to the original's result, by whose file a link to the original is known. */
+  originalResult: string | null;
 };
 
 /** A read of the remix while it is out: for one form's remix and account (`key`). */
@@ -79,14 +84,14 @@ async function readRemixAnswer(read: RemixRead): Promise<RemixSourceBundle | nul
  * it answers; one made after it reads again, as no answer is kept past its read. A read that fails,
  * or stalls past REMIX_LINK_READ_TIMEOUT_MS, leaves each link as it was.
  */
-export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken }: RemixRead): RenewRemixLink {
-  const readRef = useRef<RemixRead>({ remixId, remixPostId, formAccount, pageToken });
+export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken, originalResult }: RemixRead): RenewRemixLink {
+  const readRef = useRef<RemixRead>({ remixId, remixPostId, formAccount, pageToken, originalResult });
   useEffect(() => {
-    readRef.current = { remixId, remixPostId, formAccount, pageToken };
-  }, [formAccount, pageToken, remixId, remixPostId]);
+    readRef.current = { remixId, remixPostId, formAccount, pageToken, originalResult };
+  }, [formAccount, originalResult, pageToken, remixId, remixPostId]);
   const readOutRef = useRef<ReadOut | null>(null);
 
-  return useCallback<RenewRemixLink>(async (link, options = {}) => {
+  return useCallback<RenewRemixLink>(async (link) => {
     const read = readRef.current;
     if (!read.remixId || !isSignedMediaUrlExpiring(link, Date.now())) return link;
     // The read out is shared only by asks for its own remix and account: another account's form is
@@ -104,7 +109,7 @@ export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageTok
       readOut = started;
     }
     const answer = await readOut.answer;
-    const renewed = answer ? renewedRemixLink(link, answer, options) : null;
+    const renewed = answer ? renewedRemixLink(link, answer, read.originalResult) : null;
     return renewed && !isSignedMediaUrlExpiring(renewed, Date.now()) ? renewed : link;
   }, []);
 }

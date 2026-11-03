@@ -49,15 +49,16 @@ function remixAnswerLinks(answer: RemixSourceBundle): string[] {
 }
 
 /**
- * A fresh answer's link to the file `link` opens, or null where the answer holds none. With
- * `result`, the answer's own result: the original may have been posted since, and its result is
+ * A fresh answer's link to the file `link` opens, or null where the answer holds none. A link to
+ * the original (any link to the file of `original`, the form's link to the original's result) is
+ * renewed as the answer's own result: the original may have been posted since, and its result is
  * then its post's public copy rather than the private file the older link opened.
  */
 export function renewedRemixLink(
   link: string,
   answer: RemixSourceBundle,
-  options: { result?: boolean } = {},
+  original: string | null = null,
 ): string | null {
-  if (options.result) return answer.result?.url || null;
+  if (original && isSameStoredFile(link, original)) return answer.result?.url || null;
   return remixAnswerLinks(answer).find((candidate) => isSameStoredFile(candidate, link)) ?? null;
 }

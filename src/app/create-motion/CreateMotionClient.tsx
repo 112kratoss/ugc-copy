@@ -1,7 +1,7 @@
 'use client';
 
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Loader2, Check, Play, Image as ImageIcon, Video } from 'lucide-react';
@@ -413,8 +413,6 @@ function MotionCreator({
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
-    // The remix's links last an hour: each is renewed where it is used past that.
-    const renewRemixLink = useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken: session?.access_token ?? null });
     // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
     // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
     const canvasPublish = useCreatorPublish({
@@ -432,6 +430,15 @@ function MotionCreator({
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
+    // The remix's links last an hour: each is renewed where it is used past that, and a link to
+    // the original as the original is now (its post's copy, once it is posted).
+    const renewRemixLink = useRemixLinkRenewal({
+        remixId,
+        remixPostId,
+        formAccount,
+        pageToken: session?.access_token ?? null,
+        originalResult: remixSourceBundle?.result?.url ?? null,
+    });
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     // The character and the clip the remix was not given, as empty boxes for the remixer's own
     // (owner, 2026-11-03): beside the form, never saved, priced or sent. A box filled, by a file or
@@ -736,7 +743,7 @@ function MotionCreator({
         // read, and Generate stayed held until a reload. One about to lapse is renewed first.
         if (isSignedMediaUrlExpiring(url, Date.now())) {
             const clipAtPress = referenceVideoRef.current;
-            url = await renewRemixLink(url, { result: true });
+            url = await renewRemixLink(url);
             // Gone, or another clip put in its place meanwhile: the creator's choice stands.
             if (unmountSignal.current.aborted || referenceVideoRef.current !== clipAtPress) return;
         }
@@ -755,13 +762,6 @@ function MotionCreator({
         setVideoPickError(null);
         fillRemixSlot('motion_reference_video');
     };
-
-    // A preview opens the remix's media by a link that opens: the original by the remix's result
-    // (posted since, it is its post's copy), the rest by the file each link opens.
-    const renewPreviewLink = useCallback(
-        (src: string) => renewRemixLink(src, { result: src === remixVideoUrl }),
-        [remixVideoUrl, renewRemixLink],
-    );
 
     useEffect(() => {
         if (!referenceVideo) {
@@ -2118,7 +2118,7 @@ function MotionCreator({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Uploaded preview'}
                 title={uploadPreview?.title ?? 'Media Preview'}
-                renewSrc={remixId ? renewPreviewLink : undefined}
+                renewSrc={remixId ? renewRemixLink : undefined}
             />
 
         </div>

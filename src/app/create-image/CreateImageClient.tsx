@@ -526,8 +526,6 @@ function ImageCreator({
     // Remix State
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
-    // The remix's links last an hour: each is renewed where it is used past that.
-    const renewRemixLink = useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken: session?.access_token ?? null });
     // Publishing on the canvas: the form's details, the remix's original (credited with Follow,
     // owner 2026-10-28), Posted, and a publish in flight, which Generate waits for.
     const canvasPublish = useCreatorPublish({
@@ -546,6 +544,15 @@ function ImageCreator({
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
+    // The remix's links last an hour: each is renewed where it is used past that, and a link to
+    // the original as the original is now (its post's copy, once it is posted).
+    const renewRemixLink = useRemixLinkRenewal({
+        remixId,
+        remixPostId,
+        formAccount,
+        pageToken: session?.access_token ?? null,
+        originalResult: remixSourceBundle?.result?.url ?? null,
+    });
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     // The references the remix was not given, as empty boxes for the remixer's own (owner,
     // 2026-11-03): beside the form, never saved, priced or sent. A box filled leaves the list.
@@ -1110,11 +1117,6 @@ function ImageCreator({
         updateMentionState(prompt);
     };
 
-    // A preview opens the remix's media by a link that opens: the original by the remix's result
-    // (posted since, it is its post's copy), a restored picture by the file its link opens.
-    const renewPreviewLink = useCallback((src: string) => renewRemixLink(src), [renewRemixLink]);
-    const renewOriginalLink = useCallback((src: string) => renewRemixLink(src, { result: true }), [renewRemixLink]);
-
     const handleUseOriginalResultAsReference = async () => {
         if (!remixSourceBundle) {
             return;
@@ -1133,7 +1135,7 @@ function ImageCreator({
         // The link the remix was read with lasts an hour: past it the picture was drawn from a link
         // storage refuses. One about to lapse is renewed first.
         if (resultUrl && isSignedMediaUrlExpiring(resultUrl, Date.now())) {
-            resultUrl = await renewRemixLink(resultUrl, { result: true });
+            resultUrl = await renewRemixLink(resultUrl);
             if (unmountSignal.current.aborted || refused()) return;
         }
 
@@ -2610,7 +2612,7 @@ function ImageCreator({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Reference image'}
                 title={uploadPreview?.title ?? 'Reference Preview'}
-                renewSrc={remixId ? renewPreviewLink : undefined}
+                renewSrc={remixId ? renewRemixLink : undefined}
             />
 
             <StudioMediaPreviewModal
@@ -2637,7 +2639,7 @@ function ImageCreator({
                 src={remixImageUrl}
                 alt="Original creation"
                 title="Original Creation"
-                renewSrc={remixId ? renewOriginalLink : undefined}
+                renewSrc={remixId ? renewRemixLink : undefined}
                 footer={
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>
