@@ -329,6 +329,13 @@ export interface SerializedWorkflowCanvasGraph {
 
 export interface SerializeWorkflowGraphOptions {
   mode?: WorkflowGraphSerializationMode;
+  /**
+   * For a share (`share-export`): whether an input's prepared Seedance asset goes into it, read on the
+   * input's own record, its link included, before the share drops the link. Its id runs the file it was
+   * prepared from for anyone who imports the share, so one left out leaves the input empty to fill.
+   * Every asset goes where this is not given.
+   */
+  sharesSeedanceAsset?: (asset: SeedanceAssetMetadata) => boolean;
 }
 
 export interface WorkflowCanvasRecord {
@@ -759,7 +766,8 @@ export function createCanvasEdge(source: string, sourceHandle: WorkflowHandleTyp
 function serializeWorkflowNodeData(
   type: WorkflowNodeKind,
   data: Partial<WorkflowNodeData> | undefined,
-  mode: WorkflowGraphSerializationMode
+  mode: WorkflowGraphSerializationMode,
+  sharesSeedanceAsset?: SerializeWorkflowGraphOptions['sharesSeedanceAsset']
 ): Record<string, unknown> {
   const normalizedData = normalizeNodeData(type, data);
   const normalized = normalizedData as Record<string, unknown>;
@@ -771,7 +779,7 @@ function serializeWorkflowNodeData(
   }
 
   if (mode === 'share-export') {
-    return sanitizeWorkflowNodeDataForShare(type, normalizedData);
+    return sanitizeWorkflowNodeDataForShare(type, normalizedData, sharesSeedanceAsset);
   }
 
   if (mode === 'template-compile') {
@@ -802,7 +810,7 @@ function sanitizeWorkflowNodeDataForTemplateCompile(
       storagePath: isConsumerInput ? null : typed.storagePath,
       seedanceAsset: isConsumerInput
         ? createSeedanceAssetMetadata({ assetType: 'Image' })
-        : sanitizeSeedanceAssetMetadataForShare(typed.seedanceAsset),
+        : sanitizeSeedanceAssetMetadataForTemplate(typed.seedanceAsset),
     };
   }
 
@@ -816,7 +824,7 @@ function sanitizeWorkflowNodeDataForTemplateCompile(
       durationSeconds: isConsumerInput ? null : typed.durationSeconds,
       seedanceAsset: isConsumerInput
         ? createSeedanceAssetMetadata({ assetType: 'Video' })
-        : sanitizeSeedanceAssetMetadataForShare(typed.seedanceAsset),
+        : sanitizeSeedanceAssetMetadataForTemplate(typed.seedanceAsset),
     };
   }
 
@@ -835,7 +843,12 @@ function sanitizeWorkflowReferenceElementsForShare(elements: WorkflowReferenceEl
   }));
 }
 
-function sanitizeSeedanceAssetMetadataForShare(metadata: SeedanceAssetMetadata) {
+/**
+ * A template's fixed input's asset as the server compiler keeps it, without the link it was prepared
+ * from. The compiled graph stays private, and its hash pins the version a test run proved, so it keeps
+ * what it always has; the publish clears the asset itself (`copyFixedAssets`).
+ */
+function sanitizeSeedanceAssetMetadataForTemplate(metadata: SeedanceAssetMetadata) {
   return createSeedanceAssetMetadata({
     assetId: metadata.assetId,
     assetType: metadata.assetType,
@@ -846,9 +859,23 @@ function sanitizeSeedanceAssetMetadataForShare(metadata: SeedanceAssetMetadata) 
   });
 }
 
+function sanitizeSeedanceAssetMetadataForShare(
+  metadata: SeedanceAssetMetadata,
+  shares: SerializeWorkflowGraphOptions['sharesSeedanceAsset'] = () => true
+) {
+  // Left out whole: an input with no asset, which its importer fills and prepares as their own.
+  if (!shares(metadata)) {
+    return createSeedanceAssetMetadata({ assetType: metadata.assetType });
+  }
+  // The provider's error can name the file it could not read, the sharer's upload, path and all
+  // (2026-11-04 re-review): it stays out with the link the asset was prepared from.
+  return { ...sanitizeSeedanceAssetMetadataForTemplate(metadata), error: null };
+}
+
 function sanitizeWorkflowNodeDataForShare(
   type: WorkflowNodeKind,
-  data: WorkflowNodeData
+  data: WorkflowNodeData,
+  sharesSeedanceAsset?: SerializeWorkflowGraphOptions['sharesSeedanceAsset']
 ): Record<string, unknown> {
   const editableData = {
     ...(data as Record<string, unknown>),
@@ -861,7 +888,7 @@ function sanitizeWorkflowNodeDataForShare(
         ...editableData,
         imageUrl: null,
         storagePath: null,
-        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as ImageInputNodeData).seedanceAsset),
+        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as ImageInputNodeData).seedanceAsset, sharesSeedanceAsset),
       };
     case 'video-input':
       return {
@@ -869,14 +896,14 @@ function sanitizeWorkflowNodeDataForShare(
         videoUrl: null,
         storagePath: null,
         durationSeconds: null,
-        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as VideoInputNodeData).seedanceAsset),
+        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as VideoInputNodeData).seedanceAsset, sharesSeedanceAsset),
       };
     case 'audio-input':
       return {
         ...editableData,
         audioUrl: null,
         storagePath: null,
-        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as AudioInputNodeData).seedanceAsset),
+        seedanceAsset: sanitizeSeedanceAssetMetadataForShare((data as AudioInputNodeData).seedanceAsset, sharesSeedanceAsset),
       };
     case 'image-generate':
       return {
@@ -910,7 +937,7 @@ export function serializeWorkflowGraph(
         x: node.position.x,
         y: node.position.y,
       },
-      data: serializeWorkflowNodeData(node.type, node.data, mode),
+      data: serializeWorkflowNodeData(node.type, node.data, mode, options?.sharesSeedanceAsset),
       draggable: node.draggable ?? true,
     })),
     edges: graph.edges.map((edge) => ({
@@ -924,9 +951,10 @@ export function serializeWorkflowGraph(
 }
 
 export function createWorkflowShareSnapshotGraph(
-  value: Partial<WorkflowCanvasGraph> | null | undefined
+  value: Partial<WorkflowCanvasGraph> | null | undefined,
+  options: Pick<SerializeWorkflowGraphOptions, 'sharesSeedanceAsset'> = {}
 ): SerializedWorkflowCanvasGraph {
-  return serializeWorkflowGraph(value, { mode: 'share-export' });
+  return serializeWorkflowGraph(value, { mode: 'share-export', sharesSeedanceAsset: options.sharesSeedanceAsset });
 }
 
 /**

@@ -1,6 +1,7 @@
-import { extractPromptHandles, videoDraftHandles, videoDraftMentionedHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft, type VideoCreationDraft } from './media-creation-view-model';
+import { extractPromptHandles, remixDraftInputSlots, videoDraftHandles, videoDraftMentionedHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft, type VideoCreationDraft } from './media-creation-view-model';
 import type { SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 import { signedStorageUrlExpiresAt } from './media-url-expiry';
+import { remixInputSlotHandles } from './remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from './types';
 
 /** A link with less than this left is treated as already gone. */
@@ -106,26 +107,90 @@ function hasExpiredLink(draft: CreationDraft, { now, storageBaseUrl }: Reference
  * source is read, so a clip under a stand-in (`handleStandIn`) still counts.
  */
 export function needsRemixReferenceRecovery(draft: CreationDraft, clock?: ReferenceLinkClock): boolean {
+  // The source could not read what it keeps back (2026-11-03 re-review): read again, whatever the words say.
+  if (draft.inputSlotsUnread === true) return true;
   if (clock && hasExpiredLink(draft, clock)) return true;
   if (draft.tool === 'video' && missesClipHandles(draft)) return true;
   return missesReferences(draft);
 }
 
-/** A saved restore whose rail came back empty while its prompt still mentions what was on it. */
+/** The handles of a remix's empty slots: a mention of one was the creator's input kept to themselves, not one lost. */
+function slotHandles(draft: CreationDraft): Set<string> {
+  return new Set(remixInputSlotHandles(remixDraftInputSlots(draft)));
+}
+
+/**
+ * A saved restore whose rail came back empty while its prompt still mentions what was on it. A
+ * mention of an empty slot is not one: the source never gives that input, and its box asks for the
+ * remixer's own, so reading the source again on every visit would bring nothing back.
+ */
 function missesReferences(draft: CreationDraft): boolean {
   if (draft.tool === 'motion' || draft.references.length > 0) return false;
   if (draft.tool === 'video' && (draft.startFrame || draft.endFrame || draft.referenceVideos.length > 0 || videoSubjects(draft).length > 0)) return false;
-  return extractPromptHandles(draft.prompt).length > 0;
+  const waiting = slotHandles(draft);
+  return extractPromptHandles(draft.prompt).some((handle) => !waiting.has(handle));
 }
 
 /**
  * A clip without a handle of its own (none, or a stand-in the app made up for it), beside words (the
- * prompt or a shot) that mention one nothing in the draft answers to.
+ * prompt or a shot) that mention one nothing in the draft answers to, an empty slot included.
  */
 function missesClipHandles(draft: VideoCreationDraft): boolean {
   if (!draft.referenceVideos.some((clip) => !clip.handle || clip.handleStandIn)) return false;
-  const held = new Set(videoDraftHandles(draft));
+  const held = new Set([...videoDraftHandles(draft), ...slotHandles(draft)]);
   return [...videoDraftMentionedHandles(draft)].some((handle) => !held.has(handle));
+}
+
+/**
+ * A saved remix with the empty slots its source names now, where it was saved before slots
+ * existed: a session that holds its own slots keeps them, as the remixer has filled them so far.
+ */
+function withSourceSlots(draft: CreationDraft, restored: CreationDraft): CreationDraft {
+  if (draft.inputSlots !== undefined || draft.tool !== restored.tool) return draft;
+  const slots = remixDraftInputSlots(restored);
+  return slots.length > 0 ? { ...draft, inputSlots: [...slots] } : draft;
+}
+
+/**
+ * A saved remix whose source could not read the inputs it keeps back, with what a read that could brings:
+ * the copies a bought recipe holds, put where the session has nothing (what the remixer added since
+ * stays theirs, as does a handle they took), and no longer marked unread. Its slots come with
+ * `withSourceSlots`. A read that still could not is no answer: the session stays as it was.
+ */
+function withReadInputs(draft: CreationDraft, restored: CreationDraft): CreationDraft {
+  if (draft.inputSlotsUnread !== true || restored.inputSlotsUnread === true || draft.tool !== restored.tool) return draft;
+  const taken = new Set(heldDraftMedia(draft).flatMap((media) => (media.handle ? [media.handle] : [])));
+  const missing = (current: readonly MediaDraft[], source: readonly MediaDraft[]) => [
+    ...current,
+    ...source.filter((media) => !current.some((held) => isSameMedia(held, media)) && !(media.handle && taken.has(media.handle))),
+  ];
+  const read = { ...draft };
+  delete read.inputSlotsUnread;
+  if (read.tool === 'image' && restored.tool === 'image') {
+    return { ...read, references: missing(read.references, restored.references) };
+  }
+  if (read.tool === 'video' && restored.tool === 'video') {
+    const subjects = videoSubjects(read);
+    return {
+      ...read,
+      references: missing(read.references, restored.references),
+      referenceVideos: missing(read.referenceVideos, restored.referenceVideos),
+      referenceAudios: missing(read.referenceAudios, restored.referenceAudios),
+      startFrame: read.startFrame ?? restored.startFrame,
+      endFrame: read.endFrame ?? restored.endFrame,
+      subjects: [...subjects, ...videoSubjects(restored).filter((subject) => !taken.has(subject.handle))],
+    };
+  }
+  if (read.tool === 'motion' && restored.tool === 'motion') {
+    return {
+      ...read,
+      characterImage: read.characterImage ?? restored.characterImage,
+      referenceVideo: read.referenceVideo ?? restored.referenceVideo,
+      // The run's length follows its clip, which the read brings where the session had none.
+      duration: read.referenceVideo ? read.duration : restored.duration,
+    };
+  }
+  return read;
 }
 
 /**
@@ -142,13 +207,14 @@ function missesClipHandles(draft: VideoCreationDraft): boolean {
  * leaves is the clip's own from then on. A clip the source left out (it could
  * not sign it this time) keeps its mark, so a later visit can still give it its
  * handle. A handle the creator gave stays. Missing images come back only while
- * the prompt still mentions them.
+ * the prompt still mentions them. A session saved before remixes had empty
+ * slots takes the ones its source names now (`withSourceSlots`).
  */
 export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft): CreationDraft {
   const sourceMedia = heldDraftMedia(restored);
   const mentioned = current.tool === 'video' ? videoDraftMentionedHandles(current) : new Set<string>();
   const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle ? [media.handle] : [])));
-  const renewed = mapDraftMedia(current, (media) => {
+  const renewed = mapDraftMedia(withSourceSlots(withReadInputs(current, restored), restored), (media) => {
     const match = sourceMedia.find((candidate) => isSameMedia(media, candidate));
     const url = match?.url && match.url !== media.url ? match.url : media.url;
     const sourceHandle = media.kind === 'video' && match?.handle && !match.handleStandIn ? match.handle : null;

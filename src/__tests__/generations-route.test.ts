@@ -946,6 +946,9 @@ describe('/api/generations route', () => {
     inputMediaState = [
       row('input-own', 0, 'uploads/user-1/draft/face.png'),
       row('input-original', 1, 'generation_inputs/creator-9/gen-0/00-reference-image.png'),
+      // A file of a seller's recipe the run used through the creator's unlock goes in no recipe of
+      // theirs (owner, 2026-11-03), so the recipe they start from counts it nowhere.
+      row('input-bought', 2, 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png'),
     ];
 
     const { GET } = await import('@/app/api/generations/route');

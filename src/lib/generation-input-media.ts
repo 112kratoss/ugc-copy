@@ -2,6 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 
 import {
+  isRecipeFileInput,
+  isRecipeFileSource,
+  RECIPE_FILE_SOURCE_KIND,
+  recipeFileCopyOf,
+} from '@/lib/generation-input-origin';
+import { RECIPE_IMPORT_FOLDER } from '@/lib/recipe-file-paths';
+import {
   isValidElementHandle,
   normalizeSubmittedElementDescriptors,
   type ImageElementDescriptor,
@@ -23,6 +30,7 @@ import {
 import {
   createSeedanceAssetMetadata,
   readSeedanceAssetCollections,
+  readSeedanceAssetMetadata,
   type SeedanceAssetCollections,
   type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
@@ -110,7 +118,7 @@ interface LegacyGenerationReference {
  * them. Only the owner's remix is given these (owner, 2026-10-29): anyone
  * else, a remix of shared inputs or of a bought recipe included, restores the
  * inputs from the bundle's `inputs` instead, and of `seedanceAssets` is given
- * only the asset ids, by `sanitizeWorkflowSettingsForRemix`.
+ * only the ids of the assets prepared from those, by `preparedSeedanceAssetIdsFor`.
  */
 const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'elements',
@@ -360,6 +368,59 @@ async function loadCandidateMedia(
   };
 }
 
+/** The folders a run start imports another account's media into, which no kept input is stored in. */
+const IMPORT_FOLDERS = new Set(['remix-imports', RECIPE_IMPORT_FOLDER]);
+
+/**
+ * The candidates that are a file of someone else's recipe (`isRecipeFileInput`), which their rows are
+ * marked as, each with the copy it stands for where one is on record (`recipeFile`, which a later use
+ * of the input is checked against the unlock by, `reuseRecipeFile`): one the start imported through
+ * the caller's unlock, whose source names the recipe file or its import, and one made from a kept
+ * input of the caller's own that is marked, as a run made again from a creation of theirs is (its
+ * source is that run's own copy, which reads as the caller's upload). A read of those rows that fails
+ * marks none of them: the path alone decides then (2026-11-03 re-review), since a mark is for good and
+ * a creator's own inputs would then read as empty slots to everyone who remixes them.
+ */
+async function findRecipeFileCandidates(
+  supabase: SupabaseClient,
+  userId: string,
+  candidates: readonly PersistGenerationInputCandidate[],
+): Promise<Map<PersistGenerationInputCandidate, string | null>> {
+  const own = new Set([userId]);
+  const marked = new Map<PersistGenerationInputCandidate, string | null>();
+  const fromKeptInputs = new Map<string, PersistGenerationInputCandidate[]>();
+  for (const candidate of candidates) {
+    const sources = [candidate.sourceStoragePath, candidate.sourceUrl];
+    if (sources.some((source) => isRecipeFileSource(source, own))) {
+      marked.set(candidate, recipeFileCopyOf({ metadata: { sourceStoragePath: candidate.sourceStoragePath, sourceUrl: candidate.sourceUrl } }, own));
+      continue;
+    }
+    for (const source of sources) {
+      const location = normalizeStoragePath(source, userId);
+      if (location?.bucket !== GENERATION_INPUTS_BUCKET || IMPORT_FOLDERS.has(location.filePath.split('/')[1] ?? '')) continue;
+      const key = `${location.bucket}/${location.filePath}`;
+      fromKeptInputs.set(key, [...(fromKeptInputs.get(key) ?? []), candidate]);
+    }
+  }
+  if (fromKeptInputs.size === 0) return marked;
+
+  const { data, error } = await supabase
+    .from('generation_input_media')
+    .select('storage_path, metadata')
+    .eq('user_id', userId)
+    .in('storage_path', [...fromKeptInputs.keys()]);
+  if (error) {
+    logBackendError('failed_to_read_kept_inputs_for_recipe_file_mark', { error });
+    return marked;
+  }
+  for (const row of (data ?? []) as Array<{ storage_path: string; metadata: Record<string, unknown> | null }>) {
+    if (!isRecipeFileInput({ metadata: row.metadata }, own)) continue;
+    const copy = recipeFileCopyOf({ metadata: row.metadata }, own);
+    fromKeptInputs.get(row.storage_path)?.forEach((candidate) => marked.set(candidate, copy));
+  }
+  return marked;
+}
+
 export async function persistGenerationInputMedia(params: {
   supabase: SupabaseClient;
   generationId: string | null | undefined;
@@ -375,6 +436,7 @@ export async function persistGenerationInputMedia(params: {
   if (!generationId || candidates.length === 0) {
     return;
   }
+  const recipeFiles = await findRecipeFileCandidates(supabase, userId, candidates);
 
   // Each failure below is logged where it happens, which says nothing about
   // the generation as a whole. These add up to whether its recipe was kept.
@@ -428,6 +490,10 @@ export async function persistGenerationInputMedia(params: {
         ...(candidate.metadata ?? {}),
         sourceStoragePath: candidate.sourceStoragePath ?? null,
         sourceUrl: candidate.sourceUrl ?? null,
+        // Never handed on (`isRecipeFileInput`): set here from the sources the start resolved, never asked of a client.
+        ...(recipeFiles.has(candidate)
+          ? { sourceKind: RECIPE_FILE_SOURCE_KIND, ...(recipeFiles.get(candidate) ? { recipeFile: recipeFiles.get(candidate) } : {}) }
+          : {}),
       };
 
       durableMutationOutcomeUnknown = true;
@@ -1072,10 +1138,11 @@ export async function buildLegacyGenerationInputMedia(params: {
 
 /**
  * Who a remix's settings are for: the owner (or a guest identity since linked
- * to them); someone the run's inputs are handed to, a remix of shared inputs or
- * of a bought recipe; or anyone else.
+ * to them), or anyone else. A remix the run's inputs are handed to (a remix of
+ * shared inputs or of a bought recipe) is given them beside the settings, with
+ * the assets prepared from them (`preparedSeedanceAssetIdsFor`), never in them.
  */
-export type RemixSettingsReader = 'owner' | 'with-inputs' | 'without-inputs';
+export type RemixSettingsReader = 'owner' | 'without-inputs';
 
 export function sanitizeWorkflowSettingsForRemix(
   workflowSettings: Record<string, unknown>,
@@ -1086,9 +1153,6 @@ export function sanitizeWorkflowSettingsForRemix(
     if (OUTPUT_LIST_WORKFLOW_KEYS.has(key)) continue;
     if (reader === 'owner' || !INPUT_MEDIA_WORKFLOW_KEYS.has(key)) {
       sanitized[key] = value;
-    } else if (reader === 'with-inputs' && key === 'seedanceAssets') {
-      const prepared = preparedSeedanceAssetIds(value);
-      if (prepared) sanitized[key] = prepared;
     }
   }
 
@@ -1096,24 +1160,56 @@ export function sanitizeWorkflowSettingsForRemix(
 }
 
 /**
- * What a Seedance 2 run prepared from its references, as a remix the inputs
- * are handed to is given it: each asset's id, kind and state, in the place of
- * its reference. A remixer cannot prepare an asset from the creator's copy, and
- * a real person's picture runs only as a prepared asset. The link each was
- * prepared from, and the error and time of the last check, which can repeat
- * it, stay out: they name the creator's upload.
+ * What a remix the run's inputs are handed to is given of the assets a Seedance 2 run prepared from
+ * its references: the asset id, kind and state of each input it is handed (`restoredIds`). A remixer
+ * cannot prepare an asset from the creator's copy, and a real person's picture runs only as a prepared
+ * asset. The link each was prepared from, and the error and time of the last check, which can repeat
+ * it, stay out: they name the creator's upload. An asset id runs the file it was prepared from
+ * (2026-11-04 re-review), so an asset goes only with an input of the run's that the remix is handed:
+ * none for an input it is not given (an empty slot), none prepared from an input that was never kept,
+ * and none prepared from a recipe file, whoever's input recorded it. Each list keeps the handed ones in
+ * the run's order, which is how both creators pair an asset with a restored reference, by its place
+ * among them: the reference pictures (for a run from before the family took frames, which kept its
+ * pictures as frames, the frames), clips and tracks. Null when no input handed on was prepared.
  */
-function preparedSeedanceAssetIds(value: unknown): ReturnType<typeof readSeedanceAssetCollections> {
+export function preparedSeedanceAssetIdsFor(
+  value: unknown,
+  inputs: readonly GenerationInputMediaItem[],
+  restoredIds: ReadonlySet<string>,
+  /** The run's creator and the guests linked to them, whose own recipe files are their own uploads. */
+  creatorIds: ReadonlySet<string>,
+): ReturnType<typeof readSeedanceAssetCollections> {
   const collections = readSeedanceAssetCollections(value);
   if (!collections) return null;
-  const idsOnly = (list: Array<SeedanceAssetMetadata | null>) => list.map((asset) => (
-    asset ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status }) : null
-  ));
-  return {
-    images: idsOnly(collections.images),
-    videos: idsOnly(collections.videos),
-    audios: idsOnly(collections.audios),
+  const ordered = [...inputs].sort((left, right) => left.sortOrder - right.sortOrder);
+  const ofRole = (mediaType: GenerationInputMediaType, role: string) => ordered.filter((item) => item.mediaType === mediaType && item.role === role);
+  const pictures = ofRole('image', 'reference_image');
+  const frames = [...ofRole('image', 'start_frame').slice(0, 1), ...ofRole('image', 'end_frame').slice(0, 1)];
+  // Each asset goes with the input it was prepared from, never by its place (2026-11-03 re-review): one
+  // input kept without an asset moved every asset after it onto the wrong input, a held-back one's
+  // among them. An asset prepared from a recipe file goes with none: a run records it under the link
+  // its caller sent (the unified start's `preparedSeedanceAssets`), the copy's own for a buyer's run,
+  // and under an import's where an older start sent one (2026-11-04 re-review).
+  const assetOf = (item: GenerationInputMediaItem, assets: Array<SeedanceAssetMetadata | null>) => {
+    const recorded = readSeedanceAssetMetadata(item.metadata?.seedanceAsset)?.assetId ?? null;
+    const sources = new Set([item.metadata?.sourceStoragePath, item.metadata?.sourceUrl]
+      .filter((source): source is string => typeof source === 'string' && Boolean(source.trim()))
+      .map(mediaSourceKey));
+    const asset = assets.find((candidate) => candidate && !isRecipeFileSource(candidate.sourceUrl, creatorIds) && (
+      (recorded !== null && candidate.assetId === recorded)
+      || (Boolean(candidate.sourceUrl) && sources.has(mediaSourceKey(candidate.sourceUrl!)))
+    ));
+    return asset ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status }) : null;
   };
+  const restored = (items: GenerationInputMediaItem[], assets: Array<SeedanceAssetMetadata | null>) => (
+    items.flatMap((item) => (restoredIds.has(item.id) ? [assetOf(item, assets)] : []))
+  );
+  const subset = {
+    images: restored(pictures.length > 0 ? pictures : frames, collections.images),
+    videos: restored(ofRole('video', 'reference_video'), collections.videos),
+    audios: restored(ofRole('audio', 'reference_audio'), collections.audios),
+  };
+  return [...subset.images, ...subset.videos, ...subset.audios].some(Boolean) ? subset : null;
 }
 
 /**

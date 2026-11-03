@@ -44,6 +44,7 @@ const EXPOSED_POST = exposedPostOf(PUBLIC_SOURCE);
 const PUBLISHED_RECIPE = {
   id: 'bundle-1',
   post_id: EXPOSED_POST.id,
+  owner_user_id: PUBLIC_SOURCE.user_id,
   status: 'published',
   allow_remix: true,
 };

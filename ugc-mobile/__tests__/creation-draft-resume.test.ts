@@ -24,6 +24,7 @@ import {
   remixDraftScope,
 } from '../lib/creation-draft-resume';
 import { createDefaultCreationDraft } from '../lib/media-creation-view-model';
+import type { RemixInputSlot } from '../lib/remix-input-slots/remix-input-slots';
 
 /** What builds before identity-scoped drafts wrote: one draft for the whole phone. */
 const PHONE_WIDE_KEY = 'magicbooklet.creation.drafts.v1';
@@ -106,6 +107,84 @@ describe('creation draft resume', () => {
         characterIds: ['character-1'],
       },
     });
+  });
+
+  // A remix's empty slots (owner, 2026-11-03) are the remixer's progress: the ones still to fill.
+  it('keeps a remix session’s empty slots through a save, reads them back defensively, and keeps none in the ordinary draft', async () => {
+    useMemoryStorage();
+    const drafts = defaultDrafts();
+    const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
+    const clipSlot: RemixInputSlot = { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' };
+    const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' })!;
+    await persistCreationDrafts({
+      ...drafts,
+      image: {
+        ...drafts.image,
+        // A malformed entry and one of a role the image creator has no place for are read as nothing.
+        inputSlots: [productSlot, { id: '', role: 'reference_image' } as never, { id: 'slot-9', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' }],
+      },
+      // Every slot filled: the field stays, empty, so the session is not taken for one saved before slots.
+      video: { ...drafts.video, inputSlots: [] },
+      remixRestored: true,
+    }, scope);
+
+    const loaded = await loadPersistedCreationDrafts(scope);
+    expect(loaded?.image.inputSlots).toEqual([productSlot]);
+    expect(loaded?.video.inputSlots).toEqual([]);
+    expect(loaded && 'inputSlots' in loaded.motion).toBe(false);
+
+    await persistCreationDrafts({ ...drafts, video: { ...drafts.video, inputSlots: [clipSlot] } }, scope);
+    expect((await loadPersistedCreationDrafts(scope))?.video.inputSlots).toEqual([clipSlot]);
+
+    // The ordinary Create draft is never a remix, so it holds no slots, whatever an older write left.
+    const ordinary = ordinaryDraftScope('reader');
+    await persistCreationDrafts({ ...drafts, image: { ...drafts.image, inputSlots: [productSlot] } }, ordinary);
+    const ordinaryDrafts = await loadPersistedCreationDrafts(ordinary);
+    expect(ordinaryDrafts && 'inputSlots' in ordinaryDrafts.image).toBe(false);
+  });
+
+  // A remix whose kept-back inputs could not be read (2026-11-03 re-review) keeps saying so, so any later
+  // visit reads its source again, whatever its prompt mentions.
+  it('keeps a remix session’s unread kept-back inputs through a save, and none in the ordinary draft', async () => {
+    useMemoryStorage();
+    const drafts = defaultDrafts();
+    const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' })!;
+    await persistCreationDrafts({ ...drafts, motion: { ...drafts.motion, inputSlotsUnread: true }, remixRestored: true }, scope);
+    const loaded = await loadPersistedCreationDrafts(scope);
+    expect(loaded?.motion).toMatchObject({ inputSlotsUnread: true });
+    expect(loaded && 'inputSlotsUnread' in loaded.image).toBe(false);
+
+    await persistCreationDrafts({ ...drafts, motion: { ...drafts.motion, inputSlotsUnread: 'yes' as never } }, scope);
+    expect((await loadPersistedCreationDrafts(scope))?.motion).not.toHaveProperty('inputSlotsUnread');
+
+    const ordinary = ordinaryDraftScope('reader');
+    await persistCreationDrafts({ ...drafts, motion: { ...drafts.motion, inputSlotsUnread: true } }, ordinary);
+    expect((await loadPersistedCreationDrafts(ordinary))?.motion).not.toHaveProperty('inputSlotsUnread');
+  });
+
+  // The slots' notice, put away (2026-11-03), stays away for the rest of the remix, a resume included.
+  it('keeps a remix session’s put-away slots notice through a save, and none in the ordinary draft', async () => {
+    useMemoryStorage();
+    const drafts = defaultDrafts();
+    const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
+    const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' })!;
+    await persistCreationDrafts({
+      ...drafts,
+      image: { ...drafts.image, inputSlots: [productSlot], inputSlotsNoticeDismissed: true },
+      remixRestored: true,
+    }, scope);
+    const loaded = await loadPersistedCreationDrafts(scope);
+    expect(loaded?.image).toMatchObject({ inputSlots: [productSlot], inputSlotsNoticeDismissed: true });
+    expect(loaded && 'inputSlotsNoticeDismissed' in loaded.video).toBe(false);
+
+    // Only `true` puts it away; anything else an older or broken write left is read as never put away.
+    await persistCreationDrafts({ ...drafts, image: { ...drafts.image, inputSlots: [productSlot], inputSlotsNoticeDismissed: 'yes' as never } }, scope);
+    expect((await loadPersistedCreationDrafts(scope))?.image).not.toHaveProperty('inputSlotsNoticeDismissed');
+
+    const ordinary = ordinaryDraftScope('reader');
+    await persistCreationDrafts({ ...drafts, image: { ...drafts.image, inputSlotsNoticeDismissed: true } }, ordinary);
+    const ordinaryDrafts = await loadPersistedCreationDrafts(ordinary);
+    expect(ordinaryDrafts && 'inputSlotsNoticeDismissed' in ordinaryDrafts.image).toBe(false);
   });
 
   it('isolates normal drafts, distinct remix sources, and different accounts', async () => {

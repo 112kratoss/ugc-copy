@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createNodeRunState,
   createStarterGraph,
+  createWorkflowNode,
   createWorkflowShareSnapshotGraph,
   type ImageGenerateNodeData,
   type ImageInputNodeData,
@@ -74,6 +75,29 @@ describe('createWorkflowShareSnapshotGraph', () => {
     expect((sharedImageGenerateNode?.data as { elements?: Array<Record<string, unknown>> }).elements?.[0]).not.toHaveProperty('url');
     expect((sharedImageGenerateNode?.data as { elements?: Array<Record<string, unknown>> }).elements?.[0]).not.toHaveProperty('storagePath');
     expect((sharedImageGenerateNode?.data as { elements?: Array<Record<string, unknown>> }).elements?.[0]).not.toHaveProperty('sourceGenerationId');
+  });
+
+  // 2026-11-04 re-review: a share kept a prepared asset's provider error, which can name the file the
+  // provider could not read: the sharer's upload, path and all. It stays out with the link the asset was
+  // prepared from; the asset's id and state still go with the share.
+  it.each(['image-input', 'video-input', 'audio-input'] as const)('drops the provider error of a %s’s shared asset', (kind) => {
+    const node = createWorkflowNode(kind, { x: 0, y: 0 });
+    const upload = 'generated_images/user-1/1730000000000-passport-scan.jpg';
+    Object.assign(node.data, {
+      seedanceAsset: {
+        assetId: 'asset-own',
+        assetType: kind === 'image-input' ? 'Image' : kind === 'video-input' ? 'Video' : 'Audio',
+        status: 'failed',
+        sourceUrl: upload,
+        error: `Could not read ${upload}`,
+        lastCheckedAt: '2026-11-04T09:00:00.000Z',
+      },
+    });
+
+    const snapshot = createWorkflowShareSnapshotGraph({ nodes: [node], edges: [] });
+
+    expect(snapshot.nodes[0].data).toMatchObject({ seedanceAsset: { assetId: 'asset-own', status: 'failed', sourceUrl: null, error: null } });
+    expect(JSON.stringify(snapshot)).not.toMatch(/passport-scan|generated_images\/user-1/);
   });
 });
 

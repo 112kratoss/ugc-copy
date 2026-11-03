@@ -946,6 +946,63 @@ describe('post resource bundle server access', () => {
     ]);
   });
 
+  // Owner, 2026-11-03: a file of someone else's recipe that this creator's run used through their
+  // unlock (a remix of a recipe they bought) is never handed on, whatever this recipe's switches say.
+  it('hands a buyer none of the creation’s inputs that were someone else’s recipe files, in the unlock or its remix', async () => {
+    bundleRow = {
+      ...(bundleRow as BundleRow),
+      access_mode: 'paid',
+      price_usd_cents: 900,
+      allow_remix: true,
+    };
+    viewerHasPurchased = true;
+    const recipeFileRow = (id: string, sortOrder: number, metadata: Record<string, unknown>) => ({
+      ...generationInputRows[0],
+      id,
+      label: `Bought ${id}`,
+      storage_path: `generation_inputs/owner-1/gen-1/0${sortOrder}-reference-image.png`,
+      sort_order: sortOrder,
+      metadata,
+    });
+    generationInputRows = [
+      ...generationInputRows,
+      // Marked as it was kept: the run imported the seller's copy through the creator's unlock.
+      recipeFileRow('input-bought', 1, {
+        sourceKind: 'recipe-file',
+        sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-1.png',
+      }),
+      // Unmarked, and known by its sources alone: the seller's file, and the start's import of it.
+      recipeFileRow('input-seller-file', 2, {
+        sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/01-reference-image-row-2.png',
+      }),
+      recipeFileRow('input-imported', 3, {
+        sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/owner-1/recipe-imports/gen-0/02-reference-image-row-3.png?token=x',
+      }),
+    ];
+    const {
+      getPostResourceBundleDetailByPostId,
+      loadGenerationRecipeRemixInputMediaByPostId,
+      loadGenerationRecipeRemixInputsByPostId,
+    } = await import('@/lib/post-resource-bundles-server');
+    const request = { postId: 'post-1', generationId: 'gen-1', viewerUserId: 'viewer-1' };
+
+    const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+    const media = await loadGenerationRecipeRemixInputMediaByPostId(request);
+    const inputs = await loadGenerationRecipeRemixInputsByPostId(request);
+
+    const listed = (detail?.resources?.items ?? []).map((item) => item.storagePath).filter(Boolean);
+    expect(listed).toContain('generation_inputs/owner-1/gen-1/00-reference-image.png');
+    expect(listed.filter((path) => /0[123]-reference-image/.test(String(path)))).toEqual([]);
+    expect(media.map((item) => item.id)).toEqual(['input-1']);
+    expect(inputs.inputMedia.map((item) => item.id)).toEqual(['input-1']);
+    // Held back for a remix's empty slots, with no link to the file.
+    expect(inputs.recipeFiles.map((item) => [item.id, item.url])).toEqual([
+      ['input-bought', null],
+      ['input-seller-file', null],
+      ['input-imported', null],
+    ]);
+  });
+
   it('does not expose remix inputs to someone who has not unlocked a switch-off recipe', async () => {
     bundleRow = {
       ...(bundleRow as BundleRow),
@@ -3058,6 +3115,40 @@ describe('generation references packaged for a publish', () => {
     expect(items[0].id).toBe('reference-ref-original');
   });
 
+  // Owner, 2026-11-03: what the publisher bought is theirs to use, never to sell or give on. The
+  // web's recipe sends the rows a remix brought from its original, and a recipe file reads as one.
+  it('copies none of the rows that were someone else’s recipe files, given them or not', async () => {
+    const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
+    const bought = (id: string, metadata: Record<string, unknown>, sortOrder: number) => ({
+      ...reference(id, 'user-1', `generation_inputs/user-1/gen-1/0${sortOrder}.png`, sortOrder),
+      metadata,
+    }) as unknown as ReferenceRow;
+    const rows = [
+      reference('ref-own', 'user-1', 'generation_inputs/user-1/gen-1/00.png'),
+      bought('ref-bought', { sourceKind: 'recipe-file', sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png' }, 1),
+      bought('ref-seller-file', { sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/01-reference-image-row.png' }, 2),
+      bought('ref-imported', { sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-0/02.png?token=x' }, 3),
+      // The publisher's own recipe file is their own upload, and copies as one.
+      bought('ref-own-recipe-file', { sourceStoragePath: 'post_resource_files/user-1/resources/guide.png' }, 4),
+    ];
+
+    const all = referenceClient(rows, []);
+    const allItems = await buildGenerationReferenceResourceItems({ supabase: all.client, ownerUserId: 'user-1', generationId: 'gen-1' });
+    const given = referenceClient(rows, []);
+    const givenItems = await buildGenerationReferenceResourceItems({
+      supabase: given.client,
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+      onlyRowIds: new Set(['ref-bought', 'ref-seller-file', 'ref-imported']),
+    });
+
+    expect(allItems.map((item) => item.id)).toEqual(['reference-ref-own', 'reference-ref-own-recipe-file']);
+    expect(all.downloads).toEqual(['generation_inputs/user-1/gen-1/00.png', 'generation_inputs/user-1/gen-1/04.png']);
+    expect(givenItems).toEqual([]);
+    expect(given.downloads).toEqual([]);
+    expect(given.uploads).toEqual([]);
+  });
+
   it('packages the account’s own references without asking who is linked to it', async () => {
     const { buildGenerationReferenceResourceItems } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(
@@ -3144,6 +3235,32 @@ describe('loadGenerationInputOrigins', () => {
       'row-own': 'own',
       'row-guest': 'own',
       'row-result': 'others',
+    });
+    expect(origins.hasOwn).toBe(true);
+  });
+
+  // A recipe that leaves the creator's own uploads out copies the rows whose origin is another's:
+  // a file of someone else's recipe the run used is neither, and no recipe copies it.
+  it('reads a file of someone else’s recipe as a recipe file, which is neither the creator’s nor the original’s', async () => {
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const origins = await loadGenerationInputOrigins({
+      supabase: originsClient({
+        rows: [
+          { id: 'row-bought', storage_path: 'generation_inputs/user-1/gen-1/00.png', source_generation_id: null, metadata: { sourceKind: 'recipe-file', sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png' } },
+          { id: 'row-seller-file', storage_path: 'generation_inputs/user-1/gen-1/01.png', source_generation_id: null, metadata: { sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/01-reference-image-row.png' } },
+          { id: 'row-original', storage_path: 'generation_inputs/user-1/gen-1/02.png', source_generation_id: null, metadata: { sourceStoragePath: 'generation_inputs/creator-9/gen-0/00.png' } },
+          { id: 'row-own-recipe-file', storage_path: 'generation_inputs/user-1/gen-1/03.png', source_generation_id: null, metadata: { sourceStoragePath: 'post_resource_files/user-1/resources/guide.png' } },
+        ],
+      }),
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+    });
+
+    expect(Object.fromEntries(origins.byRowId)).toEqual({
+      'row-bought': 'recipe',
+      'row-seller-file': 'recipe',
+      'row-original': 'others',
+      'row-own-recipe-file': 'own',
     });
     expect(origins.hasOwn).toBe(true);
   });
