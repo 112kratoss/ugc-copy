@@ -4,7 +4,6 @@ import { enforceBackendRateLimit, MEDIA_GENERATION_RATE_LIMIT } from '@/lib/back
 import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
 import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
 import { resolveGenerationMediaSource, startMotionGeneration } from '@/lib/generation-services';
-import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,
@@ -160,16 +159,9 @@ export async function startMotionGenerationForRoute({
     // Measured once the key is claimed: a start already accepted replays
     // without reading its clip again.
     start: async (clientRequestKeyHash) => {
-      // One for the start: the clip and the character share each unlock's read.
+      // One for the start: the clip's measuring and the start's resolves share each unlock's read.
       const recipeCopyReads = createRecipeCopyReads();
-      // The picture is resolved beside the clip, which is resolved to be measured (the clip asked
-      // first): the adapter sends both as given, and a remix's restored picture is the link the
-      // remix was read with, which lasts an hour. A picture the caller may not use is refused as
-      // early as such a clip.
-      const [measured, characterImageSource] = await Promise.all([
-        measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId, recipeCopyReads),
-        resolveGenerationMediaSource(supabase, characterImageUrl, userId, { recipeCopyReads }),
-      ]);
+      const measured = await measureReferenceVideoSeconds(supabase, referenceVideoUrl, userId, recipeCopyReads);
       const measuredSeconds = measured.seconds;
       // Kie's motion control takes a clip of 3 to 30 seconds; a shorter one was priced
       // at 3, held, and refused by the provider.
@@ -201,10 +193,12 @@ export async function startMotionGenerationForRoute({
         userId,
         clientRequestKeyHash,
         model: selectedModel as MotionModelId,
-        // The clip as resolved to measure it: the file measured is the one the provider fetches, and a
-        // link the client kept past its hour (a remix's original) is not sent on.
-        referenceVideoUrl: measured.source,
-        characterImageUrl: characterImageSource,
+        // As sent, which the start resolves, the clip by the link it was measured from: the file
+        // measured is the one the provider fetches.
+        referenceVideoUrl,
+        characterImageUrl,
+        resolvedMediaSources: new Map([[referenceVideoUrl, measured.source]]),
+        recipeCopyReads,
         duration: Number(normalizedSettings.duration),
         referenceVideoSeconds: measuredSeconds,
         characterOrientation: characterOrientation === 'image' ? 'image' : 'video',
