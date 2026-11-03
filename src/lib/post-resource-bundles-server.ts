@@ -90,7 +90,7 @@ import {
   type GenerationInputMediaRow,
 } from '@/lib/generation-input-media';
 import { slugifySourceTool } from '@/lib/source-tools';
-import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+import { getUserOwnedStoredMediaLocation, parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
 import { isOwnOrLinkedAccountId, readLinkedAccountIds, resolveLinkedAccountIds } from '@/lib/account-identity';
 import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner, type GenerationInputOrigin } from '@/lib/generation-input-origin';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
@@ -1347,6 +1347,138 @@ export async function loadGenerationRecipeRemixInputMediaByPostId(params: {
   });
 
   return eligible?.inputMedia ?? [];
+}
+
+/** As long as every other link a remix source hands out: the remix form holds it for its session. */
+const GENERATION_REFERENCE_COPY_URL_TTL_SECONDS = 3600;
+
+/** A recipe's copy of one of its creation's saved inputs (`buildGenerationReferenceResourceItems`). */
+export interface GenerationReferenceCopy {
+  /** Where the copy is kept: `post_resource_files/<publisher>/generation-references/<generation>/<file>`. */
+  storagePath: string;
+  /** A short-lived signed link to the copy; null when it could not be signed, or was not asked for. */
+  url: string | null;
+}
+
+/**
+ * Whether `storagePath` is the copy "Include creation references" makes of one
+ * input row: a file of the publisher's folder for the creation, named after the
+ * row (`<sort order>-<role>-<row id>.<extension>`, buildReferenceResourceStoragePath),
+ * exactly as stored, with nothing decoded on the way.
+ */
+function isGenerationReferenceCopyPath(
+  storagePath: string | null | undefined,
+  expected: { ownerUserId: string; folder: string; rowSegment: string },
+): storagePath is string {
+  if (!storagePath?.startsWith(expected.folder)) return false;
+  if (parseCanonicalStorageObjectPath(storagePath, { ownerUserId: expected.ownerUserId }) !== storagePath) return false;
+  const fileName = storagePath.slice(expected.folder.length);
+  const extensionStart = fileName.lastIndexOf('.');
+  return !fileName.includes('/')
+    && extensionStart > 0
+    && fileName.slice(0, extensionStart).endsWith(`-${expected.rowSegment}`);
+}
+
+/**
+ * The copies of a creation's saved inputs among a recipe's items, by the input
+ * row each was made from, as object paths in `post_resource_files`. "Include
+ * creation references" stores a row's copy as `reference-<row id>`
+ * (`generationReferenceItemId`) in the publisher's folder for the creation; an
+ * item of that id kept anywhere else, another creation's folder included, is
+ * no copy of the row and is left out.
+ */
+export function findGenerationReferenceCopies(params: {
+  items: readonly Pick<PostResourceItem, 'id' | 'storagePath'>[];
+  ownerUserId: string;
+  generationId: string;
+  inputRowIds: readonly string[];
+}): Map<string, string> {
+  const folder = `${params.ownerUserId}/generation-references/${params.generationId}/`;
+  const copies = new Map<string, string>();
+  for (const rowId of params.inputRowIds) {
+    // `generationReferenceItemId` without its fallback to the row's place: an
+    // id that sanitizes to nothing names no row.
+    const rowSegment = sanitizePathSegment(rowId, '');
+    if (!rowSegment || copies.has(rowId)) continue;
+    const copy = params.items.find((item) => (
+      item.id === `reference-${rowSegment}`
+      && isGenerationReferenceCopyPath(item.storagePath, { ownerUserId: params.ownerUserId, folder, rowSegment })
+    ));
+    if (copy?.storagePath) copies.set(rowId, copy.storagePath);
+  }
+  return copies;
+}
+
+/**
+ * The copies an unlocked recipe holds of its creation's saved inputs, for a
+ * remix whose creator keeps the inputs themselves out of it (the stored
+ * `allow_remix` off; owner, 2026-11-03), by the input row each was made from,
+ * each with a short-lived signed link. Read through the unlock's own read
+ * (`getPostResourceBundleDetailByPostId`) and from the versions the post's file
+ * route signs a file of for this viewer (`post-resource-file-url-service.ts`):
+ * the recipe as it stands and the version they unlocked, so a later edit takes
+ * back nothing they paid for. Empty for a viewer without the recipe, a recipe
+ * on another creation, or no copies.
+ */
+export async function loadGenerationRecipeReferenceCopiesByPostId(params: {
+  postId: string;
+  generationId: string;
+  viewerUserId: string;
+  /** The creation's saved input rows to find copies of. */
+  inputRowIds: readonly string[];
+  adminSupabase?: SupabaseClient;
+  getDetailByPostId?: typeof getPostResourceBundleDetailByPostId;
+  /** False for a caller that needs only where each copy is kept (a run start importing one): nothing is signed. */
+  signUrls?: boolean;
+}): Promise<Map<string, GenerationReferenceCopy>> {
+  if (params.inputRowIds.length === 0) {
+    return new Map();
+  }
+
+  const adminSupabase = params.adminSupabase ?? createServiceClient();
+  const detail = await (params.getDetailByPostId ?? getPostResourceBundleDetailByPostId)(params.postId, {
+    viewerUserId: params.viewerUserId,
+    adminSupabase,
+    countLockedReferences: false,
+  });
+  if (
+    !detail
+    || !detail.viewerCanAccess
+    || !detail.resources
+    || detail.post?.generationId !== params.generationId
+  ) {
+    return new Map();
+  }
+
+  const filePaths = findGenerationReferenceCopies({
+    items: [...(detail.resources.items ?? []), ...(detail.purchasedRevision?.resources.items ?? [])],
+    // Where the file route signs the recipe's files from: its seller's folder.
+    ownerUserId: detail.seller.id,
+    generationId: params.generationId,
+    inputRowIds: params.inputRowIds,
+  });
+
+  return new Map(await Promise.all([...filePaths].map(async ([rowId, filePath]) => {
+    let url: string | null = null;
+    if (params.signUrls === false) {
+      const unsigned: GenerationReferenceCopy = { storagePath: `${POST_RESOURCE_FILES_BUCKET}/${filePath}`, url };
+      return [rowId, unsigned] as const;
+    }
+    try {
+      const { data, error } = await adminSupabase.storage
+        .from(POST_RESOURCE_FILES_BUCKET)
+        .createSignedUrl(filePath, GENERATION_REFERENCE_COPY_URL_TTL_SECONDS);
+      if (error || !data?.signedUrl) {
+        logBackendError('post_resource_generation_ref_copy_sign_failed', { error: error });
+      } else {
+        url = data.signedUrl;
+      }
+    } catch (error) {
+      logBackendError('post_resource_generation_ref_copy_sign_failed', { error: error });
+    }
+    const copy: GenerationReferenceCopy = { storagePath: `${POST_RESOURCE_FILES_BUCKET}/${filePath}`, url };
+    return [rowId, copy] as const;
+  })));
 }
 
 async function buildPriceQuote(

@@ -16,6 +16,14 @@ import type {
 import { nameSaysNothing } from './media-file-names';
 import { heldLengthNote, lengthHeldUnderMinimum, lengthReading } from './model-catalog/protocol';
 import { readSeedanceAssetCollections, type SeedanceAssetMetadata } from './model-catalog/seedance-assets';
+import {
+  parseRemixInputSlotsForTool,
+  REMIX_INPUT_SLOT_TOOL_ROLES,
+  remixInputSlotHandles,
+  unfilledRemixSlotsMessage,
+  type RemixInputSlot,
+  type RemixInputSlotRole,
+} from './remix-input-slots/remix-input-slots';
 
 export const IMAGE_MODELS = {
   'nano-banana-2-lite': {
@@ -331,6 +339,17 @@ export interface CatalogBackedDraftFields {
   catalogInputSlots?: CatalogDraftInputSlots;
 }
 
+export interface RemixSlotDraftFields {
+  /**
+   * A remix's empty slots: what it holds in place of the inputs its creator kept to themselves
+   * (owner, 2026-11-03; `lib/remix-input-slots`). They are not media: never sent, quoted or
+   * counted as an input, and each is drawn as an empty box until the remixer fills it with their
+   * own (`fillRemixInputSlot`). Saved with a remix session, as the box's progress is the
+   * remixer's. Absent from every other draft, and from remix sessions saved before slots existed.
+   */
+  inputSlots?: RemixInputSlot[];
+}
+
 export interface UploadedMediaInput {
   signedUrl: string;
   storagePath: string;
@@ -368,7 +387,7 @@ export interface MediaDraft {
   seedanceAsset?: SeedanceAssetMetadata | null;
 }
 
-export interface ImageCreationDraft extends CatalogBackedDraftFields {
+export interface ImageCreationDraft extends CatalogBackedDraftFields, RemixSlotDraftFields {
   tool: 'image';
   model: ImageModelId;
   prompt: string;
@@ -400,7 +419,7 @@ export interface SubjectDraft {
   images: MediaDraft[];
 }
 
-export interface VideoCreationDraft extends CatalogBackedDraftFields {
+export interface VideoCreationDraft extends CatalogBackedDraftFields, RemixSlotDraftFields {
   tool: 'video';
   model: VideoModelId;
   prompt: string;
@@ -425,7 +444,7 @@ export interface VideoCreationDraft extends CatalogBackedDraftFields {
   sourceGenerationId?: string | null;
 }
 
-export interface MotionCreationDraft extends CatalogBackedDraftFields {
+export interface MotionCreationDraft extends CatalogBackedDraftFields, RemixSlotDraftFields {
   tool: 'motion';
   model: MotionModelId;
   prompt: string;
@@ -1146,6 +1165,160 @@ export function replaceMediaDraftMedia(media: MediaDraft, upload: UploadedMediaI
   };
 }
 
+/** A remix source's empty slots as `tool`'s creator holds them: read defensively, and only those it has a place for. */
+export function remixInputSlotsFor(tool: CreatorToolId, value: unknown): RemixInputSlot[] {
+  return parseRemixInputSlotsForTool(tool, value);
+}
+
+/** One empty list for every draft without slots, so a composer handed it sees no change from render to render. */
+const NO_REMIX_INPUT_SLOTS: readonly RemixInputSlot[] = Object.freeze([]);
+
+/** Every slot a draft holds, waited on or not (`unfilledRemixInputSlots`); none on a draft that never had any. */
+export function remixDraftInputSlots(draft: CreationDraft): readonly RemixInputSlot[] {
+  return Array.isArray(draft.inputSlots) ? draft.inputSlots : NO_REMIX_INPUT_SLOTS;
+}
+
+/**
+ * The handles a prompt's mention can find in a draft, wherever they wait: its references, clips,
+ * tracks and subjects. A frame's or a motion input's handle is none a prompt names; their slots are
+ * filled by their place (`remixSlotPlaceTaken`).
+ */
+function mentionableDraftHandles(draft: CreationDraft): Set<string> {
+  if (draft.tool === 'motion') return new Set();
+  const media = draft.tool === 'image' ? draft.references : [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios];
+  return new Set([
+    ...media.flatMap((item) => (item.handle ? [item.handle] : [])),
+    ...(draft.tool === 'video' ? subjectHandles(draft) : []),
+  ]);
+}
+
+/** Whether the one place a slot stands for holds something: a frame, or a motion run's character or clip. */
+function remixSlotPlaceTaken(draft: CreationDraft, role: RemixInputSlotRole): boolean {
+  if (draft.tool === 'video' && (role === 'start_frame' || role === 'end_frame')) {
+    return Boolean(role === 'start_frame' ? draft.startFrame : draft.endFrame);
+  }
+  if (draft.tool === 'motion' && (role === 'character_image' || role === 'motion_reference_video')) {
+    return Boolean(role === 'character_image' ? draft.characterImage : draft.referenceVideo);
+  }
+  return false;
+}
+
+/**
+ * The slots a draft still waits on, each drawn as an empty box where its input goes, in the run's
+ * order. A slot leaves when it is filled through its box (`fillRemixInputSlot`), and is not waited
+ * on while something the draft holds answers to its handle (a picture added and named so) or its
+ * one place holds something put there another way (the source's own result, as the motion clip).
+ */
+export function unfilledRemixInputSlots(draft: CreationDraft): readonly RemixInputSlot[] {
+  const slots = remixDraftInputSlots(draft);
+  if (slots.length === 0) return slots;
+  const held = mentionableDraftHandles(draft);
+  return slots.filter((slot) => !(slot.handle && held.has(slot.handle)) && !remixSlotPlaceTaken(draft, slot.role));
+}
+
+/**
+ * What a prompt's unknown mentions hold a run with. A mention of an empty slot's handle asks for the
+ * remixer's own input in its box (`unfilledRemixSlotsMessage`); any other keeps the unknown-mention
+ * line, which is the server's own refusal.
+ */
+export function promptMentionErrors(unknown: readonly string[], draft: CreationDraft): string[] {
+  const waiting = new Set(remixInputSlotHandles(unfilledRemixInputSlots(draft)));
+  const others = unknown.filter((handle) => !waiting.has(handle));
+  const slotMessage = unfilledRemixSlotsMessage(unknown.filter((handle) => waiting.has(handle)));
+  return [
+    ...(others.length > 0 ? [`Unknown element mention${others.length === 1 ? '' : 's'}: ${others.join(', ')}`] : []),
+    ...(slotMessage ? [slotMessage] : []),
+  ];
+}
+
+/** What a slot's fill is called: the words of the handle the prompt mentions it by, or else the slot's own name. */
+function remixSlotFillName(slot: RemixInputSlot): string {
+  return slot.handle?.slice(1).replace(/_+/g, ' ').trim() || slot.name;
+}
+
+/** The slot's handle while nothing else answers to it, or else one made from `name` past every handle taken. */
+function remixSlotFillHandle(slot: RemixInputSlot, name: string, taken: readonly string[]): string {
+  return slot.handle && !taken.includes(slot.handle) ? slot.handle : uniqueHandle(name, taken);
+}
+
+/**
+ * The draft with the remixer's own media in a slot's place, and without the slot, so its box
+ * leaves. The media is named for the slot: it takes the handle the prompt mentions the slot by,
+ * which the mention then finds, or else the slot's name ("Start frame", "Reference image 2"). A
+ * subject is made of every picture that arrived; any other slot takes the first. `namesClips` says
+ * the draft's model takes clips under a handle (Kling 3.0's video elements), where a clip whose
+ * slot has none is named as one the creator adds is. The same draft when the slot has gone
+ * already, nothing arrived, or the creator has no place for the slot.
+ */
+export function fillRemixInputSlot<T extends CreationDraft>(
+  draft: T,
+  slotId: string,
+  arrived: readonly MediaDraft[],
+  options: { namesClips?: boolean } = {},
+): T {
+  return fillSlotOf(draft, slotId, arrived, options.namesClips ?? false) as T;
+}
+
+function fillSlotOf(draft: CreationDraft, slotId: string, arrived: readonly MediaDraft[], namesClips: boolean): CreationDraft {
+  const slots = remixDraftInputSlots(draft);
+  const slot = slots.find((candidate) => candidate.id === slotId);
+  const [first] = arrived;
+  if (!slot || !first || !REMIX_INPUT_SLOT_TOOL_ROLES[draft.tool].includes(slot.role)) return draft;
+  const inputSlots = slots.filter((candidate) => candidate.id !== slotId);
+  const name = remixSlotFillName(slot);
+  // Named as a rename names it: a picture takes the handle made from the name, a clip or a track one it held.
+  const renamed = renameMediaDraft(first, name);
+  const withSlotHandle: MediaDraft = slot.handle ? { ...renamed, handle: slot.handle } : renamed;
+
+  if (draft.tool === 'image') {
+    const taken = draft.references.flatMap((media) => (media.handle ? [media.handle] : []));
+    return { ...draft, references: [...draft.references, { ...renamed, handle: remixSlotFillHandle(slot, name, taken) }], inputSlots };
+  }
+  if (draft.tool === 'motion') {
+    return slot.role === 'character_image'
+      ? { ...draft, characterImage: withSlotHandle, inputSlots }
+      // The run's length follows its clip, as a clip picked in the slot's box sets it.
+      : { ...draft, referenceVideo: withSlotHandle, duration: Math.ceil(first.durationSeconds ?? draft.duration), inputSlots };
+  }
+  const taken = videoDraftHandles(draft);
+  switch (slot.role) {
+    case 'start_frame':
+      // Wan 2.7 takes a start frame beside its references; anywhere else a frame makes a frames run.
+      return { ...draft, startFrame: withSlotHandle, referenceMode: draft.model === 'wan-2.7' && draft.referenceMode === 'elements' ? 'elements' : 'frames', inputSlots };
+    case 'end_frame':
+      return { ...draft, endFrame: withSlotHandle, referenceMode: 'frames', inputSlots };
+    case 'reference_image':
+      return { ...draft, references: [...draft.references, { ...renamed, handle: remixSlotFillHandle(slot, name, taken) }], referenceMode: 'elements', inputSlots };
+    case 'reference_video': {
+      const clip = slot.handle && !taken.includes(slot.handle)
+        ? withSlotHandle
+        : namesClips ? withCreatorClipHandle(draft, renamed) : renamed;
+      return { ...draft, referenceVideos: [...draft.referenceVideos, clip], inputSlots };
+    }
+    case 'reference_audio':
+      return { ...draft, referenceAudios: [...draft.referenceAudios, withSlotHandle], inputSlots };
+    default: {
+      const subject = createSubjectDraft([...arrived], name, taken);
+      const handle = remixSlotFillHandle(slot, name, taken);
+      return {
+        ...draft,
+        subjects: [...videoSubjects(draft), { ...subject, handle, images: subject.images.map((image) => ({ ...image, handle })) }],
+        inputSlots,
+      };
+    }
+  }
+}
+
+/** The draft with a remix source's empty slots for its creator, and none it held before. */
+function withRemixSourceSlots<T extends CreationDraft>(draft: T, bundle: RemixSourceBundle): T {
+  const slots = remixInputSlotsFor(draft.tool, bundle.inputSlots);
+  if (slots.length > 0) return { ...draft, inputSlots: slots };
+  if (draft.inputSlots === undefined) return draft;
+  const next = { ...draft };
+  delete next.inputSlots;
+  return next;
+}
+
 /**
  * A blank draft on the bundled stand-in (Kling 3.0 for video and motion, whatever the catalog's
  * default): the base a remix restores its source into, and the skeleton of the opening. A creator
@@ -1249,13 +1422,14 @@ function hydrateImageDraftFromRemixSource(
   const config = bundledImageModel(model);
   const restoredReferences = hydrateRemixImageElements(bundle.inputs.image?.elements);
 
-  let nextDraft: ImageCreationDraft = {
+  // Beside the references it restores, an empty slot for each one its creator kept to themselves.
+  let nextDraft: ImageCreationDraft = withRemixSourceSlots({
     ...baseDraft,
     model,
     prompt: bundle.generation.prompt,
     references: restoredReferences.drafts,
     sourceGenerationId: bundle.generation.id,
-  };
+  }, bundle);
 
   const aspectRatio = stringSetting(settings, 'aspectRatio');
   if (aspectRatio && asStringList(config.aspectRatios).includes(aspectRatio)) {
@@ -1328,7 +1502,7 @@ function hydrateVideoDraftFromRemixSource(
       restoredElements.drafts.length > 0 ? 'elements' : baseDraft.referenceMode
     );
 
-  let nextDraft: VideoCreationDraft = {
+  let nextDraft: VideoCreationDraft = withRemixSourceSlots({
     ...baseDraft,
     model,
     prompt: bundle.generation.prompt,
@@ -1342,7 +1516,7 @@ function hydrateVideoDraftFromRemixSource(
     endFrame: restoredEndFrame.draft,
     referenceMode,
     sourceGenerationId: bundle.generation.id,
-  };
+  }, bundle);
 
   if (typeof isMultiShot === 'boolean') {
     nextDraft = { ...nextDraft, isMultiShot };
@@ -1418,14 +1592,14 @@ function hydrateMotionDraftFromRemixSource(
   const restoredCharacterImage = hydrateOptionalRemixAsset(motionInputs?.characterImage, 'Character Image');
   const restoredReferenceVideo = hydrateOptionalRemixAsset(motionInputs?.referenceVideo, 'Reference Motion');
 
-  let nextDraft: MotionCreationDraft = {
+  let nextDraft: MotionCreationDraft = withRemixSourceSlots({
     ...baseDraft,
     model,
     prompt: bundle.generation.prompt,
     characterImage: restoredCharacterImage.draft,
     referenceVideo: restoredReferenceVideo.draft,
     sourceGenerationId: bundle.generation.id,
-  };
+  }, bundle);
 
   const mode = stringSetting(settings, 'mode');
   if (isMotionResolution(mode)) {
@@ -1608,10 +1782,7 @@ function validateImageDraft(draft: ImageCreationDraft): CreationValidationResult
   }
 
   const handles = namedReferences(draft.references).map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
-  const unknown = unknownPromptHandles(draft.prompt, handles);
-  if (unknown.length > 0) {
-    errors.push(`Unknown element mention${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`);
-  }
+  errors.push(...promptMentionErrors(unknownPromptHandles(draft.prompt, handles), draft));
 
   return buildLocalValidationResult(errors);
 }
@@ -1655,10 +1826,7 @@ function validateVideoDraft(draft: VideoCreationDraft): CreationValidationResult
   const handles = namedReferences(activeReferences).map((reference) => reference.handle).filter((handle): handle is string => Boolean(handle));
   const mentioned = extractPromptHandles(draft.prompt);
   const knownMentions = mentioned.filter((handle) => handles.includes(handle));
-  const unknown = draft.isMultiShot ? [] : unknownPromptHandles(draft.prompt, handles);
-  if (unknown.length > 0) {
-    errors.push(`Unknown element mention${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}`);
-  }
+  errors.push(...promptMentionErrors(draft.isMultiShot ? [] : unknownPromptHandles(draft.prompt, handles), draft));
   if (knownMentions.length > 0 && !usesReusableReferences) {
     errors.push('Attach the reference images your @handles name before generating.');
   }

@@ -123,6 +123,7 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   createSubjectDraft,
+  fillRemixInputSlot,
   motionClipLengthReading,
   nameUnnamedReferences,
   placeName,
@@ -139,11 +140,13 @@ import {
   type ReferenceMode,
   type SubjectDraft,
   type VideoCreationDraft,
+  unfilledRemixInputSlots,
   videoDraftHandles,
   videoDraftReferenceMode,
   videoSubjects,
   withCreatorClipHandle,
 } from '@/lib/media-creation-view-model';
+import { remixInputSlotAction, remixInputSlotsNotice, remixInputSlotTitle, type RemixInputSlot } from '@/lib/remix-input-slots/remix-input-slots';
 import { assetDurationSeconds, pickAudioDocument, pickMedia, pickMediaList, uploadPickedMedia, type UploadedMedia } from '@/lib/media';
 import { readMediaFileLength } from '@/lib/media-file-length';
 import { listFilesInSentence, nameSaysNothing, readableFileName } from '@/lib/media-file-names';
@@ -782,8 +785,20 @@ function groupDigits(value: number) {
 
 /** Which add control an upload came from: that tile shows the upload's progress. */
 // The video tool's pictures upload under a target of their own, so neither tool's rail shows the
-// other's upload as its own.
-type UploadTarget = 'image-references' | 'video-image-references' | 'subject' | 'start-frame' | 'end-frame' | 'character' | 'reference-video' | 'reference-audio' | 'motion-clip';
+// other's upload as its own. A remix's empty slot on a rail shows its own fill (`input-slot:<id>`).
+type UploadTarget = 'image-references' | 'video-image-references' | 'subject' | 'start-frame' | 'end-frame' | 'character' | 'reference-video' | 'reference-audio' | 'motion-clip' | `input-slot:${string}`;
+
+/**
+ * Where a fill of a remix's empty slot shows its upload: the frame's or the motion input's own box,
+ * which the slot stands in, and else the slot's own box on its rail.
+ */
+function inputSlotUploadTarget(slot: RemixInputSlot): UploadTarget {
+  if (slot.role === 'start_frame') return 'start-frame';
+  if (slot.role === 'end_frame') return 'end-frame';
+  if (slot.role === 'character_image') return 'character';
+  if (slot.role === 'motion_reference_video') return 'motion-clip';
+  return `input-slot:${slot.id}`;
+}
 
 /** An upload in flight: where it came from, how far its bytes have got (null while their size is unknown), and whether it can be stopped. */
 type UploadProgress = { target: UploadTarget; percent: number | null; cancellable: boolean };
@@ -2405,6 +2420,135 @@ function IdentityCreationScreen({
     }
   };
 
+  /** Why a remix's empty slot cannot take the remixer's own on this model, said as its kind's add control says it; null when it can. */
+  const inputSlotRefusal = (tool: CreatorToolId, slot: RemixInputSlot): string | null => {
+    if (tool === 'image') {
+      const limit = imageReferenceLimit('image');
+      return imageDraft.references.length >= limit ? addLimitMessage('image', limit) : null;
+    }
+    if (tool !== 'video') return null;
+    const model = catalog ? getCatalogModel(catalog, videoDraft.model) : null;
+    if (slot.role === 'reference_image') {
+      const limit = imageReferenceLimit('video');
+      return videoDraft.references.length >= limit ? addLimitMessage('image', limit) : null;
+    }
+    if (slot.role === 'reference_video') {
+      const limit = referenceVideoLimit();
+      return videoDraft.referenceVideos.length >= limit ? addLimitMessage('video', limit) : null;
+    }
+    if (slot.role === 'reference_audio') {
+      const limit = audioReferenceLimitOf(model, videoDraft, referenceRailShape(videoDraft, model));
+      return videoDraft.referenceAudios.length >= limit ? addLimitMessage('audio', limit) : null;
+    }
+    if (slot.role === 'subject') {
+      const subjectSlot = catalogSubjectSlot(model);
+      if (!subjectSlot) return 'This model does not take named subjects.';
+      const maxNamed = subjectsPerRun(subjectSlot);
+      return videoSubjects(videoDraft).length >= maxNamed ? `This model takes up to ${maxNamed} named subject${maxNamed === 1 ? '' : 's'} per run.` : null;
+    }
+    return null;
+  };
+
+  /**
+   * What a slot's box picks: one picture, clip or track, as that kind's own add control picks it, or a
+   * subject's pictures. `refusal` says why a pick cannot go; `note`, what was left of one.
+   */
+  const pickForInputSlot = async (slot: RemixInputSlot): Promise<{ picks: PickedUpload[]; refusal?: string; note?: string }> => {
+    if (slot.role === 'subject') {
+      const picked = await pickMediaList('image', { allowsMultipleSelection: true });
+      if (picked.length === 0) return { picks: [] };
+      if (picked.length < SUBJECT_IMAGES_PER_NAME.min) {
+        return { picks: [], refusal: `Pick ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of the same person or thing.` };
+      }
+      return {
+        picks: picked.slice(0, SUBJECT_IMAGES_PER_NAME.max).map((asset) => ({
+          uri: asset.uri,
+          fileName: asset.fileName,
+          mimeType: asset.mimeType,
+          kind: 'image' as const,
+          sizeBytes: asset.fileSize ?? null,
+        })),
+        ...(picked.length > SUBJECT_IMAGES_PER_NAME.max
+          ? { note: `Kept the first ${SUBJECT_IMAGES_PER_NAME.max} pictures: a subject is made of ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max}.` }
+          : {}),
+      };
+    }
+    if (slot.kind === 'audio') {
+      const picked = await pickAudioDocument();
+      return { picks: picked ? [{ uri: picked.uri, fileName: picked.name, mimeType: picked.mimeType, kind: 'audio', sizeBytes: picked.size ?? null }] : [] };
+    }
+    const picked = await pickMedia(slot.kind);
+    if (!picked) return { picks: [] };
+    // A motion run's clip is refused at the pick, before its upload, as the clip's own box refuses it.
+    const refusal = slot.role === 'motion_reference_video' ? motionClipRefusal(picked, motionClipSlot().maxSeconds) : null;
+    if (refusal) return { picks: [], refusal };
+    return {
+      picks: [{
+        uri: picked.uri,
+        fileName: picked.fileName,
+        mimeType: picked.mimeType,
+        kind: slot.kind,
+        durationSeconds: slot.kind === 'video' ? assetDurationSeconds(picked.duration) : null,
+        sizeBytes: picked.fileSize ?? null,
+      }],
+    };
+  };
+
+  /**
+   * Fills a remix's empty slot with the remixer's own (owner, 2026-11-03): its kind's picker, the
+   * upload shown on the slot's own box, and the media put where the slot stands, named for it
+   * (`fillRemixInputSlot`), so the prompt's mention of the slot finds it and the box leaves. It lands
+   * on the draft as it is then, normalized against the newest catalog, as an upload from a rail does.
+   */
+  const fillInputSlot = async (tool: CreatorToolId, slot: RemixInputSlot) => {
+    setMessage(null);
+    setPromptMessage(null);
+    const refusal = inputSlotRefusal(tool, slot);
+    if (refusal) {
+      setMessage(refusal);
+      return;
+    }
+    setIsUploading(true);
+    try {
+      const { picks, refusal: pickRefusal, note } = await pickForInputSlot(slot);
+      if (pickRefusal) {
+        setMessage(pickRefusal);
+        return;
+      }
+      if (picks.length === 0) return;
+      // A track's length is read while it uploads, as a track added from the rail has it read.
+      const trackLength = slot.kind === 'audio' ? readMediaFileLength(picks[0].uri) : null;
+      const result = await uploadPicks(inputSlotUploadTarget(slot), picks);
+      const readLength = trackLength ? await trackLength : null;
+      const arrived = result.successes.map(({ result: media }) => createMediaDraftFromUpload(
+        readLength !== null ? { ...media, durationSeconds: readLength } : media,
+      ));
+      const failure = uploadFailureMessage(result.failures, arrived.length);
+      if (slot.role === 'subject' && arrived.length < SUBJECT_IMAGES_PER_NAME.min) {
+        // The pictures that arrived still make the subject when there are enough of them.
+        setMessage(`${failure ?? ''} A subject is made of ${SUBJECT_IMAGES_PER_NAME.min} to ${SUBJECT_IMAGES_PER_NAME.max} pictures of the same person or thing.`.trim());
+        return;
+      }
+      setMessage(failure ?? note ?? null);
+      if (arrived.length === 0) return;
+      const source = latestCatalog.current;
+      if (tool === 'image') {
+        setImageDraft((draft) => normalizeCatalogDraft(fillRemixInputSlot(draft, slot.id, arrived), source));
+      } else if (tool === 'video') {
+        setVideoDraft((draft) => normalizeCatalogDraft(fillRemixInputSlot(draft, slot.id, arrived, {
+          namesClips: clipsTakeHandles(source ? getCatalogModel(source, draft.model) : null, draft),
+        }), source));
+      } else {
+        setMotionDraft((draft) => fillRemixInputSlot(draft, slot.id, arrived));
+      }
+      if (slot.role === 'reference_image' || slot.role === 'reference_video' || slot.role === 'reference_audio') revealInRail(arrived[0].id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Upload failed.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   // A refusal is said under the prompt (or the shot); a failed enhancement is refunded, and the
   // answer carries the balance after the refund.
   const showEnhancementFailure = (error: unknown) => {
@@ -3129,6 +3273,10 @@ function IdentityCreationScreen({
       </View>
     </View>
   ) : null;
+  // The inputs the source's creator kept to themselves are no failed restore: a retry brings none of
+  // them, so the line says only that their boxes wait for the remixer's own, while any stay empty.
+  const remixSlotsNotice = isRestoringRemix ? null : remixInputSlotsNotice(unfilledRemixInputSlots(rawDraft).length);
+  const remixSlotsBanner = remixSlotsNotice ? <SlimCreatorBanner label="Remix source" body={remixSlotsNotice} /> : null;
 
   if (activeTool !== 'image') {
     const creatorModels = catalog ? getCatalogModels(catalog, activeTool) : [];
@@ -3215,6 +3363,7 @@ function IdentityCreationScreen({
               loading
             />
           ) : null}
+          {remixSlotsBanner}
           {remixRestoreBanner}
           {draftLoadError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft unavailable" body="Your saved draft could not be read. Retry to continue without overwriting it." /><SecondaryButton label="Retry loading draft" onPress={() => setDraftLoadAttempt((value) => value + 1)} /></View> : null}
           {draftSaveError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft not saved" body={draftSaveError} /><SecondaryButton label="Retry saving draft" onPress={() => { void saveLatestDraft().then(() => setDraftSaveError(null), () => undefined); }} /></View> : null}
@@ -3252,6 +3401,8 @@ function IdentityCreationScreen({
               onUploadVideo={() => uploadReferenceVideo('video')}
               onUploadAudio={uploadReferenceAudio}
               onAddSubject={() => void uploadSubject()}
+              inputSlots={unfilledRemixInputSlots(videoDraft)}
+              onFillSlot={(slot) => void fillInputSlot('video', slot)}
               upload={upload}
               onCancelUpload={cancelUpload}
               promptNotes={promptNotes}
@@ -3288,6 +3439,8 @@ function IdentityCreationScreen({
               onChange={(draft) => replaceDraft(draft)}
               onUploadCharacter={() => uploadSingleImage('character')}
               onUploadMotion={() => uploadReferenceVideo('motion')}
+              inputSlots={unfilledRemixInputSlots(motionDraft)}
+              onFillSlot={(slot) => void fillInputSlot('motion', slot)}
               upload={upload}
               onCancelUpload={cancelUpload}
               promptNotes={promptNotes}
@@ -3487,6 +3640,7 @@ function IdentityCreationScreen({
               loading
             />
           ) : null}
+          {remixSlotsBanner}
           {remixRestoreBanner}
           {draftLoadError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft unavailable" body="Your saved draft could not be read. Retry to continue without overwriting it." /><SecondaryButton label="Retry loading draft" onPress={() => setDraftLoadAttempt((value) => value + 1)} /></View> : null}
           {draftSaveError ? <View style={{ gap: 8 }}><SlimCreatorBanner label="Draft not saved" body={draftSaveError} /><SecondaryButton label="Retry saving draft" onPress={() => { void saveLatestDraft().then(() => setDraftSaveError(null), () => undefined); }} /></View> : null}
@@ -3512,6 +3666,9 @@ function IdentityCreationScreen({
             promptNotes={promptNotes}
             isUploading={isUploading}
             uploadProgress={upload?.target === 'image-references' ? upload : null}
+            inputSlots={unfilledRemixInputSlots(imageDraft)}
+            onFillSlot={(slot) => void fillInputSlot('image', slot)}
+            slotUpload={upload}
             promptMessage={promptMessage}
             onPromptChange={updatePrompt}
             onEnhance={enhancePrompt}
@@ -3869,6 +4026,9 @@ function ImagePromptComposer({
   promptNotes,
   isUploading,
   uploadProgress,
+  inputSlots,
+  onFillSlot,
+  slotUpload,
   promptMessage,
   onPromptChange,
   onEnhance,
@@ -3911,6 +4071,12 @@ function ImagePromptComposer({
   isUploading: boolean;
   /** References being uploaded from the rail's add tile. */
   uploadProgress: UploadProgress | null;
+  /** A remix's empty slots for pictures its creator kept to themselves, drawn after the pictures. */
+  inputSlots: readonly RemixInputSlot[];
+  /** Picks the remixer's own picture for a slot. */
+  onFillSlot: (slot: RemixInputSlot) => void;
+  /** An upload in flight, which a slot's box shows when the box started it. */
+  slotUpload: UploadProgress | null;
   promptMessage: string | null;
   onPromptChange: (prompt: string) => void;
   onEnhance: () => void;
@@ -4112,6 +4278,17 @@ function ImagePromptComposer({
                     >
                       <ReferenceMediaPreview media={media} size={72} />
                     </Pressable>
+                  ))}
+                  {/* After the pictures the remix restored, an empty box for each its creator kept. */}
+                  {inputSlots.map((slot) => (
+                    <RemixInputSlotTile
+                      key={slot.id}
+                      slot={slot}
+                      compact
+                      disabled={isUploading}
+                      progress={slotUpload?.target === inputSlotUploadTarget(slot) ? slotUpload : null}
+                      onPress={() => onFillSlot(slot)}
+                    />
                   ))}
                 </ScrollView>
               </View>
@@ -4422,6 +4599,8 @@ function VideoCreatorComposer({
   onUploadVideo,
   onUploadAudio,
   onAddSubject,
+  inputSlots,
+  onFillSlot,
   upload,
   onCancelUpload,
   promptNotes,
@@ -4469,6 +4648,13 @@ function VideoCreatorComposer({
   onUploadVideo: () => void;
   onUploadAudio: () => void;
   onAddSubject: () => void;
+  /**
+   * A remix's empty slots for the inputs its creator kept to themselves, each drawn where that input
+   * goes: on its frame's box, after the rail's pictures and clips or its tracks, among the subjects.
+   */
+  inputSlots: readonly RemixInputSlot[];
+  /** Picks the remixer's own for a slot. */
+  onFillSlot: (slot: RemixInputSlot) => void;
   /** An upload in flight, shown on the control it came from. */
   upload: UploadProgress | null;
   onCancelUpload: () => void;
@@ -4606,6 +4792,14 @@ function VideoCreatorComposer({
   // What the rail shows, in its order: pictures and clips, then audio.
   const railVisuals = [...draft.references, ...draft.referenceVideos].filter(isSent);
   const railAudios = draft.referenceAudios.filter(isSent);
+  // A remix's empty slots, each where its input goes: a frame's own box, the rail after its pictures
+  // and clips or after its tracks, and the subjects' row.
+  const startInputSlot = inputSlots.find((slot) => slot.role === 'start_frame') ?? null;
+  const endInputSlot = inputSlots.find((slot) => slot.role === 'end_frame') ?? null;
+  const visualInputSlots = inputSlots.filter((slot) => slot.role === 'reference_image' || slot.role === 'reference_video');
+  const trackInputSlots = inputSlots.filter((slot) => slot.role === 'reference_audio');
+  const subjectInputSlots = inputSlots.filter((slot) => slot.role === 'subject');
+  const slotProgress = (slot: RemixInputSlot) => (upload?.target === inputSlotUploadTarget(slot) ? upload : null);
   const reducedMotion = useReducedMotion();
   const {
     scrollRef: reusableRailRef,
@@ -4817,20 +5011,32 @@ function VideoCreatorComposer({
             style={{ gap: 6, opacity: framesLockedByReferences || framesLockedBySubjects ? 0.4 : 1 }}
           >
             <View testID="video-frame-slots" style={{ flexDirection: 'row', gap: 9 }}>
+              {/* A remix's empty frame slot is drawn on the frame's own box: titled as the prompt names it, asking for the remixer's own. */}
               {supportsStartFrame ? (
-                <CompactReferenceSlot testID="video-start-frame-slot" title={startFrameSlot?.label ?? 'Start frame'} helper={startFrameLeftOut ? frameLeftOutHelper : 'First visual'} media={startFrameLeftOut ? null : draft.startFrame} required={(startFrameSlot?.min ?? (model?.id === 'hailuo-2.3' ? 1 : 0)) > 0} disabled={startFrameLeftOut} isUploading={isUploading} progress={upload?.target === 'start-frame' ? upload : null} onAdd={onUploadStart} onOpen={() => setReferenceId(draft.startFrame?.id ?? null)} />
+                <CompactReferenceSlot
+                  testID="video-start-frame-slot"
+                  title={startInputSlot ? remixInputSlotTitle(startInputSlot) : startFrameSlot?.label ?? 'Start frame'}
+                  helper={startFrameLeftOut ? frameLeftOutHelper : startInputSlot ? remixInputSlotAction(startInputSlot) : 'First visual'}
+                  media={startFrameLeftOut ? null : draft.startFrame}
+                  required={(startFrameSlot?.min ?? (model?.id === 'hailuo-2.3' ? 1 : 0)) > 0}
+                  disabled={startFrameLeftOut}
+                  isUploading={isUploading}
+                  progress={upload?.target === 'start-frame' ? upload : null}
+                  onAdd={startInputSlot ? () => onFillSlot(startInputSlot) : onUploadStart}
+                  onOpen={() => setReferenceId(draft.startFrame?.id ?? null)}
+                />
               ) : null}
               {supportsEndFrame ? (
                 <CompactReferenceSlot
                   testID="video-end-frame-slot"
-                  title={endFrameSlot?.label ?? 'End frame'}
-                  helper={endFrameLeftOut ? frameLeftOutHelper : draft.isMultiShot ? 'Single shot only' : 'Optional finish'}
+                  title={endInputSlot ? remixInputSlotTitle(endInputSlot) : endFrameSlot?.label ?? 'End frame'}
+                  helper={endFrameLeftOut ? frameLeftOutHelper : draft.isMultiShot ? 'Single shot only' : endInputSlot ? remixInputSlotAction(endInputSlot) : 'Optional finish'}
                   media={endFrameLeftOut ? null : draft.endFrame}
                   required={(endFrameSlot?.min ?? 0) > 0}
                   disabled={endFrameLeftOut || (draft.isMultiShot && !draft.endFrame)}
                   isUploading={isUploading}
                   progress={upload?.target === 'end-frame' ? upload : null}
-                  onAdd={onUploadEnd}
+                  onAdd={endInputSlot ? () => onFillSlot(endInputSlot) : onUploadEnd}
                   onOpen={() => setReferenceId(draft.endFrame?.id ?? null)}
                 />
               ) : null}
@@ -4869,6 +5075,9 @@ function VideoCreatorComposer({
                   <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{media.displayName}</Text>
                 </Pressable>
               ))}
+              {visualInputSlots.map((slot) => (
+                <RemixInputSlotTile key={slot.id} slot={slot} disabled={isUploading} progress={slotProgress(slot)} onPress={() => onFillSlot(slot)} />
+              ))}
               {railAudios.map((media) => (
                 <View key={media.id} onLayout={reusableItemLayout(media.id)} style={{ width: 72, gap: 4 }}>
                   <ReferenceMediaPreview media={media} size={72} />
@@ -4894,9 +5103,15 @@ function VideoCreatorComposer({
                   ) : null}
                 </View>
               ))}
+              {trackInputSlots.map((slot) => (
+                <RemixInputSlotTile key={slot.id} slot={slot} disabled={isUploading} progress={slotProgress(slot)} onPress={() => onFillSlot(slot)} />
+              ))}
               </ScrollView>
             </View>
-            {upload?.target === 'reference-video' && upload.cancellable ? <UploadCancelButton onPress={onCancelUpload} /> : null}
+            {/* A clip, picked from the add tile or a slot's box, can be stopped. */}
+            {upload?.cancellable && (upload.target === 'reference-video' || visualInputSlots.some((slot) => upload.target === inputSlotUploadTarget(slot)))
+              ? <UploadCancelButton onPress={onCancelUpload} />
+              : null}
             {preparesSeedanceAssets ? (
               <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
                 Open a reference to prepare it with Seedance once. Every run then reuses the prepared asset instead of sending the file again.
@@ -4927,6 +5142,10 @@ function VideoCreatorComposer({
                   <SubjectPreview subject={subject} size={72} />
                   <Text numberOfLines={1} style={{ color: theme.colors.muted, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>{subject.displayName}</Text>
                 </Pressable>
+              ))}
+              {/* A subject the remix's creator kept to themselves: an empty one, named as the prompt names it. */}
+              {subjectInputSlots.map((slot) => (
+                <RemixInputSlotTile key={slot.id} slot={slot} disabled={isUploading} progress={slotProgress(slot)} onPress={() => onFillSlot(slot)} />
               ))}
               {/* At the end: a run takes at most three subjects, which always fit beside it. */}
               {subjects.length < maxSubjects ? (
@@ -5009,6 +5228,61 @@ function CompactRailAddButton({ label, uploadingLabel = label, icon = 'image', o
           <Text numberOfLines={1} maxFontSizeMultiplier={appTheme.typeScale.control} style={[labelStyle, { position: 'absolute', top: 0, left: 0, right: 0 }]}>{uploadPercentLabel(progress)}</Text>
         ) : null}
       </View>
+    </Pressable>
+  );
+}
+
+/**
+ * A remix's empty slot on a rail (owner, 2026-11-03): an empty box in place of an input the source's
+ * creator kept to themselves, titled as the prompt names it (`remixInputSlotTitle`) and saying what it
+ * takes (`remixInputSlotAction`). A press picks the remixer's own, and the box shows that upload until
+ * the media takes its place. Drawn as the rail's add tile is, so it reads as somewhere to add, at the
+ * height of the image rail's pictures there (`compact`) and of the video rail's add tile elsewhere.
+ */
+function RemixInputSlotTile({ slot, compact = false, disabled, progress = null, onPress }: {
+  slot: RemixInputSlot;
+  compact?: boolean;
+  disabled: boolean;
+  /** The upload this box started, whose progress it shows in place of what it asks for. */
+  progress?: UploadProgress | null;
+  onPress: () => void;
+}) {
+  const theme = useAppTheme();
+  const title = remixInputSlotTitle(slot);
+  const action = remixInputSlotAction(slot);
+  const textStyle: TextStyle = { fontSize: 11, lineHeight: 14, textAlign: 'center', fontVariant: ['tabular-nums'] };
+  return (
+    <Pressable
+      testID={`remix-input-slot-${slot.id}`}
+      accessibilityRole="button"
+      accessibilityLabel={progress ? `Uploading ${title}, ${uploadPercentLabel(progress)}` : `${action} for ${title}`}
+      accessibilityState={{ disabled, busy: Boolean(progress) }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => ({
+        width: 96,
+        minHeight: compact ? 72 : 96,
+        borderRadius: appTheme.radii.md,
+        borderCurve: 'continuous',
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        borderColor: hexWithAlpha(theme.colors.image, 0.42),
+        backgroundColor: hexWithAlpha(theme.colors.image, 0.055),
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 3,
+        paddingHorizontal: 6,
+        paddingVertical: 6,
+        opacity: progress ? 1 : disabled ? 0.38 : pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      {progress
+        ? <ActivityIndicator color={theme.colors.image} size="small" />
+        : slot.kind === 'video' ? <Video size={appTheme.icon.sm} color={theme.colors.video} /> : slot.kind === 'audio' ? <AudioLines size={appTheme.icon.sm} color={theme.colors.motion} /> : <Plus size={appTheme.icon.sm} color={theme.colors.image} />}
+      <Text numberOfLines={1} maxFontSizeMultiplier={appTheme.typeScale.control} style={[textStyle, { width: '100%', color: theme.colors.text, fontWeight: '800' }]}>{title}</Text>
+      <Text numberOfLines={2} maxFontSizeMultiplier={appTheme.typeScale.control} style={[textStyle, { color: progress ? theme.colors.textSecondary : theme.colors.muted, fontWeight: '700' }]}>
+        {progress ? `Uploading ${uploadPercentLabel(progress)}` : action}
+      </Text>
     </Pressable>
   );
 }
@@ -5109,6 +5383,8 @@ function MotionCreatorComposer({
   onChange,
   onUploadCharacter,
   onUploadMotion,
+  inputSlots,
+  onFillSlot,
   upload,
   onCancelUpload,
   promptNotes,
@@ -5141,6 +5417,10 @@ function MotionCreatorComposer({
   onUploadCharacter: () => void;
   /** Picks a clip; with one attached, the new one takes its place. */
   onUploadMotion: () => void;
+  /** A remix's empty slots for the character and the clip its creator kept to themselves, drawn on their boxes. */
+  inputSlots: readonly RemixInputSlot[];
+  /** Picks the remixer's own for a slot. */
+  onFillSlot: (slot: RemixInputSlot) => void;
   /** An upload in flight, shown on the slot it came from. */
   upload: UploadProgress | null;
   onCancelUpload: () => void;
@@ -5172,6 +5452,9 @@ function MotionCreatorComposer({
   const motionSlot = catalogInputSlot(model, draft, slotKeys.video);
   const supportsCharacter = catalogInputSupported(model, draft, slotKeys.image, true);
   const supportsMotion = catalogInputSupported(model, draft, slotKeys.video, true);
+  // A remix's empty slot for the character or the clip, drawn on that input's own box.
+  const characterInputSlot = inputSlots.find((slot) => slot.role === 'character_image') ?? null;
+  const clipInputSlot = inputSlots.find((slot) => slot.role === 'motion_reference_video') ?? null;
 
   return (
     <View testID="motion-creator-composer" style={{ gap: 12 }}>
@@ -5185,8 +5468,30 @@ function MotionCreatorComposer({
             kling-3-motion-inputs-20261101). The panel's title and
             the bar say so; a slot carries no badge, and an empty slot no line of its own. */}
         <View style={{ flexDirection: 'row', gap: 9 }}>
-          {supportsCharacter ? <CompactReferenceSlot testID="motion-character-slot" title={characterSlot?.label ?? 'Character image'} helper="Who should move?" media={draft.characterImage} isUploading={isUploading} progress={upload?.target === 'character' ? upload : null} onAdd={onUploadCharacter} onOpen={() => setSelectedRole('character')} /> : null}
-          {supportsMotion ? <CompactReferenceSlot testID="motion-video-slot" title={motionSlot?.label ?? 'Motion video'} helper="How should they move?" media={draft.referenceVideo} isUploading={isUploading} progress={upload?.target === 'motion-clip' ? upload : null} onAdd={onUploadMotion} onOpen={() => setSelectedRole('motion')} /> : null}
+          {supportsCharacter ? (
+            <CompactReferenceSlot
+              testID="motion-character-slot"
+              title={characterInputSlot ? remixInputSlotTitle(characterInputSlot) : characterSlot?.label ?? 'Character image'}
+              helper={characterInputSlot ? remixInputSlotAction(characterInputSlot) : 'Who should move?'}
+              media={draft.characterImage}
+              isUploading={isUploading}
+              progress={upload?.target === 'character' ? upload : null}
+              onAdd={characterInputSlot ? () => onFillSlot(characterInputSlot) : onUploadCharacter}
+              onOpen={() => setSelectedRole('character')}
+            />
+          ) : null}
+          {supportsMotion ? (
+            <CompactReferenceSlot
+              testID="motion-video-slot"
+              title={clipInputSlot ? remixInputSlotTitle(clipInputSlot) : motionSlot?.label ?? 'Motion video'}
+              helper={clipInputSlot ? remixInputSlotAction(clipInputSlot) : 'How should they move?'}
+              media={draft.referenceVideo}
+              isUploading={isUploading}
+              progress={upload?.target === 'motion-clip' ? upload : null}
+              onAdd={clipInputSlot ? () => onFillSlot(clipInputSlot) : onUploadMotion}
+              onOpen={() => setSelectedRole('motion')}
+            />
+          ) : null}
         </View>
         {/* Drawn only with something to say, so the panel's gap leaves no band under empty slots. */}
         {characterError || motionError || clipLength || clipUploading ? (

@@ -1,11 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type {
+  CreationDraft,
   ImageCreationDraft,
   MotionCreationDraft,
   VideoCreationDraft,
 } from './media-creation-view-model';
 import type { RemixOriginal } from './remix-original-reference';
+// From the shared module, not the view model: auth loads this file at launch.
+import { parseRemixInputSlotsForTool } from './remix-input-slots/remix-input-slots';
 
 /**
  * Every draft is kept under this key plus a scope that names its identity.
@@ -87,6 +90,17 @@ export type PersistedCreationDrafts = {
   remixOriginal?: RemixOriginal | null;
 };
 
+/**
+ * A saved draft's empty remix slots read back as a remix holds them (`parseRemixInputSlotsForTool`), or none
+ * outside a remix session, which holds no slots. A draft saved without the field keeps it absent:
+ * that is how a remix session saved before slots existed is told from one whose slots are all filled.
+ */
+function withSavedInputSlots<T extends CreationDraft>(draft: T, remix: boolean): T {
+  if (!('inputSlots' in draft)) return draft;
+  const { inputSlots, ...rest } = draft;
+  return (remix ? { ...rest, inputSlots: parseRemixInputSlotsForTool(draft.tool, inputSlots) } : rest) as T;
+}
+
 function parsePersistedCreationDrafts(raw: string, { remix }: { remix: boolean }): PersistedCreationDrafts | null {
   try {
     const parsed = JSON.parse(raw) as Partial<PersistedCreationDrafts>;
@@ -95,7 +109,8 @@ function parsePersistedCreationDrafts(raw: string, { remix }: { remix: boolean }
     }
     const drafts = {
       ...parsed,
-      video: {
+      image: withSavedInputSlots(parsed.image, remix),
+      video: withSavedInputSlots({
         ...parsed.video,
         preparedAudioIds: Array.isArray(parsed.video.preparedAudioIds)
           ? parsed.video.preparedAudioIds.filter((value): value is string => typeof value === 'string')
@@ -103,7 +118,8 @@ function parsePersistedCreationDrafts(raw: string, { remix }: { remix: boolean }
         characterIds: Array.isArray(parsed.video.characterIds)
           ? parsed.video.characterIds.filter((value): value is string => typeof value === 'string')
           : [],
-      },
+      }, remix),
+      motion: withSavedInputSlots(parsed.motion, remix),
     } as PersistedCreationDrafts;
     // The ordinary Create draft is never a remix. Builds from before remix
     // sessions got their own key wrote them into this one, so an install that

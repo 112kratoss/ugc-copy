@@ -63,6 +63,7 @@ import {
   type ReferenceMediaDescriptor,
 } from '@/lib/generation-input-media';
 import { importSharedGenerationInputMedia, resolveRemixResultMedia } from '@/lib/generation-input-media-import';
+import { importGenerationReferenceCopy } from '@/lib/generation-reference-copy-import';
 // Shared with both composers' inputs, so the three limits cannot drift.
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
@@ -1292,10 +1293,17 @@ export async function resolveGenerationMediaSource(
     // from the storage path, never from the client's signed URL. A remix also
     // offers the original's own result as a reference, answered with a link to
     // it under the same gate as the remix source's.
-    const imported = await importSharedGenerationInputMedia({
+    const sharedImport = await importSharedGenerationInputMedia({
       source,
       viewerUserId: userId,
     });
+    // A remix of an unlocked recipe restores the inputs the recipe holds
+    // copies of, which are the seller's files: imported the same way once the
+    // unlock is read again. It takes only `post_resource_files` sources, the
+    // shared import only `generation_inputs`, so neither answers the other's.
+    const imported = sharedImport.outcome === 'not-eligible'
+      ? await importGenerationReferenceCopy({ source, viewerUserId: userId })
+      : sharedImport;
     if (imported.outcome === 'imported') {
       return imported.signedUrl;
     }

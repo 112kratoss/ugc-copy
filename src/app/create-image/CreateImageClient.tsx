@@ -12,8 +12,15 @@ import {
     promptLimitFor,
 } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 import {
+    remixInputSlotAction,
+    remixInputSlotTitle,
+    unfilledRemixSlotsMessage,
+    type RemixInputSlot,
+} from '../../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
+import {
     StudioBackgroundProcessingNotice,
     StudioElementHandleList,
+    StudioElementHandleText,
     StudioGenerationStatus,
     StudioMediaPreviewModal,
     StudioModelNotice,
@@ -41,6 +48,7 @@ import {
     CreatorReferencePreview,
     CreatorReferenceStrip,
     CreatorReferenceTile,
+    CreatorRemixSlotTile,
     type CreatorReferencePreviewTarget,
     CreatorRunFailed,
     CreatorRunFailedLine,
@@ -93,12 +101,17 @@ import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRemixElementSeeds,
+    getRemixNoticeDescription,
     getRemixReferenceCapWarning,
     joinRemixRestoreWarnings,
     createRemixResultReferenceElement,
     getRemixRestoreWarning,
+    readRemixInputSlots,
     REMIX_RESTORE_WARNING,
     isRemixResultReference,
+    remixSlotFillNaming,
+    splitUnfilledSlotMentions,
+    withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
 import {
     getPersistedImageElementRecords,
@@ -279,6 +292,22 @@ function hydrateImageElements(seeds: ImageElementSeed[]): ImageElementDraft[] {
 
 function readAccessToken(): Promise<string | null> {
     return supabase.auth.getSession().then(({ data }) => data.session?.access_token ?? null);
+}
+
+/**
+ * Why the sign step would refuse a picked picture, checked as it is added (to the grid or to a
+ * remix's empty slot), or null: a refused file used to wait in the rail and fail every Generate
+ * without its name.
+ */
+function imageFileRefusal(file: File): string | null {
+    const fileName = file.name || 'This file';
+    if (!TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('image', file.type)) {
+        return `“${fileName}” isn’t a JPEG, PNG, WebP, GIF, AVIF or HEIC image.`;
+    }
+    if (file.size > TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind.image) {
+        return `“${fileName}” is larger than ${Math.round(TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind.image / (1024 * 1024))} MB.`;
+    }
+    return null;
 }
 
 /** Back to this page with its params, so a remix or a prefilled prompt survives the sign-in. */
@@ -507,6 +536,9 @@ function ImageCreator({
     const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
+    // The references the remix was not given, as empty boxes for the remixer's own (owner,
+    // 2026-11-03): beside the form, never saved, priced or sent. A box filled leaves the list.
+    const [remixSlots, setRemixSlots] = useState<RemixInputSlot[]>([]);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [isResultPreviewOpen, setIsResultPreviewOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
@@ -752,6 +784,7 @@ function ImageCreator({
                 }
                 setRemixImageUrl(bundle.result?.mediaType === 'image' ? bundle.result.url : null);
                 setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
+                setRemixSlots(readRemixInputSlots(bundle));
 
                 const settings = bundle.workflowSettings as ImageWorkflowSettings | null;
                 const nextModelId =
@@ -883,21 +916,12 @@ function ImageCreator({
         const pickedFiles = Array.from(files);
         if (pickedFiles.length === 0) return;
 
-        // The sign step's own limits, checked as a file is added: a refused file
-        // used to wait in the rail and fail every Generate without its name.
+        // The sign step's own limits, checked as a file is added.
         const refusals: string[] = [];
-        const maxImageMegabytes = Math.round(TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind.image / (1024 * 1024));
         const validFiles = pickedFiles.filter((file) => {
-            const fileName = file.name || 'This file';
-            if (!TEMPORARY_MEDIA_UPLOAD_LIMITS.isAllowedMimeType('image', file.type)) {
-                refusals.push(`“${fileName}” isn’t a JPEG, PNG, WebP, GIF, AVIF or HEIC image.`);
-                return false;
-            }
-            if (file.size > TEMPORARY_MEDIA_UPLOAD_LIMITS.maxBytesByKind.image) {
-                refusals.push(`“${fileName}” is larger than ${maxImageMegabytes} MB.`);
-                return false;
-            }
-            return true;
+            const refusal = imageFileRefusal(file);
+            if (refusal) refusals.push(refusal);
+            return !refusal;
         });
 
         const currentElements = elementRefs.current;
@@ -931,6 +955,38 @@ function ImageCreator({
             await processImageFiles(e.target.files);
             e.target.value = '';
         }
+    };
+
+    /**
+     * The remixer's own picture in a remix's empty slot: a reference of theirs, under the slot's
+     * name and the @handle the prompt mentions it by, so the prompt works unchanged. The checks of
+     * an add hold: a file the sign step refuses, or one past the model's limit, leaves the box.
+     */
+    const fillReferenceImageSlot = async (slot: RemixInputSlot, files: File[]) => {
+        const [file] = files;
+        if (!file) return;
+        const refusal = imageFileRefusal(file);
+        if (refusal) {
+            setElementPickNotice(refusal);
+            return;
+        }
+        const currentElements = elementRefs.current;
+        if (currentElements.length >= model.maxImages) {
+            setElementPickNotice(`This model takes up to ${model.maxImages} image${model.maxImages === 1 ? '' : 's'}. Remove one to add another.`);
+            return;
+        }
+        setElementPickNotice(null);
+        const naming = remixSlotFillNaming(slot);
+        const nextElements = hydrateImageElements([...currentElements, {
+            displayName: naming.displayName,
+            handle: naming.handle,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            source: 'upload',
+        }]);
+        commitElements(nextElements);
+        setRemixSlots((slots) => withoutRemixInputSlot(slots, slot.id));
+        await persistUploadedImageElements(nextElements);
     };
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
@@ -1327,6 +1383,16 @@ function ImageCreator({
     const referencedElementHandles = extractPromptHandles(prompt).filter((handle) => sentElementHandles.includes(handle));
     const isElementEnhancementLocked = referencedElementHandles.length > 0;
     const staleElementMentions = findUnknownPromptHandles(prompt, sentElementHandles);
+    // A remix's empty boxes for the references it was not given, drawn after the restored ones
+    // while the model takes references (a prompt-only model has nowhere to fill them).
+    const referenceImageSlots = model.maxImages > 0 ? remixSlots.filter((slot) => slot.role === 'reference_image') : [];
+    // A mention of an empty box's handle asks for the remixer's own in that box; any other unknown
+    // mention keeps its words. Either holds the run, as the server refuses both.
+    const { slotHandles: unfilledSlotMentions, otherHandles: unknownElementMentions } = splitUnfilledSlotMentions(
+        staleElementMentions,
+        referenceImageSlots,
+    );
+    const unfilledSlotsMessage = unfilledRemixSlotsMessage(unfilledSlotMentions);
     // The selected model's own prompt limit (Kie refuses past it), counted as the run
     // sends the prompt. Text past it is kept and marked over, after a paste or a switch to
     // a model with a lower limit alike, and the run waits with the start's own words.
@@ -1696,7 +1762,9 @@ function ImageCreator({
         const submitted = prompt.trim();
         if (!submitted) { setError('Please enter a prompt'); return; }
         if (staleElementMentions.length > 0) {
-            setError(`Unknown element mention${staleElementMentions.length > 1 ? 's' : ''}: ${staleElementMentions.join(', ')}`);
+            setError(unknownElementMentions.length > 0
+                ? `Unknown element mention${unknownElementMentions.length > 1 ? 's' : ''}: ${unknownElementMentions.join(', ')}`
+                : unfilledSlotsMessage);
             return;
         }
         if (referenceLimitMessage || promptLimitMessage) return;
@@ -1917,10 +1985,17 @@ function ImageCreator({
             {quoteRetry}
         </div>
     ) : staleElementMentions.length > 0 ? (
-        <p className="text-rose-300">
-            Resolve the unknown element mention{staleElementMentions.length > 1 ? 's' : ''} before generating:{' '}
-            <StudioElementHandleList handles={staleElementMentions} />
-        </p>
+        <div className="space-y-2">
+            {unknownElementMentions.length > 0 ? (
+                <p className="text-rose-300">
+                    Resolve the unknown element mention{unknownElementMentions.length > 1 ? 's' : ''} before generating:{' '}
+                    <StudioElementHandleList handles={unknownElementMentions} />
+                </p>
+            ) : null}
+            {unfilledSlotsMessage ? (
+                <p className="text-rose-300 [overflow-wrap:anywhere]"><StudioElementHandleText text={unfilledSlotsMessage} /></p>
+            ) : null}
+        </div>
     ) : quoteState.status === 'error' ? (
         quoteRetry
     ) : null;
@@ -2150,7 +2225,7 @@ function ImageCreator({
                                     exit={{ opacity: 0, y: -12 }}
                                 >
                                     <StudioRemixNotice
-                                        description={`${`Settings pre-filled from ${remixTitle ? `"${remixTitle}"` : 'the original creation'}.`}${remixRestoreWarning ? ` ${remixRestoreWarning}` : ''}`}
+                                        description={getRemixNoticeDescription(remixTitle, referenceImageSlots.length, remixRestoreWarning)}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={canUseOriginalResultAsReference ? (
                                             <StudioUseOriginalButton using={hasOriginalResultReference} onUse={handleUseOriginalResultAsReference} />
@@ -2178,13 +2253,19 @@ function ImageCreator({
                             />
                             <div className="flex items-center justify-between gap-3 px-4 pb-3 text-xs">
                                 <PromptLengthCounter meter={promptMeter} suffix=" characters" />
-                                {staleElementMentions.length > 0 ? (
+                                {unknownElementMentions.length > 0 ? (
                                     <p className="min-w-0 text-right text-rose-300">
-                                        Unknown element mention{staleElementMentions.length > 1 ? 's' : ''}:{' '}
-                                        <StudioElementHandleList handles={staleElementMentions} />
+                                        Unknown element mention{unknownElementMentions.length > 1 ? 's' : ''}:{' '}
+                                        <StudioElementHandleList handles={unknownElementMentions} />
                                     </p>
                                 ) : null}
                             </div>
+                            {/* A sentence, so a line of its own under the counter rather than beside it. */}
+                            {unfilledSlotsMessage ? (
+                                <p className="px-4 pb-3 text-xs text-rose-300 [overflow-wrap:anywhere]">
+                                    <StudioElementHandleText text={unfilledSlotsMessage} />
+                                </p>
+                            ) : null}
                         </div>
 
                         {activeMentionQuery ? (
@@ -2244,6 +2325,8 @@ function ImageCreator({
                                     handleDragLeave(event);
                                 } : undefined}
                                 onDrop={canAddReferences ? handleDrop : undefined}
+                                // A drop on a remix's empty box stays the box's, and the section lets go of its highlight all the same.
+                                onDropCapture={canAddReferences ? () => setIsDragging(false) : undefined}
                                 className={isDragging ? `rounded-ui-2xl border p-4 ${imageAccent.tileActive}` : 'ui-card p-4'}
                             >
                                 <div className="mb-1 flex items-center justify-between gap-3">
@@ -2260,7 +2343,7 @@ function ImageCreator({
                                     </p>
                                 )}
 
-                                {elements.length > 0 ? (
+                                {elements.length > 0 || referenceImageSlots.length > 0 ? (
                                     <CreatorReferenceStrip className="mb-3">
                                         {elements.map((element) => (
                                             <CreatorReferenceTile
@@ -2279,6 +2362,19 @@ function ImageCreator({
                                                 handle={element.handle}
                                                 handleClassName="text-sky-300"
                                                 onInsert={() => handleInsertElementHandle(element.handle)}
+                                            />
+                                        ))}
+                                        {/* What the remix was not given, after what it brought back. */}
+                                        {referenceImageSlots.map((slot) => (
+                                            <CreatorRemixSlotTile
+                                                key={slot.id}
+                                                accent="image"
+                                                slotId={slot.id}
+                                                title={remixInputSlotTitle(slot)}
+                                                action={remixInputSlotAction(slot)}
+                                                accept="image/*"
+                                                handleClassName="text-sky-300"
+                                                onFiles={(files) => void fillReferenceImageSlot(slot, files)}
                                             />
                                         ))}
                                     </CreatorReferenceStrip>

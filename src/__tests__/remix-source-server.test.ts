@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   loadGenerationInputMediaMap: vi.fn(),
   buildLegacyGenerationInputMedia: vi.fn(),
   loadGenerationRecipeRemixInputMediaByPostId: vi.fn(),
+  loadGenerationRecipeReferenceCopiesByPostId: vi.fn(),
 }));
 
 const adminClient = {
@@ -76,6 +77,7 @@ vi.mock('@/lib/generation-input-media', async (importOriginal) => ({
 }));
 vi.mock('@/lib/post-resource-bundles-server', () => ({
   loadGenerationRecipeRemixInputMediaByPostId: mocks.loadGenerationRecipeRemixInputMediaByPostId,
+  loadGenerationRecipeReferenceCopiesByPostId: mocks.loadGenerationRecipeReferenceCopiesByPostId,
 }));
 
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
@@ -132,6 +134,7 @@ beforeEach(() => {
   mocks.loadGenerationInputMediaMap.mockReset().mockResolvedValue(new Map());
   mocks.buildLegacyGenerationInputMedia.mockReset().mockResolvedValue([]);
   mocks.loadGenerationRecipeRemixInputMediaByPostId.mockReset().mockResolvedValue([]);
+  mocks.loadGenerationRecipeReferenceCopiesByPostId.mockReset().mockResolvedValue(new Map());
 });
 
 describe('loadRemixSourceBundle access', () => {
@@ -237,8 +240,15 @@ describe('loadRemixSourceBundle access', () => {
     const bundle = await loadRemixSourceBundle(request(), 'gen-1');
 
     expect(bundle.workflowSettings).toEqual({ model: 'nano-banana-2' });
-    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
+    expect(bundle.inputs).toEqual({});
+    expect(bundle).not.toHaveProperty('inputMedia');
+    // The run's inputs are read only to name their slots (owner, 2026-11-03):
+    // nothing is signed, and nothing of them is handed over.
+    expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalledTimes(1);
+    expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalledWith(expect.objectContaining({ urlMode: 'none' }));
+    expect(mocks.buildLegacyGenerationInputMedia).toHaveBeenCalledWith(expect.objectContaining({ urlMode: 'none' }));
     expect(mocks.loadGenerationRecipeRemixInputMediaByPostId).not.toHaveBeenCalled();
+    expect(mocks.loadGenerationRecipeReferenceCopiesByPostId).not.toHaveBeenCalled();
   });
 
   it('restores bought recipe media from the post the gate verified, not the one the caller named', async () => {
@@ -274,6 +284,275 @@ describe('loadRemixSourceBundle access', () => {
       referenceImageUrls: ['https://cdn.example/private-face.png'],
     });
     expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalled();
+  });
+});
+
+// Owner, 2026-11-03: a remix is given a creation's prompt, model and settings,
+// and its saved inputs only where the creator shares them. Each input it is not
+// given becomes an empty slot named as its role and, where the prompt mentions
+// it, by its handle, so the remixer adds their own and the prompt still runs.
+// Someone who unlocked the recipe gets back the inputs the creator put copies of
+// in it ("Include creation references"), and slots for the rest.
+describe('input slots for a remix given none of the run’s inputs', () => {
+  const PUBLIC_ACCESS = { allowed: true, basis: 'public', post: EXPOSED_POST, includeSharedInputMedia: false, recipeEntitled: false };
+  const UNLOCKED_ACCESS = { ...PUBLIC_ACCESS, basis: 'unlocked' };
+  /** A kept row as a read without signing answers it: no link. */
+  const row = (
+    id: string,
+    mediaType: string,
+    role: string,
+    sortOrder: number,
+    label: string,
+    metadata: Record<string, unknown>,
+    sourceGenerationId: string | null = null,
+  ) => ({
+    id,
+    generationId: 'gen-1',
+    mediaType,
+    role,
+    label,
+    url: null,
+    storagePath: `generation_inputs/creator-1/gen-1/0${sortOrder}-${role}.png`,
+    sourceGenerationId,
+    sortOrder,
+    metadata,
+  });
+  const PRODUCT = row('row-product', 'image', 'reference_image', 0, 'Product', {
+    handle: '@product',
+    displayName: 'Product',
+    sourceStoragePath: 'uploads/creator-1/1730000000000-product.png',
+  });
+  // Its handle was made from an upload's file name, and the prompt does not mention it.
+  const BACKDROP = row('row-backdrop', 'image', 'reference_image', 1, 'my-passport.jpg', {
+    handle: '@my_passport',
+    displayName: 'my-passport.jpg',
+    sourceStoragePath: 'uploads/creator-1/1730000000001-my-passport.jpg',
+  }, 'gen-private-7');
+  const BOTH_SLOTS = [
+    { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' },
+    { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
+  ];
+  const SLOT_KEYS = new Set(['id', 'kind', 'role', 'handle', 'name', 'pictureCount', 'durationSeconds']);
+
+  /** Nothing that names or reaches the creator's files: no row, path, link, source, label or stored name. */
+  function expectNothingOfTheInputs(value: unknown) {
+    expect(JSON.stringify(value)).not.toMatch(
+      /row-product|row-backdrop|gen-private-7|generation_inputs|uploads\/|Product|my-passport|my_passport|displayName|sourceStoragePath|"label"|https?:\/\//,
+    );
+  }
+
+  beforeEach(() => {
+    mocks.generation = {
+      ...mocks.generation,
+      share_input_media_for_remix: false,
+      prompt: 'Place @product on a marble counter, soft light',
+      workflow_settings: { model: 'nano-banana-2', aspectRatio: '3:4' },
+    };
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [PRODUCT, BACKDROP]]]));
+  });
+
+  it('gives anyone else a slot for each kept input, with a handle only where the prompt mentions it', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputSlots).toEqual(BOTH_SLOTS);
+    for (const slot of bundle.inputSlots ?? []) {
+      expect(Object.keys(slot).filter((key) => !SLOT_KEYS.has(key))).toEqual([]);
+    }
+    // Read once, without signing: the rows were enough, so the settings were not read for inputs.
+    expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalledTimes(1);
+    expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalledWith(expect.objectContaining({
+      generationIds: ['gen-1'],
+      urlMode: 'none',
+      throwOnError: true,
+    }));
+    expect(mocks.buildLegacyGenerationInputMedia).not.toHaveBeenCalled();
+    // Not someone who unlocked a recipe: no copy is looked for.
+    expect(mocks.loadGenerationRecipeReferenceCopiesByPostId).not.toHaveBeenCalled();
+    expect(bundle.inputs).toEqual({});
+    expect(bundle).not.toHaveProperty('inputMedia');
+    // A slot is no restore failure: the fixture's missing result is the only one.
+    expect(bundle.restoreIssues).toEqual(['result']);
+    expectNothingOfTheInputs(bundle);
+  });
+
+  it('gives a run that kept no rows a slot for each input its settings name, read without signing', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/generation-input-media')>('@/lib/generation-input-media');
+    mocks.buildLegacyGenerationInputMedia.mockImplementation(actual.buildLegacyGenerationInputMedia);
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map());
+    mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
+    mocks.generation = {
+      ...mocks.generation,
+      prompt: '@me in a linen suit.',
+      workflow_settings: {
+        model: 'nano-banana-2',
+        elements: [
+          { id: 'el-1', displayName: 'passport-scan.jpg', handle: '@me', storagePath: 'uploads/creator-1/1730000000000-passport-scan.jpg' },
+          { id: 'el-2', displayName: 'Reference result', handle: '@reference_result', sourceGenerationId: 'gen-private-7' },
+        ],
+      },
+    };
+    const storageFrom = vi.spyOn(adminClient.storage, 'from');
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@me', name: 'Reference image 1' },
+      { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
+    ]);
+    expect(mocks.buildLegacyGenerationInputMedia).toHaveBeenCalledWith(expect.objectContaining({ generationId: 'gen-1', urlMode: 'none' }));
+    expect(storageFrom).not.toHaveBeenCalled();
+    expect(bundle.inputs).toEqual({});
+    expect(JSON.stringify(bundle)).not.toMatch(/passport-scan|gen-private-7|Reference result|el-\d|uploads\//);
+    storageFrom.mockRestore();
+  });
+
+  it('names a motion run’s slots as its character and its clip', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(PUBLIC_ACCESS);
+    mocks.generation = {
+      ...mocks.generation,
+      category: 'video',
+      creation_mode: 'motion',
+      model: 'kling-2.6',
+      prompt: 'Dance like the clip',
+      workflow_settings: { model: 'kling-2.6' },
+    };
+    // The plain reference roles the catalog path kept motion inputs under.
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [
+      row('row-hero', 'image', 'reference_image', 0, 'hero.png', { slot: 'characterImage' }),
+      row('row-moves', 'video', 'reference_video', 1, 'moves.mp4', { slot: 'referenceVideo', durationSeconds: 8 }),
+    ]]]));
+
+    const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+    expect(bundle.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
+      { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+    ]);
+    expect(bundle.inputs).toEqual({});
+  });
+
+  it('gives no slots when the rows cannot be read, rather than failing the remix or reading the settings', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(UNLOCKED_ACCESS);
+    mocks.loadGenerationInputMediaMap.mockImplementation(async (params: { throwOnError?: boolean }) => {
+      if (params.throwOnError) throw new Error('canceling statement due to statement timeout');
+      return new Map([['gen-1', [PRODUCT, BACKDROP]]]);
+    });
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.generation.prompt).toBe('Place @product on a marble counter, soft light');
+    expect(bundle).not.toHaveProperty('inputSlots');
+    expect(bundle.inputs).toEqual({});
+    expect(mocks.buildLegacyGenerationInputMedia).not.toHaveBeenCalled();
+    expect(mocks.loadGenerationRecipeReferenceCopiesByPostId).not.toHaveBeenCalled();
+  });
+
+  it('looks for copies in the recipe of the post the gate verified, and gives slots alone when it holds none', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(UNLOCKED_ACCESS);
+
+    const bundle = await loadRemixSourceBundle(request('post-client'), 'gen-1', { postId: 'post-client' });
+
+    expect(mocks.loadGenerationRecipeReferenceCopiesByPostId).toHaveBeenCalledTimes(1);
+    expect(mocks.loadGenerationRecipeReferenceCopiesByPostId).toHaveBeenCalledWith(expect.objectContaining({
+      postId: 'post-verified',
+      generationId: 'gen-1',
+      viewerUserId: 'viewer-1',
+      inputRowIds: ['row-product', 'row-backdrop'],
+    }));
+    // The creator's switch is off: the inputs themselves are not read for this buyer.
+    expect(mocks.loadGenerationRecipeRemixInputMediaByPostId).not.toHaveBeenCalled();
+    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalledWith(expect.objectContaining({ urlMode: 'signed' }));
+    expect(bundle.inputSlots).toEqual(BOTH_SLOTS);
+    expect(bundle.inputs).toEqual({});
+    expect(bundle.workflowSettings).toEqual({ model: 'nano-banana-2', aspectRatio: '3:4' });
+    expectNothingOfTheInputs(bundle);
+  });
+
+  it('restores the inputs an unlocked recipe holds copies of from the copies’ links, and gives slots for the rest', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(UNLOCKED_ACCESS);
+    const COPY = 'post_resource_files/creator-1/generation-references/gen-1/00-reference-image-row-product.png';
+    mocks.loadGenerationRecipeReferenceCopiesByPostId.mockResolvedValue(new Map([['row-product', {
+      storagePath: COPY,
+      url: 'https://signed.example/recipe-copy-of-product.png?token=short',
+    }]]));
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    // Under the row's own id, as any remixer's restore is, with the copy in place of the creator's file.
+    expect(bundle.inputs.image?.elements).toEqual([{
+      id: 'row-product',
+      displayName: 'Product',
+      handle: '@product',
+      storagePath: COPY,
+      sourceGenerationId: null,
+      url: 'https://signed.example/recipe-copy-of-product.png?token=short',
+    }]);
+    expect(bundle.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 1' },
+    ]);
+    expectNothingOfTheInputs(bundle.inputSlots);
+    // Neither the creator's own copy, where their upload was staged, nor the withheld input reaches the remix.
+    expect(JSON.stringify(bundle)).not.toMatch(/generation_inputs|uploads\/|sourceStoragePath|row-backdrop|my-passport|my_passport|gen-private-7/);
+    expect(bundle).not.toHaveProperty('inputMedia');
+    expect(bundle.restoreIssues).toEqual(['result']);
+  });
+
+  it('counts a copy whose link could not be signed as a failed restore, not a slot', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(UNLOCKED_ACCESS);
+    mocks.loadGenerationRecipeReferenceCopiesByPostId.mockResolvedValue(new Map([['row-product', {
+      storagePath: 'post_resource_files/creator-1/generation-references/gen-1/00-reference-image-row-product.png',
+      url: null,
+    }]]));
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.inputs.image?.elements).toEqual([expect.objectContaining({ id: 'row-product', url: null })]);
+    expect(bundle.restoreIssues).toContain('image-element:Product');
+    expect(bundle.inputSlots?.map((slot) => slot.handle)).toEqual([null]);
+  });
+
+  it('gives slots in place of copies when the recipe cannot be read', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue(UNLOCKED_ACCESS);
+    mocks.loadGenerationRecipeReferenceCopiesByPostId.mockRejectedValue(new Error('post_resource_bundles unavailable'));
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.inputSlots).toEqual(BOTH_SLOTS);
+    expect(bundle.inputs).toEqual({});
+  });
+
+  it.each([
+    ['the owner', { allowed: true, basis: 'owner', post: null, includeSharedInputMedia: true, recipeEntitled: false }],
+    ['a remix of shared inputs', { ...PUBLIC_ACCESS, includeSharedInputMedia: true }],
+    ['someone the unlocked recipe hands the inputs to', { ...UNLOCKED_ACCESS, recipeEntitled: true }],
+  ])('gives %s no slots', async (_, access) => {
+    mocks.resolveRemixAccess.mockResolvedValue(access);
+    mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([PRODUCT, BACKDROP]);
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle).not.toHaveProperty('inputSlots');
+    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalledWith(expect.objectContaining({ urlMode: 'none' }));
+    expect(mocks.loadGenerationRecipeReferenceCopiesByPostId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a recipe it has not unlocked', { allowed: false, reason: 'unlock_required' }, 403],
+    ['a template result', { allowed: false, reason: 'template_result' }, 400],
+    ['a source it may not see', { allowed: false, reason: 'not_found' }, 404],
+  ])('reads no input and names no slot for %s', async (_, access, status) => {
+    mocks.resolveRemixAccess.mockResolvedValue(access);
+
+    const outcome = await loadRemixSourceBundle(request(), 'gen-1').then((bundle) => bundle, (error: unknown) => error);
+
+    expect(outcome).toBeInstanceOf(RemixSourceError);
+    expect(outcome).toMatchObject({ status });
+    expect(JSON.stringify(outcome)).not.toMatch(/inputSlots|slot-1/);
+    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
+    expect(mocks.buildLegacyGenerationInputMedia).not.toHaveBeenCalled();
+    expect(mocks.loadGenerationRecipeReferenceCopiesByPostId).not.toHaveBeenCalled();
   });
 });
 
@@ -837,8 +1116,46 @@ describe('a Kling O3 run with named subjects', () => {
     expect(bundle.generation.prompt).toBe('@lead lifts @bottle and smiles at the camera.');
     expect(bundle.inputs.video).toBeUndefined();
     expect(bundle.workflowSettings).toEqual({ model: 'kling-o3', referenceMode: 'elements' });
-    expect(JSON.stringify(bundle)).not.toMatch(/hero-front|subject_image|Hero creator/);
-    expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
+    // Even the links this fake read hands back stay out: a slot is named, never filled.
+    expect(JSON.stringify(bundle)).not.toMatch(/hero-front|subject_image|Hero creator|kept-\d|generation_inputs/);
+    // Read without signing, for an empty slot per subject (owner, 2026-11-03).
+    expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalledTimes(1);
+    expect(mocks.loadGenerationInputMediaMap).toHaveBeenCalledWith(expect.objectContaining({ urlMode: 'none' }));
+    expect(bundle.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'subject', handle: '@lead', name: 'Subject 1', pictureCount: 2 },
+      { id: 'slot-2', kind: 'image', role: 'subject', handle: '@bottle', name: 'Subject 2', pictureCount: 2 },
+    ]);
+  });
+
+  it('restores the subjects an unlocked recipe holds copies of, and gives the others a slot each', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, basis: 'unlocked' });
+    const copyPath = (sortOrder: number) => (
+      `post_resource_files/creator-1/generation-references/gen-1/0${sortOrder}-subject-image-row-${sortOrder}.png`
+    );
+    mocks.loadGenerationRecipeReferenceCopiesByPostId.mockResolvedValue(new Map([0, 1].map((sortOrder) => [
+      `row-${sortOrder}`,
+      { storagePath: copyPath(sortOrder), url: `https://signed.example/copy-${sortOrder}.png` },
+    ])));
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.inputs.video?.subjects).toEqual([{
+      handle: '@lead',
+      displayName: 'Hero creator',
+      images: [0, 1].map((sortOrder) => ({
+        kind: 'image',
+        label: 'Hero creator',
+        storagePath: copyPath(sortOrder),
+        sourceGenerationId: null,
+        url: `https://signed.example/copy-${sortOrder}.png`,
+      })),
+    }]);
+    expect(bundle.inputSlots).toEqual([
+      { id: 'slot-1', kind: 'image', role: 'subject', handle: '@bottle', name: 'Subject 1', pictureCount: 2 },
+    ]);
+    // The creator's own copies and their links never reach the remix: only the recipe's.
+    expect(JSON.stringify(bundle)).not.toMatch(/kept-\d|generation_inputs/);
+    expect(bundle.restoreIssues.filter((issue) => issue.startsWith('video-subject'))).toEqual([]);
   });
 
   it('restores the subjects of a bought recipe from the post the gate verified, with the settings still stripped', async () => {

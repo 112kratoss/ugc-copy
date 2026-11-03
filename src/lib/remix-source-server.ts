@@ -37,6 +37,7 @@ import {
   type RemixSourceResult,
 } from '@/lib/remix-source';
 import { loadGenerationRecipeRemixInputMediaByPostId } from '@/lib/post-resource-bundles-server';
+import { resolveWithheldRemixInputs } from '@/lib/remix-input-slots-server';
 import { createServiceClient, createUserClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   getUserOwnedStoredMediaLocation,
@@ -408,10 +409,27 @@ export async function loadRemixSourceBundle(
       throwOnError: true,
       })
     : [];
+  // Anyone else is given none of the run's inputs (owner, 2026-11-03): an
+  // empty slot for each, and for someone the gate found unlocked the post's
+  // recipe, the inputs that recipe holds copies of instead. The owner, a remix
+  // the creator shared the inputs with and a recipe that hands them over get
+  // no slots.
+  const withheldInputs = !readsRunInputs && !access.recipeEntitled
+    ? await resolveWithheldRemixInputs({
+        adminSupabase,
+        generation: typedGeneration,
+        workflowSettings,
+        tool: isMotionWorkflow ? 'motion' : category === 'image' ? 'image' : 'video',
+        unlockedPostId: access.basis === 'unlocked' ? access.post.id : null,
+        viewerUserId: user.id,
+      })
+    : null;
   const keptInputMedia = readsRunInputs ? inputMedia : recipeInputMedia;
   // What anyone but the owner restores from: each row cut down to its copy and
-  // what a restore reads (`toRemixerInputMedia`).
-  const restoredInputMedia = isOwner ? keptInputMedia : keptInputMedia.map(toRemixerInputMedia);
+  // what a restore reads (`toRemixerInputMedia`), or to the recipe's copy of it.
+  const restoredInputMedia = isOwner
+    ? keptInputMedia
+    : [...keptInputMedia.map(toRemixerInputMedia), ...(withheldInputs?.restoredFromCopies ?? [])];
 
   const restoreIssues: string[] = [];
   // Keeping inputs fails one item at a time, so the kept rows can hold less
@@ -544,6 +562,8 @@ export async function loadRemixSourceBundle(
     // it from, both naming the file. Anyone else restores from `inputs`, which
     // is built below from the same rows cut down to what a restore reads.
     ...(isOwner ? { inputMedia: keptInputMedia } : {}),
+    // Not restore failures: never in `restoreIssues`.
+    ...(withheldInputs && withheldInputs.inputSlots.length > 0 ? { inputSlots: withheldInputs.inputSlots } : {}),
     workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
   };

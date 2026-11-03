@@ -6,6 +6,7 @@ import type {
   CatalogControl,
   CatalogInputMode,
   CatalogInputSlot,
+  GenerationModelCatalog,
   GenerationModelDescriptor,
 } from '../lib/generation-model-catalog';
 import { normalizeCatalogSettings, parseModelCatalogDetail } from '../lib/generation-model-catalog';
@@ -37,6 +38,7 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   createSubjectDraft,
+  fillRemixInputSlot,
   renameMediaDraft,
   videoDraftReferenceMode,
   type ImageCreationDraft,
@@ -45,6 +47,7 @@ import {
   type VideoShotDraft,
 } from '../lib/media-creation-view-model';
 import type { SeedanceAssetMetadata } from '../lib/model-catalog/seedance-assets';
+import type { RemixInputSlot } from '../lib/remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from '../lib/types';
 import { createRemixRestoreCatalog, createTestGenerationModelCatalog, remoteImageModel, seedance15ProModel, veo31Model } from './fixtures/generation-model-catalog';
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
@@ -1650,5 +1653,82 @@ describe('a prompt is held to its model’s own limit', () => {
     const motion = { ...createDefaultCreationDraft('motion'), prompt: 'Calm, then a spin.' };
     expect(catalogPromptMeters(motion, motionModel).prompt).toMatchObject({ limit: 2500, label: '18 / 2,500' });
     expect(catalogPromptMeters({ ...createDefaultCreationDraft('image'), model: 'z-image', prompt: 'x' }, null).prompt.limit).toBe(1000);
+  });
+});
+
+// Owner, 2026-11-03: a remix not given its creator's inputs gets an empty slot in place of each, which
+// its prompt names; the remixer fills it with their own, and nothing of a slot is ever sent or priced.
+describe('a remix’s empty input slots in a catalog run', () => {
+  const slotsImage: GenerationModelDescriptor = { ...imageModelWithSlots('slots-image', 'Slots Image', 4), availability: { web: true, mobile: true } };
+  const catalog: GenerationModelCatalog = {
+    schemaVersion: 3,
+    revision: 'slots-rev',
+    defaults: { image: slotsImage.id, video: kling30.id, motion: null },
+    models: [slotsImage, kling30],
+  };
+  const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
+  const imageSource: RemixSourceBundle = {
+    generation: { id: 'gen-slots', title: 'Counter', prompt: 'Place @product on a marble counter', category: 'image', model: slotsImage.id },
+    result: null,
+    inputs: { image: { elements: [] } },
+    inputSlots: [productSlot],
+    workflowSettings: { model: slotsImage.id },
+    restoreIssues: [],
+  };
+  const videoSource: RemixSourceBundle = {
+    generation: { id: 'gen-dance', title: 'Dance', prompt: 'Open on the door, then @dance spins', category: 'video', model: kling30.id },
+    result: null,
+    inputs: { video: { referenceMode: 'frames', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+    inputSlots: [
+      { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
+      { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4 },
+    ],
+    workflowSettings: { model: kling30.id, referenceMode: 'frames', duration: 5 },
+    restoreIssues: [],
+  };
+  const slotWords = /slot-\d|inputSlots|Reference image 1|Reference video 1/;
+
+  it('restores the slots through the catalog’s own normalization, as no restore issue', () => {
+    const restored = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageSource, catalog);
+    expect(restored).toMatchObject({ warning: null, switchedModel: false, model: { id: 'slots-image' } });
+    expect(restored.draft.inputSlots).toEqual([productSlot]);
+    expect(restored.draft.tool === 'image' && restored.draft.references).toEqual([]);
+  });
+
+  it('holds the run on a mention of an empty slot in its own words, and lets it go once the slot is filled', () => {
+    const { draft } = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageSource, catalog);
+    const slotLine = 'Add your own for @product in its box, or take @product out of the prompt.';
+    expect(validateCatalogCreationDraft(draft, slotsImage, ready)).toMatchObject({ errors: [slotLine], canGenerate: false });
+    expect(validateCatalogCreationDraft({ ...draft, prompt: 'Put @product beside @missing' }, slotsImage, ready).errors)
+      .toEqual(['Unknown element mention: @missing', slotLine]);
+    // Taken out of the prompt, the slot holds nothing: it is an input the run may go without.
+    expect(validateCatalogCreationDraft({ ...draft, prompt: 'A bottle on a marble counter' }, slotsImage, ready).errors).toEqual([]);
+
+    const filled = fillRemixInputSlot(draft, 'slot-1', [upload('bottle.png', 'image')]);
+    expect(validateCatalogCreationDraft(filled, slotsImage, ready)).toMatchObject({ errors: [], canGenerate: true });
+    const run = buildUnifiedCatalogGenerationRequest(filled, slotsImage, catalog.revision);
+    expect(run.inputs).toEqual([expect.objectContaining({ slot: 'imageReferences', handle: '@product', url: 'https://cdn.example.com/bottle.png' })]);
+    expect(JSON.stringify([run, buildCatalogQuoteRequest(filled, slotsImage, catalog.revision)])).not.toMatch(slotWords);
+  });
+
+  it('sends a Kling 3.0 remix’s filled clip under the handle its prompt names, beside the filled frame, and no slot', () => {
+    const { draft } = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), videoSource, catalog);
+    expect(draft.inputSlots?.map((slot) => slot.id)).toEqual(['slot-1', 'slot-2']);
+    expect(validateCatalogCreationDraft(draft, kling30, ready).errors)
+      .toEqual(['Add your own for @dance in its box, or take @dance out of the prompt.']);
+    // Unfilled, the run and its quote send nothing in a slot's place.
+    expect(buildUnifiedCatalogGenerationRequest(draft, kling30, catalog.revision).inputs).toEqual([]);
+    expect(JSON.stringify(buildCatalogQuoteRequest(draft, kling30, catalog.revision))).not.toMatch(slotWords);
+
+    const clip = fillRemixInputSlot(draft, 'slot-2', [upload('move.mp4', 'video', { durationSeconds: 4 })], { namesClips: true });
+    const filled = applyCatalogModelDefaults(fillRemixInputSlot(clip, 'slot-1', [upload('door.png', 'image')]), kling30, catalog.revision);
+    expect(validateCatalogCreationDraft(filled, kling30, ready)).toMatchObject({ errors: [], canGenerate: true });
+    const run = buildUnifiedCatalogGenerationRequest(filled, kling30, catalog.revision);
+    expect(run.prompt).toBe('Open on the door, then @dance spins');
+    expect(run.inputs).toEqual([
+      expect.objectContaining({ slot: 'startFrame', url: 'https://cdn.example.com/door.png' }),
+      expect.objectContaining({ slot: 'videoElements', handle: '@dance', url: 'https://cdn.example.com/move.mp4', durationSeconds: 4 }),
+    ]);
+    expect(JSON.stringify([run, buildCatalogQuoteRequest(filled, kling30, catalog.revision)])).not.toMatch(slotWords);
   });
 });

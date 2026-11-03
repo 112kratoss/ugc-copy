@@ -1,5 +1,6 @@
 import type { GenerationSetupEntry } from './generation-setup/generation-setup';
 import type { SeedanceAssetCollections, SeedanceAssetKind, SeedanceAssetStatus } from './model-catalog/seedance-assets';
+import type { RemixInputSlot } from './remix-input-slots/remix-input-slots';
 
 export type CreatorToolId = 'image' | 'video' | 'motion';
 
@@ -701,6 +702,12 @@ export interface RemixSourceBundle {
   };
   /** The owner's remix only: the kept rows, with where each input was staged. */
   inputMedia?: GenerationInputMediaItem[];
+  /**
+   * The inputs this remix is not given, as empty slots for the remixer's own
+   * (`lib/remix-input-slots`): absent for the owner and wherever every input
+   * is restored. Not restore failures, so never in `restoreIssues`.
+   */
+  inputSlots?: RemixInputSlot[];
   workflowSettings: Record<string, unknown>;
   restoreIssues: string[];
 }

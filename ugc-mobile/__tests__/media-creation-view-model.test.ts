@@ -11,6 +11,7 @@ import {
   createDefaultCreationDraft,
   createMediaDraftFromUpload,
   extractPromptHandles,
+  fillRemixInputSlot,
   getCreationReadiness,
   getCreationSectionOrder,
   getCreationSectionSummary,
@@ -20,17 +21,21 @@ import {
   hydrateCreationDraftFromRemixSource,
   motionClipLengthReading,
   nameUnnamedReferences,
+  promptMentionErrors,
   renameMediaDraft,
   replaceMediaDraftMedia,
   replaceShotPrompt,
+  unfilledRemixInputSlots,
   validateCreationDraft,
   videoDraftReferenceMode,
+  videoSubjects,
   VIDEO_MODELS,
   withClipHandles,
   withCreatorClipHandle,
   type MediaDraft,
   type VideoCreationDraft,
 } from '../lib/media-creation-view-model';
+import type { RemixInputSlot } from '../lib/remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from '../lib/types';
 
 const repoRoot = process.cwd();
@@ -1228,5 +1233,181 @@ describe('a motion clip’s length as the composer shows it', () => {
   it('shows the run’s seconds for a clip whose length the phone could not read, and nothing without a clip', () => {
     expect(motionClipLengthReading(withClip(null, 7), kling26Clip, 30)).toEqual({ reading: '7s', heldNote: null });
     expect(motionClipLengthReading(createDefaultCreationDraft('motion'), kling26Clip, 30)).toBeNull();
+  });
+});
+
+// Owner, 2026-11-03: a remix not given its creator's inputs gets an empty box in place of each, named
+// as the prompt names it, to fill with the remixer's own; the prompt then works unchanged.
+describe('a remix’s empty input slots', () => {
+  const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
+  const backdropSlot: RemixInputSlot = { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' };
+  const upload = (fileName: string, kind: 'image' | 'video' | 'audio' = 'image', durationSeconds: number | null = null) => createMediaDraftFromUpload({
+    signedUrl: `https://cdn.example.com/${fileName}`,
+    storagePath: `uploads/remixer/${fileName}`,
+    mimeType: kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : 'audio/mpeg',
+    fileName,
+    kind,
+    durationSeconds,
+  });
+  const imageRemix = (inputSlots: unknown, prompt = 'Place @product on a marble counter, soft light') => remixSourceBundle({
+    generation: { prompt },
+    workflowSettings: { model: 'nano-banana-2' },
+    inputs: { image: { elements: [] } },
+    inputSlots: inputSlots as RemixInputSlot[],
+  });
+
+  it('restores each tool’s slots beside its inputs, as no restore issue, and only the roles its creator has a place for', () => {
+    const image = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([
+      productSlot,
+      backdropSlot,
+      // A frame has no place in the image creator, and a malformed entry is read as nothing.
+      { id: 'slot-3', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
+      { id: '', role: 'reference_image' },
+    ]));
+    expect(image.warning).toBeNull();
+    expect(image.draft.references).toEqual([]);
+    expect(image.draft.inputSlots).toEqual([productSlot, backdropSlot]);
+
+    const video = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('video'), remixSourceBundle({
+      generation: { category: 'video', model: 'seedance-2', prompt: '@maya dances like @dance' },
+      workflowSettings: { model: 'seedance-2', referenceMode: 'elements' },
+      inputs: { video: { referenceMode: 'elements', startFrame: null, endFrame: null, elements: [], referenceVideos: [], referenceAudios: [] } },
+      inputSlots: [
+        { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
+        { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4.2 },
+        { id: 'slot-3', kind: 'audio', role: 'reference_audio', handle: null, name: 'Reference audio 1' },
+        { id: 'slot-4', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+        { id: 'slot-5', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
+      ],
+    }));
+    expect(video.warning).toBeNull();
+    expect(video.draft.inputSlots?.map((slot) => slot.role)).toEqual(['start_frame', 'reference_video', 'reference_audio', 'subject']);
+    expect(video.draft.inputSlots?.[1]).toEqual({ id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1', durationSeconds: 4.2 });
+
+    const motion = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), remixSourceBundle({
+      generation: { category: 'video', model: 'kling-3.0', prompt: '' },
+      workflowSettings: { model: 'kling-3.0' },
+      inputSlots: [
+        { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
+        { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+        { id: 'slot-3', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 1' },
+      ],
+    }));
+    expect(motion.warning).toBeNull();
+    expect(motion.draft.inputSlots?.map((slot) => slot.id)).toEqual(['slot-1', 'slot-2']);
+
+    // A source that kept nothing back gives a draft without the field, as every other draft is.
+    const owner = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix(undefined));
+    expect('inputSlots' in owner.draft).toBe(false);
+  });
+
+  it('fills a slot with the remixer’s own picture under the handle the prompt mentions, and the slot leaves', () => {
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot, backdropSlot]));
+    const bottle = upload('IMG_2201.png');
+    const filled = fillRemixInputSlot(draft, 'slot-1', [bottle]);
+
+    expect(filled.references).toEqual([expect.objectContaining({ id: bottle.id, url: bottle.url, storagePath: bottle.storagePath, displayName: 'product', handle: '@product' })]);
+    expect(filled.inputSlots).toEqual([backdropSlot]);
+    expect(unfilledRemixInputSlots(filled)).toEqual([backdropSlot]);
+
+    // A slot the prompt does not mention names its fill by its own name; the last one leaves the field empty, not gone.
+    const both = fillRemixInputSlot(filled, 'slot-2', [upload('backdrop.png')]);
+    expect(both.references.map((media) => [media.displayName, media.handle])).toEqual([['product', '@product'], ['Reference image 2', '@reference_image_2']]);
+    expect(both.inputSlots).toEqual([]);
+    expect(unfilledRemixInputSlots(both)).toEqual([]);
+
+    // A slot already filled, or an upload that brought nothing, changes nothing.
+    expect(fillRemixInputSlot(both, 'slot-1', [upload('again.png')])).toBe(both);
+    expect(fillRemixInputSlot(draft, 'slot-1', [])).toBe(draft);
+  });
+
+  it('puts a video run’s fills where each slot stands: its frame, its clip under the handle, its track and its subject', () => {
+    const base: VideoCreationDraft = {
+      ...createDefaultCreationDraft('video'),
+      model: 'kling-3.0-video',
+      prompt: '@maya dances like @dance',
+      inputSlots: [
+        { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' },
+        { id: 'slot-2', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' },
+        { id: 'slot-3', kind: 'video', role: 'reference_video', handle: null, name: 'Reference video 2' },
+        { id: 'slot-4', kind: 'audio', role: 'reference_audio', handle: null, name: 'Reference audio 1' },
+        { id: 'slot-5', kind: 'image', role: 'subject', handle: '@maya', name: 'Subject 1', pictureCount: 2 },
+      ],
+    };
+    const framed = fillRemixInputSlot(base, 'slot-1', [upload('door.png')]);
+    expect(framed.startFrame).toMatchObject({ url: 'https://cdn.example.com/door.png', displayName: 'Start frame' });
+    expect(framed.referenceMode).toBe('frames');
+
+    const danced = fillRemixInputSlot(framed, 'slot-2', [upload('move.mp4', 'video', 4)], { namesClips: true });
+    expect(danced.referenceVideos).toEqual([expect.objectContaining({ handle: '@dance', displayName: 'dance', durationSeconds: 4 })]);
+    // A clip whose slot has no handle is named as a clip the creator adds, where the model names clips.
+    const second = fillRemixInputSlot(danced, 'slot-3', [upload('spin.mp4', 'video', 5)], { namesClips: true });
+    expect(second.referenceVideos.map((clip) => clip.handle)).toEqual(['@dance', '@reference_video_2']);
+    expect(second.referenceVideos[1].handleStandIn).toBeUndefined();
+
+    const tracked = fillRemixInputSlot(second, 'slot-4', [upload('voice.mp3', 'audio', 6)]);
+    expect(tracked.referenceAudios).toEqual([expect.objectContaining({ displayName: 'Reference audio 1', url: 'https://cdn.example.com/voice.mp3' })]);
+
+    const subject = fillRemixInputSlot(tracked, 'slot-5', [upload('maya-1.png'), upload('maya-2.png')]);
+    expect(videoSubjects(subject)).toEqual([expect.objectContaining({ displayName: 'maya', handle: '@maya' })]);
+    expect(videoSubjects(subject)[0].images.map((image) => image.handle)).toEqual(['@maya', '@maya']);
+    expect(subject.inputSlots).toEqual([]);
+  });
+
+  it('fills a motion run’s character and clip, the run taking its length from the clip', () => {
+    const base = {
+      ...createDefaultCreationDraft('motion'),
+      inputSlots: [
+        { id: 'slot-1', kind: 'image', role: 'character_image', handle: null, name: 'Character image' },
+        { id: 'slot-2', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video', durationSeconds: 8 },
+      ] satisfies RemixInputSlot[],
+    };
+    const character = fillRemixInputSlot(base, 'slot-1', [upload('me.png')]);
+    expect(character.characterImage).toMatchObject({ url: 'https://cdn.example.com/me.png', displayName: 'Character image' });
+    const clip = fillRemixInputSlot(character, 'slot-2', [upload('moves.mp4', 'video', 6.2)]);
+    expect(clip.referenceVideo).toMatchObject({ url: 'https://cdn.example.com/moves.mp4', displayName: 'Motion video' });
+    expect(clip.duration).toBe(7);
+    expect(clip.inputSlots).toEqual([]);
+  });
+
+  it('waits on no slot whose handle the draft answers to by now, or whose one place holds something', () => {
+    const image = { ...createDefaultCreationDraft('image'), inputSlots: [productSlot, backdropSlot] };
+    // A picture added from the rail and named so answers to the slot's mention.
+    const named = { ...image, references: [{ ...upload('bottle.png'), displayName: 'product', handle: '@product' }] };
+    expect(unfilledRemixInputSlots(named)).toEqual([backdropSlot]);
+
+    const frameSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'start_frame', handle: null, name: 'Start frame' };
+    const video = { ...createDefaultCreationDraft('video'), inputSlots: [frameSlot] };
+    expect(unfilledRemixInputSlots(video)).toEqual([frameSlot]);
+    expect(unfilledRemixInputSlots({ ...video, startFrame: upload('door.png') })).toEqual([]);
+    expect(unfilledRemixInputSlots(createDefaultCreationDraft('video'))).toEqual([]);
+  });
+
+  it('asks for the remixer’s own in place of the unknown mention of an empty slot, and keeps the line for any other', () => {
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot]));
+    expect(validateCreationDraft(draft).errors).toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
+
+    const withOther = { ...draft, prompt: 'Place @product beside @missing' };
+    expect(validateCreationDraft(withOther).errors).toEqual([
+      'Unknown element mention: @missing',
+      'Add your own for @product in its box, or take @product out of the prompt.',
+    ]);
+    expect(promptMentionErrors(['@product', '@backdrop'], { ...draft, inputSlots: [productSlot, { ...backdropSlot, handle: '@backdrop' }] })).toEqual([
+      'Add your own for @product and @backdrop in their boxes, or take them out of the prompt.',
+    ]);
+
+    // Filled, the mention finds the remixer's picture.
+    expect(validateCreationDraft(fillRemixInputSlot(draft, 'slot-1', [upload('bottle.png')])).errors).toEqual([]);
+  });
+
+  it('never sends or describes a slot in a run', () => {
+    const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot, backdropSlot]));
+    const filled = fillRemixInputSlot(draft, 'slot-1', [upload('bottle.png')]);
+    const payload = buildGenerationPayload(filled);
+
+    expect(payload.imageUrls).toEqual(['https://cdn.example.com/bottle.png']);
+    expect(payload.elements?.map((element) => element.handle)).toEqual(['@product']);
+    expect(JSON.stringify(payload)).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
+    expect(JSON.stringify(buildPromptEnhancementRequest(filled))).not.toMatch(/slot-\d|Reference image 2|inputSlots/);
   });
 });

@@ -22,6 +22,7 @@ import {
   createDefaultCreationDraft,
   extractPromptHandles,
   hydrateCreationDraftFromRemixSource,
+  promptMentionErrors,
   REMIX_RESTORE_WARNING_MESSAGE,
   videoSubjects,
   withClipHandles,
@@ -1088,8 +1089,8 @@ export function validateCatalogCreationDraft(
     }
   }
 
-  const unknownHandles = unknownPromptMentions(draft, model);
-  if (unknownHandles.length > 0) errors.push(`Unknown element mention${unknownHandles.length === 1 ? '' : 's'}: ${unknownHandles.join(', ')}`);
+  // A mention of a remix's empty slot asks for the remixer's own input in its box; any other is unknown.
+  errors.push(...promptMentionErrors(unknownPromptMentions(draft, model), draft));
 
   const hasServerQuote = typeof options.quotedCost === 'number' && Number.isFinite(options.quotedCost);
   const cost = hasServerQuote ? options.quotedCost as number : 0;

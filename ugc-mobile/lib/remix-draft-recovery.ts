@@ -1,6 +1,7 @@
-import { extractPromptHandles, videoDraftHandles, videoDraftMentionedHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft, type VideoCreationDraft } from './media-creation-view-model';
+import { extractPromptHandles, remixDraftInputSlots, videoDraftHandles, videoDraftMentionedHandles, videoSubjects, type CreationDraft, type MediaDraft, type SubjectDraft, type VideoCreationDraft } from './media-creation-view-model';
 import type { SeedanceAssetMetadata } from './model-catalog/seedance-assets';
 import { signedStorageUrlExpiresAt } from './media-url-expiry';
+import { remixInputSlotHandles } from './remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from './types';
 
 /** A link with less than this left is treated as already gone. */
@@ -111,21 +112,41 @@ export function needsRemixReferenceRecovery(draft: CreationDraft, clock?: Refere
   return missesReferences(draft);
 }
 
-/** A saved restore whose rail came back empty while its prompt still mentions what was on it. */
+/** The handles of a remix's empty slots: a mention of one was the creator's input kept to themselves, not one lost. */
+function slotHandles(draft: CreationDraft): Set<string> {
+  return new Set(remixInputSlotHandles(remixDraftInputSlots(draft)));
+}
+
+/**
+ * A saved restore whose rail came back empty while its prompt still mentions what was on it. A
+ * mention of an empty slot is not one: the source never gives that input, and its box asks for the
+ * remixer's own, so reading the source again on every visit would bring nothing back.
+ */
 function missesReferences(draft: CreationDraft): boolean {
   if (draft.tool === 'motion' || draft.references.length > 0) return false;
   if (draft.tool === 'video' && (draft.startFrame || draft.endFrame || draft.referenceVideos.length > 0 || videoSubjects(draft).length > 0)) return false;
-  return extractPromptHandles(draft.prompt).length > 0;
+  const waiting = slotHandles(draft);
+  return extractPromptHandles(draft.prompt).some((handle) => !waiting.has(handle));
 }
 
 /**
  * A clip without a handle of its own (none, or a stand-in the app made up for it), beside words (the
- * prompt or a shot) that mention one nothing in the draft answers to.
+ * prompt or a shot) that mention one nothing in the draft answers to, an empty slot included.
  */
 function missesClipHandles(draft: VideoCreationDraft): boolean {
   if (!draft.referenceVideos.some((clip) => !clip.handle || clip.handleStandIn)) return false;
-  const held = new Set(videoDraftHandles(draft));
+  const held = new Set([...videoDraftHandles(draft), ...slotHandles(draft)]);
   return [...videoDraftMentionedHandles(draft)].some((handle) => !held.has(handle));
+}
+
+/**
+ * A saved remix with the empty slots its source names now, where it was saved before slots
+ * existed: a session that holds its own slots keeps them, as the remixer has filled them so far.
+ */
+function withSourceSlots(draft: CreationDraft, restored: CreationDraft): CreationDraft {
+  if (draft.inputSlots !== undefined || draft.tool !== restored.tool) return draft;
+  const slots = remixDraftInputSlots(restored);
+  return slots.length > 0 ? { ...draft, inputSlots: [...slots] } : draft;
 }
 
 /**
@@ -142,13 +163,14 @@ function missesClipHandles(draft: VideoCreationDraft): boolean {
  * leaves is the clip's own from then on. A clip the source left out (it could
  * not sign it this time) keeps its mark, so a later visit can still give it its
  * handle. A handle the creator gave stays. Missing images come back only while
- * the prompt still mentions them.
+ * the prompt still mentions them. A session saved before remixes had empty
+ * slots takes the ones its source names now (`withSourceSlots`).
  */
 export function recoverRemixReferences(current: CreationDraft, restored: CreationDraft): CreationDraft {
   const sourceMedia = heldDraftMedia(restored);
   const mentioned = current.tool === 'video' ? videoDraftMentionedHandles(current) : new Set<string>();
   const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle ? [media.handle] : [])));
-  const renewed = mapDraftMedia(current, (media) => {
+  const renewed = mapDraftMedia(withSourceSlots(current, restored), (media) => {
     const match = sourceMedia.find((candidate) => isSameMedia(media, candidate));
     const url = match?.url && match.url !== media.url ? match.url : media.url;
     const sourceHandle = media.kind === 'video' && match?.handle && !match.handleStandIn ? match.handle : null;

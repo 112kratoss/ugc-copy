@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { applyCatalogModelDefaults } from '../lib/generation-model-draft';
 import { createDefaultCreationDraft, renameMediaDraft, type CreationDraft, type MediaDraft, type MotionCreationDraft, type VideoCreationDraft } from '../lib/media-creation-view-model';
 import { countDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaUrl } from '../lib/remix-draft-recovery';
+import type { RemixInputSlot } from '../lib/remix-input-slots/remix-input-slots';
 import type { RemixSourceBundle } from '../lib/types';
 import { klingVideoModel } from './generation-model-catalog-v2-fixtures';
 const reference = { id: 'girl', kind: 'image' as const, url: 'https://example.com/girl.jpg', fileName: 'girl.jpg', displayName: 'Girl', handle: '@girl' };
@@ -25,6 +26,43 @@ describe('saved remix reference recovery', () => {
     const current = draft({ prompt: '@new_subject' });
     expect(recoverRemixReferences(current, draft({ references: [reference] }))).toBe(current);
     expect(recoverRemixReferences(draft(), draft())).toEqual(draft());
+  });
+});
+
+// A remix's empty slots (owner, 2026-11-03) stand for inputs its source never gives: a mention of one is
+// no lost reference, and a session saved before slots existed takes the ones its source names now.
+describe('a saved remix with empty slots', () => {
+  const productSlot: RemixInputSlot = { id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@product', name: 'Reference image 1' };
+  const backdropSlot: RemixInputSlot = { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' };
+  const imageDraft = (prompt: string, inputSlots?: RemixInputSlot[]) => ({
+    ...createDefaultCreationDraft('image'),
+    prompt,
+    ...(inputSlots ? { inputSlots } : {}),
+  });
+
+  it('reads no source again for a session whose prompt mentions only its empty slots', () => {
+    expect(needsRemixReferenceRecovery(imageDraft('Place @product on a counter', [productSlot]))).toBe(false);
+    // A mention no slot stands for is still a reference the restore lost.
+    expect(needsRemixReferenceRecovery(imageDraft('Place @product beside @logo', [productSlot]))).toBe(true);
+    // A clip without its own handle, beside a mention of an empty slot, has none to take back from the source.
+    const clip = { id: 'spin', kind: 'video' as const, url: 'https://example.com/spin.mp4', fileName: 'spin.mp4', displayName: 'Spin' };
+    const kling: VideoCreationDraft = {
+      ...draft({ model: 'kling-3.0-video', prompt: 'Open on @dance' }),
+      referenceVideos: [clip],
+      inputSlots: [{ id: 'slot-1', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' }],
+    };
+    expect(needsRemixReferenceRecovery(kling)).toBe(false);
+  });
+
+  it('gives a session saved before slots the ones its source names, and keeps a session’s own', () => {
+    const saved = imageDraft('Place @product on a counter');
+    expect(needsRemixReferenceRecovery(saved)).toBe(true);
+    const restored = imageDraft('Place @product on a counter', [productSlot, backdropSlot]);
+
+    expect(recoverRemixReferences(saved, restored).inputSlots).toEqual([productSlot, backdropSlot]);
+    // The remixer filled the first already: the session keeps what is left.
+    expect(recoverRemixReferences(imageDraft('Place @product on a counter', [backdropSlot]), restored).inputSlots).toEqual([backdropSlot]);
+    expect(recoverRemixReferences(imageDraft('Place @product on a counter', []), restored).inputSlots).toEqual([]);
   });
 });
 
