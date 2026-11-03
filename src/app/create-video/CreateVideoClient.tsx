@@ -4099,6 +4099,7 @@ function VideoCreator({
     // One menu for the shots, which take turns: it is the focused shot's.
     const shotMentionMenu = useCreatorMentionMenu({
         mention: shotPromptsTakeMentions ? activeShotMentionQuery : null,
+        scope: activeShotMentionQuery?.shotId,
         suggestions: shotMentionSuggestions,
         onInsert: (handle) => {
             if (activeShotMentionQuery) handleInsertShotHandle(activeShotMentionQuery.shotId, handle);

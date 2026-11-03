@@ -40,39 +40,44 @@ const MENU_WIDTH = 352;
  */
 export function useCreatorMentionMenu<T extends CreatorMentionSuggestion>({
   mention,
+  scope = '',
   suggestions,
   onInsert,
 }: {
   /** The page's mention at the caret, or null where the prompt offers none. */
   mention: CreatorMention | null;
+  /** Which of the prompts sharing this menu the mention is in (a shot's id), so Escape and the row reached stay with it. */
+  scope?: string;
   suggestions: readonly T[];
   onInsert: (handle: string) => void;
 }) {
   const listboxId = useId();
   const [blurred, setBlurred] = useState(false);
-  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+  const [dismissedAt, setDismissedAt] = useState<string | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [trackedKey, setTrackedKey] = useState<string | null>(null);
   const takenKeyUp = useRef<string | null>(null);
 
   // A new query starts at the first row; a caret that left the "@" ends Escape's hold on it.
-  const key = mention ? `${mention.replaceStart}:${mention.query}` : null;
+  const at = mention ? `${scope}:${mention.replaceStart}` : null;
+  const key = mention ? `${at}:${mention.query}` : null;
   if (key !== trackedKey) {
     setTrackedKey(key);
     setActiveIndex(0);
-    if (!mention && dismissedAt !== null) setDismissedAt(null);
+    if (dismissedAt !== null && at !== dismissedAt) setDismissedAt(null);
   }
 
-  const open = mention !== null && !blurred && mention.replaceStart !== dismissedAt;
+  const open = mention !== null && !blurred && at !== dismissedAt;
   const active = suggestions.length > 0 ? Math.min(activeIndex, suggestions.length - 1) : -1;
   const optionId = (index: number) => `${listboxId}-option-${index}`;
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     takenKeyUp.current = null;
-    if (!open || !mention || event.nativeEvent.isComposing) return;
+    // Safari ends an input method's composition with an Enter that no longer says it composes, but keeps keyCode 229.
+    if (!open || !mention || event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === 'Escape') {
       event.preventDefault();
-      setDismissedAt(mention.replaceStart);
+      setDismissedAt(at);
       return;
     }
     const count = suggestions.length;
@@ -99,13 +104,13 @@ export function useCreatorMentionMenu<T extends CreatorMentionSuggestion>({
     field: ({ onCaretMove, onFocus, owns = true }: { onCaretMove: () => void; onFocus?: () => void; owns?: boolean }) => ({
       onClick: onCaretMove,
       onKeyUp: (event: KeyboardEvent<HTMLTextAreaElement>) => {
-        if (takenKeyUp.current === event.key) {
-          takenKeyUp.current = null;
-          return;
-        }
-        onCaretMove();
+        const taken = takenKeyUp.current === event.key;
+        takenKeyUp.current = null;
+        if (!taken) onCaretMove();
       },
-      onKeyDown: owns ? onKeyDown : undefined,
+      onKeyDown: owns ? onKeyDown : () => {
+        takenKeyUp.current = null;
+      },
       onFocus: () => {
         setBlurred(false);
         onFocus?.();
@@ -214,7 +219,14 @@ export function CreatorMentionMenu<T extends CreatorMentionSuggestion>({
     window.addEventListener('resize', schedule);
     window.addEventListener('scroll', schedule, true);
     window.visualViewport?.addEventListener('resize', schedule);
+    // The field moves or resizes in its card without a scroll: its own drag handle, a line drawn above it.
+    const textarea = fieldRef.current();
+    const box = rootRef.current?.offsetParent;
+    const sizes = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    if (textarea) sizes?.observe(textarea);
+    if (box) sizes?.observe(box);
     return () => {
+      sizes?.disconnect();
       cancelAnimationFrame(frame);
       window.removeEventListener('resize', schedule);
       window.removeEventListener('scroll', schedule, true);
@@ -337,8 +349,9 @@ function visibleBounds() {
   let bottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
   const header = document.querySelector('.app-shell-header');
   if (header) top = Math.max(top, header.getBoundingClientRect().bottom);
+  // The creator's bar covers the page only while it floats; under the column's width it can sit in the flow.
   const bar = document.querySelector('[data-creator-bar]');
-  if (bar) {
+  if (bar && ['sticky', 'fixed'].includes(getComputedStyle(bar).position)) {
     const barTop = bar.getBoundingClientRect().top;
     if (barTop > top) bottom = Math.min(bottom, barTop);
   }

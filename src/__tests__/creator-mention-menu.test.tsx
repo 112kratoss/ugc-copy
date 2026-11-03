@@ -16,7 +16,7 @@ const REFERENCES: CreatorMentionSuggestion[] = [
 ];
 
 /** A prompt wired as the creators wire theirs: the mention at the caret, the matches, and the insert. */
-function Prompt({ references = REFERENCES }: { references?: CreatorMentionSuggestion[] }) {
+function Prompt({ references = REFERENCES, scope }: { references?: CreatorMentionSuggestion[]; scope?: string }) {
   const [textarea, setTextarea] = useState<HTMLTextAreaElement | null>(null);
   const [prompt, setPrompt] = useState('');
   const [mention, setMention] = useState<CreatorMention | null>(null);
@@ -29,6 +29,7 @@ function Prompt({ references = REFERENCES }: { references?: CreatorMentionSugges
     : [];
   const menu = useCreatorMentionMenu({
     mention,
+    scope,
     suggestions: matches,
     onInsert: (handle) => {
       const next = insertHandleIntoPrompt(prompt, handle, prompt.length, prompt.length, mention);
@@ -143,6 +144,26 @@ describe('the "@" menu', () => {
 
     type('Open on ');
     type('Open on @');
+    expect(menu()).not.toBeNull();
+  });
+
+  it('leaves an input method\'s Enter to the input method', () => {
+    render(<Prompt />);
+    type('Open on @');
+    expect(fireEvent.keyDown(field(), { key: 'Enter', isComposing: true })).toBe(true);
+    // Safari's Enter that ends the composition no longer says it composes, but keeps keyCode 229.
+    expect(fireEvent.keyDown(field(), { key: 'Enter', keyCode: 229 })).toBe(true);
+    expect(field()).toHaveValue('Open on @');
+  });
+
+  it('keeps Escape to the prompt it was pressed in, where prompts share the menu', () => {
+    const { rerender } = render(<Prompt scope="shot-1" />);
+    type('@');
+    fireEvent.keyDown(field(), { key: 'Escape' });
+    expect(menu()).toBeNull();
+
+    // Another shot with its own "@" at the same place: its menu is not the one put away.
+    rerender(<Prompt scope="shot-2" />);
     expect(menu()).not.toBeNull();
   });
 
