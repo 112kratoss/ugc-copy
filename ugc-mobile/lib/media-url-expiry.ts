@@ -46,10 +46,23 @@ export function signedStorageUrlExpiresAt(url: string, storageBaseUrl: string): 
   }
 }
 
-export function resolveMediaUrlForExpiry(url: string, storageBaseUrl: string, apiBaseUrl: string, now: number): string {
-  const expiry = getPrivateMediaExpiry(url, storageBaseUrl);
-  if (!expiry || expiry.expiresAt > now + 30_000) return url;
+/** How close to its end a signed address is read through the authenticated media route instead. */
+export const PRIVATE_MEDIA_ROUTE_WITHIN_MS = 30_000;
+
+/** Whether a signed address dated by `getPrivateMediaExpiry` is within `PRIVATE_MEDIA_ROUTE_WITHIN_MS` of its end. */
+export function isPrivateMediaNearExpiry(expiry: { expiresAt: number }, now: number): boolean {
+  return expiry.expiresAt <= now + PRIVATE_MEDIA_ROUTE_WITHIN_MS;
+}
+
+/** The authenticated media route's address for a private object, which signs it afresh on each request. */
+export function privateMediaRouteUrl(expiry: { bucket: string; path: string }, apiBaseUrl: string): string {
   const proxy = new URL('/api/media', apiBaseUrl);
   proxy.search = new URLSearchParams({ bucket: expiry.bucket, path: expiry.path }).toString();
   return proxy.href;
+}
+
+export function resolveMediaUrlForExpiry(url: string, storageBaseUrl: string, apiBaseUrl: string, now: number): string {
+  const expiry = getPrivateMediaExpiry(url, storageBaseUrl);
+  if (!expiry || !isPrivateMediaNearExpiry(expiry, now)) return url;
+  return privateMediaRouteUrl(expiry, apiBaseUrl);
 }
