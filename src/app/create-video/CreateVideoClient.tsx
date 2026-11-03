@@ -1895,6 +1895,12 @@ function VideoCreator({
     const supportsEndFrame = affordances.frames.end;
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
     const referenceVideoLimit = affordances.referenceVideos.max;
+    // The clip limit as the form has it now, for a press that waits (a fresh link, a clip's length):
+    // the creator may choose another model meanwhile.
+    const referenceVideoLimitRef = useRef(referenceVideoLimit);
+    useEffect(() => {
+        referenceVideoLimitRef.current = referenceVideoLimit;
+    }, [referenceVideoLimit]);
     const referenceAudioLimit = affordances.referenceAudios.max;
     // The clip and track panel, the checks before a run and the run itself follow the
     // limits the model publishes. Two lists of models stood here before, and MiniMax H3
@@ -3387,7 +3393,7 @@ function VideoCreator({
     const addOriginalResultAsReferenceVideo = async () => {
         const original = remixVideoUrl;
         const unwanted = () => referenceVideosRef.current.some((reference) => isRemixResultReference(reference, remixId))
-            || referenceVideosRef.current.length >= referenceVideoLimit;
+            || referenceVideosRef.current.length >= referenceVideoLimitRef.current;
         if (!original || !remixId || unwanted()) return;
         // The link the remix was read with lasts an hour: past it the clip's length could not be read,
         // and the clip came in with none. One about to lapse is renewed first.

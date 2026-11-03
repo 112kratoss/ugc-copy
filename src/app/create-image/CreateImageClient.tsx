@@ -603,6 +603,12 @@ function ImageCreator({
         : modelCatalog.error?.message || null;
     const modelNotice = catalogProblem ?? catalogNotice;
     const model = IMAGE_MODELS[selectedModel] ?? IMAGE_MODELS['nano-banana-2'];
+    // The model's picture limit as the form has it now, for a press that waits on a fresh link: the
+    // creator may choose another model meanwhile.
+    const maxImagesRef = useRef(model.maxImages);
+    useEffect(() => {
+        maxImagesRef.current = model.maxImages;
+    }, [model.maxImages]);
     const imageModelOptions = modelCatalog.summaries.filter(item => item.kind === 'image').map(item => ({ ...(IMAGE_MODELS as unknown as Record<string, typeof IMAGE_MODELS[keyof typeof IMAGE_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
     const filteredImageModelOptions = normalizedModelSearchQuery
@@ -1124,8 +1130,9 @@ function ImageCreator({
         // Asked before the remix is read again for a link, so a press refused reads nothing, and
         // again once the link is in, as the form may have changed meanwhile.
         const refused = () => {
-            if (elementRefs.current.length >= model.maxImages) {
-                setError(`This model supports up to ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}.`);
+            const maxImages = maxImagesRef.current;
+            if (elementRefs.current.length >= maxImages) {
+                setError(`This model supports up to ${maxImages} reference image${maxImages === 1 ? '' : 's'}.`);
                 return true;
             }
             return elementRefs.current.some((element) => isRemixResultReference(element, remixSourceBundle.generation.id));
