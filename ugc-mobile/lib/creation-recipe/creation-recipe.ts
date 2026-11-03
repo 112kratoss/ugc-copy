@@ -106,11 +106,12 @@ export const CREATION_PROMPT_INCLUDED_DETAIL = "Every creation's recipe has it: 
 
 // ─── The creation's saved inputs ─────────────────────────────────────────────
 
-const REFERENCES_FOLDER = 'generation-references';
+/** The folder of a creator's recipe files the copies are kept in, which the server's readers parse too (`src/lib/recipe-file-paths.ts`). */
+export const CREATION_REFERENCES_FOLDER = 'generation-references';
 
 /** The creator's folder for the copies of one creation's saved inputs: `<owner>/generation-references/<creation>/`. */
 export function creationReferencesFolder(ownerUserId: string, generationId: string): string {
-  return `${ownerUserId}/${REFERENCES_FOLDER}/${generationId}/`;
+  return `${ownerUserId}/${CREATION_REFERENCES_FOLDER}/${generationId}/`;
 }
 
 /** A segment of a copy's path or id: lower case letters, digits, dots and single dashes. */
@@ -159,7 +160,7 @@ export function isCreationReferenceCopyPath(
 ): boolean {
   return Boolean(generationId)
     && typeof storagePath === 'string'
-    && storagePath.includes(`/${REFERENCES_FOLDER}/${generationId}/`);
+    && storagePath.includes(`/${CREATION_REFERENCES_FOLDER}/${generationId}/`);
 }
 
 /** Whether a stored file is the copy of this one saved input. */
@@ -189,7 +190,8 @@ export interface CreationInputLike {
   /**
    * The server copies it into the creation's recipe when the creator asks: a
    * saved input row of the creator's, or of a guest linked to them, whose file
-   * sits in that identity's own folder. Absent from servers before 2026-11-03.
+   * sits in that identity's own folder, and never a file bought in someone
+   * else's recipe (#678). Absent from servers before 2026-11-03.
    */
   recipeCopyable?: boolean | null;
 }
@@ -233,8 +235,9 @@ export function generationReferences(media: readonly CreationInputLike[] | null 
 /**
  * The saved inputs "From this creation" shows, counts and offers: those the
  * server copies into the recipe when asked. A remix's references kept in its
- * original's folder, and the inputs an older run's settings name, are not
- * copied, so they are not promised either.
+ * original's folder, a file bought in someone else's recipe (#678), and the
+ * inputs an older run's settings name are not copied, so they are not
+ * promised either.
  */
 export function recipeCopyableInputs(media: readonly CreationInputLike[] | null | undefined): GenerationReference[] {
   return generationReferences((media ?? []).filter((item) => item.recipeCopyable === true));

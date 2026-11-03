@@ -3177,6 +3177,25 @@ describe('generation references packaged for a publish', () => {
     expect(given).toEqual({ ok: true, references: [] });
   });
 
+  // The review of #677's merge with #678: the plan judged a recipe file by the publisher alone and
+  // the owner's library read by the account and its linked guests, so a guest's own recipe file
+  // was offered and never copied.
+  it('reads a linked guest’s own recipe file as the account’s, as the library offers it', async () => {
+    const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+    const source = referenceClient(
+      [{
+        ...reference('ref-guest-file', 'user-1', 'generation_inputs/user-1/gen-1/00.png'),
+        metadata: { sourceStoragePath: 'post_resource_files/guest-1/resources/guide.png' },
+      } as unknown as ReferenceRow],
+      ['guest-1'],
+    );
+
+    const plan = await planGenerationReferenceCopies({ supabase: source.client, ownerUserId: 'user-1', generationId: 'gen-1' });
+
+    expect(source.linkedLookups).toContain('merged_into_user_id=user-1');
+    expect(plan.ok && plan.references.map((planned) => planned.item.id)).toEqual(['reference-ref-guest-file']);
+  });
+
   it('plans the account’s own references without asking who is linked to it', async () => {
     const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(

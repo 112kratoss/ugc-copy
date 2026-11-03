@@ -938,8 +938,13 @@ export async function planGenerationReferenceCopies(params: {
 
   const rows = ((data ?? []) as GenerationInputMediaRow[])
     .filter((row) => !params.onlyRowIds || params.onlyRowIds.has(row.id));
-  // The linked guests are asked for only when a row is not the publisher's own.
-  const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId)
+  // The linked guests are asked for only when a row is not the publisher's own,
+  // or reads as a recipe file under the publisher alone: the copyable rule then
+  // judges it by the set the owner's library read offers it by, so what the
+  // composers offer is what is copied.
+  const publisherOnly = new Set([params.ownerUserId]);
+  const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId
+    || isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, publisherOnly))
     ? await resolveLinkedAccountIds(params.supabase, params.ownerUserId)
     : [params.ownerUserId];
   const heldItems = params.heldItems ?? [];

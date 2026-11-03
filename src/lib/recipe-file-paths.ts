@@ -1,8 +1,12 @@
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
+// The copies' folder is the shared rule's, whose `creationReferenceCopyPath` files them.
+import { CREATION_REFERENCES_FOLDER, creationReferencesFolder } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /**
  * Where a recipe's copies of its creation's inputs live, and where a run start keeps its import of
- * one (owner, 2026-11-03): one place for every writer and reader of the two layouts.
+ * one (owner, 2026-11-03): the server's readers of both layouts and the writer of the imports. The
+ * copies are filed by `creationReferenceCopyPath` (`ugc-mobile/lib/creation-recipe/`, one rule
+ * with both composers), in the folder read here.
  *
  * - A copy, which "Include creation references" files in the publisher's recipe files:
  *   `post_resource_files/<publisher>/generation-references/<generation>/<file>`.
@@ -15,7 +19,7 @@ import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 export const RECIPE_FILES_BUCKET = 'post_resource_files';
 const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 /** The folder of a publisher's recipe files "Include creation references" keeps its copies in. */
-export const GENERATION_REFERENCE_COPY_FOLDER = 'generation-references';
+export const GENERATION_REFERENCE_COPY_FOLDER = CREATION_REFERENCES_FOLDER;
 /** The folder of a caller's generation inputs a run start keeps its imports of recipe copies in. */
 export const RECIPE_IMPORT_FOLDER = 'recipe-imports';
 
@@ -28,7 +32,7 @@ export interface GenerationReferenceCopyParts {
 
 /** A creation's copies' folder in its publisher's recipe files, with its trailing slash. */
 export function generationReferenceCopyFolder(ownerUserId: string, generationId: string): string {
-  return `${ownerUserId}/${GENERATION_REFERENCE_COPY_FOLDER}/${generationId}/`;
+  return creationReferencesFolder(ownerUserId, generationId);
 }
 
 /**
