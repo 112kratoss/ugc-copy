@@ -2481,7 +2481,9 @@ describe('NewPostClient', () => {
     expect(screen.getByText(/1 selected output/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
-    expect(screen.queryByLabelText('Post media order')).not.toBeInTheDocument();
+    // Two images attached: Text asks before it lets them go.
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove media' }));
+    await waitFor(() => expect(screen.queryByLabelText('Post media order')).not.toBeInTheDocument());
     expect(screen.queryByText(/selected output/i)).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
       target: { value: 'A useful text proof with enough detail for the community to learn from.' },
@@ -2501,6 +2503,30 @@ describe('NewPostClient', () => {
     expect(request.body.get('mediaItems')).toBeNull();
     expect(resourceBundle.resources.items[0].scope).toEqual({ kind: 'all' });
     expect(resourceBundle.resources.sections[0].scope).toEqual({ kind: 'all' });
+  });
+
+  it('asks before the media or text switch lets attached media go, by key as by click', async () => {
+    renderComposerWithTwoImages();
+    const media = screen.getByRole('radio', { name: /^media$/i });
+    media.focus();
+    // An arrow picks Text, as a click does: with two images attached it asks first.
+    fireEvent.keyDown(media, { key: 'ArrowRight' });
+    const question = await screen.findByRole('alertdialog');
+    expect(question).toHaveTextContent('Switch to a text post?');
+    expect(question).toHaveTextContent('The 2 pictures and clips you added are removed.');
+    fireEvent.click(within(question).getByRole('button', { name: 'Keep media' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('radio', { name: /^media$/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Post media order')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('radio', { name: /^media$/i })).toHaveFocus());
+  });
+
+  it('switches to text at once while no media is attached', () => {
+    render(<NewPostClient />);
+    fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^text$/i })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('asks for confirmation before removing a resource card', () => {
@@ -2576,7 +2602,7 @@ describe('NewPostClient', () => {
   }
 
   function renderComposerWithTwoImages() {
-    const { container } = render(<NewPostClient />);
+    const { container } = render(<><NewPostClient /><FeedbackViewport /></>);
     const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(fileInput, {
       target: {
@@ -3805,14 +3831,18 @@ describe('NewPostClient', () => {
         return rejectWhenAborted(options?.signal);
       });
 
-      const { container } = render(<NewPostClient />);
+      const { container } = render(<><NewPostClient /><FeedbackViewport /></>);
       attachFile(container, new File(['a'], 'first.png', { type: 'image/png' }));
       attachFile(container, new File(['b'], 'second.png', { type: 'image/png' }));
       await waitFor(() => expect(signals).toHaveLength(2));
 
       fireEvent.click(screen.getByRole('radio', { name: /^text$/i }));
+      // Nothing stops until the question is answered.
+      const question = await screen.findByRole('alertdialog', { name: 'Switch to a text post?' });
+      expect(signals.some((signal) => signal.aborted)).toBe(false);
+      fireEvent.click(within(question).getByRole('button', { name: 'Remove media' }));
 
-      expect(signals.every((signal) => signal.aborted)).toBe(true);
+      await waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
     });
 
     it('still cancels every file at once, and keeps them all', async () => {

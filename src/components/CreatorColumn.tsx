@@ -436,7 +436,6 @@ export function aspectRatioMark(option: string): ReactNode {
  */
 export function CreatorSettingChoices<T extends string>({
   label,
-  labelHidden = false,
   hint,
   options,
   optionLabel,
@@ -449,8 +448,6 @@ export function CreatorSettingChoices<T extends string>({
   optionMark,
 }: {
   label: string;
-  /** For a group whose options say what it is, as the shot mode's do. */
-  labelHidden?: boolean;
   hint?: string;
   options: readonly T[];
   /** What an option says, where its value is not words ("std" → "Standard 720p"). */
@@ -476,7 +473,7 @@ export function CreatorSettingChoices<T extends string>({
   const { selected: selectedClasses, mark: selectedMarkClass } = getAccentClasses(accent);
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const next = choiceKeyTarget(event.key, index, options.length);
+    const next = choiceKeyTarget(event, index, options.length);
     if (next === null) return;
     event.preventDefault();
     onChange(options[next]);
@@ -485,14 +482,10 @@ export function CreatorSettingChoices<T extends string>({
 
   return (
     <div>
-      {labelHidden ? (
-        <p id={labelId} className="sr-only">{label}</p>
-      ) : (
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-          <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
-          {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
-        </div>
-      )}
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p id={labelId} className="text-xs font-bold text-[var(--ui-text-muted)]">{label}</p>
+        {hint ? <p className="text-xs text-[var(--ui-text-faint)]">{hint}</p> : null}
+      </div>
       <div
         role="radiogroup"
         aria-labelledby={labelId}

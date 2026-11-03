@@ -508,6 +508,28 @@ describe('the header', () => {
     expect(texts(tree)).toContain('Posts 2');
   });
 
+  it('holds Follow while the change is on its way, so it cannot be sent twice', async () => {
+    let answer!: (value: { following: boolean }) => void;
+    mocks.api.setCreatorFollowing.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve; }));
+    mocks.api.getCreatorProfile.mockResolvedValue(creatorPage());
+    const tree = await renderScreen(newQueryClient());
+
+    const toggle = () => byType(tree, 'toggle-button')[0];
+    expect(toggle().props).toMatchObject({ label: 'Follow', on: false, loading: false });
+    await act(async () => {
+      (toggle().props.onPress as () => void)();
+    });
+    await settle();
+    // Following at once, waiting until the server answers.
+    expect(toggle().props).toMatchObject({ label: 'Following', on: true, loading: true });
+
+    await act(async () => answer({ following: true }));
+    await settle();
+    // Answered: free again (the page is then read anew, here from a stub that still says not following).
+    expect(mocks.api.setCreatorFollowing).toHaveBeenCalledTimes(1);
+    expect(toggle().props.loading).toBe(false);
+  });
+
   // The reel keeps its own answer for a creator (`useCreatorFollow`), for five
   // minutes; a Follow pressed here must not leave it saying otherwise.
   it("hands a Follow pressed here to the reel's own record of it", async () => {

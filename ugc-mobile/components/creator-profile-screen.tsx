@@ -5,7 +5,7 @@ import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'ex
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
-import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2, UserCheck, UserPlus } from 'lucide-react-native';
+import { ChevronRight, ExternalLink, FileText, Globe, Heart, ImageIcon, Layers3, Lock, MapPin, MoreVertical, Pencil, Play, Repeat2 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AccessibilityInfo, ActivityIndicator, Linking, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -717,8 +717,8 @@ function CreatorHeader({
       </View>
 
       <View style={{ padding: 16, paddingTop: 0, gap: 14 }}>
-        {/* Where the actions do not fit beside the avatar (Follow on a 360dp phone, or at large
-            text sizes) they take the next line, under it, rather than run off the card. */}
+        {/* Where the actions do not fit beside the avatar (on a 360dp phone, or at large text
+            sizes) they take the next line, under it, rather than run off the card. */}
         <View style={{ marginTop: -42, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
           <CreatorAvatar avatarUrl={profile.avatarUrl} initial={initial} size={86} />
           <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
@@ -900,17 +900,13 @@ function EditProfileButton({ onPress }: { onPress: () => void }) {
   return <PrimaryButton label="Edit" accessibilityLabel="Edit profile" icon={Pencil} onPress={onPress} />;
 }
 
-/** Follow is the prominent action; once followed it steps back to a supporting one, as one view. */
+/**
+ * Follow is the prominent action; once followed it steps back to a supporting one, as one view.
+ * Words alone: with a glyph the primary's Follow put Share and ⋮ under the avatar on a
+ * 375pt iPhone, where the hand-built one fitted.
+ */
 function FollowButton({ following, loading, onPress }: { following: boolean; loading: boolean; onPress: () => void }) {
-  return (
-    <ToggleButton
-      on={following}
-      label={following ? 'Following' : 'Follow'}
-      icon={following ? UserCheck : UserPlus}
-      loading={loading}
-      onPress={onPress}
-    />
-  );
+  return <ToggleButton on={following} label={following ? 'Following' : 'Follow'} loading={loading} onPress={onPress} />;
 }
 
 function SocialChip({ label, url }: { label: string; url: string }) {

@@ -49,7 +49,7 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 24, bottom: 24, left: 0, right: 0 }),
 }));
 
-import { IconButton, iconButtonMenuTrigger, PrimaryButton, SecondaryButton, SegmentedControl, ToggleButton } from '../components/ui';
+import { IconButton, iconButtonMenuTrigger, PrimaryButton, SecondaryButton, SegmentedControl, segmentTabRole, ToggleButton } from '../components/ui';
 
 const colors = themes.dark.colors;
 type Style = Record<string, unknown>;
@@ -143,7 +143,9 @@ describe('the segmented control', () => {
     for (const label of labels) {
       expect(flatStyle(label.props.style)).toMatchObject(appTheme.type.label);
       expect(label.props.maxFontSizeMultiplier).toBe(appTheme.typeScale.control);
+      // One line, truncating where it does not fit; never shrinking, which had no floor but 4pt.
       expect(label.props.numberOfLines).toBe(1);
+      expect(label.props.adjustsFontSizeToFit).toBeUndefined();
     }
   });
 
@@ -295,14 +297,14 @@ describe('the button primitives', () => {
     });
   });
 
-  it('keeps a one-word label whole, on one line and shrinking a little first, and wraps several words between them', () => {
+  it('keeps a one-word label whole on one line, and wraps several words between them, never shrinking either', () => {
+    // React Native 0.83 reads no minimumFontScale: a label that shrank to fit had no floor but 4pt.
     const [word] = hosts(renderNode(<SecondaryButton label="Comment" icon={GlyphStub} />), 'text');
-    expect(word.props).toMatchObject({ numberOfLines: 1, adjustsFontSizeToFit: true });
-    // Never under the 11pt floor.
-    expect(appTheme.type.label.fontSize * word.props.minimumFontScale).toBeGreaterThanOrEqual(11);
+    expect(word.props.numberOfLines).toBe(1);
+    expect(word.props.adjustsFontSizeToFit).toBeUndefined();
     const [words] = hosts(renderNode(<SecondaryButton label="View public profile" />), 'text');
     expect(words.props.numberOfLines).toBeUndefined();
-    expect(words.props.adjustsFontSizeToFit).toBe(false);
+    expect(words.props.adjustsFontSizeToFit).toBeUndefined();
   });
 
   it('draws the glyph alone where the label is empty, named by its accessible label', () => {
@@ -359,6 +361,21 @@ describe('the button primitives', () => {
     expect(after.props.style.backgroundColor).toBe(colors.panelSoft);
     renderer.act(() => { after.props.onPress(); });
     expect(haptics.light).toHaveBeenCalledTimes(2);
+  });
+
+  it('holds a toggle while it waits, its label beside the spinner, so it cannot be pressed twice', () => {
+    const onPress = vi.fn();
+    const tree = renderNode(<ToggleButton on={false} label="Follow" loading onPress={onPress} />);
+    const [pressable] = hosts(tree, 'pressable');
+    expect(pressable.props.accessibilityState).toEqual({ busy: true, disabled: true, selected: false });
+    expect(pressable.props.disabled).toBe(true);
+    expect(hosts(tree, 'activity-indicator')).toHaveLength(1);
+    expect(hosts(tree, 'text').map((text) => text.props.children)).toEqual(['Follow']);
+  });
+
+  it('reads a tab segment as a selected button on iOS, where "tab" carries no trait', () => {
+    expect(segmentTabRole('ios')).toBe('button');
+    expect(segmentTabRole('android')).toBe('tab');
   });
 });
 

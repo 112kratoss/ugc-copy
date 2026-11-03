@@ -93,6 +93,34 @@ describe('SegmentedControl', () => {
     expect(onChange).toHaveBeenCalledWith('oldest');
   });
 
+  it('leaves a key held with Alt, Ctrl or Cmd to the browser (Alt+← and Cmd+← go back)', () => {
+    const onChange = vi.fn();
+    render(<Picker onChange={onChange} />);
+    const top = screen.getByRole('radio', { name: 'Top' });
+    for (const modifier of ['altKey', 'ctrlKey', 'metaKey'] as const) {
+      expect(fireEvent.keyDown(top, { key: 'ArrowRight', [modifier]: true })).toBe(true);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('is two pressed-or-not buttons where the page around it owns the arrow keys', () => {
+    // The comment order in the reel, whose ← and → step through posts.
+    const onChange = vi.fn();
+    render(<Picker role="toggle" onChange={onChange} />);
+    expect(screen.getByRole('group', { name: 'Sort comments' })).toBeInTheDocument();
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map((button) => button.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false']);
+    // Each a stop in the tab order, and no arrow is taken.
+    expect(buttons.map((button) => button.tabIndex)).toEqual([0, 0, 0]);
+    for (const key of ['ArrowRight', 'ArrowLeft', 'ArrowDown', 'Home', 'End']) {
+      expect(fireEvent.keyDown(buttons[0], { key })).toBe(true);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    expect(onChange).toHaveBeenCalledWith('newest');
+    expect(screen.getByRole('button', { name: 'New' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('is a tab list when it switches what is shown, each tab naming itself and its panel', () => {
     render(
       <SegmentedControl
@@ -274,8 +302,16 @@ describe('one segmented control on the web', () => {
   });
 
   it('draws every segmented control with SegmentedControl', () => {
-    const found = sourceFiles(sourceRoot)
-      .filter((file) => path.relative(sourceRoot, file) !== path.join('components', 'DesignSystem.tsx'))
+    const files = sourceFiles(sourceRoot)
+      .filter((file) => path.relative(sourceRoot, file) !== path.join('components', 'DesignSystem.tsx'));
+    // A walk that read nothing would pass: it reads the app's pages and the controls' old homes.
+    expect(files.length).toBeGreaterThan(200);
+    expect(files.map((file) => path.relative(sourceRoot, file))).toEqual(expect.arrayContaining([
+      path.join('components', 'PostComments.tsx'),
+      path.join('app', 'post', 'new', 'NewPostClient.tsx'),
+      path.join('app', 'login', 'LoginClient.tsx'),
+    ]));
+    const found = files
       .flatMap((file) => handDrawnSegments(readFileSync(file, 'utf8')).map((line) => `${path.relative(sourceRoot, file)}:${line}`));
     expect(found).toEqual([]);
   });

@@ -686,8 +686,10 @@ export default function PostComments({
                 </h2>
                 {/* Sorting nothing is noise — the pills appear with the first comment. */}
                 {totalCount > 0 ? (
+                // Toggle buttons, not tabs: in the reel ← and → step through posts, so
+                // the order takes no arrow keys, as its buttons took none before.
                 <SegmentedControl
-                    role="tab"
+                    role="toggle"
                     fill={false}
                     ariaLabel="Sort comments"
                     options={SORT_OPTIONS}

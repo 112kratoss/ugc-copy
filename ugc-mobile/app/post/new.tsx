@@ -1150,6 +1150,8 @@ function PostComposerFooter({
             icon={Globe2}
             trailingIcon={ChevronDown}
             onPress={onVisibility}
+            // Placed, so it fills the row's height when Publish's label wraps.
+            style={{ flexShrink: 0 }}
           />
           <PrimaryButton
             label={submitLabel}
@@ -3796,7 +3798,9 @@ function NewPostComposer() {
         visibility={draft.visibility}
         isEditMode={isEditMode}
         loading={publishMutation.isPending || isSavingIdentity}
-        disabled={!canSubmit || isSavingIdentity || isPickingMedia || pendingRetryMedia.length > 0 || (composerStep === 'resources' && !stepTwoValidation.valid)}
+        // The name and handle save is `loading`, which already holds the button: as `disabled`
+        // too it drew grey, then coral once the post began.
+        disabled={!canSubmit || isPickingMedia || pendingRetryMedia.length > 0 || (composerStep === 'resources' && !stepTwoValidation.valid)}
         onNext={goToResources}
         onVisibility={() => setIsVisibilityOpen(true)}
         onPublish={() => void submitPost()}
@@ -4065,9 +4069,7 @@ function MadeWithSection({
           );
         })}
         {!disabled && rows.length < MAX_MADE_WITH_ROWS ? (
-          <View style={{ alignSelf: 'flex-start' }}>
-            <MiniAction label="Add another tool" onPress={onAdd} />
-          </View>
+          <SecondaryButton label="Add another tool" onPress={onAdd} style={{ alignSelf: 'flex-start' }} />
         ) : null}
       </View>
     </SurfaceSection>
@@ -5083,41 +5085,6 @@ function MediaGalleryCard({
         </Text>
       </View>
     </View>
-  );
-}
-
-function MiniAction({
-  label,
-  onPress,
-  disabled = false,
-  accessibilityLabel,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-  accessibilityLabel?: string;
-}) {
-  const theme = useAppTheme();
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel ?? label}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: appTheme.touch.compact,
-        borderRadius: appTheme.radii.pill,
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.surfaceStrong,
-        opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-        paddingHorizontal: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-      })}
-    >
-      <Text style={{ color: theme.colors.text, fontSize: 12, fontWeight: '700' }}>{label}</Text>
-    </Pressable>
   );
 }
 

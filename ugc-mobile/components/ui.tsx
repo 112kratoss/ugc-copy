@@ -5,6 +5,7 @@ import { Link } from 'expo-router';
 import {
   ActivityIndicator,
   Animated,
+  Platform,
   Pressable,
   Text,
   TextInput,
@@ -558,6 +559,26 @@ const SEGMENT_TRACK_BORDER = 1;
  * height through its slop: a 48pt hit region on a 38pt capsule.
  */
 const SEGMENT_THUMB_HEIGHT = appTheme.touch.default - 2 * (SEGMENT_INSET + SEGMENT_TRACK_BORDER);
+/**
+ * A tab segment's role on a platform. iOS gives "tab" no trait, so VoiceOver read
+ * one as its bare label; a button with the selected state reads "Selected, Sign
+ * in, button" there, as React Navigation's tabs do. Android announces "tab".
+ */
+export function segmentTabRole(os: string): 'button' | 'tab' {
+  return os === 'ios' ? 'button' : 'tab';
+}
+
+function resolveSegmentTabRole() {
+  try {
+    return segmentTabRole(Platform.OS);
+  } catch {
+    // Keeps the control usable under react-native test mocks without Platform.
+    return 'tab' as const;
+  }
+}
+
+const SEGMENT_TAB_ROLE = resolveSegmentTabRole();
+
 const SEGMENT_HIT_SLOP = {
   top: SEGMENT_INSET + SEGMENT_TRACK_BORDER,
   bottom: SEGMENT_INSET + SEGMENT_TRACK_BORDER,
@@ -586,9 +607,10 @@ export type SegmentedControlOption<Value extends string> = {
  *
  * `fill` shares the row equally, as the HIG prefers ("keep segment size
  * consistent"); `fill={false}` sizes each segment to its label, for a control
- * beside a title or another control. A label stays on one line and shrinks a
- * little before it would truncate, as counts in a third of a phone's width do
- * at large text sizes.
+ * beside a title or another control. A label stays on one line and truncates
+ * where it does not fit, as UIKit's own control does: it never shrinks, since
+ * React Native 0.83 reads no `minimumFontScale` and a shrinking label had no
+ * floor but 4pt.
  *
  * Choosing the segment already in use does nothing, and only a real change
  * ticks (`haptic.select`).
@@ -643,7 +665,7 @@ export function SegmentedControl<Value extends string>({
         return (
           <Pressable
             key={option.value}
-            accessibilityRole={tabs ? 'tab' : 'radio'}
+            accessibilityRole={tabs ? SEGMENT_TAB_ROLE : 'radio'}
             accessibilityLabel={option.accessibilityLabel ?? option.label}
             accessibilityState={tabs ? { selected: active, disabled } : { checked: active, disabled }}
             disabled={disabled}
@@ -665,14 +687,7 @@ export function SegmentedControl<Value extends string>({
               paddingHorizontal: fill ? appTheme.spacing.compact : appTheme.spacing.gap,
             })}
           >
-            <AppText
-              selectable={false}
-              variant="label"
-              color={active ? 'onPrimary' : 'muted'}
-              numberOfLines={1}
-              adjustsFontSizeToFit
-              minimumFontScale={0.7}
-            >
+            <AppText selectable={false} variant="label" color={active ? 'onPrimary' : 'muted'} numberOfLines={1}>
               {option.label}
             </AppText>
           </Pressable>
@@ -929,14 +944,13 @@ export function ToggleRow({
   );
 }
 
-/** A one-word label shrinks this far (13pt to 11pt, the type floor) before it truncates. */
-const BUTTON_WORD_MIN_SCALE = 0.85;
-
 /**
  * A button's words. A label of several words wraps between them at large text
  * sizes, as the HIG prefers to truncating; a one-word label cannot wrap without
  * breaking the word ("Comme / nt" in a third of a phone's width), so it stays on
- * one line and shrinks a little before it truncates.
+ * one line and truncates. It never shrinks to fit: React Native 0.83 reads no
+ * `minimumFontScale`, so a shrinking label had no floor but 4pt, under the 11pt
+ * one.
  */
 function ButtonLabel({ text, variant, color }: { text: string; variant: 'button' | 'label'; color: string }) {
   const oneWord = !/\s/.test(text.trim());
@@ -946,8 +960,6 @@ function ButtonLabel({ text, variant, color }: { text: string; variant: 'button'
       variant={variant}
       color={color}
       numberOfLines={oneWord ? 1 : undefined}
-      adjustsFontSizeToFit={oneWord}
-      minimumFontScale={oneWord ? BUTTON_WORD_MIN_SCALE : undefined}
       style={{ flexShrink: 1, textAlign: 'center' }}
     >
       {text}
@@ -1036,7 +1048,7 @@ type ButtonProps = {
 function ActionButton({
   prominence,
   selected,
-  tick = prominence === 'primary',
+  tick,
   label,
   loadingLabel,
   onPress,
@@ -1060,6 +1072,9 @@ function ActionButton({
 }) {
   const theme = useAppTheme();
   const primary = prominence === 'primary';
+  // In the body, not a default beside `prominence`: React Compiler cannot lower that one
+  // and skipped the whole component.
+  const ticks = tick ?? primary;
   const unavailable = Boolean(disabled || loading);
   const motion = usePressMotion(unavailable);
   const fill = accent ?? 'primary';
@@ -1082,7 +1097,7 @@ function ActionButton({
         disabled={unavailable}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
-        onPress={tick ? () => {
+        onPress={ticks ? () => {
           haptic.light();
           onPress?.();
         } : onPress}
@@ -1144,7 +1159,8 @@ export function SecondaryButton(props: ButtonProps & { accent?: ToolAccent }) {
  * the state changes.
  */
 export function ToggleButton({ on, ...props }: ButtonProps & { on: boolean }) {
-  return <ActionButton {...props} prominence={on ? 'secondary' : 'primary'} selected={on} tick />;
+  // It keeps its words beside the spinner, so it does not narrow while the change is sent.
+  return <ActionButton {...props} loadingLabel={props.loadingLabel ?? props.label} prominence={on ? 'secondary' : 'primary'} selected={on} tick />;
 }
 
 /** Width reserved beside the text for a trailing in-field control. */

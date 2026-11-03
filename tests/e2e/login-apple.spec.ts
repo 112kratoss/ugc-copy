@@ -36,13 +36,13 @@ test('/login: Continue with Apple, on either tab, leaves for Supabase’s Apple 
   await page.goto('/login?returnUrl=%2Fcreate-video', { waitUntil: 'commit' });
   const apple = page.getByRole('button', { name: 'Continue with Apple' });
   await expect(apple).toBeVisible(COLD_PAGE);
-  await expect(page.getByRole('button', { name: 'Sign in', pressed: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Sign in', selected: true })).toBeVisible();
   // The agreement under Google is under Apple too: either button makes an account.
   await expect(apple).toHaveAccessibleDescription(/^By continuing you agree to the Terms and the Privacy Policy\./);
   await expect.poll(() => hydrationCommitted(page), { ...COLD_PAGE, message: 'React commits the page’s hydration' }).toBe(true);
 
   // The Sign-up tab, the page's own switch: no new visit.
-  await page.getByRole('button', { name: 'Sign up', exact: true }).click();
+  await page.getByRole('tab', { name: 'Sign up', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible();
   await expect(apple).toBeVisible();
   await apple.click();

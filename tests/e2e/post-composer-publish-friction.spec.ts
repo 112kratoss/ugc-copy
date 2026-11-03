@@ -128,7 +128,7 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     await answerTheComposer(page, PLACEHOLDER_PROFILE, order);
     await page.goto('/post/new');
 
-    await page.getByRole('button', { name: /^text$/i }).click(COLD_PAGE);
+    await page.getByRole('radio', { name: /^text$/i }).click(COLD_PAGE);
     await page.getByRole('textbox', { name: /^post text/i }).fill('A note that stands on its own for the community.');
     await page.getByRole('textbox', { name: /^title/i }).fill('Product demo with soft window light');
 
@@ -166,7 +166,7 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     await answerTheComposer(page, { ...PLACEHOLDER_PROFILE, username: 'maya-k', displayName: 'Maya K' }, order);
     await page.goto('/post/new');
 
-    await page.getByRole('button', { name: /^text$/i }).click(COLD_PAGE);
+    await page.getByRole('radio', { name: /^text$/i }).click(COLD_PAGE);
     await page.getByRole('textbox', { name: /^post text/i }).fill('A note that stands on its own for the community.');
     await page.getByRole('textbox', { name: /^title/i }).fill('Product demo with soft window light');
 

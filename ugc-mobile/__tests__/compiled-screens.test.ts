@@ -36,6 +36,11 @@ const SCREENS = [
   // 2026-11-01. Its media list stays uncompiled, as before: it reads a ref during render.
   ['components/profile-dashboard.tsx', 'ProfileDashboard'],
   ['components/profile-dashboard.tsx', 'ProfileMediaScopeControl'],
+  // Every PrimaryButton, SecondaryButton and ToggleButton is an ActionButton: one skipped is ~200 buttons
+  // re-rendering with their parents (a `tick = prominence === 'primary'` default did it, 2026-11-03).
+  ['components/ui.tsx', 'ActionButton'],
+  ['components/ui.tsx', 'SegmentedControl'],
+  ['components/ui.tsx', 'IconButton'],
 ] as const;
 
 const metroCaller = {

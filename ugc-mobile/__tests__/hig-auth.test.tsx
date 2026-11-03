@@ -325,7 +325,10 @@ describe('S2 — the front door uses the app\'s own controls', () => {
 
     for (const tab of [selected, unselected]) {
       const [host] = hosts(tree, tab);
-      expect(host.props.accessibilityRole).toBe('tab');
+      // A tab segment on iOS, this suite's platform as the control loads: a button with the selected
+      // state, since iOS gives "tab" no trait (`segmentTabRole`).
+      expect(host.props.accessibilityRole).toBe('button');
+      expect(typeof host.props.accessibilityState.selected).toBe('boolean');
       // The thumb is drawn inside the track and answers to the track's whole height.
       const slop = host.props.hitSlop as { top: number; bottom: number };
       expect(Number(styleOf(tree, tab).minHeight) + slop.top + slop.bottom).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);

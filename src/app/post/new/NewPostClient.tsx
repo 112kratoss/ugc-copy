@@ -929,6 +929,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
+  const proofSwitchRef = useRef<HTMLDivElement | null>(null);
   const storySectionRef = useRef<HTMLDivElement | null>(null);
   const resourceSectionRef = useRef<HTMLDivElement | null>(null);
   const publishSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1893,6 +1894,28 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         : card
     )));
     resetFeedback();
+  };
+
+  // Text lets every attached picture and clip go, uploads included, and an arrow key on the
+  // switch picks it as a click does, so it asks first while there is media to lose. Kept,
+  // the focus goes back to Media, the choice in use.
+  const askThenSwitchToTextProof = async () => {
+    if (mediaItems.length > 0) {
+      const lets = await askToConfirm({
+        title: 'Switch to a text post?',
+        message: mediaItems.length === 1
+          ? 'The picture or clip you added is removed.'
+          : `The ${mediaItems.length} pictures and clips you added are removed.`,
+        confirmLabel: 'Remove media',
+        cancelLabel: 'Keep media',
+        tone: 'danger',
+      });
+      if (!lets) {
+        proofSwitchRef.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus();
+        return;
+      }
+    }
+    switchToTextProof();
   };
 
   const moveMediaItem = (sourceId: string, targetId: string) => {
@@ -3053,13 +3076,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                   </div>
                   {!hasGeneratedProof && !isEditMode ? (
                     <SegmentedControl
+                      ref={proofSwitchRef}
                       fill={false}
                       ariaLabel="Post media or text"
                       options={PROOF_MODE_OPTIONS}
                       value={proofMode}
                       onChange={(mode) => {
                         if (mode === 'text') {
-                          switchToTextProof();
+                          void askThenSwitchToTextProof();
                           return;
                         }
                         setProofMode('media');

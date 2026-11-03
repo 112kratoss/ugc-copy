@@ -223,7 +223,7 @@ describe('PostComments', () => {
         );
 
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-        fireEvent.click(screen.getByRole('tab', { name: 'New' }));
+        fireEvent.click(screen.getByRole('button', { name: 'New' }));
         expect(await screen.findByText('Newest result')).toBeInTheDocument();
 
         resolveTop(jsonResponse(page([comment({
