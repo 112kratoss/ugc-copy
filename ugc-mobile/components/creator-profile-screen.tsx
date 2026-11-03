@@ -546,13 +546,15 @@ export function CreatorProfileScreen({
       );
     }
     if (item.kind === 'placeholder') {
-      // The first stand-in tells a screen reader the posts are coming; the bones themselves are hidden.
+      // The first stand-in tells a screen reader the posts are coming; the bones
+      // themselves are hidden. A label in every state: Android keeps one set back
+      // to undefined (hig-accessibility-label-states), and FlashList reuses cells.
       const announces = item.index === 0;
       return (
         <View
           accessible={announces}
           accessibilityRole={announces ? 'progressbar' : undefined}
-          accessibilityLabel={announces ? 'Loading posts' : undefined}
+          accessibilityLabel={announces ? 'Loading posts' : ''}
           style={{ paddingHorizontal: GRID_GAP / 2, paddingBottom: GRID_GAP }}
         >
           <SkeletonBone width={tileWidth} height={tilePictureHeight + TILE_CAPTION_MIN_HEIGHT} radius={appTheme.radii.lg} />
