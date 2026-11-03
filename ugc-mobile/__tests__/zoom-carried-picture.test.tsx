@@ -59,6 +59,8 @@ const read = (name: string) => readFileSync(path.join(mobileRoot, name), 'utf8')
 const SCREEN = { width: 402, height: 874 };
 const PREVIEW: ZoomPreview = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: 'tile-hash' };
 const CARRIED_DEADLINE_MS = Number(read('components/media-zoom.tsx').match(/const CARRIED_DEADLINE_MS = (\d+);/)?.[1]);
+const DRAWN_GRACE_MS = Number(read('components/media-zoom.tsx').match(/const DRAWN_GRACE_MS = (\d+);/)?.[1]);
+const DRAWN_DEADLINE_MS = Number(read('components/media-zoom.tsx').match(/const DRAWN_DEADLINE_MS = (\d+);/)?.[1]);
 
 /** What a tapped tile hands the reel: the Android flight's origin, or the one UIKit's zoom carries. */
 function openFromTile({ native = false, video = null }: { native?: boolean; video?: ZoomVideo | null } = {}) {
@@ -88,10 +90,17 @@ function Slide({ itemId }: { itemId: string }) {
   );
 }
 
+/** A slide with no picture for the copy to lie over: an audio, text or status page. */
+function SlideWithoutPicture({ itemId }: { itemId: string }) {
+  return React.createElement('slide', { itemId }, React.createElement('slide-audio'), React.createElement('slide-rail'));
+}
+
 let stage!: ReturnType<typeof useMediaZoomStage>;
 
+type ReelProps = { reducedMotion?: boolean; openedOn?: 'picture' | 'no picture' };
+
 /** The reel: the post it opened on and its neighbour, then its own Back over both. */
-function Reel({ reducedMotion = false }: { reducedMotion?: boolean }) {
+function Reel({ reducedMotion = false, openedOn = 'picture' }: ReelProps) {
   stage = useMediaZoomStage({
     screen: SCREEN,
     initialItemId: 'post-1',
@@ -104,7 +113,7 @@ function Reel({ reducedMotion = false }: { reducedMotion?: boolean }) {
   });
   return (
     <MediaZoomStage stage={stage} screen={SCREEN}>
-      <Slide itemId="post-1" />
+      {openedOn === 'picture' ? <Slide itemId="post-1" /> : <SlideWithoutPicture itemId="post-1" />}
       <Slide itemId="post-2" />
       {React.createElement('reel-back-control')}
     </MediaZoomStage>
@@ -112,7 +121,7 @@ function Reel({ reducedMotion = false }: { reducedMotion?: boolean }) {
 }
 
 const mounted: renderer.ReactTestRenderer[] = [];
-function mount(props: { reducedMotion?: boolean } = {}) {
+function mount(props: ReelProps = {}) {
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
     tree = renderer.create(<Reel {...props} />);
@@ -292,5 +301,34 @@ describe('the reel slide that draws it', () => {
     const list = reel.indexOf('<FlatList');
     expect(reel.indexOf('<TopScrim topInset={topInset} over="media" />')).toBeGreaterThan(list);
     expect(reel.indexOf('<ViewerTopControl label="Go back" onPress={zoom.dismiss}')).toBeGreaterThan(list);
+  });
+});
+
+// An audio, text or status page has no picture for the tile's copy to lie over,
+// so no slide draws the copy and none says it has been drawn. Android's flight
+// then waited for the reel's window to be drawn until its 500 ms deadline, and
+// its chrome and hand-off landed about 380 ms later than a reel that carried
+// nothing (the 120 ms grace).
+describe("the window of a reel whose opened page draws no copy", () => {
+  it('is drawn after the grace, as a reel that carried no picture is', () => {
+    vi.useFakeTimers();
+    expect(DRAWN_GRACE_MS).toBeGreaterThan(0);
+    expect(DRAWN_DEADLINE_MS).toBeGreaterThan(DRAWN_GRACE_MS);
+    openFromTile();
+    const tree = mount({ openedOn: 'no picture' });
+    expect(copiesIn(tree)).toHaveLength(0);
+    expect(stage.drawn).toBe(false);
+    renderer.act(() => { vi.advanceTimersByTime(DRAWN_GRACE_MS); });
+    expect(stage.drawn).toBe(true);
+  });
+
+  it('waits for the copy instead where the opened page draws one', () => {
+    vi.useFakeTimers();
+    openFromTile();
+    const tree = mount();
+    renderer.act(() => { vi.advanceTimersByTime(DRAWN_GRACE_MS); });
+    expect(stage.drawn).toBe(false);
+    renderer.act(() => copiesIn(tree)[0]!.props.onDisplay());
+    expect(stage.drawn).toBe(true);
   });
 });

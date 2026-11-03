@@ -739,6 +739,11 @@ export interface MediaZoomCarried {
   style: StyleProp<ViewStyle>;
   /** It has been drawn: the reel's window is on screen. */
   reportDrawn: () => void;
+  /**
+   * For the slide drawing it, for as long as it does: the reel waits for the
+   * copy to be drawn only while a slide is drawing it. Returns the release.
+   */
+  claim: () => () => void;
 }
 
 const MediaZoomCarriedContext = createContext<MediaZoomCarried | null>(null);
@@ -1231,6 +1236,15 @@ export function useMediaZoomStage({
   const [carried, setCarried] = useState<ZoomPreview | null>(carriedPreview);
   const carryingRef = useRef(Boolean(carriedPreview));
   const carriedOpacity = useSharedValue(carriedPreview ? 1 : 0);
+  // How many slides are drawing that copy (`MediaZoomCarriedPicture`): only a
+  // media page of the post the reel opened on does.
+  const copiesDrawnRef = useRef(0);
+  const claimCarried = useCallback(() => {
+    copiesDrawnRef.current += 1;
+    return () => {
+      copiesDrawnRef.current -= 1;
+    };
+  }, []);
 
   const [opened, setOpened] = useState(!zooming);
   const interactive = useSharedValue(zooming ? 0 : 1);
@@ -1657,9 +1671,12 @@ export function useMediaZoomStage({
   }, [markDrawn, zooming]);
 
   // With no picture carried, the reel having a slide in place is the signal
-  // that its window has something in it.
+  // that its window has something in it. So it is with a picture no slide
+  // draws: an audio, text or status page, or Details, has nothing for it to lie
+  // over, and the reel waited for the deadline instead. The slide that draws
+  // the copy mounts with the list, a frame before the reel is `ready`.
   useEffect(() => {
-    if (!zooming || !ready || carryingRef.current) return;
+    if (!zooming || !ready || (carryingRef.current && copiesDrawnRef.current > 0)) return;
     const grace = setTimeout(markDrawn, DRAWN_GRACE_MS);
     return () => clearTimeout(grace);
   }, [markDrawn, ready, zooming]);
@@ -1887,9 +1904,9 @@ export function useMediaZoomStage({
   // keeps one identity while it lasts: a new one re-renders the slide drawing it.
   const carriedPicture = useMemo<MediaZoomCarried | null>(() => (
     carried && origin
-      ? { itemId: origin.itemId, preview: carried, style: carriedStyle, reportDrawn: reportCarriedDrawn }
+      ? { itemId: origin.itemId, preview: carried, style: carriedStyle, reportDrawn: reportCarriedDrawn, claim: claimCarried }
       : null
-  ), [carried, carriedStyle, origin, reportCarriedDrawn]);
+  ), [carried, carriedStyle, claimCarried, origin, reportCarriedDrawn]);
 
   const lentVideoValue = useMemo<MediaZoomLentVideo | null>(() => (
     lentVideo && videoHandoff !== 'failed'
@@ -2270,7 +2287,9 @@ export function MediaZoomFlightLayer({
  * The tapped tile's picture, drawn by the reel's slide for the post it opened
  * on, in the place that slide draws its own media, until the slide's own has
  * painted (`useMediaZoomPaintReport`) or `CARRIED_DEADLINE_MS` has passed. Being
- * drawn is also how the reel says its window is on screen at all.
+ * drawn is also how the reel says its window is on screen at all, so the slide
+ * claims it while it draws it: a reel whose opened page draws none (audio,
+ * text, status) goes by its grace instead.
  *
  * The slide lays it directly over its own picture and under everything drawn
  * over that picture: the video's view and badges, then the rail, caption, top
@@ -2287,8 +2306,11 @@ export function MediaZoomFlightLayer({
  * `rerenderIfNeeded`), and the slide's picture would load twice.
  */
 export function MediaZoomCarriedPicture({ itemId }: { itemId: string }) {
-  const carried = useContext(MediaZoomCarriedContext);
-  if (!carried || carried.itemId !== itemId) return null;
+  const context = useContext(MediaZoomCarriedContext);
+  const carried = context?.itemId === itemId ? context : null;
+  const claim = carried?.claim;
+  useEffect(() => claim?.(), [claim]);
+  if (!carried) return null;
   return (
     <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, carried.style]}>
       <Image
