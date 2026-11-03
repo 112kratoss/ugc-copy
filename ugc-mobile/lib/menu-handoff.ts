@@ -133,13 +133,16 @@ export function useMenuHandoff<Row extends string>({
     if (visible) claimedRef.current = false;
   }, [visible]);
 
-  const claim = () => {
+  // Stable for the menu's life by hand, not only where the compiler memoizes
+  // this hook: the comments sheet, which the compiler skips, lists `handOff`
+  // among its own callbacks' dependencies, and each new one rebuilt them.
+  const claim = useCallback(() => {
     if (claimedRef.current) return false;
     claimedRef.current = true;
     return true;
-  };
+  }, []);
 
-  const handOff = (row: Row, navigate: () => boolean | void) => {
+  const handOff = useCallback((row: Row, navigate: () => boolean | void) => {
     if (!claim()) return;
     // Read before navigating: a jump to a tab changes the route at once.
     const from = focusedRouteKey(navigation);
@@ -147,7 +150,7 @@ export function useMenuHandoff<Row extends string>({
     // fallback's exit rather than in a menu whose rows no longer answer.
     setHandoff({ row, from, phase: 'waiting' });
     if (navigate() === false) setHandoff({ row, from, phase: 'leaving' });
-  };
+  }, [claim, navigation]);
 
   return { chosen: handoff?.row ?? null, leaving, handOff, claim };
 }

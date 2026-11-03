@@ -814,6 +814,24 @@ describe('comments sheet', () => {
     expect(routerPush).toHaveBeenLastCalledWith('/creators/batman');
   });
 
+  // Review of #679: the hand-off's `handOff` was new on every render here,
+  // where the compiler skips the sheet, so every keystroke in the composer
+  // gave each row a new author handler.
+  it("keeps each row's author handler while the reader types", () => {
+    pages = [page([comment()])];
+    const tree = renderSheet();
+    const authorHandler = () => tree.root.find((node) => (
+      typeof node.props.onAuthorOpen === 'function' && node.props.comment?.id === 'comment-1'
+    )).props.onAuthorOpen;
+    const before = authorHandler();
+
+    renderer.act(() => {
+      composerInput(tree.root).props.onChangeText('So good');
+    });
+
+    expect(authorHandler()).toBe(before);
+  });
+
   it('opens one screen for two quick taps on authors', () => {
     pages = [page([comment()])];
     const tree = renderSheet();
