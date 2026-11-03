@@ -810,7 +810,7 @@ function sanitizeWorkflowNodeDataForTemplateCompile(
       storagePath: isConsumerInput ? null : typed.storagePath,
       seedanceAsset: isConsumerInput
         ? createSeedanceAssetMetadata({ assetType: 'Image' })
-        : sanitizeSeedanceAssetMetadataForShare(typed.seedanceAsset),
+        : sanitizeSeedanceAssetMetadataForTemplate(typed.seedanceAsset),
     };
   }
 
@@ -824,7 +824,7 @@ function sanitizeWorkflowNodeDataForTemplateCompile(
       durationSeconds: isConsumerInput ? null : typed.durationSeconds,
       seedanceAsset: isConsumerInput
         ? createSeedanceAssetMetadata({ assetType: 'Video' })
-        : sanitizeSeedanceAssetMetadataForShare(typed.seedanceAsset),
+        : sanitizeSeedanceAssetMetadataForTemplate(typed.seedanceAsset),
     };
   }
 
@@ -843,14 +843,12 @@ function sanitizeWorkflowReferenceElementsForShare(elements: WorkflowReferenceEl
   }));
 }
 
-function sanitizeSeedanceAssetMetadataForShare(
-  metadata: SeedanceAssetMetadata,
-  shares: SerializeWorkflowGraphOptions['sharesSeedanceAsset'] = () => true
-) {
-  // Left out whole: an input with no asset, which its importer fills and prepares as their own.
-  if (!shares(metadata)) {
-    return createSeedanceAssetMetadata({ assetType: metadata.assetType });
-  }
+/**
+ * A template's fixed input's asset as the server compiler keeps it, without the link it was prepared
+ * from. The compiled graph stays private, and its hash pins the version a test run proved, so it keeps
+ * what it always has; the publish clears the asset itself (`copyFixedAssets`).
+ */
+function sanitizeSeedanceAssetMetadataForTemplate(metadata: SeedanceAssetMetadata) {
   return createSeedanceAssetMetadata({
     assetId: metadata.assetId,
     assetType: metadata.assetType,
@@ -859,6 +857,19 @@ function sanitizeSeedanceAssetMetadataForShare(
     error: metadata.error,
     lastCheckedAt: metadata.lastCheckedAt,
   });
+}
+
+function sanitizeSeedanceAssetMetadataForShare(
+  metadata: SeedanceAssetMetadata,
+  shares: SerializeWorkflowGraphOptions['sharesSeedanceAsset'] = () => true
+) {
+  // Left out whole: an input with no asset, which its importer fills and prepares as their own.
+  if (!shares(metadata)) {
+    return createSeedanceAssetMetadata({ assetType: metadata.assetType });
+  }
+  // The provider's error can name the file it could not read, the sharer's upload, path and all
+  // (2026-11-04 re-review): it stays out with the link the asset was prepared from.
+  return { ...sanitizeSeedanceAssetMetadataForTemplate(metadata), error: null };
 }
 
 function sanitizeWorkflowNodeDataForShare(
