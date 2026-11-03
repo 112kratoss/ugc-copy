@@ -1,16 +1,29 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import publicPostQuality from '../../contracts/public-post-quality-v1.json';
 import {
+  countTitleCharacters,
   DECISIVE_PLACEHOLDER_WORDS,
+  isTitleTooShortForRecipe,
   PLACEHOLDER_FILLER_WORDS,
   PLACEHOLDER_WORDS,
+  RECIPE_TITLE_MIN_LENGTH,
+  RECIPE_TITLE_TOO_SHORT_HINT,
 } from '../../ugc-mobile/lib/post-publish-policy/post-publish-policy';
 import {
   assessMarketplaceListingQuality,
   formatBundleAccessLabel,
   getCreatorPublishReadinessError,
+  getMarketplaceQualityError,
+  getMarketplaceRefusalFields,
   getPublicPostQualityError,
+  isDatabaseRecipeTitleRefusal,
+  RECIPE_TITLE_TOO_SHORT_CODE,
+  RECIPE_TITLE_TOO_SHORT_REFUSAL,
 } from '@/lib/marketplace-trust';
 
 type PublicPostQualityMessageKey = keyof typeof publicPostQuality.messages;
@@ -82,6 +95,110 @@ const baseSeller = {
   name: 'Launch Maker',
   avatarUrl: 'https://cdn.example.com/avatar.jpg',
 };
+
+// Owner, 2026-11-03: the title minimum stays, and is said plainly. The server
+// refuses in the words both composers use, with a code they answer with "Post
+// without recipe", and each composer says the rule by the title beforehand.
+describe('the title a recipe needs', () => {
+  const listing = (title: string) => ({
+    title,
+    summary: 'Use this exact launch prompt to build a reusable product hook.',
+    previewText: 'Includes the prompt, post structure, and creator notes.',
+    accessMode: 'free' as const,
+    resources: {
+      promptText: 'Write a direct product hook with one visual proof point and a short CTA.',
+      attachments: [],
+      allowRemix: false,
+    },
+    post: basePost,
+    seller: baseSeller,
+  });
+  const words = 'Lantern glow at dusk';
+
+  it('refuses a title one character short of the shared minimum, in plain words, and takes one at it', () => {
+    expect(getMarketplaceQualityError(listing(words.slice(0, RECIPE_TITLE_MIN_LENGTH - 1))))
+      .toBe(RECIPE_TITLE_TOO_SHORT_REFUSAL);
+    expect(getMarketplaceQualityError(listing(words.slice(0, RECIPE_TITLE_MIN_LENGTH)))).toBeNull();
+    expect(RECIPE_TITLE_TOO_SHORT_REFUSAL).not.toMatch(/Improve this recipe/);
+    expect(RECIPE_TITLE_TOO_SHORT_REFUSAL.startsWith(RECIPE_TITLE_TOO_SHORT_HINT)).toBe(true);
+    // The listing checklist keeps naming the rule, from the same number.
+    expect(assessMarketplaceListingQuality(listing('Cat')).issues[0]).toEqual({
+      code: 'missing_title',
+      field: 'title',
+      message: `Add a clear listing title with at least ${RECIPE_TITLE_MIN_LENGTH} characters.`,
+    });
+  });
+
+  it('keeps the other refusals in the listing rule’s words', () => {
+    expect(getMarketplaceQualityError({ ...listing(words), previewText: 'test', summary: '' }))
+      .toMatch(/^Improve this recipe before publishing: /);
+  });
+
+  it('answers the refusal on all three routes with the fields the fixture pins', () => {
+    for (const endpoint of ['createPost', 'publishGeneration', 'updatePost'] as const) {
+      const pinned = mobileApiContract.endpoints[endpoint].errors.recipeTitleTooShort;
+      expect(pinned.status).toBe(400);
+      expect({
+        error: RECIPE_TITLE_TOO_SHORT_REFUSAL,
+        ...getMarketplaceRefusalFields(RECIPE_TITLE_TOO_SHORT_REFUSAL),
+      }).toEqual(pinned.response);
+    }
+    expect(getMarketplaceRefusalFields(RECIPE_TITLE_TOO_SHORT_REFUSAL)).toEqual({
+      field: 'title',
+      code: RECIPE_TITLE_TOO_SHORT_CODE,
+    });
+    expect(getMarketplaceRefusalFields('Improve this recipe before publishing: Add a useful preview.')).toEqual({});
+  });
+
+  it('says the hint for the recipes and titles the rule refuses, and no other', () => {
+    expect(isTitleTooShortForRecipe('Cat', 'free')).toBe(true);
+    expect(isTitleTooShortForRecipe('Cat', 'paid')).toBe(true);
+    expect(isTitleTooShortForRecipe('  Cat  ', 'free')).toBe(true);
+    expect(isTitleTooShortForRecipe('Cat', 'none')).toBe(false);
+    expect(isTitleTooShortForRecipe(words.slice(0, RECIPE_TITLE_MIN_LENGTH), 'paid')).toBe(false);
+    // An empty title is asked for on its own, and the server lists a post
+    // saved without one under "Recipe".
+    expect(isTitleTooShortForRecipe('', 'free')).toBe(false);
+    expect(isTitleTooShortForRecipe(null, 'free')).toBe(false);
+  });
+
+  // #677's re-review: "Cat 🐱" is six UTF-16 units and five characters. Both
+  // checks counted six and let it through, and the database, counting
+  // characters, refused it with a 500.
+  it('counts a title in characters, as the database does, in both checks', () => {
+    expect(countTitleCharacters('Cat 🐱')).toBe(5);
+    expect('Cat 🐱'.length).toBe(6);
+    expect(isTitleTooShortForRecipe('Cat 🐱', 'free')).toBe(true);
+    expect(getMarketplaceQualityError(listing('Cat 🐱'))).toBe(RECIPE_TITLE_TOO_SHORT_REFUSAL);
+    expect(isTitleTooShortForRecipe('Cats 🐱', 'free')).toBe(false);
+    expect(getMarketplaceQualityError(listing('Cats 🐱'))).toBeNull();
+  });
+
+  it('knows the database’s refusal of the same rule, and only that one', () => {
+    const raised = (message: string) => ({ code: 'P0001', message });
+    expect(isDatabaseRecipeTitleRefusal(raised(
+      'Improve this unlock before publishing: Add a clear listing title with at least 6 characters.',
+    ))).toBe(true);
+    expect(isDatabaseRecipeTitleRefusal(raised(
+      'Improve this unlock before publishing: Add a useful preview or summary that tells buyers what they will unlock.',
+    ))).toBe(false);
+    expect(isDatabaseRecipeTitleRefusal(new Error('socket hang up'))).toBe(false);
+    expect(isDatabaseRecipeTitleRefusal(null)).toBe(false);
+  });
+
+  it('holds the database’s listing rule to the same minimum', () => {
+    const migrations = path.resolve(process.cwd(), 'supabase/migrations');
+    const definition = /CREATE (?:OR REPLACE )?FUNCTION public\.marketplace_resource_bundle_quality_issue\b/;
+    const newest = fs.readdirSync(migrations)
+      .filter((file) => file.endsWith('.sql'))
+      .sort()
+      .filter((file) => definition.test(fs.readFileSync(path.join(migrations, file), 'utf8')))
+      .at(-1);
+    expect(newest).toBeDefined();
+    const sql = fs.readFileSync(path.join(migrations, newest!), 'utf8');
+    expect(sql).toContain(`IF v_title = '' OR length(v_title) < ${RECIPE_TITLE_MIN_LENGTH} THEN`);
+  });
+});
 
 describe('marketplace trust helpers', () => {
   it('formats access labels from localized price quotes', () => {

@@ -176,6 +176,53 @@ export function getPublicPostQualityError(input: {
   return null;
 }
 
+/**
+ * The shortest title a public post with a recipe, Free or Paid, goes out
+ * under: the listing rule's (`assessMarketplaceListingQuality` in
+ * `src/lib/marketplace-trust.ts`, which the create, publish and edit routes
+ * hold a public post to; the database's `marketplace_resource_bundle_quality_issue`
+ * holds the same number, pinned by `src/__tests__/marketplace-trust.test.ts`).
+ * A post without a recipe follows the post's own title rules. Owner,
+ * 2026-11-03: the rule stays, and both composers say it plainly, by the title
+ * before Publish and with "Post without recipe" when it refuses.
+ */
+export const RECIPE_TITLE_MIN_LENGTH = 6;
+
+/** The code the routes answer a refusal by that rule with, beside `field: 'title'`. */
+export const RECIPE_TITLE_TOO_SHORT_CODE = 'RECIPE_TITLE_TOO_SHORT';
+
+/** The hint by the title while the recipe is Free or Paid and the title is shorter than that. */
+export const RECIPE_TITLE_TOO_SHORT_HINT = `A recipe needs a title of at least ${RECIPE_TITLE_MIN_LENGTH} characters.`;
+
+/** What a publish or a save refused by that rule says, in place of the listing rule's own words. */
+export const RECIPE_TITLE_TOO_SHORT_REFUSAL = `${RECIPE_TITLE_TOO_SHORT_HINT} Make the title longer, or post without the recipe.`;
+
+/**
+ * A title's length as the database's `length()` counts it: in characters
+ * (code points), not the UTF-16 units `String.prototype.length` counts. An
+ * emoji is one character there and two here, so "Cat 🐱" passed both checks
+ * as six and the database refused it as five (#677's re-review).
+ */
+export function countTitleCharacters(value: string): number {
+  return Array.from(value).length;
+}
+
+/**
+ * Whether a post's title is shorter than its recipe needs: a Free or Paid
+ * recipe and a title with something in it, counted as the database counts it
+ * (`countTitleCharacters`). An empty title is asked for on its own, recipe or
+ * not, and a post saved without one is listed under "Recipe".
+ */
+export function isTitleTooShortForRecipe(
+  title: string | null | undefined,
+  accessMode: string | null | undefined,
+): boolean {
+  const length = countTitleCharacters(title?.trim() ?? '');
+  return (accessMode === 'free' || accessMode === 'paid')
+    && length > 0
+    && length < RECIPE_TITLE_MIN_LENGTH;
+}
+
 export type CreationTitleSuggestionInput = {
   /**
    * The creation's prompt. It is read only while the post's recipe leaves it

@@ -11,7 +11,6 @@ import clsx from 'clsx';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 import {
   MEDIA_TOOL_IDS,
-  StudioElementChip,
   StudioElementHandle,
   StudioUploadedMediaPreview,
   type StudioMediaPreviewType,
@@ -1071,59 +1070,6 @@ export function CreatorBackgroundRunLine({ title }: { title: string }) {
       <Link href="/creations" className="underline underline-offset-4 hover:text-[var(--ui-text-primary)]">Studio</Link>
       {' '}when it is done.
     </p>
-  );
-}
-
-export type CreatorMentionSuggestion = { id: string; displayName: string; handle: string };
-
-/**
- * The panel that typing "@" in a prompt opens: what was typed, and the
- * references whose handle it can become. A group named by its title.
- */
-export function CreatorMentionPanel<T extends CreatorMentionSuggestion>({
-  title,
-  hint,
-  query,
-  suggestions,
-  handleClassName,
-  onInsert,
-}: {
-  title: string;
-  hint: string;
-  query: string;
-  suggestions: readonly T[];
-  /** A suggestion's handle colour: on the video creator a clip's differs from a picture's. */
-  handleClassName: (suggestion: T) => string;
-  onInsert: (handle: string) => void;
-}) {
-  return (
-    <div role="group" aria-label={title} className="rounded-ui-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-[min(50%_-_0.75rem,10rem)] flex-1">
-          <p className="ui-kicker">{title}</p>
-          <p className="mt-1 text-sm text-[var(--ui-text-muted)]">{hint}</p>
-        </div>
-        {query ? (
-          <StudioElementHandle
-            handle={`@${query}`}
-            className="rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-3 py-1 text-xs font-semibold text-[var(--ui-text-secondary)]"
-          />
-        ) : null}
-      </div>
-      {suggestions.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {suggestions.map((suggestion) => (
-            <StudioElementChip
-              key={suggestion.id}
-              displayName={suggestion.displayName}
-              handle={suggestion.handle}
-              handleClassName={handleClassName(suggestion)}
-              onInsert={() => onInsert(suggestion.handle)}
-            />
-          ))}
-        </div>
-      ) : null}
-    </div>
   );
 }
 

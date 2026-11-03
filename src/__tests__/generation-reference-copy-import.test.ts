@@ -32,7 +32,7 @@ const SOURCE = `post_resource_files/${COPY}`;
 /** The caller's import, which names the copy it was made from: its seller, its creation, its file. */
 const DESTINATION = `${VIEWER}/recipe-imports/${SELLER}/${GENERATION}/${COPY.split('/').pop()}`;
 
-/** A recipe item as the recipe stores it (`buildGenerationReferenceResourceItems`). */
+/** A recipe item as the recipe stores it (`planGenerationReferenceCopies`). */
 const copyItem = (rowId: string, storagePath: string) => ({ id: `reference-${rowId}`, type: 'reference_image', title: 'Reference', storagePath });
 
 const PUBLIC_GENERATION = {

@@ -14,6 +14,11 @@ import {
   type ImageElementDescriptor,
 } from '@/lib/image-elements';
 import { markMediaUploadIntentsConsumed } from '@/lib/media-upload-intents';
+// One rule with both composers: whether a creation gives its recipe anything (#677's re-reviews).
+import {
+  creationMayShareRecipe,
+  type CreationStateLike,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import { buildMediaProxyUrl, isMediaBucket } from '@/lib/media-urls';
 import {
   downloadAllowlistedRemoteMedia,
@@ -36,6 +41,7 @@ import {
 } from '@/lib/seedance-assets';
 import {
   getCanonicalStoredMediaLocation,
+  getUserOwnedStoredMediaLocation,
   isStorageObjectOwnedByUser,
 } from '@/lib/storage-ownership';
 import {
@@ -77,6 +83,44 @@ export interface GenerationInputMediaItem {
   sourceGenerationId: string | null;
   sortOrder: number;
   metadata: Record<string, unknown>;
+  /**
+   * Whether "Include creation references" copies it into the creation's recipe
+   * (`isRecipeCopyableInputRow`). Only the owner's library read marks it.
+   */
+  recipeCopyable?: boolean;
+}
+
+/**
+ * Whether the server copies a saved input into its creation's recipe when the
+ * creator asks: a row kept by the publisher or a guest linked to them, whose
+ * file sits in that identity's own folder, and never a file of someone else's
+ * recipe the run used through the publisher's unlock (`isRecipeFileInput`,
+ * owner 2026-11-03), whose import sits in the publisher's own folder too.
+ * `ownerIds` is the publisher's linked set (`resolveLinkedAccountIds`). The
+ * copy reads nothing else, so the composers offer nothing else
+ * (`recipeCopyable` on the owner's library read).
+ */
+export function isRecipeCopyableInputRow(
+  row: Pick<GenerationInputMediaRow, 'user_id' | 'storage_path' | 'metadata'>,
+  ownerIds: readonly string[],
+): boolean {
+  return ownerIds.includes(row.user_id)
+    && !isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, new Set(ownerIds))
+    && Boolean(getUserOwnedStoredMediaLocation(row.storage_path, row.user_id));
+}
+
+/**
+ * Whether anything of a creation, its exact prompt or its saved inputs, may go
+ * into its post's recipe: the rule both composers read too
+ * (`creationMayShareRecipe`, `ugc-mobile/lib/creation-recipe/`), by the two
+ * marks an operator's removal and its creator's archive write, never by
+ * `is_public` (an NSFW cover writes that as well, deliberately not gated). A
+ * creation only not published yet (a private post, a first publish) has
+ * neither mark: its recipe is a draft no one else reads until the post is
+ * public, and the creation goes public with it.
+ */
+export function creationMaySharePostInputs(generation: CreationStateLike | null | undefined): boolean {
+  return creationMayShareRecipe(generation);
 }
 
 export interface PersistGenerationInputCandidate {
@@ -705,6 +749,11 @@ export async function loadGenerationInputMediaMap(params: {
    * settings name has to hear of it.
    */
   throwOnError?: boolean;
+  /**
+   * The publisher's linked set: each item says whether the recipe copy takes
+   * it (`recipeCopyable`, `isRecipeCopyableInputRow`). Left out, no item says.
+   */
+  recipeCopyableFor?: readonly string[];
 }): Promise<Map<string, GenerationInputMediaItem[]>> {
   const generationIds = Array.from(new Set(params.generationIds.filter(Boolean)));
   const inputMap = new Map<string, GenerationInputMediaItem[]>();
@@ -748,6 +797,9 @@ export async function loadGenerationInputMediaMap(params: {
       }
 
       const item = mapInputMediaRow(row, url, trustedStoragePath);
+      if (params.recipeCopyableFor) {
+        item.recipeCopyable = isRecipeCopyableInputRow(row, params.recipeCopyableFor);
+      }
       const nextItems = inputMap.get(row.generation_id) ?? [];
       nextItems.push(item);
       inputMap.set(row.generation_id, nextItems);

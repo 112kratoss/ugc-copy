@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   buildLegacyGenerationInputMedia,
+  creationMaySharePostInputs,
   loadGenerationInputMediaMap,
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
@@ -55,6 +56,8 @@ type GenerationRow = {
   error_message?: string | null;
   /** Set by an admin removal, which archives the row too (20260820010000). */
   moderation_removed_at?: string | null;
+  /** Set by its creator's archive, or by an admin removal. */
+  archived_at?: string | null;
 };
 
 /**
@@ -700,6 +703,9 @@ export async function listOwnerGenerationsForRoute({
         supabase: adminSupabase,
         generationIds: ordinaryGenerationIds,
         urlMode: 'signed',
+        // Which inputs "Include creation references" copies, so the composers
+        // show and count only those (#677's review).
+        recipeCopyableFor: ownerUserIds,
       }),
     resolveOwnedStoredMediaUrlMap({
       supabase: adminSupabase,
@@ -726,17 +732,21 @@ export async function listOwnerGenerationsForRoute({
     const outputCount = getWorkflowOutputCount(workflowSettings);
     const outputUrls = summaryOnly ? [] : getPersistedOutputUrls(workflowSettings, resolvedMediaUrls);
     const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
+    // Every input says whether the recipe copy takes it: the inputs an older
+    // run's settings name have no saved row to copy, and a creation an operator
+    // removed or its creator archived shares none.
+    const sharesInputs = creationMaySharePostInputs(generation);
     const inputMedia = summaryOnly || template
       ? []
       : durableInputMedia.length > 0
-        ? durableInputMedia
-        : await buildLegacyGenerationInputMedia({
+        ? durableInputMedia.map((item) => ({ ...item, recipeCopyable: sharesInputs && item.recipeCopyable === true }))
+        : (await buildLegacyGenerationInputMedia({
           supabase: adminSupabase,
           generationId: generation.id,
           ownerUserId: generation.user_id ?? userId,
           category: generation.category ?? null,
           workflowSettings: workflowSettings ?? {},
-        });
+        })).map((item) => ({ ...item, recipeCopyable: false }));
     const unreadSourceIds = inputMedia
       .filter(needsSourceGenerationOwner)
       .map((item) => item.sourceGenerationId)

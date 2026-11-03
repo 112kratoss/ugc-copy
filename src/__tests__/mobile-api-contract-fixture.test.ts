@@ -1016,6 +1016,9 @@ describe('shared mobile API v1 contract fixture', () => {
 
     expect(post.hasPaidOrders).toBe(false);
     expect(post.resourceBundleBuyerCount).toBe(post.bundle.salesCount + post.bundle.freeUnlockCount);
+    // #677's re-reviews: a recipe anyone has had gains no exact prompt from
+    // either composer, a retired one included.
+    expect(post.resourceBundleEverUnlocked).toBe(post.bundle.salesCount + post.bundle.freeUnlockCount > 0);
   });
 
   // The unified start carries the price its quote showed (`expectedCostCredits`). The

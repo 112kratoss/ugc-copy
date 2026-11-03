@@ -48,7 +48,6 @@ import {
     CreatorCanvasStage,
     CreatorColumnBar,
     CreatorColumnLayout,
-    CreatorMentionPanel,
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
@@ -72,6 +71,7 @@ import {
     creatorCanvasChip,
     describeRunFailure,
 } from '@/components/CreatorColumn';
+import { CreatorMentionMenu, useCreatorMentionMenu } from '@/components/CreatorMentionMenu';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
 import { referenceKeepWords, samePriceForEach } from '../../../ugc-mobile/lib/creator-run-fit/creator-run-fit';
@@ -1441,6 +1441,11 @@ function ImageCreator({
             );
         })
         : [];
+    const mentionMenu = useCreatorMentionMenu({
+        mention: activeMentionQuery,
+        suggestions: mentionSuggestions,
+        onInsert: handleInsertElementHandle,
+    });
 
     // The run's settings read back as the app's bar reads them: "1K · AUTO · JPG". The format is the
     // model's descriptor's; until that is in, the opening's for the model the page opened on.
@@ -2267,7 +2272,7 @@ function ImageCreator({
                             ) : null}
                         </AnimatePresence>
 
-                        <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${imageAccent.outline}`}>
+                        <div className={`relative rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${imageAccent.outline}`}>
                             <label htmlFor="create-image-prompt" className="ui-kicker block px-4 pt-4">
                                 Prompt
                             </label>
@@ -2276,8 +2281,7 @@ function ImageCreator({
                                 ref={promptTextareaRef}
                                 value={prompt}
                                 onChange={(e) => handlePromptChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
-                                onClick={syncPromptCaretState}
-                                onKeyUp={syncPromptCaretState}
+                                {...mentionMenu.field({ onCaretMove: syncPromptCaretState })}
                                 placeholder="Describe the image you want to create..."
                                 maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                 aria-invalid={promptMeter.state === 'over' || undefined}
@@ -2298,18 +2302,16 @@ function ImageCreator({
                                     <StudioElementHandleText text={heldSlotsMessage} />
                                 </p>
                             ) : null}
+                            {mentionMenu.open ? (
+                                <CreatorMentionMenu
+                                    menu={mentionMenu.menu}
+                                    field={() => promptTextareaRef.current}
+                                    noun="reference"
+                                    prompt={prompt}
+                                    handleClassName={() => 'text-sky-300'}
+                                />
+                            ) : null}
                         </div>
-
-                        {activeMentionQuery ? (
-                            <CreatorMentionPanel
-                                title="Insert element"
-                                hint={mentionSuggestions.length > 0 ? 'Pick an element to insert its @mention.' : 'No matching elements yet.'}
-                                query={activeMentionQuery.query}
-                                suggestions={mentionSuggestions}
-                                handleClassName={() => 'text-sky-300'}
-                                onInsert={handleInsertElementHandle}
-                            />
-                        ) : null}
 
                         <EnhancePromptButton
                             variant="toolbar"

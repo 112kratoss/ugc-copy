@@ -410,26 +410,31 @@ function chooseModel(container: HTMLElement, displayName: string) {
 
 /** The "@" panel under a shot prompt, or null while it is shut. */
 function shotMentionPanel(shot = 1) {
-  // The panel stands right under the prompt box. While it is shut the duration
-  // row is there instead, and that row has no line of text.
-  const below = screen.getByPlaceholderText(`Describe shot ${shot}...`).nextElementSibling;
-  return below?.querySelector('p') ? below : null;
+  // The "@" menu stands right after the shot's prompt box, drawn over what follows it.
+  const beside = screen.getByPlaceholderText(`Describe shot ${shot}...`).nextElementSibling;
+  return beside?.hasAttribute('data-mention-menu') ? beside as HTMLElement : null;
 }
 
-/** What that panel says and offers: its title, its line of help, and each @handle to pick. */
+/** The main prompt's "@" menu, drawn in the prompt's card, or null while it is shut. */
+function promptMentionMenu() {
+  return document.getElementById('create-video-prompt')?.parentElement?.querySelector<HTMLElement>(':scope > [data-mention-menu]') ?? null;
+}
+
+/** What that menu says and offers: its title and count, each @handle to pick, and its line when it has none. */
 function shotMentionPanelState(shot = 1) {
   const panel = shotMentionPanel(shot);
   if (!panel) {
     return null;
   }
 
-  const [title, help] = Array.from(panel.querySelectorAll('p')).map((line) => line.textContent?.trim() ?? '');
+  const [title, count, empty] = Array.from(panel.querySelectorAll('p')).map((line) => line.textContent?.trim() ?? '');
   return {
     title,
-    help,
-    offers: Array.from(panel.querySelectorAll('button')).map((button) => (
-      Array.from(button.querySelectorAll('span')).map((span) => span.textContent ?? '').find((text) => text.startsWith('@')) ?? ''
+    count,
+    offers: Array.from(panel.querySelectorAll('[role="option"]')).map((option) => (
+      Array.from(option.querySelectorAll('span')).map((span) => span.textContent ?? '').find((text) => text.startsWith('@')) ?? ''
     )),
+    empty: empty ?? null,
   };
 }
 
@@ -1188,12 +1193,12 @@ describe('CreateVideoClient Kling video elements', () => {
       await screen.findByRole('radio', { name: 'Frames' });
 
       fireEvent.change(promptField(), { target: { value: 'A scene with @' } });
-      expect(screen.queryByText('Insert reference')).toBeNull();
+      expect(promptMentionMenu()).toBeNull();
 
       await chooseInputs('References');
       fireEvent.change(promptField(), { target: { value: 'A scene with @h' } });
-      expect(await screen.findByText('Insert reference')).toBeInTheDocument();
-      expect(screen.getByText('No matching references yet.')).toBeInTheDocument();
+      await waitFor(() => expect(promptMentionMenu()).not.toBeNull());
+      expect(promptMentionMenu()).toHaveTextContent('No references match “@h”.');
     });
 
     it('saves the side picked with the draft, and opens on it again', async () => {
@@ -2047,9 +2052,10 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(shot, { target: { value: 'Open on @V' } });
 
       expect(shotMentionPanelState()).toEqual({
-        title: 'Insert video element',
-        help: 'Pick a Kling video handle for this shot.',
+        title: 'Video elements',
+        count: '1 video element',
         offers: ['@video_element_1'],
+        empty: null,
       });
 
       fireEvent.click(shotMentionPanel()!.querySelector('button')!);
@@ -2866,17 +2872,8 @@ describe('CreateVideoClient Kling video elements', () => {
       // The name is "Hero creator", so this is how a creator starts to look for it.
       fireEvent.change(promptBox(), { target: { value: 'A scene with @H' } });
 
-      const title = await screen.findByText('Insert reference');
-      // The panel is the title's nearest ancestor that holds a reference to pick.
-      let panel = title.parentElement;
-      while (panel && !panel.querySelector('button')) {
-        panel = panel.parentElement;
-      }
-      const suggestion = Array.from(panel?.querySelectorAll('button') ?? [])
-        .find((button) => button.textContent?.includes('@hero_creator'));
-      expect(suggestion).toBeDefined();
-
-      fireEvent.click(suggestion!);
+      await waitFor(() => expect(promptMentionMenu()).not.toBeNull());
+      fireEvent.click(within(promptMentionMenu()!).getByRole('option', { name: /^Insert @hero_creator,/ }));
 
       // What was typed is replaced by the handle as it is written.
       expect(promptBox()).toHaveValue('A scene with @hero_creator');
@@ -3007,18 +3004,12 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: 'A scene with @villain and @V' } });
       await new Promise((resolve) => setTimeout(resolve, 60));
 
-      // The panel is still at what was typed last, not at the prompt the rename left.
-      const title = screen.getByText('Insert reference');
-      let panel = title.parentElement;
-      while (panel && !panel.querySelector('button')) {
-        panel = panel.parentElement;
-      }
-      expect(panel).toHaveTextContent('@V');
-      const suggestion = Array.from(panel?.querySelectorAll('button') ?? [])
-        .find((button) => button.textContent?.includes('@villain'));
-      expect(suggestion).toBeDefined();
+      // The menu is still at what was typed last, not at the prompt the rename left:
+      // the pick takes the place of "@V", and the first @villain is named in the prompt.
+      const suggestion = within(promptMentionMenu()!).getByRole('option', { name: /^Insert @villain,/ });
+      expect(suggestion).toHaveAccessibleName('Insert @villain, Villain, already in the prompt');
 
-      fireEvent.click(suggestion!);
+      fireEvent.click(suggestion);
 
       expect(promptBox()).toHaveValue('A scene with @villain and @villain');
     });
@@ -3163,9 +3154,10 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(shotBox(), { target: { value: 'Open on @' } });
 
         expect(shotMentionPanelState()).toEqual({
-          title: 'Insert subject',
-          help: 'Pick a named subject for this shot.',
+          title: 'Subjects',
+          count: '2 subjects',
           offers: ['@hero_creator', '@serum_bottle'],
+          empty: null,
         });
 
         // The name is "Hero creator", so this is how a creator starts to look for it.
@@ -3192,9 +3184,10 @@ describe('CreateVideoClient Kling video elements', () => {
         fireEvent.change(shotBox(), { target: { value: 'Open on @z' } });
 
         expect(shotMentionPanelState()).toEqual({
-          title: 'Insert subject',
-          help: 'No matching subjects yet.',
+          title: 'Subjects',
+          count: '0 subjects',
           offers: [],
+          empty: 'No subjects match “@z”.',
         });
       });
 

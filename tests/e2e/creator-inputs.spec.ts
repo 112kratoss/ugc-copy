@@ -163,13 +163,15 @@ test('going back to frames asks the mirror question and brings the first picture
 
   // Under Frames, "@" in the prompt offers nothing.
   const prompt = page.getByRole('textbox', { name: 'Prompt' });
+  const mentionMenu = page.locator('[data-mention-menu]');
   await prompt.fill('A harbour at dusk with @');
-  await expect(page.getByText('Insert reference', { exact: true })).toHaveCount(0);
+  await expect(mentionMenu).toHaveCount(0);
 
   await inputs(page).getByText('References', { exact: true }).click();
   await expect(inputs(page).getByRole('radio', { name: 'References' })).toBeChecked();
   await prompt.fill('A harbour at dusk with @h');
-  await expect(page.getByText('Insert reference', { exact: true })).toBeVisible();
+  await expect(mentionMenu).toBeVisible();
+  await expect(mentionMenu).toContainText('No references match “@h”.');
   await prompt.fill('A harbour at dusk.');
 
   await inputs(page).locator('input[type="file"][accept="image/*"][multiple]').setInputFiles([png('hero.png'), png('prop.png'), png('extra.png')]);

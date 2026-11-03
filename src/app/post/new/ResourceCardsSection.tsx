@@ -80,11 +80,14 @@ function describeScope(card: PostComposerResourceCardDraft, mediaCount: number) 
 function ResourceCardRow({
   card,
   mediaCount,
+  locked = false,
   onEdit,
   onRemove,
 }: {
   card: PostComposerResourceCardDraft;
   mediaCount: number;
+  /** A creation's exact prompt: part of every creation's recipe, neither edited nor removed. */
+  locked?: boolean;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -98,7 +101,7 @@ function ResourceCardRow({
   // A card keeps its type name as the default title, so repeating it underneath
   // would just print the same words twice.
   const metaParts = [
-    displayTitle === typeLabel ? null : typeLabel,
+    locked ? 'From this creation' : displayTitle === typeLabel ? null : typeLabel,
     attachmentCount > 0 ? `${attachmentCount} ${attachmentCount === 1 ? 'file' : 'files'}` : null,
     scopeLabel,
   ].filter(Boolean);
@@ -120,7 +123,7 @@ function ResourceCardRow({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {isConfirmingRemove ? (
+        {locked ? null : isConfirmingRemove ? (
           <>
             <span className="sr-only" role="status">Remove this item?</span>
             <button
@@ -165,8 +168,10 @@ function ResourceCardRow({
 }
 
 /**
- * The creation's saved inputs, which the publish route copies into the recipe
- * (A-F9). Read-only: "Include creation references" above adds and removes it.
+ * The creation's saved inputs the recipe does not hold yet, which a publish or
+ * an edit's save copies into it when asked (A-F9). Read-only: "Include creation
+ * references" above adds and removes it; once copied they are the recipe's own
+ * items, listed with the rest.
  */
 function CreationReferencesRow({ count }: { count: number }) {
   return (
@@ -190,6 +195,7 @@ export default function ResourceCardsSection({
   previewText,
   previewError,
   creationReferenceCount = 0,
+  lockedCardIds,
   includesRemix = false,
   buyerCount = 0,
   onAddCard,
@@ -202,8 +208,10 @@ export default function ResourceCardsSection({
   /** The one public text (S6): the creator's own, or the suggestion while they have not written it. */
   previewText: string;
   previewError?: string | null;
-  /** Saved inputs the recipe will carry; 0 leaves their row out. */
+  /** Saved inputs the save will copy in, beyond those the recipe holds; 0 leaves their row out. */
   creationReferenceCount?: number;
+  /** Items drawn without Edit and Remove: a creation's exact prompt. */
+  lockedCardIds?: ReadonlySet<string>;
   /** A creation post's recipe includes its Remix (S1). */
   includesRemix?: boolean;
   /** People who have this recipe already. */
@@ -255,6 +263,7 @@ export default function ResourceCardsSection({
                 key={card.id}
                 card={card}
                 mediaCount={mediaCount}
+                locked={lockedCardIds?.has(card.id) ?? false}
                 onEdit={() => onEditCard(card.id)}
                 onRemove={() => onRemoveCard(card.id)}
               />

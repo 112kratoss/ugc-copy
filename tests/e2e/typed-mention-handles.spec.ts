@@ -1,25 +1,22 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 /**
- * A long handle typed after "@" stays inside a creator's prompt card.
+ * A long handle typed after "@" stays inside a creator's prompt card and its "@" menu.
  *
- * Typing "@" in a prompt opens a panel of references to insert, and the panel's
- * header echoes what has been typed in a pill. Until the handle is complete it
- * is also an unknown one, so the line under the prompt reads "Unknown element
- * mention: @...". Both printed the handle as one run that could neither break
- * nor shrink. With a handle of 36 characters typed in full on a 390px phone the
- * pill stood 63px past its header in the video creator, after squeezing the
- * panel's title onto six lines, and from 360px down the page scrolled sideways.
- * A handle of 68 characters did that at 768px, and its "Unknown element mention"
- * line ran 181px past its row at 390px. The image creator says it once more in
- * its run panel, "Resolve the unknown element mention before generating: @...",
- * and that line made the page 83px wider than a 1280px window (2026-10-03).
+ * Typing "@" in a prompt opens a menu of references to insert. Until the handle
+ * is complete it is also an unknown one, so the line under the prompt reads
+ * "Unknown element mention: @...". Each printed the handle as one run that could
+ * neither break nor shrink: the panel the menu replaced echoed it in a pill that
+ * stood 63px past its header on a 390px phone, the "Unknown element mention" line
+ * ran 181px past its row, and the image creator's "Resolve the unknown element
+ * mention before generating: @..." made the page 83px wider than a 1280px window
+ * (2026-10-03).
  *
- * All three follow the rule of the reference cards now. The echoed handle stays
- * beside the panel's title while it takes no more than half of the header, and
- * takes the next line, whole, when it is longer. In the two sentences a handle
- * stays on one line while a line can hold it. Where no line can, it breaks after
- * an underscore.
+ * Since 2026-11-04 the menu says what matches nothing in a sentence, "No
+ * references match “@...”.", in place of the pill. All three sentences follow the
+ * rule of the reference cards: a handle stays on one line while a line can hold
+ * it, and where no line can, it breaks after an underscore. The menu itself stays
+ * inside the window.
  *
  * Vitest cannot reach this. The handle was always in the document, and only the
  * layout pushed it out of its card.
@@ -47,8 +44,8 @@ const VIEWPORTS = [
 type MentionLines = {
   /** How far the document is wider than its window, in pixels. */
   pageOverflow: number;
-  /** The pill in the panel's header: "@" and what was typed after it. */
-  echo: string;
+  /** The menu's sentence for what was typed: "No references match “@...”." */
+  empty: string;
   /** The line under the prompt, or null where the prompt has none. */
   unknown: string | null;
   /** The run panel's line about the same handle, or null where the creator has none. */
@@ -57,17 +54,18 @@ type MentionLines = {
   faults: string[];
 };
 
-/** Measures the header of the panel titled `title` and the sentences that name the handle, or answers null while the panel is shut. */
-async function readMentionLines(page: Page, title: string): Promise<MentionLines | null> {
+/** Measures the "@" menu of `prompt` and the sentences that name the handle, or answers null while the menu is shut. */
+async function readMentionLines(prompt: Locator): Promise<MentionLines | null> {
   try {
-    return await page.evaluate((panelTitle) => {
-      const heading = Array.from(document.querySelectorAll<HTMLElement>('p'))
-        .find((candidate) => candidate.textContent?.trim() === panelTitle);
-      // The header holds the title with its line of help, then the echoed handle.
-      const block = heading?.parentElement ?? null;
-      const header = block?.parentElement ?? null;
-      if (!block || !header || header.childElementCount < 2) return null;
-      const echo = header.lastElementChild as HTMLElement;
+    // A reload can take a shot prompt off the page: the caller shows it again.
+    if (await prompt.count() === 0) return null;
+    return await prompt.evaluate((field) => {
+      // The menu is drawn in the prompt's own card, over the page.
+      const menu = field.parentElement?.querySelector<HTMLElement>(':scope > [data-mention-menu]') ?? null;
+      if (!menu || getComputedStyle(menu).visibility !== 'visible') return null;
+      const sentence = Array.from(menu.querySelectorAll<HTMLElement>('p'))
+        .find((candidate) => /^No .* match/.test((candidate.textContent ?? '').trim()));
+      if (!sentence) return null;
 
       const faults: string[] = [];
       const px = (value: number) => `${Math.round(value)}px`;
@@ -103,78 +101,33 @@ async function readMentionLines(page: Page, title: string): Promise<MentionLines
         };
       };
 
-      reportOverflow(header);
-      const headerBox = header.getBoundingClientRect();
-      const blockBox = block.getBoundingClientRect();
-      const echoBox = echo.getBoundingClientRect();
-      for (const [name, box] of [['the title', blockBox], ['the echoed handle', echoBox]] as const) {
-        if (box.left < headerBox.left - 1 || box.right > headerBox.right + 1) {
-          faults.push(`${name} runs from ${px(box.left)} to ${px(box.right)}, outside its header at ${px(headerBox.left)} to ${px(headerBox.right)}`);
-        }
-      }
-
-      // The title's share of the header: half of it once the gap is out, or 160px
-      // where half is more.
-      const gap = parseFloat(getComputedStyle(header).columnGap) || 0;
-      const room = header.clientWidth;
-      const titleShare = Math.min(room / 2 - gap, 160);
-      if (blockBox.width < titleShare - 1) {
-        faults.push(`the title is ${px(blockBox.width)} wide, under its share of ${px(titleShare)}`);
-      }
-
-      // The echoed handle shows whole. An inline box reports no width, which would pass.
-      if (echo.clientWidth === 0) {
-        faults.push('the echoed handle has no box of its own to measure');
-      } else if (echo.scrollWidth > echo.clientWidth + 1 || echo.scrollHeight > echo.clientHeight + 1) {
-        faults.push(`a ${echo.clientWidth}x${echo.clientHeight}px pill holds ${echo.scrollWidth}x${echo.scrollHeight}px of handle`);
-      }
-
-      const echoed = handleRuns(echo);
-      const echoStyle = getComputedStyle(echo);
-      const whole = echoed.width
-        + parseFloat(echoStyle.paddingLeft) + parseFloat(echoStyle.paddingRight)
-        + parseFloat(echoStyle.borderLeftWidth) + parseFloat(echoStyle.borderRightWidth);
-      const beside = echoBox.top < blockBox.bottom - 1 && echoBox.bottom > blockBox.top + 1;
-      if (beside) {
-        if (echoBox.left < blockBox.right - 1 || Math.abs(echoBox.right - headerBox.right) > 1) {
-          faults.push('the echoed handle beside the title is not at the end of the header');
-        }
-        // Wrapped beside the title, a handle would be a ribbon a few characters wide.
-        if (echoed.lines > 1) {
-          faults.push(`the echoed handle wraps onto ${echoed.lines} lines beside the title`);
-        }
-      } else {
-        if (echoBox.top < blockBox.bottom - 1 || Math.abs(echoBox.left - headerBox.left) > 1) {
-          faults.push('the echoed handle is on a line of its own, but not under the start of the title');
-        }
-        // It leaves the title's line only when it has to.
-        if (titleShare + gap + whole <= room + 1) {
-          faults.push(`the echoed handle is on a line of its own, though its ${px(whole)} fit beside a ${px(titleShare)} title in ${px(room)}`);
-        }
-        // And it wraps only when the line it then has is too short for it.
-        if (echoed.lines > 1 && echoBox.width < room - 1) {
-          faults.push(`the echoed handle wraps onto ${echoed.lines} lines in ${px(echoBox.width)} of the ${px(room)} its line has`);
-        }
+      // The menu stays inside the window, however long what was typed.
+      const menuBox = menu.getBoundingClientRect();
+      if (menuBox.left < -1 || menuBox.right > window.innerWidth + 1) {
+        faults.push(`the menu runs from ${px(menuBox.left)} to ${px(menuBox.right)}, outside the ${px(window.innerWidth)} window`);
       }
 
       // A sentence that ends in the handle stays inside `within`, and breaks the
       // handle only when no line can hold it.
-      const reportSentence = (sentence: HTMLElement, within: HTMLElement) => {
-        const name = `"${(sentence.textContent ?? '').trim().slice(0, 24)}..."`;
+      const reportSentence = (line: HTMLElement, within: HTMLElement) => {
+        const name = `"${(line.textContent ?? '').trim().slice(0, 24)}..."`;
         reportOverflow(within);
         const frame = within.getBoundingClientRect();
         const text = document.createRange();
-        text.selectNodeContents(sentence);
+        text.selectNodeContents(line);
         const outside = Array.from(text.getClientRects())
           .find((run) => run.width > 0 && (run.left < frame.left - 1 || run.right > frame.right + 1));
         if (outside) {
           faults.push(`${name} runs from ${px(outside.left)} to ${px(outside.right)}, outside its box at ${px(frame.left)} to ${px(frame.right)}`);
         }
-        const handle = handleRuns(sentence);
-        if (handle.lines > 1 && handle.width <= sentence.clientWidth + 1) {
-          faults.push(`the handle in ${name} wraps onto ${handle.lines} lines, though its ${px(handle.width)} fit one line of ${px(sentence.clientWidth)}`);
+        // A line's room is the box's inside less its padding: the menu's sentence has some.
+        const lineStyle = getComputedStyle(line);
+        const room = line.clientWidth - (parseFloat(lineStyle.paddingLeft) || 0) - (parseFloat(lineStyle.paddingRight) || 0);
+        const handle = handleRuns(line);
+        if (handle.lines > 1 && handle.width <= room + 1) {
+          faults.push(`the handle in ${name} wraps onto ${handle.lines} lines, though its ${px(handle.width)} fit one line of ${px(room)}`);
         }
-        return (sentence.textContent ?? '').replace(/\s+/g, ' ').trim();
+        return (line.textContent ?? '').replace(/\s+/g, ' ').trim();
       };
 
       // The line under the prompt: the character count, then the message. The count reads
@@ -191,12 +144,12 @@ async function readMentionLines(page: Page, title: string): Promise<MentionLines
       const root = document.documentElement;
       return {
         pageOverflow: root.scrollWidth - root.clientWidth,
-        echo: echo.textContent ?? '',
+        empty: reportSentence(sentence, menu),
         unknown: unknown?.parentElement ? reportSentence(unknown, unknown.parentElement) : null,
         resolve: resolve ? reportSentence(resolve, resolve) : null,
         faults,
       };
-    }, title);
+    }, undefined, { timeout: 5_000 });
   } catch (error) {
     // The dev server reloads open pages on its own (see kling-o3-named-subjects.spec.ts),
     // which tears the page down mid-read. Answer "unknown" and let the caller ask again.
@@ -234,21 +187,22 @@ async function showShotPrompts(page: Page) {
 async function expectTypedHandlesInTheirCard(
   page: Page,
   prompt: Locator,
-  title: string,
+  rows: string,
   sentences: { unknown: boolean; resolve: boolean },
   show: () => Promise<void> = async () => {},
 ) {
   for (const query of QUERIES) {
+    const empty = `No ${rows} match “@${query}”.`;
     for (const viewport of VIEWPORTS) {
       await page.setViewportSize(viewport);
       await expect(async () => {
-        if ((await readMentionLines(page, title))?.echo !== `@${query}`) {
+        if ((await readMentionLines(prompt))?.empty !== empty) {
           await show();
           await prompt.fill(`${PROMPT_START}${query}`, { timeout: 5_000 });
         }
-        expect(await readMentionLines(page, title), `"@${query}" at ${viewport.width}px wide`).toEqual({
+        expect(await readMentionLines(prompt), `"@${query}" at ${viewport.width}px wide`).toEqual({
           pageOverflow: 0,
-          echo: `@${query}`,
+          empty,
           unknown: sentences.unknown ? `Unknown element mention: @${query}` : null,
           resolve: sentences.resolve ? `Resolve the unknown element mention before generating: @${query}` : null,
           faults: [],
@@ -274,25 +228,25 @@ test.describe('handles typed after "@"', () => {
     await page.getByRole('group', { name: 'Inputs' }).getByText('References', { exact: true }).click();
     await expect(page.getByRole('radio', { name: 'References' })).toBeChecked();
 
-    await expectTypedHandlesInTheirCard(page, prompt, 'Insert reference', { unknown: true, resolve: false });
+    await expectTypedHandlesInTheirCard(page, prompt, 'references', { unknown: true, resolve: false });
   });
 
-  test('a Kling shot prompt keeps a typed handle inside its panel', async ({ page }) => {
+  test('a Kling shot prompt keeps a typed handle inside its menu', async ({ page }) => {
     await page.goto('/create-video?model=kling-3.0-video');
     const shot = page.getByPlaceholder('Describe shot 1...');
 
-    // A shot prompt has the panel, and no sentence about unknown mentions.
-    await expectTypedHandlesInTheirCard(page, shot, 'Insert video element', { unknown: false, resolve: false }, () => (
+    // A shot prompt has the menu, and no sentence about unknown mentions.
+    await expectTypedHandlesInTheirCard(page, shot, 'video elements', { unknown: false, resolve: false }, () => (
       showShotPrompts(page)
     ));
   });
 
-  test('a Kling O3 shot prompt keeps a typed handle inside its panel', async ({ page }) => {
+  test('a Kling O3 shot prompt keeps a typed handle inside its menu', async ({ page }) => {
     await page.goto('/create-video?model=kling-o3');
     const shot = page.getByPlaceholder('Describe shot 1...');
 
-    // The same panel under the title it has on Kling O3, where it offers the named subjects.
-    await expectTypedHandlesInTheirCard(page, shot, 'Insert subject', { unknown: false, resolve: false }, () => (
+    // The same menu on Kling O3, where it offers the named subjects.
+    await expectTypedHandlesInTheirCard(page, shot, 'subjects', { unknown: false, resolve: false }, () => (
       showShotPrompts(page)
     ));
   });
@@ -302,6 +256,6 @@ test.describe('handles typed after "@"', () => {
     const prompt = page.getByPlaceholder('Describe the image you want to create...');
     await expect(prompt).toBeVisible();
 
-    await expectTypedHandlesInTheirCard(page, prompt, 'Insert element', { unknown: true, resolve: true });
+    await expectTypedHandlesInTheirCard(page, prompt, 'references', { unknown: true, resolve: true });
   });
 });

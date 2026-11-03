@@ -40,8 +40,10 @@ import {
   PUBLIC_UGC_SAFETY_ERROR,
 } from '@/lib/public-ugc-safety';
 import {
+  getMarketplaceRefusalFields,
+  getRecipeTitleRefusalBody,
   isCreatorProfileCheckError,
-  isCreatorProfileReadinessError,
+  isDatabaseRecipeTitleRefusal,
 } from '@/lib/marketplace-trust';
 import {
   getSubmittedMediaKind,
@@ -194,20 +196,13 @@ export async function publishPreparedPost({
     : null;
 
   if (marketplaceQualityError) {
-    const needsProfileRepair = isCreatorProfileReadinessError(marketplaceQualityError);
     const profileCheckFailed = isCreatorProfileCheckError(marketplaceQualityError);
     return {
       ok: false,
       status: profileCheckFailed ? 500 : 400,
       body: {
         error: marketplaceQualityError,
-        ...(needsProfileRepair
-          ? {
-              field: 'profile',
-              actionHref: '/profile',
-              actionLabel: 'Complete profile and return',
-            }
-          : {}),
+        ...getMarketplaceRefusalFields(marketplaceQualityError),
       },
     };
   }
@@ -605,6 +600,11 @@ export async function publishPreparedPost({
     if (publishError instanceof DefinitiveSupabaseMutationRejection) {
       await abortPreparedClaims();
       await cleanupUploadedMedia();
+    }
+    // The database refused the recipe's title by its own count (#677's
+    // re-review): answered as the route's own check answers it.
+    if (isDatabaseRecipeTitleRefusal(publishError)) {
+      return { ok: false, status: 400, body: getRecipeTitleRefusalBody() };
     }
     if (isMissingPostsSchemaError(publishError)) {
       return { ok: false, status: 500, body: { error: MISSING_POSTS_SCHEMA_ERROR } };
