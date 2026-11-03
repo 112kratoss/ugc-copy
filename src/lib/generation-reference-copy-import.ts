@@ -217,8 +217,10 @@ const IMPORT_FOLDERS = new Set(['remix-imports', RECIPE_IMPORT_FOLDER]);
  * block since the remix ended nothing (2026-11-03 re-review). Null for anything else, which a start
  * resolves as it always has; an import of another creator's shared input is the shared import's.
  *
- * Answers as the import does, and `failed` (retryable) when a kept input's row cannot be read: unread,
- * it would be signed as the caller's own.
+ * Answers as the import does. A kept input whose row cannot be read is left to the start, as its path
+ * decides (2026-11-04 re-review), the way an input is marked as it is kept (`findRecipeFileCandidates`):
+ * only a start's import is a recipe file by its path, and a file in the caller's own folder is one they
+ * can read anyway. Answered `failed`, a creator's own re-run of their own upload failed with it.
  */
 export async function reuseRecipeFile(params: {
   source: string;
@@ -242,7 +244,7 @@ export async function reuseRecipeFile(params: {
       .limit(1);
     if (error) {
       logBackendError('failed_to_read_kept_input_for_recipe_file_reuse', { error });
-      return { outcome: 'failed' };
+      return null;
     }
     const row = ((data ?? []) as Array<{ metadata: Record<string, unknown> | null }>)[0];
     if (!row || !isRecipeFileInput({ metadata: row.metadata }, own)) return null;

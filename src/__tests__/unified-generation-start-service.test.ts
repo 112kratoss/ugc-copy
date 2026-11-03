@@ -1857,6 +1857,43 @@ describe('a page run the provider is sent', () => {
     });
   });
 
+  // 2026-11-04 re-review: a buyer's client prepares a picture from a recipe's copy (the asset route
+  // imports the copy first and prepares the import) and sends the copy's own link beside the asset's
+  // id. The run records the asset under that link, never the import's, so it is that link a remix of
+  // the buyer's run is held to: no remix is handed the asset, even with an input that recorded it.
+  it('records a picture prepared from a recipe’s copy under the copy’s link, whose asset no remix is handed', async () => {
+    const COPY_LINK = 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-9.png?token=read';
+    const IMPORTED = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-9.png?token=fresh';
+    // The buyer's unlock holds: the start imports the copy again, as their own file (`reuseRecipeFile`).
+    vi.doMock('@/lib/generation-reference-copy-import', async (importOriginal) => ({
+      ...await importOriginal<typeof import('@/lib/generation-reference-copy-import')>(),
+      reuseRecipeFile: vi.fn(async ({ source }: { source: string }) => (source.includes('post_resource_files/seller-9/')
+        ? { outcome: 'imported' as const, storagePath: 'generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-9.png', signedUrl: IMPORTED }
+        : null)),
+    }));
+    const { outcome, request, reservation } = await startFromPage({
+      kind: 'video',
+      modelId: 'seedance-2',
+      prompt: '@lead walks along the harbour at dusk.',
+      shots: [],
+      settings: { aspectRatio: '16:9', sound: false, duration: 5, resolution: '720p', referenceMode: 'elements' },
+      inputs: [{ slot: 'imageReferences', kind: 'image', url: COPY_LINK, assetId: 'asset-mine', label: 'Lead', handle: '@lead' }],
+    }).finally(() => vi.doUnmock('@/lib/generation-reference-copy-import'));
+
+    expect(outcome).toMatchObject({ success: true, modelId: 'seedance-2' });
+    expect(JSON.stringify(request)).toContain('asset-mine');
+    const recorded = (reservation?.p_workflow_settings as { seedanceAssets?: unknown } | undefined)?.seedanceAssets;
+    expect(recorded).toMatchObject({ images: [expect.objectContaining({ assetId: 'asset-mine', sourceUrl: COPY_LINK })] });
+
+    const { preparedSeedanceAssetIdsFor } = await import('@/lib/generation-input-media');
+    const kept = {
+      id: 'row-lead', generationId: 'generation-1', mediaType: 'image' as const, role: 'reference_image', label: 'Lead', url: null,
+      storagePath: 'generation_inputs/user-1/generation-1/00-reference_image.png', sourceGenerationId: null, sortOrder: 0,
+      metadata: { seedanceAsset: { assetId: 'asset-mine', assetType: 'Image', status: 'active' } },
+    };
+    expect(preparedSeedanceAssetIdsFor(recorded, [kept], new Set([kept.id]), new Set(['user-1']))).toBeNull();
+  });
+
   it('sends Nano Banana 2 the legend for a mentioned picture and keeps the prompt as written', async () => {
     const { outcome, request, reservation } = await startFromPage({
       kind: 'image',

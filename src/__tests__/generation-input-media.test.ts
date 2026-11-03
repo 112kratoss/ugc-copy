@@ -1133,7 +1133,6 @@ describe('the pictures of a Kling O3 named subject', () => {
     };
 
     expect(sanitizeWorkflowSettingsForRemix(settings, 'without-inputs')).toEqual({ model: 'kling-o3', duration: 5 });
-    expect(sanitizeWorkflowSettingsForRemix(settings, 'with-inputs')).toEqual({ model: 'kling-o3', duration: 5 });
     expect(sanitizeWorkflowSettingsForRemix(settings, 'owner')).toEqual(settings);
   });
 
@@ -1186,24 +1185,34 @@ describe('the settings a remix is given', () => {
   });
 
   // 2026-11-03 re-review: an asset a buyer prepared from a recipe's copy (imported first, so it is
-  // theirs) is prepared from a recipe file, which is never handed on: a remix the inputs go to gets
-  // no asset in its place, and every other keeps its place among them.
-  it('hands no remix an asset prepared from a recipe file, keeping every other in its place', async () => {
-    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
-    const asset = (assetId: string, sourceUrl: string) => ({ assetId, assetType: 'Image', status: 'active', sourceUrl, error: null, lastCheckedAt: null });
+  // theirs) is prepared from a recipe file, which is never handed on. A run records each asset under
+  // the link its caller sent (`preparedSeedanceAssets` in the unified start): for a recipe file the
+  // copy's own link, which names no import (2026-11-04 re-review), so only an import's was caught.
+  // Either one keeps its asset from every remix, even where an input the remix is handed recorded it;
+  // a creator's own copy is their own file.
+  it('hands no remix an asset whose recorded source is a recipe file, by the copy’s link or an import', async () => {
+    const { preparedSeedanceAssetIdsFor } = await import('@/lib/generation-input-media');
+    const signed = (path: string) => `https://project.supabase.co/storage/v1/object/sign/${path}?token=read`;
+    const asset = (assetId: string, sourcePath: string) => ({ assetId, assetType: 'Image', status: 'active', sourceUrl: signed(sourcePath), error: null, lastCheckedAt: null });
+    const images = [
+      // As the run records it: the copy's link the buyer's client sent beside the asset's id.
+      asset('asset-copy', 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png'),
+      asset('asset-import', 'generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row.png'),
+      // An import in the first round's layout, which named no seller.
+      asset('asset-old-import', 'generation_inputs/user-1/recipe-imports/gen-0/00-reference-image-row.png'),
+      asset('asset-own-copy', 'post_resource_files/user-1/generation-references/gen-1/00-reference-image-row.png'),
+    ];
+    // Each input handed on, and each recording its asset: the worst case, one a hold-back missed.
+    const rows = images.map((entry, index): GenerationInputMediaItem => ({
+      id: `row-${index}`, generationId: 'gen-1', mediaType: 'image', role: 'reference_image', label: `row-${index}`, url: null,
+      storagePath: `generation_inputs/user-1/gen-1/0${index}.png`, sourceGenerationId: null, sortOrder: index,
+      metadata: { seedanceAsset: entry },
+    }));
 
-    const handed = sanitizeWorkflowSettingsForRemix({
-      model: 'seedance-2',
-      seedanceAssets: { images: [
-        asset('asset-own', 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/face.jpg?token=read'),
-        asset('asset-bought', 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row.png?token=read'),
-        asset('asset-other', 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/hand.jpg?token=read'),
-      ] },
-    }, 'with-inputs');
+    const prepared = preparedSeedanceAssetIdsFor({ images }, rows, new Set(rows.map((row) => row.id)), new Set(['user-1']));
 
-    expect((handed.seedanceAssets as { images: Array<{ assetId: string } | null> }).images.map((entry) => entry?.assetId ?? null))
-      .toEqual(['asset-own', null, 'asset-other']);
-    expect(JSON.stringify(handed)).not.toMatch(/asset-bought|recipe-imports/);
+    expect(prepared?.images.map((entry) => entry?.assetId ?? null)).toEqual([null, null, null, 'asset-own-copy']);
+    expect(JSON.stringify(prepared)).not.toMatch(/asset-copy|asset-import|asset-old-import|seller-9|recipe-imports/);
   });
 
   // 2026-11-03 re-review: the assets were paired with the inputs by place, so one input kept without
@@ -1224,14 +1233,15 @@ describe('the settings a remix is given', () => {
       row('row-c', 2, { sourceUrl: signed('uploads/user-1/c.png') }),
     ];
     const settings = { images: [asset('asset-a', 'uploads/user-1/a.png'), asset('asset-c', 'uploads/user-1/c.png')] };
+    const CREATOR = new Set(['user-1']);
 
-    const prepared = preparedSeedanceAssetIdsFor(settings, rows, new Set(['row-a', 'row-c']));
+    const prepared = preparedSeedanceAssetIdsFor(settings, rows, new Set(['row-a', 'row-c']), CREATOR);
 
     expect(prepared?.images.map((entry) => entry?.assetId ?? null)).toEqual(['asset-a', 'asset-c']);
     // An input none of the assets was prepared from gets none, rather than its neighbour's.
-    expect(preparedSeedanceAssetIdsFor({ images: [asset('asset-c', 'uploads/user-1/c.png')] }, rows, new Set(['row-a', 'row-c']))?.images.map((entry) => entry?.assetId ?? null))
+    expect(preparedSeedanceAssetIdsFor({ images: [asset('asset-c', 'uploads/user-1/c.png')] }, rows, new Set(['row-a', 'row-c']), CREATOR)?.images.map((entry) => entry?.assetId ?? null))
       .toEqual([null, 'asset-c']);
-    expect(preparedSeedanceAssetIdsFor({ images: [asset('asset-x', 'uploads/user-1/x.png')] }, rows, new Set(['row-a', 'row-c']))).toBeNull();
+    expect(preparedSeedanceAssetIdsFor({ images: [asset('asset-x', 'uploads/user-1/x.png')] }, rows, new Set(['row-a', 'row-c']), CREATOR)).toBeNull();
   });
 
   it('holds the input slots for the owner only, and never where the pictures were kept', async () => {
@@ -1239,7 +1249,6 @@ describe('the settings a remix is given', () => {
     const restored = { model: 'nano-banana-2', aspectRatio: '3:4', settings: { aspectRatio: '3:4' } };
 
     expect(sanitizeWorkflowSettingsForRemix(storedSettings(), 'without-inputs')).toEqual(restored);
-    expect(sanitizeWorkflowSettingsForRemix(storedSettings(), 'with-inputs')).toEqual(restored);
     expect(sanitizeWorkflowSettingsForRemix(storedSettings(), 'owner')).toEqual({ ...restored, inputs: storedSettings().inputs });
   });
 
@@ -1272,25 +1281,32 @@ describe('the settings a remix is given', () => {
     },
   });
 
+  // A remix the inputs are handed to is given, beside them, the assets prepared from the inputs it is
+  // handed (`preparedSeedanceAssetIdsFor`), never in the settings: an asset id runs the file it was
+  // prepared from, so one no input it is handed was prepared from would run a file it is not given.
   it('hands a remix given the inputs what was prepared from them, without the links it was prepared from', async () => {
-    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
-
-    const remixed = sanitizeWorkflowSettingsForRemix(seedanceSettings(), 'with-inputs');
-
-    expect(remixed).toEqual({
-      model: 'seedance-2',
-      seedanceAssets: {
-        images: [
-          { assetId: 'asset-face', assetType: 'Image', status: 'active', sourceUrl: null, error: null, lastCheckedAt: null },
-          // Each list keeps its length: an entry pairs with its reference by place.
-          null,
-        ],
-        videos: [{ assetId: null, assetType: 'Video', status: 'failed', sourceUrl: null, error: null, lastCheckedAt: null }],
-        audios: [],
-      },
+    const { preparedSeedanceAssetIdsFor, sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
+    const [face] = seedanceSettings().seedanceAssets.images as Array<{ sourceUrl: string }>;
+    const [holiday] = seedanceSettings().seedanceAssets.videos;
+    // Kept as a start keeps them (`persistGenerationInputMedia`): each with the link it was read from.
+    const kept = (id: string, mediaType: 'image' | 'video', role: string, sortOrder: number, metadata: Record<string, unknown>): GenerationInputMediaItem => ({
+      id, generationId: 'gen-1', mediaType, role, label: id, url: null,
+      storagePath: `generation_inputs/user-1/gen-1/0${sortOrder}-${role}`, sourceGenerationId: null, sortOrder, metadata,
     });
-    expect(JSON.stringify(remixed)).not.toMatch(/uploads\/user-1|passport-scan|holiday/);
-    // An asset id runs the creator's file: it goes only where the inputs go.
+    const rows = [
+      kept('row-face', 'image', 'reference_image', 0, { sourceUrl: face.sourceUrl }),
+      kept('row-holiday', 'video', 'reference_video', 1, { seedanceAsset: holiday, sourceUrl: holiday.sourceUrl }),
+    ];
+
+    const handed = preparedSeedanceAssetIdsFor(seedanceSettings().seedanceAssets, rows, new Set(['row-face', 'row-holiday']), new Set(['user-1']));
+
+    expect(handed).toEqual({
+      images: [{ assetId: 'asset-face', assetType: 'Image', status: 'active', sourceUrl: null, error: null, lastCheckedAt: null }],
+      videos: [{ assetId: null, assetType: 'Video', status: 'failed', sourceUrl: null, error: null, lastCheckedAt: null }],
+      audios: [],
+    });
+    expect(JSON.stringify(handed)).not.toMatch(/uploads\/user-1|passport-scan|holiday/);
+    // The settings hand no asset to anyone but the owner.
     expect(sanitizeWorkflowSettingsForRemix(seedanceSettings(), 'without-inputs')).toEqual({ model: 'seedance-2' });
     expect(sanitizeWorkflowSettingsForRemix(seedanceSettings(), 'owner')).toEqual(seedanceSettings());
   });
@@ -1299,7 +1315,7 @@ describe('the settings a remix is given', () => {
     const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
     const stored = { ...storedSettings(), ...seedanceSettings() };
 
-    for (const reader of ['without-inputs', 'with-inputs', 'owner'] as const) {
+    for (const reader of ['without-inputs', 'owner'] as const) {
       sanitizeWorkflowSettingsForRemix(stored, reader);
     }
 

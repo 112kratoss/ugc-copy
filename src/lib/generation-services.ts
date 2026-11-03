@@ -1293,8 +1293,10 @@ export async function resolveGenerationMediaSource(
   // block since the remix ended nothing (2026-11-03 re-review).
   const recipeFile = await reuseRecipeFile({ source, viewerUserId: userId, reads: options.recipeCopyReads });
   if (recipeFile?.outcome === 'imported') return recipeFile.signedUrl;
+  // Retryable, and said of the recipe: only a recipe file gets here, never a creator's own upload whose
+  // kept row could not be read, which the path leaves to the start (2026-11-04 re-review).
   if (recipeFile?.outcome === 'failed') {
-    throw new GenerationServiceError('We could not prepare the shared reference media. Please try again.', 500);
+    throw new GenerationServiceError('We could not prepare a file from a recipe you unlocked. Please try again.', 500);
   }
   if (recipeFile?.outcome === 'not-eligible') {
     throw new GenerationServiceError('Media references must belong to the authenticated user.', 400);

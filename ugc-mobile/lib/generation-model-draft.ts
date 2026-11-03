@@ -35,6 +35,7 @@ import {
   type ImageCreationDraft,
   type MediaDraft,
   type MotionCreationDraft,
+  type PromptEnhancementRequestOptions,
   type ReferenceMode,
   type VideoCreationDraft,
   type VideoRunEnhancementInputs,
@@ -598,6 +599,24 @@ export function catalogRunEnhancementInputs(
     referenceImageCount: sent((slot) => slot.role === 'reference' && slot.kind === 'image' && slot.key !== SUBJECT_IMAGES_SLOT_KEY).length,
     hasReferenceVideo: sent((slot) => slot.role === 'reference' && slot.kind === 'video').length > 0,
     elementReferences: [...elementReferences].map(([handle, displayName]) => ({ handle, displayName })),
+  };
+}
+
+/**
+ * What a video's Enhance request is built with on this model (`buildPromptEnhancementRequest`): what
+ * its run sends (`catalogRunEnhancementInputs`), and whether the model's clips and tracks take a handle
+ * (`catalogRemixSlotPlacement`), which decides the remix boxes Enhance is told to keep, as the web's is
+ * told (2026-11-04 re-review). On Seedance 2 a clip held under a box's handle answers no mention, so
+ * the box stays open and its handle is kept; read without the model, the clip closed it.
+ */
+export function catalogVideoEnhancementOptions(
+  draft: VideoCreationDraft,
+  model: GenerationModelDescriptor,
+): Required<Pick<PromptEnhancementRequestOptions, 'videoRun' | 'remixSlots'>> {
+  const { clipsTakeHandles, tracksTakeHandles } = catalogRemixSlotPlacement(draft, model);
+  return {
+    videoRun: catalogRunEnhancementInputs(draft, model),
+    remixSlots: { clipsTakeHandles, tracksTakeHandles },
   };
 }
 

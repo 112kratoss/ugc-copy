@@ -22,6 +22,7 @@ import {
   catalogRunEnhancementInputs,
   catalogRunInputSlots,
   catalogStandbyReferencesReason,
+  catalogVideoEnhancementOptions,
   catalogVideoRunReferenceMode,
   reconcileCreationDraftWithCatalog,
   videoSettingsHiddenControlKeys,
@@ -1793,5 +1794,26 @@ describe('a remix’s empty input slots in a catalog run', () => {
       .toEqual(['slot-3']);
     // Kling 3.0 names its clips: the box is placed there, as before.
     expect(catalogRemixSlotPlacement(dance, kling30)).toMatchObject({ clipsTakeHandles: true });
+  });
+
+  // 2026-11-04 re-review: the creator built a video's Enhance from what the run sends alone, and read the
+  // remix's boxes as if every held clip took its handle. On Seedance 2 a clip held under @dance (added on
+  // Kling 3.0, where it answered the box) answers no mention, so its box is open again, and Enhance was
+  // not told to keep @dance. The options the creator builds Enhance with carry the model's own answer.
+  it('builds a video’s Enhance with the boxes the chosen model leaves open', () => {
+    const { draft } = hydrateCatalogCreationDraftFromRemixSource(createDefaultCreationDraft('video'), videoSource, catalog);
+    const clip = { ...upload('move.mp4', 'video', { durationSeconds: 4 }), displayName: 'dance', handle: '@dance' };
+    const onSeedance = { ...applyCatalogModelDefaults(draft, seedance2, catalog.revision), referenceVideos: [clip] } as VideoCreationDraft;
+    const kept = (options: Parameters<typeof buildPromptEnhancementRequest>[1]) => (
+      buildPromptEnhancementRequest(onSeedance, options).context?.elementReferences ?? []
+    );
+
+    expect(catalogVideoEnhancementOptions(onSeedance, seedance2)).toMatchObject({
+      videoRun: catalogRunEnhancementInputs(onSeedance, seedance2),
+      remixSlots: { clipsTakeHandles: false },
+    });
+    expect(kept(catalogVideoEnhancementOptions(onSeedance, seedance2))).toContainEqual({ handle: '@dance', displayName: 'dance' });
+    // What the run sends alone, as before: no @dance to keep.
+    expect(kept({ videoRun: catalogRunEnhancementInputs(onSeedance, seedance2) })).not.toContainEqual(expect.objectContaining({ handle: '@dance' }));
   });
 });

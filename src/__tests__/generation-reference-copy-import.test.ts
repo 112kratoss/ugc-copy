@@ -365,6 +365,18 @@ describe('reusing a recipe file the caller already holds', () => {
     await expect(reuse(theirs, setUp({ tables: { post_resource_bundle_purchases: [] } }))).resolves.toEqual({ outcome: 'not-eligible' });
   });
 
+  // The first round's imports (`<buyer>/recipe-imports/<generation>/<file>`) named no seller, so no copy
+  // can be read off one: refused, never signed as the caller's own file, rows readable or not.
+  it('refuses an import kept in the first round’s layout, which names no copy', async () => {
+    const firstRound = `generation_inputs/${VIEWER}/recipe-imports/${GENERATION}/${COPY.split('/').pop()}`;
+
+    for (const stub of [setUp(), setUp({ tables: { generation_input_media: databaseError('57014', 'canceling statement due to statement timeout') } })]) {
+      await expect(reuse(firstRound, stub)).resolves.toEqual({ outcome: 'not-eligible' });
+      await expect(reuse(`https://project.supabase.co/storage/v1/object/sign/${firstRound}?token=old`, stub)).resolves.toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+    }
+  });
+
   it('checks a kept input of the caller’s own marked as a recipe file as the copy it came from', async () => {
     const marked = setUp({ tables: { generation_input_media: [
       { id: ROW, generation_id: GENERATION, user_id: SELLER, storage_path: `generation_inputs/${SELLER}/${GENERATION}/00.png`, metadata: {} },
@@ -381,12 +393,24 @@ describe('reusing a recipe file the caller already holds', () => {
     await expect(reuse(KEPT, refunded)).resolves.toEqual({ outcome: 'not-eligible' });
   });
 
-  it('refuses a kept input marked as a recipe file whose copy is not on record, and fails retryably when its row cannot be read', async () => {
+  it('refuses a kept input marked as a recipe file whose copy is not on record', async () => {
     const unknownCopy = setUp({ tables: { generation_input_media: [{ id: 'kept-1', generation_id: 'gen-mine', user_id: VIEWER, storage_path: KEPT, metadata: { sourceKind: 'recipe-file' } }] } });
     await expect(reuse(KEPT, unknownCopy)).resolves.toEqual({ outcome: 'not-eligible' });
+  });
 
+  // 2026-11-04 re-review: a failed read of a kept input's row answered `failed`, so a creator's own re-run
+  // of their own upload failed with a refusal about shared media. Unread, the path decides, as it does
+  // where an input is kept (`findRecipeFileCandidates`): only a start's import is a recipe file by its
+  // path, and a kept input in the caller's own folder is theirs to read whatever its row says.
+  it('leaves a kept input whose row cannot be read to the start, as its path says it is the caller’s own', async () => {
     const unreadable = setUp({ tables: { generation_input_media: databaseError('57014', 'canceling statement due to statement timeout') } });
-    await expect(reuse(KEPT, unreadable)).resolves.toEqual({ outcome: 'failed' });
+
+    await expect(reuse(KEPT, unreadable)).resolves.toBeNull();
+    expect(unreadable.copy).not.toHaveBeenCalled();
+    // A start's import is a recipe file by its path all the same: checked as its copy, whose own read
+    // of the creation's rows fails retryably here, never left to the start as the caller's own.
+    await expect(reuse(`generation_inputs/${DESTINATION}`, unreadable)).resolves.toEqual({ outcome: 'failed' });
+    expect(unreadable.copy).not.toHaveBeenCalled();
   });
 
   it.each([

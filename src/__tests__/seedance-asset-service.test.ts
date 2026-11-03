@@ -145,14 +145,17 @@ describe('createSeedanceAssetForRoute from a recipe file', () => {
     expect(fetcher).toHaveBeenCalledWith('https://api.kie.ai/api/v1/playground/createAsset', expect.objectContaining({
       body: JSON.stringify({ assetType: 'Image', url: IMPORTED }),
     }));
-    // Prepared from a recipe file, which no remix of the buyer's creation is ever handed (`sanitizeWorkflowSettingsForRemix`).
+    // The reply names the buyer's import, but a run records the asset under the link its client sends,
+    // the copy's own: what a remix of the buyer's run is held to is that record, tested where the run
+    // makes it (unified-generation-start-service.test.ts) and where a remix reads it
+    // (`preparedSeedanceAssetIdsFor`), never this reply (2026-11-04 re-review).
     expect(result).toMatchObject({ ok: true, body: { assetId: 'asset-mine', sourceUrl: IMPORTED } });
     expect(resolveStoredMediaUrl).not.toHaveBeenCalled();
   });
 
   it.each([
     ['refuses one the unlock no longer covers', 'not-eligible' as const, 400, 'Asset media must belong to the authenticated user.'],
-    ['fails retryably when the unlock cannot be read', 'failed' as const, 500, 'We could not prepare the shared reference media. Please try again.'],
+    ['fails retryably when the unlock cannot be read', 'failed' as const, 500, 'We could not prepare a file from a recipe you unlocked. Please try again.'],
   ])('%s, preparing nothing', async (_, outcome, status, error) => {
     const admin = createAdminSupabaseMock();
     const fetcher = created();

@@ -241,7 +241,7 @@ export async function createSeedanceAssetForRoute({
     // runs on Seedance 2 only as a prepared asset. No remix of the buyer's creation is handed it.
     const recipeFile = await reuseRecipeFile({ source: normalizedUrl, viewerUserId: userId });
     if (recipeFile?.outcome === 'failed') {
-      return { ok: false, status: 500, body: { error: 'We could not prepare the shared reference media. Please try again.' } };
+      return { ok: false, status: 500, body: { error: 'We could not prepare a file from a recipe you unlocked. Please try again.' } };
     }
     if (recipeFile?.outcome === 'not-eligible') {
       return { ok: false, status: 400, body: { error: 'Asset media must belong to the authenticated user.' } };

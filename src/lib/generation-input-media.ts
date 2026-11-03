@@ -7,7 +7,7 @@ import {
   RECIPE_FILE_SOURCE_KIND,
   recipeFileCopyOf,
 } from '@/lib/generation-input-origin';
-import { isRecipeImportSource, RECIPE_IMPORT_FOLDER } from '@/lib/recipe-file-paths';
+import { RECIPE_IMPORT_FOLDER } from '@/lib/recipe-file-paths';
 import {
   isValidElementHandle,
   normalizeSubmittedElementDescriptors,
@@ -118,7 +118,7 @@ interface LegacyGenerationReference {
  * them. Only the owner's remix is given these (owner, 2026-10-29): anyone
  * else, a remix of shared inputs or of a bought recipe included, restores the
  * inputs from the bundle's `inputs` instead, and of `seedanceAssets` is given
- * only the asset ids, by `sanitizeWorkflowSettingsForRemix`.
+ * only the ids of the assets prepared from those, by `preparedSeedanceAssetIdsFor`.
  */
 const INPUT_MEDIA_WORKFLOW_KEYS = new Set([
   'elements',
@@ -1138,10 +1138,11 @@ export async function buildLegacyGenerationInputMedia(params: {
 
 /**
  * Who a remix's settings are for: the owner (or a guest identity since linked
- * to them); someone the run's inputs are handed to, a remix of shared inputs or
- * of a bought recipe; or anyone else.
+ * to them), or anyone else. A remix the run's inputs are handed to (a remix of
+ * shared inputs or of a bought recipe) is given them beside the settings, with
+ * the assets prepared from them (`preparedSeedanceAssetIdsFor`), never in them.
  */
-export type RemixSettingsReader = 'owner' | 'with-inputs' | 'without-inputs';
+export type RemixSettingsReader = 'owner' | 'without-inputs';
 
 export function sanitizeWorkflowSettingsForRemix(
   workflowSettings: Record<string, unknown>,
@@ -1152,9 +1153,6 @@ export function sanitizeWorkflowSettingsForRemix(
     if (OUTPUT_LIST_WORKFLOW_KEYS.has(key)) continue;
     if (reader === 'owner' || !INPUT_MEDIA_WORKFLOW_KEYS.has(key)) {
       sanitized[key] = value;
-    } else if (reader === 'with-inputs' && key === 'seedanceAssets') {
-      const prepared = preparedSeedanceAssetIds(value);
-      if (prepared) sanitized[key] = prepared;
     }
   }
 
@@ -1162,45 +1160,24 @@ export function sanitizeWorkflowSettingsForRemix(
 }
 
 /**
- * What a Seedance 2 run prepared from its references, as a remix the inputs
- * are handed to is given it: each asset's id, kind and state, in the place of
- * its reference. A remixer cannot prepare an asset from the creator's copy, and
- * a real person's picture runs only as a prepared asset. The link each was
- * prepared from, and the error and time of the last check, which can repeat
- * it, stay out: they name the creator's upload.
- */
-function preparedSeedanceAssetIds(value: unknown): ReturnType<typeof readSeedanceAssetCollections> {
-  const collections = readSeedanceAssetCollections(value);
-  if (!collections) return null;
-  // An asset prepared from a recipe file (a buyer's import of a recipe's copy) is never handed on: it
-  // would run the seller's file for anyone who remixes the buyer's creation. Its place stays, empty.
-  const idsOnly = (list: Array<SeedanceAssetMetadata | null>) => list.map((asset) => (
-    asset && !isRecipeImportSource(asset.sourceUrl)
-      ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status })
-      : null
-  ));
-  return {
-    images: idsOnly(collections.images),
-    videos: idsOnly(collections.videos),
-    audios: idsOnly(collections.audios),
-  };
-}
-
-/**
- * What a remix that restores only some of a run's references, from the copies a recipe it unlocked
- * holds, is given of the run's prepared assets (owner, 2026-11-03): each restored reference's asset id,
- * kind and state, as `preparedSeedanceAssetIds` gives a remix the inputs are handed to every one. A
- * remixer cannot prepare a recipe's copy, and a real person's picture runs only as a prepared asset. An
- * input the remix is not given (an empty slot) gets none: its asset would run the creator's own file.
- * Each list keeps the restored ones in the run's order, which is how both creators pair an asset with
- * a restored reference, by its place among them: the reference pictures (for a run from before the
- * family took frames, which kept its pictures as frames, the frames), clips and tracks. Null when no
- * restored reference was prepared.
+ * What a remix the run's inputs are handed to is given of the assets a Seedance 2 run prepared from
+ * its references: the asset id, kind and state of each input it is handed (`restoredIds`). A remixer
+ * cannot prepare an asset from the creator's copy, and a real person's picture runs only as a prepared
+ * asset. The link each was prepared from, and the error and time of the last check, which can repeat
+ * it, stay out: they name the creator's upload. An asset id runs the file it was prepared from
+ * (2026-11-04 re-review), so an asset goes only with an input of the run's that the remix is handed:
+ * none for an input it is not given (an empty slot), none prepared from an input that was never kept,
+ * and none prepared from a recipe file, whoever's input recorded it. Each list keeps the handed ones in
+ * the run's order, which is how both creators pair an asset with a restored reference, by its place
+ * among them: the reference pictures (for a run from before the family took frames, which kept its
+ * pictures as frames, the frames), clips and tracks. Null when no input handed on was prepared.
  */
 export function preparedSeedanceAssetIdsFor(
   value: unknown,
   inputs: readonly GenerationInputMediaItem[],
   restoredIds: ReadonlySet<string>,
+  /** The run's creator and the guests linked to them, whose own recipe files are their own uploads. */
+  creatorIds: ReadonlySet<string>,
 ): ReturnType<typeof readSeedanceAssetCollections> {
   const collections = readSeedanceAssetCollections(value);
   if (!collections) return null;
@@ -1210,13 +1187,15 @@ export function preparedSeedanceAssetIdsFor(
   const frames = [...ofRole('image', 'start_frame').slice(0, 1), ...ofRole('image', 'end_frame').slice(0, 1)];
   // Each asset goes with the input it was prepared from, never by its place (2026-11-03 re-review): one
   // input kept without an asset moved every asset after it onto the wrong input, a held-back one's
-  // among them. An asset prepared from a recipe file goes with none.
+  // among them. An asset prepared from a recipe file goes with none: a run records it under the link
+  // its caller sent (the unified start's `preparedSeedanceAssets`), the copy's own for a buyer's run,
+  // and under an import's where an older start sent one (2026-11-04 re-review).
   const assetOf = (item: GenerationInputMediaItem, assets: Array<SeedanceAssetMetadata | null>) => {
     const recorded = readSeedanceAssetMetadata(item.metadata?.seedanceAsset)?.assetId ?? null;
     const sources = new Set([item.metadata?.sourceStoragePath, item.metadata?.sourceUrl]
       .filter((source): source is string => typeof source === 'string' && Boolean(source.trim()))
       .map(mediaSourceKey));
-    const asset = assets.find((candidate) => candidate && !isRecipeImportSource(candidate.sourceUrl) && (
+    const asset = assets.find((candidate) => candidate && !isRecipeFileSource(candidate.sourceUrl, creatorIds) && (
       (recorded !== null && candidate.assetId === recorded)
       || (Boolean(candidate.sourceUrl) && sources.has(mediaSourceKey(candidate.sourceUrl!)))
     ));

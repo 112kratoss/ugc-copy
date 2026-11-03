@@ -1657,9 +1657,10 @@ describe('generation services', () => {
   });
 
   it.each([
-    ['could not prepare', 'failed', 'We could not prepare the shared reference media. Please try again.'],
+    // Retryable, and said of the recipe: a creator's own upload never reaches it (2026-11-04 re-review).
+    ['could not prepare', 'failed', 'We could not prepare a file from a recipe you unlocked. Please try again.'],
     ['does not cover', 'not-eligible', 'Media references must belong to the authenticated user.'],
-  ] as const)('refuses a recipe copy the unlock %s, as it refuses shared media, before anything is held', async (_, outcome, message) => {
+  ] as const)('refuses a recipe copy the unlock %s, before anything is held', async (_, outcome, message) => {
     const { startImageGeneration } = await import('@/lib/generation-services');
     recipeCopyImportMocks.reuseRecipeFile.mockResolvedValueOnce({ outcome } as never);
 

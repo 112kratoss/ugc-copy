@@ -375,10 +375,7 @@ export async function loadRemixSourceBundle(
   const readsRunInputs = isOwner || access.includeSharedInputMedia;
   const slotTool = isMotionWorkflow ? 'motion' : category === 'image' ? 'image' : 'video';
   const slotWords = remixSlotWords(typedGeneration.prompt, workflowSettings);
-  let effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(
-    workflowSettings,
-    isOwner ? 'owner' : readsRunInputs || access.recipeEntitled ? 'with-inputs' : 'without-inputs',
-  );
+  let effectiveWorkflowSettings = sanitizeWorkflowSettingsForRemix(workflowSettings, isOwner ? 'owner' : 'without-inputs');
   const durableInputMediaMap = readsRunInputs
     ? await loadGenerationInputMediaMap({
         supabase: adminSupabase,
@@ -443,14 +440,19 @@ export async function loadRemixSourceBundle(
   // Never with a link: a held-back input only names its slot.
   const heldBackRecipeFiles = handOver.heldBack.map((item) => ({ ...item, url: null }));
   const inputSlots = withheldInputs?.inputSlots ?? remixInputSlotsOf(heldBackRecipeFiles, { tool: slotTool, words: slotWords });
-  if (heldBackRecipeFiles.length > 0) {
-    // The prepared assets of the inputs handed over, in their places among them: a held-back file's
-    // asset would run it, and the restore pairs each asset with a restored input by its place.
+  if (!isOwner && (readsRunInputs || access.recipeEntitled)) {
+    // A remix the inputs are handed to is given the prepared assets of the inputs it is handed, each
+    // with the input it was prepared from and in their places among them, which is how a restore pairs
+    // them. An asset id runs the file it was prepared from (2026-11-04 re-review): none goes with a
+    // held-back file, an input never kept, or a recipe file, nor to a recipe that hands over no input.
     const handedOverIds = new Set(keptInputMedia.map((item) => item.id));
-    const prepared = preparedSeedanceAssetIdsFor(workflowSettings.seedanceAssets, [...keptInputMedia, ...heldBackRecipeFiles], handedOverIds);
-    effectiveWorkflowSettings = { ...effectiveWorkflowSettings };
-    if (prepared) effectiveWorkflowSettings.seedanceAssets = prepared;
-    else delete effectiveWorkflowSettings.seedanceAssets;
+    const prepared = preparedSeedanceAssetIdsFor(
+      workflowSettings.seedanceAssets,
+      [...keptInputMedia, ...heldBackRecipeFiles],
+      handedOverIds,
+      creatorIds,
+    );
+    if (prepared) effectiveWorkflowSettings = { ...effectiveWorkflowSettings, seedanceAssets: prepared };
   }
   // What anyone but the owner restores from: each row cut down to its copy and
   // what a restore reads (`toRemixerInputMedia`), or to the recipe's copy of it.

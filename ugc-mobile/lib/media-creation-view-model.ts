@@ -2327,6 +2327,12 @@ export interface PromptEnhancementRequestOptions {
   level?: 'faithful' | 'cinematic';
   /** A video run's inputs, as its model sends them. Without them, the attachments are read alone. */
   videoRun?: VideoRunEnhancementInputs;
+  /**
+   * Whether the chosen model's clips and tracks take a handle, which decides whether one the draft holds
+   * answers a remix's box (`unfilledRemixInputSlots`, `catalogRemixSlotPlacement`). Without it every held
+   * clip and track answers its handle's box, as on a draft whose model is not known.
+   */
+  remixSlots?: RemixSlotPlaceOptions;
 }
 
 /** A video run's inputs read off the draft's attachments alone, for a draft whose model is not known. */
@@ -2349,10 +2355,15 @@ function attachedVideoRunInputs(draft: VideoCreationDraft): VideoRunEnhancementI
  * The named references an Enhance request tells the enhancer to keep: those the run sends, then a
  * remix's empty boxes its prompt mentions (`withRemixSlotEnhancerReferences`), as the web creators
  * tell it. Told of neither, the enhancer could rewrite "@product" out of a remix's prompt and leave
- * its box with nothing to answer (2026-11-03).
+ * its box with nothing to answer (2026-11-03). A box is open as the chosen model answers it
+ * (`remixSlots`): a plain clip held under its handle answers no mention on Seedance 2 (2026-11-04).
  */
-function enhancerReferences(draft: CreationDraft, sent: Array<{ handle: string; displayName: string }>) {
-  return withRemixSlotEnhancerReferences(sent, unfilledRemixInputSlots(draft), draft.prompt);
+function enhancerReferences(
+  draft: CreationDraft,
+  sent: Array<{ handle: string; displayName: string }>,
+  remixSlots: RemixSlotPlaceOptions = {},
+) {
+  return withRemixSlotEnhancerReferences(sent, unfilledRemixInputSlots(draft, remixSlots), draft.prompt);
 }
 
 export function buildPromptEnhancementRequest(
@@ -2371,7 +2382,7 @@ export function buildPromptEnhancementRequest(
         elementReferences: enhancerReferences(draft, references.map((reference) => ({
           handle: reference.handle ?? '',
           displayName: reference.displayName,
-        }))),
+        })), options.remixSlots),
         ...(level ? { enhancementLevel: level } : {}),
       },
     };
@@ -2395,7 +2406,7 @@ export function buildPromptEnhancementRequest(
         referenceImageCount: run.referenceImageCount,
         isMultiShot: draft.isMultiShot,
         shotCount: draft.multiPrompts.length,
-        elementReferences: enhancerReferences(draft, run.elementReferences),
+        elementReferences: enhancerReferences(draft, run.elementReferences, options.remixSlots),
         ...(frameImageUrls.length > 0 ? { frameImageUrls } : {}),
         ...(level ? { enhancementLevel: level } : {}),
       },

@@ -85,11 +85,11 @@ import {
   catalogPromptMeters,
   catalogRefusedRunPrice,
   catalogRemixSlotPlacement,
-  catalogRunEnhancementInputs,
   catalogRunSlots,
   catalogStandbyReferencesReason,
   catalogStartRequest,
   catalogSubjectSlot,
+  catalogVideoEnhancementOptions,
   catalogVideoRunReferenceMode,
   createOpeningCreationDraft,
   getCatalogDraftSettings,
@@ -2656,10 +2656,13 @@ function IdentityCreationScreen({
     }
   };
 
-  /** A video run's inputs as its model sends them, for its Enhance request; none before the model is in. */
+  /**
+   * A video run's inputs as its model sends them, and the remix boxes its model leaves open, for its
+   * Enhance request (`catalogVideoEnhancementOptions`); none before the model is in.
+   */
   const videoRunEnhancement = (draft: VideoCreationDraft) => {
     const model = catalog ? getCatalogModel(catalog, draft.model) : null;
-    return model ? { videoRun: catalogRunEnhancementInputs(draft, model) } : {};
+    return model ? catalogVideoEnhancementOptions(draft, model) : {};
   };
 
   /**

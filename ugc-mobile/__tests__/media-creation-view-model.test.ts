@@ -1517,6 +1517,31 @@ describe('a remix’s empty input slots', () => {
     expect(promptMentionErrors(['@product'], draft)).toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
   });
 
+  // 2026-11-04 re-review: the app's Enhance read a remix's open boxes as if every held clip took its
+  // handle, so on Seedance 2 a plain clip held under @dance closed its box and Enhance was free to
+  // rewrite @dance out of the prompt, which the web's Enhance keeps (CreateVideoClient's `openRemixSlots`).
+  // It reads the boxes as the chosen model answers them, by the same shared rule.
+  it('has Enhance keep a box’s handle that the chosen model leaves open, in each shot too', () => {
+    const danceSlot: RemixInputSlot = { id: 'slot-7', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' };
+    const held: VideoCreationDraft = {
+      ...createDefaultCreationDraft('video'),
+      model: 'seedance-2',
+      prompt: 'Open on the door, then @dance spins',
+      inputSlots: [danceSlot],
+      referenceVideos: [{ id: 'clip-1', kind: 'video' as const, url: 'https://cdn.example.com/move.mp4', fileName: 'move.mp4', displayName: 'dance', handle: '@dance' }],
+    };
+    const kept = (remixSlots?: { clipsTakeHandles: boolean }) => buildPromptEnhancementRequest(held, { remixSlots }).context?.elementReferences;
+
+    // Seedance 2's clips take no handle: the held clip answers no mention, so its box stays open.
+    expect(kept({ clipsTakeHandles: false })).toEqual([{ handle: '@dance', displayName: 'dance' }]);
+    const story: VideoCreationDraft = { ...held, isMultiShot: true, multiPrompts: [{ id: 'shot-1', prompt: '@dance at dusk', duration: 5 }] };
+    expect(buildShotPromptEnhancementRequest(story, 'shot-1', { remixSlots: { clipsTakeHandles: false } })?.context.elementReferences)
+      .toEqual([{ handle: '@dance', displayName: 'dance' }]);
+    // Kling 3.0's do: the clip answers the box, as it does before the model is known.
+    expect(kept({ clipsTakeHandles: true })).toEqual([]);
+    expect(kept()).toEqual([]);
+  });
+
   // The notice stayed for as long as any box was empty, a box nobody mentions included (2026-11-03).
   it('puts the boxes’ notice away for the rest of the remix, and keeps the boxes and what they hold the run on', () => {
     const { draft } = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('image'), imageRemix([productSlot, backdropSlot]));

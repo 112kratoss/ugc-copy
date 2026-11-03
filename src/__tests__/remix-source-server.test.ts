@@ -1551,6 +1551,23 @@ describe("a Seedance 2 run's prepared assets", () => {
       lastCheckedAt: '2026-10-29T10:00:00.000Z',
     }],
   };
+  // The picture the asset was prepared from, kept as a start keeps it: with the link it was read from.
+  const FACE = {
+    id: 'row-face',
+    generationId: 'gen-1',
+    mediaType: 'image',
+    role: 'reference_image',
+    label: 'Face',
+    url: 'https://signed.example/face.png',
+    storagePath: 'generation_inputs/creator-1/gen-1/00-reference_image.png',
+    sourceGenerationId: null,
+    sortOrder: 0,
+    metadata: { sourceUrl: PREPARED.images[0].sourceUrl },
+  };
+  const HANDED_ON = [
+    ['a remix of shared inputs', { ...PUBLIC_ACCESS, includeSharedInputMedia: true }],
+    ["a bought recipe's remix", { ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true }],
+  ] as const;
 
   beforeEach(() => {
     mocks.generation = {
@@ -1560,12 +1577,11 @@ describe("a Seedance 2 run's prepared assets", () => {
       model: 'seedance-2',
       workflow_settings: { model: 'seedance-2', referenceMode: 'elements', seedanceAssets: structuredClone(PREPARED) },
     };
+    mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [FACE]]]));
+    mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([FACE]);
   });
 
-  it.each([
-    ['a remix of shared inputs', { ...PUBLIC_ACCESS, includeSharedInputMedia: true }],
-    ["a bought recipe's remix", { ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true }],
-  ])('go to %s by id, without the links they were prepared from', async (_, access) => {
+  it.each(HANDED_ON)('go to %s by id, without the links they were prepared from', async (_, access) => {
     mocks.resolveRemixAccess.mockResolvedValue(access);
 
     const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
@@ -1580,6 +1596,42 @@ describe("a Seedance 2 run's prepared assets", () => {
       },
     });
     expect(JSON.stringify(bundle)).not.toMatch(/passport-scan/);
+  });
+
+  // 2026-11-04 re-review: with nothing held back, every asset the run recorded went to the remix by its
+  // place: one prepared from a recipe file among them, which the run records under the copy's link the
+  // buyer's client sent (no import's), and one prepared from an input that was never kept. An asset id
+  // runs the file it was prepared from, so each now goes with an input the remix is handed, or nowhere.
+  it.each(HANDED_ON)('go to %s only with an input it is handed', async (_, access) => {
+    mocks.resolveRemixAccess.mockResolvedValue(access);
+    const [face] = PREPARED.images;
+    mocks.generation = {
+      ...mocks.generation,
+      workflow_settings: { model: 'seedance-2', referenceMode: 'elements', seedanceAssets: { images: [
+        face,
+        { ...face, assetId: 'asset-bought', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-9.png?token=read' },
+        { ...face, assetId: 'asset-unkept', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000002-hand.jpg?token=read' },
+      ] } },
+    };
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.workflowSettings.seedanceAssets).toEqual({
+      images: [{ assetId: 'asset-face', assetType: 'Image', status: 'active', sourceUrl: null, error: null, lastCheckedAt: null }],
+      videos: [],
+      audios: [],
+    });
+    expect(JSON.stringify(bundle)).not.toMatch(/asset-bought|asset-unkept|seller-9|1730000000002-hand/);
+  });
+
+  it('go nowhere with a recipe that hands its buyer none of the inputs', async () => {
+    mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, basis: 'unlocked', recipeEntitled: true });
+    // The creator's switch is off: the unlock hands over no input (`loadGenerationRecipeRemixInputsByPostId`).
+    mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([]);
+
+    const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+    expect(bundle.workflowSettings).toEqual({ model: 'seedance-2', referenceMode: 'elements' });
   });
 
   it('stay out of a remix the inputs are not handed to', async () => {
