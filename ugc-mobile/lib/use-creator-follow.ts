@@ -24,8 +24,10 @@ type FollowStateQueryClient = Pick<QueryClient, 'getQueriesData' | 'getQueryStat
  * into the page before the server has it, and puts the page back if it fails,
  * which the reel's copy of a seeded answer would never learn.
  *
- * The pages and the follow states are both removed when the account on the
- * phone changes (`isViewerlessCreatorQuery` in `lib/auth.tsx`).
+ * The pages and the follow states are both forgotten whenever the person on
+ * the phone changes: as a sign-in lands, and on every way out of a session
+ * (`isViewerlessCreatorQuery` in `lib/auth.tsx`). Until this phone's sign-ins
+ * did it too (review of #679), a guest's pages outlived its sign-in.
  */
 export function cachedCreatorPageFollowState(
   queryClient: FollowStateQueryClient,
