@@ -27,6 +27,11 @@ vi.mock('@tanstack/react-query', () => ({
     prefetchQuery: async ({ queryKey }: { queryKey: unknown }) => {
       state.prefetched.push(queryKey);
     },
+    // No creator page cached: every answer is asked for.
+    getQueriesData: () => [],
+    getQueryState: () => undefined,
+    isMutating: () => 0,
+    setQueryData: vi.fn(),
   }),
 }));
 vi.mock('@/lib/auth', () => ({

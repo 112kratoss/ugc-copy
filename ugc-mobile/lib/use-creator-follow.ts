@@ -1,10 +1,10 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
 import type { MagicbookletApiClient } from './api-client';
 import { useAuth } from './auth';
 import { setCachedCreatorProfileFollowing } from './creator-profile-view-model';
-import type { CreatorFollowAttribution } from './types';
+import type { CreatorFollowAttribution, CreatorProfileResponse } from './types';
 
 const FOLLOW_STATE_STALE_MS = 1000 * 60 * 5;
 
@@ -12,19 +12,66 @@ export function creatorFollowStateQueryKey(creatorId: string | null) {
   return ['creator-follow-state', creatorId] as const;
 }
 
+type FollowStateQueryClient = Pick<QueryClient, 'getQueriesData' | 'getQueryState' | 'isMutating'>;
+
+/**
+ * Whether the reader follows a creator, as a cached page of that creator says
+ * (`viewer.isFollowing`, which the reel's Follow and the page's own button both
+ * keep current), and when that page was read: the freshest such page read
+ * within the time the reel keeps an answer for. Null when there is none.
+ *
+ * Nothing while any mutation is in flight: the page's Follow writes its answer
+ * into the page before the server has it, and puts the page back if it fails,
+ * which the reel's copy of a seeded answer would never learn.
+ *
+ * The pages and the follow states are both removed when the account on the
+ * phone changes (`isViewerlessCreatorQuery` in `lib/auth.tsx`).
+ */
+export function cachedCreatorPageFollowState(
+  queryClient: FollowStateQueryClient,
+  creatorId: string,
+  now = Date.now(),
+): { state: { following: boolean }; updatedAt: number } | null {
+  if (queryClient.isMutating() > 0) return null;
+  let freshest: { state: { following: boolean }; updatedAt: number } | null = null;
+  for (const [queryKey, data] of queryClient.getQueriesData<InfiniteData<CreatorProfileResponse>>({ queryKey: ['creator-profile'] })) {
+    if (!Array.isArray(data?.pages)) continue;
+    const page = data.pages.find((candidate) => candidate?.profile?.id === creatorId);
+    if (typeof page?.viewer?.isFollowing !== 'boolean') continue;
+    const updatedAt = queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0;
+    if (!(updatedAt > now - FOLLOW_STATE_STALE_MS)) continue;
+    if (!freshest || updatedAt > freshest.updatedAt) {
+      freshest = { state: { following: page.viewer.isFollowing }, updatedAt };
+    }
+  }
+  return freshest;
+}
+
 /**
  * Asks ahead whether the signed-in reader follows a creator, into the cache
  * `useCreatorFollow` reads — as a finger lands on one of their tiles, so a
  * reel opening on the post already knows (`ZoomPostPreparer`). An answer still
  * fresh is not asked for again.
+ *
+ * A fresh page of the creator, read later than any answer held, is that answer,
+ * as of when the page was read: a tile on a creator's page knows whom the reader
+ * follows without a request. Asked for as the finger landed, the answer still
+ * came 1.1–2.4 s after the reel had opened, and the Follow pill popped in under
+ * the reader (device sweep, Pixel 9a emulator, 2026-11-03). Home and Explore
+ * cards carry no follow state, so a tile there still waits for the request.
  */
 export function prefetchCreatorFollowState(
   queryClient: QueryClient,
   api: Pick<MagicbookletApiClient, 'getCreatorFollowState'>,
   creatorId: string
 ) {
+  const queryKey = creatorFollowStateQueryKey(creatorId);
+  const fromPage = cachedCreatorPageFollowState(queryClient, creatorId);
+  if (fromPage && fromPage.updatedAt > (queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0)) {
+    queryClient.setQueryData(queryKey, fromPage.state, { updatedAt: fromPage.updatedAt });
+  }
   return queryClient.prefetchQuery({
-    queryKey: creatorFollowStateQueryKey(creatorId),
+    queryKey,
     queryFn: () => api.getCreatorFollowState(creatorId),
     staleTime: FOLLOW_STATE_STALE_MS,
   });
