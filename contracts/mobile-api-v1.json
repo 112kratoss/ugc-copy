@@ -746,7 +746,21 @@
                 "currency": "USD"
               }
             },
-            "canRemix": true
+            "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ]
           }
         ],
         "pageInfo": {
@@ -978,6 +992,20 @@
             "generationId": "generation-1",
             "asset": null,
             "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ],
             "savedAt": "2026-06-22T06:10:00.000Z"
           }
         ],
@@ -1031,7 +1059,21 @@
           "isSaved": false,
           "generationId": "generation-1",
           "asset": null,
-          "canRemix": true
+          "canRemix": true,
+          "generationSetup": [
+            {
+              "label": "Aspect ratio",
+              "value": "16:9"
+            },
+            {
+              "label": "Resolution",
+              "value": "1K"
+            },
+            {
+              "label": "Output format",
+              "value": "JPG"
+            }
+          ]
         }
       },
       "responseVariants": {
@@ -1065,7 +1107,8 @@
             "asset": null,
             "canRemix": false,
             "remixCapability": "none",
-            "remixTarget": null
+            "remixTarget": null,
+            "generationSetup": []
           }
         }
       }

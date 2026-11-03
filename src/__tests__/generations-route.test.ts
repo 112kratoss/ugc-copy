@@ -425,10 +425,12 @@ describe('/api/generations route', () => {
     expect(data.generations[0].paywallPrefill).toMatchObject({
       promptText: 'A creator-style product image with warm natural light.',
       allowRemix: true,
-      resourceKinds: ['prompt', 'notes', 'remix', 'files'],
+      resourceKinds: ['prompt', 'remix', 'files'],
       referenceCount: 1,
     });
-    expect(String(data.generations[0].paywallPrefill.notesMarkdown)).toContain('Model: Nano Banana 2.0');
+    // The settings are public on the post since 2026-11-03: a new recipe takes in no saved setup,
+    // and the field that carried it as a note is gone.
+    expect(data.generations[0].paywallPrefill).not.toHaveProperty('notesMarkdown');
   });
 
   it('returns a bounded page with pagination metadata', async () => {
@@ -987,7 +989,7 @@ describe('/api/generations route', () => {
     expect(data.generations[0].workflow_settings).toBeUndefined();
     expect(data.generations[0].paywallPrefill).toMatchObject({
       allowRemix: true,
-      resourceKinds: ['prompt', 'notes', 'remix', 'files'],
+      resourceKinds: ['prompt', 'remix', 'files'],
       referenceCount: 1,
     });
   });

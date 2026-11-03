@@ -83,6 +83,25 @@ export function buildPostDetailsMeta(
   };
 }
 
+/**
+ * Whether Details reads the post for its creation's settings, which everyone
+ * sees under Made with (owner, 2026-11-03): a post made from a creation whose
+ * card came without them (Home's first page kept from an earlier launch, or a
+ * card whose settings the server could not read). Every other card brings them,
+ * empty where it has none, which the server decides (a template's result, an
+ * upload, a written post); an upload, a written post and a post under its NSFW
+ * cover (which names no creation) have none to read either way.
+ */
+export function shouldReadPostGenerationSetup(
+  item: Pick<ImmersivePreviewItem, 'sourceType' | 'showcasePostId' | 'generationId' | 'previewKind' | 'details'>,
+): boolean {
+  return item.sourceType === 'showcase'
+    && Boolean(item.showcasePostId)
+    && Boolean(item.generationId)
+    && item.previewKind !== 'text'
+    && item.details?.generationSetup === undefined;
+}
+
 export interface PostDetailsStat {
   label: string;
   value: string;

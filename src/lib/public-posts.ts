@@ -32,7 +32,16 @@ import {
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import {
+  PUBLIC_GENERATION_SETUP_COLUMNS,
+  buildPublicGenerationSetup,
+  loadPublicGenerationSetupCatalog,
+  publicPostGenerationSetup,
+  readPublicGenerationSetupRow,
+  selectWithGenerationSetup,
+} from '@/lib/public-generation-setup';
 import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
+import type { GenerationSetupEntry } from '../../ugc-mobile/lib/generation-setup/generation-setup';
 import {
   MAGICBOOKLET_SOURCE_KIND,
   normalizeShowcaseSourceKind,
@@ -108,6 +117,14 @@ export interface PublicPostDetail {
   canRemix: boolean;
   remixCapability: PostRemixCapability;
   remixTarget: PostRemixTarget;
+  /**
+   * The settings the post's creator chose for its creation, as everyone may see
+   * them (`buildPublicGenerationSetup`, decided for every read by
+   * `publicPostGenerationSetup`): none for an upload, a text post, a template's
+   * result or a post under its NSFW cover, and left out where the creation or
+   * the catalog could not be read.
+   */
+  generationSetup?: GenerationSetupEntry[];
 }
 
 async function fetchPublicPostRow(
@@ -282,27 +299,36 @@ async function loadPublicPostCreator(
 }
 
 /**
- * The creation's model as anyone may see it, and whether it is a template's
- * result, whose model is the template's and whose post offers no Remix.
+ * The creation's model and settings as anyone may see them, and whether it is
+ * a template's result, whose model and settings are the template's and whose
+ * post offers no Remix. One read, of the settings' paths beside the model
+ * (never the whole workflow_settings record), with the catalog loaded beside it;
+ * the settings are left out (unknown) where either could not be read.
  */
 async function loadPublicPostGeneration(
   adminSupabase: ReturnType<typeof createServiceClient>,
   generationId: string | null,
-): Promise<{ model: string; templateResult: boolean } | null> {
+): Promise<{ model: string; templateResult: boolean; generationSetup?: GenerationSetupEntry[] } | null> {
   if (!generationId) return null;
 
-  const { data: generation, error: generationError } = await adminSupabase
-    .from('generations')
-    .select('model, template_run_id, template_run_step_id')
-    .eq('id', generationId)
-    .maybeSingle();
+  const catalog = loadPublicGenerationSetupCatalog();
+  const { data, error: generationError, withSetup } = await selectWithGenerationSetup(
+    PUBLIC_GENERATION_SETUP_COLUMNS,
+    (select) => adminSupabase.from('generations').select(select).eq('id', generationId).maybeSingle(),
+  );
 
   if (generationError) {
     logBackendError('failed_to_fetch_post_generation_model', { error: generationError });
     return null;
   }
-  if (!generation) return null;
-  return { model: shownGenerationModel(generation), templateResult: isTemplateResultGeneration(generation) };
+  if (!data) return null;
+  const generation = readPublicGenerationSetupRow(data);
+  const setupCatalog = withSetup ? await catalog : null;
+  return {
+    model: shownGenerationModel({ ...generation, model: generation.model ?? '' }),
+    templateResult: isTemplateResultGeneration(generation),
+    ...(setupCatalog ? { generationSetup: buildPublicGenerationSetup(generation, setupCatalog) } : {}),
+  };
 }
 
 export async function getPublicPostDetail(
@@ -468,6 +494,12 @@ export async function getPublicPostDetail(
       : null,
   });
 
+  // Left out where the creation or the catalog could not be read: unknown, never none.
+  const generationSetup = publicPostGenerationSetup(
+    { postFormat: row.post_format, generationId: row.generation_id },
+    generation?.generationSetup,
+  );
+
   const detail: PublicPostDetail = {
     isNsfw: row.is_nsfw === true,
     id: row.id,
@@ -497,6 +529,7 @@ export async function getPublicPostDetail(
     canRemix: remix.capability === 'public' && remix.target !== 'workflow' && remix.target !== 'text_template',
     remixCapability: remix.capability,
     remixTarget: remix.target,
+    ...(generationSetup ? { generationSetup } : {}),
   };
   if (!row.is_nsfw) return detail;
   const revealed = options?.revealNsfw && await hasNsfwReveal(adminSupabase, row.id, viewerUserId);

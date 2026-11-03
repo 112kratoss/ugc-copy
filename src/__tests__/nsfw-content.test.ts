@@ -7,9 +7,10 @@ describe('manual NSFW content', () => {
     const covered = coverNsfwContent({ id: 'post', title: secret, body: secret, prompt: secret,
       description: secret, mediaUrl: secret, mediaItems: [{ url: secret, preview: { url: secret } }],
       asset: { lockedPreview: secret }, resourceBundle: { promptText: secret }, generationId: secret,
+      generationSetup: [{ label: 'Aspect ratio', value: secret }],
       canRemix: true, category: 'video', postFormat: 'media', mediaKind: 'video' });
     expect(JSON.stringify(covered)).not.toContain(secret);
-    expect(covered).toMatchObject({ id: 'post', isNsfw: true, nsfwRevealed: false, mediaItems: [], mediaUrl: null, canRemix: false });
+    expect(covered).toMatchObject({ id: 'post', isNsfw: true, nsfwRevealed: false, mediaItems: [], mediaUrl: null, canRemix: false, generationSetup: [] });
   });
   it('distinguishes an omitted old-client label from an explicit unmark', () => {
     expect(parseNsfwFlag(undefined)).toBeUndefined();

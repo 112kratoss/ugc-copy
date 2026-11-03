@@ -19,21 +19,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Whether a generations answer's `paywallPrefill` is one: every kind a recipe's, the texts text
- * or none, the remix switch a boolean. The composer and the creators' form take it alike, so a
- * recipe one offers the other never drops. (Here, not in `generation-paywall.ts`, whose imports
- * reach the server's catalog: both callers are browser code.)
+ * A generations answer's `paywallPrefill`, or null where it is none: every kind a recipe's, the
+ * prompt text or none, the remix switch a boolean. The composer and the creators' form both read
+ * it here, so a recipe one offers the other never drops, and neither takes in notes: an answer
+ * from before 2026-11-03 named the creation's "Saved generation setup" as its `notes`, which no
+ * recipe holds now that the post shows the settings to everyone (owner's decision), so its notes
+ * are left out here, the kind and the text. (Here, not in `generation-paywall.ts`, which is the
+ * server's: both callers are browser code.)
  */
-export function isGenerationPaywallPrefill(value: unknown): value is GenerationPaywallPrefill {
+export function readGenerationPaywallPrefill(value: unknown): GenerationPaywallPrefill | null {
   if (!isRecord(value)) {
-    return false;
+    return null;
   }
   const typed = value as Partial<GenerationPaywallPrefill>;
-  return Array.isArray(typed.resourceKinds)
+  const valid = Array.isArray(typed.resourceKinds)
     && typed.resourceKinds.every((kind) => isPostResourceKind(kind))
     && (typeof typed.promptText === 'string' || typed.promptText === null || typed.promptText === undefined)
-    && (typeof typed.notesMarkdown === 'string' || typed.notesMarkdown === null || typed.notesMarkdown === undefined)
     && typeof typed.allowRemix === 'boolean';
+  if (!valid) return null;
+  const prefill: GenerationPaywallPrefill & { notesMarkdown?: unknown } = {
+    ...(typed as GenerationPaywallPrefill),
+    resourceKinds: (typed.resourceKinds as GenerationPaywallPrefill['resourceKinds']).filter((kind) => kind !== 'notes'),
+  };
+  delete prefill.notesMarkdown;
+  return prefill;
 }
 
 /** The details of `generationId` in an `/api/generations` answer, or null where it is not there. */
@@ -43,8 +52,8 @@ function readCreationPublishDetails(generationId: string, payload: unknown): Cre
   if (!generation) return null;
   return {
     title: typeof generation.title === 'string' ? generation.title : '',
-    // Checked as the composer checks it, which "More options" opens on the same creation.
-    paywallPrefill: isGenerationPaywallPrefill(generation.paywallPrefill) ? generation.paywallPrefill : null,
+    // Read as the composer reads it, which "More options" opens on the same creation.
+    paywallPrefill: readGenerationPaywallPrefill(generation.paywallPrefill),
     creation: readCreationTitleSource(generation),
   };
 }

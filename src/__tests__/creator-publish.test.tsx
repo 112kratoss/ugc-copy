@@ -15,7 +15,7 @@ import {
   type RemixOriginal,
   type RemixOriginalRead,
 } from '@/components/CreatorPublish';
-import type { CreationPublishDetails } from '@/lib/creation-publish-details';
+import { readGenerationPaywallPrefill, type CreationPublishDetails } from '@/lib/creation-publish-details';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import { onCreditTopUpOpen } from '@/lib/credit-top-up';
 
@@ -38,7 +38,7 @@ vi.mock('next/link', () => ({
 const PROMPT = 'A harbour at dusk, lanterns on the water, slow push-in.';
 const DETAILS: CreationPublishDetails = {
   title: 'Harbour at dusk',
-  paywallPrefill: { resourceKinds: ['prompt'], promptText: PROMPT, notesMarkdown: null, allowRemix: false },
+  paywallPrefill: { resourceKinds: ['prompt'], promptText: PROMPT, allowRemix: false },
   creation: { prompt: PROMPT, model: 'seedance-2-mini', category: 'video' },
 };
 const ORIGINAL: RemixOriginal = {
@@ -56,7 +56,6 @@ const WITH_UPLOADS: CreationPublishDetails = {
   paywallPrefill: {
     resourceKinds: ['prompt', 'remix'],
     promptText: PROMPT,
-    notesMarkdown: null,
     allowRemix: true,
     referenceCount: 3,
     referenceKindCounts: { image: 3 },
@@ -317,6 +316,74 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
     expect((call?.[1] as RequestInit).headers).toMatchObject({ Authorization: 'Bearer token-1' });
   });
 
+  // Owner, 2026-11-03: the creation's settings show on its post for everyone, so the recipe
+  // takes in no "Saved generation setup", even from an answer that still carried one: the
+  // prefill's one reader, which the composer shares, leaves its notes out.
+  it('shares no settings with the recipe, which the post shows everyone', async () => {
+    const fetchMock = installFetch();
+    const olderAnswer = {
+      resourceKinds: ['prompt', 'notes'],
+      promptText: PROMPT,
+      notesMarkdown: 'Saved generation setup\nAspect ratio: 9:16\nDuration: 5s',
+      allowRemix: false,
+    };
+    const paywallPrefill = readGenerationPaywallPrefill(olderAnswer);
+    expect(paywallPrefill).toEqual({ resourceKinds: ['prompt'], promptText: PROMPT, allowRemix: false });
+    const { onPublished } = renderPanel({ details: { ...DETAILS, paywallPrefill } });
+    expect(within(form()).getByText('The prompt, free, so others can remix it.')).toBeInTheDocument();
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    const body = publishBody(fetchMock);
+    expect(body).toMatchObject({
+      resourceBundle: {
+        accessMode: 'free',
+        summary: 'Prompt from this creation',
+        resources: { promptText: PROMPT },
+      },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/saved generation setup|aspect ratio|9:16|notes/i);
+  });
+
+  // An answer of notes alone (the settings) offers no recipe on either surface: the composer reads
+  // it through the same reader, which leaves it no kind.
+  it('offers no recipe from an older answer that held only the settings', () => {
+    installFetch();
+    const paywallPrefill = readGenerationPaywallPrefill({
+      resourceKinds: ['notes'],
+      promptText: null,
+      notesMarkdown: 'Saved generation setup\nAspect ratio: 9:16',
+      allowRemix: false,
+    });
+    expect(paywallPrefill).toEqual({ resourceKinds: [], promptText: null, allowRemix: false });
+    renderPanel({ details: { ...DETAILS, paywallPrefill } });
+    expect(within(form()).queryByRole('switch', { name: 'Share the recipe' })).not.toBeInTheDocument();
+    expect(readGenerationPaywallPrefill({ resourceKinds: ['settings'], allowRemix: false })).toBeNull();
+    expect(readGenerationPaywallPrefill(null)).toBeNull();
+  });
+
+  // A motion run saved no prompt: its recipe is the original's references, or the creator's own
+  // uploads once added, and the switch says so rather than promising a prompt (#675's review).
+  it('describes a prompt-less creation’s recipe by what it holds', () => {
+    installFetch();
+    const motion: CreationPublishDetails = {
+      ...DETAILS,
+      paywallPrefill: {
+        resourceKinds: ['remix', 'files'],
+        promptText: null,
+        allowRemix: true,
+        referenceCount: 2,
+        referenceKindCounts: { image: 1, video: 1 },
+        ownReferenceCount: 0,
+        ownReferenceKindCounts: {},
+      },
+      creation: { prompt: '', model: 'kling-2.6', category: 'video' },
+    };
+    renderPanel({ details: motion });
+    expect(within(form()).getByText('The original’s references, free, so others can remix it.')).toBeInTheDocument();
+    expect(within(form()).queryByText(/the prompt/i)).not.toBeInTheDocument();
+  });
+
   it('publishes the media alone with the recipe off', async () => {
     const fetchMock = installFetch();
     const { onPublished } = renderPanel();
@@ -356,14 +423,14 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
   });
 });
 
-// Owner, 2026-10-29: the recipe shares the prompt, the settings and the original's references;
-// the creator's own uploads stay out unless they add them, and with any in the creation the
-// remix's hand-over, which would give them all away, is off.
+// Owner, 2026-10-29: the recipe shares the prompt and the original's references (its settings show
+// on the post for everyone since 2026-11-03); the creator's own uploads stay out unless they add them,
+// and with any in the creation the remix's hand-over, which would give them all away, is off.
 describe('CreatorPublishPanel: the creator’s own uploads', () => {
   it('leaves them out by default: the original’s references only, and no hand-over', async () => {
     const fetchMock = installFetch();
     const { onPublished } = renderPanel({ details: WITH_UPLOADS });
-    expect(within(form()).getByText('The prompt, settings and the original’s references, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
+    expect(within(form()).getByText('The prompt and the original’s references, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
     expect(within(form()).getByRole('checkbox', { name: 'Add my 2 photos' })).not.toBeChecked();
 
     fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
@@ -388,14 +455,14 @@ describe('CreatorPublishPanel: the creator’s own uploads', () => {
     expect(body).not.toHaveProperty('leaveOutOwnGenerationReferences');
   });
 
-  it('shares the prompt and settings alone where every reference is the creator’s own', async () => {
+  it('shares the prompt alone where every reference is the creator’s own', async () => {
     const fetchMock = installFetch();
     const own: CreationPublishDetails = {
       ...WITH_UPLOADS,
       paywallPrefill: { ...WITH_UPLOADS.paywallPrefill!, referenceCount: 2, ownReferenceCount: 2 },
     };
     const { onPublished } = renderPanel({ details: own });
-    expect(within(form()).getByText('The prompt and settings, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
+    expect(within(form()).getByText('The prompt, free, so others can remix it. Your 2 photos stay out unless you add them.')).toBeInTheDocument();
 
     fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
     await waitFor(() => expect(onPublished).toHaveBeenCalled());
@@ -418,7 +485,7 @@ describe('CreatorPublishPanel: the creator’s own uploads', () => {
     installFetch();
     const onlyOwn: CreationPublishDetails = {
       ...DETAILS,
-      paywallPrefill: { resourceKinds: ['remix'], promptText: null, notesMarkdown: null, allowRemix: true, referenceCount: 2, ownReferenceCount: 2 },
+      paywallPrefill: { resourceKinds: ['remix'], promptText: null, allowRemix: true, referenceCount: 2, ownReferenceCount: 2 },
     };
     renderPanel({ details: onlyOwn });
     expect(within(form()).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'false');
@@ -668,11 +735,25 @@ describe('the recipe’s words', () => {
 
   it('says what goes with the recipe and what stays out', () => {
     expect(describeSharedRecipe({ otherReferenceCount: 0, ownUploads: null, addsOwnUploads: false }))
-      .toBe('The prompt and settings, free, so others can remix it.');
+      .toBe('The prompt, free, so others can remix it.');
     expect(describeSharedRecipe({ otherReferenceCount: 1, ownUploads: '1 photo', addsOwnUploads: false }))
-      .toBe('The prompt, settings and the original’s references, free, so others can remix it. Your 1 photo stays out unless you add it.');
+      .toBe('The prompt and the original’s references, free, so others can remix it. Your 1 photo stays out unless you add it.');
     expect(describeSharedRecipe({ otherReferenceCount: 1, ownUploads: '1 photo', addsOwnUploads: true }))
-      .toBe('The prompt, settings and the original’s references, free, so others can remix it. Your 1 photo goes with it, and remixes get it.');
+      .toBe('The prompt and the original’s references, free, so others can remix it. Your 1 photo goes with it, and remixes get it.');
+  });
+
+  // A creation that saved no prompt (a motion run) is never told it shares one.
+  it('names no prompt for a creation that saved none', () => {
+    expect(describeSharedRecipe({ hasPrompt: false, otherReferenceCount: 2, ownUploads: null, addsOwnUploads: false }))
+      .toBe('The original’s references, free, so others can remix it.');
+    expect(describeSharedRecipe({ hasPrompt: false, otherReferenceCount: 1, ownUploads: '1 clip', addsOwnUploads: false }))
+      .toBe('The original’s references, free, so others can remix it. Your 1 clip stays out unless you add it.');
+    expect(describeSharedRecipe({ hasPrompt: false, otherReferenceCount: 0, ownUploads: '2 files', addsOwnUploads: true }))
+      .toBe('Your 2 files, free, so others can remix it.');
+    expect(describeSharedRecipe({ hasPrompt: false, otherReferenceCount: 0, ownUploads: '2 files', addsOwnUploads: false }))
+      .toBe('It saved no prompt, so the recipe holds nothing until you add your 2 files.');
+    expect(describeSharedRecipe({ hasPrompt: false, otherReferenceCount: 0, ownUploads: null, addsOwnUploads: false }))
+      .toBe('Its remix, free, so others can make their own.');
   });
 });
 

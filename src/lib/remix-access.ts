@@ -148,8 +148,9 @@ async function hasPurchasedBundle(
  *   check asks about that account, the one a viewer sees on the post.
  * - A published recipe on the post includes its Remix, free or paid, whatever
  *   its stored `allow_remix` says (2026-10-27): the unlock protects the
- *   creation's prompt and settings as well as the items attached to it, so a
- *   viewer who has not unlocked it gets `unlock_required`. A free recipe is
+ *   creation's prompt as well as the items attached to it, so a viewer who has
+ *   not unlocked it gets `unlock_required`. (Its settings are no secret: the
+ *   post shows them to everyone since 2026-11-03.) A free recipe is
  *   claimed by the Remix tap itself, on the clients. The creation's inputs are
  *   another matter: they go to someone who unlocked it (`recipeEntitled`) only
  *   where the creator's stored switch offered them, as before.

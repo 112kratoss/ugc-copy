@@ -2840,7 +2840,7 @@ describe('CreateImageClient generation pipeline', () => {
   // Publishing on the canvas (PR 3b, the artboard Result): the form starts from the creation's
   // own title and its recipe, read once the run is done, as the Publish window did.
   it('starts the canvas’s publish form from the creation’s title and recipe', async () => {
-    const paywallPrefill = { resourceKinds: ['prompt'], promptText: 'A lighthouse at dawn', notesMarkdown: null, allowRemix: false };
+    const paywallPrefill = { resourceKinds: ['prompt'], promptText: 'A lighthouse at dawn', allowRemix: false };
     const fetchMock = installFetch({
       starts: [startedReply()],
       publishDetails: { generations: [{ id: 'gen-new', title: 'Lighthouse study', paywallPrefill }] },

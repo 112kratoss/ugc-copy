@@ -23,6 +23,8 @@ export function coverNsfwContent<T extends object>(content: T): T & NsfwContentS
     mediaUrl: null,
     mediaItems: [],
     generationId: null,
+    // The creation's settings (`buildPublicGenerationSetup`) describe what the cover hides.
+    generationSetup: [],
     asset: null,
     resourceBundle: null,
     canRemix: false,

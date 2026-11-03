@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import Link from 'next/link';
 import { EyeOff } from 'lucide-react';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
+import PostGenerationSetupLine from '@/app/showcase/[id]/PostGenerationSetupLine';
 import PostResourceBundlePanel from '@/app/showcase/[id]/PostResourceBundlePanel';
 import { buildRecipePanelProps, getRecipeRemixOffer } from '@/app/showcase/[id]/recipe-panel-props';
 import type { PublicPostDetail } from '@/lib/public-posts';
@@ -115,6 +116,8 @@ export default function NsfwPostReveal({
     <section className="w-full rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 text-center">
       <span className="inline-flex items-center gap-2 rounded-full border border-[var(--ui-border-default)] px-3 py-1 text-sm font-semibold"><EyeOff size={16} aria-hidden />NSFW · 18+</span>
       {detail ? <div className="mt-5 space-y-5 text-left">
+        {/* The creation's settings, which the cover hid with the rest: the page's line, revealed (owner, 2026-11-03). */}
+        <PostGenerationSetupLine entries={detail.generationSetup} className="text-xs text-[var(--ui-text-secondary)]" />
         <h1 className="text-2xl font-semibold">{detail.title}</h1>
         {detail.body ? <p className="whitespace-pre-wrap">{detail.body}</p> : null}
         {detail.mediaItems.length ? <ShowcaseMediaCarousel mediaItems={detail.mediaItems} title={detail.title} /> : null}

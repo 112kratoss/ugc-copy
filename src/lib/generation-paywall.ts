@@ -1,9 +1,5 @@
 import { isValidElementHandle, normalizeSubmittedElementDescriptors } from '@/lib/image-elements';
 import {
-  getGenerationModelChoiceOptionLabel,
-  getGenerationModelDisplayName,
-} from '@/lib/generation-model-catalog';
-import {
   getPostResourceKinds,
   type PostResourceItem,
   type PostResourceItemRole,
@@ -11,7 +7,6 @@ import {
   type PostResourceRemixUse,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { GENERATION_SETUP_HEADER } from '../../ugc-mobile/lib/recipe-reading/recipe-reading';
 import type { GenerationInputMediaItem, GenerationInputMediaType } from '@/lib/generation-input-media';
 import {
   isMotionGeneration,
@@ -20,10 +15,16 @@ import {
   normalizeRemixMediaAssetDescriptor,
 } from '@/lib/remix-source';
 
+/**
+ * What a recipe made from a creation starts from, on the owner's library entry (`/api/generations`).
+ * Until 2026-11-03 it carried `notesMarkdown` too, the creation's "Saved generation setup", which
+ * every new recipe took in as a protected note; the settings are the post's now, for everyone
+ * (`buildPublicGenerationSetup`, owner's decision), and the field is gone. No installed app reads
+ * the prefill, and a page running older code takes an answer without it as one with no notes.
+ */
 export interface GenerationPaywallPrefill {
   resourceKinds: PostResourceKind[];
   promptText: string | null;
-  notesMarkdown: string | null;
   allowRemix: boolean;
   referenceCount?: number;
   referenceKindCounts?: Partial<Record<GenerationInputMediaType, number>>;
@@ -41,7 +42,6 @@ export interface GenerationPaywallPrefillSource {
   category: string | null | undefined;
   /** The generation's creation_mode: how a catalog-path motion generation says it is one. */
   creationMode?: string | null;
-  model: string | null | undefined;
   prompt: string | null | undefined;
   workflowSettings: Record<string, unknown> | null | undefined;
   inputMedia?: GenerationInputMediaItem[] | null;
@@ -207,37 +207,6 @@ export function buildGenerationRecipeResourceItems(source: {
   return items;
 }
 
-function formatBooleanLabel(value: boolean): string {
-  return value ? 'On' : 'Off';
-}
-
-function formatListCount(value: number, singular: string, plural: string): string | null {
-  if (value <= 0) {
-    return null;
-  }
-
-  return `${value} ${value === 1 ? singular : plural}`;
-}
-
-function formatModeLabel(modelId: string | null, mode: string | null): string | null {
-  if (!modelId || !mode) return mode;
-  return getGenerationModelChoiceOptionLabel(modelId, 'mode', mode) ?? mode;
-}
-
-function getModelDisplayName(workflowSettings: Record<string, unknown>, model: string | null | undefined): string | null {
-  const workflowModel = typeof workflowSettings.model === 'string' ? workflowSettings.model : null;
-
-  if (workflowModel) {
-    return getGenerationModelDisplayName(workflowModel) ?? workflowModel;
-  }
-
-  if (!model) {
-    return null;
-  }
-
-  return getGenerationModelDisplayName(model) ?? model;
-}
-
 function hasRecoverableDescriptor(value: unknown, expectedKind: 'image' | 'video'): boolean {
   const descriptor = normalizeRemixMediaAssetDescriptor(value, expectedKind);
   return Boolean(descriptor?.storagePath || descriptor?.sourceGenerationId);
@@ -304,188 +273,29 @@ export function hasRecoverableGenerationRemixInputs(source: GenerationPaywallPre
   return false;
 }
 
-function buildImageNotes(modelLabel: string | null, workflowSettings: Record<string, unknown>): string[] {
-  const details: string[] = [];
-  const referenceCount = countRecoverableDescriptors(workflowSettings.elements);
-
-  if (modelLabel) {
-    details.push(`Model: ${modelLabel}`);
-  }
-
-  if (typeof workflowSettings.aspectRatio === 'string') {
-    details.push(`Aspect ratio: ${workflowSettings.aspectRatio}`);
-  }
-
-  if (typeof workflowSettings.resolution === 'string') {
-    details.push(`Resolution: ${workflowSettings.resolution}`);
-  }
-
-  if (typeof workflowSettings.outputFormat === 'string') {
-    details.push(`Output format: ${workflowSettings.outputFormat.toUpperCase()}`);
-  }
-
-  if (typeof workflowSettings.googleSearch === 'boolean') {
-    details.push(`Google Search grounding: ${formatBooleanLabel(workflowSettings.googleSearch)}`);
-  }
-
-  const referencesLabel = formatListCount(referenceCount, 'saved reference', 'saved references');
-  if (referencesLabel) {
-    details.push(`Inputs: ${referencesLabel}`);
-  }
-
-  return details;
-}
-
-function buildVideoNotes(modelLabel: string | null, workflowSettings: Record<string, unknown>): string[] {
-  const details: string[] = [];
-  const frameCount = Number(hasRecoverableDescriptor(workflowSettings.startFrame, 'image')) +
-    Number(hasRecoverableDescriptor(workflowSettings.endFrame, 'image'));
-  const namedReferenceCount = countRecoverableDescriptors(workflowSettings.elements);
-  const referenceVideoCount = Array.isArray(workflowSettings.referenceVideoUrls)
-    ? workflowSettings.referenceVideoUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
-    : 0;
-  const klingVideoElementCount = countRecoverableDescriptors(workflowSettings.klingVideoElements);
-  const namedSubjectCount = countRecoverableSubjects(workflowSettings);
-  const referenceAudioCount = Array.isArray(workflowSettings.referenceAudioUrls)
-    ? workflowSettings.referenceAudioUrls.filter((value) => typeof value === 'string' && value.trim().length > 0).length
-    : 0;
-
-  if (modelLabel) {
-    details.push(`Model: ${modelLabel}`);
-  }
-
-  if (typeof workflowSettings.aspectRatio === 'string') {
-    details.push(`Aspect ratio: ${workflowSettings.aspectRatio}`);
-  }
-
-  if (typeof workflowSettings.duration === 'number' && Number.isFinite(workflowSettings.duration)) {
-    details.push(`Duration: ${workflowSettings.duration}s`);
-  }
-
-  if (typeof workflowSettings.resolution === 'string') {
-    details.push(`Resolution: ${workflowSettings.resolution}`);
-  } else if (typeof workflowSettings.mode === 'string') {
-    const workflowModel = typeof workflowSettings.model === 'string' ? workflowSettings.model : null;
-    const modeLabel = formatModeLabel(workflowModel, workflowSettings.mode);
-    if (modeLabel) {
-      details.push(`Mode: ${modeLabel}`);
-    }
-  }
-
-  if (typeof workflowSettings.referenceMode === 'string') {
-    details.push(
-      `Reference mode: ${
-        workflowSettings.referenceMode === 'elements' ? 'Named references' : 'Frames'
-      }`
-    );
-  }
-
-  if (typeof workflowSettings.sound === 'boolean') {
-    details.push(`Sound: ${formatBooleanLabel(workflowSettings.sound)}`);
-  }
-
-  if (typeof workflowSettings.fixedLens === 'boolean' && workflowSettings.fixedLens) {
-    details.push('Camera: Fixed lens');
-  }
-
-  if (Array.isArray(workflowSettings.multiPrompts) && workflowSettings.multiPrompts.length > 0) {
-    details.push(`Shot prompts: ${workflowSettings.multiPrompts.length}`);
-  }
-
-  const inputLabels = [
-    formatListCount(frameCount, 'saved frame', 'saved frames'),
-    formatListCount(namedReferenceCount, 'named reference', 'named references'),
-    formatListCount(namedSubjectCount, 'named subject', 'named subjects'),
-    formatListCount(referenceVideoCount + klingVideoElementCount, 'video reference', 'video references'),
-    formatListCount(referenceAudioCount, 'audio reference', 'audio references'),
-  ].filter((value): value is string => Boolean(value));
-
-  if (inputLabels.length > 0) {
-    details.push(`Inputs: ${inputLabels.join(', ')}`);
-  }
-
-  return details;
-}
-
-function buildMotionNotes(modelLabel: string | null, workflowSettings: Record<string, unknown>): string[] {
-  const details: string[] = [];
-  const motionInputs = motionInputDescriptors(workflowSettings);
-  const hasCharacterImage = hasRecoverableDescriptor(motionInputs.characterImage, 'image');
-  const hasReferenceVideo = hasRecoverableDescriptor(motionInputs.referenceVideo, 'video');
-  const inputs: string[] = [];
-
-  if (modelLabel) {
-    details.push(`Model: ${modelLabel}`);
-  }
-
-  if (typeof workflowSettings.duration === 'number' && Number.isFinite(workflowSettings.duration)) {
-    details.push(`Duration: ${workflowSettings.duration}s`);
-  }
-
-  if (typeof workflowSettings.mode === 'string') {
-    details.push(`Render mode: ${workflowSettings.mode}`);
-  }
-
-  if (typeof workflowSettings.characterOrientation === 'string') {
-    details.push(`Character orientation: ${workflowSettings.characterOrientation}`);
-  }
-
-  if (hasCharacterImage) {
-    inputs.push('character image');
-  }
-
-  if (hasReferenceVideo) {
-    inputs.push('reference video');
-  }
-
-  if (inputs.length > 0) {
-    details.push(`Inputs: ${inputs.join(' + ')}`);
-  }
-
-  return details;
-}
-
-export function buildGenerationPaywallNotes(source: GenerationPaywallPrefillSource): string | null {
-  const workflowSettings =
-    source.workflowSettings && typeof source.workflowSettings === 'object' ? source.workflowSettings : {};
-  const modelLabel = getModelDisplayName(workflowSettings, source.model);
-  const isMotionWorkflow = isMotionGeneration({ category: source.category, creationMode: source.creationMode, workflowSettings });
-
-  const details =
-    source.category === 'image'
-      ? buildImageNotes(modelLabel, workflowSettings)
-      : (source.category === 'video' && !isMotionWorkflow) || source.category === 'ugc-ad'
-        ? buildVideoNotes(modelLabel, workflowSettings)
-        : isMotionWorkflow
-          ? buildMotionNotes(modelLabel, workflowSettings)
-          : [];
-
-  if (details.length === 0) {
-    return null;
-  }
-
-  // The header the recipe reader recognises a saved setup by (the shared reading rule).
-  return [GENERATION_SETUP_HEADER, ...details].join('\n');
-}
-
+/**
+ * What a recipe made from the creation starts from: its prompt, its saved references and the
+ * remix a buyer can restore. Not its settings: those are public on the post since 2026-11-03
+ * (`buildPublicGenerationSetup` in public-generation-setup.ts, owner's decision), so the sell
+ * link, Studio's Manage and Add recipe, the composer and the creators' publish form no longer
+ * put a "Saved generation setup" item into a new recipe. Recipes that hold one keep it.
+ */
 export function buildGenerationPaywallPrefill(
   source: GenerationPaywallPrefillSource
 ): GenerationPaywallPrefill | null {
   const promptText = trimText(source.prompt);
-  const notesMarkdown = buildGenerationPaywallNotes(source);
   const allowRemix = hasRecoverableGenerationRemixInputs(source);
   const referenceKindCounts = getSavedReferenceKindCounts(source.inputMedia);
   const referenceCount = getSavedReferenceCount(referenceKindCounts);
   const resourceKinds = getPostResourceKinds({
     promptText,
-    notesMarkdown,
     allowRemix,
   });
   const effectiveResourceKinds: PostResourceKind[] = referenceCount > 0 && !resourceKinds.includes('files')
     ? [...resourceKinds, 'files']
     : resourceKinds;
 
-  if (!promptText && !notesMarkdown && !allowRemix && referenceCount === 0) {
+  if (!promptText && !allowRemix && referenceCount === 0) {
     return null;
   }
 
@@ -496,7 +306,6 @@ export function buildGenerationPaywallPrefill(
   return {
     resourceKinds: effectiveResourceKinds,
     promptText,
-    notesMarkdown,
     allowRemix,
     referenceCount,
     referenceKindCounts,

@@ -37,6 +37,7 @@ import {
   getPublicPostDetail,
 } from '@/lib/public-posts';
 import { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
+import { postgrestSelect } from './fixtures/postgrest-select';
 
 function createServiceClientMock(posts: PostRow[]) {
   const filters: Array<{ column: string; value: unknown; operation: 'eq' | 'in' | 'is' }> = [];
@@ -152,37 +153,52 @@ describe('public post detail read', () => {
 
   /**
    * Answers the post row, and the post's creation when one is given, with only
-   * the columns its read asks for, as PostgREST does. The creator read finds
-   * nothing.
+   * the columns and JSON paths its read asks for, as PostgREST does. The creator
+   * read finds nothing. `generationSelects` keeps each select of the creation,
+   * and a creation given as an error answers its read with it.
    */
-  function useClientFor(row: Record<string, unknown>, generation: Record<string, unknown> | null = null) {
+  let generationSelects: string[] = [];
+  function useClientFor(
+    row: Record<string, unknown>,
+    generation: Record<string, unknown> | { error: unknown } | null = null,
+    options: { revealedTo?: string } = {},
+  ) {
     const client = {
       from(table: string) {
-        let columns: string[] = [];
+        let selected = '';
         const query = {
-          select: (selected: string) => {
-            columns = selected.split(',').map((column) => column.trim());
+          select: (columns: string) => {
+            selected = columns;
+            if (table === 'generations') generationSelects.push(columns);
             return query;
           },
           eq: () => query,
           is: () => query,
           in: () => query,
-          maybeSingle: async () => ({
-            data: table === 'posts'
-              ? row
-              : table === 'generations' && generation
-                ? Object.fromEntries(columns.map((column) => [column, generation[column] ?? null]))
-                : null,
-            error: null,
-          }),
+          maybeSingle: async () => {
+            if (table === 'generations' && generation && 'error' in generation) return { data: null, error: generation.error };
+            return {
+              data: table === 'posts'
+                ? row
+                : table === 'generations' && generation
+                  ? postgrestSelect(generation as Record<string, unknown>, selected)
+                  : null,
+              error: null,
+            };
+          },
         };
         return query;
       },
+      // The viewer's reveal of an NSFW post (`hasNsfwReveal`).
+      rpc: async (name: string, args: Record<string, unknown>) => (name === 'has_nsfw_reveal'
+        ? { data: Boolean(options.revealedTo) && args.p_viewer_id === options.revealedTo, error: null }
+        : { data: null, error: { message: `unexpected rpc ${name}` } }),
     };
     helperMocks.createServiceClient.mockReturnValue(client);
   }
 
   beforeEach(() => {
+    generationSelects = [];
     helperMocks.createServiceClient.mockReset();
     detailMocks.getPostResourceBundleDetailByPostId.mockReset().mockResolvedValue(null);
     detailMocks.loadPostMediaItemsMap.mockReset().mockResolvedValue(new Map([[
@@ -239,9 +255,15 @@ describe('public post detail read', () => {
     ['its run', { template_run_id: 'run-1', template_run_step_id: null }],
     ['its step', { template_run_id: null, template_run_step_id: 'step-1' }],
   ])("names a template result's model as Studio does when the creation records %s, and offers no Remix", async (_label, link) => {
+    // It stored settings a line could be built from: only the template check keeps them off.
     useClientFor(
       postRow({ generation_id: 'gen-1', category: 'image' }),
-      { model: 'nano-banana-pro', ...link },
+      {
+        model: 'nano-banana-pro',
+        category: 'image',
+        workflow_settings: { model: 'nano-banana-pro', aspectRatio: '9:16', resolution: '2K', outputFormat: 'png' },
+        ...link,
+      },
     );
 
     const detail = await getPublicPostDetail('post-1');
@@ -251,8 +273,93 @@ describe('public post detail read', () => {
       canRemix: false,
       remixCapability: 'none',
       remixTarget: null,
+      // Its settings are the template author's too.
+      generationSetup: [],
     });
-    expect(JSON.stringify(detail)).not.toContain('nano-banana-pro');
+    expect(JSON.stringify(detail)).not.toMatch(/nano-banana-pro|9:16|PNG/);
+  });
+
+  // Owner's decision, 2026-11-03: a creation's settings are a standard detail of
+  // its post, which the page shows under Made with without any unlock.
+  describe("the creation's settings", () => {
+    const imageCreation = {
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      template_run_id: null,
+      template_run_step_id: null,
+      workflow_settings: {
+        model: 'nano-banana-2',
+        aspectRatio: '9:16',
+        resolution: '1K',
+        outputFormat: 'jpg',
+        googleSearch: false,
+        elements: [{ id: 'element-1', displayName: 'Bottle', handle: '@bottle', storagePath: 'uploads/user-1/bottle.png' }],
+      },
+    };
+
+    it('reads them with the model, in the one read of the creation, and leaves out the model and inputs', async () => {
+      useClientFor(postRow({ generation_id: 'gen-1', category: 'image' }), imageCreation);
+
+      const detail = await getPublicPostDetail('post-1');
+
+      // Grounding was off, as on every run now, so it is left out.
+      expect(detail?.generationSetup).toEqual([
+        { label: 'Aspect ratio', value: '9:16' },
+        { label: 'Resolution', value: '1K' },
+        { label: 'Output format', value: 'JPG' },
+      ]);
+      expect(detail?.model).toBe('nano-banana-2');
+      expect(JSON.stringify(detail?.generationSetup)).not.toMatch(/model|nano|bottle|input/i);
+      // The page and its metadata select the settings' paths, never the whole record.
+      expect(generationSelects).toHaveLength(1);
+      expect(generationSelects[0]).toContain('workflow_settings->aspectRatio');
+      expect(generationSelects[0]).not.toMatch(/workflow_settings(?!->)/);
+    });
+
+    it('shows none on an upload, which has no creation, nor on a written post', async () => {
+      useClientFor(postRow({ generation_id: null, category: 'image', source_kind: 'external' }));
+      await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({ generationSetup: [] });
+
+      useClientFor(postRow({ generation_id: 'gen-1', category: 'image', post_format: 'text', body: 'Notes on the shoot.' }), imageCreation);
+      detailMocks.loadPostMediaItemsMap.mockResolvedValue(new Map());
+      await expect(getPublicPostDetail('post-1')).resolves.toMatchObject({ postFormat: 'text', generationSetup: [] });
+    });
+
+    // [] is a post with none to show: a creation that could not be read is no answer at all.
+    it('leaves them out where the creation could not be read', async () => {
+      useClientFor(postRow({ generation_id: 'gen-1', category: 'image' }), { error: { code: '57014', message: 'statement timeout' } });
+
+      const detail = await getPublicPostDetail('post-1');
+
+      expect(detail).not.toBeNull();
+      expect(detail).not.toHaveProperty('generationSetup');
+    });
+
+    it('shows none on a post under its NSFW cover, whose content it describes', async () => {
+      useClientFor(postRow({ generation_id: 'gen-1', category: 'image', is_nsfw: true }), imageCreation);
+
+      const detail = await getPublicPostDetail('post-1');
+
+      expect(detail).toMatchObject({ isNsfw: true, nsfwRevealed: false, generationSetup: [] });
+      expect(JSON.stringify(detail)).not.toContain('9:16');
+    });
+
+    // The reveal route answers the web's gate with this detail, which draws the line as the page does.
+    it('shows them to the viewer who revealed the post, and to no one else', async () => {
+      useClientFor(postRow({ generation_id: 'gen-1', category: 'image', is_nsfw: true }), imageCreation, { revealedTo: 'viewer-1' });
+
+      await expect(getPublicPostDetail('post-1', { viewerUserId: 'viewer-1', revealNsfw: true })).resolves.toMatchObject({
+        nsfwRevealed: true,
+        generationSetup: [
+          { label: 'Aspect ratio', value: '9:16' },
+          { label: 'Resolution', value: '1K' },
+          { label: 'Output format', value: 'JPG' },
+        ],
+      });
+      const other = await getPublicPostDetail('post-1', { viewerUserId: 'viewer-2', revealNsfw: true });
+      expect(other).toMatchObject({ nsfwRevealed: false, generationSetup: [] });
+    });
   });
 
   it("keeps an ordinary creation's model and Remix", async () => {

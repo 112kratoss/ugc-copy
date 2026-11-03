@@ -294,3 +294,46 @@ describe('ShowcaseDetailEngagementRow', () => {
     expect(await screen.findByRole('link', { name: /unlock the recipe to remix/i })).toHaveAttribute('href', '#recipe');
   });
 });
+
+describe('NsfwPostReveal', () => {
+  // A mature post's settings describe what its cover hides: the gate draws them with the
+  // revealed post, in the line the page draws for any other (owner, 2026-11-03), as the app's
+  // iOS reveal does.
+  it("draws the revealed post's settings, and nothing of them before or after", async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const reply = (body: unknown) => ({ ok: true, json: async () => body }) as Response;
+      if (url === '/api/content-preferences') return reply({ showMature: true });
+      if (url === '/api/posts/post-1/reveal') {
+        return reply({
+          success: true,
+          detail: {
+            title: 'Shared creation',
+            body: '',
+            mediaItems: [],
+            generationSetup: [
+              { label: 'Aspect ratio', value: '9:16' },
+              { label: 'Mode', value: 'Fast' },
+              { label: 'Resolution', value: '1080P' },
+            ],
+          },
+        });
+      }
+      return reply([]);
+    }));
+    render(<NsfwPostReveal postId="post-1" />);
+
+    expect(screen.queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal post' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
+
+    const line = await screen.findByTestId('post-generation-setup');
+    expect(line.querySelector('[aria-hidden="true"]')?.textContent).toBe('9:16·Fast·1080P');
+    expect(screen.getByText('Generation settings: Aspect ratio: 9:16, Mode: Fast, Resolution: 1080P')).toHaveClass('sr-only');
+    expect(screen.getByText('Fast')).toHaveAttribute('title', 'Mode');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide this post' }));
+    expect(screen.queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+  });
+});

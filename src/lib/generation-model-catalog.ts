@@ -879,12 +879,6 @@ const ALL_PUBLIC_MODELS: GenerationModelDescriptor[] = [
   ? { ...model, availability: { web: false, mobile: false } }
   : model));
 
-const PRIVATE_GENERATION_MODEL_ALIASES = [
-  ...Object.values(IMAGE_MODELS),
-  ...Object.values(VIDEO_MODELS),
-  ...Object.values(MOTION_MODELS),
-] as Array<{ id: string; displayName: string; apiModelId?: string }>;
-
 function buildRevision(models: GenerationModelDescriptor[]): string {
   return createHash('sha256')
     .update(JSON.stringify({
@@ -1505,22 +1499,4 @@ export function quoteGenerationModel(
     normalizedSettings,
     costCredits: calculateGenerationModelRuntimeCost(runtimeConfig, normalizedSettings, inputs),
   };
-}
-
-export function getGenerationModelDisplayName(modelId: string): string | null {
-  return ALL_PUBLIC_MODELS.find((model) => model.id === modelId)?.displayName
-    ?? PRIVATE_GENERATION_MODEL_ALIASES.find((model) => model.apiModelId === modelId)?.displayName
-    ?? null;
-}
-
-export function getGenerationModelChoiceOptionLabel(
-  modelId: string,
-  controlKey: string,
-  value: string,
-): string | null {
-  const model = ALL_PUBLIC_MODELS.find((candidate) => candidate.id === modelId);
-  const control = model?.controls.find((candidate): candidate is CatalogChoiceControl => (
-    candidate.type === 'choice' && candidate.key === controlKey
-  ));
-  return control?.options.find((option) => option.value === value)?.label ?? null;
 }

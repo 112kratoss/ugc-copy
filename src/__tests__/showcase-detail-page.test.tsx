@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ShowcaseDetailPage, { generateMetadata } from '@/app/showcase/[id]/page';
@@ -1146,6 +1146,109 @@ describe('Showcase detail page', () => {
 
       expect(head).not.toHaveTextContent('Made with');
       expect(head).not.toHaveTextContent('Nano Banana');
+    });
+
+    // Owner's decision, 2026-11-03: the creation's settings are a standard
+    // detail, on a quiet line under Made with, for a visitor who unlocked nothing.
+    describe("the creation's settings", () => {
+      const imageSetup = [
+        { label: 'Aspect ratio', value: '9:16' },
+        { label: 'Resolution', value: '1K' },
+        { label: 'Output format', value: 'JPG' },
+      ];
+
+      it('reads them under Made with, each value named for a mouse and a screen reader', async () => {
+        const head = await renderHead({
+          generationSetup: imageSetup,
+          resourceBundle: null,
+        });
+
+        const line = within(head).getByTestId('post-generation-setup');
+        const terms = line.querySelector('[aria-hidden="true"]');
+        expect(terms?.textContent).toBe('9:16·1K·JPG');
+        expect(within(line).getByText('JPG')).toHaveAttribute('title', 'Output format');
+        expect(within(line).getByText('9:16')).toHaveAttribute('title', 'Aspect ratio');
+        expect(within(line).getByText(
+          'Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG',
+        )).toHaveClass('sr-only');
+        expect(line).not.toHaveTextContent(/grounding/i);
+        // Under the byline that names the model, above the title.
+        const madeWith = within(head).getByText('Made with Nano Banana 2.0');
+        expect(madeWith.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(line.compareDocumentPosition(within(head).getByRole('heading', { level: 1 })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(line).not.toHaveTextContent(/nano banana|model/i);
+      });
+
+      it('names Search grounding on a run that had it on, as a switch with its name', async () => {
+        const head = await renderHead({
+          generationSetup: [...imageSetup, { label: 'Google Search grounding', value: 'On' }],
+        });
+
+        const line = within(head).getByTestId('post-generation-setup');
+        expect(line.querySelector('[aria-hidden="true"]')?.textContent).toBe('9:16·1K·JPG·Search grounding on');
+        expect(within(line).getByText('Search grounding on')).toHaveAttribute('title', 'Google Search grounding');
+      });
+
+      // The read decides which posts have a line (`publicPostGenerationSetup`): the page draws what it is sent.
+      it('draws no line where the read sends none or could not read it: an upload, a template result, a text post', async () => {
+        for (const generationSetup of [[], undefined]) {
+          const head = await renderHead({ generationSetup });
+          expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+          cleanup();
+        }
+      });
+
+      it('draws none on a post under its NSFW cover, which clears it with the rest it hides', async () => {
+        const detail = await getPublicPostDetailMock('post-1');
+        const head = await renderHead({ ...coverNsfwContent({ ...detail, generationSetup: imageSetup }) });
+        expect(within(head).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+        expect(head).not.toHaveTextContent('9:16');
+      });
+
+      // A paid recipe sells the prompt and the inputs; the settings are the post's, for everyone.
+      it('draws the line for a visitor beside a paid recipe they have not unlocked', async () => {
+        const head = await renderHead({
+          generationSetup: imageSetup,
+          resourceBundle: {
+            id: 'bundle-1',
+            accessMode: 'paid',
+            priceQuote: { formatted: '$9.00', note: null },
+            resourceKinds: ['prompt', 'files'],
+            lockedPreview: {
+              resourceKinds: ['prompt', 'files'],
+              attachmentPreviews: [],
+              itemCounts: { prompt: 1, files: 2 },
+              itemPreviews: [{ type: 'prompt', title: 'Prompt', role: 'primary', remixUse: 'none' }],
+              hasPrompt: true,
+              hasNotes: false,
+              hasWorkflow: false,
+              hasRemix: true,
+              updatedAt: '2026-03-28T10:00:00.000Z',
+            },
+            viewerCanAccess: false,
+            viewerIsOwner: false,
+            salesCount: 0,
+            resources: null,
+            title: 'Golden hour recipe',
+            summary: 'The prompt and its references',
+            previewText: 'The prompt and its references',
+            priceUsdCents: 900,
+            status: 'published',
+          },
+        });
+
+        const line = within(head).getByTestId('post-generation-setup');
+        expect(line.querySelector('[aria-hidden="true"]')?.textContent).toBe('9:16·1K·JPG');
+        // The recipe stays locked under the post, and holds no copy of the line.
+        const recipe = screen.getByTestId('canonical-post-recipe');
+        expect(postResourceBundlePanelPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
+          isFree: false,
+          viewerCanAccess: false,
+          resourceKinds: ['prompt', 'files'],
+        }));
+        expect(within(recipe).queryByTestId('post-generation-setup')).not.toBeInTheDocument();
+        expect(screen.getAllByTestId('post-generation-setup')).toHaveLength(1);
+      });
     });
   });
 

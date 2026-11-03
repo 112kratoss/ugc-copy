@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
 import type { PostMediaSummary } from '@/lib/post-media';
 import {
+  SHOWCASE_APP_ONLY_ITEM_FIELDS,
   SHOWCASE_APP_ONLY_MEDIA_FIELDS,
   toShowcaseBootstrapFeedPage,
   type ShowcaseFeedItem,
@@ -99,8 +100,11 @@ describe('what Explore and the marketplace write into a first load', () => {
       category: 'text',
       postFormat: 'text',
     });
+    // Every card carries its post's settings line, which only the app's Details draws: the web's
+    // post page reads its own.
+    const setup = [{ label: 'Aspect ratio', value: '9:16' }];
     const feed: ShowcaseFeedPage = {
-      items: [createItem(), textPost],
+      items: [createItem({ generationSetup: setup }), { ...textPost, generationSetup: [] }],
       pageInfo: { hasMore: true, nextOffset: 12, limit: 12, offset: 0 },
       feedSessionId: 'session-1',
       algorithmVersion: 'v4',
@@ -114,13 +118,18 @@ describe('what Explore and the marketplace write into a first load', () => {
     const keptMediaItems = before.items[0].mediaItems?.map((mediaItem) => Object.fromEntries(
       Object.entries(mediaItem).filter(([field]) => !appOnly.has(field)),
     ));
+    const { generationSetup: _cardSetup, ...card } = before.items[0];
     expect(trimmed).toEqual({
       ...before,
-      items: [{ ...before.items[0], mediaItems: keptMediaItems }, textPost],
+      items: [{ ...card, mediaItems: keptMediaItems }, textPost],
     });
     for (const mediaItem of trimmed.items[0].mediaItems ?? []) {
       for (const field of SHOWCASE_APP_ONLY_MEDIA_FIELDS) expect(mediaItem).not.toHaveProperty(field);
     }
+    for (const item of trimmed.items) {
+      for (const field of SHOWCASE_APP_ONLY_ITEM_FIELDS) expect(item).not.toHaveProperty(field);
+    }
+    expect(_cardSetup).toEqual(setup);
   });
 
   it('keeps the app-only media fields off the web’s media type', () => {

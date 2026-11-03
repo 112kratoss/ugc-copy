@@ -1696,9 +1696,9 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
 
   // A creation post's recipe includes its Remix (2026-10-27): whoever has not
   // unlocked it unlocks it to remix, whatever its stored remix switch says, so
-  // the creation's prompt and settings never go to someone who has not unlocked
-  // a recipe that sells them. Callers pass a published recipe, or one this
-  // viewer may open.
+  // the creation's prompt never goes to someone who has not unlocked a recipe
+  // that sells it (its settings the post shows everyone, since 2026-11-03).
+  // Callers pass a published recipe, or one this viewer may open.
   if (hasGeneration) {
     return {
       capability: bundleRequiresUnlock ? 'unlock_required' : 'public',

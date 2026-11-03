@@ -143,6 +143,8 @@ function seed() {
       user_id: CREATOR,
       model: 'nano-banana-2',
       category: 'image',
+      creation_mode: null,
+      workflow_settings: { aspectRatio: '4:5', resolution: '1K' },
       preview_url: null,
       preview_width: null,
       preview_height: null,

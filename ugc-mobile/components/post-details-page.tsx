@@ -13,6 +13,7 @@ import { SaveHeart } from '@/components/save-heart';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { describeGenerationSetup, formatGenerationSetupLine } from '@/lib/generation-setup/generation-setup';
 import { formatCompactCount } from '@/lib/home-view-model';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import {
@@ -34,6 +35,7 @@ import { formatLockedBundleFacts, formatPostResourceBundleCountSummary } from '@
 import { accentColor, appTheme, type ToolAccent } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { useBundleUnlock } from '@/lib/use-bundle-unlock';
+import { usePostGenerationSetup } from '@/lib/use-post-generation-setup';
 import { verticalHitSlop } from '@/lib/hit-target';
 
 /** The creator byline reads as a single line of text; its reach is widened rather than its height. */
@@ -145,6 +147,8 @@ export function PostDetailsPage({
   });
   const bundle = resourceQuery.data?.bundle;
   const unlock = listingUnlock ?? (retainedPostId ? retainedRecipeUnlock(bundle, retainedPostId) : null);
+  // The creation's settings, under Made with: everyone's to see (owner, 2026-11-03).
+  const generationSetup = usePostGenerationSetup(item, active);
 
   const bundleUnlock = useBundleUnlock({
     authReturnTo,
@@ -420,6 +424,24 @@ export function PostDetailsPage({
           {meta.metaParts.length > 0 ? (
             <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
               {meta.metaParts.join(' · ')}
+            </Text>
+          ) : null}
+          {/* "9:16 · 1K · JPG", in the web post page's words; VoiceOver names each value. */}
+          {generationSetup.entries.length > 0 ? (
+            <Text
+              accessibilityLabel={describeGenerationSetup(generationSetup.entries)}
+              style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}
+            >
+              {formatGenerationSetupLine(generationSetup.entries)}
+            </Text>
+          ) : generationSetup.pending ? (
+            // The line's place, held while the post's read brings it, so nothing under it moves as it lands.
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}
+            >
+              {' '}
             </Text>
           ) : null}
         </View>

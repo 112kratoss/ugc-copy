@@ -1293,7 +1293,6 @@ describe('CreateMotionClient start', () => {
     const paywallPrefill = {
       resourceKinds: ['prompt'],
       promptText: 'Saved prompt',
-      notesMarkdown: null,
       allowRemix: true,
       referenceCount: 2,
     };

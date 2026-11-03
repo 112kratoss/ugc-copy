@@ -3,8 +3,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 import type { PostMediaSummary } from '@/lib/post-media';
 import { toUsablePreviewSize, type PreviewSize } from '@/lib/preview-dimensions';
+import {
+  buildPublicGenerationSetup,
+  readPublicGenerationSetupRow,
+  selectWithGenerationSetup,
+  type PublicGenerationSetupCatalog,
+} from '@/lib/public-generation-setup';
 import { resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { isTemplateResultGeneration, shownGenerationModel, type TemplateRunLink } from '@/lib/template-result';
+import type { GenerationSetupEntry } from '../../ugc-mobile/lib/generation-setup/generation-setup';
 
 export interface GenerationPreviewInfo {
   /** As anyone may see it: a template result's is `template-workflow`, as Studio shows it. */
@@ -14,7 +21,14 @@ export interface GenerationPreviewInfo {
   previewUrl: string | null;
   previewWidth: number | null;
   previewHeight: number | null;
+  /**
+   * The creation's line, which its post shows everyone (`buildPublicGenerationSetup`), where the
+   * caller asked for it and its settings and the catalog could be read; unset otherwise, unknown.
+   */
+  generationSetup?: GenerationSetupEntry[];
 }
+
+const PREVIEW_INFO_COLUMNS = 'id, user_id, model, preview_url, preview_width, preview_height, category, template_run_id, template_run_step_id';
 
 function previewSizeFields(size: PreviewSize | null) {
   return { previewWidth: size?.width ?? null, previewHeight: size?.height ?? null };
@@ -47,11 +61,19 @@ function previewSizeFields(size: PreviewSize | null) {
  * The model is returned for every generation either way; callers read it
  * whether or not a poster is grafted. A template result's is never its own: its
  * recipe and model are the template author's (`template-result.ts`).
+ *
+ * `generationSetupCatalog`, given, has the same read select the settings each
+ * creation's line is built from (`PUBLIC_GENERATION_SETUP_PATHS`, the paths, not
+ * the record), so a feed card carries its post's line with no read of its own.
+ * Like the signing set it arrives as a promise, loaded beside the read.
  */
 export async function loadGenerationPreviewInfoMap(
   adminSupabase: SupabaseClient,
   generationIds: string[],
-  options?: { signPreviewFor?: PromiseLike<ReadonlySet<string>> },
+  options?: {
+    signPreviewFor?: PromiseLike<ReadonlySet<string>>;
+    generationSetupCatalog?: PromiseLike<PublicGenerationSetupCatalog | null>;
+  },
 ): Promise<Map<string, GenerationPreviewInfo>> {
   const generationInfoMap = new Map<string, GenerationPreviewInfo>();
   const uniqueIds = Array.from(new Set(generationIds.filter(Boolean)));
@@ -66,10 +88,10 @@ export async function loadGenerationPreviewInfoMap(
     preview_height?: number | null;
   };
 
-  const modelsWithPreviewResult = await adminSupabase
-    .from('generations')
-    .select('id, user_id, model, preview_url, preview_width, preview_height, category, template_run_id, template_run_step_id')
-    .in('id', uniqueIds);
+  const read = (select: string) => adminSupabase.from('generations').select(select).in('id', uniqueIds);
+  const modelsWithPreviewResult = options?.generationSetupCatalog
+    ? await selectWithGenerationSetup(PREVIEW_INFO_COLUMNS, read)
+    : { ...(await read(PREVIEW_INFO_COLUMNS)), withSetup: false };
   const models = modelsWithPreviewResult.data as GenerationInfoRow[] | null;
   const modelsError = modelsWithPreviewResult.error;
 
@@ -80,6 +102,9 @@ export async function loadGenerationPreviewInfoMap(
 
   // Awaited only now, after the read above has already happened.
   const signPreviewFor = options?.signPreviewFor ? await options.signPreviewFor : null;
+  const setupCatalog = modelsWithPreviewResult.withSetup && options?.generationSetupCatalog
+    ? await options.generationSetupCatalog
+    : null;
 
   const entries = await Promise.all((models ?? []).flatMap((generation) => {
     if (typeof generation.id !== 'string' || typeof generation.model !== 'string') return [];
@@ -91,14 +116,17 @@ export async function loadGenerationPreviewInfoMap(
     return [Promise.resolve(needsPreview && previewSource && generation.user_id
       ? resolveOwnedStoredMediaUrl(adminSupabase, previewSource, generation.user_id)
       : null)
-      .then((previewUrl) => [generation.id, {
+      .then((previewUrl): readonly [string, GenerationPreviewInfo] => [generation.id, {
         model: shownGenerationModel(generation),
         templateResult: isTemplateResultGeneration(generation),
         previewUrl,
         // One rule for a usable size, shared with the backfill that writes
         // the column and the pipeline that measures it.
         ...previewSizeFields(toUsablePreviewSize(generation.preview_width, generation.preview_height)),
-      }] as const)];
+        ...(setupCatalog
+          ? { generationSetup: buildPublicGenerationSetup(readPublicGenerationSetupRow(generation), setupCatalog) }
+          : {}),
+      }])];
   }));
   for (const [generationId, generationInfo] of entries) {
     generationInfoMap.set(generationId, generationInfo);
