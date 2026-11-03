@@ -126,6 +126,29 @@ test('/delete-account: an account with an Apple identity continues with Apple, a
   await expect(page).toHaveURL(`${ORIGIN}/delete-account`);
   expect(deletions).toHaveLength(0);
 
+  // Next's router keeps the address the page opened on and writes its own copy back at every
+  // commit: the page hands it the clean address too, so a refresh brings no code back.
+  type RouterWindow = { e2eAddresses: string[]; next: { router: { refresh(): void } } };
+  await page.evaluate(() => {
+    const routerWindow = window as unknown as RouterWindow;
+    const replaceState = window.history.replaceState.bind(window.history);
+    routerWindow.e2eAddresses = [];
+    window.history.replaceState = (state, unused, url) => {
+      routerWindow.e2eAddresses.push(String(url));
+      replaceState(state, unused, url);
+    };
+    routerWindow.next.router.refresh();
+  });
+  await expect.poll(
+    () => page.evaluate(() => (window as unknown as RouterWindow).e2eAddresses.length),
+    { message: "the refresh's commit writes the router's address", timeout: 30_000 },
+  ).toBeGreaterThan(0);
+  expect(await page.evaluate(() => (window as unknown as RouterWindow).e2eAddresses)).toEqual(
+    expect.not.arrayContaining([expect.stringContaining('code=')]),
+  );
+  await expect(page).toHaveURL(`${ORIGIN}/delete-account`);
+  await expect(section.getByText('Apple confirmed it is you. Type DELETE to finish deleting the account.')).toBeVisible();
+
   await section.getByLabel('Type DELETE to confirm').fill('DELETE');
   await section.getByRole('button', { name: 'Permanently delete account' }).click();
 

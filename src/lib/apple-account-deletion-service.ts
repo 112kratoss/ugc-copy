@@ -26,7 +26,8 @@ export class AppleAccountDeletionError extends Error {
   /**
    * `detail`: for the server log only, what failed without anything secret
    * (`token endpoint 400 invalid_client`, `missing NEXT_PUBLIC_APPLE_SERVICES_ID`).
-   * The answer carries `message` and `code`.
+   * The answer carries `message` and `code`. `codeSpent`: Apple took the code
+   * (or refused it for good), so sending it again only spends an attempt.
    */
   constructor(
     message: string,
@@ -34,6 +35,7 @@ export class AppleAccountDeletionError extends Error {
     public readonly status: 403 | 503,
     public readonly reauthenticate: boolean,
     public readonly detail?: string,
+    public readonly codeSpent = false,
   ) {
     super(message);
     this.name = 'AppleAccountDeletionError';
@@ -93,23 +95,33 @@ function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+/** Apple's answer, its body read under the same timeout as the request: a stalled body would hold the route. */
 async function fetchApple(
   fetcher: typeof fetch,
   url: string,
   body: URLSearchParams,
-) {
+): Promise<{ ok: boolean; status: number; text: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), APPLE_REQUEST_TIMEOUT_MS);
   try {
-    return await fetcher(url, {
+    const response = await fetcher(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body,
       cache: 'no-store',
       signal: controller.signal,
     });
+    return { ok: response.ok, status: response.status, text: await response.text() };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
   }
 }
 
@@ -159,23 +171,33 @@ async function verifyAppleIdentityToken(idToken: string, clientId: string) {
   return stringField(payload.sub);
 }
 
-function reauthenticationFailure() {
+/** The code is no use any more: expired, consumed, refused, or Apple's token for it unverifiable. */
+function reauthenticationFailure(detail: string) {
   return new AppleAccountDeletionError(
     'Apple could not verify this deletion request. Continue with Apple again and retry.',
     'APPLE_REAUTH_FAILED',
     403,
     true,
+    detail,
+    true,
   );
 }
 
-function upstreamFailure(detail: string) {
+/** `codeSpent`: the failure came after Apple took the code. */
+function upstreamFailure(detail: string, { codeSpent = false }: { codeSpent?: boolean } = {}) {
   return new AppleAccountDeletionError(
     'Apple account verification is temporarily unavailable. Your account is still active; please try again later.',
     'APPLE_REVOCATION_UNAVAILABLE',
     503,
     false,
     detail,
+    codeSpent,
   );
+}
+
+function describeVerifyFailure(error: unknown) {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  return `id token unverifiable (${typeof code === 'string' ? code : error instanceof Error ? error.name : 'unknown'})`;
 }
 
 export async function authorizeAppleAccountDeletion({
@@ -189,7 +211,7 @@ export async function authorizeAppleAccountDeletion({
 }, dependencies: AppleAccountDeletionDependencies = {}) {
   const trimmedCode = authorizationCode.trim();
   if (!trimmedCode || trimmedCode.length > APPLE_AUTHORIZATION_CODE_MAX_LENGTH) {
-    throw reauthenticationFailure();
+    throw reauthenticationFailure('code empty or too long');
   }
   if (!expectedAppleSubject.trim()) {
     throw new AppleAccountDeletionError(
@@ -197,6 +219,7 @@ export async function authorizeAppleAccountDeletion({
       'ACCOUNT_REAUTH_MISMATCH',
       403,
       false,
+      'account has no Apple subject',
     );
   }
 
@@ -220,9 +243,9 @@ export async function authorizeAppleAccountDeletion({
   const fetcher = dependencies.fetcher ?? fetch;
   const clientSecret = await createClientSecret({ clientId, keyId, now, privateKey, teamId });
 
-  let tokenResponse: Response;
+  let tokenAnswer: Awaited<ReturnType<typeof fetchApple>>;
   try {
-    tokenResponse = await fetchApple(fetcher, APPLE_TOKEN_URL, new URLSearchParams({
+    tokenAnswer = await fetchApple(fetcher, APPLE_TOKEN_URL, new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
       code: trimmedCode,
@@ -233,39 +256,37 @@ export async function authorizeAppleAccountDeletion({
     throw upstreamFailure('token request failed');
   }
 
-  if (!tokenResponse.ok) {
+  if (!tokenAnswer.ok) {
     // `invalid_grant` is the user-actionable case: the short-lived code is
     // expired, consumed, malformed, or belongs to another client. Other Apple
     // errors (especially `invalid_client`) indicate server configuration or an
     // upstream failure and must not send the user through a reauth loop.
-    let appleError: unknown;
-    try {
-      appleError = (await tokenResponse.json() as { error?: unknown }).error;
-    } catch {
-      // No JSON body: an upstream failure all the same.
+    const appleError = (parseJson(tokenAnswer.text) as { error?: unknown } | null)?.error;
+    if (tokenAnswer.status === 400 && appleError === 'invalid_grant') {
+      throw reauthenticationFailure('token endpoint 400 invalid_grant');
     }
-    if (tokenResponse.status === 400 && appleError === 'invalid_grant') throw reauthenticationFailure();
     throw upstreamFailure(
-      `token endpoint ${tokenResponse.status}${typeof appleError === 'string' ? ` ${appleError}` : ''}`,
+      `token endpoint ${tokenAnswer.status}${typeof appleError === 'string' ? ` ${appleError}` : ''}`,
     );
   }
 
-  let tokenPayload: AppleTokenResponse;
-  try {
-    tokenPayload = await tokenResponse.json() as AppleTokenResponse;
-  } catch {
-    throw upstreamFailure('token response unreadable');
+  // From here on Apple has taken the code.
+  const tokenPayload = parseJson(tokenAnswer.text) as AppleTokenResponse | null;
+  if (!tokenPayload || typeof tokenPayload !== 'object') {
+    throw upstreamFailure('token response unreadable', { codeSpent: true });
   }
   const idToken = stringField(tokenPayload.id_token);
   const refreshToken = stringField(tokenPayload.refresh_token);
   const accessToken = stringField(tokenPayload.access_token);
-  if (!idToken || (!refreshToken && !accessToken)) throw upstreamFailure('token response incomplete');
+  if (!idToken || (!refreshToken && !accessToken)) {
+    throw upstreamFailure('token response incomplete', { codeSpent: true });
+  }
 
   let appleSubject: string | null;
   try {
     appleSubject = await verifyIdentityToken(idToken, clientId);
-  } catch {
-    throw reauthenticationFailure();
+  } catch (error) {
+    throw reauthenticationFailure(describeVerifyFailure(error));
   }
   if (!appleSubject || appleSubject !== expectedAppleSubject) {
     throw new AppleAccountDeletionError(
@@ -273,23 +294,25 @@ export async function authorizeAppleAccountDeletion({
       'ACCOUNT_REAUTH_MISMATCH',
       403,
       false,
+      'id token names another Apple user',
+      true,
     );
   }
 
   const tokenToRevoke = (refreshToken ?? accessToken) as string;
   const tokenTypeHint = refreshToken ? 'refresh_token' : 'access_token';
-  let revokeResponse: Response;
+  let revokeAnswer: Awaited<ReturnType<typeof fetchApple>>;
   try {
-    revokeResponse = await fetchApple(fetcher, APPLE_REVOKE_URL, new URLSearchParams({
+    revokeAnswer = await fetchApple(fetcher, APPLE_REVOKE_URL, new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
       token: tokenToRevoke,
       token_type_hint: tokenTypeHint,
     }));
   } catch {
-    throw upstreamFailure('revoke request failed');
+    throw upstreamFailure('revoke request failed', { codeSpent: true });
   }
-  if (!revokeResponse.ok) throw upstreamFailure(`revoke endpoint ${revokeResponse.status}`);
+  if (!revokeAnswer.ok) throw upstreamFailure(`revoke endpoint ${revokeAnswer.status}`, { codeSpent: true });
 }
 
 export const APPLE_ACCOUNT_DELETION_ENDPOINTS = {

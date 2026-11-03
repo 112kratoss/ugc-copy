@@ -92,6 +92,12 @@ export function readAppleWebAuthorizationAnswer(hash: string): AppleWebAuthoriza
 export type AppleWebAuthorizationStart = { state: string; userId: string };
 
 const START_STORAGE_KEY = 'magicbooklet:apple-account-deletion';
+/**
+ * How long a start answers Apple: a person can take a while on Apple's page, and
+ * may come back to it with Back and confirm again (a new code for the same
+ * state); Apple's own code lives five minutes.
+ */
+export const APPLE_WEB_AUTHORIZATION_START_LIFETIME_MS = 10 * 60 * 1000;
 
 function tabStorage(): Storage | null {
   try {
@@ -102,24 +108,26 @@ function tabStorage(): Storage | null {
 }
 
 /** Keeps the start in this tab for Apple's answer, which arrives in a new load of the page; false when the browser refuses. */
-export function rememberAppleWebAuthorizationStart(start: AppleWebAuthorizationStart): boolean {
+export function rememberAppleWebAuthorizationStart(start: AppleWebAuthorizationStart, now = Date.now()): boolean {
   const storage = tabStorage();
   if (!storage) return false;
   try {
-    storage.setItem(START_STORAGE_KEY, JSON.stringify(start));
+    storage.setItem(START_STORAGE_KEY, JSON.stringify({ ...start, startedAt: now }));
     return true;
   } catch {
     return false;
   }
 }
 
-/** The start this tab kept, if any. */
-export function readAppleWebAuthorizationStart(): AppleWebAuthorizationStart | null {
+/** The start this tab kept, if any, while it still answers Apple. */
+export function readAppleWebAuthorizationStart(now = Date.now()): AppleWebAuthorizationStart | null {
   try {
     const kept: unknown = JSON.parse(tabStorage()?.getItem(START_STORAGE_KEY) ?? 'null');
     if (kept && typeof kept === 'object') {
-      const { state, userId } = kept as Record<string, unknown>;
-      if (typeof state === 'string' && state && typeof userId === 'string' && userId) return { state, userId };
+      const { state, userId, startedAt } = kept as Record<string, unknown>;
+      const fresh = typeof startedAt === 'number' && now - startedAt >= 0
+        && now - startedAt <= APPLE_WEB_AUTHORIZATION_START_LIFETIME_MS;
+      if (fresh && typeof state === 'string' && state && typeof userId === 'string' && userId) return { state, userId };
     }
   } catch {
     // A value the browser garbled holds no start.
@@ -127,7 +135,7 @@ export function readAppleWebAuthorizationStart(): AppleWebAuthorizationStart | n
   return null;
 }
 
-/** One answer per start. */
+/** Once the account is deleted, or the tab starts another. */
 export function forgetAppleWebAuthorizationStart(): void {
   try {
     tabStorage()?.removeItem(START_STORAGE_KEY);

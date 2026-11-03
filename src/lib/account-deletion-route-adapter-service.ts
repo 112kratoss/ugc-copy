@@ -121,20 +121,25 @@ function getBearerAccessToken(request: Request): string | undefined {
 
 // A 500 always says whether the account is untouched (`deletionScheduled:
 // false`, safe to retry) or already locked with a job the scheduler finishes.
-function deletionFailureResponse(request: Request, deletionScheduled: boolean) {
+// `appleCodeSpent`: the request's Apple code was already redeemed (and Apple's
+// authorization revoked), so a retry needs a fresh one; the website reads it.
+function deletionFailureResponse(request: Request, deletionScheduled: boolean, appleCodeSpent = false) {
   return applyPrivateNoStoreApiResponseHeaders(
     NextResponse.json(
-      deletionScheduled
-        ? {
-            error: 'Your account is being deleted and will be removed automatically.',
-            code: 'ACCOUNT_DELETION_RETRY_SCHEDULED',
-            deletionScheduled: true,
-          }
-        : {
-            error: 'Account deletion could not be completed. Please try again.',
-            code: 'ACCOUNT_DELETION_NOT_STARTED',
-            deletionScheduled: false,
-          },
+      {
+        ...(deletionScheduled
+          ? {
+              error: 'Your account is being deleted and will be removed automatically.',
+              code: 'ACCOUNT_DELETION_RETRY_SCHEDULED',
+              deletionScheduled: true,
+            }
+          : {
+              error: 'Account deletion could not be completed. Please try again.',
+              code: 'ACCOUNT_DELETION_NOT_STARTED',
+              deletionScheduled: false,
+            }),
+        ...(appleCodeSpent ? { appleCodeSpent: true } : {}),
+      },
       { status: 500 },
     ),
     request,
@@ -297,15 +302,14 @@ export async function deleteAccountRouteResponse({
       });
     } catch (error) {
       if (error instanceof AppleAccountDeletionError) {
-        if (error.status >= 500) {
-          // Which client, and what Apple or the configuration refused: a website
-          // failure with a working app is the Services ID's setup.
-          const client = deletionRequest.appleAuthorizationClient ?? 'native';
-          resolved.logError(
-            `Apple account deletion authorization failed (${client}${error.detail ? `: ${error.detail}` : ''}):`,
-            error,
-          );
-        }
+        // Which client, and what Apple or the configuration refused, the
+        // refusals that send the person back to Apple included: a website
+        // failure with a working app is the Services ID's setup.
+        const client = deletionRequest.appleAuthorizationClient ?? 'native';
+        resolved.logError(
+          `Apple account deletion authorization failed (${client}${error.detail ? `: ${error.detail}` : ''}):`,
+          error,
+        );
         return applyPrivateNoStoreApiResponseHeaders(
           NextResponse.json({
             error: error.message,
@@ -313,6 +317,7 @@ export async function deleteAccountRouteResponse({
             ...(error.reauthenticate
               ? { reason: REAUTHENTICATION_REQUIRED, reauthenticate: true }
               : {}),
+            ...(error.codeSpent ? { appleCodeSpent: true } : {}),
           }, { status: error.status }),
           request,
         );
@@ -359,7 +364,7 @@ export async function deleteAccountRouteResponse({
       );
     }
     await persistDeletionFailure(error);
-    return deletionFailureResponse(request, !(error instanceof AccountDeletionNotStartedError));
+    return deletionFailureResponse(request, !(error instanceof AccountDeletionNotStartedError), Boolean(appleIdentity));
   }
 
   if (start.status === 'already_deleted') {

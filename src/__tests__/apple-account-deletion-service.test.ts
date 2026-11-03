@@ -254,6 +254,65 @@ describe('Apple account deletion authorization', () => {
     expect(String(error)).not.toContain('APPLE_SIGN_IN_PRIVATE_KEY');
   });
 
+  // Whether Apple took the code: after it did, a retry with the same code only spends one
+  // of the hour's attempts, so the website asks Apple for a fresh one instead.
+  describe('whether Apple took the code', () => {
+    const tokens = async () => jsonResponse({ access_token: 'a', refresh_token: 'apple-refresh-token', id_token: 'apple-id-token' });
+    const failedFetch = async (): Promise<Response> => {
+      throw new TypeError('fetch failed');
+    };
+    const unverifiable = Object.assign(new Error('signature verification failed'), { code: 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED' });
+
+    it.each<[string, Array<() => Promise<Response>>, { subject?: string; verifyError?: Error }, Record<string, unknown>]>([
+      ['the token request fails', [failedFetch], {}, { code: 'APPLE_REVOCATION_UNAVAILABLE', detail: 'token request failed', codeSpent: false }],
+      ['the token endpoint fails', [async () => new Response('Bad gateway', { status: 502 })], {}, { code: 'APPLE_REVOCATION_UNAVAILABLE', detail: 'token endpoint 502', codeSpent: false }],
+      ['Apple refuses the code', [async () => jsonResponse({ error: 'invalid_grant' }, 400)], {}, { code: 'APPLE_REAUTH_FAILED', detail: 'token endpoint 400 invalid_grant', codeSpent: true }],
+      ['the token answer is unreadable', [async () => new Response('<html>', { status: 200 })], {}, { code: 'APPLE_REVOCATION_UNAVAILABLE', detail: 'token response unreadable', codeSpent: true }],
+      ["Apple's id token cannot be verified", [tokens], { verifyError: unverifiable }, { code: 'APPLE_REAUTH_FAILED', detail: 'id token unverifiable (ERR_JWS_SIGNATURE_VERIFICATION_FAILED)', codeSpent: true }],
+      ['the id token names another Apple user', [tokens], { subject: 'apple-user-2' }, { code: 'ACCOUNT_REAUTH_MISMATCH', detail: 'id token names another Apple user', codeSpent: true }],
+      ['the revoke request fails', [tokens, failedFetch], {}, { code: 'APPLE_REVOCATION_UNAVAILABLE', detail: 'revoke request failed', codeSpent: true }],
+    ])('says so when %s', async (_label, answers, { subject, verifyError }, expected) => {
+      const fetcher = vi.fn<typeof fetch>();
+      for (const answer of answers) fetcher.mockImplementationOnce(answer);
+      const resolved = dependencies({ fetcher, subject });
+      if (verifyError) resolved.verifyIdentityToken.mockRejectedValueOnce(verifyError);
+
+      await expect(authorizeAppleAccountDeletion({
+        authorizationCode: 'fresh-one-time-code',
+        expectedAppleSubject: 'apple-user-1',
+      }, resolved)).rejects.toMatchObject(expected);
+    });
+  });
+
+  // A body that never ends holds the route as an answer that never comes would, up to its
+  // maximum duration: the one timeout covers both.
+  it("gives up on an Apple answer whose body never ends", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn<typeof fetch>(async (_url, init) => ({
+        ok: false,
+        status: 502,
+        text: () => new Promise<string>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')));
+        }),
+      }) as unknown as Response);
+      const settled = authorizeAppleAccountDeletion({
+        authorizationCode: 'fresh-one-time-code',
+        expectedAppleSubject: 'apple-user-1',
+      }, dependencies({ fetcher })).catch((thrown: unknown) => thrown);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      await expect(settled).resolves.toMatchObject({
+        code: 'APPLE_REVOCATION_UNAVAILABLE',
+        detail: 'token request failed',
+        codeSpent: false,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('creates a short-lived ES256 Apple client secret with the required claims', async () => {
     const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
     const privateKeyPem = await exportPKCS8(privateKey);

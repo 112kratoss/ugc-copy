@@ -463,21 +463,27 @@ Apple's invalid_client page.
    in on the website with the Apple ID of an iPhone account and check that it is
    the same account (handle and credits): that sign-in is the secret's check.
 5. Deletion on the website (below): run
-   `NEXT_PUBLIC_APPLE_SERVICES_ID=<Services ID> npm run ops:external-gates -- --probe-apple-web-deletion`.
+   `NEXT_PUBLIC_APPLE_SERVICES_ID=<Services ID> NEXT_PUBLIC_SITE_URL=<Vercel's value> npm run ops:external-gates -- --probe-apple-web-deletion`.
    It reads Apple's own authorize page, which carries Apple's verdict in its
    `boot_args`, for three requests: Supabase's sign-in request, which Apple must
-   take; a return URL nobody registered, which Apple must refuse (the two
-   controls); and the deletion page's request, back to
-   `https://magicbooklet.com/delete-account`. Until step 1's deletion return URL
-   is in, it fails on Apple's `Invalid web redirect url. (invalid_request)`
-   (2026-11-02). The variable must be Supabase's Services ID. Once it passes, set
+   take; a return URL nobody registered on the site's host, which Apple must
+   refuse (the two controls); and the deletion page's request, back to
+   `/delete-account` on `NEXT_PUBLIC_SITE_URL` (`https://magicbooklet.com` when
+   unset, which the probe says it did not check). Until step 1's deletion return
+   URL is in, it fails on Apple's `Invalid web redirect url. (invalid_request)`
+   (2026-11-02). The Services ID must be Supabase's. Once it passes, set
    `NEXT_PUBLIC_APPLE_SERVICES_ID` to that Services ID in Vercel's production
-   environment and deploy: the deletion page reads it at build. To check it,
-   make an account with Continue with Apple on the website and delete it on
-   `/delete-account`; afterwards the Apple ID's list of apps using Sign in with
-   Apple (account.apple.com, Sign-In and Security) no longer shows the app. Do
-   the same for a Google account that has signed in with Apple on the website by
-   the same email.
+   environment and deploy: the deletion page reads it at build. Then check three
+   accounts, each deleted on `/delete-account`, against the Apple ID's list of
+   apps using Sign in with Apple (account.apple.com, Sign-In and Security),
+   which must no longer show the app afterwards: one made with Continue with
+   Apple on the website; a Google account that has signed in with Apple on the
+   website by the same email; and one made with Sign in with Apple in the iPhone
+   app. The last is the one that shows the cross-client revoke: its
+   authorization was issued to the bundle id, and the website revokes as the
+   Services ID. If the app is still listed after it, unset the variable and
+   redeploy, which sends such accounts back to the iPhone app, until the
+   website can revoke them too.
 
 Apple sends a person's name only the first time they authorize Magicbooklet,
 web or app, and Supabase keeps it then; an account made on the website without
@@ -497,19 +503,27 @@ Apple's page from anywhere else cannot bring a deletion; the person then types
 DELETE, and `DELETE /api/account` sends the code with
 `appleAuthorizationClient: 'web'`. The backend redeems it as the Services ID
 with the return URL Apple requires again and revokes as the Services ID, the
-client Apple issued the code to; the website and the app are one group, so
-that disconnects both. This serves every account with an Apple identity: one
+client Apple issued the code to. The website and the app are one group in
+Apple's configuration, which should disconnect the app's authorization with
+it; step 5's iPhone-made account is the check. This serves every account with an Apple identity: one
 made in the app, one made with Apple on the website, and a Google account that
 Supabase linked an Apple sign-in to because both carry the same verified
 email. The iPhone app keeps its native path (no client named, the bundle id).
 Apple returns only to that registered address, so on another origin of the site
 (`www.magicbooklet.com`, which serves the site without redirecting, or a
 preview) the page links to `magicbooklet.com/delete-account` instead, where the
-person signs in again. The code is kept through an answer that leaves the form
-up (one that could not say whether the deletion started, or Apple's service
-unavailable), so the retry sends it again: a deletion that did start answers it
-as under way, where sending the person back to Apple would add an authorization
-that nothing revokes. Without `NEXT_PUBLIC_APPLE_SERVICES_ID` the page sends
+person signs in again. Before leaving for Apple, the page asks Supabase whether
+its session is still live: auth-js keeps using a stored session that a
+deletion elsewhere has ended, and Apple would confirm for a request refused
+before its code is used, leaving a new authorization that nothing revokes. The
+start stays in the tab for ten minutes, so going Back to Apple's page and
+confirming again still lands. The code is kept through an answer that leaves
+the form up from before Apple was asked (one that could not say whether the
+deletion started, or Apple's service unavailable), so the retry sends it again:
+a deletion that did start answers it as under way. A refusal after the backend
+redeemed it says so (`appleCodeSpent: true`), and the page asks for Apple
+again, as it does for a code older than Apple's five minutes, rather than spend
+one of the hour's three attempts on a code Apple will refuse. Without `NEXT_PUBLIC_APPLE_SERVICES_ID` the page sends
 such an account to the iPhone app, and the email request remains for anyone who
 cannot use their Apple ID. A website failure logs its client and what Apple or
 the configuration refused (`Apple account deletion authorization failed (web:

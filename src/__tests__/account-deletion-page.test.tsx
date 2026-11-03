@@ -540,6 +540,7 @@ describe('account deletion page', () => {
             ['a Google account linked to an Apple sign-in', googleAppleUser],
         ])('sends %s to Apple as the Services ID, keeping the start in this tab', async (_label, user) => {
             mocks.session = signedInAs(user);
+            mocks.getUser.mockResolvedValue({ data: { user }, error: null });
             const assign = openPage();
             const fetchMock = answerRequests();
             render(<DeleteAccountPage />);
@@ -552,7 +553,9 @@ describe('account deletion page', () => {
 
             fireEvent.click(within(section).getByRole('button', { name: 'Continue with Apple' }));
 
-            expect(assign).toHaveBeenCalledOnce();
+            await waitFor(() => expect(assign).toHaveBeenCalledOnce());
+            // Supabase is asked about the stored session first.
+            expect(mocks.getUser).toHaveBeenCalledWith();
             const appleUrl = new URL(String(assign.mock.calls[0][0]));
             const start = readAppleWebAuthorizationStart();
             expect(start).toEqual({ state: expect.any(String), userId: user.id });
@@ -582,7 +585,8 @@ describe('account deletion page', () => {
 
             const section = await deletionSection();
             expect(within(section).getByRole('status')).toHaveTextContent('Apple confirmed it is you. Type DELETE to finish deleting the account.');
-            expect(readAppleWebAuthorizationStart()).toBeNull();
+            // Kept for Back to Apple's page, which can confirm again with the same state.
+            expect(readAppleWebAuthorizationStart()).toEqual({ state: 'state-1', userId: user.id });
             // The code leaves the address at once, keeping Next's history state; then through
             // Next's patched history (a null state), so its router takes the clean address too.
             await waitFor(() => expect(replaceState).toHaveBeenCalledTimes(2));
@@ -592,6 +596,7 @@ describe('account deletion page', () => {
             await confirmDeletion();
 
             expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+            expect(readAppleWebAuthorizationStart()).toBeNull();
             const [request] = deletionRequests(fetchMock);
             expect(request.headers).toMatchObject({ Authorization: 'Bearer old-token' });
             expect(JSON.parse(String(request.body))).toEqual({
@@ -712,18 +717,171 @@ describe('account deletion page', () => {
         // answer to a later deletion request.
         it("does not show Apple's earlier answer as the answer to a later request", async () => {
             mocks.session = signedInAs(googleUser);
-            rememberAppleWebAuthorizationStart({ state: 'state-1', userId: googleUser.id });
-            openPage('#error=user_cancelled_authorize&state=state-1');
+            // An answer this tab did not start, for an account this browser lists without Apple.
+            openPage('#error=user_cancelled_authorize&state=state-2');
             answerRequests({
                 deletions: [appleRefusal('APPLE_REAUTH_REQUIRED', 'Continue with Apple before permanently deleting your account.', true)],
             });
             render(<DeleteAccountPage />);
 
-            // This browser's copy of the account names no Apple identity yet: the plain form.
+            // The plain form, with nothing said about Apple.
             const section = await confirmDeletion();
 
             expect(await within(section).findByRole('button', { name: 'Continue with Apple' })).toBeInTheDocument();
             expect(within(section).queryByRole('alert')).toBeNull();
+        });
+
+        // The server asked for Apple, and this tab sent the account there: it has an Apple
+        // identity, whatever this browser's copy of the account still lists.
+        it("says Apple's Cancel deleted nothing for an account this browser lists without Apple", async () => {
+            mocks.session = signedInAs(googleUser);
+            rememberAppleWebAuthorizationStart({ state: 'state-1', userId: googleUser.id });
+            openPage('#error=user_cancelled_authorize&state=state-1');
+            const fetchMock = answerRequests();
+            render(<DeleteAccountPage />);
+
+            const section = await deletionSection();
+            expect(within(section).getByRole('alert')).toHaveTextContent('You cancelled Continue with Apple. Your account was not deleted.');
+            expect(within(section).getByRole('button', { name: 'Continue with Apple' })).toBeInTheDocument();
+            expect(within(section).queryByLabelText('Type DELETE to confirm')).toBeNull();
+            expect(deletionRequests(fetchMock)).toHaveLength(0);
+        });
+
+        // Back from the deletion page to Apple's, and Confirm again: Apple answers the same
+        // state with a new code.
+        it('takes a second confirmation of the same start, as after Back to Apple', async () => {
+            mocks.session = signedInAs(appleUser);
+            rememberAppleWebAuthorizationStart({ state: 'state-1', userId: appleUser.id });
+            openPage('#code=apple-code-1&state=state-1');
+            const fetchMock = answerRequests({ deletions: [scheduled] });
+            const { unmount } = render(<DeleteAccountPage />);
+            await deletionSection();
+            unmount();
+
+            openPage('#code=apple-code-3&state=state-1');
+            render(<DeleteAccountPage />);
+            const section = await deletionSection();
+            expect(within(section).getByRole('status')).toHaveTextContent('Apple confirmed it is you.');
+            await confirmDeletion();
+
+            expect(await screen.findByText('Your account is being deleted. You have been signed out.')).toBeInTheDocument();
+            expect(deletionRequests(fetchMock).map(codeSent)).toEqual(['apple-code-3']);
+        });
+
+        // A deletion elsewhere ended the session, but auth-js still holds it: Apple would confirm
+        // for a request refused before its code is used, and nothing would revoke that.
+        it.each<[string, { data: { user: TestUser | null }; error: Error | null }]>([
+            ['Supabase says the session has ended', { data: { user: null }, error: sessionMissing }],
+            ["the stored session is another account's", { data: { user: emailUser }, error: null }],
+        ])('does not leave for Apple when %s', async (_label, answer) => {
+            mocks.session = signedInAs(appleUser);
+            mocks.getUser.mockResolvedValue(answer);
+            const assign = openPage();
+            answerRequests();
+            render(<DeleteAccountPage />);
+
+            const section = await deletionSection();
+            fireEvent.click(within(section).getByRole('button', { name: 'Continue with Apple' }));
+
+            expect(await within(section).findByText('Your session has ended. Sign in again, then confirm the deletion here.')).toBeInTheDocument();
+            expect(assign).not.toHaveBeenCalled();
+            expect(readAppleWebAuthorizationStart()).toBeNull();
+        });
+
+        it('takes one press of Continue with Apple while it checks the session', async () => {
+            mocks.session = signedInAs(appleUser);
+            let answerCheck: (answer: unknown) => void = () => undefined;
+            mocks.getUser.mockImplementation(() => new Promise((resolve) => {
+                answerCheck = resolve;
+            }));
+            const assign = openPage();
+            answerRequests();
+            render(<DeleteAccountPage />);
+
+            const section = await deletionSection();
+            const button = within(section).getByRole('button', { name: 'Continue with Apple' });
+            fireEvent.click(button);
+            await waitFor(() => expect(button).toBeDisabled());
+            fireEvent.click(button);
+
+            await act(async () => answerCheck({ data: { user: appleUser }, error: null }));
+            await waitFor(() => expect(assign).toHaveBeenCalledOnce());
+            expect(mocks.getUser).toHaveBeenCalledOnce();
+        });
+
+        it('says when it could not check the session before Continue with Apple', async () => {
+            mocks.session = signedInAs(appleUser);
+            // getUser cannot reach Supabase (the default here).
+            const assign = openPage();
+            answerRequests();
+            render(<DeleteAccountPage />);
+
+            const section = await deletionSection();
+            fireEvent.click(within(section).getByRole('button', { name: 'Continue with Apple' }));
+
+            expect(await within(section).findByRole('alert')).toHaveTextContent(
+                'We could not check your session before Continue with Apple. Check the connection and try again.',
+            );
+            expect(within(section).getByRole('button', { name: 'Continue with Apple' })).toBeEnabled();
+            expect(assign).not.toHaveBeenCalled();
+            expect(readAppleWebAuthorizationStart()).toBeNull();
+        });
+
+        // Apple redeems a code once, within five minutes: past either, sending it again only
+        // spends one of the hour's three attempts on Apple's refusal.
+        it.each<[string, Answer, string]>([
+            [
+                "Apple's service fails after it took the code",
+                { status: 503, body: { ...(appleUnavailable.body as object), appleCodeSpent: true } },
+                'Your account was not deleted. Apple account verification is temporarily unavailable.',
+            ],
+            [
+                'the deletion does not start after Apple took the code',
+                {
+                    status: 500,
+                    body: {
+                        error: 'Account deletion could not be completed. Please try again.',
+                        code: 'ACCOUNT_DELETION_NOT_STARTED',
+                        deletionScheduled: false,
+                        appleCodeSpent: true,
+                    },
+                },
+                'Your account was not deleted. Account deletion could not be completed. Please try again.',
+            ],
+        ])('asks for Apple again when %s', async (_label, answer, alert) => {
+            mocks.session = signedInAs(appleUser);
+            rememberAppleWebAuthorizationStart({ state: 'state-1', userId: appleUser.id });
+            openPage('#code=apple-code-1&state=state-1');
+            const fetchMock = answerRequests({ deletions: [answer] });
+            render(<DeleteAccountPage />);
+
+            const section = await confirmDeletion();
+
+            expect(await within(section).findByRole('alert')).toHaveTextContent(alert);
+            expect(within(section).getByRole('button', { name: 'Continue with Apple' })).toBeInTheDocument();
+            expect(within(section).queryByLabelText('Type DELETE to confirm')).toBeNull();
+            expect(deletionRequests(fetchMock)).toHaveLength(1);
+            expect(mocks.signOut).not.toHaveBeenCalled();
+        });
+
+        it("asks for Apple again rather than send a code older than Apple's five minutes", async () => {
+            const now = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 10, 3, 10, 0, 0));
+            mocks.session = signedInAs(appleUser);
+            rememberAppleWebAuthorizationStart({ state: 'state-1', userId: appleUser.id });
+            openPage('#code=apple-code-1&state=state-1');
+            const fetchMock = answerRequests();
+            render(<DeleteAccountPage />);
+            const section = await deletionSection();
+            expect(within(section).getByRole('status')).toHaveTextContent('Apple confirmed it is you.');
+
+            now.mockReturnValue(Date.UTC(2026, 10, 3, 10, 5, 0));
+            await confirmDeletion();
+
+            expect(await within(section).findByRole('alert')).toHaveTextContent(
+                "Your account was not deleted. Apple's confirmation lasts five minutes; continue with Apple again.",
+            );
+            expect(within(section).getByRole('button', { name: 'Continue with Apple' })).toBeInTheDocument();
+            expect(deletionRequests(fetchMock)).toHaveLength(0);
         });
 
         // Apple returns only to the address registered with it, on the site's own host.

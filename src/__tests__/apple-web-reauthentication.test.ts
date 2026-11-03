@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  APPLE_WEB_AUTHORIZATION_START_LIFETIME_MS,
   APPLE_WEB_RETURN_PATH,
   buildAppleWebAuthorizationUrl,
   forgetAppleWebAuthorizationStart,
@@ -94,8 +95,25 @@ describe('Continue with Apple on the website', () => {
       expect(readAppleWebAuthorizationStart()).toBeNull();
     });
 
+    // Long enough for a person who takes their time on Apple's page, or goes Back to it and
+    // confirms again; a start from longer ago answers nothing.
+    it('answers Apple for ten minutes from the press', () => {
+      const pressedAt = Date.UTC(2026, 10, 3, 10, 0, 0);
+      rememberAppleWebAuthorizationStart({ state: 'state-1', userId: 'user-1' }, pressedAt);
+
+      expect(APPLE_WEB_AUTHORIZATION_START_LIFETIME_MS).toBe(10 * 60 * 1000);
+      expect(readAppleWebAuthorizationStart(pressedAt + APPLE_WEB_AUTHORIZATION_START_LIFETIME_MS))
+        .toEqual({ state: 'state-1', userId: 'user-1' });
+      expect(readAppleWebAuthorizationStart(pressedAt + APPLE_WEB_AUTHORIZATION_START_LIFETIME_MS + 1)).toBeNull();
+      // A clock since set back says nothing of the start's age.
+      expect(readAppleWebAuthorizationStart(pressedAt - 1)).toBeNull();
+    });
+
     it('reads no start from a value it did not write, and says when the browser keeps none', () => {
       window.sessionStorage.setItem('magicbooklet:apple-account-deletion', '{"state":"state-1"}');
+      expect(readAppleWebAuthorizationStart()).toBeNull();
+      // One kept before starts had an age.
+      window.sessionStorage.setItem('magicbooklet:apple-account-deletion', '{"state":"state-1","userId":"user-1"}');
       expect(readAppleWebAuthorizationStart()).toBeNull();
       window.sessionStorage.setItem('magicbooklet:apple-account-deletion', 'not json');
       expect(readAppleWebAuthorizationStart()).toBeNull();

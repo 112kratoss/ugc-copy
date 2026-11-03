@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const PROJECT_REF = process.env.SUPABASE_PROJECT_REF || 'ildfmhozpibwiopeavfg';
 const REVENUECAT_WEBHOOK_URL = process.env.REVENUECAT_WEBHOOK_URL
@@ -10,10 +11,10 @@ const DEFAULT_AUTH_DB_POOL_PERCENT = Number(process.env.SUPABASE_AUTH_DB_POOL_PE
 // The iPhone app's bundle id (ugc-mobile/app.json): Apple refuses the web flow with it as client.
 const IOS_BUNDLE_ID = process.env.IOS_BUNDLE_ID || 'com.magicbooklet.mobile';
 const SITE_AUTH_CALLBACK_URL = 'https://magicbooklet.com/auth/callback';
-// Where Apple returns the deletion page's Continue with Apple (src/lib/apple-web-reauthentication.ts).
-export const SITE_APPLE_DELETION_RETURN_URL = 'https://magicbooklet.com/delete-account';
-// A return URL nobody registers: Apple must refuse it, or the deletion probe cannot see a refusal.
-const SITE_UNREGISTERED_RETURN_URL = 'https://magicbooklet.com/external-gates-unregistered-return';
+// The site's address when NEXT_PUBLIC_SITE_URL is not given, as in src/lib/seo.ts.
+const DEFAULT_SITE_URL = 'https://magicbooklet.com';
+// A return path nobody registers: Apple must refuse it, or the deletion probe cannot see a refusal.
+const UNREGISTERED_RETURN_PATH = '/external-gates-unregistered-return';
 // Where Supabase asks Apple to return: its own callback, or a custom domain's once one is active.
 const SUPABASE_AUTH_CALLBACK_URL = process.env.SUPABASE_AUTH_CALLBACK_URL
   || `https://${PROJECT_REF}.supabase.co/auth/v1/callback`;
@@ -349,13 +350,25 @@ function readAppleAuthorizePage({ status, html, url }) {
   throw new Error(`Apple's authorize page (HTTP ${status}) says neither that it takes the request nor that it refuses it; open ${url} in a browser to check it.`);
 }
 
+function siteUrlFromEnv() {
+  return process.env.NEXT_PUBLIC_SITE_URL?.trim() || null;
+}
+
 /**
- * Apple's authorize page as the deletion page opens it
- * (src/lib/apple-web-reauthentication.ts, held equal by
- * production-external-gates-script.test.ts): no scope, the code in the
- * fragment, back to the deletion page.
+ * Where Apple returns the deletion page's Continue with Apple: /delete-account
+ * on the site's address, which the site reads from NEXT_PUBLIC_SITE_URL
+ * (src/lib/apple-web-reauthentication.ts, held equal for the same variable by
+ * production-external-gates-script.test.ts).
  */
-export function buildAppleDeletionAuthorizeUrl(clientId, returnUrl = SITE_APPLE_DELETION_RETURN_URL) {
+export function siteAppleDeletionReturnUrl(siteUrl = siteUrlFromEnv() ?? DEFAULT_SITE_URL) {
+  return new URL('/delete-account', siteUrl).toString();
+}
+
+/**
+ * Apple's authorize page as the deletion page opens it: no scope, the code in
+ * the fragment, back to the deletion page.
+ */
+export function buildAppleDeletionAuthorizeUrl(clientId, returnUrl = siteAppleDeletionReturnUrl()) {
   const url = new URL('https://appleid.apple.com/auth/authorize');
   url.search = new URLSearchParams({
     client_id: clientId,
@@ -375,12 +388,16 @@ async function fetchAppleAuthorizePage(url) {
 /**
  * Apple's answer to the deletion page's Continue with Apple, before
  * NEXT_PUBLIC_APPLE_SERVICES_ID turns it on: the Services ID must take
- * /delete-account as a return URL. Two controls go first, so a pass means
- * something: Apple takes Supabase's own sign-in request, and refuses a return
- * URL nobody registered. Given NEXT_PUBLIC_APPLE_SERVICES_ID, the value Vercel
- * holds, it must be the Services ID Supabase asks Apple as.
+ * /delete-account on the site's address as a return URL. Two controls go
+ * first, so a pass means something: Apple takes Supabase's own sign-in request,
+ * and refuses a return URL nobody registered on the same host. Given
+ * NEXT_PUBLIC_APPLE_SERVICES_ID, the value Vercel holds, it must be the
+ * Services ID Supabase asks Apple as; given NEXT_PUBLIC_SITE_URL, Vercel's
+ * value, the return URL is on that address.
  */
 async function probeAppleWebDeletion() {
+  const returnUrl = siteAppleDeletionReturnUrl();
+  const unregisteredUrl = new URL(UNREGISTERED_RETURN_PATH, returnUrl).toString();
   const { clientId, location } = await readSupabaseAppleRedirect();
   const configured = process.env.NEXT_PUBLIC_APPLE_SERVICES_ID?.trim();
   if (configured && configured !== clientId) {
@@ -390,17 +407,20 @@ async function probeAppleWebDeletion() {
   if (signIn.refused) {
     throw new Error(`Apple web deletion probe failed: Apple refuses even Supabase's sign-in request (${signIn.errorMessage} ${signIn.errorCode}); run --probe-apple-web-sign-in and the runbook's "Sign in with Apple on the web" first.`);
   }
-  const unregistered = await fetchAppleAuthorizePage(buildAppleDeletionAuthorizeUrl(clientId, SITE_UNREGISTERED_RETURN_URL));
+  const unregistered = await fetchAppleAuthorizePage(buildAppleDeletionAuthorizeUrl(clientId, unregisteredUrl));
   if (!unregistered.refused) {
-    throw new Error(`Apple web deletion probe failed: Apple took ${SITE_UNREGISTERED_RETURN_URL}, which nobody registered, so this probe cannot see its refusals.`);
+    throw new Error(`Apple web deletion probe failed: Apple took ${unregisteredUrl}, which nobody registered, so this probe cannot see its refusals.`);
   }
-  const deletion = await fetchAppleAuthorizePage(buildAppleDeletionAuthorizeUrl(clientId));
+  const deletion = await fetchAppleAuthorizePage(buildAppleDeletionAuthorizeUrl(clientId, returnUrl));
   if (deletion.refused) {
-    throw new Error(`Apple web deletion probe failed: Apple refuses ${SITE_APPLE_DELETION_RETURN_URL} for ${clientId}: ${deletion.errorMessage} (${deletion.errorCode}). Add it to the Services ID's Return URLs, with magicbooklet.com among its Domains.`);
+    throw new Error(`Apple web deletion probe failed: Apple refuses ${returnUrl} for ${clientId}: ${deletion.errorMessage} (${deletion.errorCode}). Add it to the Services ID's Return URLs, with ${new URL(returnUrl).host} among its Domains.`);
   }
-  console.log(`Apple web deletion probe: Apple takes ${SITE_APPLE_DELETION_RETURN_URL} as a return URL for ${clientId}`);
+  console.log(`Apple web deletion probe: Apple takes ${returnUrl} as a return URL for ${clientId}`);
   if (!configured) {
     console.log(`Not checked without NEXT_PUBLIC_APPLE_SERVICES_ID: that Vercel holds ${clientId}. Run again with the variable set to Vercel's value.`);
+  }
+  if (!siteUrlFromEnv()) {
+    console.log(`Not checked without NEXT_PUBLIC_SITE_URL: that the site's address is ${DEFAULT_SITE_URL}. Run again with the variable set to Vercel's value.`);
   }
 }
 
@@ -596,8 +616,19 @@ async function main() {
   runSupabaseAdvisorCheck();
 }
 
-// Run as a command, not when a test imports the builder above.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run as a command, not when a test imports the builders above. Node runs a
+// script by its real path, so a path through a symlink (macOS's /tmp is one)
+// is compared as the file it names.
+function isRunAsCommand() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isRunAsCommand()) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
