@@ -407,7 +407,13 @@ export function ProfileDashboard({
     savedHasMore: savedQuery.hasNextPage,
     savedLoaded: Boolean(savedQuery.data),
   });
-  const tabCards = activeTab === 'Saved' ? savedCards : activeTab === 'Creations' ? creationCards : postCards;
+  // A tab added later is given its own cards here, or nothing compiles.
+  const cardsByTab: Record<ProfileMediaTab, ProfileMediaCard[]> = {
+    Creations: creationCards,
+    Posts: postCards,
+    Saved: savedCards,
+  };
+  const tabCards = cardsByTab[activeTab];
   // Each tab's chips and empty state read only that tab's scopes, and its chips
   // set only its own: Posts can never be handed Failed. Saved has no chips. The
   // empty state names the tab shown, narrowed rather than retyped, so it cannot
@@ -436,8 +442,7 @@ export function ProfileDashboard({
   // time (`warmImages`), so a switch draws them from the disk.
   const switchImages = PROFILE_MEDIA_TABS
     .filter((tab) => tab !== activeTab)
-    .flatMap((tab) => (tab === 'Saved' ? savedCards : tab === 'Creations' ? creationCards : postCards)
-      .slice(0, PROFILE_SWITCH_WARM_COUNT))
+    .flatMap((tab) => cardsByTab[tab].slice(0, PROFILE_SWITCH_WARM_COUNT))
     .flatMap((card) => profileTileImage(card) ?? []);
   // The effect is keyed by which pictures they are, not by the array listing them.
   const switchImagesKey = JSON.stringify(switchImages);
