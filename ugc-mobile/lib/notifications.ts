@@ -8,7 +8,7 @@ import { Platform } from 'react-native';
 
 import type { MagicbookletApiClient } from './api-client';
 import { env } from './env';
-import { dedupeInFlight } from './in-flight';
+import { dedupeInFlight, isInFlight, trackInFlight } from './in-flight';
 import { ALERTS_LIST_QUERY_KEY, NOTIFICATION_BADGE_QUERY_KEY } from './notification-badge';
 
 const DEVICE_ID_KEY = 'magicbooklet.mobileNotifications.deviceId';
@@ -199,17 +199,19 @@ function exchangeForExpoPushToken(projectId: string, devicePushToken: Notificati
   );
 }
 
-/** Each Expo token's registration with the API while it is on the wire. */
-const registrationsInFlight = new Map<string, Promise<void>>();
+/** The owner of the registrations on the wire (`trackInFlight`), keyed by Expo token. */
+const expoTokenRegistrations = {};
 
 /**
  * Store the token, then tell the API about it. Both registration paths — the
  * cold-start sync and the rotation listener — go through here, so the stored
  * value can never drift from the one the backend was given. Recorded while it
- * runs, so the listener can leave a token to the registration already sending it.
+ * runs, so the listener can leave a token to the registration already sending
+ * it. Never shared, unlike the exchange: each registration is sent with the
+ * session it was asked under, across a sign-out too.
  */
 function persistAndRegisterExpoPushToken(api: MagicbookletApiClient, expoPushToken: string) {
-  const registration = (async () => {
+  return trackInFlight(expoTokenRegistrations, expoPushToken, (async () => {
     const deviceId = await getStableDeviceId();
     await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
     await api.registerMobilePushToken({
@@ -218,15 +220,7 @@ function persistAndRegisterExpoPushToken(api: MagicbookletApiClient, expoPushTok
       deviceId,
       appVersion: Constants.expoConfig?.version ?? null,
     });
-  })();
-  registrationsInFlight.set(expoPushToken, registration);
-  const release = () => {
-    if (registrationsInFlight.get(expoPushToken) === registration) registrationsInFlight.delete(expoPushToken);
-  };
-  // Both branches handled here, so this derived promise never reports a
-  // rejection; the caller still receives it on `registration`.
-  registration.then(release, release);
-  return registration;
+  })());
 }
 
 export async function registerForMobilePushNotifications(
@@ -574,7 +568,7 @@ async function registerRotatedDevicePushToken(
   }
   // Not yet stored, because the registration whose fetch fired this listener is
   // still storing and sending it: on a first registration both sent it.
-  if (registrationsInFlight.has(token.data)) {
+  if (isInFlight(expoTokenRegistrations, token.data)) {
     return;
   }
 
