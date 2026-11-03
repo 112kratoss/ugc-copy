@@ -11,6 +11,7 @@ import {
 } from '@/lib/post-resource-bundles-server';
 import { loadPostMediaItemsMap } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
+import { withholdCopiesOfCreationsOffView } from '@/lib/recipe-copy-access';
 import {
   getPostResourceKinds,
   normalizePostResourceAttachments,
@@ -281,6 +282,9 @@ export async function getViewerUnlockDetail({
     loadViewerUnlockPayments(adminSupabase, [projection.purchase_id]),
   ]);
   if (!purchasedRevision) return null;
+  // The version they bought, as the live read serves the recipe as it stands: without the copies of
+  // a creation now removed or archived (owner, 2026-11-04), so no file route signs one.
+  await withholdCopiesOfCreationsOffView(adminSupabase, [purchasedRevision.resources]);
   const isNsfw = Boolean(projection.post_id && nsfwPostIds.has(projection.post_id));
 
   let liveDetail: PostResourceBundleDetail | null = null;

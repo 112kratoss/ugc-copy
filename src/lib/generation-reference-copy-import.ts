@@ -7,6 +7,7 @@ import { isAlreadyExistsStorageError, type SharedInputMediaImportResult } from '
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeReferenceCopies } from '@/lib/post-resource-bundles-server';
 import {
+  type GenerationReferenceCopyParts,
   isRecipeImportSource,
   parseGenerationReferenceCopyPath,
   RECIPE_FILES_BUCKET,
@@ -17,13 +18,15 @@ import {
 import { resolveRemixAccess, type RemixAccessGeneration } from '@/lib/remix-access';
 import { createServiceClient } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation, getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+// The rule the composers and the server's saves read: a creation an operator removed or its creator archived.
+import { creationMayShareRecipe, type CreationStateLike } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /** Where a run start keeps another account's media it may use: as `importSharedGenerationInputMedia` does. */
 const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 const SIGNED_URL_TTL_SECONDS = 3600;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** What the remix gate reads of a creation, its run links included (`RemixAccessGeneration`). */
-const GENERATION_SELECT = 'id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id';
+const GENERATION_SELECT = 'id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id, archived_at, moderation_removed_at';
 
 /** What one run start has read of a viewer's unlock of a creation: the copies it lets them import, or why none. */
 type RecipeCopyAccess =
@@ -74,8 +77,11 @@ async function readRecipeCopyAccess(
     logBackendError('failed_to_load_generation_for_recipe_copy_import', { error: generationResult.error });
     return { outcome: 'failed' };
   }
-  const generation = generationResult.data as RemixAccessGeneration | null;
+  const generation = generationResult.data as (RemixAccessGeneration & CreationStateLike) | null;
   if (!generation?.user_id) return { outcome: 'not-eligible' };
+  // A creation its operator removed or its creator archived lends its copies to nobody (owner,
+  // 2026-11-04), read at every start, so un-archiving restores them.
+  if (!creationMayShareRecipe(generation)) return { outcome: 'not-eligible' };
 
   try {
     const viewer = await adminSupabase.auth.admin.getUserById(viewerUserId);
@@ -119,6 +125,55 @@ async function readRecipeCopyAccess(
 }
 
 /**
+ * Whether the viewer may reuse this recipe copy in a run now: the reuse half of "may this viewer use
+ * this copy now", which the start's import and a Seedance asset prepared from the copy both ask
+ * (`readRecipeCopyAccess`: the remix gate, the version they bought holding the copy, and its creation
+ * neither removed nor archived). The read half, for a file a viewer already holds, is the database's
+ * `recipe_file_readable_by` (`recipe-copy-access.ts`).
+ */
+export async function checkRecipeCopyReuse(params: {
+  /** The copy as `post_resource_files/<seller>/generation-references/<creation>/<file>`, a path or a link. */
+  source: string;
+  viewerUserId: string;
+  reads?: RecipeCopyReads;
+  dependencies?: GenerationReferenceCopyImportDependencies;
+}): Promise<
+  | { outcome: 'entitled'; adminSupabase: SupabaseClient; copy: GenerationReferenceCopyParts; location: { bucket: string; filePath: string } }
+  | { outcome: 'not-eligible' }
+  | { outcome: 'failed' }
+> {
+  const location = getCanonicalStoredMediaLocation(params.source, {
+    allowedBuckets: [RECIPE_FILES_BUCKET],
+  });
+  const copy = location ? parseGenerationReferenceCopyPath(location.filePath) : null;
+  if (
+    !location
+    || !copy
+    // Both are ids: a segment that is none names no account or creation.
+    || !UUID_PATTERN.test(copy.ownerUserId)
+    || !UUID_PATTERN.test(copy.generationId)
+    // The seller's own copy is theirs: their run reads it as their own file.
+    || copy.ownerUserId === params.viewerUserId
+  ) {
+    return { outcome: 'not-eligible' };
+  }
+
+  const adminSupabase = (params.dependencies?.createServiceClient ?? createServiceClient)();
+  const readKey = `${params.viewerUserId}:${copy.generationId}`;
+  let read = params.reads?.get(readKey);
+  if (!read) {
+    read = readRecipeCopyAccess(adminSupabase, params.viewerUserId, copy.generationId, params.dependencies);
+    params.reads?.set(readKey, read);
+  }
+  const access = await read;
+  if (access.outcome !== 'entitled') return access;
+  if (!access.copyPaths.has(`${RECIPE_FILES_BUCKET}/${location.filePath}`)) {
+    return { outcome: 'not-eligible' };
+  }
+  return { outcome: 'entitled', adminSupabase, copy, location };
+}
+
+/**
  * A recipe's copy of one of its creation's saved inputs, handed to a run start
  * by a remix of that recipe (owner, 2026-11-03).
  *
@@ -150,34 +205,9 @@ export async function importGenerationReferenceCopy(params: {
   reads?: RecipeCopyReads;
   dependencies?: GenerationReferenceCopyImportDependencies;
 }): Promise<SharedInputMediaImportResult> {
-  const location = getCanonicalStoredMediaLocation(params.source, {
-    allowedBuckets: [RECIPE_FILES_BUCKET],
-  });
-  const copy = location ? parseGenerationReferenceCopyPath(location.filePath) : null;
-  if (
-    !location
-    || !copy
-    // Both are ids: a segment that is none names no account or creation.
-    || !UUID_PATTERN.test(copy.ownerUserId)
-    || !UUID_PATTERN.test(copy.generationId)
-    // The seller's own copy is theirs: their run reads it as their own file.
-    || copy.ownerUserId === params.viewerUserId
-  ) {
-    return { outcome: 'not-eligible' };
-  }
-
-  const adminSupabase = (params.dependencies?.createServiceClient ?? createServiceClient)();
-  const readKey = `${params.viewerUserId}:${copy.generationId}`;
-  let read = params.reads?.get(readKey);
-  if (!read) {
-    read = readRecipeCopyAccess(adminSupabase, params.viewerUserId, copy.generationId, params.dependencies);
-    params.reads?.set(readKey, read);
-  }
-  const access = await read;
-  if (access.outcome !== 'entitled') return access;
-  if (!access.copyPaths.has(`${RECIPE_FILES_BUCKET}/${location.filePath}`)) {
-    return { outcome: 'not-eligible' };
-  }
+  const checked = await checkRecipeCopyReuse(params);
+  if (checked.outcome !== 'entitled') return checked;
+  const { adminSupabase, copy, location } = checked;
 
   // Deterministic, beside the shared import's own folder, and naming the copy it was made from
   // (`recipeImportPath`): a retry or a second remix reuses the one copy, the run keeps working
@@ -228,33 +258,48 @@ export async function reuseRecipeFile(params: {
   reads?: RecipeCopyReads;
   dependencies?: GenerationReferenceCopyImportDependencies;
 }): Promise<SharedInputMediaImportResult | null> {
-  const own = new Set([params.viewerUserId]);
-  let copySource = recipeCopyOfSource(params.source, own);
-  // An import whose path names no copy is none a start made: never the caller's own file either.
-  if (!copySource && isRecipeImportSource(params.source)) return { outcome: 'not-eligible' };
-  if (!copySource) {
-    const kept = getUserOwnedStoredMediaLocation(params.source, params.viewerUserId, { allowedBuckets: [GENERATION_INPUTS_BUCKET] });
-    if (!kept || IMPORT_FOLDERS.has(kept.filePath.split('/')[1] ?? '')) return null;
-    const adminSupabase = (params.dependencies?.createServiceClient ?? createServiceClient)();
-    const { data, error } = await adminSupabase
-      .from('generation_input_media')
-      .select('metadata')
-      .eq('user_id', params.viewerUserId)
-      .eq('storage_path', `${GENERATION_INPUTS_BUCKET}/${kept.filePath}`)
-      .limit(1);
-    if (error) {
-      logBackendError('failed_to_read_kept_input_for_recipe_file_reuse', { error });
-      return null;
-    }
-    const row = ((data ?? []) as Array<{ metadata: Record<string, unknown> | null }>)[0];
-    if (!row || !isRecipeFileInput({ metadata: row.metadata }, own)) return null;
-    copySource = recipeFileCopyOf({ metadata: row.metadata }, own);
-    if (!copySource) return { outcome: 'not-eligible' };
-  }
+  const held = await findHeldRecipeCopy(params);
+  if (held === null) return null;
+  if (held.outcome === 'not-eligible') return held;
   return importGenerationReferenceCopy({
-    source: copySource,
+    source: held.copySource,
     viewerUserId: params.viewerUserId,
     reads: params.reads,
     dependencies: params.dependencies,
   });
+}
+
+/**
+ * The recipe copy a source the caller holds stands for, as `reuseRecipeFile` reads it: the seller's
+ * copy itself, a run start's import of one, or a kept input of the caller's own marked as a recipe
+ * file. `not-eligible` for a recipe file whose copy is on no record, or an import naming none; null
+ * for anything else, the caller's own files and a kept row that cannot be read included.
+ */
+export async function findHeldRecipeCopy(params: {
+  source: string;
+  viewerUserId: string;
+  dependencies?: GenerationReferenceCopyImportDependencies;
+}): Promise<{ outcome: 'copy'; copySource: string } | { outcome: 'not-eligible' } | null> {
+  const own = new Set([params.viewerUserId]);
+  const copySource = recipeCopyOfSource(params.source, own);
+  if (copySource) return { outcome: 'copy', copySource };
+  // An import whose path names no copy is none a start made: never the caller's own file either.
+  if (isRecipeImportSource(params.source)) return { outcome: 'not-eligible' };
+  const kept = getUserOwnedStoredMediaLocation(params.source, params.viewerUserId, { allowedBuckets: [GENERATION_INPUTS_BUCKET] });
+  if (!kept || IMPORT_FOLDERS.has(kept.filePath.split('/')[1] ?? '')) return null;
+  const adminSupabase = (params.dependencies?.createServiceClient ?? createServiceClient)();
+  const { data, error } = await adminSupabase
+    .from('generation_input_media')
+    .select('metadata')
+    .eq('user_id', params.viewerUserId)
+    .eq('storage_path', `${GENERATION_INPUTS_BUCKET}/${kept.filePath}`)
+    .limit(1);
+  if (error) {
+    logBackendError('failed_to_read_kept_input_for_recipe_file_reuse', { error });
+    return null;
+  }
+  const row = ((data ?? []) as Array<{ metadata: Record<string, unknown> | null }>)[0];
+  if (!row || !isRecipeFileInput({ metadata: row.metadata }, own)) return null;
+  const recorded = recipeFileCopyOf({ metadata: row.metadata }, own);
+  return recorded ? { outcome: 'copy', copySource: recorded } : { outcome: 'not-eligible' };
 }

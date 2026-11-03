@@ -329,6 +329,16 @@ function createAdminClientMock() {
       return {
         select() {
           return {
+            // The state of the creations a recipe's copies are of (`loadWithheldCopyCreations`).
+            async in(column: string, values: unknown[]) {
+              if (column !== 'id') {
+                throw new Error(`Unexpected filter column: ${column}`);
+              }
+              return {
+                data: values.flatMap((value) => generationRows.get(String(value)) ?? []),
+                error: null,
+              };
+            },
             eq(column: string, value: unknown) {
               if (column !== 'id') {
                 throw new Error(`Unexpected filter column: ${column}`);

@@ -81,6 +81,7 @@ function adminClient(
     payment = null as Record<string, unknown> | null,
     blocked = false,
     blockError = null as Error | null,
+    archivedCreations = [] as string[],
   } = {},
 ) {
   const createSignedUrl = vi.fn(async (path: string) => ({
@@ -93,6 +94,16 @@ function adminClient(
       return { data: (inFilter as string[]).map((id) => ({ id, is_nsfw: nsfwPostIds.includes(id) })), error: null };
     }
     if (table === 'post_resource_bundle_purchases') return { data: payment ? [payment] : [], error: null };
+    if (table === 'generations') {
+      return {
+        data: (inFilter as string[]).map((id) => ({
+          id,
+          archived_at: archivedCreations.includes(id) ? '2026-11-04T00:00:00.000Z' : null,
+          moderation_removed_at: null,
+        })),
+        error: null,
+      };
+    }
     if (table === 'user_blocks') {
       if (blockError) return { data: null, error: blockError };
       return { data: blocked ? [{ blocked_user_id: 'creator-1', blocker_user_id: 'creator-1' }] : [], error: null };
@@ -340,6 +351,42 @@ describe('viewer unlock entitlement and state', () => {
     loadMediaItems.mockReset();
     getLiveDetail.mockResolvedValue(liveDetail());
     loadMediaItems.mockResolvedValue(new Map());
+  });
+
+  // Owner, 2026-11-04: the copies of a creation its creator archived or an operator removed are not
+  // served to a buyer, from the version they bought either (the live read withholds them from the
+  // recipe as it stands), so the library's file route signs none of them.
+  it('withholds the bought version’s copies of a creation now off public view, and signs none', async () => {
+    const CREATION = '22222222-2222-4222-8222-222222222222';
+    const COPY = `creator-1/generation-references/${CREATION}/00-reference-image-row-1.png`;
+    const boughtWithCopy = {
+      ...revision,
+      resource_items: [
+        { id: 'guide', type: 'reference_image', title: 'Guide', storagePath: 'creator-1/resources/guide.png', contentType: 'image/png', sortOrder: 0 },
+        { id: 'reference-row-1', type: 'reference_image', title: 'Reference', storagePath: COPY, contentType: 'image/png', sortOrder: 1 },
+      ],
+    };
+    const readItems = async (archivedCreations: string[]) => {
+      const admin = adminClient(liveProjection(), purchasedProofMedia, boughtWithCopy, { archivedCreations });
+      const detail = await getViewerUnlockDetail({ adminSupabase: admin as never, unlockId: UNLOCK_ID, viewerUserId: 'buyer-1' });
+      const signed = await createViewerUnlockFileUrl({
+        adminSupabase: admin as never,
+        body: { storagePath: COPY },
+        countryCode: null,
+        rateLimitKey: 'buyer-1',
+        unlockId: UNLOCK_ID,
+        viewerUserId: 'buyer-1',
+      });
+      return { paths: detail?.purchasedRevision.resources.items?.flatMap((item) => (item.storagePath ? [item.storagePath] : [])), signed };
+    };
+
+    const live = await readItems([]);
+    expect(live.paths).toEqual(['creator-1/resources/guide.png', COPY]);
+    expect(live.signed).toMatchObject({ ok: true });
+
+    const archived = await readItems([CREATION]);
+    expect(archived.paths).toEqual(['creator-1/resources/guide.png']);
+    expect(archived.signed).toMatchObject({ ok: false, status: 404 });
   });
 
   it('opens an NSFW purchase without a reveal: live bundle, current files signed, not detached, flagged', async () => {

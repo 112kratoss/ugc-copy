@@ -39,6 +39,7 @@ function createAdminSupabaseMock(state: {
   marketplaceOrderLoadError?: boolean;
   marketplaceAdjustmentStatus?: string;
   resourceAdjustmentStatus?: string;
+  resourceAdjustmentOrderId?: string;
   adjustmentError?: boolean;
   creditAdjustmentStatus?: string;
   /** What `settle_referral_purchase_rewards` reports. Unset: the buyer was not referred. */
@@ -172,7 +173,13 @@ function createAdminSupabaseMock(state: {
       if (name === 'reconcile_post_resource_cash_adjustment') {
         return state.adjustmentError
           ? { data: null, error: { message: 'adjustment failed' } }
-          : { data: { status: state.resourceAdjustmentStatus ?? 'not_found' }, error: null };
+          : {
+            data: {
+              status: state.resourceAdjustmentStatus ?? 'not_found',
+              ...(state.resourceAdjustmentOrderId ? { order_id: state.resourceAdjustmentOrderId } : {}),
+            },
+            error: null,
+          };
       }
 
       if (name === 'complete_marketplace_purchase' && state.marketplaceOrder) {
@@ -972,6 +979,34 @@ describe('processRazorpayWebhookForRoute', () => {
       'reconcile_marketplace_cash_adjustment', 'reconcile_post_resource_cash_adjustment',
     ]);
     expect(admin.providerDependencyInserts).toHaveLength(1);
+  });
+
+  // Owner, 2026-11-04: the refund deleted the buyer's purchase of a recipe, so their run starts'
+  // imports of its copies go with it; a failure there leaves the read-time checks standing.
+  it('releases a refunded recipe buyer’s imports of its copies once the purchase is gone', async () => {
+    const admin = createAdminSupabaseMock({
+      marketplaceAdjustmentStatus: 'not_found', resourceAdjustmentStatus: 'adjusted', resourceAdjustmentOrderId: 'bundle-order-1',
+    });
+    const releaseRecipeImports = vi.fn(async () => undefined);
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client, rawBody: refundProcessedBody(), releaseRecipeImports,
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(releaseRecipeImports).toHaveBeenCalledWith({ adminSupabase: admin.client, orderId: 'bundle-order-1' });
+  });
+
+  it('releases nothing for a replay the adjustment had already made, or a marketplace refund', async () => {
+    const releaseRecipeImports = vi.fn(async () => undefined);
+    for (const state of [
+      { marketplaceAdjustmentStatus: 'not_found', resourceAdjustmentStatus: 'already_adjusted', resourceAdjustmentOrderId: 'bundle-order-1' },
+      { marketplaceAdjustmentStatus: 'adjusted' },
+    ]) {
+      const admin = createAdminSupabaseMock(state);
+      await processRazorpayWebhookForRoute({ createAdminSupabase: () => admin.client, rawBody: refundProcessedBody(), releaseRecipeImports });
+    }
+
+    expect(releaseRecipeImports).not.toHaveBeenCalled();
   });
 
   it('acknowledges a matching bundle replay after checking the bundle path', async () => {

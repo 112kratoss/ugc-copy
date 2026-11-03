@@ -132,9 +132,11 @@ describe('reading the copies from the recipe the viewer bought', () => {
     revisionError?: boolean;
     purchases?: Array<Record<string, unknown>> | ReturnType<typeof databaseError>;
     failing?: string[];
+    creation?: { archived_at?: string | null; moderation_removed_at?: string | null };
   } = {}) {
     const stored = createStoredRows({
       post_resource_bundles: [{ id: 'bundle-1', resource_items: options.currentItems ?? [], resource_sections: [] }],
+      generations: [{ id: GENERATION, archived_at: null, moderation_removed_at: null, ...options.creation }],
       post_resource_bundle_purchases: options.purchases ?? [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
     }, {
       get_purchased_post_resource_bundle_revision: () => (options.revisionError
@@ -175,8 +177,21 @@ describe('reading the copies from the recipe the viewer bought', () => {
       storagePath: `post_resource_files/${COPY_A}`,
       url: `https://signed.example/post_resource_files/${COPY_A}?token=short`,
     }]]));
-    // What the gate read is not read again: no purchase, no post, no profile.
-    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['post_resource_bundles']);
+    // What the gate read is not read again: no purchase, no post, no profile. The creation's state is
+    // read now, as the copies' own (owner, 2026-11-04).
+    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['post_resource_bundles', 'generations']);
+  });
+
+  // Owner, 2026-11-04: a creation its creator archived or an operator removed lends its copies to no
+  // remix and no start, read now so that un-archiving restores them.
+  it.each([
+    ['archived by its creator', { archived_at: '2026-11-04T00:00:00.000Z' }],
+    ['removed by an operator', { moderation_removed_at: '2026-11-04T00:00:00.000Z' }],
+  ])('restores no copy of a creation %s, and signs none', async (_, creation) => {
+    const client = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)], creation });
+
+    expect(await load(client)).toEqual(new Map());
+    expect(client.createSignedUrl).not.toHaveBeenCalled();
   });
 
   // A creator who edits a sold recipe cannot take back what it held when it was

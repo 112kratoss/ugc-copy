@@ -37,6 +37,8 @@ let generationRow: {
   category: string | null;
   prompt: string | null;
   workflow_settings: Record<string, unknown> | null;
+  archived_at?: string | null;
+  moderation_removed_at?: string | null;
 } | null;
 let generationInputRows: Array<{
   id: string;
@@ -510,6 +512,11 @@ vi.mock('@/lib/server-helpers', () => ({
                     };
                   },
                 };
+              },
+              // The state of the creations a recipe's copies are of (`loadWithheldCopyCreations`).
+              async in(_column: string, ids: unknown[]) {
+                const row = generationRow as { id?: string } | null;
+                return { data: row?.id && ids.includes(row.id) ? [row] : [], error: null };
               },
             };
           },
@@ -1271,6 +1278,46 @@ describe('post resource bundle server access', () => {
     expect(references.map((item) => item.storagePath)).toEqual([
       'owner-1/generation-references/gen-1/input.png',
     ]);
+  });
+
+  // Owner, 2026-11-04: the copies of a creation its creator archived or an operator removed are no
+  // longer served to the recipe's buyers, from the recipe as it stands or from the version they bought,
+  // so no file route signs them; un-archiving serves them again, and the seller's editor keeps them.
+  describe('the copies of a creation now off public view', () => {
+    const COPY = 'owner-1/generation-references/gen-1/00-reference-image-input-1.png';
+    beforeEach(() => {
+      bundleRow = {
+        ...(bundleRow as BundleRow),
+        resource_items: [
+          { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' },
+          { id: 'reference-input-1', type: 'reference_image', title: 'Image input', storagePath: COPY, contentType: 'image/png' },
+        ],
+      };
+      viewerHasPurchased = true;
+    });
+    const copiesFor = async (viewerUserId: string) => {
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId });
+      return (detail?.resources?.items ?? []).filter((item) => item.storagePath === COPY).map((item) => item.storagePath);
+    };
+
+    it('withholds them from a buyer once the creation is archived, and serves them again after', async () => {
+      expect(await copiesFor('viewer-1')).toEqual([COPY]);
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), archived_at: '2026-11-04T00:00:00.000Z' };
+      expect(await copiesFor('viewer-1')).toEqual([]);
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), archived_at: null };
+      expect(await copiesFor('viewer-1')).toEqual([COPY]);
+    });
+
+    it('withholds them once an operator removed the creation', async () => {
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), moderation_removed_at: '2026-11-04T00:00:00.000Z' };
+      expect(await copiesFor('viewer-1')).toEqual([]);
+    });
+
+    it('keeps them in the seller’s own editor', async () => {
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), archived_at: '2026-11-04T00:00:00.000Z' };
+      expect(await copiesFor('owner-1')).toEqual([COPY]);
+    });
   });
 
   // Recipe reading review B3 (2026-10-29): a creation recipe gains the

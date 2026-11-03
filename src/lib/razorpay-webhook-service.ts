@@ -23,6 +23,7 @@ import {
   type RazorpayPaymentResponse,
 } from '@/lib/razorpay-orders';
 import { reconcileRazorpayCreditSource } from '@/lib/referral-reward-service';
+import { releaseRecipeImportsForRefundedOrder } from '@/lib/recipe-import-release';
 
 type CreditTransactionRow = {
   id: string;
@@ -96,6 +97,7 @@ type ProcessRazorpayWebhookParams = {
   notifyCreditPurchase?: typeof notifyRazorpayCreditPurchase;
   notifyMarketplacePurchase?: typeof notifyRazorpayMarketplacePurchase;
   notifyPostResourcePurchase?: typeof notifyRazorpayPostResourcePurchase;
+  releaseRecipeImports?: typeof releaseRecipeImportsForRefundedOrder;
 };
 
 function parseWebhookEvent(rawBody: string): RazorpayWebhookEvent {
@@ -125,6 +127,7 @@ export async function processRazorpayWebhookForRoute({
   notifyCreditPurchase = notifyRazorpayCreditPurchase,
   notifyMarketplacePurchase = notifyRazorpayMarketplacePurchase,
   notifyPostResourcePurchase = notifyRazorpayPostResourcePurchase,
+  releaseRecipeImports = releaseRecipeImportsForRefundedOrder,
 }: ProcessRazorpayWebhookParams): Promise<RazorpayWebhookRouteResult> {
   const event = parseWebhookEvent(rawBody);
   let supabaseAdmin: SupabaseClient | null = null;
@@ -410,6 +413,12 @@ export async function processRazorpayWebhookForRoute({
           paymentId,
           providerEventId,
         });
+      }
+      // The refund deleted the buyer's purchase of a recipe: their run starts' imports of its copies
+      // go with it (owner, 2026-11-04). Read-time checks hold the rest, so a failure here only logs.
+      const orderId = data && typeof data === 'object' ? stringValue((data as { order_id?: unknown }).order_id) : '';
+      if (rpcName === 'reconcile_post_resource_cash_adjustment' && status === 'adjusted' && action !== 'restore' && orderId) {
+        await releaseRecipeImports({ adminSupabase: getSupabaseAdmin(), orderId });
       }
       return { handled: true, shouldRetry: false };
     }
