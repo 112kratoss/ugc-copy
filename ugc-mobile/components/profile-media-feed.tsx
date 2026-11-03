@@ -338,8 +338,7 @@ export function ProfileMediaFeedScreen() {
   // The landing scroll's one native move: the feed shows from it rather than
   // from the promise, which resolves 200 ms later (`feedLandingScrollArrived`).
   // iOS only until it has been watched on Android, where cards overlapped as a
-  // jump settled (docs/audits/creations-feed-landing-fix-2026-09-16.md); the
-  // promise is what was checked there.
+  // jump settled (04d55f05d, #175); the promise is what was checked there.
   const noteLandingScroll = useCallback((nativeOffset: number) => {
     const index = landingScrollIndexRef.current;
     const list = listRef.current;

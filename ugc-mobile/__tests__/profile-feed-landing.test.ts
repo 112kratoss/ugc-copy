@@ -168,7 +168,7 @@ describe("the landing scroll's arrival", () => {
     // On iOS; Android keeps the promise until the early reveal has been watched there.
     expect(feed).toContain("onScroll={Platform.OS === 'ios' ? (event) => noteLandingScroll(event.nativeEvent.contentOffset.y) : undefined}");
     // Never `initialScrollIndex`: on Android it overlapped the cards (FlashList #1797,
-    // docs/audits/creations-feed-landing-fix-2026-09-16.md).
+    // fixed in 04d55f05d, #175).
     expect(feed).not.toContain('initialScrollIndex=');
   });
 });
