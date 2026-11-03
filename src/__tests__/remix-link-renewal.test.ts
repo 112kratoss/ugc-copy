@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { remixAnswerNeedsRenewal, renewedRemixLink } from '@/lib/remix-link-renewal';
+import { renewedRemixLink } from '@/lib/remix-link-renewal';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { SIGNED_LINK_SECONDS, signedStorageLink } from './fixtures/signed-storage-links';
 
@@ -78,11 +78,5 @@ describe('a remix link renewed', () => {
     expect(renewedRemixLink(lapsed.result!.url!, posted)).toBeNull();
     expect(renewedRemixLink(lapsed.result!.url!, posted, { result: true })).toBe(PUBLIC_RESULT);
     expect(renewedRemixLink(lapsed.result!.url!, { ...posted, result: null }, { result: true })).toBeNull();
-  });
-
-  it('reads an answer as one to renew from while its own links last', () => {
-    const answer = answerSignedAt(SIGNED_AT);
-    expect(remixAnswerNeedsRenewal(answer, SIGNED_AT + 10 * 60_000)).toBe(false);
-    expect(remixAnswerNeedsRenewal(answer, SIGNED_AT + HOUR_MS)).toBe(true);
   });
 });

@@ -1,6 +1,5 @@
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
-import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 
 /*
  * A remix hands its media out by storage links signed for an hour (`/api/remix-source`), and a
@@ -47,11 +46,6 @@ function remixAnswerLinks(answer: RemixSourceBundle): string[] {
   collect(answer.inputs);
   collect(answer.inputMedia);
   return links;
-}
-
-/** Whether any link of an answer has lapsed by `nowMs` or soon will: it is no answer to renew from. */
-export function remixAnswerNeedsRenewal(answer: RemixSourceBundle, nowMs: number): boolean {
-  return remixAnswerLinks(answer).some((link) => isSignedMediaUrlExpiring(link, nowMs));
 }
 
 /**

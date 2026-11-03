@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 
-import { remixAnswerNeedsRenewal, renewedRemixLink } from '@/lib/remix-link-renewal';
+import { renewedRemixLink } from '@/lib/remix-link-renewal';
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { supabase } from '@/lib/supabase';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
@@ -19,7 +19,8 @@ type RemixRead = {
   pageToken: string | null;
 };
 
-type HeldAnswer = { key: string; answer: Promise<RemixSourceBundle | null> };
+/** A read of the remix while it is out: for one form's remix and account (`key`). */
+type ReadOut = { key: string; answer: Promise<RemixSourceBundle | null> };
 
 /**
  * How long a read for fresh links may take. Past it the read is given up and the link left as it
@@ -74,38 +75,36 @@ async function readRemixAnswer(read: RemixRead): Promise<RemixSourceBundle | nul
  * length from the original's clip and a preview drew nothing. A link about to lapse is swapped,
  * at the press or the preview that uses it, for the same file's link in a fresh read of the
  * remix: the same gate as the form's own read, whose answer is used for its links alone, so the
- * form keeps everything the creator changed. One answer serves every link while its own last,
- * and a read that fails, or stalls past REMIX_LINK_READ_TIMEOUT_MS, leaves the link as it was.
+ * form keeps everything the creator changed. The asks made while a read is out share it, whatever
+ * it answers; one made after it reads again, as no answer is kept past its read. A read that fails,
+ * or stalls past REMIX_LINK_READ_TIMEOUT_MS, leaves each link as it was.
  */
 export function useRemixLinkRenewal({ remixId, remixPostId, formAccount, pageToken }: RemixRead): RenewRemixLink {
   const readRef = useRef<RemixRead>({ remixId, remixPostId, formAccount, pageToken });
   useEffect(() => {
     readRef.current = { remixId, remixPostId, formAccount, pageToken };
   }, [formAccount, pageToken, remixId, remixPostId]);
-  const heldRef = useRef<HeldAnswer | null>(null);
+  const readOutRef = useRef<ReadOut | null>(null);
 
   return useCallback<RenewRemixLink>(async (link, options = {}) => {
     const read = readRef.current;
     if (!read.remixId || !isSignedMediaUrlExpiring(link, Date.now())) return link;
+    // The read out is shared only by asks for its own remix and account: another account's form is
+    // answered by its own read, through its own gate.
     const key = JSON.stringify([read.remixId, read.remixPostId, read.formAccount]);
-    const freshLink = (answer: RemixSourceBundle | null) => {
-      const renewed = answer ? renewedRemixLink(link, answer, options) : null;
-      return renewed && !isSignedMediaUrlExpiring(renewed, Date.now()) ? renewed : null;
-    };
-
-    const held = heldRef.current?.key === key ? heldRef.current : null;
-    if (held) {
-      const answer = await held.answer;
-      const renewed = freshLink(answer);
-      if (renewed) return renewed;
-      // An answer still current without this file: reading again would not bring it.
-      if (answer && !remixAnswerNeedsRenewal(answer, Date.now())) return link;
+    let readOut = readOutRef.current?.key === key ? readOutRef.current : null;
+    if (!readOut) {
+      const started: ReadOut = {
+        key,
+        answer: readRemixAnswer(read).finally(() => {
+          if (readOutRef.current === started) readOutRef.current = null;
+        }),
+      };
+      readOutRef.current = started;
+      readOut = started;
     }
-
-    // A read that fails or is given up leaves the link as it was. Its answer, settled as none,
-    // holds no one after it: the next use reads again.
-    const next: HeldAnswer = { key, answer: readRemixAnswer(read) };
-    heldRef.current = next;
-    return freshLink(await next.answer) ?? link;
+    const answer = await readOut.answer;
+    const renewed = answer ? renewedRemixLink(link, answer, options) : null;
+    return renewed && !isSignedMediaUrlExpiring(renewed, Date.now()) ? renewed : link;
   }, []);
 }
