@@ -353,7 +353,11 @@ export default function StudioScreen() {
                 )}
               </>
             )}
-            {preferencesQuery.isError ? (
+            {/* The alert types follow the list, so they wait for its first read:
+                drawn under the loading card, they jumped down past every row
+                when the list landed on a first visit (iPhone 17 Pro simulator,
+                2026-11-03). Drawn once it has, they appear where they stay. */}
+            {notificationsQuery.isLoading ? null : preferencesQuery.isError ? (
               <View style={{ gap: appTheme.spacing.gap }}>
                 <StatusBlock tone="danger" title="Could not load alert preferences" body="Your current preferences have not been changed." />
                 <SecondaryButton label="Retry preferences" onPress={() => void preferencesQuery.refetch()} />

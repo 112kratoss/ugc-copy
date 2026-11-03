@@ -309,6 +309,44 @@ describe('the push switch (decision D8)', () => {
   });
 });
 
+describe('a first visit (iPhone 17 Pro simulator sweep, 2026-11-03)', () => {
+  // The alert types were drawn under the loading card and jumped down past
+  // every row when the list landed. They follow the list, so they wait for it.
+  it('draws the alert types once the list has landed, below it, never under the loading card', async () => {
+    let answer!: (page: MobileNotificationsResponse) => void;
+    mocks.api.listMobileNotifications.mockImplementation(() => new Promise<MobileNotificationsResponse>((resolve) => {
+      answer = resolve;
+    }));
+    const { tree } = await renderAlerts();
+
+    // The preferences have answered; the list has not.
+    expect(texts(tree)).toContain('Loading alerts');
+    expect(texts(tree)).not.toContain('Alert types');
+
+    await act(async () => answer(alertsPage(0, 12, 3)));
+    await settle();
+
+    const drawn = texts(tree);
+    expect(drawn).not.toContain('Loading alerts');
+    expect(drawn.indexOf('Alert types')).toBeGreaterThan(drawn.indexOf('Alert 11'));
+  });
+
+  it('holds a preferences error back the same way, and draws it under a list that could not be read', async () => {
+    mocks.api.getMobileNotificationPreferences.mockRejectedValue(new Error('Network request failed'));
+    let fail!: (error: Error) => void;
+    mocks.api.listMobileNotifications.mockImplementation(() => new Promise<MobileNotificationsResponse>((_resolve, reject) => {
+      fail = reject;
+    }));
+    const { tree } = await renderAlerts();
+    expect(statusTitles(tree)).toEqual([]);
+
+    await act(async () => fail(new Error('Network request failed')));
+    await settle();
+
+    expect(statusTitles(tree)).toEqual(['Could not load alerts', 'Could not load alert preferences']);
+  });
+});
+
 describe('older alerts (finding 03-9)', () => {
   // The unread count covers every alert, and unread ones are never pruned: a
   // busy account read "72 unread" over its newest 50 with no way to the rest.
