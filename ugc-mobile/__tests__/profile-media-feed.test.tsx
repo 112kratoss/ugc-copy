@@ -36,7 +36,15 @@ const authState = vi.hoisted(() => ({
   identityUserId: 'owner-1' as string | null,
 }));
 
-const libraryState = vi.hoisted(() => ({ items: [] as unknown[], selection: 'none' as string }));
+const libraryState = vi.hoisted(() => ({
+  items: [] as unknown[],
+  selection: 'none' as string,
+  hasNextPage: false,
+  // A read of the library under way, the head's or a page's.
+  isFetching: false,
+  // What the feed asks the library for its next page with.
+  fetchNextPage: vi.fn(() => Promise.resolve()),
+}));
 
 // What the feed last asked of the focus and foreground revalidation.
 const revalidationState = vi.hoisted(() => ({
@@ -80,6 +88,7 @@ const listState = vi.hoisted(() => {
       accessibilityElementsHidden?: boolean;
       onLoad?: () => void;
       onScrollBeginDrag?: () => void;
+      onEndReached?: () => void;
     },
     scrolledTo: [] as number[],
     landedTop: null as number | null,
@@ -286,11 +295,11 @@ vi.mock('@/lib/profile-library-head', () => ({ refreshProfileLibraryHead: vi.fn(
 vi.mock('@/lib/use-profile-library-source', () => ({
   useProfileLibrarySource: () => ({
     enrichmentFailed: false,
-    fetchNextPage: vi.fn(),
+    fetchNextPage: libraryState.fetchNextPage,
     hasData: true,
-    hasNextPage: false,
+    hasNextPage: libraryState.hasNextPage,
     isError: false,
-    isFetching: false,
+    isFetching: libraryState.isFetching,
     isFetchingNextPage: false,
     isFetchNextPageError: false,
     isLoading: false,
@@ -345,6 +354,8 @@ beforeEach(() => {
   routerState.params = { source: 'profile-posts' };
   libraryState.items = [publicPost];
   libraryState.selection = 'none';
+  libraryState.hasNextPage = false;
+  libraryState.isFetching = false;
   authState.user = { id: 'owner-1', email: 'owner@example.com' };
   authState.isGuest = false;
   authState.identityUserId = 'owner-1';
@@ -714,6 +725,8 @@ describe('opening the feed on a card', () => {
   const openedCard = () => openingCards()[0].findByType(ProfileFeedCardView);
   /** The view the opened card is laid out in, with the list's padding round it. */
   const cardFrame = () => openingCards()[0].findAll((node) => node.props.style?.paddingHorizontal !== undefined)[0];
+  /** Whether the opened card stands on the list's foot, under the space that fills the list above it. */
+  const onFoot = () => openingCards()[0].findAll((node) => node.props.style?.flexGrow === 1).length === 1;
   const listCard = (index: number) => listState.props!.data![index];
 
   /** The list's first layout, which starts its landing; every scroll arrives on the card. */
@@ -772,6 +785,68 @@ describe('opening the feed on a card', () => {
     // not show from under it for a frame before the landing starts.
     expect(drawLog.entries.slice(0, 4)).toEqual(['list@1', 'opened:gen-3', 'list@0', 'opened:gen-3']);
     expect(openingCards()).toHaveLength(1);
+  });
+
+  // Review of PR #679, finding 10. Opened on the last card loaded, the landing
+  // scroll reaches the end of the list, which asked for the next page; that
+  // page landing moved the opened card from the list's foot to its top while
+  // the list was still landing it on its foot.
+  it('keeps the opened card where it was first drawn when a page lands under it', () => {
+    openOn('gen-4');
+    expect(onFoot()).toBe(true);
+
+    libraryState.items = [...library, creation('gen-5'), creation('gen-6')];
+    rerenderFeed();
+
+    expect(openedCard().props.card).toBe(listCard(3));
+    expect(cardFrame().props.style).toMatchObject({ paddingTop: 0 });
+    expect(onFoot()).toBe(true);
+  });
+
+  it('stands the card afresh when a reorder starts a landing on another index', () => {
+    openOn('gen-3');
+    expect(onFoot()).toBe(false);
+
+    // A refresh moved it to the end of the loaded cards before the list landed.
+    libraryState.items = [library[0], library[1], library[3], library[2]];
+    rerenderFeed();
+
+    expect(openedCard().props.card).toBe(listCard(3));
+    expect(onFoot()).toBe(true);
+  });
+
+  it('asks for the next page only once the list has landed on the card', async () => {
+    libraryState.hasNextPage = true;
+    openOn('gen-4');
+
+    // The landing's own scroll reaches the end of the list.
+    act(() => { listState.props!.onEndReached!(); });
+    expect(libraryState.fetchNextPage).not.toHaveBeenCalled();
+
+    await listLaidOut();
+    expect(libraryState.fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for it once a read of the library that was under way as the list landed is done', async () => {
+    libraryState.hasNextPage = true;
+    libraryState.isFetching = true;
+    openOn('gen-4');
+    act(() => { listState.props!.onEndReached!(); });
+    await listLaidOut();
+    expect(libraryState.fetchNextPage).not.toHaveBeenCalled();
+
+    libraryState.isFetching = false;
+    rerenderFeed();
+    expect(libraryState.fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for it at once when the end is reached after the list has landed', async () => {
+    libraryState.hasNextPage = true;
+    openOn('gen-4');
+    await listLaidOut();
+
+    act(() => { listState.props!.onEndReached!(); });
+    expect(libraryState.fetchNextPage).toHaveBeenCalledTimes(1);
   });
 
   it('draws nothing over a feed opened without a card', () => {

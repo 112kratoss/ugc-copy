@@ -277,6 +277,19 @@ export function ProfileMediaFeedScreen() {
   if (openingCardDue && !openingCardShown) setOpeningCardShown(true);
   if (openingCardShown && !openingCardDue && landing.phase !== 'landed') setOpeningCardShown(false);
   const handOverOpeningCard = useCallback(() => setOpeningCardShown(false), []);
+  // Where the card stands is read from the cards when it is first drawn, and
+  // kept while it stands for that index. Opened on the last card loaded, a page
+  // landing under it moved it from the list's foot to its top while the list
+  // was still landing it on its foot (review of #679, finding 10). A reorder
+  // that starts a landing on another index stands it afresh.
+  const openingCardStands = openingCardShown && openingCard !== null;
+  const [openingCardStand, setOpeningCardStand] = useState(() => (
+    openingCardStands ? { index: targetIndex, place: feedLandingCardPlace(targetIndex, cards.length) } : null
+  ));
+  if (!openingCardStands && openingCardStand) setOpeningCardStand(null);
+  if (openingCardStands && openingCardStand?.index !== targetIndex) {
+    setOpeningCardStand({ index: targetIndex, place: feedLandingCardPlace(targetIndex, cards.length) });
+  }
   // Where the landed list stands the card, from the list's top: the card's
   // place among the cards less how far the list has scrolled. FlashList records
   // a native scroll before it passes the event on, so this is current from the
@@ -390,6 +403,22 @@ export function ProfileMediaFeedScreen() {
     lastLoadMoreAtRef.current = 0;
     requestNextPage();
   }, [requestNextPage]);
+
+  // The landing's own scroll to a card near the end of the list reaches its
+  // end, and the page asked for then landed while the list was still seeking
+  // the card (review of #679, finding 10). The end is noted instead, and the
+  // page asked for once the landing is over and the library is not mid-read:
+  // FlashList reports an end once per arrival, so one dropped here would wait
+  // until the reader had left the end and come back.
+  const endReachedWhileSeekingRef = useRef(false);
+  const holdEndReached = useCallback(() => {
+    endReachedWhileSeekingRef.current = true;
+  }, []);
+  useEffect(() => {
+    if (landing.phase === 'seeking' || libraryIsFetching || !endReachedWhileSeekingRef.current) return;
+    endReachedWhileSeekingRef.current = false;
+    requestNextPage();
+  }, [landing.phase, libraryIsFetching, requestNextPage]);
 
   const openItem = useCallback((
     item: ImmersivePreviewItem,
@@ -684,7 +713,7 @@ export function ProfileMediaFeedScreen() {
         }}
         viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
         viewabilityConfigCallbackPairs={audioViewabilityPairs}
-        onEndReached={requestNextPage}
+        onEndReached={landing.phase === 'seeking' ? holdEndReached : requestNextPage}
         onEndReachedThreshold={0.6}
         ListFooterComponent={isFetchingNextPage
           ? <FeedFooterLoader />
@@ -716,10 +745,10 @@ export function ProfileMediaFeedScreen() {
           />
         )}
       />
-      {openingCardShown && openingCard ? (
+      {openingCardShown && openingCard && openingCardStand ? (
         <OpeningCard
           card={openingCard}
-          place={feedLandingCardPlace(targetIndex, cards.length)}
+          place={openingCardStand.place}
           cardWidth={cardWidth}
           horizontalPadding={horizontalPadding}
           pendingAction={pendingAction}
