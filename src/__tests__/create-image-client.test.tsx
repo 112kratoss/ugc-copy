@@ -14,7 +14,7 @@ import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
 import { outsideAct } from './fixtures/outside-act';
-import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
+import { advancePastTheHour, expectOpensObject, movePageClock, signedStorageLink } from './fixtures/signed-storage-links';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -3378,7 +3378,6 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
  * reaches the file by a link that opens; the creator's edits stay as they are.
  */
 describe('CreateImageClient a remix kept open past its links’ hour', () => {
-  const OPENED_AT = Date.UTC(2026, 10, 2, 9, 0, 0);
   const RESULT = 'generated_images/user-1/harbour.png';
   const PICTURE = 'generation_inputs/user-1/gen-1/00-reference_image.png';
   const originalCreateObjectURL = URL.createObjectURL;
@@ -3414,19 +3413,18 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
   });
 
   it('draws the original by a link that opens when “Use as reference” is pressed past the hour, keeping the creator’s edits', async () => {
-    movePageClock(OPENED_AT);
+    movePageClock();
     installFetch({ remixBundle: () => ownRunRemix() });
     render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
     expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
     typePrompt('@lead rows across the harbour at noon');
 
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
 
     // On main the new picture was drawn from the link the remix opened with, which storage refuses by now.
     const shown = (await screen.findByAltText('Original result · Harbour')).getAttribute('src')!;
-    expect(storedObjectOf(shown)).toBe(RESULT);
-    expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+    expectOpensObject(shown, RESULT);
     expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
     // The remix read again for the link puts nothing of the original back over the form.
     expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead rows across the harbour at noon');
@@ -3435,7 +3433,7 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
   // The remix is read again for a link only for a picture that goes on: a press the model's limit
   // refuses reads nothing, and says so as it did before.
   it('refuses “Use as reference” at the model’s limit past the hour without reading the remix again', async () => {
-    movePageClock(OPENED_AT);
+    movePageClock();
     modelCatalogState.summaries = [...imageModelSummaries, { id: 'ideogram-v3', kind: 'image', displayName: 'Ideogram V3', description: 'Test one-picture image model' }];
     const fetchMock = installFetch({ remixBundle: () => ownRunRemix() });
     const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
@@ -3443,7 +3441,7 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
     // Ideogram V3 takes one picture: the restored one fills it.
     chooseModel(view.container, 'Ideogram V3');
 
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
 
     expect(await screen.findByText('This model supports up to 1 reference image.')).toBeInTheDocument();
@@ -3452,18 +3450,17 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
   });
 
   it('shows the original past the hour by a link that opens', async () => {
-    movePageClock(OPENED_AT);
+    movePageClock();
     installFetch({ remixBundle: () => ownRunRemix() });
     render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
     const original = await screen.findByRole('button', { name: /View original/ });
 
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     fireEvent.click(original);
 
     const dialog = await screen.findByRole('dialog', { name: 'Original Creation' });
     await waitFor(() => expect(dialog.querySelector('img')).not.toBeNull());
     const shown = dialog.querySelector('img')!.getAttribute('src')!;
-    expect(storedObjectOf(shown)).toBe(RESULT);
-    expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+    expectOpensObject(shown, RESULT);
   });
 });

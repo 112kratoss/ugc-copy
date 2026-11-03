@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { REMIX_LINK_READ_TIMEOUT_MS, useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
-import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
+import { PAGE_OPENED_AT, advancePastTheHour, expectOpensObject, movePageClock, signedStorageLink } from './fixtures/signed-storage-links';
 
 // The browser's auth client: whose session it holds, and its token.
 const browser = vi.hoisted(() => ({ session: { access_token: 'browser-token', user: { id: 'user-1' } } as { access_token: string; user: { id: string } } | null }));
@@ -12,7 +12,6 @@ vi.mock('@/lib/supabase', () => ({
   supabase: { auth: { getSession: vi.fn(async () => ({ data: { session: browser.session } })) } },
 }));
 
-const OPENED_AT = Date.UTC(2026, 10, 2, 9, 0, 0);
 const RESULT = 'generated_videos/user-1/result.mp4';
 const CLIP = 'generation_inputs/user-1/gen-1/01-motion_reference_video.mp4';
 const PICTURE = 'generation_inputs/user-1/gen-1/00-character_image.png';
@@ -51,7 +50,7 @@ function renew({ formAccount = 'user-1', remixId = 'gen-1' as string | null } = 
 }
 
 beforeEach(() => {
-  movePageClock(OPENED_AT);
+  movePageClock();
   browser.session = { access_token: 'browser-token', user: { id: 'user-1' } };
   answer = () => new Response(JSON.stringify(answerNow()), { status: 200, headers: { 'Content-Type': 'application/json' } });
   fetchMock.mockClear();
@@ -73,19 +72,18 @@ describe('useRemixLinkRenewal', () => {
 
   it('renews a lapsed link by reading the remix again with the browser’s session, for the same file', async () => {
     const lapsed = signedStorageLink(CLIP);
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
 
     const renewed = await renew()(lapsed);
 
-    expect(storedObjectOf(renewed)).toBe(CLIP);
-    expect(storageOpens(renewed)).toBe(true);
+    expectOpensObject(renewed, CLIP);
     expect(remixReads()).toEqual([{ url: '/api/remix-source?id=gen-1&postId=post-1', authorization: 'Bearer browser-token' }]);
   });
 
   it('reads with the page’s session where the browser’s is another account’s', async () => {
     browser.session = { access_token: 'other-token', user: { id: 'user-2' } };
     const lapsed = signedStorageLink(CLIP);
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
 
     await renew()(lapsed);
 
@@ -94,7 +92,7 @@ describe('useRemixLinkRenewal', () => {
 
   it('serves every lapsed link from one read, those asked together included', async () => {
     const opened = answerNow();
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     const renewLink = renew();
 
     const [clip, picture] = await Promise.all([
@@ -103,34 +101,35 @@ describe('useRemixLinkRenewal', () => {
     ]);
     const result = await renewLink(opened.result!.url!, { result: true });
 
-    expect([clip, picture, result].map(storedObjectOf)).toEqual([CLIP, PICTURE, RESULT]);
-    expect([clip, picture, result].every((link) => storageOpens(link))).toBe(true);
+    expectOpensObject(clip, CLIP);
+    expectOpensObject(picture, PICTURE);
+    expectOpensObject(result, RESULT);
     expect(remixReads()).toHaveLength(1);
   });
 
   it('reads again once the answer it holds has lapsed too', async () => {
     const opened = answerNow();
     const renewLink = renew();
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     await renewLink(opened.result!.url!);
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
 
     const renewed = await renewLink(opened.result!.url!);
 
-    expect(storageOpens(renewed)).toBe(true);
+    expectOpensObject(renewed, RESULT);
     expect(remixReads()).toHaveLength(2);
   });
 
   it('leaves the link as it was where the read fails, and reads again at the next use', async () => {
     const lapsed = signedStorageLink(CLIP);
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     answer = () => new Response(JSON.stringify({ error: 'Too many requests' }), { status: 429 });
     const renewLink = renew();
 
     await expect(renewLink(lapsed)).resolves.toBe(lapsed);
 
     answer = () => new Response(JSON.stringify(answerNow()), { status: 200 });
-    expect(storageOpens(await renewLink(lapsed))).toBe(true);
+    expectOpensObject(await renewLink(lapsed), CLIP);
     expect(remixReads()).toHaveLength(2);
   });
 
@@ -138,9 +137,9 @@ describe('useRemixLinkRenewal', () => {
   // its timeout, the link stays as it was, and the next use reads again.
   it('gives up a read that stalls, leaving the link as it was, and reads again at the next use', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-    vi.setSystemTime(OPENED_AT);
+    vi.setSystemTime(PAGE_OPENED_AT);
     const lapsed = signedStorageLink(CLIP);
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     // The remix source answers nothing until the read is given up.
     answer = (init) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('The read was given up.', 'AbortError')));
@@ -153,14 +152,14 @@ describe('useRemixLinkRenewal', () => {
     await expect(stalled).resolves.toBe(lapsed);
     expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     answer = () => new Response(JSON.stringify(answerNow()), { status: 200 });
-    expect(storageOpens(await renewLink(lapsed))).toBe(true);
+    expectOpensObject(await renewLink(lapsed), CLIP);
     expect(remixReads()).toHaveLength(2);
   });
 
   it('reads no more for a file the answer it holds does not hand out', async () => {
     const elsewhere = signedStorageLink('uploads/user-1/hero.png');
     const lapsedClip = signedStorageLink(CLIP);
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     const renewLink = renew();
     await renewLink(lapsedClip);
 
@@ -170,7 +169,7 @@ describe('useRemixLinkRenewal', () => {
 
   it('renews nothing off a remix page', async () => {
     const lapsed = signedStorageLink(CLIP);
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
 
     await expect(renew({ remixId: null })(lapsed)).resolves.toBe(lapsed);
     expect(remixReads()).toEqual([]);

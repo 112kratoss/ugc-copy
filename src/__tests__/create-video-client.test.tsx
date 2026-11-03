@@ -33,7 +33,7 @@ import { buildUnifiedGenerationQuoteInput, parseUnifiedGenerationRequest } from 
 import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings, queryGenerateButton } from './fixtures/creator-column-bar';
-import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
+import { advancePastTheHour, expectOpensObject, movePageClock, previewLink, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
 
 // One router for every render: a new object per render restarts effects that read it.
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
@@ -8439,7 +8439,6 @@ describe('CreateVideoClient Kling video elements', () => {
    * reaches the file by a link that opens; the creator's edits stay as they are.
    */
   describe('a remix kept open past its links’ hour', () => {
-    const OPENED_AT = Date.UTC(2026, 10, 2, 9, 0, 0);
     const RESULT = 'generated_videos/user-1/intense.mp4';
     const CLIP = 'generation_inputs/user-1/gen-1/00-reference_video.mp4';
     /** An unposted Seedance 2.5 run of the creator's own, as the remix source answers a read of it: by links signed as it answers. */
@@ -8473,21 +8472,14 @@ describe('CreateVideoClient Kling video elements', () => {
       ) as number);
     });
 
-    /** The link the preview dialog named `title` draws its clip or picture from, once it draws one. */
-    async function previewLink(title: string) {
-      const dialog = await screen.findByRole('dialog', { name: title });
-      await waitFor(() => expect(dialog.querySelector('video, img')).not.toBeNull());
-      return dialog.querySelector('video, img')!.getAttribute('src')!;
-    }
-
     it('measures the original’s clip by a link that opens when “Use as reference” is pressed past the hour, keeping the creator’s edits', async () => {
-      movePageClock(OPENED_AT);
+      movePageClock();
       stubRemix(() => ownRunRemix());
       render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
       const use = await screen.findByRole('button', { name: 'Use as reference' });
       fireEvent.change(promptBox(), { target: { value: 'Two figures circle, then strike.' } });
 
-      advancePageClock(PAST_THE_HOUR_MS);
+      advancePastTheHour();
       fireEvent.click(use);
 
       const clips = await screen.findByRole('list', { name: 'Reference videos' });
@@ -8496,9 +8488,9 @@ describe('CreateVideoClient Kling video elements', () => {
       // now: its card said "Duration unavailable" and the price was asked without its length.
       expect(within(clips).queryByText('Duration unavailable')).toBeNull();
       expect(within(clips).getByText('4.2s clip')).toBeInTheDocument();
+      // The stand-in reads a length only by a link storage opens, so the length shown says it opened.
       const read = readDurationMock.mock.calls.at(-1)?.[0] as string;
       expect(storedObjectOf(read)).toBe(RESULT);
-      expect(storageOpens(read), 'read by a link storage refuses: its hour is up').toBe(true);
       expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
       await waitFor(() => expect(quoteStandIn.lastRequest()?.inputMetadata?.slots?.videoReferences).toEqual({ count: 1, durationsSeconds: [4.2] }));
       // The remix read again for the link puts nothing of the original back over the form.
@@ -8506,31 +8498,29 @@ describe('CreateVideoClient Kling video elements', () => {
     });
 
     it('plays the original past the hour by a link that opens', async () => {
-      movePageClock(OPENED_AT);
+      movePageClock();
       stubRemix(() => ownRunRemix());
       render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
       const original = await screen.findByRole('button', { name: 'View original' });
 
-      advancePageClock(PAST_THE_HOUR_MS);
+      advancePastTheHour();
       fireEvent.click(original);
 
       const shown = await previewLink('Original Creation');
-      expect(storedObjectOf(shown)).toBe(RESULT);
-      expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+      expectOpensObject(shown, RESULT);
     });
 
     it('plays a restored reference clip past the hour by a link that opens', async () => {
-      movePageClock(OPENED_AT);
+      movePageClock();
       stubRemix(() => ownRunRemix({ referenceClip: true }));
       render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
       const clips = await screen.findByRole('list', { name: 'Reference videos' });
 
-      advancePageClock(PAST_THE_HOUR_MS);
+      advancePastTheHour();
       fireEvent.click(within(clips).getByRole('button', { name: 'Preview Video reference 1' }));
 
       const shown = await previewLink('Video reference 1');
-      expect(storedObjectOf(shown)).toBe(CLIP);
-      expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+      expectOpensObject(shown, CLIP);
     });
   });
 });

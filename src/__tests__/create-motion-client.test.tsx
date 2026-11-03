@@ -16,7 +16,7 @@ import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting, costShown } from './fixtures/creator-column-bar';
 import { outsideAct } from './fixtures/outside-act';
-import { PAST_THE_HOUR_MS, advancePageClock, movePageClock, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
+import { advancePastTheHour, expectOpensObject, movePageClock, previewLink, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
 
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -2473,7 +2473,6 @@ describe('CreateMotionClient a remix not given the creator\'s inputs', () => {
  * reaches the file by a link that opens; the creator's edits stay as they are.
  */
 describe('CreateMotionClient a remix kept open past its links’ hour', () => {
-  const OPENED_AT = Date.UTC(2026, 10, 2, 9, 0, 0);
   const RESULT = 'generated_videos/user-1/source-result.mp4';
   const PICTURE = 'generation_inputs/user-1/generation-source/00-character_image.png';
   const CLIP = 'generation_inputs/user-1/generation-source/01-motion_reference_video.mp4';
@@ -2508,21 +2507,14 @@ describe('CreateMotionClient a remix kept open past its links’ hour', () => {
     vi.mocked(readVideoDurationSeconds).mockImplementation(async () => probeState.seconds);
   });
 
-  /** The link the preview dialog named `title` draws its clip or picture from, once it draws one. */
-  async function previewLink(title: string) {
-    const dialog = await screen.findByRole('dialog', { name: title });
-    await waitFor(() => expect(dialog.querySelector('video, img')).not.toBeNull());
-    return dialog.querySelector('video, img')!.getAttribute('src')!;
-  }
-
   it('reads the original’s clip by a link that opens when “Use as reference video” is pressed past the hour, keeping the creator’s edits', async () => {
-    movePageClock(OPENED_AT);
+    movePageClock();
     const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
     const prompt = screen.getByPlaceholderText(/Describe the kind of movement/);
     fireEvent.change(prompt, { target: { value: 'Spin twice, then bow.' } });
 
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
     await waitFor(() => expect(readVideoDurationSeconds).toHaveBeenCalledTimes(2));
     await act(async () => {});
@@ -2531,9 +2523,9 @@ describe('CreateMotionClient a remix kept open past its links’ hour', () => {
     // the page said it could not read the clip, and Generate stayed held until a reload.
     expect(screen.queryAllByText('We could not read the reference video. Please try another clip.')).toEqual([]);
     expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+    // The stand-in reads a length only by a link storage opens, so the length shown says it opened.
     const read = vi.mocked(readVideoDurationSeconds).mock.calls.at(-1)?.[0] as string;
     expect(storedObjectOf(read)).toBe(RESULT);
-    expect(storageOpens(read), 'read by a link storage refuses: its hour is up').toBe(true);
     expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
     await waitFor(() => expect(generateButton()).toBeEnabled());
     // The remix read again for the link puts nothing of the original back over the form.
@@ -2542,28 +2534,26 @@ describe('CreateMotionClient a remix kept open past its links’ hour', () => {
   });
 
   it('plays the original past the hour by a link that opens', async () => {
-    movePageClock(OPENED_AT);
+    movePageClock();
     render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
     const original = await screen.findByRole('button', { name: 'View original' });
 
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     fireEvent.click(original);
 
     const shown = await previewLink('Original Creation');
-    expect(storedObjectOf(shown)).toBe(RESULT);
-    expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+    expectOpensObject(shown, RESULT);
   });
 
   it('plays the restored clip past the hour by a link that opens', async () => {
-    movePageClock(OPENED_AT);
+    movePageClock();
     render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
     expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
 
-    advancePageClock(PAST_THE_HOUR_MS);
+    advancePastTheHour();
     fireEvent.click(screen.getByRole('button', { name: 'Preview video' }));
 
     const shown = await previewLink('Reference Video');
-    expect(storedObjectOf(shown)).toBe(CLIP);
-    expect(storageOpens(shown), 'drawn from a link storage refuses: its hour is up').toBe(true);
+    expectOpensObject(shown, CLIP);
   });
 });

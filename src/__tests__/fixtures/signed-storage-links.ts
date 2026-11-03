@@ -1,4 +1,5 @@
-import { onTestFinished, vi } from 'vitest';
+import { screen, waitFor } from '@testing-library/react';
+import { expect, onTestFinished, vi } from 'vitest';
 
 import { unsignedJwt } from './unsigned-jwt';
 
@@ -46,11 +47,14 @@ export function storedObjectOf(link: string): string | null {
   return match ? match[1] : null;
 }
 
+/** When the page opens, by default (`movePageClock`). */
+export const PAGE_OPENED_AT = Date.UTC(2026, 10, 2, 9, 0, 0);
+
 /**
  * Sets the clock the page reads (`Date`) to `atMs`, leaving timers and promises real, until the
- * test ends. Moving it on an hour is a page left open past its links' hour.
+ * test ends. Moving it past the hour (`advancePastTheHour`) is a page left open past its links' hour.
  */
-export function movePageClock(atMs: number): void {
+export function movePageClock(atMs = PAGE_OPENED_AT): void {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(atMs);
   onTestFinished(() => {
@@ -58,10 +62,20 @@ export function movePageClock(atMs: number): void {
   });
 }
 
-/** Sixty-one minutes: a link signed when the page opened has lapsed. */
-export const PAST_THE_HOUR_MS = (SIGNED_LINK_SECONDS + 60) * 1000;
+/** Moves the page's clock (`movePageClock`) on sixty-one minutes: a link signed before has lapsed. */
+export function advancePastTheHour(): void {
+  vi.setSystemTime(Date.now() + (SIGNED_LINK_SECONDS + 60) * 1000);
+}
 
-/** Moves the page's clock (`movePageClock`) on by `ms`. */
-export function advancePageClock(ms: number): void {
-  vi.setSystemTime(Date.now() + ms);
+/** That `link` is a link to `object` (`bucket/path`) which storage opens now (`storageOpens`). */
+export function expectOpensObject(link: string, object: string): void {
+  expect(storedObjectOf(link)).toBe(object);
+  expect(storageOpens(link), `${link} is refused by storage`).toBe(true);
+}
+
+/** The link the preview dialog named `title` draws its clip or picture from, once it draws one. */
+export async function previewLink(title: string): Promise<string> {
+  const dialog = await screen.findByRole('dialog', { name: title });
+  await waitFor(() => expect(dialog.querySelector('video, img')).not.toBeNull());
+  return dialog.querySelector('video, img')!.getAttribute('src')!;
 }
