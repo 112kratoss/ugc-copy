@@ -3163,7 +3163,6 @@ describe('generation references packaged for a publish', () => {
     ]);
     expect(source.downloads).toEqual([]);
     expect(copied.files.get('reference-ref-1')).toEqual({ contentType: 'image/webp', sizeBytes: 4096 });
-    expect(copied.createdPaths).toEqual(['user-1/generation-references/gen-1/00-reference-ref-1.png']);
     expect(copied.failedItemIds.size).toBe(0);
   });
 
@@ -3187,7 +3186,7 @@ describe('generation references packaged for a publish', () => {
     expect([...copied.failedItemIds]).toEqual(['reference-ref-big', 'reference-ref-avif']);
     expect(source.copies).toEqual([]);
     expect(source.downloads).toEqual([]);
-    expect(copied.createdPaths).toEqual([]);
+    expect(copied.files.size).toBe(0);
   });
 
   it('reads and writes a file again where storage cannot copy it, never over one already there', async () => {
@@ -3204,12 +3203,13 @@ describe('generation references packaged for a publish', () => {
 
     expect(source.downloads).toEqual(['generation_inputs/user-1/gen-1/hero.png']);
     expect(source.uploads).toEqual([{ path: 'post_resource_files/user-1/generation-references/gen-1/00-reference-ref-1.png', upsert: false }]);
-    expect(copied.createdPaths).toEqual(['user-1/generation-references/gen-1/00-reference-ref-1.png']);
+    // Typed and sized by the bytes it read.
+    expect(copied.files.get('reference-ref-1')).toMatchObject({ contentType: 'image/png' });
   });
 
-  // The path is fixed by the input, so a file there is this input's: it is used,
-  // and it is not this save's to remove.
-  it('keeps a copy already at the input’s path as it is, and does not count it as written', async () => {
+  // The path is fixed by the input, so a file there is this input's: it is used
+  // as it is, and nothing is written over it.
+  it('keeps a copy already at the input’s path as it is', async () => {
     const { copyPlannedGenerationReferences, planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
     const source = referenceClient(
       [reference('ref-1', 'user-1', 'generation_inputs/user-1/gen-1/hero.png')],
@@ -3225,8 +3225,9 @@ describe('generation references packaged for a publish', () => {
     const copied = await copyPlannedGenerationReferences({ supabase: source.client, references: plan.references });
 
     expect(copied.files.get('reference-ref-1')).toEqual({ contentType: 'image/png', sizeBytes: 4096 });
-    expect(copied.createdPaths).toEqual([]);
     expect(source.downloads).toEqual([]);
+    expect(source.uploads).toEqual([]);
+    expect(source.removals).toEqual([]);
   });
 
   it('takes the inputs that could not be copied out of the recipe, and keeps a first item', async () => {
@@ -3244,22 +3245,11 @@ describe('generation references packaged for a publish', () => {
     const applied = applyCopiedGenerationReferences(bundle, {
       files: new Map([['reference-ref-2', { contentType: 'image/webp', sizeBytes: 12 }]]),
       failedItemIds: new Set(['reference-ref-1']),
-      createdPaths: [],
     });
 
     expect(applied?.resources?.items).toEqual([
       expect.objectContaining({ id: 'reference-ref-2', contentType: 'image/webp', sizeBytes: 12, isPrimary: true }),
     ]);
-  });
-
-  it('removes the copies a refused write leaves behind', async () => {
-    const { removeCopiedGenerationReferences } = await import('@/lib/post-resource-bundles-server');
-    const source = referenceClient([], []);
-
-    await removeCopiedGenerationReferences({ supabase: source.client, paths: ['user-1/generation-references/gen-1/00-reference-ref-1.png'] });
-    await removeCopiedGenerationReferences({ supabase: source.client, paths: [] });
-
-    expect(source.removals).toEqual([['post_resource_files/user-1/generation-references/gen-1/00-reference-ref-1.png']]);
   });
 
   // Owner, 2026-11-03: every creation's recipe has its exact prompt, and one with
@@ -3338,6 +3328,25 @@ describe('generation references packaged for a publish', () => {
       previewText: 'The product reference behind this still.',
       resources: { promptText: null, notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix: false, sections: [], items: [] },
     };
+    const note = {
+      id: 'notes',
+      scope: { kind: 'all' as const },
+      type: 'note' as const,
+      role: 'primary' as const,
+      sectionId: null,
+      title: 'Lighting',
+      description: null,
+      textContent: 'Key light at 45 degrees.',
+      externalUrl: null,
+      storagePath: null,
+      contentType: null,
+      sizeBytes: null,
+      workflowSnapshot: null,
+      sortOrder: 0,
+      isPrimary: true,
+      remixUse: 'none' as const,
+    };
+    const withNote = { ...referencesOnly, resources: { ...referencesOnly.resources, items: [note] } };
 
     it('validates the recipe with the inputs merged in, so one of the inputs alone is taken', async () => {
       const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
@@ -3349,7 +3358,8 @@ describe('generation references packaged for a publish', () => {
         bundle: referencesOnly,
         creation: { id: 'gen-1', prompt: null },
         includeReferences: true,
-        mayShareReferences: true,
+        mayShareCreation: true,
+        addsCreationPrompt: true,
         mediaKeys: ['media-1'],
         dependencies: { planGenerationReferenceCopies },
       });
@@ -3364,7 +3374,7 @@ describe('generation references packaged for a publish', () => {
       expect(planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'user-1', generationId: 'gen-1' }));
     });
 
-    it('adds the exact prompt and the inputs together, and copies none of a creation off public view', async () => {
+    it('adds the exact prompt and the inputs together', async () => {
       const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
       const prepared = await prepareCreationRecipeBundle({
         supabase: {} as never,
@@ -3372,12 +3382,62 @@ describe('generation references packaged for a publish', () => {
         bundle: referencesOnly,
         creation: { id: 'gen-1', prompt: 'A product still lit like a window display.' },
         includeReferences: true,
-        mayShareReferences: false,
+        mayShareCreation: true,
+        addsCreationPrompt: true,
         mediaKeys: ['media-1'],
         dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput] })) },
       });
 
-      expect(prepared).toMatchObject({ ok: true, addedItemIds: ['creation-prompt-item'], pendingCopies: [], refusedReferenceCount: 1 });
+      expect(prepared).toMatchObject({
+        ok: true,
+        addedItemIds: ['creation-prompt-item', 'reference-ref-1'],
+        pendingCopies: [plannedInput],
+        refusedReferenceCount: 0,
+      });
+    });
+
+    // #677's re-review: the exact prompt still went into the recipe of a
+    // creation an operator removed or its creator archived, which Remix
+    // withholds (`remix-access.ts`); only the inputs were held back.
+    it('adds nothing of a creation off public view, its exact prompt included', async () => {
+      const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: withNote,
+        creation: { id: 'gen-1', prompt: 'A product still lit like a window display.' },
+        includeReferences: true,
+        mayShareCreation: false,
+        addsCreationPrompt: true,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput] })) },
+      });
+
+      expect(prepared).toMatchObject({ ok: true, addedItemIds: [], pendingCopies: [], refusedReferenceCount: 1 });
+      expect(prepared.ok && prepared.bundle?.resources?.items).toEqual([note]);
+    });
+
+    // #677's re-review (decided there): an edit of a recipe people have never
+    // gains the prompt from the server, since an older composer sends the
+    // recipe back on every save and the revision would reach them unseen. A
+    // composer that shows the locked card sends it itself; the inputs a creator
+    // asks for still come.
+    it('adds no exact prompt where told the recipe is one people have, and still the inputs asked for', async () => {
+      const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: withNote,
+        creation: { id: 'gen-1', prompt: 'A product still lit like a window display.' },
+        includeReferences: true,
+        mayShareCreation: true,
+        addsCreationPrompt: false,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput] })) },
+      });
+
+      expect(prepared).toMatchObject({ ok: true, addedItemIds: ['reference-ref-1'], pendingCopies: [plannedInput] });
+      expect(prepared.ok && prepared.bundle?.resources?.items?.map((item) => item.id)).toEqual(['notes', 'reference-ref-1']);
     });
 
     it('refuses a recipe that is still empty once nothing could be added', async () => {
@@ -3388,7 +3448,8 @@ describe('generation references packaged for a publish', () => {
         bundle: referencesOnly,
         creation: { id: 'gen-1', prompt: null },
         includeReferences: true,
-        mayShareReferences: true,
+        mayShareCreation: true,
+        addsCreationPrompt: true,
         mediaKeys: ['media-1'],
         dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [] })) },
       });
@@ -3404,7 +3465,8 @@ describe('generation references packaged for a publish', () => {
         bundle: referencesOnly,
         creation: { id: 'gen-1', prompt: null },
         includeReferences: true,
-        mayShareReferences: true,
+        mayShareCreation: true,
+        addsCreationPrompt: true,
         mediaKeys: ['media-1'],
         dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: false as const })) },
       });
@@ -3423,7 +3485,8 @@ describe('generation references packaged for a publish', () => {
         bundle: { ...referencesOnly, resources: { ...referencesOnly.resources, items: [replaced] } },
         creation: { id: 'gen-1', prompt: null },
         includeReferences: true,
-        mayShareReferences: true,
+        mayShareCreation: true,
+        addsCreationPrompt: true,
         mediaKeys: ['media-1'],
         dependencies: { planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput] })) },
       });

@@ -33,7 +33,6 @@ import {
   planGenerationReferenceCopies,
   prepareCreationRecipeBundle,
   readAddedRecipeItems,
-  removeCopiedGenerationReferences,
   updatePostWithResourceBundleAtomically,
   type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
@@ -261,7 +260,6 @@ export type PostUpdateDependencies = {
   /** Their files, copied once every check has passed, right before the write. */
   copyPlannedGenerationReferences?: typeof copyPlannedGenerationReferences;
   /** The copies a refused write leaves behind, removed. */
-  removeCopiedGenerationReferences?: typeof removeCopiedGenerationReferences;
   loadCreationRecipeSource?: typeof loadCreationRecipeSource;
   updatePostWithResourceBundleAtomically?: typeof updatePostWithResourceBundleAtomically;
   replacePostSourceTools?: typeof replacePostSourceTools;
@@ -336,7 +334,6 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
       dependencies?.getMarketplaceQualityErrorForPostBundle ?? getMarketplaceQualityErrorForPostBundle,
     planGenerationReferenceCopies: dependencies?.planGenerationReferenceCopies ?? planGenerationReferenceCopies,
     copyPlannedGenerationReferences: dependencies?.copyPlannedGenerationReferences ?? copyPlannedGenerationReferences,
-    removeCopiedGenerationReferences: dependencies?.removeCopiedGenerationReferences ?? removeCopiedGenerationReferences,
     loadCreationRecipeSource: dependencies?.loadCreationRecipeSource ?? loadCreationRecipeSource,
     updatePostWithResourceBundleAtomically:
       dependencies?.updatePostWithResourceBundleAtomically ?? updatePostWithResourceBundleAtomically,
@@ -369,6 +366,15 @@ function inferExtension(fileName: string, mimeType: string): string {
   }
 
   return mimeType.startsWith('video/') ? 'mp4' : 'jpg';
+}
+
+/**
+ * Whether people have the post's recipe, paid or free: the count both
+ * composers say ("3 people have this recipe") and the one a republish of a
+ * sold recipe keys on.
+ */
+function recipePeopleHave(bundle: Pick<BundleStatusRow, 'sales_count' | 'free_unlock_count'> | null): boolean {
+  return Boolean(bundle) && ((bundle?.sales_count ?? 0) + (bundle?.free_unlock_count ?? 0)) > 0;
 }
 
 function normalizeText(value: unknown): string | null {
@@ -1474,7 +1480,12 @@ export async function updateOwnerPostForRoute({
         ? { id: post.generation_id, prompt: creationRecipeSource.prompt }
         : null,
       includeReferences: body.includeGenerationReferences === true,
-      mayShareReferences: creationMaySharePostInputs(creationRecipeSource),
+      mayShareCreation: creationMaySharePostInputs(creationRecipeSource),
+      // A recipe people have gains no prompt from here (#677's re-review): an
+      // older composer sends the recipe back on every save, a caption fix
+      // included, and the prompt would reach them as a revision nobody saw.
+      // The composers show the locked card and send it themselves.
+      addsCreationPrompt: !recipePeopleHave(liveBundle),
       // A copy the stored recipe keeps is in place already: saving again
       // copies none of it a second time.
       storedItems: liveBundle
@@ -1624,7 +1635,7 @@ export async function updateOwnerPostForRoute({
     const frozenSoldBundleForRepublish = nextVisibility === 'public'
       && !hasResourceBundlePayload
       && liveBundle
-      && ((liveBundle.sales_count ?? 0) + (liveBundle.free_unlock_count ?? 0)) > 0
+      && recipePeopleHave(liveBundle)
       ? buildStoredBundleForQualityCheck(liveBundle)
       : null;
     const bundleForPublicValidation = hasResourceBundlePayload
@@ -1958,10 +1969,8 @@ export async function updateOwnerPostForRoute({
         copiedReferences.failedItemIds.size > 0
         && validatePostResourceBundleInput(resourceBundle, { ownerUserId, mediaKeys: availableMediaKeys })
       ) {
-        await resolvedDependencies.removeCopiedGenerationReferences({
-          supabase: adminSupabase,
-          paths: copiedReferences.createdPaths,
-        });
+        // The copies made stay: each is at its input's one path, where the
+        // next save finds it (#677's re-review).
         await Promise.all(resourceConsumptionClaims.map((claim) => (
           abortNullableUploadByteConsumption(adminSupabase, claim)
         )));
@@ -2004,13 +2013,9 @@ export async function updateOwnerPostForRoute({
         if (preparedMedia) {
           await rollbackPreparedEditedPostMedia(adminSupabase, preparedMedia);
         }
-        // Nothing was written, so no recipe names the copies made for it.
-        if (copiedReferences) {
-          await resolvedDependencies.removeCopiedGenerationReferences({
-            supabase: adminSupabase,
-            paths: copiedReferences.createdPaths,
-          });
-        }
+        // The copies made for it stay (#677's re-review): each is at its
+        // input's one path, where the next save finds it, and a save running
+        // beside this one may already name it in its recipe.
       }
       throw error;
     }

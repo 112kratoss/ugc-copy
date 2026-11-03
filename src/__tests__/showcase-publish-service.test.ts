@@ -2271,9 +2271,7 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
       copyPlannedGenerationReferences: vi.fn(async () => ({
         files: new Map([[referenceItem.id as string, { contentType: 'image/png', sizeBytes: 64 }]]),
         failedItemIds: new Set<string>(),
-        createdPaths: [referenceItem.storagePath as string],
       })),
-      removeCopiedGenerationReferences: vi.fn(async () => undefined),
       publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
         postId: 'post-remix',
         visibility: 'public' as const,
@@ -2441,10 +2439,8 @@ describe('a creation’s recipe as the publish saves it', () => {
         return {
           files: new Map([['reference-input-1', { contentType: 'image/png', sizeBytes: 64 }]]),
           failedItemIds: new Set<string>(),
-          createdPaths: [reference.item.storagePath as string],
         };
       }),
-      removeCopiedGenerationReferences: vi.fn(async () => undefined),
       publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => {
         order.push('write');
         return { postId: 'post-recipe', visibility: 'private' as const, bundleId: 'bundle-recipe', bundleStatus: 'draft' as const };
@@ -2453,14 +2449,15 @@ describe('a creation’s recipe as the publish saves it', () => {
       requestPostEmbedding: vi.fn(async () => undefined),
       ...overrides,
     } satisfies Partial<ShowcasePublishServiceDependencies>;
+    const adminClient = createAdminClientMock({ ...generation, ...generationOverrides });
     const result = await publishGenerationToShowcaseForRoute({
-      adminSupabase: createAdminClientMock({ ...generation, ...generationOverrides }).client,
+      adminSupabase: adminClient.client,
       body: { generationId: 'gen-recipe', visibility: 'private', title: 'Window display still', ...body },
       userId: 'user-1',
       dependencies,
     });
     const written = vi.mocked(dependencies.publishGenerationPostWithResourceBundleAtomically).mock.calls[0]?.[0].bundle;
-    return { result, dependencies, order, written };
+    return { result, dependencies, order, written, adminClient };
   }
 
   it('adds the exact prompt to a recipe sent without a prompt item, and says so', async () => {
@@ -2495,8 +2492,11 @@ describe('a creation’s recipe as the publish saves it', () => {
     expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
   });
 
-  it('removes the copies it wrote when the database refuses the write', async () => {
-    const { result, dependencies } = await publish(
+  // #677's re-review: a refused publish removed the copy it had made, while a
+  // save beside it could already have found that file at its path and named
+  // it. Each copy has one path per input, so the next save reuses it instead.
+  it('leaves the copies it made in place when the database refuses the write', async () => {
+    const { result, dependencies, adminClient } = await publish(
       { includeGenerationReferences: true, resourceBundle: recipe([note]) },
       {
         publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => {
@@ -2506,9 +2506,10 @@ describe('a creation’s recipe as the publish saves it', () => {
     );
 
     expect(result).toMatchObject({ ok: false, status: 500 });
-    expect(dependencies.removeCopiedGenerationReferences).toHaveBeenCalledWith(expect.objectContaining({
-      paths: ['user-1/generation-references/gen-recipe/00-reference-input-1.png'],
-    }));
+    expect(dependencies.copyPlannedGenerationReferences).toHaveBeenCalledTimes(1);
+    expect(adminClient.removeMock).not.toHaveBeenCalledWith(
+      expect.arrayContaining(['user-1/generation-references/gen-recipe/00-reference-input-1.png']),
+    );
   });
 
   // The app reads these fields by the shared contract's example.
@@ -2523,16 +2524,18 @@ describe('a creation’s recipe as the publish saves it', () => {
       .toEqual(Object.keys((result.ok && result.body.recipeItemsAdded?.[1]) || {}).sort());
   });
 
-  it('copies none from a creation an operator removed, and says so', async () => {
+  // #677's re-review: the inputs were held back, but the exact prompt, which
+  // Remix withholds from such a creation, still went in.
+  it('adds nothing of a creation an operator removed, its exact prompt included, and says so', async () => {
     const { result, dependencies, written } = await publish(
       { includeGenerationReferences: true, resourceBundle: recipe([note]) },
       {},
       { moderation_removed_at: '2026-11-02T00:00:00.000Z', archived_at: '2026-11-02T00:00:00.000Z' },
     );
 
-    expect(result).toMatchObject({ ok: true, body: { referencesNotCopied: 1 } });
+    expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [], referencesNotCopied: 1 } });
     expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
-    expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes', 'creation-prompt-item']);
+    expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
   });
 });
 

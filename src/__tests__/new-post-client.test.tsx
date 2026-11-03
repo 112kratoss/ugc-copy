@@ -5697,6 +5697,33 @@ describe('NewPostClient', () => {
       ]);
     });
 
+    // #677's re-review (decided there): the server adds nothing to a recipe
+    // people have, so the card the composer adds is a change they would get,
+    // shown and left unsaved until the seller saves it.
+    it('keeps the exact prompt it adds to a recipe people have as unsaved work', async () => {
+      enqueueCreation({ input_media: [] });
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundleBuyerCount: 2,
+        resourceBundle: {
+          accessMode: 'free',
+          previewText: 'Lighting notes for this still.',
+          resources: {
+            items: [{
+              id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting',
+              textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none',
+            }],
+          },
+        } as EditablePostDraft['resourceBundle'],
+      }} />);
+
+      await waitFor(() => expect(screen.getByText('Exact generation prompt')).toBeInTheDocument());
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(true);
+    });
+
     // The inputs used to be offered on a new post only, so a recipe added
     // later could never carry them (owner, 2026-11-03).
     it('offers the creation’s inputs in an edit, and has the save copy them when asked', async () => {

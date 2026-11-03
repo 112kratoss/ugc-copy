@@ -937,8 +937,6 @@ export type CopiedGenerationReferences = {
   files: Map<string, { contentType: string; sizeBytes: number | null }>;
   /** The inputs that could not be copied, by item id. */
   failedItemIds: Set<string>;
-  /** The files this copy wrote, which a save whose write is then refused removes again. */
-  createdPaths: string[];
 };
 
 function isStorageObjectExistsError(error: unknown): boolean {
@@ -962,7 +960,9 @@ type ReferenceFileCopy =
  * held to them, and a file it would refuse is no copy. Where the file cannot
  * be described, it is read and written again, as every copy was before. A
  * file already at the copy's path is this input's (the path is fixed by the
- * input) and stands; only a file written here is this save's to remove.
+ * input) and stands. A copy is never removed again, a refused save's included
+ * (#677's re-review): the next save of the recipe finds it at that path, and a
+ * save running beside the refused one may already name it.
  */
 async function copyGenerationReferenceFile(
   supabase: SupabaseClient,
@@ -1036,7 +1036,7 @@ export async function copyPlannedGenerationReferences(params: {
   supabase: SupabaseClient;
   references: readonly PlannedGenerationReference[];
 }): Promise<CopiedGenerationReferences> {
-  const copied: CopiedGenerationReferences = { files: new Map(), failedItemIds: new Set(), createdPaths: [] };
+  const copied: CopiedGenerationReferences = { files: new Map(), failedItemIds: new Set() };
   for (const { item, source } of params.references) {
     if (!source || !item.id || !item.storagePath) {
       continue;
@@ -1050,9 +1050,6 @@ export async function copyPlannedGenerationReferences(params: {
     if (result.outcome === 'failed') {
       copied.failedItemIds.add(item.id);
       continue;
-    }
-    if (result.outcome === 'created') {
-      copied.createdPaths.push(item.storagePath);
     }
     copied.files.set(item.id, { contentType: result.contentType, sizeBytes: result.sizeBytes });
   }
@@ -1086,24 +1083,6 @@ export function applyCopiedGenerationReferences(
   return { ...bundle, resources: { ...bundle.resources, items: settled } };
 }
 
-/** Removes copies a save wrote and then could not keep, because its write was refused. */
-export async function removeCopiedGenerationReferences(params: {
-  supabase: SupabaseClient;
-  paths: readonly string[];
-}): Promise<void> {
-  if (params.paths.length === 0) {
-    return;
-  }
-  try {
-    const { error } = await params.supabase.storage.from(POST_RESOURCE_FILES_BUCKET).remove([...params.paths]);
-    if (error) {
-      logBackendError('post_resource_generation_ref_cleanup_failed', { error });
-    }
-  } catch (error) {
-    logBackendError('post_resource_generation_ref_cleanup_failed', { error });
-  }
-}
-
 export const GENERATION_REFERENCES_UNREADABLE_ERROR = 'Could not read this creation’s saved inputs. Try again.';
 export const GENERATION_REFERENCES_NOT_COPIED_ERROR = 'Could not copy this creation’s saved inputs into the recipe. Try again.';
 
@@ -1129,11 +1108,14 @@ export type CreationRecipeBundlePreparation =
  * of the inputs alone is sent with no item of its own, and the edit refused it
  * before they were merged in.
  *
- * `mayShareReferences` is false for a creation taken off public view, by an
- * operator's removal or its creator's archive: the read of its recipe
- * withholds its inputs from everyone but the owner (`is_public`,
- * `canViewGenerationRecipeInputs`), so no copy hands them out either. Those
- * asked for are counted as refused.
+ * `mayShareCreation` is false for a creation taken off public view, by an
+ * operator's removal or its creator's archive (`creationMaySharePostInputs`):
+ * nothing of it goes into the recipe, neither its exact prompt, which Remix
+ * withholds from such a creation too, nor its saved inputs. Those asked for are
+ * counted as refused. `addsCreationPrompt` is false for an edit of a recipe
+ * people have (#677's re-review, decided there): an older composer sends the
+ * recipe back on every save, so the prompt would reach them as a revision
+ * nobody saw. A composer that shows the locked card sends it itself.
  */
 export async function prepareCreationRecipeBundle(params: {
   supabase: SupabaseClient;
@@ -1142,7 +1124,8 @@ export async function prepareCreationRecipeBundle(params: {
   /** The post's creation, where the recipe is one's: its id and its prompt. */
   creation: { id: string; prompt: string | null } | null;
   includeReferences: boolean;
-  mayShareReferences: boolean;
+  mayShareCreation: boolean;
+  addsCreationPrompt: boolean;
   onlyRowIds?: ReadonlySet<string>;
   /** The recipe's items as stored, whose copies need no second one. */
   storedItems?: readonly PostResourceItem[];
@@ -1160,10 +1143,12 @@ export async function prepareCreationRecipeBundle(params: {
   let bundle = params.bundle;
 
   if (params.creation && bundle && bundle.accessMode !== 'none') {
-    const withPrompt = withCreationPromptItem(bundle, params.creation.prompt);
-    bundle = withPrompt.bundle;
-    if (withPrompt.addedItem?.id) {
-      addedItemIds.push(withPrompt.addedItem.id);
+    if (params.mayShareCreation && params.addsCreationPrompt) {
+      const withPrompt = withCreationPromptItem(bundle, params.creation.prompt);
+      bundle = withPrompt.bundle;
+      if (withPrompt.addedItem?.id) {
+        addedItemIds.push(withPrompt.addedItem.id);
+      }
     }
 
     if (params.includeReferences && bundle) {
@@ -1183,7 +1168,7 @@ export async function prepareCreationRecipeBundle(params: {
       const sentPaths = new Set(sentItems.flatMap((item) => (item.storagePath ? [item.storagePath] : [])));
       const sentIds = new Set(sentItems.map((item) => item.id));
       const toAdd = planned.references.filter((reference) => !holdsResourceItem(sentPaths, sentIds, reference.item));
-      if (!params.mayShareReferences) {
+      if (!params.mayShareCreation) {
         refusedReferenceCount = toAdd.length;
       } else if (toAdd.length > 0) {
         bundle = mergeGenerationReferenceItemsIntoBundle(bundle, toAdd.map((reference) => reference.item));

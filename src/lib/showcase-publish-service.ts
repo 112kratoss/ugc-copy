@@ -21,7 +21,6 @@ import {
   prepareCreationRecipeBundle,
   publishGenerationPostWithResourceBundleAtomically,
   readAddedRecipeItems,
-  removeCopiedGenerationReferences,
   type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
 import { creationMaySharePostInputs } from '@/lib/generation-input-media';
@@ -79,8 +78,9 @@ type ShowcaseCategory = GenerationShowcaseCategory;
 export { getCanonicalGenerationShowcaseAssetPath };
 const MISSING_POST_RESOURCE_BUNDLES_SCHEMA_ERROR =
   'Posts are working, but atomic unlock publishing is not enabled on the connected Supabase project yet. Apply the post resource bundle migrations, including 20260508120000_post_system_marketplace_reliability.sql, and try again.';
-// `archived_at` and `moderation_removed_at` say whether the creation's saved
-// inputs may go into its recipe (`creationMaySharePostInputs`).
+// `archived_at` and `moderation_removed_at` say whether anything of the
+// creation, its exact prompt or its saved inputs, may go into its recipe
+// (`creationMaySharePostInputs`).
 const GENERATION_SELECT_WITH_SHOWCASE_ASSET = 'id, user_id, status, model, category, creation_mode, output_url, showcase_asset_path, title, description, prompt, template_run_id, template_run_step_id, archived_at, moderation_removed_at';
 // The legacy variant serves schemas that predate `showcase_asset_path`, which
 // also predate the template system — so it omits the template columns too and
@@ -156,7 +156,6 @@ export type ShowcasePublishServiceDependencies = {
   /** Their files, copied once every check has passed, right before the write. */
   copyPlannedGenerationReferences: typeof copyPlannedGenerationReferences;
   /** The copies a refused write leaves behind, removed. */
-  removeCopiedGenerationReferences: typeof removeCopiedGenerationReferences;
   loadGenerationInputOrigins: typeof loadGenerationInputOrigins;
   validatePostResourceBundleInput: typeof validatePostResourceBundleInput;
   getMarketplaceQualityErrorForPostBundle: typeof getMarketplaceQualityErrorForPostBundle;
@@ -220,7 +219,6 @@ function resolveDependencies(
       dependencies?.openAllowlistedRemoteMedia ?? openAllowlistedRemoteMedia,
     planGenerationReferenceCopies: dependencies?.planGenerationReferenceCopies ?? planGenerationReferenceCopies,
     copyPlannedGenerationReferences: dependencies?.copyPlannedGenerationReferences ?? copyPlannedGenerationReferences,
-    removeCopiedGenerationReferences: dependencies?.removeCopiedGenerationReferences ?? removeCopiedGenerationReferences,
     loadGenerationInputOrigins: dependencies?.loadGenerationInputOrigins ?? loadGenerationInputOrigins,
     validatePostResourceBundleInput: dependencies?.validatePostResourceBundleInput ?? validatePostResourceBundleInput,
     getMarketplaceQualityErrorForPostBundle:
@@ -275,19 +273,6 @@ class GenerationReferencesNotCopiedError extends Error {
     super('The creation’s saved inputs could not be copied into the recipe.');
     this.name = 'GenerationReferencesNotCopiedError';
   }
-}
-
-/**
- * Whether a failed write was refused by the database, and so wrote nothing:
- * it answers with a code of its own (a raised check, a constraint, PostgREST's
- * refusal). A dropped connection or a timeout has none, and may have written.
- */
-function isDatabaseRefusal(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === 'string' && code.trim().length > 0;
 }
 
 function isSoldResourceBundleMutationError(error: unknown): boolean {
@@ -652,7 +637,9 @@ export async function publishGenerationToShowcaseForRoute({
         bundle: effectiveResourceBundle,
         creation: { id: generationId, prompt: generation.prompt ?? null },
         includeReferences: shouldIncludeGenerationReferences && requestedAccessMode !== 'none',
-        mayShareReferences: creationMaySharePostInputs(generation),
+        mayShareCreation: creationMaySharePostInputs(generation),
+        // A publish makes the recipe, so the rule puts the prompt in.
+        addsCreationPrompt: true,
         ...(inputOrigins
           ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin === 'others' ? [rowId] : []))) }
           : {}),
@@ -1015,15 +1002,11 @@ export async function publishGenerationToShowcaseForRoute({
     postId = publishResult.postId;
     resourceBundleStatus = publishResult.bundleStatus;
   } catch (postError) {
-    // The copies this publish wrote go again where nothing was written: the
-    // recipe could not keep them, or the database refused the write. One that
-    // may have gone through keeps them, since its recipe may name them.
-    if (copiedReferences && (postError instanceof GenerationReferencesNotCopiedError || isDatabaseRefusal(postError))) {
-      await resolvedDependencies.removeCopiedGenerationReferences({
-        supabase: adminSupabase,
-        paths: copiedReferences.createdPaths,
-      });
-    }
+    // The copies this publish wrote stay where they are, whatever went wrong
+    // (#677's re-review): each sits at the one path its input has, so the next
+    // save of this recipe finds it there and copies nothing again, and another
+    // save running beside this one may already have named it in its recipe.
+    // Removing it on a refusal could take the file from under that one.
 
     if (hasShowcaseAssetColumn && nextShowcaseAssetPath && nextShowcaseAssetPath !== generation.showcase_asset_path) {
       const removableDerivativePath = getCanonicalGenerationShowcaseAssetPath(

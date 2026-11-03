@@ -60,7 +60,7 @@ const profileState = vi.hoisted(() => ({ profile: null as Record<string, unknown
 // The files still on the device, by uri; anything else reads as gone.
 const deviceFileState = vi.hoisted(() => ({ uris: new Set<string>() }));
 // The creation the composer is opened on, when a case needs one other than `generationItem`.
-const generationState = vi.hoisted(() => ({ item: null as Record<string, unknown> | null, pending: false }));
+const generationState = vi.hoisted(() => ({ item: null as Record<string, unknown> | null, pending: false, failed: false }));
 const mutationState = vi.hoisted(() => ({
   mutate: vi.fn(),
   isPending: false,
@@ -155,6 +155,9 @@ vi.mock('@tanstack/react-query', () => ({
   useQuery: (options: { queryKey: string[]; enabled?: boolean; gcTime?: number }) => {
     queryOptionsState.options.push(options);
     if (options.queryKey[0] === 'post-new-generations') {
+      if (generationState.failed) {
+        return { data: undefined, error: new Error('Network request failed'), isLoading: false, isSuccess: false, isError: true };
+      }
       return generationState.pending
         ? { data: undefined, error: null, isLoading: true, isSuccess: false, isError: false }
         : { data: { generations: [generationState.item ?? generationItem] }, error: null, isLoading: false, isSuccess: true };
@@ -451,6 +454,7 @@ describe('mobile external post composer', () => {
     routerState.canGoBack.mockReturnValue(false);
     generationState.item = null;
     generationState.pending = false;
+    generationState.failed = false;
     profileState.profile = null;
     authState.user.user_metadata = {};
     authState.refreshProfile.mockClear();
@@ -2884,6 +2888,71 @@ describe('mobile external post composer', () => {
       expect(pressables(tree, 'Remove Exact generation prompt')).toHaveLength(0);
       expect(pressables(tree, 'Remove Lighting guide')).toHaveLength(1);
       expect(gestureEnabled(tree)).toBe(true);
+    });
+
+    // #677's re-review (decided there): the server adds nothing to a recipe
+    // people have, so the card the composer adds is a change they would get,
+    // shown and left unsaved until the seller saves it.
+    it('keeps the exact prompt it adds to a recipe people have as an unsaved change', async () => {
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = {
+        ...creationPost({
+          accessMode: 'free',
+          previewText: 'A lighting guide for glossy product shots.',
+          resources: {
+            items: [{ id: 'guide', type: 'note', title: 'Lighting guide', textContent: 'Key light at 45 degrees.', sortOrder: 0 }],
+          },
+        }),
+        resourceBundleBuyerCount: 2,
+      };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(collectText(tree.root)).toContain('Exact generation prompt');
+      expect(gestureEnabled(tree)).toBe(false);
+    });
+
+    // #677's re-review: a creation read that failed as the edit opened, and
+    // came back later, added the card after the edit's starting point, so an
+    // edit nobody had touched read as unsaved. The web folds it into its saved
+    // state; here the starting point is taken again while nothing was touched.
+    it('takes a late exact prompt as where an untouched edit starts, and not once the creator has changed something', async () => {
+      const recipe = {
+        accessMode: 'free',
+        previewText: 'A lighting guide for glossy product shots.',
+        resources: {
+          items: [{ id: 'guide', type: 'note', title: 'Lighting guide', textContent: 'Key light at 45 degrees.', sortOrder: 0 }],
+        },
+      };
+      paramsState.params = { postId: 'post-from-creation' };
+      postEditState.post = creationPost(recipe);
+      generationState.failed = true;
+      const untouched = await renderScreen();
+      expect(collectText(untouched.root)).not.toContain('Exact generation prompt');
+      expect(gestureEnabled(untouched)).toBe(true);
+
+      generationState.failed = false;
+      await renderer.act(async () => {
+        untouched.update(<NewPostScreen />);
+        await Promise.resolve();
+      });
+      renderer.act(() => findPressableByText(untouched.root, 'Next').props.onPress());
+      expect(collectText(untouched.root)).toContain('Exact generation prompt');
+      expect(gestureEnabled(untouched)).toBe(true);
+      renderer.act(() => untouched.unmount());
+      mountedTrees.splice(mountedTrees.indexOf(untouched), 1);
+
+      // Changed before the read came back: the card is part of what they save.
+      storageState.values.clear();
+      generationState.failed = true;
+      const touched = await renderScreen();
+      renderer.act(() => findTextInputByAccessibilityLabel(touched.root, 'Title, required').props.onChangeText('Hero product image, lit'));
+      generationState.failed = false;
+      await renderer.act(async () => {
+        touched.update(<NewPostScreen />);
+        await Promise.resolve();
+      });
+      expect(gestureEnabled(touched)).toBe(false);
     });
 
     it('says the inputs are in when the recipe already holds their copies', async () => {

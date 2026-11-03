@@ -733,8 +733,8 @@ export async function listOwnerGenerationsForRoute({
     const outputUrls = summaryOnly ? [] : getPersistedOutputUrls(workflowSettings, resolvedMediaUrls);
     const durableInputMedia = inputMediaMap.get(generation.id) ?? [];
     // Every input says whether the recipe copy takes it: the inputs an older
-    // run's settings name have no saved row to copy, and a creation off public
-    // view shares none.
+    // run's settings name have no saved row to copy, and a creation an operator
+    // removed or its creator archived shares none.
     const sharesInputs = creationMaySharePostInputs(generation);
     const inputMedia = summaryOnly || template
       ? []

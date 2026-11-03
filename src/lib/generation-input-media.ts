@@ -93,14 +93,15 @@ export function isRecipeCopyableInputRow(
 }
 
 /**
- * Whether a creation's saved inputs may go into its post's recipe at all: not
- * while the creation is off public view, by an operator's removal or by its
- * creator's archive. Both write `is_public = false`, through which the read of
- * a recipe withholds the creation's inputs from everyone but its owner
- * (`canViewGenerationRecipeInputs`), so no copy hands them out either. A
- * creation only not published yet (a private post, a first publish) has
- * neither mark: its recipe is a draft no one else reads until the post is
- * public, and the creation goes public with it.
+ * Whether anything of a creation, its exact prompt or its saved inputs, may go
+ * into its post's recipe: not once an operator has removed it or its creator
+ * has archived it (`moderation_removed_at`, `archived_at`), as Remix withholds
+ * such a creation's prompt too. The gate is those two marks and not
+ * `is_public`, which other states write as well: a creation behind an NSFW
+ * cover is not public either, and not holding its recipe back for that is
+ * intended (#677's re-review). A creation only not published yet (a private
+ * post, a first publish) has neither mark: its recipe is a draft no one else
+ * reads until the post is public, and the creation goes public with it.
  */
 export function creationMaySharePostInputs(
   generation: { archived_at?: string | null; moderation_removed_at?: string | null } | null | undefined,

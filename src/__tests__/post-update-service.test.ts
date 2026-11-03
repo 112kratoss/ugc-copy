@@ -1533,14 +1533,12 @@ describe('updateOwnerPostForRoute', () => {
       const copiedAll = (inputIds: string[]) => ({
         files: new Map(inputIds.map((id) => [`reference-${id}`, { contentType: 'image/webp', sizeBytes: 68 }] as const)),
         failedItemIds: new Set<string>(),
-        createdPaths: inputIds.map(copyPath),
       });
 
       function referenceDependencies(overrides: Partial<PostUpdateDependencies> = {}) {
         return createDependencies({
           planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput()] })),
           copyPlannedGenerationReferences: vi.fn(async () => copiedAll(['input-1'])),
-          removeCopiedGenerationReferences: vi.fn(async () => undefined),
           ...overrides,
         });
       }
@@ -1550,7 +1548,7 @@ describe('updateOwnerPostForRoute', () => {
         generation?: Record<string, unknown>;
         bundle?: Record<string, unknown> | null;
       } = {}) {
-        const { client } = createSupabaseMock({
+        const { client, removals } = createSupabaseMock({
           post: privatePost,
           bundle: options.bundle === undefined ? { id: 'bundle-1', access_mode: 'free', status: 'draft' } : options.bundle,
           generation: options.generation ?? generationRow,
@@ -1564,7 +1562,7 @@ describe('updateOwnerPostForRoute', () => {
           dependencies,
         });
         const written = vi.mocked(dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].bundle;
-        return { result, dependencies, client, written };
+        return { result, dependencies, client, written, removals };
       }
 
       it('copies them into the recipe when an edit asks, and says what it added', async () => {
@@ -1653,7 +1651,11 @@ describe('updateOwnerPostForRoute', () => {
         expect(tooLong.copyPlannedGenerationReferences).not.toHaveBeenCalled();
       });
 
-      it('removes the copies it wrote when the database refuses the write, and keeps them when the write may have gone through', async () => {
+      // #677's re-review: a refused save removed the copy it had made, while a
+      // save beside it could already have found that file at its path and named
+      // it in its recipe. Each copy has one path per input, so the next save of
+      // the recipe finds it there and copies nothing again.
+      it('leaves the copies it made in place when the database refuses the write', async () => {
         const refused = referenceDependencies({
           updatePostWithResourceBundleAtomically: vi.fn(async () => {
             throw new DefinitiveSupabaseMutationRejection({ message: 'Improve this unlock before publishing' }, 400);
@@ -1661,17 +1663,8 @@ describe('updateOwnerPostForRoute', () => {
         });
         const definite = await save({ includeGenerationReferences: true, resourceBundle: recipe('free') }, { dependencies: refused });
         expect(definite.result).toMatchObject({ ok: false, status: 500 });
-        expect(refused.removeCopiedGenerationReferences).toHaveBeenCalledWith(expect.objectContaining({
-          paths: [copyPath('input-1')],
-        }));
-
-        const unknown = referenceDependencies({
-          updatePostWithResourceBundleAtomically: vi.fn(async () => {
-            throw new Error('socket hang up');
-          }),
-        });
-        await save({ includeGenerationReferences: true, resourceBundle: recipe('free') }, { dependencies: unknown });
-        expect(unknown.removeCopiedGenerationReferences).not.toHaveBeenCalled();
+        expect(refused.copyPlannedGenerationReferences).toHaveBeenCalledTimes(1);
+        expect(definite.removals.flat()).not.toContain(copyPath('input-1'));
       });
 
       it('leaves out, and counts, the inputs it could not copy', async () => {
@@ -1697,7 +1690,6 @@ describe('updateOwnerPostForRoute', () => {
           copyPlannedGenerationReferences: vi.fn(async () => ({
             files: new Map(),
             failedItemIds: new Set(['reference-input-1']),
-            createdPaths: [],
           })),
         });
         const { result } = await save({ includeGenerationReferences: true, resourceBundle: recipe('free', []) }, { dependencies });
@@ -1725,20 +1717,119 @@ describe('updateOwnerPostForRoute', () => {
           expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [], referencesNotCopied: 1 } });
           expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
           expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['recipe-prompt']);
+
+          // #677's re-review: nor its exact prompt, which Remix withholds from
+          // such a creation too.
+          const note = { id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting', textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none' };
+          const withoutPrompt = await save(
+            { resourceBundle: recipe('free', [note]) },
+            { generation: { ...generationRow, ...offView, prompt: 'A sunset study in golden light.' } },
+          );
+          expect(withoutPrompt.result).toMatchObject({ ok: true, body: { recipeItemsAdded: [] } });
+          expect((withoutPrompt.written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
         }
       });
 
-      // #677's review: the editor re-copied every input on every save.
+      // #677's review: the editor re-copied every input on every save. The plan
+      // here is the real one, reading the creation's one saved input, so the
+      // test shows that no copy runs (#677's re-review: a stand-in plan that
+      // still named a source proved nothing).
       it('hands the stored recipe’s copies to the plan, which then needs none of them again', async () => {
+        const { planGenerationReferenceCopies } = await vi.importActual<typeof import('@/lib/post-resource-bundles-server')>(
+          '@/lib/post-resource-bundles-server',
+        );
+        const inputRow = {
+          id: 'input-1',
+          generation_id: 'generation-1',
+          user_id: 'user-1',
+          media_type: 'image',
+          role: 'reference',
+          label: 'Product',
+          storage_path: 'generation_inputs/user-1/generation-1/input-1.png',
+          source_generation_id: null,
+          sort_order: 0,
+          metadata: null,
+        };
+        const inputReads: string[] = [];
+        const inputsClient = {
+          from(table: string) {
+            inputReads.push(table);
+            const query = {
+              select: () => query,
+              eq: () => query,
+              order: async () => ({ data: [inputRow], error: null }),
+            };
+            return query;
+          },
+        } as unknown as SupabaseClient;
+        const dependencies = referenceDependencies({
+          planGenerationReferenceCopies: vi.fn((params) => planGenerationReferenceCopies({ ...params, supabase: inputsClient })),
+        });
         const storedCopy = { ...plannedInput().item, contentType: 'image/webp', sizeBytes: 68 };
-        const { dependencies } = await save(
+
+        // A composer that sends only the prompt back, as an older one does.
+        const { result, written } = await save(
           { includeGenerationReferences: true, resourceBundle: recipe('free') },
-          { bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft', resource_items: [promptItem, storedCopy] } },
+          { dependencies, bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft', resource_items: [promptItem, storedCopy] } },
         );
 
-        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
-          heldItems: expect.arrayContaining([expect.objectContaining({ id: 'reference-input-1', storagePath: copyPath('input-1') })]),
-        }));
+        expect(result).toMatchObject({ ok: true, body: { referencesNotCopied: 0 } });
+        expect(inputReads).toEqual(['generation_input_media']);
+        expect(dependencies.copyPlannedGenerationReferences).not.toHaveBeenCalled();
+        expect((written?.resources?.items ?? []).map((item) => [item.id, item.storagePath ?? null, item.contentType ?? null])).toEqual([
+          ['recipe-prompt', null, null],
+          ['reference-input-1', copyPath('input-1'), 'image/webp'],
+        ]);
+      });
+
+      // #677's re-review (decided there): the server adds the exact prompt to a
+      // recipe on publish, and on an edit only where nobody has the recipe yet.
+      // An older composer sends the recipe back on every save, so a caption fix
+      // of a recipe people have revised it with a prompt the seller had left
+      // out, and switching it off again did not stick.
+      describe('the exact prompt and a recipe people have', () => {
+        const noteItem = {
+          id: 'notes', type: 'note', role: 'primary', sectionId: null, title: 'Lighting',
+          textContent: 'Key light at 45 degrees.', sortOrder: 0, isPrimary: true, remixUse: 'none',
+        };
+        const creation = { ...generationRow, prompt: 'A sunset study in golden light.' };
+        const storedRecipe = (people: { sales_count: number; free_unlock_count: number }) => ({
+          id: 'bundle-1', access_mode: 'free', status: 'published', resource_items: [noteItem], ...people,
+        });
+
+        it('adds no prompt when an older composer saves a recipe people have', async () => {
+          const { result, written } = await save(
+            { title: 'Fixed caption typo', resourceBundle: recipe('free', [noteItem]) },
+            { generation: creation, bundle: storedRecipe({ sales_count: 2, free_unlock_count: 1 }) },
+          );
+
+          expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [] } });
+          expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes']);
+        });
+
+        it('keeps the locked card a composer showed and sent for a recipe people have, and adds nothing beside it', async () => {
+          const lockedCard = {
+            id: 'creation-prompt', type: 'prompt', role: 'primary', sectionId: null, title: 'Exact generation prompt',
+            textContent: 'A sunset study in golden light.', sortOrder: 1, isPrimary: false, remixUse: 'text_template',
+          };
+          const { result, written } = await save(
+            { resourceBundle: recipe('free', [noteItem, lockedCard]) },
+            { generation: creation, bundle: storedRecipe({ sales_count: 0, free_unlock_count: 3 }) },
+          );
+
+          expect(result).toMatchObject({ ok: true, body: { recipeItemsAdded: [] } });
+          expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes', 'creation-prompt']);
+        });
+
+        it('adds the prompt to a recipe nobody has yet', async () => {
+          const { result, written } = await save(
+            { resourceBundle: recipe('free', [noteItem]) },
+            { generation: creation, bundle: storedRecipe({ sales_count: 0, free_unlock_count: 0 }) },
+          );
+
+          expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['notes', 'creation-prompt-item']);
+          expect(result.ok && result.body.recipeItemsAdded?.map((item) => item.id)).toEqual(['creation-prompt-item']);
+        });
       });
 
       // Owner, 2026-11-03: every creation's recipe has its exact prompt, on the

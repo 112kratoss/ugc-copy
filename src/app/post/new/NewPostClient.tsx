@@ -1455,12 +1455,17 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // rule the server holds every save to (#677's review). A recipe that keeps a
   // prompt item of its own keeps it alone. Where the saved state lacks it too
   // (the composer's start), it goes there as well, the same card, so it is no
-  // unsaved work of its own; a removal of the creator's own prompt is.
+  // unsaved work of its own; a removal of the creator's own prompt is. In an
+  // edit of a recipe people have it stays unsaved work (#677's re-review): the
+  // server adds nothing to such a recipe, so the card is a change they would
+  // get, shown here for the seller to save or leave.
+  const promptCardIsUnsavedWork = isEditMode && recipeBuyerCount > 0;
   useEffect(() => {
     if (!needsCreationPromptItem(resourceCards, creationPrompt)) return;
     if ((isGeneratedPaywallIntent || isCreationPaywallManagementIntent) && !didApplyGenerationPaywallPrefill) return;
     const promptCard = createCreationPromptCard(creationPrompt);
     setResourceCards((cards) => (needsCreationPromptItem(cards, creationPrompt) ? [promptCard, ...cards] : cards));
+    if (promptCardIsUnsavedWork) return;
     setSavedSnapshot((saved) => (needsCreationPromptItem(saved.resourceCards, creationPrompt)
       ? { ...saved, resourceCards: [promptCard, ...saved.resourceCards] }
       : saved));
@@ -1469,6 +1474,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     didApplyGenerationPaywallPrefill,
     isCreationPaywallManagementIntent,
     isGeneratedPaywallIntent,
+    promptCardIsUnsavedWork,
     resourceCards,
   ]);
 

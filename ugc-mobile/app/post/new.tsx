@@ -2303,8 +2303,24 @@ function NewPostComposer() {
   const hasComposerCreation = isEditMode ? hasPrefilledEdit : Boolean(selectedGeneration);
   useEffect(() => {
     if (!hasComposerCreation || !needsCreationPromptItem(draft.resource.cards, creationPrompt)) return;
+    // An edit's card that comes after its starting point (the creation's read
+    // failed or waited as the edit opened, #677's re-review) is where an edit
+    // nobody has touched since starts, as the web folds it into its saved
+    // state. Not in a recipe people have: there it is a change they would get,
+    // left unsaved for the seller to save or leave.
+    if (
+      isEditMode
+      && recipeBuyerCount === 0
+      && initialDraftSignatureRef.current !== null
+      && getPostComposerDraftSignature(draft) === initialDraftSignatureRef.current
+    ) {
+      initialDraftSignatureRef.current = getPostComposerDraftSignature({
+        ...draft,
+        resource: withCreationPromptCard(draft.resource, creationPrompt),
+      });
+    }
     setDraft((current) => ({ ...current, resource: withCreationPromptCard(current.resource, creationPrompt) }));
-  }, [creationPrompt, draft.resource.cards, hasComposerCreation]);
+  }, [creationPrompt, draft, hasComposerCreation, isEditMode, recipeBuyerCount]);
 
   useEffect(() => {
     if (!generationId || !generationsQuery.isSuccess) return;
@@ -2387,7 +2403,10 @@ function NewPostComposer() {
         creationPackage: getDefaultCreationPackageDraft(),
         // One Recipe preview, starting from the summary listings showed first
         // (recipe audit S6). A creation's recipe has its exact prompt, as on
-        // the web; where the edit starts from, so it is no unsaved change.
+        // the web; where the edit starts from, so it is no unsaved change,
+        // except in a recipe people have (#677's re-review): the card goes in
+        // after the starting point there, a change they would get, and the
+        // seller saves it or leaves it.
         resource: withCreationPromptCard(resourceBundleInput ? foldRecipeSummaryIntoPreview({
           accessMode: resourceBundleInput.accessMode || 'none',
           cardAuthoringMode: 'cards',
@@ -2419,7 +2438,7 @@ function NewPostComposer() {
           // showed 100 tokens and saved 900 through the legacy-USD rule.
           priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : '9',
           priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : '900',
-        }) : getDefaultResourceDraft(), creationPrompt),
+        }) : getDefaultResourceDraft(), (post.resourceBundleBuyerCount ?? 0) > 0 ? null : creationPrompt),
       });
       setHasPrefilledEdit(true);
     }
