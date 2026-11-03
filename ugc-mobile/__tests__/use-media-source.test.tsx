@@ -143,6 +143,37 @@ describe('media source session renewal', () => {
     renderer.act(() => tree.unmount());
   });
 
+  // Most addresses are drawn and gone long before they end.
+  it('builds the route’s address only for an address that has ended', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(900_000);
+    const token = `head.${Buffer.from(JSON.stringify({ exp: 4000 })).toString('base64url')}.signature`;
+    const url = `https://project.supabase.co/storage/v1/object/sign/generated_images/owner/lazy.webp?token=${token}`;
+    const RealURL = globalThis.URL;
+    let routesBuilt = 0;
+    globalThis.URL = class extends RealURL {
+      constructor(...args: ConstructorParameters<typeof URL>) {
+        super(...args);
+        if (args[0] === '/api/media') routesBuilt += 1;
+      }
+    } as typeof URL;
+    let result: ReturnType<typeof useMediaSource>;
+    function Probe() { result = useMediaSource(url); return null; }
+    let tree!: renderer.ReactTestRenderer;
+    try {
+      renderer.act(() => { tree = renderer.create(<Probe />); });
+      expect(routesBuilt).toBe(0);
+      expect(result!.source.uri).toBe(url);
+
+      renderer.act(() => { vi.advanceTimersByTime(4000_000 - 900_000 - 30_000); });
+      expect(routesBuilt).toBe(1);
+      expect(new RealURL(result!.source.uri).pathname).toBe('/api/media');
+    } finally {
+      globalThis.URL = RealURL;
+    }
+    renderer.act(() => tree.unmount());
+  });
+
   it('sends an address that arrives within 30 s of its end to the route from its first render', () => {
     vi.useFakeTimers();
     vi.setSystemTime(975_000);

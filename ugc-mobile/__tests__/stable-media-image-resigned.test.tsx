@@ -206,6 +206,27 @@ describe('StableMediaImage given a new signature of the file it draws', () => {
     expect(decodedImageAspectRatio(LATER)).toBeCloseTo(16 / 9);
   });
 
+  // Every picture's address is asked about by the session's key, its source and
+  // its move to a newer signature, and dating it parses two URLs and decodes a
+  // token. On a list read again that is every tile on screen at once.
+  it('dates each address once, at mount and when its list signs it again', () => {
+    const decode = vi.spyOn(globalThis, 'atob');
+    try {
+      const first = signed('dated.webp', T0 + 60 * MINUTE_MS, 'dated-first');
+      const tree = mount(<StableMediaImage url={first} cacheKey="dated" />);
+      expect(decode).toHaveBeenCalledTimes(1);
+
+      decode.mockClear();
+      renderer.act(() => {
+        tree.update(<StableMediaImage url={signed('dated.webp', T0 + 61 * MINUTE_MS, 'dated-second')} cacheKey="dated" />);
+      });
+      expect(decode).toHaveBeenCalledTimes(1);
+      expect(picture(tree)!.props.source.uri).toBe(first);
+    } finally {
+      decode.mockRestore();
+    }
+  });
+
   it('works out the file an address names once, not on every render', () => {
     const identify = vi.mocked(signedMediaIdentity);
     identify.mockClear();

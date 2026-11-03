@@ -26,17 +26,22 @@ import { whenClockReaches } from './wall-clock-timer';
 export function useMediaSource(url: string) {
   const { session } = useAuth();
   const expiry = useMemo(() => getPrivateMediaExpiry(url, env.supabaseUrl), [url]);
-  const routeUrl = useMemo(() => (expiry ? privateMediaRouteUrl(expiry, env.apiBaseUrl) : null), [expiry]);
   // An address that arrives that close to its end goes to the route from its
   // first render, which reads the clock once for it, not on every render.
   const endedOnArrival = useMemo(() => Boolean(expiry && isPrivateMediaNearExpiry(expiry, Date.now())), [expiry]);
   // One that gets there while it is drawn is marked as the clock gets there.
   const [endedUrl, setEndedUrl] = useState<string | null>(null);
-  const effectiveUrl = routeUrl && (endedOnArrival || endedUrl === url) ? routeUrl : url;
+  const ended = Boolean(expiry) && (endedOnArrival || endedUrl === url);
+  // The route's address is built for an address that has ended, and only
+  // then: most are drawn and gone long before.
+  const effectiveUrl = useMemo(
+    () => (expiry && ended ? privateMediaRouteUrl(expiry, env.apiBaseUrl) : url),
+    [ended, expiry, url]
+  );
   useEffect(() => {
-    if (!expiry || effectiveUrl !== url) return undefined;
+    if (!expiry || ended) return undefined;
     return whenClockReaches(expiry.expiresAt - PRIVATE_MEDIA_ROUTE_WITHIN_MS, () => setEndedUrl(url));
-  }, [expiry, effectiveUrl, url]);
+  }, [ended, expiry, url]);
   const authenticated = useMemo(() => isAuthenticatedMediaProxy(effectiveUrl, env.apiBaseUrl), [effectiveUrl]);
   const token = authenticated ? session?.access_token : undefined;
   const source = useMemo(() => buildMediaSource(effectiveUrl, env.apiBaseUrl, token), [effectiveUrl, token]);

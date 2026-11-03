@@ -7,12 +7,36 @@ function signedTokenExpiresAt(source: URL): number | null {
   return parsed.exp * 1000;
 }
 
-/** Metadata only: the server still authorizes the replacement URL. */
-export function getPrivateMediaExpiry(url: string, storageBaseUrl: string): {
+type PrivateMediaExpiry = Readonly<{
   expiresAt: number;
   bucket: string;
   path: string;
-} | null {
+}>;
+
+/** The addresses dated last, by Storage base and address, oldest first. */
+const datedAddresses = new Map<string, PrivateMediaExpiry | null>();
+const MAX_DATED_ADDRESSES = 256;
+
+/**
+ * Metadata only: the server still authorizes the replacement URL.
+ *
+ * Worked out once per address. Every picture asks it of its address several
+ * times over (`StableMediaImage`'s key and its move to a newer signature,
+ * `useMediaSource`), and each answer parses two URLs and decodes a token: on a
+ * list read again, which signs every file anew, that was every tile on screen
+ * at once. The answer is one frozen object, the same each time.
+ */
+export function getPrivateMediaExpiry(url: string, storageBaseUrl: string): PrivateMediaExpiry | null {
+  const key = `${storageBaseUrl}\n${url}`;
+  const dated = datedAddresses.get(key);
+  if (dated !== undefined) return dated;
+  const expiry = readPrivateMediaExpiry(url, storageBaseUrl);
+  datedAddresses.set(key, expiry);
+  if (datedAddresses.size > MAX_DATED_ADDRESSES) datedAddresses.delete(datedAddresses.keys().next().value!);
+  return expiry;
+}
+
+function readPrivateMediaExpiry(url: string, storageBaseUrl: string): PrivateMediaExpiry | null {
   try {
     const source = new URL(url);
     const storage = new URL(storageBaseUrl);
@@ -23,7 +47,7 @@ export function getPrivateMediaExpiry(url: string, storageBaseUrl: string): {
     if (expiresAt === null) return null;
     const path = decodeURIComponent(match[2]);
     if (!path || path.includes('\\') || path.split('/').some(part => part === '..' || part === '.')) return null;
-    return { expiresAt, bucket: match[1], path };
+    return Object.freeze({ expiresAt, bucket: match[1], path });
   } catch {
     return null;
   }

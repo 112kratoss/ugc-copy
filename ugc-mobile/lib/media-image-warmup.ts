@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 
 import { env } from './env';
-import { buildMediaSource, isAuthenticatedMediaProxy } from './media-source';
+import { buildMediaSource } from './media-source';
 import { resolveMediaUrlForExpiry } from './media-url-expiry';
 
 /** A picture as a tile asks expo-image for it: its link, and the key it is cached under. */
@@ -10,14 +10,12 @@ export type WarmImage = { url: string; cacheKey: string };
 /**
  * The source `useMediaSource` builds for a link, outside a render: a signed
  * Storage link about to expire goes through the media proxy, and only that proxy
- * is sent the session. `__tests__/media-image-warmup.test.tsx` holds the two to
- * one answer, since a warm-up under any other source fills a cache entry no tile
- * reads.
+ * is sent the session (`buildMediaSource` decides). `__tests__/media-image-warmup.test.tsx`
+ * holds the two to one answer, since a warm-up under any other source fills a
+ * cache entry no tile reads.
  */
 export function mediaSourceFor(url: string, accessToken: string | null | undefined, now: number) {
-  const effectiveUrl = resolveMediaUrlForExpiry(url, env.supabaseUrl, env.apiBaseUrl, now);
-  const token = isAuthenticatedMediaProxy(effectiveUrl, env.apiBaseUrl) ? accessToken : undefined;
-  return buildMediaSource(effectiveUrl, env.apiBaseUrl, token);
+  return buildMediaSource(resolveMediaUrlForExpiry(url, env.supabaseUrl, env.apiBaseUrl, now), env.apiBaseUrl, accessToken);
 }
 
 /** Each picture asked for this launch, by cache key and link, whether or not it loaded. */
