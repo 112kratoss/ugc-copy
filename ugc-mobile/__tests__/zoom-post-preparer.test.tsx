@@ -4,11 +4,24 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 
+type PagePrefetch = {
+  queryKey: unknown;
+  initialPageParam: number;
+  staleTime: number;
+  queryFn: (context: { pageParam: number }) => Promise<unknown>;
+};
+
 const { state } = vi.hoisted(() => ({
   state: {
     user: { id: 'reader' } as { id: string } | null,
     preparer: null as ((post: ImmersivePreviewItem) => void) | null,
     prefetched: [] as unknown[],
+    pagePrefetches: [] as PagePrefetch[],
+    mutating: 0,
+    api: {
+      getCreatorFollowState: (() => undefined) as (...args: unknown[]) => unknown,
+      getCreatorProfile: (() => undefined) as (...args: unknown[]) => unknown,
+    },
   },
 }));
 
@@ -27,15 +40,18 @@ vi.mock('@tanstack/react-query', () => ({
     prefetchQuery: async ({ queryKey }: { queryKey: unknown }) => {
       state.prefetched.push(queryKey);
     },
+    prefetchInfiniteQuery: async (options: PagePrefetch) => {
+      state.pagePrefetches.push(options);
+    },
     // No creator page cached: every answer is asked for.
     getQueriesData: () => [],
     getQueryState: () => undefined,
-    isMutating: () => 0,
+    isMutating: () => state.mutating,
     setQueryData: vi.fn(),
   }),
 }));
 vi.mock('@/lib/auth', () => ({
-  useAuth: () => ({ user: state.user, api: { getCreatorFollowState: vi.fn() } }),
+  useAuth: () => ({ user: state.user, api: state.api }),
 }));
 // What the chrome draws is not the subject here, only what the preparer asks for.
 vi.mock('@/components/reel-chrome', () => ({ IconShadow: () => null, ReelSlideChrome: () => null }));
@@ -49,6 +65,7 @@ vi.mock('react-native-safe-area-context', () => ({
 }));
 
 import { ZoomPostPreparer } from '../components/zoom-post-chrome';
+import { prepareCreatorProfile } from '../lib/creator-profile-opening';
 
 function post(creatorId: string, sourceType: ImmersivePreviewItem['sourceType'] = 'showcase') {
   return { id: `post-by-${creatorId}`, creatorId, sourceType } as ImmersivePreviewItem;
@@ -66,6 +83,8 @@ afterEach(() => {
   state.user = { id: 'reader' };
   state.preparer = null;
   state.prefetched = [];
+  state.pagePrefetches = [];
+  state.mutating = 0;
 });
 
 describe('ZoomPostPreparer', () => {
@@ -86,5 +105,43 @@ describe('ZoomPostPreparer', () => {
     mount();
 
     expect(state.preparer).toBeNull();
+  });
+});
+
+describe("ZoomPostPreparer, for a creator's page", () => {
+  // A guest's touch too: guests open creator pages as members do.
+  it.each([['a member', { id: 'reader' }], ['a guest', null]])(
+    "reads the page's first page as a finger lands on its creator, for %s",
+    async (_reader, user) => {
+      state.user = user;
+      const getCreatorProfile = vi.fn(async () => ({}));
+      state.api.getCreatorProfile = getCreatorProfile;
+      const tree = mount();
+
+      prepareCreatorProfile('luna');
+
+      // The page's own query: its key, its page size, its minute of freshness.
+      expect(state.pagePrefetches.map((options) => options.queryKey)).toEqual([['creator-profile', 'infinite', 'luna']]);
+      const [options] = state.pagePrefetches;
+      expect(options).toMatchObject({ initialPageParam: 0, staleTime: 60_000 });
+      await options.queryFn({ pageParam: 0 });
+      expect(getCreatorProfile).toHaveBeenCalledWith('luna', { limit: 24, offset: 0 });
+
+      renderer.act(() => tree.unmount());
+      prepareCreatorProfile('luna');
+      expect(state.pagePrefetches).toHaveLength(1);
+    },
+  );
+
+  // A Follow pressed in the reel, say: a page read under it can carry the
+  // answer from before it.
+  it('reads nothing while a change is on its way', () => {
+    state.mutating = 1;
+    const tree = mount();
+
+    prepareCreatorProfile('luna');
+
+    expect(state.pagePrefetches).toEqual([]);
+    renderer.act(() => tree.unmount());
   });
 });

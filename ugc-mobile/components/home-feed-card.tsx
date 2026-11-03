@@ -6,6 +6,7 @@ import { NativeMenu } from '@/components/native-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import { FEED_CARD_MEDIA_RADIUS, feedCardMediaWidth } from '@/lib/feed-card-geometry';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
+import { prepareCreatorProfile } from '@/lib/creator-profile-opening';
 import { FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { PostReadMore, PostTextBlock } from '@/components/post-text-block';
 import { SaveHeart } from '@/components/save-heart';
@@ -95,6 +96,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       creatorLabel={card.creatorLabel}
       creatorName={card.creatorName}
       onCreatorPress={onCreatorOpen}
+      // Their page's first read starts as the finger lands (`prepareCreatorProfile`).
+      onCreatorPressIn={() => prepareCreatorProfile(card.item.creator.username)}
       onMorePress={onFeedbackOpen}
       moreAccessibilityLabel={`More options for ${card.title}`}
       renderMoreMenu={({ trigger, renderButton }) => (

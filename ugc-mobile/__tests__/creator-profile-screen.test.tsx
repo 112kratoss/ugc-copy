@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   announce: vi.fn(),
   haptic: { success: vi.fn(), error: vi.fn(), light: vi.fn(), select: vi.fn() },
   list: { stickyHeaderIndices: undefined as number[] | undefined },
+  /** Each picture as it mounts: a header drawn again would mount its avatar again. */
+  imageMounts: [] as string[],
 }));
 
 vi.mock('react-native', () => ({
@@ -104,6 +106,14 @@ vi.mock('expo-glass-effect', () => ({
 vi.mock('expo-linear-gradient', () => ({
   LinearGradient: (props: MockProps) => React.createElement('linear-gradient', props),
 }));
+vi.mock('expo-image', () => ({
+  Image: (props: MockProps) => {
+    React.useEffect(() => {
+      mocks.imageMounts.push(String((props.source as { uri?: string } | undefined)?.uri));
+    }, []);
+    return React.createElement('image', props);
+  },
+}));
 
 vi.mock('@/components/ui', async (importOriginal) => {
   // The real controls (`SegmentedControl` and the buttons): what the screen draws is what is pressed.
@@ -136,6 +146,7 @@ vi.mock('@/components/zoom-veil', () => ({
 }));
 vi.mock('@/components/skeleton', () => ({
   CreatorProfileSkeleton: () => React.createElement('creator-profile-skeleton'),
+  SkeletonBone: (props: MockProps) => React.createElement('skeleton-bone', props),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -264,6 +275,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.user = { id: 'viewer-1' };
   mocks.list.stickyHeaderIndices = undefined;
+  mocks.imageMounts = [];
   mocks.confirm.mockResolvedValue(true);
   mocks.api.unblockUser.mockResolvedValue({ success: true, blocked: false });
   mocks.api.blockUser.mockResolvedValue({ success: true, blocked: true });
@@ -546,5 +558,91 @@ describe('the header', () => {
 
     expect(mocks.api.setCreatorFollowing).toHaveBeenCalledWith('creator-1', true);
     expect(queryClient.getQueryData(['creator-follow-state', 'creator-1'])).toEqual({ following: true });
+  });
+});
+
+// iPhone simulator, 2026-11-03: a creator opened from a reel had slid in by
+// about +400 ms and drew a skeleton until +1100–1750 ms.
+describe('a page opened from a post of theirs', () => {
+  const LANE_KEY = ['showcase-feed', 'infinite', 'viewer-1', { category: 'all', sort: 'for-you' }];
+
+  /** One of luna's posts, as Home's lane holds it. */
+  function lunaInLane(queryClient: QueryClient) {
+    const item: ShowcaseFeedItem = {
+      ...post('post-9'),
+      creator: { id: 'creator-1', username: 'luna', name: 'Luna Studio', avatar: 'https://cdn.test/luna.jpg' },
+    };
+    queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(LANE_KEY, {
+      pages: [{ items: [item], pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 } } as unknown as ShowcaseFeedResponse],
+      pageParams: [{ offset: 0 }],
+    });
+  }
+
+  /** The page's read, held until the test lets it land or fail. */
+  function heldRead() {
+    const read = {} as { land: (page: CreatorProfileResponse) => void; fail: (error: unknown) => void };
+    mocks.api.getCreatorProfile.mockImplementation(() => new Promise((resolve, reject) => {
+      read.land = resolve;
+      read.fail = reject;
+    }));
+    return read;
+  }
+
+  it('draws who they are from the first frame, and nothing the read has not said', async () => {
+    const queryClient = newQueryClient();
+    lunaInLane(queryClient);
+    const read = heldRead();
+    const tree = await renderScreen(queryClient);
+
+    expect(byType(tree, 'creator-profile-skeleton')).toEqual([]);
+    expect(texts(tree)).toEqual(expect.arrayContaining(['Luna Studio', '@luna']));
+    expect(byType(tree, 'image').map((node) => node.props.source)).toEqual([{ uri: 'https://cdn.test/luna.jpg' }]);
+    // Whose page it is, whether the reader follows it, its counts and its
+    // tabs all wait for the read.
+    expect(byType(tree, 'toggle-button')).toEqual([]);
+    expect(byType(tree, 'native-menu')).toEqual([]);
+    expect(byType(tree, 'pressable').map((node) => node.props.accessibilityLabel)).not.toContain('Share profile');
+    expect(texts(tree).filter((text) => /^(Posts|Saves|Remixes|Recipes)/.test(text))).toEqual([]);
+    expect(mocks.list.stickyHeaderIndices).toBeUndefined();
+    // The grid's shape until the posts come, said once to a screen reader.
+    expect(byType(tree, 'skeleton-bone')).toHaveLength(6);
+    expect(byType(tree, 'view')
+      .filter((node) => node.props.accessibilityRole === 'progressbar')
+      .map((node) => node.props.accessibilityLabel)).toEqual(['Loading posts']);
+
+    const profile = { ...creatorPage().profile, avatarUrl: 'https://cdn.test/luna.jpg', bio: 'Neon portraits' };
+    await act(async () => read.land(creatorPage({ profile })));
+    await settle();
+
+    expect(byType(tree, 'skeleton-bone')).toEqual([]);
+    expect(tileLabels(tree)).toEqual(['Open Post post-1', 'Open Post post-2']);
+    expect(byType(tree, 'toggle-button').map((node) => [node.props.label, node.props.on])).toEqual([['Follow', false]]);
+    expect(texts(tree)).toEqual(expect.arrayContaining(['Neon portraits', 'Posts 2', 'Saves']));
+    expect(mocks.list.stickyHeaderIndices).toEqual([1]);
+    // Filled in, not drawn again: the avatar mounted once.
+    expect(mocks.imageMounts).toEqual(['https://cdn.test/luna.jpg']);
+    expect(mocks.api.getCreatorProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('draws the skeleton, as before, for a creator the app holds no post of', async () => {
+    heldRead();
+    const tree = await renderScreen(newQueryClient());
+
+    expect(byType(tree, 'creator-profile-skeleton')).toHaveLength(1);
+    expect(texts(tree)).not.toContain('@luna');
+  });
+
+  it('says what failed in place of the header it drew when the read fails', async () => {
+    const queryClient = newQueryClient();
+    lunaInLane(queryClient);
+    const read = heldRead();
+    const tree = await renderScreen(queryClient);
+    expect(texts(tree)).toContain('Luna Studio');
+
+    await act(async () => read.fail(new ApiError('Failed to fetch creator profile.', 500)));
+    await settle();
+
+    expect(byType(tree, 'status-block').map((node) => node.props.title)).toEqual(['Could not load creator']);
+    expect(texts(tree)).not.toContain('Luna Studio');
   });
 });

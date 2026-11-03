@@ -43,6 +43,7 @@ export function FeedCardShell({
   creatorLabel,
   creatorName,
   onCreatorPress,
+  onCreatorPressIn,
   onMorePress,
   moreAccessibilityLabel,
   renderMoreMenu,
@@ -70,6 +71,8 @@ export function FeedCardShell({
   creatorLabel: string;
   creatorName: string;
   onCreatorPress?: () => void;
+  /** The finger has landed on the byline: a chance to start reading the creator's page (`prepareCreatorProfile`). */
+  onCreatorPressIn?: () => void;
   onMorePress: () => void;
   moreAccessibilityLabel: string;
   /**
@@ -184,6 +187,7 @@ export function FeedCardShell({
           accessibilityLabel={onCreatorPress ? `Open ${creatorLabel}` : `${creatorLabel} · ${timeLabel}`}
           disabled={!onCreatorPress}
           onPress={onCreatorPress}
+          onPressIn={onCreatorPressIn}
           hitSlop={verticalHitSlop(CREATOR_ROW_HEIGHT)}
           style={({ pressed }) => ({
             flexDirection: 'row',

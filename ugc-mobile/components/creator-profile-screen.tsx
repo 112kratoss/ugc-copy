@@ -33,6 +33,7 @@ import {
   setCachedCreatorProfileBlocked,
   type CreatorProfileTab,
 } from '@/lib/creator-profile-view-model';
+import { creatorProfileOpening } from '@/lib/creator-profile-opening';
 import {
   CREATOR_PROFILE_PAGE_SIZE,
   creatorProfileGridQueryKey,
@@ -54,7 +55,7 @@ import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcaseFeedViewerQueryKey, createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
-import { CreatorProfileSkeleton } from '@/components/skeleton';
+import { CreatorProfileSkeleton, SkeletonBone } from '@/components/skeleton';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -76,6 +77,9 @@ const CREATOR_PROFILE_PAGES: ProfilePageAdapter<CreatorProfileResponse, Showcase
 };
 const GRID_GAP = 10;
 const LOAD_MORE_COOLDOWN_MS = 800;
+/** A grid tile's picture is 4:5 across the tile, over a caption block at least this tall (`CreatorPostTile`). */
+const TILE_PICTURE_ASPECT = 1.25;
+const TILE_CAPTION_MIN_HEIGHT = 92;
 
 type CreatorTool = CreatorProfileStats['toolsUsed'][number];
 type CreatorListItem =
@@ -84,7 +88,18 @@ type CreatorListItem =
   | { kind: 'post'; key: string; item: ShowcaseFeedItem }
   | { kind: 'tool'; key: string; tool: CreatorTool }
   | { kind: 'empty'; key: 'empty'; tab: CreatorProfileTab }
-  | { kind: 'blocked'; key: 'blocked' };
+  | { kind: 'blocked'; key: 'blocked' }
+  | { kind: 'placeholder'; key: string; index: number };
+
+/**
+ * The page before its first read lands, drawn from a post of the creator's:
+ * the header, under the key it keeps once the page is read, so it is filled
+ * in rather than drawn again, and tile-shaped stand-ins until the posts come.
+ */
+const OPENING_LIST_ITEMS: CreatorListItem[] = [
+  { kind: 'header', key: 'header' },
+  ...Array.from({ length: 6 }, (_, index) => ({ kind: 'placeholder' as const, key: `placeholder:${index}`, index })),
+];
 
 export function CreatorProfileScreen({
   initialTab = 'creations',
@@ -122,12 +137,20 @@ export function CreatorProfileScreen({
     enabled: Boolean(username),
   });
   const data = profileQuery.data?.pages[0];
+  // Who they are, as a post of theirs the app already holds names them: the
+  // header is drawn from it while the first read, which a touch on their avatar
+  // or handle started (`prepareCreatorProfile`), is on its way.
+  const opening = useMemo(() => creatorProfileOpening(queryClient, username), [queryClient, username]);
+  const headerProfile = data?.profile ?? (profileQuery.isLoading ? opening : null);
+  const hasPage = Boolean(data);
   const items = useMemo(() => flattenCreatorProfilePages(profileQuery.data?.pages), [profileQuery.data?.pages]);
   const profilePageCount = profileQuery.data?.pages.length ?? 0;
   const currentTabItems = useMemo(() => creatorProfileTabItems(items, activeTab), [activeTab, items]);
   const socialLinks = useMemo(() => data ? creatorProfileSocialLinks(data.profile) : [], [data]);
   const blockedByViewer = Boolean(data?.viewer.blockedByViewer);
   const listItems = useMemo<CreatorListItem[]>(() => {
+    // Not read yet: the tabs, their counts and the posts wait for the read.
+    if (!hasPage) return OPENING_LIST_ITEMS;
     // Someone the viewer blocked: who they are and the way to undo it, and
     // none of their work (the server sends none).
     if (blockedByViewer) return [{ kind: 'header', key: 'header' }, { kind: 'blocked', key: 'blocked' }];
@@ -141,7 +164,7 @@ export function CreatorProfileScreen({
       { kind: 'tabs', key: 'tabs' },
       ...(content.length ? content : [{ kind: 'empty', key: 'empty', tab: activeTab } as const]),
     ];
-  }, [activeTab, blockedByViewer, currentTabItems, data?.stats?.toolsUsed]);
+  }, [activeTab, blockedByViewer, currentTabItems, data?.stats?.toolsUsed, hasPage]);
 
   // Coming back to the screen, or following, refreshes the first page and
   // merges it over the cached pages (the profile dashboard's pattern, audit
@@ -461,7 +484,8 @@ export function CreatorProfileScreen({
   }, []);
   const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 55, minimumViewTime: 160 }), []);
 
-  if (profileQuery.isLoading && !data) {
+  // No post of theirs is held (a typed link, a search result): nothing to draw yet.
+  if (profileQuery.isLoading && !headerProfile) {
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
         <Stack.Screen options={{ title: 'Creator' }} />
@@ -471,7 +495,7 @@ export function CreatorProfileScreen({
     );
   }
 
-  if (!data) {
+  if (!headerProfile) {
     // The body used to print `error.message` -- whatever the API happened to
     // say, in the API's words, to someone who cannot act on it. Feedback:
     // "show people when a command can't be carried out and help them
@@ -501,17 +525,19 @@ export function CreatorProfileScreen({
     );
   }
 
+  const tilePictureHeight = Math.round(tileWidth * TILE_PICTURE_ASPECT);
   const renderItem = ({ item }: { item: CreatorListItem }) => {
     if (item.kind === 'header') {
       return (
         <View style={{ paddingBottom: 14 }}>
           <CreatorHeader
-            data={data}
+            data={data ?? null}
             followError={followError}
             isFollowLoading={followMutation.isPending}
             onEditProfile={() => router.push('/edit-profile' as never)}
             onFollowPress={handleFollowPress}
             onSafetyOptions={handleSafetyOptions}
+            profile={headerProfile}
             safetyMenu={safetyMenu}
             onShareProfile={handleShareProfile}
             socialLinks={socialLinks}
@@ -519,7 +545,22 @@ export function CreatorProfileScreen({
         </View>
       );
     }
+    if (item.kind === 'placeholder') {
+      // The first stand-in tells a screen reader the posts are coming; the bones themselves are hidden.
+      const announces = item.index === 0;
+      return (
+        <View
+          accessible={announces}
+          accessibilityRole={announces ? 'progressbar' : undefined}
+          accessibilityLabel={announces ? 'Loading posts' : undefined}
+          style={{ paddingHorizontal: GRID_GAP / 2, paddingBottom: GRID_GAP }}
+        >
+          <SkeletonBone width={tileWidth} height={tilePictureHeight + TILE_CAPTION_MIN_HEIGHT} radius={appTheme.radii.lg} />
+        </View>
+      );
+    }
     if (item.kind === 'tabs') {
+      if (!data) return null;
       return (
         <View style={{ backgroundColor: theme.colors.background, paddingBottom: 12 }}>
           <CreatorTabs activeTab={activeTab} data={data} onChange={setActiveTab} />
@@ -530,7 +571,7 @@ export function CreatorProfileScreen({
       return <CreatorToolRow tool={item.tool} />;
     }
     if (item.kind === 'blocked') {
-      return <CreatorBlockedPanel onUnblock={handleUnblockUser} unblocking={unblocking} username={data.profile.username} />;
+      return <CreatorBlockedPanel onUnblock={handleUnblockUser} unblocking={unblocking} username={headerProfile.username} />;
     }
     if (item.kind === 'empty') {
       return (
@@ -582,13 +623,13 @@ export function CreatorProfileScreen({
         onRefresh={handleRefresh}
         onViewableItemsChanged={onViewableItemsChanged}
         overrideItemLayout={(layout, item) => {
-          if (item.kind !== 'post') layout.span = 2;
+          if (item.kind !== 'post' && item.kind !== 'placeholder') layout.span = 2;
         }}
         refreshing={pullRefreshing}
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
-        // The tabs stick; a blocked creator's page has none.
-        stickyHeaderIndices={blockedByViewer ? undefined : [1]}
+        // The tabs stick; a blocked creator's page has none, nor a page not read yet.
+        stickyHeaderIndices={blockedByViewer || !hasPage ? undefined : [1]}
         viewabilityConfig={viewabilityConfig}
         style={{ flex: 1, width: '100%', maxWidth: 430, alignSelf: 'center', backgroundColor: theme.colors.background }}
         contentContainerStyle={{
@@ -686,23 +727,30 @@ function CreatorHeader({
   onEditProfile,
   onFollowPress,
   onSafetyOptions,
+  profile,
   safetyMenu,
   onShareProfile,
   socialLinks,
 }: {
-  data: CreatorProfileResponse;
+  /**
+   * The page as read. Null while its first read is on its way, when the header
+   * draws `profile` and nothing that waits on the read: whether the page is the
+   * reader's own, whether they follow or blocked it, its counts.
+   */
+  data: CreatorProfileResponse | null;
   followError: string | null;
   isFollowLoading: boolean;
   onEditProfile: () => void;
   onFollowPress: () => void;
   onSafetyOptions: () => void;
+  /** Who they are: the page's own profile, or before it is read, the one a post of theirs gives (`creatorProfileOpening`). */
+  profile: CreatorProfileResponse['profile'];
   /** The ⋮ menu (`lib/native-menu.ts`); `onSafetyOptions` opens the sheet where native menus are missing. */
   safetyMenu: NativeMenuModel;
   onShareProfile: () => void;
   socialLinks: Array<{ label: string; url: string }>;
 }) {
   const theme = useAppTheme();
-  const profile = data.profile;
   const initial = creatorInitial(profile);
 
   return (
@@ -721,25 +769,27 @@ function CreatorHeader({
             sizes) they take the next line, under it, rather than run off the card. */}
         <View style={{ marginTop: -42, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 }}>
           <CreatorAvatar avatarUrl={profile.avatarUrl} initial={initial} size={86} />
-          <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
-            {data.viewer.isOwner ? (
-              <EditProfileButton onPress={onEditProfile} />
-            ) : data.viewer.blockedByViewer ? null : (
-              <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
-            )}
-            <IconButton icon={ShareGlyph} label="Share profile" onPress={onShareProfile} />
-            {!data.viewer.isOwner ? (
-              <NativeMenu
-                model={safetyMenu}
-                accessibilityLabel="More options"
-                trigger={iconButtonMenuTrigger(theme.colors)}
-                onFallbackPress={onSafetyOptions}
-                renderButton={(onPress) => (
-                  <IconButton icon={MoreVertical} label="More options" onPress={onPress} />
-                )}
-              />
-            ) : null}
-          </View>
+          {data ? (
+            <View style={{ flexDirection: 'row', gap: 8, flexShrink: 0 }}>
+              {data.viewer.isOwner ? (
+                <EditProfileButton onPress={onEditProfile} />
+              ) : data.viewer.blockedByViewer ? null : (
+                <FollowButton following={data.viewer.isFollowing} loading={isFollowLoading} onPress={onFollowPress} />
+              )}
+              <IconButton icon={ShareGlyph} label="Share profile" onPress={onShareProfile} />
+              {!data.viewer.isOwner ? (
+                <NativeMenu
+                  model={safetyMenu}
+                  accessibilityLabel="More options"
+                  trigger={iconButtonMenuTrigger(theme.colors)}
+                  onFallbackPress={onSafetyOptions}
+                  renderButton={(onPress) => (
+                    <IconButton icon={MoreVertical} label="More options" onPress={onPress} />
+                  )}
+                />
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         <View style={{ gap: 6 }}>
@@ -763,7 +813,7 @@ function CreatorHeader({
           </View>
         ) : null}
 
-        {data.stats ? <CreatorStats stats={data.stats} /> : null}
+        {data?.stats ? <CreatorStats stats={data.stats} /> : null}
       </View>
     </View>
   );
@@ -809,7 +859,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
   const theme = useAppTheme();
   const isTextPost = isTextOnlyShowcasePost(item);
   const displayText = getShowcasePostDisplayText(item);
-  const height = Math.round(width * 1.25);
+  const height = Math.round(width * TILE_PICTURE_ASPECT);
   const accent = accentColor(item.category === 'video' ? 'video' : item.category === 'text' ? 'motion' : 'image', theme.colors);
   const hasVideo = item.mediaKind === 'video' || item.category === 'video' || item.mediaItems?.some((mediaItem) => mediaItem.mediaKind === 'video');
   const tileMediaItems = getShowcasePreviewMediaItems(item);
@@ -830,7 +880,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
 
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
-      <View style={{ minHeight: height + 92, overflow: 'hidden', borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
+      <View style={{ minHeight: height + TILE_CAPTION_MIN_HEIGHT, overflow: 'hidden', borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
         <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
         <View style={{ height, backgroundColor: theme.colors.surfaceInset }}>
           {isTextPost ? (
@@ -860,7 +910,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
         </View>
         </MediaZoomSourceView>
 
-        <View style={{ minHeight: 92, padding: 10, gap: 6 }}>
+        <View style={{ minHeight: TILE_CAPTION_MIN_HEIGHT, padding: 10, gap: 6 }}>
           <Text numberOfLines={2} style={{ minHeight: 38, color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{item.title || displayText}</Text>
           <Text numberOfLines={1} style={{ minHeight: 15, color: theme.colors.faint, ...appTheme.type.caption }}>
             {item.sourceTool ? `Made with ${item.sourceTool}` : ' '}

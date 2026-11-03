@@ -46,7 +46,12 @@ function textOf(node: Instance): string {
   return node.children.map((child) => (typeof child === 'string' ? child : textOf(child))).join('');
 }
 
-async function renderShell(props: { categoryLabel: string; modelLabel?: string | null }) {
+async function renderShell(props: {
+  categoryLabel: string;
+  modelLabel?: string | null;
+  onCreatorPress?: () => void;
+  onCreatorPressIn?: () => void;
+}) {
   let tree: renderer.ReactTestRenderer | null = null;
   await act(async () => {
     tree = renderer.create(
@@ -114,6 +119,26 @@ describe('FeedCardShell metadata line', () => {
     expect(hostAbove(line, 'view').props.style).toMatchObject({ flexShrink: 1, maxWidth: '50%' });
     const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === 'Open @ana');
     expect(byline.props.style).toMatchObject({ flex: 1 });
+
+    await act(async () => tree.unmount());
+  });
+});
+
+describe('FeedCardShell byline', () => {
+  // The creator's page is read as the finger lands (`prepareCreatorProfile`),
+  // and opened only by the press itself.
+  it('says when a finger lands on it, apart from the press that opens the page', async () => {
+    const onCreatorPress = vi.fn();
+    const onCreatorPressIn = vi.fn();
+    const tree = await renderShell({ categoryLabel: 'Image', onCreatorPress, onCreatorPressIn });
+    const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === 'Open @ana');
+
+    await act(async () => (byline.props.onPressIn as () => void)());
+    expect(onCreatorPressIn).toHaveBeenCalledTimes(1);
+    expect(onCreatorPress).not.toHaveBeenCalled();
+
+    await act(async () => (byline.props.onPress as () => void)());
+    expect(onCreatorPress).toHaveBeenCalledTimes(1);
 
     await act(async () => tree.unmount());
   });
