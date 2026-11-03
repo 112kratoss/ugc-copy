@@ -776,6 +776,25 @@ describe('workflow-runner recovery', () => {
         { templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' }, recipeCopyReads: expect.any(Map) },
       );
     });
+
+    // The motion start resolves the step's inputs, as POST /api/generations' does: handed the link the
+    // clip was measured from, it sends that, and it signs the picture again from the object it names,
+    // within the template's assets for a template run. The step handed it the links the canvas held,
+    // which it sent on as they were: a run of a workflow saved more than an hour before failed on Kie
+    // after its credits were held, and was refunded.
+    it('hands the start the link its clip was measured from, and its template’s assets to resolve the picture in', async () => {
+      resolveGenerationMediaSourceMock.mockImplementationOnce(async (_client: unknown, url: string) => `${url}?token=measured`);
+
+      const { startMotionGeneration } = await runMotionStep({ runId: 'run-1', stepId: 'step-1', templateId: 'template-1', templateVersionId: 'version-1' });
+
+      expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({
+        supabase: { role: 'runner' },
+        referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+        characterImageUrl: 'https://cdn.example.com/character.png',
+        resolvedMediaSources: new Map([['https://cdn.example.com/reference.mp4', 'https://cdn.example.com/reference.mp4?token=measured']]),
+        templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' },
+      }));
+    });
   });
 
   // POST /api/generations measures every clip whose length a price or a limit

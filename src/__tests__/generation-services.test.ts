@@ -4174,6 +4174,121 @@ describe('generation services', () => {
     });
   });
 
+  // A motion start sends both its inputs resolved, as the video start sends its own: the clip by the
+  // link its caller measured it from, and the picture signed again from the object it names. It sent
+  // them as it was given them, so a link the client kept past its hour (a remix's, signed when the
+  // remix was read) reached Kie after the credits were held, and the run failed and was refunded.
+  it('starts a motion run on its inputs resolved before the hold: the clip as measured, the picture from its object', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const requests: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-motion-resolved-1' } }) } as Response;
+    });
+    const signedTwoHoursAgo = Date.now() - 2 * SIGNED_LINK_SECONDS * 1000;
+    const picture = signedStorageLink('generation_inputs/user-1/gen-0/00-character_image.png', signedTwoHoursAgo);
+    const clip = signedStorageLink('generation_inputs/user-1/gen-0/01-motion_reference_video.mp4', signedTwoHoursAgo);
+    const measuredClip = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-0/01-motion_reference_video.mp4?token=measured';
+    const { supabase: creditSupabase, rpcCalls } = createSupabaseMock();
+    /** The database calls made by the time each link was signed. */
+    const callsWhenSigned: string[][] = [];
+    const createSignedUrl = vi.fn(async (filePath: string) => {
+      callsWhenSigned.push(rpcCalls.map((call) => call.fn));
+      return {
+        data: { signedUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/${filePath}?token=fresh` },
+        error: null,
+      };
+    });
+    const supabase = { storage: { from: vi.fn(() => ({ createSignedUrl })) } } as unknown as SupabaseClient;
+
+    await startMotionGeneration({
+      supabase,
+      creditSupabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-2.6',
+      characterImageUrl: picture,
+      referenceVideoUrl: clip,
+      duration: 5,
+      referenceVideoSeconds: 5,
+      resolvedMediaSources: new Map([[clip, measuredClip]]),
+    });
+
+    expect(requests[0]).toMatchObject({
+      input: {
+        input_urls: ['https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-0/00-character_image.png?token=fresh'],
+        video_urls: [measuredClip],
+      },
+    });
+    // The picture is signed once, before anything is held; the clip is not resolved a second time.
+    expect(createSignedUrl).toHaveBeenCalledTimes(1);
+    expect(createSignedUrl).toHaveBeenCalledWith('user-1/gen-0/00-character_image.png', 3600);
+    expect(callsWhenSigned).toEqual([[]]);
+  });
+
+  // A caller that does not say what its inputs are (the canvas runner, an app that sends the links
+  // alone) has them kept by the links it sent. A remix's restored input is sent as a link to its
+  // creator's file, so it stays theirs in the remixer's recipe, while the provider is sent the copy
+  // the remix gate made for the remixer.
+  it('keeps a remix’s inputs by the links they were sent as, which name their creator, and sends the remixer’s copies', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const { generationInputOrigin } = await import('@/lib/generation-input-origin');
+    const requests: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-motion-remix-1' } }) } as Response;
+    });
+    const sentAs = (file: string) => `https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-2/gen-9/${file}?token=remix-read`;
+    const copyFor = (source: string) => source.replace('user-2/gen-9', 'user-1/remix-imports/gen-9').replace('remix-read', 'copy');
+    const picture = sentAs('00-character_image.png');
+    const clip = sentAs('01-motion_reference_video.mp4');
+    // The mock is the file's own: other tests have called it by now.
+    sharedImportMocks.importSharedGenerationInputMedia.mockClear();
+    sharedImportMocks.importSharedGenerationInputMedia.mockImplementation((async ({ source }: { source: string }) => ({
+      outcome: 'imported',
+      storagePath: `generation_inputs/user-1/remix-imports/gen-9/${source.split('/gen-9/')[1]?.split('?')[0]}`,
+      signedUrl: copyFor(source),
+    })) as never);
+    const { supabase, inputMediaRows } = createSupabaseMock();
+    // The remixer's copies, which the run keeps a copy of its own of.
+    const creditSupabase = {
+      ...(supabase as unknown as Record<string, unknown>),
+      storage: {
+        from: vi.fn(() => ({
+          download: vi.fn(async (path: string) => ({
+            data: new Blob([path], { type: path.endsWith('.mp4') ? 'video/mp4' : 'image/png' }),
+            error: null,
+          })),
+          upload: vi.fn(async () => ({ error: null })),
+        })),
+      },
+    } as unknown as SupabaseClient;
+
+    try {
+      await startMotionGeneration({
+        supabase,
+        creditSupabase,
+        userId: 'user-1',
+        prompt: '',
+        model: 'kling-2.6',
+        characterImageUrl: picture,
+        referenceVideoUrl: clip,
+        duration: 5,
+        referenceVideoSeconds: 5,
+      });
+    } finally {
+      sharedImportMocks.importSharedGenerationInputMedia.mockImplementation(async () => ({ outcome: 'not-eligible' as const }));
+    }
+
+    expect(requests[0]).toMatchObject({ input: { input_urls: [copyFor(picture)], video_urls: [copyFor(clip)] } });
+    const remixer = { ownerIds: new Set(['user-1']), sourceGenerationOwners: new Map<string, string | null>() };
+    expect(inputMediaRows.map((row) => [row.role, generationInputOrigin({
+      metadata: row.metadata as Record<string, unknown>,
+      storagePath: row.storage_path as string,
+      sourceGenerationId: row.source_generation_id as string | null,
+    }, remixer)])).toEqual([['character_image', 'others'], ['motion_reference_video', 'others']]);
+  });
+
   it('sends Kling single-shot generations with named video elements', async () => {
     const { startVideoGeneration } = await import('@/lib/generation-services');
     let providerBody: Record<string, unknown> | null = null;

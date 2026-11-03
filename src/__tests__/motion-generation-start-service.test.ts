@@ -236,10 +236,11 @@ describe('startMotionGenerationForRoute', () => {
       userId: 'user-1',
       model: 'kling-3.0',
       prompt: 'Transfer the performance naturally.',
-      // Each input as resolved (this file's resolver answers one link for every input), not the
-      // caller's links, which may have run out.
-      referenceVideoUrl: resolvedReference,
-      characterImageUrl: resolvedReference,
+      // Each input as the caller sent it, which the start resolves, with the link the clip was
+      // measured from: the start sends that one rather than resolve the clip again.
+      referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+      characterImageUrl: 'https://signed.example.com/character.png',
+      resolvedMediaSources: new Map([['https://signed.example.com/reference.mp4', resolvedReference]]),
       duration: 6,
       characterOrientation: 'image',
       mode: '1080p',
@@ -392,14 +393,10 @@ describe('startMotionGenerationForRoute', () => {
     expect(startMotionGenerationMock).not.toHaveBeenCalled();
   });
 
-  // The provider is sent the picture as this route passes it on. A remix's restored picture is the
-  // link the remix was read with, signed for an hour: past it, storage refused the provider and the
-  // run failed after its credits were held. It goes resolved, as the clip does.
-  it("resolves the picture as it resolves the clip, so a link the client kept past its hour is not sent on", async () => {
-    const freshPicture = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/gen-1/00-character_image.png?token=fresh';
-    resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => (
-      url === 'https://signed.example.com/character.png' ? freshPicture : resolvedReference
-    ));
+  // The motion start resolves both its inputs, as the video start does, so this route resolves the
+  // clip only, to measure it, and hands the start that link beside the clip as sent. It handed the
+  // start the links as resolved, which the start kept a remix's inputs by: as the remixer's copies.
+  it('resolves only the clip, to measure it, and hands the start the inputs as sent with that link', async () => {
     startMotionGenerationMock.mockResolvedValueOnce({
       predictionId: 'task-motion-8',
       generationId: 'gen-motion-8',
@@ -417,65 +414,16 @@ describe('startMotionGenerationForRoute', () => {
       adminSupabase: createClientMock().client,
     });
 
-    expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith(
-      userClient.client,
-      'https://signed.example.com/character.png',
-      'user-1',
-    );
+    expect(resolveGenerationMediaSourceMock.mock.calls).toEqual([
+      [userClient.client, 'https://signed.example.com/reference.mp4', 'user-1'],
+    ]);
+    expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith(resolvedReference);
     expect(startMotionGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
-      characterImageUrl: freshPicture,
-      referenceVideoUrl: resolvedReference,
+      supabase: userClient.client,
+      characterImageUrl: 'https://signed.example.com/character.png',
+      referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+      resolvedMediaSources: new Map([['https://signed.example.com/reference.mp4', resolvedReference]]),
     }));
-  });
-
-  // The picture is resolved beside the clip, which is resolved to be measured: its latency is off
-  // the start's way, and a picture the caller may not use is refused as early as such a clip.
-  it('resolves the picture beside the clip, the clip asked first', async () => {
-    let releaseClip: (link: string) => void = () => undefined;
-    resolveGenerationMediaSourceMock.mockImplementation((_client: unknown, url: string) => (
-      url === 'https://signed.example.com/reference.mp4'
-        ? new Promise<string>((resolve) => { releaseClip = resolve; })
-        : Promise.resolve(url)
-    ));
-    startMotionGenerationMock.mockResolvedValueOnce({ predictionId: 'task-motion-9', generationId: 'gen-motion-9', remainingCredits: 500, cost: 162 });
-
-    const outcome = startMotionGenerationForRoute({
-      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-9' } }),
-      body: motionBody({ duration: 6 }),
-      userId: 'user-1',
-      callerIsGuest: false,
-      supabase: createClientMock().client,
-      adminSupabase: createClientMock().client,
-    });
-
-    await vi.waitFor(() => expect(resolveGenerationMediaSourceMock.mock.calls.map(([, url]) => url)).toEqual([
-      'https://signed.example.com/reference.mp4',
-      'https://signed.example.com/character.png',
-    ]));
-    releaseClip(resolvedReference);
-    await expect(outcome).resolves.toMatchObject({ predictionId: 'task-motion-9' });
-  });
-
-  it('refuses a picture the caller may not use before the clip is priced', async () => {
-    const notTheirs = new Error('Media references must belong to the authenticated user.');
-    resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => {
-      if (url === 'https://signed.example.com/character.png') throw notTheirs;
-      return resolvedReference;
-    });
-    // Measured longer than the caller was quoted for: once priced, the run would be sent to quote again.
-    probeMediaDurationSecondsMock.mockResolvedValueOnce(29.6);
-
-    const refusal = await startMotionGenerationForRoute({
-      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-10' } }),
-      body: motionBody({ model: 'kling-2.6', mode: '720p', duration: 1 }),
-      userId: 'user-1',
-      callerIsGuest: false,
-      supabase: createClientMock().client,
-      adminSupabase: createClientMock().client,
-    }).catch((error: unknown) => error);
-
-    expect(refusal).toBe(notTheirs);
-    expect(startMotionGenerationMock).not.toHaveBeenCalled();
   });
 
   it('replays a start already accepted without reading its clip again', async () => {

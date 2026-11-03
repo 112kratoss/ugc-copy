@@ -564,8 +564,23 @@ describe('reference lengths a caller reports', () => {
       prompt: '',
       settings: { duration, resolution: '720p', characterOrientation: 'video' },
       inputs: [
-        { slot: 'characterImage', kind: 'image', url: CHARACTER_URL },
-        { slot: 'referenceVideo', kind: 'video', url: REFERENCE_URL, durationSeconds },
+        {
+          slot: 'characterImage',
+          kind: 'image',
+          url: CHARACTER_URL,
+          label: 'Character image',
+          storagePath: 'generation_inputs/user-1/character.png',
+          sourceGenerationId: 'generation-0',
+        },
+        {
+          slot: 'referenceVideo',
+          kind: 'video',
+          url: REFERENCE_URL,
+          durationSeconds,
+          label: 'Reference video',
+          storagePath: 'generation_inputs/user-1/reference.mp4',
+          sourceGenerationId: 'generation-0',
+        },
       ],
     };
   }
@@ -837,9 +852,10 @@ describe('reference lengths a caller reports', () => {
     expect(given.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL]);
   });
 
-  // A motion run's adapter sends its clip as given, so it is handed the link resolved to measure it: the
-  // file measured is the one the provider fetches, and a client's link past its hour is not sent on.
-  it("hands a motion run the clip's resolved link, and leaves a video run's to its own adapter", async () => {
+  // A clip goes on as it was sent, with the link it was measured from beside it (`resolvedSources`),
+  // which its run's start sends. A motion clip went on as that link instead, so the run kept a
+  // remix's clip as the remixer's own copy, and their recipe took another creator's clip for theirs.
+  it('keeps every clip as it was sent, with the link it was measured from beside it', async () => {
     const fresh = 'https://project.supabase.co/storage/v1/object/sign/generated_videos/creator-1/result.mp4?token=fresh';
     const motion = await resolveBillableInputDurations({
       request: parseUnifiedGenerationRequest(motionBody(5, 5)),
@@ -850,8 +866,9 @@ describe('reference lengths a caller reports', () => {
     });
     expect(motion.request.inputs).toEqual([
       expect.objectContaining({ slot: 'characterImage', url: CHARACTER_URL }),
-      expect.objectContaining({ slot: 'referenceVideo', url: fresh, durationSeconds: 5 }),
+      expect.objectContaining({ slot: 'referenceVideo', url: REFERENCE_URL, durationSeconds: 5 }),
     ]);
+    expect(motion.resolvedSources).toEqual(new Map([[REFERENCE_URL, fresh]]));
 
     const video = await resolveBillableInputDurations({
       request: parseUnifiedGenerationRequest(seedanceBody(10)),
@@ -861,62 +878,45 @@ describe('reference lengths a caller reports', () => {
       probeInputDuration: async () => 10,
     });
     expect(video.request.inputs[0]).toMatchObject({ url: REFERENCE_URL, durationSeconds: 10 });
+    expect(video.resolvedSources).toEqual(new Map([[REFERENCE_URL, fresh]]));
   });
 
-  // The motion adapter sends its picture as given too. A remix's restored picture comes as the link
-  // the remix was read with, signed for an hour: a run started past it handed the provider a link
-  // storage refuses, and the run failed after its credits were held. The picture goes resolved, as
-  // the clip does and as every other adapter resolves its inputs.
-  it("hands a motion run the picture's resolved link too, not the client's", async () => {
-    const freshPicture = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/character.png?token=fresh';
-    const freshClip = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/reference.mp4?token=fresh';
+  // The motion start resolves its own inputs, as the video start does. It is handed them as they
+  // were sent, what each one is, and the link the clip was measured from, which it sends rather than
+  // resolve the clip again. What each one is keeps a remix's inputs as their creator's in the run's
+  // recipe, whatever copy the start sends: handed none, and the links as resolved, it kept them as
+  // the remixer's own.
+  it('hands the motion start its inputs as sent, what each one is, and the link its clip was measured from', async () => {
+    const measuredClip = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/reference.mp4?token=measured';
     const run = start({
       body: motionBody(5, 5),
       measuredSeconds: 5,
       operation: MOTION_OPERATION,
       quote: durationPricedQuote,
-      resolveLink: (url) => (url === CHARACTER_URL ? freshPicture : url === REFERENCE_URL ? freshClip : url),
+      resolveLink: (url) => (url === REFERENCE_URL ? measuredClip : `${url}&resolved=1`),
     });
 
     await expect(run.outcome).resolves.toMatchObject({ success: true });
     expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({
-      characterImageUrl: freshPicture,
-      referenceVideoUrl: freshClip,
+      characterImageUrl: CHARACTER_URL,
+      referenceVideoUrl: REFERENCE_URL,
+      characterImage: {
+        kind: 'image',
+        label: 'Character image',
+        storagePath: 'generation_inputs/user-1/character.png',
+        sourceGenerationId: 'generation-0',
+      },
+      referenceVideo: {
+        kind: 'video',
+        label: 'Reference video',
+        storagePath: 'generation_inputs/user-1/reference.mp4',
+        sourceGenerationId: 'generation-0',
+      },
+      resolvedMediaSources: new Map([[REFERENCE_URL, measuredClip]]),
     }));
-    // Resolved as the user it starts for, with the client it starts under.
-    expect(run.resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, CHARACTER_URL, 'user-1');
-  });
-
-  // The picture is resolved beside the clip, which pricing resolves to measure: its latency is off
-  // the start's way, and a picture the caller may not use is refused as early as such a clip.
-  it("resolves a motion run's picture beside its clip, the clip asked first", async () => {
-    let releaseClip: (link: string) => void = () => undefined;
-    const resolveInputSource = vi.fn((_client: unknown, url: string) => (
-      url === REFERENCE_URL ? new Promise<string>((resolve) => { releaseClip = resolve; }) : Promise.resolve(url)
-    ));
-    const run = start({ body: motionBody(5, 5), measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote, resolveInputSource });
-
-    await vi.waitFor(() => expect(resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL, CHARACTER_URL]));
-    releaseClip(REFERENCE_URL);
-    await expect(run.outcome).resolves.toMatchObject({ success: true });
-  });
-
-  it('refuses a motion picture the caller may not use before the run is priced', async () => {
-    const notTheirs = new GenerationServiceError('Media references must belong to the authenticated user.', 400);
-    const run = start({
-      // Quoted for 1 second of a 30-second clip: once priced, the run would be sent to quote again.
-      body: motionBody(1, 1),
-      measuredSeconds: 30,
-      operation: MOTION_OPERATION,
-      quote: durationPricedQuote,
-      resolveInputSource: vi.fn(async (_client: unknown, url: string) => {
-        if (url === CHARACTER_URL) throw notTheirs;
-        return url;
-      }),
-    });
-
-    await expect(run.outcome).rejects.toBe(notTheirs);
-    expect(run.startMotion).not.toHaveBeenCalled();
+    // Only the clip is resolved before the start, to be measured: the picture is the start's to resolve.
+    expect(run.resolveInputSource).toHaveBeenCalledTimes(1);
+    expect(run.resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, REFERENCE_URL, 'user-1');
   });
 
   it('refuses a reference whose length cannot be read, or that is not an HTTPS object', async () => {
@@ -1984,7 +1984,8 @@ describe('a page run the provider is sent', () => {
 
   // Product decision 20: a motion run on this route is held to Kie's own 2,500 characters.
   describe('a motion run’s prompt', () => {
-    const STORAGE = 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1';
+    // Links the start resolves as they are, as this file's video runs send theirs: the motion start
+    // resolves its inputs too, and this harness has no storage to sign one again from.
     const motionRun = (prompt: string) => startFromPage({
       kind: 'motion',
       modelId: 'kling-2.6',
@@ -1992,8 +1993,8 @@ describe('a page run the provider is sent', () => {
       shots: [],
       settings: { resolution: '720p', characterOrientation: 'video', duration: 4 },
       inputs: [
-        { slot: 'characterImage', kind: 'image', url: `${STORAGE}/character.png?token=t` },
-        { slot: 'referenceVideo', kind: 'video', url: `${STORAGE}/reference.mp4?token=t`, durationSeconds: 4 },
+        { slot: 'characterImage', kind: 'image', url: HERO },
+        { slot: 'referenceVideo', kind: 'video', url: CLIP, durationSeconds: 4 },
       ],
     });
 
@@ -2013,6 +2014,180 @@ describe('a page run the provider is sent', () => {
       expect((request as { input?: { prompt?: string } } | undefined)?.input?.prompt).toBe(atLimit);
       expect(reservation?.p_prompt).toBe(atLimit);
     });
+  });
+});
+
+// A remix of another creator's motion run, from the body the motion page posts to the inputs the
+// run keeps. The route, the catalog's quote, the dispatch, the motion start and the keeping of its
+// inputs are the real ones; the remix gate's copy of each kept input is stood in for.
+describe('a remix’s motion run', () => {
+  const ORIGINAL = 'generation-original';
+  const CREATOR = 'creator-a';
+  const REMIXER = 'remixer-b';
+  const STORAGE = 'https://project.supabase.co/storage/v1/object/sign';
+  /** The original run's kept inputs, in its creator's folder. */
+  const PICTURE = `generation_inputs/${CREATOR}/${ORIGINAL}/00-character_image.png`;
+  const CLIP = `generation_inputs/${CREATOR}/${ORIGINAL}/01-motion_reference_video.mp4`;
+  /** A kept input as the remix was read with it, and the remixer's copy the remix gate makes of it. */
+  const remixLink = (path: string) => `${STORAGE}/${path}?token=remix-read`;
+  const copyOf = (path: string) => path.replace(`${CREATOR}/${ORIGINAL}`, `${REMIXER}/remix-imports/${ORIGINAL}`);
+  const copyLink = (path: string) => `${STORAGE}/${copyOf(path)}?token=copy`;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubEnv('KIE_AI_API_KEY', 'test-key');
+    vi.stubEnv('KIE_PROVIDER_WEBHOOK_SECRET', 'test-webhook-secret');
+    vi.stubEnv('KIE_WEBHOOK_HMAC_KEY', 'hmac-key');
+    vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com');
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+    vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code');
+    vi.stubGlobal('fetch', vi.fn());
+    // The remix gate hands the remixer the original's kept inputs, each as a copy of their own, and
+    // nothing else of anyone's.
+    vi.doMock('@/lib/generation-input-media-import', () => ({
+      importSharedGenerationInputMedia: vi.fn(async ({ source }: { source: string }) => {
+        const kept = [PICTURE, CLIP].find((path) => source.includes(path));
+        return kept
+          ? { outcome: 'imported', storagePath: copyOf(kept), signedUrl: copyLink(kept) }
+          : { outcome: 'not-eligible' };
+      }),
+      resolveRemixResultMedia: vi.fn(async () => ({ outcome: 'not-eligible' })),
+    }));
+  });
+
+  afterEach(() => {
+    vi.doUnmock('@/lib/generation-input-media-import');
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  /** The remix started as the motion page posts it, with `picture` over its restored picture. */
+  async function startRemix(picture: Record<string, unknown> = {}) {
+    const { startUnifiedGenerationForRoute: startRoute } = await import('@/lib/unified-generation-start-service');
+    const { loadPublishedGenerationModelCatalog } = await import('@/lib/generation-model-catalog-store');
+    const { catalog } = await loadPublishedGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
+
+    const requests: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'provider-task-1' } }) } as Response;
+    });
+    const rpc = vi.fn(async (fn: string, args: Record<string, unknown>) => {
+      if (fn === 'claim_generation_start_request') return { data: 'claimed', error: null };
+      if (fn === 'start_generation') {
+        return {
+          data: { status: 'started', generation_id: 'generation-1', remaining_credits: 100, cost: args.p_cost },
+          error: null,
+        };
+      }
+      if (fn === 'attach_generation_provider_task') {
+        return { data: { status: 'attached', generation_id: 'generation-1' }, error: null };
+      }
+      return { data: true, error: null };
+    });
+    /** The inputs the run keeps, as `generation_input_media` rows. */
+    const keptInputs: Array<Record<string, unknown>> = [];
+    const adminSupabase = {
+      rpc,
+      from: vi.fn((table: string) => {
+        if (table === 'generation_input_media') {
+          return {
+            insert: async (row: Record<string, unknown>) => {
+              keptInputs.push({ id: `input-${keptInputs.length + 1}`, ...row });
+              return { data: null, error: null };
+            },
+          };
+        }
+        const builder = {
+          select: () => builder,
+          eq: () => builder,
+          maybeSingle: async () => ({ data: null, error: null }),
+        };
+        return builder;
+      }),
+      // The files the run keeps its own copies of: the remixer's copies the remix gate made.
+      storage: {
+        from: vi.fn(() => ({
+          download: vi.fn(async (path: string) => ({
+            data: new Blob([path], { type: path.endsWith('.mp4') ? 'video/mp4' : 'image/png' }),
+            error: null,
+          })),
+          upload: vi.fn(async () => ({ data: null, error: null })),
+        })),
+      },
+    };
+
+    const outcome = await startRoute(
+      {
+        request: new Request('http://localhost/api/generations', {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'remix-motion-run' },
+        }),
+        // As the motion page posts a remix's restored inputs: the links the remix was read with,
+        // the files they name, and the run they came from.
+        body: {
+          kind: 'motion',
+          modelId: 'kling-2.6',
+          catalogRevision: catalog.revision,
+          prompt: '',
+          settings: { resolution: '720p', characterOrientation: 'video', duration: 5 },
+          inputs: [
+            {
+              slot: 'characterImage',
+              kind: 'image',
+              url: remixLink(PICTURE),
+              label: 'Character image',
+              storagePath: PICTURE,
+              sourceGenerationId: ORIGINAL,
+              ...picture,
+            },
+            {
+              slot: 'referenceVideo',
+              kind: 'video',
+              url: remixLink(CLIP),
+              label: 'Reference video',
+              storagePath: CLIP,
+              sourceGenerationId: ORIGINAL,
+              durationSeconds: 5,
+            },
+          ],
+          sourceGenerationId: ORIGINAL,
+        },
+        userId: REMIXER,
+        callerIsGuest: false,
+        supabase: {} as never,
+        adminSupabase: adminSupabase as never,
+      },
+      {
+        resolveSource: vi.fn(async () => ORIGINAL) as never,
+        enforceRateLimit: vi.fn(async () => undefined) as never,
+        probeInputDuration: vi.fn(async () => 5),
+      },
+    );
+    return { outcome, request: requests[0], keptInputs, rpc };
+  }
+
+  // A remix's inputs are its original creator's, and a recipe left at its default shares exactly
+  // those (showcase-publish-service: `onlyRowIds`, the inputs whose origin is `others`). The run
+  // kept its picture and clip as the copies it sent, which name the remixer, so publishing the
+  // remix shared neither, and told the creator their recipe held uploads of their own.
+  it('keeps the picture and clip it brought from its original as that creator’s, so its recipe shares them', async () => {
+    const { outcome, request, keptInputs } = await startRemix();
+
+    expect(outcome).toMatchObject({ success: true, predictionId: 'provider-task-1' });
+    // The provider is sent the remixer's copies, which are theirs to send.
+    expect(request).toMatchObject({ input: { input_urls: [copyLink(PICTURE)], video_urls: [copyLink(CLIP)] } });
+    expect(keptInputs.map((row) => row.role)).toEqual(['character_image', 'motion_reference_video']);
+
+    const { loadGenerationInputOrigins } = await import('@/lib/post-resource-bundles-server');
+    const stored = createStoredRows({ generation_input_media: keptInputs, profiles: [], generations: [] });
+    const origins = await loadGenerationInputOrigins({
+      supabase: stored.client,
+      ownerUserId: REMIXER,
+      generationId: 'generation-1',
+    });
+    expect([...origins.byRowId.values()]).toEqual(['others', 'others']);
+    expect(origins.hasOwn).toBe(false);
   });
 });
 
