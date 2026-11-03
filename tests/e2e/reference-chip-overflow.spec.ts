@@ -3,16 +3,18 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 /**
  * A long reference name never makes a creator wider than its window.
  *
- * Above the prompt, each reference has a chip that inserts its @handle: the
+ * Above the prompt, each reference had a chip that inserted its @handle: the
  * reference's name, then the handle. A chip could not shrink below its text and
  * a handle cannot break, so a name of 34 characters made a chip 425px wide in a
  * 308px row, and the whole document 466px wide in a 390px window (2026-10-02).
- * Typing "@" opens a panel of the same chips in a narrower row, which made it
+ * Typing "@" opened a panel of the same chips in a narrower row, which made it
  * wider still.
  *
- * A chip stops at its row now. The handle is what the prompt needs, so it keeps
- * its full width and the name is cut to what is left. Only a handle wider than
- * the row by itself wraps.
+ * Since 2026-11-04 typing "@" opens a menu over the page with a row for each
+ * reference: its picture, its name, and its handle under the name. A row stops
+ * at the menu and the menu at the window. The handle is what the prompt needs,
+ * so it keeps the row's whole width and the name is cut to one line. Only a
+ * handle wider than its line by itself wraps, after an underscore.
  *
  * The Kling video element card had a smaller fault of the same kind. From 1280px
  * up its cards were 160px wide, which left the Copy and Insert buttons a 108px
@@ -44,8 +46,8 @@ function mediaUrl(fileName: string) {
 }
 
 /**
- * The three chips a row has to hold:
- * a default name, whose chip fits everywhere, so nothing about it may change;
+ * The three references a row has to hold:
+ * a default name, which fits everywhere, so nothing about it may change;
  * the measured one, a single word of 34 characters;
  * and a name whose handle is wider than a phone's row by itself, so it has to wrap.
  */
@@ -136,7 +138,7 @@ const IMAGE_REMIX = {
 };
 
 const VIEWPORTS = [
-  // A phone. Two of the three chips are wider than their row, and this is where
+  // A phone. Two of the three names are wider than their row, and this is where
   // the page itself grew wider than its window.
   { width: 390, height: 844 },
   // The column beside the canvas (two panes from 1120px wide).
@@ -146,7 +148,7 @@ const VIEWPORTS = [
 type Row = {
   /** How far the document is wider than its window, in pixels. */
   pageOverflow: number;
-  /** The handle on each chip or card in order, as the page's own text has it. */
+  /** The handle on each row or card in order, as the page's own text has it. */
   handles: string[];
   /** One line for each thing the layout gets wrong. */
   faults: string[];
@@ -169,36 +171,27 @@ async function readPastDevServerReloads<T>(read: () => Promise<T | null>): Promi
   }
 }
 
-/** Measures the chips under the label `label`, or answers null while there are none. */
-function readChipRow(page: Page, label: string): Promise<Row | null> {
-  return readPastDevServerReloads(() => page.evaluate((rowLabel) => {
-    const isHandle = (element: Element | null) => (
-      element !== null
-      && /^@[a-z0-9_]+$/.test(element.textContent ?? '')
-      && Array.from(element.children).every((child) => child.tagName === 'WBR')
-    );
-    // A chip is a button holding a name and then a handle.
-    const isChip = (button: Element) => button.childElementCount === 2 && isHandle(button.lastElementChild);
-    const title = Array.from(document.querySelectorAll<HTMLElement>('p'))
-      .find((candidate) => candidate.textContent?.trim() === rowLabel);
-    // The chips sit in the label's nearest ancestor that holds one.
-    let block = title?.parentElement ?? null;
-    while (block && !Array.from(block.querySelectorAll('button')).some(isChip)) {
-      block = block.parentElement;
-    }
-    const row = Array.from(block?.querySelectorAll('button') ?? []).find(isChip)?.parentElement;
-    if (!row) return null;
+/** Measures the rows of the "@" menu of `field`, or answers null while it is shut. */
+async function readMenuRows(field: Locator): Promise<Row | null> {
+  // A reload can take a shot prompt off the page: the caller shows it again.
+  if (await field.count() === 0) return null;
+  return readPastDevServerReloads(() => field.evaluate((prompt) => {
+    // The menu is drawn in the prompt's own card, over the page.
+    const menu = prompt.parentElement?.querySelector<HTMLElement>(':scope > [data-mention-menu]') ?? null;
+    const rows = Array.from(menu?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+    if (!menu || rows.length === 0 || getComputedStyle(menu).visibility !== 'visible') return null;
 
     const lineCount = (element: Element) => {
       const text = document.createRange();
       text.selectNodeContents(element);
       return new Set(Array.from(text.getClientRects()).map((line) => Math.round(line.top))).size;
     };
+    const px = (value: number) => `${Math.round(value)}px`;
     const faults: string[] = [];
 
     // Content that runs out of its box where it shows. A name cut short is
     // clipped on purpose, so a box that hides its overflow is not counted.
-    for (const element of [row, ...Array.from(row.querySelectorAll<HTMLElement>('*'))]) {
+    for (const element of [menu, ...Array.from(menu.querySelectorAll<HTMLElement>('*'))]) {
       if (
         element.clientWidth > 0
         && getComputedStyle(element).overflowX === 'visible'
@@ -208,15 +201,26 @@ function readChipRow(page: Page, label: string): Promise<Row | null> {
       }
     }
 
-    const rowBox = row.getBoundingClientRect();
-    const chips = Array.from(row.children) as HTMLElement[];
-    for (const chip of chips) {
-      const [name, handle] = Array.from(chip.children) as HTMLElement[];
-      const fault = (text: string) => faults.push(`${handle.textContent}: ${text}`);
-      const chipBox = chip.getBoundingClientRect();
+    const menuBox = menu.getBoundingClientRect();
+    if (menuBox.left < -1 || menuBox.right > window.innerWidth + 1) {
+      faults.push(`the menu runs from ${px(menuBox.left)} to ${px(menuBox.right)}, outside the ${px(window.innerWidth)} window`);
+    }
 
-      if (chipBox.left < rowBox.left - 1 || chipBox.right > rowBox.right + 1) {
-        fault(`its chip runs from ${Math.round(chipBox.left)} to ${Math.round(chipBox.right)}px, outside its row at ${Math.round(rowBox.left)} to ${Math.round(rowBox.right)}px`);
+    const handles: string[] = [];
+    for (const row of rows) {
+      // A row is the picture, then a column of the name over the handle.
+      const column = row.children[1] as HTMLElement | undefined;
+      const [name, handle] = Array.from(column?.children ?? []) as HTMLElement[];
+      handles.push(handle?.textContent ?? '');
+      const fault = (text: string) => faults.push(`${handle?.textContent ?? row.textContent}: ${text}`);
+      if (!column || !name || !handle) {
+        fault('has no name and handle to measure');
+        continue;
+      }
+
+      const rowBox = row.getBoundingClientRect();
+      if (rowBox.left < menuBox.left - 1 || rowBox.right > menuBox.right + 1) {
+        fault(`its row runs from ${px(rowBox.left)} to ${px(rowBox.right)}, outside its menu at ${px(menuBox.left)} to ${px(menuBox.right)}`);
       }
 
       // An inline box reports no width, which would pass every check below.
@@ -228,38 +232,27 @@ function readChipRow(page: Page, label: string): Promise<Row | null> {
         fault(`a ${handle.clientWidth}x${handle.clientHeight}px box holds ${handle.scrollWidth}x${handle.scrollHeight}px of handle`);
       }
       const handleBox = handle.getBoundingClientRect();
-      if (handleBox.left < chipBox.left - 1 || handleBox.right > chipBox.right + 1) {
-        fault('the handle runs outside its chip');
+      if (handleBox.left < rowBox.left - 1 || handleBox.right > rowBox.right + 1) {
+        fault('the handle runs outside its row');
       }
 
       // The name is cut, never wrapped: wrapped, a long one stood a dozen lines tall.
       if (lineCount(name) > 1) {
         fault(`the name wraps onto ${lineCount(name)} lines`);
       }
-      // And it is cut only when its chip has no more row to grow into.
-      if (name.scrollWidth > name.clientWidth + 1 && chipBox.width < row.clientWidth - 1) {
-        fault(`the name is cut in a ${Math.round(chipBox.width)}px chip that has ${row.clientWidth}px of row`);
-      }
-
-      // The handle wraps last: by then the name has given up all of its room,
-      // and the handle has everything inside the chip but the gap.
-      const chipStyle = getComputedStyle(chip);
-      const room = chip.clientWidth
-        - parseFloat(chipStyle.paddingLeft)
-        - parseFloat(chipStyle.paddingRight)
-        - (parseFloat(chipStyle.columnGap) || 0);
-      if (lineCount(handle) > 1 && handle.clientWidth < room - 1) {
-        fault(`the handle wraps onto ${lineCount(handle)} lines in ${handle.clientWidth}px of the ${Math.round(room)}px its chip has`);
+      // The handle wraps only when its line is the column's whole width.
+      if (lineCount(handle) > 1 && handle.clientWidth < column.clientWidth - 1) {
+        fault(`the handle wraps onto ${lineCount(handle)} lines in ${handle.clientWidth}px of the ${column.clientWidth}px its column has`);
       }
     }
 
     const root = document.documentElement;
     return {
       pageOverflow: root.scrollWidth - root.clientWidth,
-      handles: chips.map((chip) => chip.lastElementChild?.textContent ?? ''),
+      handles,
       faults,
     };
-  }, label));
+  }, undefined, { timeout: 5_000 }));
 }
 
 /** Measures the Kling video element tiles' Insert and Copy, or answers null while there are none. */
@@ -334,18 +327,18 @@ async function typeAtEnd(field: Locator, text: string) {
 }
 
 /**
- * The same for a panel that only shows while the prompt ends in "@". A dev server
- * reload takes the "@" away and shuts the panel, so `open` types it again until
- * the row has been measured.
+ * Measures the "@" menu of `field` at each width. The menu shows only while the
+ * prompt ends in "@", and a dev server reload takes the "@" away, so `open` types
+ * it again until the rows have been measured.
  */
-async function expectSuggestionsInTheirRow(page: Page, label: string, handles: string[], open: () => Promise<void>) {
+async function expectRowsInTheMenu(page: Page, field: Locator, handles: string[], open: () => Promise<void>) {
   for (const viewport of VIEWPORTS) {
     await page.setViewportSize(viewport);
     await expect(async () => {
-      if (!(await page.getByText(label, { exact: true }).isVisible())) {
+      if (await readMenuRows(field) === null) {
         await open();
       }
-      expect(await readChipRow(page, label), `"${label}" at ${viewport.width}px wide`).toEqual(contained(handles));
+      expect(await readMenuRows(field), `the "@" menu at ${viewport.width}px wide`).toEqual(contained(handles));
     }).toPass({ timeout: 30_000 });
   }
 }
@@ -364,7 +357,7 @@ test.describe('reference chips', () => {
     ));
   });
 
-  test('the video creator keeps a long reference name inside its chips', async ({ page }) => {
+  test('the video creator keeps a long reference name inside its "@" menu', async ({ page }) => {
     await page.route('**/api/remix-source*', (route) => route.fulfill({ json: SEEDANCE_REMIX }));
     const handles = REFERENCES.map((reference) => reference.handle);
 
@@ -373,14 +366,13 @@ test.describe('reference chips', () => {
 
     // The row of chips over the prompt went with the column layout (2026-10-26), as on the
     // image creator: each reference has its own Insert (its tile's handle, since 2026-10-31),
-    // so the chips left are the "@" panel's. The tiles scroll inside their strip, so the page's
-    // overflow measured here is the panel's alone.
-    await expectSuggestionsInTheirRow(page, 'Insert reference', handles, () => (
-      typeAtEnd(page.getByPlaceholder(/^Describe the .* scene/), ' @')
-    ));
+    // and "@" opens the menu. The tiles scroll inside their strip, so the page's overflow
+    // measured here is the menu's alone.
+    const prompt = page.getByPlaceholder(/^Describe the .* scene/);
+    await expectRowsInTheMenu(page, prompt, handles, () => typeAtEnd(prompt, ' @'));
   });
 
-  test('the video creator keeps Kling clip names inside their chips and the tiles\' buttons inside their tiles', async ({ page }) => {
+  test('the video creator keeps Kling clip names inside the "@" menu and the tiles\' buttons inside their tiles', async ({ page }) => {
     await page.route('**/api/remix-source*', (route) => route.fulfill({ json: KLING_REMIX }));
     const handles = CLIPS.map((clip) => clip.handle);
 
@@ -393,13 +385,12 @@ test.describe('reference chips', () => {
         .poll(() => readKlingCardRows(page), { message: `the cards at ${viewport.width}px wide` })
         .toEqual(contained(handles));
     }
-    await expectSuggestionsInTheirRow(page, 'Insert reference', handles, () => (
-      typeAtEnd(page.getByPlaceholder(/^Describe the .* scene/), ' @')
-    ));
+    const prompt = page.getByPlaceholder(/^Describe the .* scene/);
+    await expectRowsInTheMenu(page, prompt, handles, () => typeAtEnd(prompt, ' @'));
 
-    // Each shot of a multi-shot run has a prompt of its own, with the same panel.
-    await expectSuggestionsInTheirRow(page, 'Insert video element', handles, async () => {
-      const shot = page.getByPlaceholder('Describe shot 1...');
+    // Each shot of a multi-shot run has a prompt of its own, with the same menu.
+    const shot = page.getByPlaceholder('Describe shot 1...');
+    await expectRowsInTheMenu(page, shot, handles, async () => {
       if (!(await shot.isVisible())) {
         await page.getByRole('radio', { name: 'Multi-shot', exact: true }).click();
       }
@@ -407,7 +398,7 @@ test.describe('reference chips', () => {
     });
   });
 
-  test('the image creator keeps a long element name inside its chips', async ({ page }) => {
+  test('the image creator keeps a long element name inside its "@" menu', async ({ page }) => {
     await page.route('**/api/remix-source*', (route) => route.fulfill({ json: IMAGE_REMIX }));
     const handles = REFERENCES.map((reference) => reference.handle);
 
@@ -415,11 +406,10 @@ test.describe('reference chips', () => {
     await expect(page.getByRole('heading', { name: 'Reference images', exact: true })).toBeVisible();
 
     // The row of chips over the prompt went with the column layout (2026-10-26): each
-    // reference has its own Insert, its tile's handle (reference-card-handles.spec.ts), so
-    // the chips left are the "@" panel's. The tiles scroll inside their strip, so the page's
-    // overflow measured here is the panel's alone.
-    await expectSuggestionsInTheirRow(page, 'Insert element', handles, () => (
-      typeAtEnd(page.getByPlaceholder('Describe the image you want to create...'), ' @')
-    ));
+    // reference has its own Insert, its tile's handle (reference-card-handles.spec.ts), and
+    // "@" opens the menu. The tiles scroll inside their strip, so the page's overflow
+    // measured here is the menu's alone.
+    const prompt = page.getByPlaceholder('Describe the image you want to create...');
+    await expectRowsInTheMenu(page, prompt, handles, () => typeAtEnd(prompt, ' @'));
   });
 });

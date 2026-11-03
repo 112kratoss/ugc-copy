@@ -23,7 +23,6 @@ import {
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorInputsCard,
-    CreatorMentionPanel,
     CreatorModelChip,
     CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
@@ -53,6 +52,7 @@ import {
     describeRunFailure,
     type CreatorReferenceKind,
 } from '@/components/CreatorColumn';
+import { CreatorMentionMenu, useCreatorMentionMenu } from '@/components/CreatorMentionMenu';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import { useConfirmation } from '@/components/useConfirmation';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
@@ -1069,6 +1069,8 @@ type PromptMentionCandidate = {
     displayName: string;
     handle: string;
     kind: 'image' | 'video';
+    /** What the "@" menu shows for it: the picture, the clip, or a subject's first picture. */
+    previewUrl: string | null;
 };
 
 function hydrateVideoElements(seeds: VideoElementSeed[]): VideoElementDraft[] {
@@ -2209,6 +2211,7 @@ function VideoCreator({
                 displayName: element.displayName,
                 handle: element.handle,
                 kind: 'video' as const,
+                previewUrl: element.previewUrl || null,
             }))
             : []),
         ...(supportsNamedSubjects
@@ -2217,6 +2220,7 @@ function VideoCreator({
                 displayName: subject.displayName,
                 handle: klingSubjectHandles[index],
                 kind: 'image' as const,
+                previewUrl: subject.images[0]?.previewUrl || subject.images[0]?.remoteUrl || null,
             }))
             : []),
     ];
@@ -2298,6 +2302,7 @@ function VideoCreator({
             displayName: element.displayName,
             handle: element.handle,
             kind: 'image' as const,
+            previewUrl: element.previewUrl || null,
         })),
         ...shotMentionCandidates,
     ];
@@ -2327,9 +2332,8 @@ function VideoCreator({
             );
         })
         : [];
-    const shotMentionPanelCopy = isKlingO3Model
-        ? { title: 'Insert subject', pick: 'Pick a named subject for this shot.', none: 'No matching subjects yet.' }
-        : { title: 'Insert video element', pick: 'Pick a Kling video handle for this shot.', none: 'No matching video elements yet.' };
+    // What a shot's "@" menu offers: Kling O3's named subjects, or Kling 3.0's video elements.
+    const shotMentionNoun = isKlingO3Model ? 'subject' : 'video element';
     const showKlingVideoElementEditor = isKlingVideoModel;
     const showElementEditor = !currentIsMultiShot && canUseVideoElements;
     const showSavedElementNotice = !canUseVideoElements && !currentIsMultiShot && elements.length > 0;
@@ -4086,6 +4090,21 @@ function VideoCreator({
             textarea?.setSelectionRange(nextValue.caretIndex, nextValue.caretIndex);
         });
     };
+
+    const mentionMenu = useCreatorMentionMenu({
+        mention: offersPromptMentions ? activeMentionQuery : null,
+        suggestions: mentionSuggestions,
+        onInsert: handleInsertPromptHandle,
+    });
+    // One menu for the shots, which take turns: it is the focused shot's.
+    const shotMentionMenu = useCreatorMentionMenu({
+        mention: shotPromptsTakeMentions ? activeShotMentionQuery : null,
+        scope: activeShotMentionQuery?.shotId,
+        suggestions: shotMentionSuggestions,
+        onInsert: (handle) => {
+            if (activeShotMentionQuery) handleInsertShotHandle(activeShotMentionQuery.shotId, handle);
+        },
+    });
 
     const createSeedanceAssetKey = (kind: 'image' | 'video' | 'audio', id: string) => `${kind}:${id}`;
 
@@ -5849,7 +5868,7 @@ function VideoCreator({
 
                         {!currentIsMultiShot ? (
                             <>
-                                <div className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${videoAccent.outline}`}>
+                                <div className={`relative rounded-ui-2xl border bg-[var(--ui-surface-1)] transition-colors duration-150 ${videoAccent.outline}`}>
                                     <label htmlFor="create-video-prompt" className="ui-kicker block px-4 pt-4">
                                         Prompt
                                     </label>
@@ -5858,8 +5877,7 @@ function VideoCreator({
                                         ref={promptTextareaRef}
                                         value={prompt}
                                         onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart ?? event.target.value.length)}
-                                        onClick={syncPromptCaretState}
-                                        onKeyUp={syncPromptCaretState}
+                                        {...mentionMenu.field({ onCaretMove: syncPromptCaretState })}
                                         placeholder={`Describe the ${videoModel.displayName} scene in rich cinematic detail...`}
                                         maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                         aria-invalid={promptMeter.state === 'over' || undefined}
@@ -5886,18 +5904,16 @@ function VideoCreator({
                                             <StudioElementHandleText text={promptSlotsMessage} />
                                         </p>
                                     ) : null}
+                                    {mentionMenu.open ? (
+                                        <CreatorMentionMenu
+                                            menu={mentionMenu.menu}
+                                            field={() => promptTextareaRef.current}
+                                            noun="reference"
+                                            prompt={prompt}
+                                            handleClassName={mentionHandleClass}
+                                        />
+                                    ) : null}
                                 </div>
-
-                                {activeMentionQuery && offersPromptMentions ? (
-                                    <CreatorMentionPanel
-                                        title="Insert reference"
-                                        hint={mentionSuggestions.length > 0 ? 'Pick a reference to insert its @mention.' : 'No matching references yet.'}
-                                        query={activeMentionQuery.query}
-                                        suggestions={mentionSuggestions}
-                                        handleClassName={mentionHandleClass}
-                                        onInsert={handleInsertPromptHandle}
-                                    />
-                                ) : null}
 
                                 <EnhancePromptButton
                                     variant="toolbar"
@@ -5931,7 +5947,7 @@ function VideoCreator({
                                     <div role="group"
                                         key={shot.id}
                                         aria-labelledby={`create-video-shot-${shot.id}`}
-                                        className={`rounded-ui-2xl border bg-[var(--ui-surface-1)] p-4 transition-colors duration-150 ${videoAccent.outline}`}
+                                        className={`relative rounded-ui-2xl border bg-[var(--ui-surface-1)] p-4 transition-colors duration-150 ${videoAccent.outline}`}
                                     >
                                         <div className="mb-2 flex items-center justify-between gap-3">
                                             <h2 id={`create-video-shot-${shot.id}`} className="ui-kicker">Shot {index + 1}</h2>
@@ -5963,29 +5979,28 @@ function VideoCreator({
                                             }}
                                             value={shot.prompt}
                                             onChange={(event) => handleShotPromptChange(shot.id, event.target.value, event.target.selectionStart ?? event.target.value.length)}
-                                            onFocus={() => {
-                                                setFocusedShotId(shot.id);
-                                                updateShotMentionState(shot.id, shot.prompt);
-                                            }}
-                                            onClick={() => syncShotPromptCaretState(shot)}
-                                            onKeyUp={() => syncShotPromptCaretState(shot)}
+                                            {...shotMentionMenu.field({
+                                                onCaretMove: () => syncShotPromptCaretState(shot),
+                                                onFocus: () => {
+                                                    setFocusedShotId(shot.id);
+                                                    updateShotMentionState(shot.id, shot.prompt);
+                                                },
+                                                owns: activeShotMentionQuery?.shotId === shot.id,
+                                            })}
                                             placeholder={`Describe shot ${index + 1}...`}
                                             maxLength={GENERATION_PROMPT_MAX_LENGTH}
                                             aria-label={`Shot ${index + 1} prompt`}
                                             aria-invalid={shotMeter(shot.prompt).state === 'over' || undefined}
                                             className={`mb-3 block min-h-[100px] w-full resize-y rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)] p-3 text-sm leading-6 text-[var(--ui-text-primary)] outline-none transition-colors placeholder:text-[var(--ui-text-faint)] ${videoAccent.fieldFocus}`}
                                         />
-                                        {activeShotMentionQuery?.shotId === shot.id && shotPromptsTakeMentions ? (
-                                            <div className="mb-3">
-                                                <CreatorMentionPanel
-                                                    title={shotMentionPanelCopy.title}
-                                                    hint={shotMentionSuggestions.length > 0 ? shotMentionPanelCopy.pick : shotMentionPanelCopy.none}
-                                                    query={activeShotMentionQuery.query}
-                                                    suggestions={shotMentionSuggestions}
-                                                    handleClassName={mentionHandleClass}
-                                                    onInsert={(handle) => handleInsertShotHandle(shot.id, handle)}
-                                                />
-                                            </div>
+                                        {shotMentionMenu.open && activeShotMentionQuery?.shotId === shot.id ? (
+                                            <CreatorMentionMenu
+                                                menu={shotMentionMenu.menu}
+                                                field={() => multiShotTextareaRefs.current[shot.id] ?? null}
+                                                noun={shotMentionNoun}
+                                                prompt={shot.prompt}
+                                                handleClassName={mentionHandleClass}
+                                            />
                                         ) : null}
                                         <div className="flex items-center gap-3">
                                             <label htmlFor={`create-video-shot-duration-${shot.id}`} className="text-xs font-bold text-[var(--ui-text-muted)]">

@@ -540,17 +540,9 @@ describe('CreateImageClient element handles', () => {
     const promptBox = screen.getByPlaceholderText(promptPlaceholder);
     fireEvent.change(promptBox, { target: { value: 'A portrait of @R' } });
 
-    const title = await screen.findByText('Insert element');
-    // The panel is the title's nearest ancestor that holds an element to pick.
-    let panel = title.parentElement;
-    while (panel && !panel.querySelector('button')) {
-      panel = panel.parentElement;
-    }
-    const suggestion = Array.from(panel?.querySelectorAll('button') ?? [])
-      .find((button) => button.textContent?.includes('@restored_product'));
-    expect(suggestion).toBeDefined();
-
-    fireEvent.click(suggestion!);
+    // The "@" menu is drawn in the prompt's card, over the page.
+    const menu = await waitFor(() => promptBox.parentElement!.querySelector<HTMLElement>(':scope > [data-mention-menu]')!);
+    fireEvent.click(within(menu).getByRole('option', { name: /^Insert @restored_product,/ }));
 
     // What was typed is replaced by the handle as it is written.
     expect(promptBox).toHaveValue('A portrait of @restored_product');
