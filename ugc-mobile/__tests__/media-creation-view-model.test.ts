@@ -1494,6 +1494,26 @@ describe('a remix’s empty input slots', () => {
     expect(promptMentionErrors(['@dance'], clips, { roles, modelName: 'Seedance 2', clipsTakeHandles: false }))
       .toEqual(['Seedance 2 has no place for @dance. Switch back, or take @dance out of the prompt.']);
     expect(remixDraftSlotsNotice(clips, roles, { clipsTakeHandles: false })).toBeNull();
+
+    // Which held media answer a box is the shared rule (`remixSlotAnsweringHandles`), as on the web: a clip
+    // the draft holds under @dance answers the box only where clips take handles. A plain clip keeps
+    // its handle from Kling 3.0 but answers no mention on Seedance 2, so its box stays the remix's.
+    const heldClip = {
+      ...clips,
+      referenceVideos: [{ id: 'clip-1', kind: 'video' as const, url: 'https://cdn.example.com/move.mp4', fileName: 'move.mp4', displayName: 'dance', handle: '@dance' }],
+    };
+    expect(unfilledRemixInputSlots(heldClip, { clipsTakeHandles: false })).toEqual([danceSlot]);
+    expect(unfilledRemixInputSlots(heldClip, { clipsTakeHandles: true })).toEqual([]);
+    expect(unfilledRemixInputSlots(heldClip)).toEqual([]);
+    expect(promptMentionErrors(['@dance'], heldClip, { roles, modelName: 'Seedance 2', clipsTakeHandles: false }))
+      .toEqual(['Seedance 2 has no place for @dance. Switch back, or take @dance out of the prompt.']);
+    const heldTrack = {
+      ...createDefaultCreationDraft('video'),
+      inputSlots: [{ id: 'slot-8', kind: 'audio' as const, role: 'reference_audio' as const, handle: '@beat', name: 'Reference audio 1' }],
+      referenceAudios: [{ id: 'track-1', kind: 'audio' as const, url: 'https://cdn.example.com/beat.mp3', fileName: 'beat.mp3', displayName: 'beat', handle: '@beat' }],
+    };
+    expect(unfilledRemixInputSlots(heldTrack, { tracksTakeHandles: false }).map((slot) => slot.id)).toEqual(['slot-8']);
+    expect(unfilledRemixInputSlots(heldTrack, { tracksTakeHandles: true })).toEqual([]);
     expect(promptMentionErrors(['@product'], draft)).toEqual(['Add your own for @product in its box, or take @product out of the prompt.']);
   });
 

@@ -21,6 +21,7 @@ import {
   buildRemixInputSlots,
   remixInputSlotRoleFor,
   SINGLE_USE_REMIX_SLOT_ROLES,
+  WITHHELD_INPUTS_RESTORE_ISSUE,
   type RemixInputSlot,
   type RemixInputSlotRole,
   type RemixInputSlotTool,
@@ -34,13 +35,13 @@ import {
  */
 
 /**
- * The restore issue of a remix whose inputs could not be read for it: the run's rows, or the
- * copies the recipe its viewer bought holds. No slot is named then, since an input with a copy
- * would read as one the creator kept to themselves, for good: the clients read any restore issue
- * as a failed restore, which reads the source again (the web on a reload, the app on Retry and
- * on its next visit), and slots come only from inputs that read says are not given.
+ * The restore issue of a remix whose inputs could not be read for it (`WITHHELD_INPUTS_RESTORE_ISSUE`):
+ * the run's rows, or the copies the recipe its viewer bought holds. No slot is named then, since an
+ * input with a copy would read as one the creator kept to themselves, for good: the clients read it as
+ * a failed restore, which reads the source again (the web on a reload, the app on Retry and on any
+ * later visit), and slots come only from inputs that read says are not given.
  */
-export const WITHHELD_INPUTS_RESTORE_ISSUE = 'withheld-inputs';
+export { WITHHELD_INPUTS_RESTORE_ISSUE };
 
 /**
  * The words a run's handles are read in: its prompt, and each shot of a story, which keeps only its
@@ -123,6 +124,37 @@ export function splitRemixInputsByCopy(
   }
 
   return { restored: restored.sort(byRunOrder), withheld: withheld.sort(byRunOrder) };
+}
+
+/**
+ * Which of the inputs a remix is handed over it is given (`handedOn`) and which it gets an empty slot
+ * for instead (`heldBack`), each in the run's order: those `isHeldBack` names (a file of someone else's
+ * recipe, never handed on), and a named subject's other pictures wherever what is left of it would make
+ * no subject (fewer than `SUBJECT_IMAGES_PER_NAME.min`), so the subject is a slot rather than a
+ * one-picture subject whose box would read as answered (2026-11-03 re-review).
+ */
+export function holdBackFromRemix(
+  items: readonly GenerationInputMediaItem[],
+  isHeldBack: (item: GenerationInputMediaItem) => boolean,
+  tool: RemixInputSlotTool,
+): { handedOn: GenerationInputMediaItem[]; heldBack: GenerationInputMediaItem[] } {
+  const heldBack = new Set(items.filter(isHeldBack));
+  const subjects = new Map<string, GenerationInputMediaItem[]>();
+  for (const item of items) {
+    const handle = remixInputSlotRoleFor(item, tool) === 'subject' ? subjectHandleOf(item) : null;
+    if (handle) subjects.set(handle, [...(subjects.get(handle) ?? []), item]);
+  }
+  for (const pictures of subjects.values()) {
+    const left = pictures.filter((picture) => !heldBack.has(picture));
+    if (left.length < pictures.length && left.length < SUBJECT_IMAGES_PER_NAME.min) {
+      pictures.forEach((picture) => heldBack.add(picture));
+    }
+  }
+  const ordered = [...items].sort(byRunOrder);
+  return {
+    handedOn: ordered.filter((item) => !heldBack.has(item)),
+    heldBack: ordered.filter((item) => heldBack.has(item)),
+  };
 }
 
 /**

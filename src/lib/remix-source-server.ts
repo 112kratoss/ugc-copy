@@ -39,7 +39,7 @@ import {
 } from '@/lib/remix-source';
 import { isRecipeFileInput } from '@/lib/generation-input-origin';
 import { loadGenerationRecipeRemixInputsByPostId } from '@/lib/post-resource-bundles-server';
-import { remixInputSlotsOf, remixSlotWords, resolveWithheldRemixInputs } from '@/lib/remix-input-slots-server';
+import { holdBackFromRemix, remixInputSlotsOf, remixSlotWords, resolveWithheldRemixInputs } from '@/lib/remix-input-slots-server';
 import { createServiceClient, createUserClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   getUserOwnedStoredMediaLocation,
@@ -431,14 +431,17 @@ export async function loadRemixSourceBundle(
   // A file of someone else's recipe the creator's run used through their unlock
   // is theirs alone (owner, 2026-11-03): a remix the creator shares their inputs
   // with, or whose recipe hands them over, gets an empty slot in its place.
+  // A subject that would be left with fewer pictures than a subject takes is held back whole, for its slot.
   const creatorIds = new Set(typedGeneration.user_id ? [typedGeneration.user_id] : []);
-  const sharedRecipeFiles = readsRunInputs && !isOwner
-    ? inputMedia.filter((item) => isRecipeFileInput(item, creatorIds))
-    : [];
-  const keptInputMedia = readsRunInputs
-    ? inputMedia.filter((item) => !sharedRecipeFiles.includes(item))
-    : recipeInputs.inputMedia;
-  const heldBackRecipeFiles = readsRunInputs ? sharedRecipeFiles : recipeInputs.recipeFiles;
+  const recipeFileIds = new Set(recipeInputs.recipeFiles.map((item) => item.id));
+  const handOver = isOwner
+    ? { handedOn: inputMedia, heldBack: [] }
+    : readsRunInputs
+      ? holdBackFromRemix(inputMedia, (item) => isRecipeFileInput(item, creatorIds), slotTool)
+      : holdBackFromRemix([...recipeInputs.inputMedia, ...recipeInputs.recipeFiles], (item) => recipeFileIds.has(item.id), slotTool);
+  const keptInputMedia = handOver.handedOn;
+  // Never with a link: a held-back input only names its slot.
+  const heldBackRecipeFiles = handOver.heldBack.map((item) => ({ ...item, url: null }));
   const inputSlots = withheldInputs?.inputSlots ?? remixInputSlotsOf(heldBackRecipeFiles, { tool: slotTool, words: slotWords });
   if (heldBackRecipeFiles.length > 0) {
     // The prepared assets of the inputs handed over, in their places among them: a held-back file's

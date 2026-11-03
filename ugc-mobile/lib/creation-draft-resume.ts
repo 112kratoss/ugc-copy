@@ -98,13 +98,15 @@ export type PersistedCreationDrafts = {
  * ever `true`); no other draft keeps it.
  */
 function withSavedInputSlots<T extends CreationDraft>(draft: T, remix: boolean): T {
-  if (!('inputSlots' in draft) && !('inputSlotsNoticeDismissed' in draft)) return draft;
-  const { inputSlots, inputSlotsNoticeDismissed, ...rest } = draft;
+  if (!('inputSlots' in draft) && !('inputSlotsNoticeDismissed' in draft) && !('inputSlotsUnread' in draft)) return draft;
+  const { inputSlots, inputSlotsNoticeDismissed, inputSlotsUnread, ...rest } = draft;
   if (!remix) return rest as T;
   return {
     ...rest,
     ...('inputSlots' in draft ? { inputSlots: parseRemixInputSlotsForTool(draft.tool, inputSlots) } : {}),
     ...(inputSlotsNoticeDismissed === true ? { inputSlotsNoticeDismissed: true } : {}),
+    // The source could not read the inputs it keeps back: every later visit reads it again.
+    ...(inputSlotsUnread === true ? { inputSlotsUnread: true } : {}),
   } as T;
 }
 

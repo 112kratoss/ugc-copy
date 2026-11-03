@@ -143,6 +143,25 @@ describe('creation draft resume', () => {
     expect(ordinaryDrafts && 'inputSlots' in ordinaryDrafts.image).toBe(false);
   });
 
+  // A remix whose kept-back inputs could not be read (2026-11-03 re-review) keeps saying so, so any later
+  // visit reads its source again, whatever its prompt mentions.
+  it('keeps a remix session’s unread kept-back inputs through a save, and none in the ordinary draft', async () => {
+    useMemoryStorage();
+    const drafts = defaultDrafts();
+    const scope = remixDraftScope('reader', { generationId: 'generation', postId: 'post' })!;
+    await persistCreationDrafts({ ...drafts, motion: { ...drafts.motion, inputSlotsUnread: true }, remixRestored: true }, scope);
+    const loaded = await loadPersistedCreationDrafts(scope);
+    expect(loaded?.motion).toMatchObject({ inputSlotsUnread: true });
+    expect(loaded && 'inputSlotsUnread' in loaded.image).toBe(false);
+
+    await persistCreationDrafts({ ...drafts, motion: { ...drafts.motion, inputSlotsUnread: 'yes' as never } }, scope);
+    expect((await loadPersistedCreationDrafts(scope))?.motion).not.toHaveProperty('inputSlotsUnread');
+
+    const ordinary = ordinaryDraftScope('reader');
+    await persistCreationDrafts({ ...drafts, motion: { ...drafts.motion, inputSlotsUnread: true } }, ordinary);
+    expect((await loadPersistedCreationDrafts(ordinary))?.motion).not.toHaveProperty('inputSlotsUnread');
+  });
+
   // The slots' notice, put away (2026-11-03), stays away for the rest of the remix, a resume included.
   it('keeps a remix session’s put-away slots notice through a save, and none in the ordinary draft', async () => {
     useMemoryStorage();

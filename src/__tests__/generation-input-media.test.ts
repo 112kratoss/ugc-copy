@@ -220,7 +220,8 @@ describe('generation input media persistence', () => {
 // resolved, and carried to a run made again from that run's own copy, which reads as the caller's upload.
 describe('an input kept from a file of someone else’s recipe', () => {
   const SELLER_COPY = 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-1.png';
-  const IMPORTED = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-0/00-reference-image-row-1.png?token=copy';
+  // The start's import names the copy it was made from: its seller, its creation, its file.
+  const IMPORTED = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row-1.png?token=copy';
 
   function persisting(keptRows: Array<{ storage_path: string; metadata: Record<string, unknown> | null }> | { error: { message: string } } = []) {
     const inserted: Array<Record<string, unknown>> = [];
@@ -278,7 +279,8 @@ describe('an input kept from a file of someone else’s recipe', () => {
 
     await persistGenerationInputMedia({ supabase, generationId: 'gen-1', userId: 'user-1', candidates: [candidate(sourceStoragePath, sourceUrl)] });
 
-    expect(inserted).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ sourceKind: 'recipe-file' }) })]);
+    // With the copy it stands for, which a later use of it is checked against (`reuseRecipeFile`).
+    expect(inserted).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ sourceKind: 'recipe-file', recipeFile: SELLER_COPY }) })]);
   });
 
   it('marks a run made again from the caller’s own copy of a recipe file, and nothing of theirs beside it', async () => {
@@ -286,7 +288,7 @@ describe('an input kept from a file of someone else’s recipe', () => {
     const recreated = 'generation_inputs/user-1/gen-0/00-reference_image.png';
     const ownUpload = 'generation_inputs/user-1/gen-0/01-reference_image.png';
     const { supabase, inserted, lookups } = persisting([
-      { storage_path: recreated, metadata: { sourceKind: 'recipe-file', sourceStoragePath: SELLER_COPY } },
+      { storage_path: recreated, metadata: { sourceKind: 'recipe-file', recipeFile: SELLER_COPY, sourceStoragePath: SELLER_COPY } },
       { storage_path: ownUpload, metadata: { sourceStoragePath: 'uploads/user-1/face.png' } },
     ]);
 
@@ -300,9 +302,14 @@ describe('an input kept from a file of someone else’s recipe', () => {
     // One read of the caller's own kept inputs, by their paths.
     expect(lookups).toEqual([{ eq: [['user_id', 'user-1']], in: [['storage_path', [recreated, ownUpload]]] }]);
     expect(inserted.map((row) => (row.metadata as Record<string, unknown>).sourceKind)).toEqual(['recipe-file', undefined]);
+    expect((inserted[0]!.metadata as Record<string, unknown>).recipeFile).toBe(SELLER_COPY);
   });
 
-  it('marks a run made again from the caller’s own kept input when that input cannot be read', async () => {
+  // 2026-11-03 re-review: one failed read marked every input made again from a kept one as a recipe
+  // file for good, the creator's own among them, which then read as empty slots. The path decides
+  // instead: an import of a recipe copy is one, anything else is not (a later use of a marked input
+  // is checked against the unlock all the same, `reuseRecipeFile`).
+  it('decides by the path alone when the kept inputs cannot be read, and marks nothing of the caller’s own', async () => {
     const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
     const { supabase, inserted } = persisting({ error: { message: 'canceling statement due to statement timeout' } });
 
@@ -310,10 +317,14 @@ describe('an input kept from a file of someone else’s recipe', () => {
       supabase,
       generationId: 'gen-1',
       userId: 'user-1',
-      candidates: [candidate('generation_inputs/user-1/gen-0/00-reference_image.png', null)],
+      candidates: [
+        candidate('generation_inputs/user-1/gen-0/00-reference_image.png', null),
+        candidate(null, IMPORTED, 1),
+      ],
     });
 
-    expect(inserted).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ sourceKind: 'recipe-file' }) })]);
+    expect(inserted.map((row) => (row.metadata as Record<string, unknown>).sourceKind)).toEqual([undefined, 'recipe-file']);
+    expect((inserted[1]!.metadata as Record<string, unknown>).recipeFile).toBe(SELLER_COPY);
   });
 
   // Behaviour that predates recipe copies: unchanged, and nothing read for it.
@@ -1172,6 +1183,55 @@ describe('the settings a remix is given', () => {
       { index: 1, storagePath: 'generated_images/user-1/generated_task-1_1.png' },
     ],
     primaryOutputIndex: 0,
+  });
+
+  // 2026-11-03 re-review: an asset a buyer prepared from a recipe's copy (imported first, so it is
+  // theirs) is prepared from a recipe file, which is never handed on: a remix the inputs go to gets
+  // no asset in its place, and every other keeps its place among them.
+  it('hands no remix an asset prepared from a recipe file, keeping every other in its place', async () => {
+    const { sanitizeWorkflowSettingsForRemix } = await import('@/lib/generation-input-media');
+    const asset = (assetId: string, sourceUrl: string) => ({ assetId, assetType: 'Image', status: 'active', sourceUrl, error: null, lastCheckedAt: null });
+
+    const handed = sanitizeWorkflowSettingsForRemix({
+      model: 'seedance-2',
+      seedanceAssets: { images: [
+        asset('asset-own', 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/face.jpg?token=read'),
+        asset('asset-bought', 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-reference-image-row.png?token=read'),
+        asset('asset-other', 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/hand.jpg?token=read'),
+      ] },
+    }, 'with-inputs');
+
+    expect((handed.seedanceAssets as { images: Array<{ assetId: string } | null> }).images.map((entry) => entry?.assetId ?? null))
+      .toEqual(['asset-own', null, 'asset-other']);
+    expect(JSON.stringify(handed)).not.toMatch(/asset-bought|recipe-imports/);
+  });
+
+  // 2026-11-03 re-review: the assets were paired with the inputs by place, so one input kept without
+  // an asset (a file sent as itself) moved every asset after it onto the wrong input, a held-back recipe
+  // file's among them. Each asset now goes with the input it was prepared from.
+  it('pairs each prepared asset with the input it was prepared from, not with a place', async () => {
+    const { preparedSeedanceAssetIdsFor } = await import('@/lib/generation-input-media');
+    const signed = (path: string) => `https://project.supabase.co/storage/v1/object/sign/${path}?token=read`;
+    const asset = (assetId: string, sourcePath: string) => ({ assetId, assetType: 'Image', status: 'active', sourceUrl: signed(sourcePath), error: null, lastCheckedAt: null });
+    const row = (id: string, sortOrder: number, metadata: Record<string, unknown>): GenerationInputMediaItem => ({
+      id, generationId: 'gen-1', mediaType: 'image', role: 'reference_image', label: id, url: null,
+      storagePath: `generation_inputs/user-1/gen-1/0${sortOrder}.png`, sourceGenerationId: null, sortOrder, metadata,
+    });
+    const rows = [
+      row('row-a', 0, { sourceStoragePath: 'uploads/user-1/a.png' }),
+      // Sent as itself, with no asset, and held back from the remix: a recipe file.
+      row('row-bought', 1, { sourceKind: 'recipe-file', sourceStoragePath: 'post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row.png' }),
+      row('row-c', 2, { sourceUrl: signed('uploads/user-1/c.png') }),
+    ];
+    const settings = { images: [asset('asset-a', 'uploads/user-1/a.png'), asset('asset-c', 'uploads/user-1/c.png')] };
+
+    const prepared = preparedSeedanceAssetIdsFor(settings, rows, new Set(['row-a', 'row-c']));
+
+    expect(prepared?.images.map((entry) => entry?.assetId ?? null)).toEqual(['asset-a', 'asset-c']);
+    // An input none of the assets was prepared from gets none, rather than its neighbour's.
+    expect(preparedSeedanceAssetIdsFor({ images: [asset('asset-c', 'uploads/user-1/c.png')] }, rows, new Set(['row-a', 'row-c']))?.images.map((entry) => entry?.assetId ?? null))
+      .toEqual([null, 'asset-c']);
+    expect(preparedSeedanceAssetIdsFor({ images: [asset('asset-x', 'uploads/user-1/x.png')] }, rows, new Set(['row-a', 'row-c']))).toBeNull();
   });
 
   it('holds the input slots for the owner only, and never where the pictures were kept', async () => {

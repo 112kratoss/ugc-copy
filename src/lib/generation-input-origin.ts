@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
+import { isRecipeImportSource, RECIPE_FILES_BUCKET, recipeCopyOfSource } from '@/lib/recipe-file-paths';
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 
 /**
@@ -16,16 +17,6 @@ import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
  */
 export type GenerationInputOrigin = 'own' | 'others' | 'recipe';
 
-/** The bucket a recipe's files are kept in: its seller's uploads and the copies "Include creation references" makes. */
-export const RECIPE_FILES_BUCKET = 'post_resource_files';
-/** The bucket a run start keeps the media it imports for a caller in. */
-const GENERATION_INPUTS_BUCKET = 'generation_inputs';
-/**
- * Where a run start keeps a recipe file it imported for a remix of an unlocked recipe
- * (`importGenerationReferenceCopy`): `generation_inputs/<caller>/recipe-imports/<creation>/<file>`,
- * apart from the shared import's `remix-imports`, so the link a run kept names what it was.
- */
-export const RECIPE_IMPORT_FOLDER = 'recipe-imports';
 /**
  * What a kept input's metadata says of one that was a file of someone else's recipe
  * (`persistGenerationInputMedia`), its `sourceKind`.
@@ -81,11 +72,10 @@ export function needsSourceGenerationOwner(input: GenerationInputOriginSource): 
  */
 export function isRecipeFileSource(path: unknown, ownerIds: ReadonlySet<string>): boolean {
   if (typeof path !== 'string' || !path.trim()) return false;
+  if (isRecipeImportSource(path)) return true;
   const location = getCanonicalStoredMediaLocation(path);
-  if (!location) return false;
-  const [owner, folder] = location.filePath.split('/');
-  if (location.bucket === RECIPE_FILES_BUCKET) return Boolean(owner) && !ownerIds.has(owner!);
-  return location.bucket === GENERATION_INPUTS_BUCKET && folder === RECIPE_IMPORT_FOLDER;
+  const owner = location?.bucket === RECIPE_FILES_BUCKET ? location.filePath.split('/')[0] : null;
+  return Boolean(owner) && !ownerIds.has(owner!);
 }
 
 /**
@@ -99,6 +89,17 @@ export function isRecipeFileSource(path: unknown, ownerIds: ReadonlySet<string>)
 export function isRecipeFileInput(input: GenerationInputOriginSource, ownerIds: ReadonlySet<string>): boolean {
   if (input.metadata?.sourceKind === RECIPE_FILE_SOURCE_KIND) return true;
   return sourcePaths(input).some((path) => isRecipeFileSource(path, ownerIds));
+}
+
+/**
+ * The recipe copy a recipe-file input stands for (`post_resource_files/<seller>/generation-references/…`):
+ * the one its row recorded as it was kept (`recipeFile`), or else the one its sources name. Null where
+ * none is on record: a use of such an input is refused, never taken for the caller's own.
+ */
+export function recipeFileCopyOf(input: GenerationInputOriginSource, ownerIds: ReadonlySet<string>): string | null {
+  const recorded = input.metadata?.recipeFile;
+  return recipeCopyOfSource(recorded, ownerIds)
+    ?? sourcePaths(input).reduce<string | null>((found, path) => found ?? recipeCopyOfSource(path, ownerIds), null);
 }
 
 export function generationInputOrigin(

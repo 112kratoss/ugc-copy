@@ -553,15 +553,16 @@ export function catalogRemixSlotRoles(draft: CreationDraft, model: GenerationMod
 
 /**
  * Where this model has a place for a remix's empty slots, as its creator draws them and its run's
- * check reads them: the roles (`catalogRemixSlotRoles`), whether a video model's clips answer to a
- * handle (`takesNamedClips`: a clip the prompt names has no place where they do not, on the web
- * too), and the model's name for the words that say a box has none (owner, 2026-11-03).
+ * check reads them: the roles (`catalogRemixSlotRoles`), whether a video model's clips and tracks
+ * answer to a handle (`takesNamedClips`, `takesNamedTracks`: a clip the prompt names has no place where
+ * clips do not, and a clip or a track held answers a box only where it does, on the web too), and the
+ * model's name for the words that say a box has none (owner, 2026-11-03).
  */
 export function catalogRemixSlotPlacement(draft: CreationDraft, model: GenerationModelDescriptor): RemixSlotPlacement {
   return {
     roles: catalogRemixSlotRoles(draft, model),
     modelName: model.displayName,
-    ...(draft.tool === 'video' ? { clipsTakeHandles: takesNamedClips(model) } : {}),
+    ...(draft.tool === 'video' ? { clipsTakeHandles: takesNamedClips(model), tracksTakeHandles: takesNamedTracks(model) } : {}),
   };
 }
 
@@ -737,6 +738,11 @@ export function getCatalogCreationSectionSummary(draft: CreationDraft, model: Ge
  */
 function namesReferences(slot: CatalogInputSlot): boolean {
   return slot.role === 'reference' && (slot.kind !== 'video' || Boolean(slot.supportsNaming));
+}
+
+/** Whether a model takes tracks under the handles a prompt mentions them by: a track slot of its names them. */
+export function takesNamedTracks(model: GenerationModelDescriptor): boolean {
+  return Boolean(model.inputModes?.some((mode) => mode.slots.some((slot) => slot.kind === 'audio' && namesReferences(slot))));
 }
 
 /** Whether a model takes clips under the handles a prompt mentions them by: a clip slot of its names them. */

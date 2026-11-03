@@ -30,11 +30,11 @@ import {
 import type { ReferenceMediaDescriptor } from '@/lib/generation-input-media';
 import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
+import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
   generationCostChangedError,
   GenerationServiceError,
   resolveGenerationMediaSource,
-  resolveRecipeFileReference,
   startCatalogGeneration,
   startImageGeneration,
   startMotionGeneration,

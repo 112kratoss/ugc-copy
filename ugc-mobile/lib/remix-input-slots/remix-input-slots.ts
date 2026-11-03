@@ -243,6 +243,13 @@ export function remixInputSlotAction(slot: Pick<RemixInputSlot, 'kind' | 'role'>
 }
 
 /**
+ * The restore issue a remix source raises when it could not read the inputs it keeps back (the run's
+ * rows, or the copies a bought recipe holds): it names no slot then, and the clients read it as a failed
+ * restore, which reads the source again. The app keeps it with a remix session, so any later visit does.
+ */
+export const WITHHELD_INPUTS_RESTORE_ISSUE = 'withheld-inputs';
+
+/**
  * The name over that line: the app's banner and the web's notice card. Either can be put away for the
  * rest of the remix (2026-11-03), as a box nobody mentions may stay empty for good.
  */
@@ -298,11 +305,37 @@ export function remixInputSlotHandles(slots: readonly Pick<RemixInputSlot, 'hand
 }
 
 /**
- * What each creator reads off its chosen model to place a remix's empty slots: whether that model's
- * clips answer to an @handle (Kling 3.0's video elements). Unknown (undefined) places every clip.
+ * What each creator reads off its chosen model to place a remix's empty slots and to tell which of
+ * them are answered: whether that model's clips answer to an @handle (Kling 3.0's video elements),
+ * and whether its tracks do (a model whose audio references are named). Unknown (undefined) places,
+ * and counts, every clip and track.
  */
 export interface RemixSlotPlaceOptions {
   clipsTakeHandles?: boolean;
+  tracksTakeHandles?: boolean;
+}
+
+/** What a remix holds that can answer to a handle, by kind: each creator lists its own media's handles. */
+export interface RemixHeldHandles {
+  pictures?: readonly (string | null | undefined)[];
+  subjects?: readonly (string | null | undefined)[];
+  clips?: readonly (string | null | undefined)[];
+  tracks?: readonly (string | null | undefined)[];
+}
+
+/**
+ * The handles that answer a remix's boxes, by one rule for both creators (2026-11-03): what the remix
+ * holds under a handle the run names, so a mention of it reaches that media. A picture or a subject
+ * always does; a clip or a track only on a model that takes it under a handle (`options`), since a
+ * plain clip answers no mention and its box would hide while the mention went unanswered.
+ */
+export function remixSlotAnsweringHandles(held: RemixHeldHandles, options: RemixSlotPlaceOptions = {}): string[] {
+  return [
+    ...(held.pictures ?? []),
+    ...(held.subjects ?? []),
+    ...(options.clipsTakeHandles === false ? [] : held.clips ?? []),
+    ...(options.tracksTakeHandles === false ? [] : held.tracks ?? []),
+  ].filter((handle): handle is string => typeof handle === 'string' && HANDLE_PATTERN.test(handle));
 }
 
 /**

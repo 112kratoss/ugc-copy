@@ -97,9 +97,13 @@ import {
   isRecipeFileInput,
   loadSourceGenerationOwners,
   needsSourceGenerationOwner,
-  RECIPE_FILES_BUCKET,
   type GenerationInputOrigin,
 } from '@/lib/generation-input-origin';
+import {
+  generationReferenceCopyFolder,
+  parseGenerationReferenceCopyPath,
+  RECIPE_FILES_BUCKET,
+} from '@/lib/recipe-file-paths';
 import { loadPostMediaItemsMap, type PostMediaPersistInput } from '@/lib/post-media';
 import { loadPurchasedProofMedia } from '@/lib/purchased-proof-media';
 import {
@@ -571,19 +575,12 @@ function mapGenerationInputRemixUse(row: GenerationInputMediaRow): PostResourceR
     : 'none';
 }
 
-/** The folder of a publisher's recipe files "Include creation references" keeps its copies in. */
-const GENERATION_REFERENCE_COPY_FOLDER = 'generation-references';
-
-/** A creation's copies' folder in its publisher's recipe files, with its trailing slash. */
-function generationReferenceCopyFolder(ownerUserId: string, generationId: string): string {
-  return `${ownerUserId}/${GENERATION_REFERENCE_COPY_FOLDER}/${generationId}/`;
-}
-
 /**
  * Where "Include creation references" keeps its copy of one of a creation's saved inputs, in the
- * publisher's recipe files: `<publisher>/generation-references/<generation>/<NN>-<role>-<row id>.<ext>`.
- * The layout's one writer. Its readers are `parseGenerationReferenceCopyPath` (a run start importing a
- * copy for a remix) and `findGenerationReferenceCopies` (a remix finding the copies its recipe holds).
+ * publisher's recipe files: `<publisher>/generation-references/<generation>/<NN>-<role>-<row id>.<ext>`
+ * (the folder is `recipe-file-paths.ts`'s). The layout's one writer. Its readers are
+ * `parseGenerationReferenceCopyPath` (a run start importing a copy, the checks of a recipe file's
+ * later use) and `findGenerationReferenceCopies` (a remix finding the copies its recipe holds).
  */
 export function buildGenerationReferenceCopyPath(
   ownerUserId: string,
@@ -597,20 +594,7 @@ export function buildGenerationReferenceCopyPath(
   return `${generationReferenceCopyFolder(ownerUserId, generationId)}${sortOrder}-${role}-${id}.${extension}`;
 }
 
-/**
- * A copy's object path in the recipe files read back: its publisher, its creation and its file name,
- * or null for anything else, a file deeper in the folder included. Nothing is decoded: a caller reads
- * the path as storage would (`getCanonicalStoredMediaLocation`) before asking.
- */
-export function parseGenerationReferenceCopyPath(
-  filePath: string,
-): { ownerUserId: string; generationId: string; fileName: string } | null {
-  const [ownerUserId, folder, generationId, fileName, ...deeper] = filePath.split('/');
-  if (folder !== GENERATION_REFERENCE_COPY_FOLDER || !ownerUserId || !generationId || !fileName || deeper.length > 0) {
-    return null;
-  }
-  return { ownerUserId, generationId, fileName };
-}
+export { parseGenerationReferenceCopyPath };
 
 function buildReferenceSummary(count: number): string {
   return count === 1 ? '1 saved reference from this creation' : `${count} saved references from this creation`;
@@ -1558,7 +1542,9 @@ export async function loadGenerationRecipeReferenceCopies(params: {
   if (!stored) {
     return new Map();
   }
-  const purchasedRevision = await loadPurchasedBundleRevision(adminSupabase, recipe.id, params.viewerUserId);
+  // The version the buyer bought can hold a copy the recipe no longer does: a failed read of it is no
+  // "nothing more", which would make that copy a slot, or refuse it at Generate for good.
+  const purchasedRevision = await loadPurchasedBundleRevision(adminSupabase, recipe.id, params.viewerUserId, { throwOnError: true });
   const itemsOf = (row: { resource_items?: unknown; resource_sections?: unknown }) => normalizePostResourceItems(
     row.resource_items,
     { sections: normalizePostResourceSections(row.resource_sections) },
@@ -2904,6 +2890,7 @@ async function loadPurchasedBundleRevision(
   adminSupabase: SupabaseClient,
   bundleId: string,
   buyerUserId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<PurchasedRevisionRow | null> {
   const { data, error } = await adminSupabase.rpc('get_purchased_post_resource_bundle_revision', {
     p_bundle_id: bundleId,
@@ -2913,6 +2900,8 @@ async function loadPurchasedBundleRevision(
   if (error) {
     if (!isMissingPostResourceBundlesSchemaError(error)) {
       logBackendError('post_resource_purchased_revision_load_failed', { error: error });
+      // A reader that would take "no revision" for "nothing more was bought" hears of it.
+      if (options.throwOnError) throw error;
     }
     return null;
   }

@@ -164,6 +164,7 @@ import {
     openRemixInputSlots,
     readRemixSlotMentions,
     remixInputSlotPlaced,
+    remixSlotAnsweringHandles,
     remixSlotFillNaming,
     remixInputSlotAction,
     remixInputSlotsNotice,
@@ -1934,12 +1935,14 @@ function VideoCreator({
     // mention of it says so (`unplacedRemixSlotsMessage`). So does a clip the prompt mentions by its
     // handle on a model whose clips take none (any but Kling 3.0): a plain clip answers no mention, and
     // its box held the run for one its fill could never answer (`remixInputSlotPlaced`, the app's rule).
-    // A box something the remixer holds already answers is no box to fill (`openRemixInputSlots`).
-    const openRemixSlots = openRemixInputSlots(remixSlots, [
-        ...elements.map((element) => element.handle),
-        ...(isKlingVideoModel ? klingVideoElements.map((element) => element.handle) : []),
-        ...klingSubjectHandles,
-    ].filter((handle): handle is string => Boolean(handle)));
+    // A box something the remixer holds already answers is no box to fill, by the rule the app reads
+    // too (`remixSlotAnsweringHandles`): a picture or a subject always, a clip where clips take handles
+    // (Kling 3.0's video elements; this page's other clips and its tracks carry none).
+    const openRemixSlots = openRemixInputSlots(remixSlots, remixSlotAnsweringHandles({
+        pictures: elements.map((element) => element.handle),
+        subjects: klingSubjectHandles,
+        clips: klingVideoElements.map((element) => element.handle),
+    }, { clipsTakeHandles: isKlingVideoModel }));
     const remixSlotHasPlace = (slot: RemixInputSlot) => remixInputSlotPlaced(slot, null, { clipsTakeHandles: isKlingVideoModel });
     const remixSlotRoleOffered = (role: RemixInputSlotRole): boolean => {
         switch (role) {

@@ -65,10 +65,9 @@ import {
 import { importSharedGenerationInputMedia, resolveRemixResultMedia } from '@/lib/generation-input-media-import';
 import {
   createRecipeCopyReads,
-  importGenerationReferenceCopy,
+  reuseRecipeFile,
   type RecipeCopyReads,
 } from '@/lib/generation-reference-copy-import';
-import { RECIPE_FILES_BUCKET } from '@/lib/generation-input-origin';
 // Shared with both composers' inputs, so the three limits cannot drift.
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import { buildCatalogInputMediaCandidates } from '@/lib/catalog-input-media-candidates';
@@ -1288,6 +1287,19 @@ export async function resolveGenerationMediaSource(
     return data.signedUrl;
   }
 
+  // A recipe file the caller holds (a bought recipe's copy, a start's import of one, or a kept input
+  // of theirs marked as one) is theirs to use only while the unlock still says so: each use reads it
+  // again and imports the copy anew (`reuseRecipeFile`). Signed as their own file, a refund or a
+  // block since the remix ended nothing (2026-11-03 re-review).
+  const recipeFile = await reuseRecipeFile({ source, viewerUserId: userId, reads: options.recipeCopyReads });
+  if (recipeFile?.outcome === 'imported') return recipeFile.signedUrl;
+  if (recipeFile?.outcome === 'failed') {
+    throw new GenerationServiceError('We could not prepare the shared reference media. Please try again.', 500);
+  }
+  if (recipeFile?.outcome === 'not-eligible') {
+    throw new GenerationServiceError('Media references must belong to the authenticated user.', 400);
+  }
+
   const resolved = await resolveOwnedStoredMediaUrl(supabase, source, userId);
   if (!resolved) {
     if (await isMissingOwnUpload(supabase, source, userId)) {
@@ -1303,17 +1315,12 @@ export async function resolveGenerationMediaSource(
     // from the storage path, never from the client's signed URL. A remix also
     // offers the original's own result as a reference, answered with a link to
     // it under the same gate as the remix source's.
-    const sharedImport = await importSharedGenerationInputMedia({
+    // A remix of an unlocked recipe restores the inputs the recipe holds copies of, which are the
+    // seller's files: those were imported above, once the unlock was read again (`reuseRecipeFile`).
+    const imported = await importSharedGenerationInputMedia({
       source,
       viewerUserId: userId,
     });
-    // A remix of an unlocked recipe restores the inputs the recipe holds
-    // copies of, which are the seller's files: imported the same way once the
-    // unlock is read again. It takes only `post_resource_files` sources, the
-    // shared import only `generation_inputs`, so neither answers the other's.
-    const imported = sharedImport.outcome === 'not-eligible'
-      ? await importGenerationReferenceCopy({ source, viewerUserId: userId, reads: options.recipeCopyReads })
-      : sharedImport;
     if (imported.outcome === 'imported') {
       return imported.signedUrl;
     }
@@ -1335,26 +1342,6 @@ export async function resolveGenerationMediaSource(
     );
   }
   return resolved;
-}
-
-/**
- * A reference that a start sends the provider as given, resolved first where it is a recipe's file:
- * a motion run's character image (`startMotionGeneration` resolves neither of its inputs, and its clip
- * is resolved to be measured). A remix of an unlocked recipe restores that picture from the recipe's
- * copy, a link to the seller's file that went straight to the provider, with no unlock read again and
- * failing there once its hour ran out (2026-11-03). Resolved, it is imported as any other start
- * imports a copy (`importGenerationReferenceCopy`), or refused; anything else goes as it went.
- */
-export async function resolveRecipeFileReference(
-  supabase: SupabaseClient,
-  url: string,
-  userId: string,
-  options: GenerationMediaSourceOptions = {},
-  resolve: typeof resolveGenerationMediaSource = resolveGenerationMediaSource,
-): Promise<string> {
-  return getCanonicalStoredMediaLocation(url, { allowedBuckets: [RECIPE_FILES_BUCKET] })
-    ? resolve(supabase, url, userId, options)
-    : url;
 }
 
 async function resolveMediaUrls(

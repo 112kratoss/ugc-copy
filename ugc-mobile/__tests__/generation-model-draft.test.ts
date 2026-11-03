@@ -1783,7 +1783,8 @@ describe('a remix’s empty input slots in a catalog run', () => {
     const onSeedance = applyCatalogModelDefaults(dance, seedance2, catalog.revision);
     expect(validateCatalogCreationDraft(onSeedance, seedance2, ready).errors)
       .toContain('Seedance 2 has no place for @dance. Switch back, or take @dance out of the prompt.');
-    expect(catalogRemixSlotPlacement(onSeedance, seedance2)).toMatchObject({ modelName: 'Seedance 2', clipsTakeHandles: false });
+    // Seedance 2's clips take no handle, and its tracks, a named reference slot, do: as its run reads them.
+    expect(catalogRemixSlotPlacement(onSeedance, seedance2)).toMatchObject({ modelName: 'Seedance 2', clipsTakeHandles: false, tracksTakeHandles: true });
     expect(placedRemixInputSlots(onSeedance, ...placementArguments(catalogRemixSlotPlacement(onSeedance, seedance2))).map((slot) => slot.id))
       .toEqual(['slot-1']);
     // A clip box the prompt does not name keeps its place among Seedance 2's clips.

@@ -811,12 +811,22 @@ describe('reference lengths a caller reports', () => {
     expect(characterCall?.[3]?.recipeCopyReads).toBe(clipCall?.[3]?.recipeCopyReads);
   });
 
-  it('sends any other character as it was given, resolving nothing for it', async () => {
+  // A kept input of the caller's own can be a recipe file a remix imported (2026-11-03 re-review): it is
+  // resolved, which checks its mark against the unlock. A link that can be no recipe file goes as given.
+  it('resolves a character that is the caller’s own kept input, and sends any other as it was given', async () => {
     const run = start({ body: motionBody(5, 5), measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote });
 
     await expect(run.outcome).resolves.toMatchObject({ success: true });
     expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: CHARACTER_URL }));
-    expect(run.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL]);
+    expect(run.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL, CHARACTER_URL]);
+
+    const elsewhere = 'https://cdn.example.com/character.png';
+    const body = motionBody(5, 5);
+    body.inputs[0] = { ...body.inputs[0], url: elsewhere };
+    const given = start({ body, measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote });
+    await expect(given.outcome).resolves.toMatchObject({ success: true });
+    expect(given.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: elsewhere }));
+    expect(given.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL]);
   });
 
   // A motion run's adapter sends its clip as given, so it is handed the link resolved to measure it: the

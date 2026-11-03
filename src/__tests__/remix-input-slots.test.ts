@@ -5,6 +5,8 @@ import {
   parseRemixInputSlots,
   readRemixSlotMentions,
   remixInputSlotRoleFor,
+  remixSlotAnsweringHandles,
+  WITHHELD_INPUTS_RESTORE_ISSUE,
   REMIX_INPUT_SLOTS_NOTICE_LABEL,
   remixInputSlotAction,
   remixInputSlotHandles,
@@ -199,6 +201,32 @@ describe('remix input slots', () => {
     expect(openRemixInputSlots([product, backdrop, dance], ['@product'])).toEqual([backdrop, dance]);
     expect(openRemixInputSlots([product, backdrop], new Set(['@reference_image_2']))).toEqual([product, backdrop]);
     expect(openRemixInputSlots([product], [])).toEqual([product]);
+  });
+
+  // Which held media answer a box differed (2026-11-03 review): the app counted every clip and track,
+  // the web Kling 3.0's clips alone. One rule now: a picture or a subject always answers its handle;
+  // a clip or a track only where the chosen model takes it under a handle a mention can name.
+  it('answers a box with what the remix holds under a handle the run names', () => {
+    const held = { pictures: ['@product', null], subjects: ['@maya'], clips: ['@dance'], tracks: ['@beat', 'Not a handle'] };
+
+    expect(remixSlotAnsweringHandles(held, { clipsTakeHandles: true, tracksTakeHandles: true }))
+      .toEqual(['@product', '@maya', '@dance', '@beat']);
+    expect(remixSlotAnsweringHandles(held, { clipsTakeHandles: false, tracksTakeHandles: false }))
+      .toEqual(['@product', '@maya']);
+    // Before the model is known, every clip and track answers, as every box has its place.
+    expect(remixSlotAnsweringHandles(held)).toEqual(['@product', '@maya', '@dance', '@beat']);
+    expect(remixSlotAnsweringHandles({})).toEqual([]);
+
+    const dance: RemixInputSlot = { id: 'slot-3', kind: 'video', role: 'reference_video', handle: '@dance', name: 'Reference video 1' };
+    // A plain clip named @dance on Seedance 2 answers no mention, so its box stays open there.
+    expect(openRemixInputSlots([dance], remixSlotAnsweringHandles(held, { clipsTakeHandles: false }))).toEqual([dance]);
+    expect(openRemixInputSlots([dance], remixSlotAnsweringHandles(held, { clipsTakeHandles: true }))).toEqual([]);
+  });
+
+  // The restore issue a remix source raises when it could not read the inputs it keeps back: both
+  // clients read it, and the app keeps it with a remix session so a later visit reads the source again.
+  it('names the restore issue of inputs the source could not read', () => {
+    expect(WITHHELD_INPUTS_RESTORE_ISSUE).toBe('withheld-inputs');
   });
 
   it('names a fill for the handle the prompt mentions its box by, or else for the box', () => {

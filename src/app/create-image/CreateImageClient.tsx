@@ -17,6 +17,7 @@ import {
     remixInputSlotAction,
     remixInputSlotsNotice,
     remixInputSlotTitle,
+    remixSlotAnsweringHandles,
     remixSlotFillNaming,
     remixSlotMentionsMessage,
     withRemixSlotEnhancerReferences,
@@ -1391,8 +1392,8 @@ function ImageCreator({
     // What Enhance keeps: the references the run sends, and the remix's empty boxes the prompt
     // mentions, placed or not, so a rewrite never takes a box's mention out (2026-11-03). A prompt
     // naming either is polished around rather than rewritten.
-    // A box a reference the remixer holds already answers is no box to fill (`openRemixInputSlots`, as the app reads it).
-    const openRemixSlots = openRemixInputSlots(remixSlots, elements.map((element) => element.handle));
+    // A box a reference the remixer holds already answers is no box to fill (`remixSlotAnsweringHandles`, as the app reads it).
+    const openRemixSlots = openRemixInputSlots(remixSlots, remixSlotAnsweringHandles({ pictures: elements.map((element) => element.handle) }));
     const enhancerReferences = withRemixSlotEnhancerReferences(
         sentElements.map((element) => ({ handle: element.handle, displayName: element.displayName })),
         openRemixSlots,

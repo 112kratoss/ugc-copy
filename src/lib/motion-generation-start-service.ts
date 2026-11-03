@@ -3,7 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { enforceBackendRateLimit, MEDIA_GENERATION_RATE_LIMIT } from '@/lib/backend-rate-limit';
 import { quotePublishedGenerationModel } from '@/lib/generation-model-catalog-store';
 import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
-import { resolveGenerationMediaSource, resolveRecipeFileReference, startMotionGeneration } from '@/lib/generation-services';
+import { resolveGenerationMediaSource, startMotionGeneration } from '@/lib/generation-services';
+import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
   getGenerationStartIdempotencyKey,
   getGenerationStartLockOwner,

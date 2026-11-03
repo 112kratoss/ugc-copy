@@ -10,7 +10,7 @@ import {
   parseGenerationReferenceCopyPath,
   type GenerationReferenceCopyRecipe,
 } from '@/lib/post-resource-bundles-server';
-import { remixSlotWords, splitRemixInputsByCopy } from '@/lib/remix-input-slots-server';
+import { holdBackFromRemix, remixSlotWords, splitRemixInputsByCopy } from '@/lib/remix-input-slots-server';
 
 // Owner, 2026-11-03: a remix that is given none of the run's inputs gets an
 // empty slot for each, and someone who unlocked the recipe gets back the inputs
@@ -123,6 +123,7 @@ describe('reading the copies from the recipe the viewer bought', () => {
   function recipeClient(options: {
     currentItems?: unknown[];
     purchasedItems?: unknown[] | null;
+    revisionError?: boolean;
     purchases?: Array<Record<string, unknown>> | ReturnType<typeof databaseError>;
     failing?: string[];
   } = {}) {
@@ -130,9 +131,11 @@ describe('reading the copies from the recipe the viewer bought', () => {
       post_resource_bundles: [{ id: 'bundle-1', resource_items: options.currentItems ?? [], resource_sections: [] }],
       post_resource_bundle_purchases: options.purchases ?? [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
     }, {
-      get_purchased_post_resource_bundle_revision: () => (options.purchasedItems
-        ? [{ is_latest: false, resource_items: options.purchasedItems, resource_sections: [] }]
-        : []),
+      get_purchased_post_resource_bundle_revision: () => (options.revisionError
+        ? databaseError('57014', 'canceling statement due to statement timeout')
+        : options.purchasedItems
+          ? [{ is_latest: false, resource_items: options.purchasedItems, resource_sections: [] }]
+          : []),
     });
     const createSignedUrl = vi.fn<(filePath: string, expiresIn: number) => Promise<SignedUrlAnswer>>(async (filePath) => (
       (options.failing ?? []).includes(filePath)
@@ -189,6 +192,15 @@ describe('reading the copies from the recipe the viewer bought', () => {
     const stranger = recipeClient({ currentItems: [recipeItem(ROW_A, COPY_A)], purchases: [{ id: 'p', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }] });
     expect(await load(stranger, { recipe: { viewerHasPurchased: null } })).toEqual(new Map());
     expect(stranger.createSignedUrl).not.toHaveBeenCalled();
+  });
+
+  // The version a buyer bought can hold a copy the recipe no longer does: unread, that copy turned into
+  // a slot for good, or a start's refusal that is not retryable (2026-11-03 re-review).
+  it('throws when the version the buyer bought cannot be read, rather than reading the recipe without it', async () => {
+    const client = recipeClient({ currentItems: [recipeItem(ROW_B, COPY_B)], revisionError: true });
+
+    await expect(load(client)).rejects.toBeTruthy();
+    expect(client.createSignedUrl).not.toHaveBeenCalled();
   });
 
   it('throws when the purchase cannot be read, rather than taking it for none', async () => {
@@ -285,6 +297,28 @@ describe('splitting withheld inputs into restored copies and slots', () => {
 
     expect(ids(restored)).toEqual([]);
     expect(ids(withheld)).toEqual(['lead-1', 'lead-2']);
+  });
+
+  // A subject handed over with one of its pictures held back (a recipe file) was left with one picture,
+  // below what a subject takes, and its box hid as answered (2026-11-03 re-review). Held back whole
+  // below the minimum, it is a slot; at the minimum or above, it is handed over without the file.
+  it('holds back a subject whole where what a held-back picture leaves of it is no subject', () => {
+    const isRecipeFile = (item: GenerationInputMediaItem) => item.metadata?.sourceKind === 'recipe-file';
+    const bought = { sourceKind: 'recipe-file' };
+    const pairs = holdBackFromRemix([
+      input('lead-1', 'image', 'subject_image', 0, { handle: '@lead', subjectIndex: 0 }),
+      input('lead-2', 'image', 'subject_image', 1, { handle: '@lead', subjectIndex: 0, ...bought }),
+      input('maya-1', 'image', 'subject_image', 2, { handle: '@maya', subjectIndex: 1 }),
+      input('maya-2', 'image', 'subject_image', 3, { handle: '@maya', subjectIndex: 1 }),
+      input('maya-3', 'image', 'subject_image', 4, { handle: '@maya', subjectIndex: 1, ...bought }),
+      input('ref-own', 'image', 'reference_image', 5),
+      input('ref-bought', 'image', 'reference_image', 6, bought),
+    ], isRecipeFile, 'video');
+
+    expect(ids(pairs.handedOn)).toEqual(['maya-1', 'maya-2', 'ref-own']);
+    expect(ids(pairs.heldBack)).toEqual(['lead-1', 'lead-2', 'maya-3', 'ref-bought']);
+    // Nothing held back, nothing moves.
+    expect(holdBackFromRemix([input('lead-1', 'image', 'subject_image', 0, { handle: '@lead' })], isRecipeFile, 'video').heldBack).toEqual([]);
   });
 
   it('reads a frame as the first of its role, as the slot builder and the restore both do', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-rows';
-import { createRecipeCopyReads, importGenerationReferenceCopy } from '@/lib/generation-reference-copy-import';
+import { createRecipeCopyReads, importGenerationReferenceCopy, reuseRecipeFile } from '@/lib/generation-reference-copy-import';
 import { buildGenerationReferenceCopyPath } from '@/lib/post-resource-bundles-server';
 
 // Owner, 2026-11-03: a remix of an unlocked recipe restores the inputs the
@@ -29,7 +29,8 @@ const copyOf = (rowId: string, sortOrder: number, generationId = GENERATION) => 
 const COPY = copyOf(ROW, 0);
 const OTHER_COPY = copyOf(OTHER_ROW, 1);
 const SOURCE = `post_resource_files/${COPY}`;
-const DESTINATION = `${VIEWER}/recipe-imports/${GENERATION}/${COPY.split('/').pop()}`;
+/** The caller's import, which names the copy it was made from: its seller, its creation, its file. */
+const DESTINATION = `${VIEWER}/recipe-imports/${SELLER}/${GENERATION}/${COPY.split('/').pop()}`;
 
 /** A recipe item as the recipe stores it (`buildGenerationReferenceResourceItems`). */
 const copyItem = (rowId: string, storagePath: string) => ({ id: `reference-${rowId}`, type: 'reference_image', title: 'Reference', storagePath });
@@ -73,6 +74,7 @@ function setUp(options: {
   tables?: Tables;
   /** The version the viewer bought, where it is no longer the recipe's latest. */
   purchasedRevision?: { resource_items: unknown[] } | null;
+  revisionError?: boolean;
   blocked?: boolean;
   viewer?: { id: string; is_anonymous: boolean } | null;
   copyError?: StorageError | null;
@@ -91,9 +93,11 @@ function setUp(options: {
     profiles: [{ id: 'nobody', merged_into_user_id: null }],
     ...options.tables,
   }, {
-    get_purchased_post_resource_bundle_revision: () => (options.purchasedRevision
-      ? [{ ...options.purchasedRevision, is_latest: false, resource_sections: [] }]
-      : []),
+    get_purchased_post_resource_bundle_revision: () => (options.revisionError
+      ? databaseError('57014', 'canceling statement due to statement timeout')
+      : options.purchasedRevision
+        ? [{ ...options.purchasedRevision, is_latest: false, resource_sections: [] }]
+        : []),
   });
   const copy = vi.fn<(from: string, to: string, options?: { destinationBucket?: string }) => Promise<CopyAnswer>>(
     async (_from, to) => (options.copyError ? { data: null, error: options.copyError } : { data: { path: to }, error: null }),
@@ -281,6 +285,7 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
       post_resource_bundle_purchases: databaseError('57014', 'canceling statement due to statement timeout'),
     } }],
     ['the saved inputs', { tables: { generation_input_media: databaseError('57014', 'canceling statement due to statement timeout') } }],
+    ['the version they bought', { revisionError: true }],
   ])('fails retryably, copying nothing, when the read of %s fails', async (_, options) => {
     const stub = setUp(options as Parameters<typeof setUp>[0]);
 
@@ -320,5 +325,83 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
 
     await importAs(VIEWER, SOURCE, stub, createRecipeCopyReads());
     expect(readsOf(stub, 'posts')).toBe(2);
+  });
+});
+
+// 2026-11-03 re-review: a file the caller already holds that is a recipe file (the start's import of a
+// copy, or a kept input of theirs marked as one) was signed as their own, with no unlock read, so a
+// refund or a block ended nothing. Each is checked as the copy it stands for is, and imported again.
+describe('reusing a recipe file the caller already holds', () => {
+  const KEPT = `generation_inputs/${VIEWER}/d1b2c3d4-0000-4000-8000-000000000009/00-reference_image.png`;
+
+  function reuse(source: string, stub: ReturnType<typeof setUp>) {
+    return reuseRecipeFile({ source, viewerUserId: VIEWER, dependencies: stub.dependencies });
+  }
+
+  it('checks the start’s import of a copy as the copy itself, and imports it again', async () => {
+    const stub = setUp();
+
+    await expect(reuse(`generation_inputs/${DESTINATION}`, stub)).resolves.toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DESTINATION}` });
+    expect(stub.copy).toHaveBeenCalledWith(COPY, DESTINATION, { destinationBucket: 'generation_inputs' });
+    // Read again now: the gate, the recipe and the creation's rows.
+    expect(readsOf(stub, 'posts')).toBe(1);
+  });
+
+  it.each([
+    ['a refund', { post_resource_bundle_purchases: [{ id: 'p', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }] }],
+    ['a deleted post', { generations: [{ ...PUBLIC_GENERATION, is_public: false }] }],
+  ])('refuses the start’s import of a copy after %s', async (_, tables) => {
+    const stub = setUp({ tables });
+
+    await expect(reuse(`https://project.supabase.co/storage/v1/object/sign/generation_inputs/${DESTINATION}?token=old`, stub))
+      .resolves.toEqual({ outcome: 'not-eligible' });
+    expect(stub.copy).not.toHaveBeenCalled();
+  });
+
+  it('refuses another account’s import of a copy unless the caller bought the recipe themselves', async () => {
+    const theirs = `generation_inputs/a1b2c3d4-0000-4000-8000-000000000003/recipe-imports/${SELLER}/${GENERATION}/${COPY.split('/').pop()}`;
+
+    await expect(reuse(theirs, setUp())).resolves.toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DESTINATION}` });
+    await expect(reuse(theirs, setUp({ tables: { post_resource_bundle_purchases: [] } }))).resolves.toEqual({ outcome: 'not-eligible' });
+  });
+
+  it('checks a kept input of the caller’s own marked as a recipe file as the copy it came from', async () => {
+    const marked = setUp({ tables: { generation_input_media: [
+      { id: ROW, generation_id: GENERATION, user_id: SELLER, storage_path: `generation_inputs/${SELLER}/${GENERATION}/00.png`, metadata: {} },
+      { id: OTHER_ROW, generation_id: GENERATION, user_id: SELLER, storage_path: `generation_inputs/${SELLER}/${GENERATION}/01.png`, metadata: {} },
+      { id: 'kept-1', generation_id: 'gen-mine', user_id: VIEWER, storage_path: KEPT, metadata: { sourceKind: 'recipe-file', recipeFile: SOURCE } },
+    ] } });
+
+    await expect(reuse(KEPT, marked)).resolves.toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DESTINATION}` });
+
+    const refunded = setUp({ tables: {
+      generation_input_media: [{ id: 'kept-1', generation_id: 'gen-mine', user_id: VIEWER, storage_path: KEPT, metadata: { sourceKind: 'recipe-file', recipeFile: SOURCE } }],
+      post_resource_bundle_purchases: [],
+    } });
+    await expect(reuse(KEPT, refunded)).resolves.toEqual({ outcome: 'not-eligible' });
+  });
+
+  it('refuses a kept input marked as a recipe file whose copy is not on record, and fails retryably when its row cannot be read', async () => {
+    const unknownCopy = setUp({ tables: { generation_input_media: [{ id: 'kept-1', generation_id: 'gen-mine', user_id: VIEWER, storage_path: KEPT, metadata: { sourceKind: 'recipe-file' } }] } });
+    await expect(reuse(KEPT, unknownCopy)).resolves.toEqual({ outcome: 'not-eligible' });
+
+    const unreadable = setUp({ tables: { generation_input_media: databaseError('57014', 'canceling statement due to statement timeout') } });
+    await expect(reuse(KEPT, unreadable)).resolves.toEqual({ outcome: 'failed' });
+  });
+
+  it.each([
+    ['an unmarked kept input of the caller’s own', KEPT, [{ id: 'kept-1', generation_id: 'gen-mine', user_id: VIEWER, storage_path: KEPT, metadata: { sourceStoragePath: `uploads/${VIEWER}/face.png` } }]],
+    ['a shared input the caller imported', `generation_inputs/${VIEWER}/remix-imports/gen-9/00-reference_image.png`, []],
+    ['an upload of the caller’s own', `uploads/${VIEWER}/face.png`, []],
+    ['the caller’s own recipe file', `post_resource_files/${VIEWER}/resources/guide.png`, []],
+  ])('leaves %s to the start, as before', async (_, source, rows) => {
+    const stub = setUp({ tables: { generation_input_media: rows } });
+
+    await expect(reuse(source, stub)).resolves.toBeNull();
+    expect(stub.copy).not.toHaveBeenCalled();
+  });
+
+  it('answers the seller’s copy itself as the start’s import does', async () => {
+    await expect(reuse(SOURCE, setUp())).resolves.toMatchObject({ outcome: 'imported' });
   });
 });

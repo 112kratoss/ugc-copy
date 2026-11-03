@@ -5,8 +5,9 @@ import {
   isRecipeFileInput,
   isRecipeFileSource,
   RECIPE_FILE_SOURCE_KIND,
-  RECIPE_IMPORT_FOLDER,
+  recipeFileCopyOf,
 } from '@/lib/generation-input-origin';
+import { isRecipeImportSource, RECIPE_IMPORT_FOLDER } from '@/lib/recipe-file-paths';
 import {
   isValidElementHandle,
   normalizeSubmittedElementDescriptors,
@@ -29,6 +30,7 @@ import {
 import {
   createSeedanceAssetMetadata,
   readSeedanceAssetCollections,
+  readSeedanceAssetMetadata,
   type SeedanceAssetCollections,
   type SeedanceAssetMetadata,
 } from '@/lib/seedance-assets';
@@ -371,24 +373,26 @@ const IMPORT_FOLDERS = new Set(['remix-imports', RECIPE_IMPORT_FOLDER]);
 
 /**
  * The candidates that are a file of someone else's recipe (`isRecipeFileInput`), which their rows are
- * marked as: one the start imported through the caller's unlock, whose source names the recipe file
- * or its import, and one made from a kept input of the caller's own that is marked, as a run made
- * again from a creation of theirs is: its source is that run's own copy, which reads as the caller's
- * upload, and a mark lost there would hand on what the caller bought. A read of those rows that fails
- * marks every candidate made from one: kept unmarked, a recipe file would be handed on for good.
+ * marked as, each with the copy it stands for where one is on record (`recipeFile`, which a later use
+ * of the input is checked against the unlock by, `reuseRecipeFile`): one the start imported through
+ * the caller's unlock, whose source names the recipe file or its import, and one made from a kept
+ * input of the caller's own that is marked, as a run made again from a creation of theirs is (its
+ * source is that run's own copy, which reads as the caller's upload). A read of those rows that fails
+ * marks none of them: the path alone decides then (2026-11-03 re-review), since a mark is for good and
+ * a creator's own inputs would then read as empty slots to everyone who remixes them.
  */
 async function findRecipeFileCandidates(
   supabase: SupabaseClient,
   userId: string,
   candidates: readonly PersistGenerationInputCandidate[],
-): Promise<Set<PersistGenerationInputCandidate>> {
+): Promise<Map<PersistGenerationInputCandidate, string | null>> {
   const own = new Set([userId]);
-  const marked = new Set<PersistGenerationInputCandidate>();
+  const marked = new Map<PersistGenerationInputCandidate, string | null>();
   const fromKeptInputs = new Map<string, PersistGenerationInputCandidate[]>();
   for (const candidate of candidates) {
     const sources = [candidate.sourceStoragePath, candidate.sourceUrl];
     if (sources.some((source) => isRecipeFileSource(source, own))) {
-      marked.add(candidate);
+      marked.set(candidate, recipeFileCopyOf({ metadata: { sourceStoragePath: candidate.sourceStoragePath, sourceUrl: candidate.sourceUrl } }, own));
       continue;
     }
     for (const source of sources) {
@@ -407,12 +411,12 @@ async function findRecipeFileCandidates(
     .in('storage_path', [...fromKeptInputs.keys()]);
   if (error) {
     logBackendError('failed_to_read_kept_inputs_for_recipe_file_mark', { error });
-    for (const fromRow of fromKeptInputs.values()) fromRow.forEach((candidate) => marked.add(candidate));
     return marked;
   }
   for (const row of (data ?? []) as Array<{ storage_path: string; metadata: Record<string, unknown> | null }>) {
     if (!isRecipeFileInput({ metadata: row.metadata }, own)) continue;
-    fromKeptInputs.get(row.storage_path)?.forEach((candidate) => marked.add(candidate));
+    const copy = recipeFileCopyOf({ metadata: row.metadata }, own);
+    fromKeptInputs.get(row.storage_path)?.forEach((candidate) => marked.set(candidate, copy));
   }
   return marked;
 }
@@ -487,7 +491,9 @@ export async function persistGenerationInputMedia(params: {
         sourceStoragePath: candidate.sourceStoragePath ?? null,
         sourceUrl: candidate.sourceUrl ?? null,
         // Never handed on (`isRecipeFileInput`): set here from the sources the start resolved, never asked of a client.
-        ...(recipeFiles.has(candidate) ? { sourceKind: RECIPE_FILE_SOURCE_KIND } : {}),
+        ...(recipeFiles.has(candidate)
+          ? { sourceKind: RECIPE_FILE_SOURCE_KIND, ...(recipeFiles.get(candidate) ? { recipeFile: recipeFiles.get(candidate) } : {}) }
+          : {}),
       };
 
       durableMutationOutcomeUnknown = true;
@@ -1166,8 +1172,12 @@ export function sanitizeWorkflowSettingsForRemix(
 function preparedSeedanceAssetIds(value: unknown): ReturnType<typeof readSeedanceAssetCollections> {
   const collections = readSeedanceAssetCollections(value);
   if (!collections) return null;
+  // An asset prepared from a recipe file (a buyer's import of a recipe's copy) is never handed on: it
+  // would run the seller's file for anyone who remixes the buyer's creation. Its place stays, empty.
   const idsOnly = (list: Array<SeedanceAssetMetadata | null>) => list.map((asset) => (
-    asset ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status }) : null
+    asset && !isRecipeImportSource(asset.sourceUrl)
+      ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status })
+      : null
   ));
   return {
     images: idsOnly(collections.images),
@@ -1192,19 +1202,33 @@ export function preparedSeedanceAssetIdsFor(
   inputs: readonly GenerationInputMediaItem[],
   restoredIds: ReadonlySet<string>,
 ): ReturnType<typeof readSeedanceAssetCollections> {
-  const prepared = preparedSeedanceAssetIds(value);
-  if (!prepared) return null;
+  const collections = readSeedanceAssetCollections(value);
+  if (!collections) return null;
   const ordered = [...inputs].sort((left, right) => left.sortOrder - right.sortOrder);
   const ofRole = (mediaType: GenerationInputMediaType, role: string) => ordered.filter((item) => item.mediaType === mediaType && item.role === role);
   const pictures = ofRole('image', 'reference_image');
   const frames = [...ofRole('image', 'start_frame').slice(0, 1), ...ofRole('image', 'end_frame').slice(0, 1)];
+  // Each asset goes with the input it was prepared from, never by its place (2026-11-03 re-review): one
+  // input kept without an asset moved every asset after it onto the wrong input, a held-back one's
+  // among them. An asset prepared from a recipe file goes with none.
+  const assetOf = (item: GenerationInputMediaItem, assets: Array<SeedanceAssetMetadata | null>) => {
+    const recorded = readSeedanceAssetMetadata(item.metadata?.seedanceAsset)?.assetId ?? null;
+    const sources = new Set([item.metadata?.sourceStoragePath, item.metadata?.sourceUrl]
+      .filter((source): source is string => typeof source === 'string' && Boolean(source.trim()))
+      .map(mediaSourceKey));
+    const asset = assets.find((candidate) => candidate && !isRecipeImportSource(candidate.sourceUrl) && (
+      (recorded !== null && candidate.assetId === recorded)
+      || (Boolean(candidate.sourceUrl) && sources.has(mediaSourceKey(candidate.sourceUrl!)))
+    ));
+    return asset ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status }) : null;
+  };
   const restored = (items: GenerationInputMediaItem[], assets: Array<SeedanceAssetMetadata | null>) => (
-    items.flatMap((item, index) => (restoredIds.has(item.id) ? [assets[index] ?? null] : []))
+    items.flatMap((item) => (restoredIds.has(item.id) ? [assetOf(item, assets)] : []))
   );
   const subset = {
-    images: restored(pictures.length > 0 ? pictures : frames, prepared.images),
-    videos: restored(ofRole('video', 'reference_video'), prepared.videos),
-    audios: restored(ofRole('audio', 'reference_audio'), prepared.audios),
+    images: restored(pictures.length > 0 ? pictures : frames, collections.images),
+    videos: restored(ofRole('video', 'reference_video'), collections.videos),
+    audios: restored(ofRole('audio', 'reference_audio'), collections.audios),
   };
   return [...subset.images, ...subset.videos, ...subset.audios].some(Boolean) ? subset : null;
 }

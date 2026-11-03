@@ -107,6 +107,8 @@ function hasExpiredLink(draft: CreationDraft, { now, storageBaseUrl }: Reference
  * source is read, so a clip under a stand-in (`handleStandIn`) still counts.
  */
 export function needsRemixReferenceRecovery(draft: CreationDraft, clock?: ReferenceLinkClock): boolean {
+  // The source could not read what it keeps back (2026-11-03 re-review): read again, whatever the words say.
+  if (draft.inputSlotsUnread === true) return true;
   if (clock && hasExpiredLink(draft, clock)) return true;
   if (draft.tool === 'video' && missesClipHandles(draft)) return true;
   return missesReferences(draft);
@@ -150,6 +152,48 @@ function withSourceSlots(draft: CreationDraft, restored: CreationDraft): Creatio
 }
 
 /**
+ * A saved remix whose source could not read the inputs it keeps back, with what a read that could brings:
+ * the copies a bought recipe holds, put where the session has nothing (what the remixer added since
+ * stays theirs, as does a handle they took), and no longer marked unread. Its slots come with
+ * `withSourceSlots`. A read that still could not is no answer: the session stays as it was.
+ */
+function withReadInputs(draft: CreationDraft, restored: CreationDraft): CreationDraft {
+  if (draft.inputSlotsUnread !== true || restored.inputSlotsUnread === true || draft.tool !== restored.tool) return draft;
+  const taken = new Set(heldDraftMedia(draft).flatMap((media) => (media.handle ? [media.handle] : [])));
+  const missing = (current: readonly MediaDraft[], source: readonly MediaDraft[]) => [
+    ...current,
+    ...source.filter((media) => !current.some((held) => isSameMedia(held, media)) && !(media.handle && taken.has(media.handle))),
+  ];
+  const read = { ...draft };
+  delete read.inputSlotsUnread;
+  if (read.tool === 'image' && restored.tool === 'image') {
+    return { ...read, references: missing(read.references, restored.references) };
+  }
+  if (read.tool === 'video' && restored.tool === 'video') {
+    const subjects = videoSubjects(read);
+    return {
+      ...read,
+      references: missing(read.references, restored.references),
+      referenceVideos: missing(read.referenceVideos, restored.referenceVideos),
+      referenceAudios: missing(read.referenceAudios, restored.referenceAudios),
+      startFrame: read.startFrame ?? restored.startFrame,
+      endFrame: read.endFrame ?? restored.endFrame,
+      subjects: [...subjects, ...videoSubjects(restored).filter((subject) => !taken.has(subject.handle))],
+    };
+  }
+  if (read.tool === 'motion' && restored.tool === 'motion') {
+    return {
+      ...read,
+      characterImage: read.characterImage ?? restored.characterImage,
+      referenceVideo: read.referenceVideo ?? restored.referenceVideo,
+      // The run's length follows its clip, which the read brings where the session had none.
+      duration: read.referenceVideo ? read.duration : restored.duration,
+    };
+  }
+  return read;
+}
+
+/**
  * Repair a saved remix from its authorized source. The saved prompt and
  * settings stay, and so does every edit made since, removals included.
  *
@@ -170,7 +214,7 @@ export function recoverRemixReferences(current: CreationDraft, restored: Creatio
   const sourceMedia = heldDraftMedia(restored);
   const mentioned = current.tool === 'video' ? videoDraftMentionedHandles(current) : new Set<string>();
   const taken = new Set(heldDraftMedia(current).flatMap((media) => (media.handle ? [media.handle] : [])));
-  const renewed = mapDraftMedia(withSourceSlots(current, restored), (media) => {
+  const renewed = mapDraftMedia(withSourceSlots(withReadInputs(current, restored), restored), (media) => {
     const match = sourceMedia.find((candidate) => isSameMedia(media, candidate));
     const url = match?.url && match.url !== media.url ? match.url : media.url;
     const sourceHandle = media.kind === 'video' && match?.handle && !match.handleStandIn ? match.handle : null;

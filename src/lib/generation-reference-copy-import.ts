@@ -2,16 +2,21 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isGuestUser } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
-import { RECIPE_FILES_BUCKET, RECIPE_IMPORT_FOLDER } from '@/lib/generation-input-origin';
+import { isRecipeFileInput, recipeFileCopyOf } from '@/lib/generation-input-origin';
 import { isAlreadyExistsStorageError, type SharedInputMediaImportResult } from '@/lib/generation-input-media-import';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
+import { loadGenerationRecipeReferenceCopies } from '@/lib/post-resource-bundles-server';
 import {
-  loadGenerationRecipeReferenceCopies,
+  isRecipeImportSource,
   parseGenerationReferenceCopyPath,
-} from '@/lib/post-resource-bundles-server';
+  RECIPE_FILES_BUCKET,
+  RECIPE_IMPORT_FOLDER,
+  recipeCopyOfSource,
+  recipeImportPath,
+} from '@/lib/recipe-file-paths';
 import { resolveRemixAccess, type RemixAccessGeneration } from '@/lib/remix-access';
 import { createServiceClient } from '@/lib/server-helpers';
-import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
+import { getCanonicalStoredMediaLocation, getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 
 /** Where a run start keeps another account's media it may use: as `importSharedGenerationInputMedia` does. */
 const GENERATION_INPUTS_BUCKET = 'generation_inputs';
@@ -123,7 +128,7 @@ async function readRecipeCopyAccess(
  * `post_resource_files/<seller>/generation-references/<generation>/<file>`
  * (`parseGenerationReferenceCopyPath`), and a run start takes only the caller's
  * own files, so the remix was refused at Generate. This copies it into the
- * caller's folder, `generation_inputs/<caller>/recipe-imports/<generation>/<file>`,
+ * caller's folder, `generation_inputs/<caller>/recipe-imports/<seller>/<generation>/<file>`,
  * once their right to reuse it is read again now (`readRecipeCopyAccess`): the
  * file must be among the copies the version of the recipe they bought holds. A
  * refund, a block, or a post taken down or deleted since the remix ends it; a
@@ -174,9 +179,10 @@ export async function importGenerationReferenceCopy(params: {
     return { outcome: 'not-eligible' };
   }
 
-  // Deterministic, beside the shared import's own folder: a retry or a second remix reuses
-  // the one copy, and the run keeps working whatever the seller edits.
-  const destinationFilePath = `${params.viewerUserId}/${RECIPE_IMPORT_FOLDER}/${copy.generationId}/${copy.fileName}`;
+  // Deterministic, beside the shared import's own folder, and naming the copy it was made from
+  // (`recipeImportPath`): a retry or a second remix reuses the one copy, the run keeps working
+  // whatever the seller edits, and a later use of the import is checked against the unlock again.
+  const destinationFilePath = recipeImportPath(params.viewerUserId, copy);
   const copyResult = await adminSupabase.storage
     .from(RECIPE_FILES_BUCKET)
     .copy(location.filePath, destinationFilePath, { destinationBucket: GENERATION_INPUTS_BUCKET });
@@ -198,4 +204,55 @@ export async function importGenerationReferenceCopy(params: {
     storagePath: `${GENERATION_INPUTS_BUCKET}/${destinationFilePath}`,
     signedUrl: signedResult.data.signedUrl,
   };
+}
+
+/** The folders a run start imports another account's media into: no kept input is stored in either. */
+const IMPORT_FOLDERS = new Set(['remix-imports', RECIPE_IMPORT_FOLDER]);
+
+/**
+ * A recipe file the caller already holds, used again: the seller's copy itself, a run start's import of
+ * one (`recipeImportPath`, in anyone's folder), or a kept input of the caller's own marked as one
+ * (`isRecipeFileInput`, whose `recipeFile` names its copy). Each is checked as the copy it stands for is
+ * and imported again (`importGenerationReferenceCopy`): signed as the caller's own file, a refund or a
+ * block since the remix ended nothing (2026-11-03 re-review). Null for anything else, which a start
+ * resolves as it always has; an import of another creator's shared input is the shared import's.
+ *
+ * Answers as the import does, and `failed` (retryable) when a kept input's row cannot be read: unread,
+ * it would be signed as the caller's own.
+ */
+export async function reuseRecipeFile(params: {
+  source: string;
+  viewerUserId: string;
+  reads?: RecipeCopyReads;
+  dependencies?: GenerationReferenceCopyImportDependencies;
+}): Promise<SharedInputMediaImportResult | null> {
+  const own = new Set([params.viewerUserId]);
+  let copySource = recipeCopyOfSource(params.source, own);
+  // An import whose path names no copy is none a start made: never the caller's own file either.
+  if (!copySource && isRecipeImportSource(params.source)) return { outcome: 'not-eligible' };
+  if (!copySource) {
+    const kept = getUserOwnedStoredMediaLocation(params.source, params.viewerUserId, { allowedBuckets: [GENERATION_INPUTS_BUCKET] });
+    if (!kept || IMPORT_FOLDERS.has(kept.filePath.split('/')[1] ?? '')) return null;
+    const adminSupabase = (params.dependencies?.createServiceClient ?? createServiceClient)();
+    const { data, error } = await adminSupabase
+      .from('generation_input_media')
+      .select('metadata')
+      .eq('user_id', params.viewerUserId)
+      .eq('storage_path', `${GENERATION_INPUTS_BUCKET}/${kept.filePath}`)
+      .limit(1);
+    if (error) {
+      logBackendError('failed_to_read_kept_input_for_recipe_file_reuse', { error });
+      return { outcome: 'failed' };
+    }
+    const row = ((data ?? []) as Array<{ metadata: Record<string, unknown> | null }>)[0];
+    if (!row || !isRecipeFileInput({ metadata: row.metadata }, own)) return null;
+    copySource = recipeFileCopyOf({ metadata: row.metadata }, own);
+    if (!copySource) return { outcome: 'not-eligible' };
+  }
+  return importGenerationReferenceCopy({
+    source: copySource,
+    viewerUserId: params.viewerUserId,
+    reads: params.reads,
+    dependencies: params.dependencies,
+  });
 }

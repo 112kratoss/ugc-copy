@@ -613,11 +613,11 @@ describe('input slots for a remix given none of the run’s inputs', () => {
         prompt: 'Place @product on @backdrop',
         workflow_settings: {
           model: 'nano-banana-2',
+          // Each prepared from its input's own upload, which the input's row names as its source.
           seedanceAssets: { images: [
-            { assetId: 'asset-product', assetType: 'Image', status: 'active', sourceUrl: 'https://cdn.example/product.png' },
-            { assetId: 'asset-backdrop', assetType: 'Image', status: 'active', sourceUrl: 'https://cdn.example/backdrop.png' },
-            { assetId: 'asset-bought', assetType: 'Image', status: 'active', sourceUrl: 'https://cdn.example/bought.png' },
-            { assetId: 'asset-imported', assetType: 'Image', status: 'active', sourceUrl: 'https://cdn.example/imported.png' },
+            { assetId: 'asset-product', assetType: 'Image', status: 'active', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000000-product.png?token=prep' },
+            { assetId: 'asset-backdrop', assetType: 'Image', status: 'active', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000001-my-passport.jpg?token=prep' },
+            { assetId: 'asset-bought', assetType: 'Image', status: 'active', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-reference-image-row-9.png?token=prep' },
           ] },
         },
       };
@@ -658,6 +658,29 @@ describe('input slots for a remix given none of the run’s inputs', () => {
       expect(bundle.inputs.image?.elements?.map((element) => element.id)).toEqual(['row-product', 'row-backdrop']);
       expect(bundle.inputSlots).toEqual([{ id: 'slot-1', kind: 'image', role: 'reference_image', handle: '@backdrop', name: 'Reference image 1' }]);
       expect(JSON.stringify(bundle)).not.toMatch(/row-bought|post_resource_files|seller-9|asset-bought/);
+    });
+
+    // A subject whose held-back picture leaves it one picture is no subject (2026-11-03 re-review): it
+    // was restored with one picture, and its box hid as answered by it.
+    it('gives a subject left below what a subject takes by a held-back picture its slot, not the rest of it', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...PUBLIC_ACCESS, includeSharedInputMedia: true });
+      mocks.generation = {
+        ...mocks.generation,
+        category: 'video',
+        model: 'kling-o3',
+        prompt: '@lead lifts the bottle.',
+        workflow_settings: { model: 'kling-o3', referenceMode: 'elements' },
+      };
+      mocks.loadGenerationInputMediaMap.mockResolvedValue(new Map([['gen-1', [
+        signed(row('row-lead-1', 'image', 'subject_image', 0, 'Lead', { handle: '@lead', displayName: 'Lead', subjectIndex: 0 })),
+        signed(row('row-lead-2', 'image', 'subject_image', 1, 'Lead', { handle: '@lead', displayName: 'Lead', subjectIndex: 0, sourceKind: 'recipe-file' })),
+      ]]]));
+
+      const bundle = await loadRemixSourceBundle(request(), 'gen-1');
+
+      expect(bundle.inputs.video?.subjects ?? []).toEqual([]);
+      expect(bundle.inputSlots).toEqual([{ id: 'slot-1', kind: 'image', role: 'subject', handle: '@lead', name: 'Subject 1' }]);
+      expect(JSON.stringify(bundle)).not.toMatch(/row-lead|generation_inputs/);
     });
 
     it('still hands the owner every input of their own run', async () => {

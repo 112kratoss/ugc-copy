@@ -22,7 +22,10 @@ vi.mock('@/lib/generation-input-media-import', () => sharedImportMocks);
 // A recipe's copy of a creation's input, restored into a remix of the recipe its
 // buyer unlocked (owner, 2026-11-03): refused by default, as other people's media is.
 const recipeCopyImportMocks = vi.hoisted(() => ({
-  importGenerationReferenceCopy: vi.fn(async () => ({ outcome: 'not-eligible' as const })),
+  // Null: not a recipe file, which the start resolves as it always has.
+  reuseRecipeFile: vi.fn<(params: { source: string; viewerUserId: string; reads?: unknown }) => Promise<
+    { outcome: 'imported'; storagePath: string; signedUrl: string } | { outcome: 'not-eligible' } | { outcome: 'failed' } | null
+  >>(async () => null),
   createRecipeCopyReads: () => new Map(),
 }));
 
@@ -1567,8 +1570,8 @@ describe('generation services', () => {
       'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/remix-imports/gen-9/00-reference-image-row-1.png?token=copy';
     sharedImportMocks.importSharedGenerationInputMedia.mockClear();
     sharedImportMocks.resolveRemixResultMedia.mockClear();
-    recipeCopyImportMocks.importGenerationReferenceCopy.mockClear();
-    recipeCopyImportMocks.importGenerationReferenceCopy.mockResolvedValueOnce({
+    recipeCopyImportMocks.reuseRecipeFile.mockClear();
+    recipeCopyImportMocks.reuseRecipeFile.mockResolvedValueOnce({
       outcome: 'imported',
       storagePath: 'generation_inputs/user-1/remix-imports/gen-9/00-reference-image-row-1.png',
       signedUrl: importedSignedUrl,
@@ -1584,10 +1587,10 @@ describe('generation services', () => {
       imageUrls: [recipeCopy],
     });
 
-    // The shared import is asked first and declines a file outside the creators' kept inputs.
-    expect(sharedImportMocks.importSharedGenerationInputMedia).toHaveBeenCalledWith({ source: recipeCopy, viewerUserId: 'user-1' });
-    // With the start's one memo of the unlock reads, which all its references share.
-    expect(recipeCopyImportMocks.importGenerationReferenceCopy).toHaveBeenCalledWith({ source: recipeCopy, viewerUserId: 'user-1', reads: expect.any(Map) });
+    // Asked first, with the start's one memo of the unlock reads, which all its references share;
+    // nothing else is asked of a recipe file.
+    expect(recipeCopyImportMocks.reuseRecipeFile).toHaveBeenCalledWith({ source: recipeCopy, viewerUserId: 'user-1', reads: expect.any(Map) });
+    expect(sharedImportMocks.importSharedGenerationInputMedia).not.toHaveBeenCalled();
     expect(sharedImportMocks.resolveRemixResultMedia).not.toHaveBeenCalled();
     expect(rpcCalls.map((call) => call.fn)).toContain('start_generation');
     expect(providerBody).toMatchObject({
@@ -1602,8 +1605,8 @@ describe('generation services', () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ code: 200, data: { taskId: 'task-copies' } }) } as Response);
     const copy = (row: number) => `https://project.supabase.co/storage/v1/object/sign/post_resource_files/user-2/generation-references/gen-9/0${row}-reference-image-row-${row}.png?token=remix`;
-    recipeCopyImportMocks.importGenerationReferenceCopy.mockClear();
-    recipeCopyImportMocks.importGenerationReferenceCopy.mockImplementation((async ({ source }: { source: string }) => ({
+    recipeCopyImportMocks.reuseRecipeFile.mockClear();
+    recipeCopyImportMocks.reuseRecipeFile.mockImplementation((async ({ source }: { source: string }) => ({
       outcome: 'imported',
       storagePath: `generation_inputs/user-1/recipe-imports/gen-9/${source.length}.png`,
       signedUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-9/${source.length}.png?token=copy`,
@@ -1621,12 +1624,36 @@ describe('generation services', () => {
       });
     }
 
-    const reads = recipeCopyImportMocks.importGenerationReferenceCopy.mock.calls.map((call) => (call as unknown as [{ reads: unknown }])[0].reads);
+    const reads = recipeCopyImportMocks.reuseRecipeFile.mock.calls.map((call) => (call as unknown as [{ reads: unknown }])[0].reads);
     expect(reads).toHaveLength(4);
     expect(reads[0]).toBe(reads[1]);
     expect(reads[2]).toBe(reads[3]);
     expect(reads[2]).not.toBe(reads[0]);
-    recipeCopyImportMocks.importGenerationReferenceCopy.mockReset().mockResolvedValue({ outcome: 'not-eligible' } as never);
+    recipeCopyImportMocks.reuseRecipeFile.mockReset().mockResolvedValue(null);
+  });
+
+  // 2026-11-03 re-review: a recipe file the caller already held (the start's import of a copy, or a
+  // kept input of theirs marked as one) was signed as their own file before any import was tried, so a
+  // refund or a block since the remix ended nothing.
+  it.each([
+    ['its import of a copy', 'generation_inputs/user-1/recipe-imports/user-2/gen-9/00-reference-image-row-1.png'],
+    ['a kept input of theirs marked as a recipe file', 'generation_inputs/user-1/gen-8/00-reference_image.png'],
+  ])('checks %s against the unlock before signing anything of the caller’s', async (_, held) => {
+    const { startImageGeneration } = await import('@/lib/generation-services');
+    recipeCopyImportMocks.reuseRecipeFile.mockClear();
+    recipeCopyImportMocks.reuseRecipeFile.mockResolvedValueOnce({ outcome: 'not-eligible' });
+
+    const { supabase, rpcCalls } = createSupabaseMock();
+    await expect(startImageGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: 'A remix after the refund.',
+      model: 'nano-banana-2',
+      imageUrls: [held],
+    })).rejects.toThrow('Media references must belong to the authenticated user.');
+    expect(recipeCopyImportMocks.reuseRecipeFile).toHaveBeenCalledWith(expect.objectContaining({ source: held, viewerUserId: 'user-1' }));
+    expect(rpcCalls.map((call) => call.fn)).not.toContain('start_generation');
   });
 
   it.each([
@@ -1634,7 +1661,7 @@ describe('generation services', () => {
     ['does not cover', 'not-eligible', 'Media references must belong to the authenticated user.'],
   ] as const)('refuses a recipe copy the unlock %s, as it refuses shared media, before anything is held', async (_, outcome, message) => {
     const { startImageGeneration } = await import('@/lib/generation-services');
-    recipeCopyImportMocks.importGenerationReferenceCopy.mockResolvedValueOnce({ outcome } as never);
+    recipeCopyImportMocks.reuseRecipeFile.mockResolvedValueOnce({ outcome } as never);
 
     const { supabase, rpcCalls } = createSupabaseMock();
     await expect(startImageGeneration({

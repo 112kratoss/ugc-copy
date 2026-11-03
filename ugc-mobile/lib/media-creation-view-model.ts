@@ -23,9 +23,11 @@ import {
   REMIX_INPUT_SLOT_TOOL_ROLES,
   remixInputSlotsByPlace,
   remixInputSlotsNotice,
+  remixSlotAnsweringHandles,
   remixSlotFillNaming,
   unfilledRemixSlotsMessage,
   unplacedRemixSlotsMessage,
+  WITHHELD_INPUTS_RESTORE_ISSUE,
   withRemixSlotEnhancerReferences,
   type RemixInputSlot,
   type RemixInputSlotRole,
@@ -361,6 +363,13 @@ export interface RemixSlotDraftFields {
    * mention of one, are as they were. Only `true` is kept; never sent, quoted or described in a run.
    */
   inputSlotsNoticeDismissed?: boolean;
+  /**
+   * The remix source could not read the inputs it keeps back (`WITHHELD_INPUTS_RESTORE_ISSUE`, 2026-11-03
+   * re-review): it named no slot, and the session is a failed restore, read again on every later visit
+   * (`needsRemixReferenceRecovery`) until a read names its slots and brings back its copies. Saved with a
+   * remix session; only `true` is kept, and nothing of it is sent, quoted or described in a run.
+   */
+  inputSlotsUnread?: boolean;
 }
 
 export interface UploadedMediaInput {
@@ -1187,17 +1196,21 @@ export function remixDraftInputSlots(draft: CreationDraft): readonly RemixInputS
 }
 
 /**
- * The handles a prompt's mention can find in a draft, wherever they wait: its references, clips,
- * tracks and subjects. A frame's or a motion input's handle is none a prompt names; their slots are
- * filled by their place (`remixSlotPlaceTaken`).
+ * What a draft holds that can answer a box's handle, by kind, as the shared rule reads it
+ * (`remixSlotAnsweringHandles`, the web's too): its pictures, subjects, clips and tracks. A frame's or a
+ * motion input's handle is none a prompt names; their slots are filled by their place (`remixSlotPlaceTaken`).
  */
-function mentionableDraftHandles(draft: CreationDraft): Set<string> {
-  if (draft.tool === 'motion') return new Set();
-  const media = draft.tool === 'image' ? draft.references : [...draft.references, ...draft.referenceVideos, ...draft.referenceAudios];
-  return new Set([
-    ...media.flatMap((item) => (item.handle ? [item.handle] : [])),
-    ...(draft.tool === 'video' ? subjectHandles(draft) : []),
-  ]);
+function heldDraftHandles(draft: CreationDraft) {
+  if (draft.tool === 'motion') return {};
+  const handlesOf = (media: readonly MediaDraft[]) => media.map((item) => item.handle);
+  return draft.tool === 'image'
+    ? { pictures: handlesOf(draft.references) }
+    : {
+        pictures: handlesOf(draft.references),
+        subjects: subjectHandles(draft),
+        clips: handlesOf(draft.referenceVideos),
+        tracks: handlesOf(draft.referenceAudios),
+      };
 }
 
 /** Whether the one place a slot stands for holds something: a frame, or a motion run's character or clip. */
@@ -1214,14 +1227,16 @@ function remixSlotPlaceTaken(draft: CreationDraft, role: RemixInputSlotRole): bo
 /**
  * The slots a draft still waits on, each drawn as an empty box where its input goes, in the run's
  * order. A slot leaves when it is filled through its box (`fillRemixInputSlot`), and is not waited
- * on while something the draft holds answers to its handle (a picture added and named so: the web's
- * rule too, `openRemixInputSlots`) or its one place holds something put there another way (the
- * source's own result, as the motion clip).
+ * on while something the draft holds answers to its handle (a picture added and named so; a clip or a
+ * track only on a model that takes it under a handle, `options`: the web's rule too,
+ * `remixSlotAnsweringHandles` and `openRemixInputSlots`) or its one place holds something put there
+ * another way (the source's own result, as the motion clip).
  */
-export function unfilledRemixInputSlots(draft: CreationDraft): readonly RemixInputSlot[] {
+export function unfilledRemixInputSlots(draft: CreationDraft, options: RemixSlotPlaceOptions = {}): readonly RemixInputSlot[] {
   const slots = remixDraftInputSlots(draft);
   if (slots.length === 0) return slots;
-  return openRemixInputSlots(slots, mentionableDraftHandles(draft)).filter((slot) => !remixSlotPlaceTaken(draft, slot.role));
+  return openRemixInputSlots(slots, remixSlotAnsweringHandles(heldDraftHandles(draft), options))
+    .filter((slot) => !remixSlotPlaceTaken(draft, slot.role));
 }
 
 /**
@@ -1246,7 +1261,7 @@ export function placedRemixInputSlots(
   roles: ReadonlySet<RemixInputSlotRole> | null,
   options: RemixSlotPlaceOptions = {},
 ): RemixInputSlot[] {
-  return remixInputSlotsByPlace(unfilledRemixInputSlots(draft), roles, options).placed;
+  return remixInputSlotsByPlace(unfilledRemixInputSlots(draft, options), roles, options).placed;
 }
 
 /**
@@ -1257,7 +1272,7 @@ export function placedRemixInputSlots(
  * every slot has its box, as on a draft whose model is not known.
  */
 export function promptMentionErrors(unknown: readonly string[], draft: CreationDraft, placement?: RemixSlotPlacement): string[] {
-  const slots = remixInputSlotsByPlace(unfilledRemixInputSlots(draft), placement?.roles ?? null, placement ?? {});
+  const slots = remixInputSlotsByPlace(unfilledRemixInputSlots(draft, placement ?? {}), placement?.roles ?? null, placement ?? {});
   const mentions = readRemixSlotMentions(unknown, slots);
   const slotMessage = unfilledRemixSlotsMessage(mentions.waiting);
   const unplacedMessage = unplacedRemixSlotsMessage(mentions.unplaced, placement?.modelName);
@@ -1359,13 +1374,19 @@ export function fillRemixInputSlot<T extends CreationDraft>(
   }
 }
 
-/** The draft with a remix source's empty slots for its creator, and none it held before. */
+/**
+ * The draft with a remix source's empty slots for its creator, and none it held before; and where the
+ * source could not read the inputs it keeps back, none, and the session marked so (`inputSlotsUnread`),
+ * so a later visit reads it again.
+ */
 function withRemixSourceSlots<T extends CreationDraft>(draft: T, bundle: RemixSourceBundle): T {
   const slots = parseRemixInputSlotsForTool(draft.tool, bundle.inputSlots);
-  if (slots.length > 0) return { ...draft, inputSlots: slots };
-  if (draft.inputSlots === undefined) return draft;
+  const unread = (bundle.restoreIssues ?? []).includes(WITHHELD_INPUTS_RESTORE_ISSUE);
   const next = { ...draft };
   delete next.inputSlots;
+  delete next.inputSlotsUnread;
+  if (slots.length > 0) next.inputSlots = slots;
+  if (unread) next.inputSlotsUnread = true;
   return next;
 }
 

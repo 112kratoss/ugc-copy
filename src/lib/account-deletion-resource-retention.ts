@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isRecipeFileInput } from '@/lib/generation-input-origin';
 import { resolvePostResourceStorageLocation } from '@/lib/viewer-unlock-file-url-service';
 
 const RETAINED_BUCKET = 'post_resource_files';
@@ -26,6 +27,7 @@ type GenerationInputRow = {
   label: string | null;
   storage_path: string;
   sort_order: number | null;
+  metadata: Record<string, unknown> | null;
 };
 
 type RetainedMappingRow = {
@@ -166,7 +168,7 @@ export async function retainPurchasedUnlockFiles(
     generationIds.length > 0
       ? admin
           .from('generation_input_media')
-          .select('id, generation_id, media_type, role, label, storage_path, sort_order')
+          .select('id, generation_id, media_type, role, label, storage_path, sort_order, metadata')
           .eq('user_id', creatorUserId)
           .in('generation_id', generationIds)
       : Promise.resolve({ data: [], error: null }),
@@ -178,7 +180,11 @@ export async function retainPurchasedUnlockFiles(
     ((existingSupplementData ?? []) as Array<{ revision_id: string; resource_items: unknown }>)
       .map((row) => [row.revision_id, jsonArray(row.resource_items)]),
   );
-  const generationRows = (generationResult.data ?? []) as GenerationInputRow[];
+  // A file of someone else's recipe the creator's run used through their unlock was theirs to use, never
+  // to hand on (owner, 2026-11-03): it is kept for no buyer of theirs, as no recipe of theirs lists it.
+  const creatorIds = new Set([creatorUserId]);
+  const generationRows = ((generationResult.data ?? []) as GenerationInputRow[])
+    .filter((row) => !isRecipeFileInput({ metadata: row.metadata }, creatorIds));
 
   for (const revision of revisions) {
     if (supplements.has(revision.revision_id) || !revision.allow_remix || !revision.generation_id) {

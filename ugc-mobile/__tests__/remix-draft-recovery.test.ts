@@ -65,6 +65,42 @@ describe('a saved remix with empty slots', () => {
     expect(recoverRemixReferences(imageDraft('Place @product on a counter', []), restored).inputSlots).toEqual([]);
   });
 
+  // A remix that mentions nothing (a motion run, a frames run) read its source again only while its prompt
+  // mentioned a handle (2026-11-03 re-review): it keeps the unread state, and every later visit reads.
+  it('reads again a remix whose kept-back inputs could not be read on any later visit, and takes what the next read gives', () => {
+    const motionSource = (overrides: Partial<RemixSourceBundle>): RemixSourceBundle => ({
+      generation: { id: 'gen-2', title: 'Dance', prompt: '', category: 'video', model: 'kling-2.6' },
+      result: null,
+      inputs: {},
+      workflowSettings: { model: 'kling-2.6' },
+      restoreIssues: [],
+      ...overrides,
+    });
+    const degraded = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), motionSource({ restoreIssues: ['withheld-inputs'] }));
+    expect(degraded.draft).toMatchObject({ inputSlotsUnread: true });
+    expect(degraded.draft).not.toHaveProperty('inputSlots');
+    expect(needsRemixReferenceRecovery(degraded.draft)).toBe(true);
+
+    // Still unread: the session keeps saying so.
+    const again = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), motionSource({ restoreIssues: ['withheld-inputs'] }));
+    expect(recoverRemixReferences(degraded.draft, again.draft)).toMatchObject({ inputSlotsUnread: true });
+
+    // Read: the copy the recipe holds of the character comes back, and the clip is a box.
+    const character = { kind: 'image' as const, label: 'Character', storagePath: 'post_resource_files/creator-1/generation-references/gen-2/00-character-image-row.png', sourceGenerationId: null, url: 'https://signed.example/character.png' };
+    const clipBox: RemixInputSlot = { id: 'slot-1', kind: 'video', role: 'motion_reference_video', handle: null, name: 'Motion video' };
+    const read = hydrateCreationDraftFromRemixSource(createDefaultCreationDraft('motion'), motionSource({ inputs: { motion: { characterImage: character, referenceVideo: null } }, inputSlots: [clipBox] }));
+    const recovered = recoverRemixReferences(degraded.draft, read.draft);
+    expect(recovered).not.toHaveProperty('inputSlotsUnread');
+    expect(recovered.inputSlots).toEqual([clipBox]);
+    expect(recovered.tool === 'motion' && recovered.characterImage?.url).toBe(character.url);
+    expect(needsRemixReferenceRecovery(recovered)).toBe(false);
+
+    // What the remixer put in a place meanwhile stays theirs.
+    const mine = { ...degraded.draft, characterImage: { id: 'mine', kind: 'image' as const, url: 'https://cdn.example.com/mine.png', fileName: 'mine.png', displayName: 'Mine' } } as CreationDraft;
+    const kept = recoverRemixReferences(mine, read.draft);
+    expect(kept.tool === 'motion' && kept.characterImage?.url).toBe('https://cdn.example.com/mine.png');
+  });
+
   // A failed read of a buyer's copies turned every input into an empty slot, with no word of it: its
   // mentions had boxes, so the source was never read again, and the copies never came back (2026-11-03
   // review). The source now names no slot and says the read failed (`withheld-inputs`), so the session
