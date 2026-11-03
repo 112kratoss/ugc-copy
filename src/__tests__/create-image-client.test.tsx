@@ -3474,6 +3474,33 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
     expectOpensObject(await previewLink('Original result · Harbour'), POSTED);
   });
 
+  // The press asks the model's limit again once the link is in, of the model the form is on by
+  // then: it asked the model the press was made on, so a picture went on past the limit of a model
+  // the creator chose while the remix was read.
+  it('adds nothing past the limit of a model chosen while the link was being read', async () => {
+    movePageClock();
+    modelCatalogState.summaries = [...imageModelSummaries, { id: 'ideogram-v3', kind: 'image', displayName: 'Ideogram V3', description: 'Test one-picture image model' }];
+    installFetch({ remixBundle: () => ownRunRemix() });
+    const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    // The read for a fresh link is held until the model has changed.
+    let answerRead: () => void = () => undefined;
+    const fetchMock = installFetch({ remixBundle: () => ownRunRemix(), remixHold: new Promise<void>((resolve) => { answerRead = resolve; }) });
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+    await waitFor(() => expect(remixReads(fetchMock)).toHaveLength(1));
+    // Ideogram V3 takes one picture: the restored one fills it.
+    chooseModel(view.container, 'Ideogram V3');
+    answerRead();
+
+    // The press is over once it says either: the model's limit, or the original among the references.
+    const limit = 'This model supports up to 1 reference image.';
+    await waitFor(() => expect(screen.queryByText(limit) ?? screen.queryByAltText('Original result · Harbour')).not.toBeNull());
+    expect(screen.queryByAltText('Original result · Harbour')).toBeNull();
+    expect(screen.getByText(limit)).toBeInTheDocument();
+  });
+
   it('shows the original past the hour by a link that opens', async () => {
     movePageClock();
     installFetch({ remixBundle: () => ownRunRemix() });

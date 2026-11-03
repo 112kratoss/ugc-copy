@@ -8497,6 +8497,37 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(promptBox()).toHaveValue('Two figures circle, then strike.');
     });
 
+    // As the image creator's press: the clip limit is asked again once the link is in, of the model
+    // the form is on by then. It asked the model the press was made on, so the clip went on to a
+    // model the creator chose meanwhile that takes none.
+    it('adds no clip to a model chosen while the link was being read that takes none', async () => {
+      movePageClock();
+      modelCatalogState.summaries = [
+        { id: 'seedance-2-5', kind: 'video', displayName: 'Seedance 2.5', description: 'Test multimodal video model' },
+        { id: 'kling-3.0-video', kind: 'video', displayName: 'Kling 3.0 Cinematic', description: 'Test video model' },
+      ];
+      stubRemix(() => ownRunRemix());
+      const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1' }} />);
+      const use = await screen.findByRole('button', { name: 'Use as reference' });
+      // The read for a fresh link is held until the model has changed.
+      let answerRead: () => void = () => undefined;
+      stubRemix(() => ownRunRemix(), { hold: new Promise<void>((resolve) => { answerRead = resolve; }) });
+      const remixReads = () => fetchMock.mock.calls.filter(([input]) => String(input).includes('/api/remix-source'));
+      const readsBefore = remixReads().length;
+
+      advancePastTheHour();
+      fireEvent.click(use);
+      await waitFor(() => expect(remixReads()).toHaveLength(readsBefore + 1));
+      // Kling 3.0 takes its clips as named video elements, none as reference clips.
+      chooseModel(view.container, '^Kling 3.0 Cinematic');
+      answerRead();
+
+      // The clip's length is read by the renewed link, then the press asks the limit again.
+      await waitFor(() => expect(readDurationMock).toHaveBeenCalledWith(expect.stringContaining('/generated_videos/user-1/intense.mp4')));
+      await act(async () => {});
+      expect(screen.queryByText('Original result · intense')).toBeNull();
+    });
+
     it('plays the original past the hour by a link that opens', async () => {
       movePageClock();
       stubRemix(() => ownRunRemix());
