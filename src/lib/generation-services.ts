@@ -4110,6 +4110,36 @@ export async function startVideoGeneration(params: {
   }
 }
 
+/**
+ * A motion run's character picture as its provider is to fetch it, refused before anything is
+ * held, in words that say what to do, where it cannot be sent, as the measuring that prices a run
+ * refuses its clip: one the caller may not send (another creator's that no remix shares with them,
+ * an upload that expired), or one that resolves to no HTTPS object (the media proxy's relative
+ * link, where storage would not sign the caller's own file again). A failure of the service to
+ * prepare it keeps its own words, as a retry may get past it.
+ */
+async function resolveMotionCharacterImage(
+  supabase: SupabaseClient,
+  url: string,
+  userId: string,
+  options: GenerationMediaSourceOptions,
+): Promise<string> {
+  const refusal = () => new GenerationServiceError(
+    'The character picture could not be used. Add your own character picture, then retry.',
+    422,
+    'invalid_input_media',
+  );
+  let source: string;
+  try {
+    source = await resolveGenerationMediaSource(supabase, url, userId, options);
+  } catch (error) {
+    if (error instanceof GenerationServiceError && error.status < 500) throw refusal();
+    throw error;
+  }
+  if (!/^https:\/\//i.test(source)) throw refusal();
+  return source;
+}
+
 export async function startMotionGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
@@ -4214,7 +4244,7 @@ export async function startMotionGeneration(params: {
     recipeCopyReads: params.recipeCopyReads ?? createRecipeCopyReads(),
   };
   const [characterImageSource, referenceVideoSource] = await Promise.all([
-    resolveGenerationMediaSource(supabase, characterImageUrl, userId, mediaSourceOptions),
+    resolveMotionCharacterImage(supabase, characterImageUrl, userId, mediaSourceOptions),
     resolveGenerationMediaSource(supabase, referenceVideoUrl, userId, mediaSourceOptions),
   ]);
   // The character image as the task below sends it; Kie fetches it only after the hold.
