@@ -163,6 +163,7 @@ const expectedEndpointKeys = [
   'getMotionGeneration',
   'enhancePrompt',
   'getShowcaseFeed',
+  'prepareShowcaseFeedReadAhead',
   'getShowcaseFeedNewest',
   'recordShowcaseFeedEvents',
   'undoFeedFeedback',
