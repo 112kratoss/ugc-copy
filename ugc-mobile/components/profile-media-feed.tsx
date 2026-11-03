@@ -259,8 +259,7 @@ export function ProfileMediaFeedScreen() {
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [listReady, setListReady] = useState(false);
   const landingSeekingRef = useRef(false);
-  const landingScrollInFlightRef = useRef(false);
-  /** The index the landing scroll in flight is taking the list to. */
+  /** The index the landing scroll in flight is taking the list to; null while none is. */
   const landingScrollIndexRef = useRef<number | null>(null);
   const landingTargetVisibleRef = useRef(false);
 
@@ -318,9 +317,8 @@ export function ProfileMediaFeedScreen() {
   useEffect(() => {
     if (!listReady || !shouldScrollToFeedTarget(landing, cards.length)) return;
     const list = listRef.current;
-    if (!list || landingScrollInFlightRef.current) return;
+    if (!list || landingScrollIndexRef.current !== null) return;
     const index = landing.targetIndex;
-    landingScrollInFlightRef.current = true;
     landingScrollIndexRef.current = index;
     void list.scrollToIndex({ index, animated: false, viewPosition: 0 })
       .then(() => {
@@ -333,7 +331,6 @@ export function ProfileMediaFeedScreen() {
         });
       })
       .finally(() => {
-        landingScrollInFlightRef.current = false;
         landingScrollIndexRef.current = null;
       });
   }, [cards.length, landing, layoutRevision, listReady]);
