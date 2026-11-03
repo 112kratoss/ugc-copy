@@ -108,6 +108,21 @@ describe('showcase feed read-ahead store', () => {
     })).resolves.toBeNull();
   });
 
+  it("holds at most fifty whole rankings in an instance's memory, dropping the oldest first", async () => {
+    dataCache.available = false;
+    const store = await loadStore();
+    expect(store.SHOWCASE_FEED_READ_AHEAD_LOCAL_LIMIT).toBe(50);
+    const tokens: string[] = [];
+    for (let index = 0; index < 51; index += 1) {
+      tokens.push((await store.storePreparedShowcaseFeedSession(prepared(), { now: () => NOW })).token);
+    }
+    const claim = { anonymousKeyHash: null, viewerUserId: 'viewer-1', now: () => NOW };
+
+    await expect(store.takePreparedShowcaseFeedSession(tokens[0], claim)).resolves.toBeNull();
+    await expect(store.takePreparedShowcaseFeedSession(tokens[1], claim)).resolves.not.toBeNull();
+    await expect(store.takePreparedShowcaseFeedSession(tokens[50], claim)).resolves.not.toBeNull();
+  });
+
   it('keeps working on this instance alone where there is no data cache', async () => {
     dataCache.available = false;
     const store = await loadStore();

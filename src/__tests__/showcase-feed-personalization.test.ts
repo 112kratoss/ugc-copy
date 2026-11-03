@@ -2022,6 +2022,56 @@ describe('for-you-rules v3 wiring', () => {
       expect(unreadable.rpc.mock.calls[0][0]).toBe('get_ranked_feed_candidates_v3');
     });
 
+    it('reuses a session read within the window rather than serving page one a second time', async () => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+      // Explore was read, then the app started again cold: its lane is empty,
+      // so Home read ahead, but the first session can still be reused.
+      const session = {
+        id: 'session-earlier',
+        viewer_user_id: 'viewer-1',
+        anonymous_key_hash: null,
+        algorithm_version_id: 'algorithm-v3',
+        experiment_assignment_id: null,
+        created_at: new Date().toISOString(),
+        expires_at: '2099-01-01T00:00:00.000Z',
+      };
+      const rows = {
+        feed_session_items: ['earlier-a', 'earlier-b'].map((postId, position) => ({
+          id: 800 + position,
+          session_id: 'session-earlier',
+          post_id: postId,
+          position,
+          candidate_source: 'fresh',
+          final_score: 0.5,
+          score_components: { negative_feedback_risk: 0.01, is_following: false },
+        })),
+      };
+      const { client, persisted, rpc } = v3Client({ candidates, rows, session });
+
+      const page = await serve(client, prepared);
+
+      expect(page.feedSessionId).toBe('session-earlier');
+      expect(page.items.map((entry) => entry.id)).toEqual(['earlier-a', 'earlier-b']);
+      expect(persisted).toEqual([]);
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the active algorithm changed since (an activation or a rollback)', { algorithmId: 'algorithm-retired' }],
+      ['the viewer is in another experiment arm now', { experimentAssignmentId: 41 }],
+    ])('ranks afresh when %s', async (_case, drift) => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+      const { client, persisted, rpc } = v3Client({ candidates });
+
+      await serve(client, prepared ? { ...prepared, ...drift } : null);
+
+      expect(rpc.mock.calls.map(([name]) => name)).toEqual([
+        'get_ranked_feed_candidates_v3',
+        'persist_ranked_feed_session',
+      ]);
+      expect(persisted[0].p_session).toMatchObject({ algorithm_version_id: 'algorithm-v3' });
+    });
+
     it('keeps the ranking window the feed already reuses a first page for', () => {
       expect(PREPARED_FEED_SESSION_TTL_MS).toBe(2 * 60 * 1000);
     });

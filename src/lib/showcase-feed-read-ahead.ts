@@ -25,8 +25,12 @@ import {
 export const SHOWCASE_FEED_READ_AHEAD_TTL_MS = PREPARED_FEED_SESSION_TTL_MS;
 
 const READ_AHEAD_TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
-/** Rankings held in this instance at once; a busy instance drops the oldest. */
-const LOCAL_ENTRY_LIMIT = 200;
+/**
+ * Rankings held in this instance at once; a busy instance drops the oldest.
+ * Each is a whole hydrated ranking (about 100-300 KB), and a dropped one is
+ * still in the data cache.
+ */
+export const SHOWCASE_FEED_READ_AHEAD_LOCAL_LIMIT = 50;
 
 type LocalEntry = { prepared: PreparedRankedFeedSession; expiresAt: number };
 
@@ -69,7 +73,7 @@ function pruneLocalEntries(now: number) {
     if (expiresAt <= now) takenTokens.delete(token);
   }
   for (const entries of [localEntries, takenTokens]) {
-    while (entries.size > LOCAL_ENTRY_LIMIT) {
+    while (entries.size > SHOWCASE_FEED_READ_AHEAD_LOCAL_LIMIT) {
       const oldest = entries.keys().next().value;
       if (oldest === undefined) break;
       entries.delete(oldest);

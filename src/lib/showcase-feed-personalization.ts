@@ -1705,7 +1705,9 @@ export async function getPersonalizedShowcaseFeedPage({
   /**
    * A first page ranked ahead for this viewer and these filters
    * (`prepareRankedShowcaseFeedSession`), to be persisted and served now in
-   * place of a new ranking. Ignored on any other page or for anyone else.
+   * place of a new ranking. Ignored on any other page, for anyone else, when
+   * a session can be reused, and when the viewer's algorithm or experiment
+   * assignment is no longer the one it was ranked under.
    */
   prepared?: PreparedRankedFeedSession | null;
   serviceClient: SupabaseClient;
@@ -1735,22 +1737,6 @@ export async function getPersonalizedShowcaseFeedPage({
       nextCursor: null,
       offset,
     });
-  }
-
-  if (
-    prepared
-    && offset === 0
-    && preparedFeedSessionMatches(prepared, { anonymousKeyHash, filters, viewerUserId })
-  ) {
-    const served = await timed('prepared_page', () => servePreparedSession({
-      hydratePostIds,
-      limit,
-      prepared,
-      serviceClient,
-      timed,
-      viewerUserId,
-    }));
-    if (served) return served;
   }
 
   // The latest viewer/filter-matching session can be read while the algorithm
@@ -1819,6 +1805,29 @@ export async function getPersonalizedShowcaseFeedPage({
         viewerUserId,
       }));
       if (reused) return reused;
+    }
+
+    // A ranking read ahead stands in for a new one only where a new one would
+    // be made: no session to reuse (one read within the window is already
+    // page one, served; a second would serve it twice, the cold-start twin
+    // #466 removed), and still under the algorithm and experiment arm this
+    // viewer would be ranked with now (an activation, a rollback or a new
+    // assignment since the read-ahead is served on the current one).
+    if (
+      prepared
+      && preparedFeedSessionMatches(prepared, { anonymousKeyHash, filters, viewerUserId })
+      && prepared.algorithmId === algorithm.id
+      && prepared.experimentAssignmentId === experimentAssignmentId
+    ) {
+      const served = await timed('prepared_page', () => servePreparedSession({
+        hydratePostIds,
+        limit,
+        prepared,
+        serviceClient,
+        timed,
+        viewerUserId,
+      }));
+      if (served) return served;
     }
   }
 
