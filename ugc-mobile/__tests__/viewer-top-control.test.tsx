@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
 const glass = vi.hoisted(() => ({ available: true }));
+// What the platform answers when asked about Reduce Motion: nothing, unless a case says.
+const reduceMotion = vi.hoisted(() => ({ answer: new Promise<boolean>(() => {}) }));
 
 vi.mock('expo-glass-effect', () => ({
   GlassView: ({ children, ...props }: MockProps) => React.createElement('glass-view', props, children),
@@ -47,7 +49,7 @@ const animated = vi.hoisted(() => {
 vi.mock('react-native', () => ({
   AccessibilityInfo: {
     addEventListener: () => ({ remove: () => {} }),
-    isReduceMotionEnabled: () => new Promise<boolean>(() => {}),
+    isReduceMotionEnabled: () => reduceMotion.answer,
     isReduceTransparencyEnabled: () => Promise.resolve(false),
   },
   Animated: {
@@ -68,6 +70,7 @@ vi.mock('react-native', () => ({
 vi.mock('@/lib/theme-context', () => ({ useAppTheme: () => ({ scheme: 'dark' }) }));
 
 import { ViewerTopControl } from '../components/viewer-top-control';
+import { appTheme } from '../lib/theme';
 import { createViewerTopControls, ViewerTopControlsContext, type ViewerTopControls } from '../lib/viewer-top-controls';
 
 const mounted: renderer.ReactTestRenderer[] = [];
@@ -168,5 +171,47 @@ describe('a hidden control', () => {
     expect(host(tree, 'pressable').props).toMatchObject({ accessibilityRole: 'button', accessibilityLabel: 'Go back' });
     renderer.act(() => controls.setShown(false));
     expect(frameOf(tree).props.pointerEvents).toBe('none');
+  });
+});
+
+/** What the glass holds, and fades: the icon. */
+const iconOpacity = (tree: renderer.ReactTestRenderer) => (
+  host(tree, 'pressable').find((node) => (node.type as unknown) === 'animated-view').props.style as { opacity: { value: number } }
+).opacity.value;
+
+describe('coming in and going', () => {
+  it('fades the icon and materialises the glass over a state change, as the app\'s motion helpers time one', () => {
+    const controls = createViewerTopControls(false);
+    const { tree } = mount(controls);
+    expect(iconOpacity(tree)).toBe(0);
+    animated.timing.mockClear();
+    renderer.act(() => controls.setShown(true));
+    expect(animated.timing).toHaveBeenCalledTimes(1);
+    expect(animated.timing.mock.calls[0]![1]).toMatchObject({
+      toValue: 1,
+      duration: appTheme.motion.duration.state,
+      useNativeDriver: true,
+    });
+    expect(iconOpacity(tree)).toBe(1);
+    expect(host(tree, 'glass-view').props.glassEffectStyle).toEqual({
+      style: 'regular',
+      animate: true,
+      animationDuration: appTheme.motion.duration.state / 1000,
+    });
+  });
+
+  // Last in the file: the motion helpers keep the platform's answer for the process.
+  it('cuts both under Reduce Motion', async () => {
+    reduceMotion.answer = Promise.resolve(true);
+    const controls = createViewerTopControls(false);
+    const { tree } = mount(controls);
+    await renderer.act(async () => {
+      await reduceMotion.answer;
+    });
+    animated.timing.mockClear();
+    renderer.act(() => controls.setShown(true));
+    expect(animated.timing).not.toHaveBeenCalled();
+    expect(iconOpacity(tree)).toBe(1);
+    expect(host(tree, 'glass-view').props.glassEffectStyle).toMatchObject({ style: 'regular', animate: false });
   });
 });

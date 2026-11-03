@@ -29,8 +29,8 @@ export function AppleZoomProgress({ veil }: { veil: ZoomVeilDrop | null }) {
 /**
  * The share of the push after which the reel's top controls come in. The
  * progress follows the zoom's spring, so 0.9 arrives about 150 ms into it; the
- * controls then take another 200 ms to come in, by which time the tile's
- * picture has crossfaded away (simulator, 2026-11-03).
+ * controls then take a state change (180 ms) to come in, by which time the
+ * tile's picture has crossfaded away, about 330 ms in (simulator, 2026-11-03).
  */
 const TOP_CONTROLS_SHOW_AT = 0.9;
 /** Shown by then whatever the transition reported, so a lost event never strands them. */

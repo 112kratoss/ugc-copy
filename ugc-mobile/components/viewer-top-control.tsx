@@ -1,14 +1,19 @@
 import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'expo-glass-effect';
 import { useEffect, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, Animated, Easing, Platform, Pressable, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, Animated, Platform, Pressable, type ViewStyle } from 'react-native';
 
+import { useAnimatedState, useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { viewerTopControlTop, VIEWER_TOP_CONTROL_SIZE } from '@/lib/viewer-chrome';
 import { useViewerTopControlsShown } from '@/lib/viewer-top-controls';
 
-/** How long the control takes to come in or go (seconds, as UIKit's glass animation takes it). */
-const APPEARANCE_S = 0.2;
+/**
+ * How long the control takes to come in or go: a state change, the length
+ * `useAnimatedState` fades its icon over, in seconds as UIKit's glass
+ * animation takes it.
+ */
+const APPEARANCE_S = appTheme.motion.duration.state / 1000;
 
 type ViewerTopControlProps = {
   label: string;
@@ -34,19 +39,11 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
   const [reduceTransparency, setReduceTransparency] = useState(false);
   // Glass is not faded with opacity: under an ancestor whose opacity changed it
   // never rendered its effect again (simulator, 2026-11-03). It materialises
-  // through its own style instead, and only what it holds fades.
-  const [appearance] = useState(() => new Animated.Value(shown ? 1 : 0, { useNativeDriver: true }));
-
-  useEffect(() => {
-    const animation = Animated.timing(appearance, {
-      toValue: shown ? 1 : 0,
-      duration: APPEARANCE_S * 1000,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [appearance, shown]);
+  // through its own style instead, and only what it holds fades. Both are cut
+  // under Reduce Motion, as every state change in the app is.
+  const appearance = useAnimatedState(shown);
+  const reducedMotion = useReducedMotion();
+  const opacity = appearance ?? (shown ? 1 : 0);
 
   useEffect(() => {
     if (!glassAvailable) return;
@@ -85,7 +82,7 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
   if (glass) {
     return (
       <GlassView
-        glassEffectStyle={{ style: shown ? 'regular' : 'none', animate: true, animationDuration: APPEARANCE_S }}
+        glassEffectStyle={{ style: shown ? 'regular' : 'none', animate: !reducedMotion, animationDuration: APPEARANCE_S }}
         colorScheme={theme.scheme}
         isInteractive
         pointerEvents={pointerEvents}
@@ -103,7 +100,7 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
           onPress={onPress}
           style={content}
         >
-          <Animated.View style={{ opacity: appearance }}>{children}</Animated.View>
+          <Animated.View style={{ opacity }}>{children}</Animated.View>
         </Pressable>
       </GlassView>
     );
@@ -114,7 +111,7 @@ export function ViewerTopControl({ label, onPress, topInset, side, selected, chi
       pointerEvents={pointerEvents}
       accessibilityElementsHidden={!shown}
       importantForAccessibility={importantForAccessibility}
-      style={[frame, { opacity: appearance }]}
+      style={[frame, { opacity }]}
     >
       <Pressable
         accessibilityRole="button"
