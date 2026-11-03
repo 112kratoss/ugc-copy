@@ -224,6 +224,25 @@ describe('HomeSideMenu hand-off', () => {
     expect(drawerShown(tree)).toBe(false);
   });
 
+  it('stays closed when Back returns to Home before the owner has closed it', () => {
+    routerState.push.mockClear();
+    // The owner's close lands in a later render than the drawer's exit; until
+    // then `visible` is still true.
+    const onClose = vi.fn();
+    const tree = renderMenu(1250, { onClose });
+
+    renderer.act(() => pressable(tree, 'Settings').props.onPress());
+    renderer.act(() => container.land('settings-key'));
+    expect(drawerShown(tree)).toBe(false);
+
+    renderer.act(() => container.land('index-key'));
+
+    expect(drawerShown(tree)).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // Nothing is listened to once the hand-off has landed.
+    expect(container.listeners.size).toBe(0);
+  });
+
   it('opens one screen for two quick taps, on any rows', () => {
     routerState.push.mockClear();
     const tree = renderMenu(1250);

@@ -13,12 +13,14 @@ type Handoff<Row extends string> = {
   row: Row;
   /** The focused route when the row was tapped. */
   from: string | undefined;
+  /** Another route has taken over: the menu leaves over it. */
+  landed: boolean;
   /** Nothing took over: the menu leaves anyway. */
   stalled: boolean;
 };
 
 export interface MenuHandoff<Row extends string> {
-  /** The row whose screen is being built, drawn as pressed until the menu leaves; null otherwise. */
+  /** The row whose screen is being built, drawn as pressed until the menu has left; null otherwise. */
   chosen: Row | null;
   /**
    * True from the render in which the next screen has taken over from the one
@@ -78,36 +80,49 @@ export function useMenuHandoff<Row extends string>({
   // touch that landed while the next screen was being built reaches JS after
   // it and must not open a second screen.
   const claimedRef = useRef(false);
+  // The hand-off `onClose` was last run for: once each.
+  const closedForRef = useRef<Handoff<Row> | null>(null);
 
-  // A closed menu forgets the row it handed off, so its next opening is clear.
-  if (!visible && handoff !== null) setHandoff(null);
+  // Forgotten as the menu opens again, not as it closes: the chosen row stays
+  // drawn as pressed while the menu leaves.
+  const [openedFor, setOpenedFor] = useState(visible);
+  if (visible !== openedFor) {
+    setOpenedFor(visible);
+    if (visible && handoff !== null) setHandoff(null);
+  }
 
-  const pending = handoff !== null;
+  const waiting = handoff !== null && !handoff.landed && !handoff.stalled;
   // Subscribed only while a hand-off waits: the menus are mounted all the
   // time, and every navigation in the app would otherwise render them.
   const subscribe = useCallback(
-    (onChange: () => void) => (pending ? navigation.addListener('state', onChange) : nothingToRemove),
-    [navigation, pending],
+    (onChange: () => void) => (waiting ? navigation.addListener('state', onChange) : nothingToRemove),
+    [navigation, waiting],
   );
   const readFocusedRoute = useCallback(
-    () => (pending ? focusedRouteKey(navigation) : undefined),
-    [navigation, pending],
+    () => (waiting ? focusedRouteKey(navigation) : undefined),
+    [navigation, waiting],
   );
   const focusedRoute = useSyncExternalStore(subscribe, readFocusedRoute, readFocusedRoute);
-  const arrived = handoff !== null && focusedRoute !== handoff.from;
-  const leaving = handoff !== null && (arrived || handoff.stalled);
+  // Kept from the render that sees the new route, so a Back that returns to
+  // the old one before the menu has closed cannot bring the menu back.
+  if (handoff !== null && !handoff.landed && !handoff.stalled && focusedRoute !== handoff.from) {
+    setHandoff({ ...handoff, landed: true });
+  }
+  const leaving = handoff !== null && (handoff.landed || handoff.stalled);
 
   useEffect(() => {
-    if (!handoff || arrived || handoff.stalled) return;
+    if (!waiting) return;
     const timer = setTimeout(() => {
       setHandoff((current) => (current === handoff ? { ...current, stalled: true } : current));
     }, HANDOFF_FALLBACK_MS);
     return () => clearTimeout(timer);
-  }, [arrived, handoff]);
+  }, [handoff, waiting]);
 
   useEffect(() => {
-    if (leaving) onClose();
-  }, [leaving, onClose]);
+    if (!leaving || closedForRef.current === handoff) return;
+    closedForRef.current = handoff;
+    onClose();
+  }, [handoff, leaving, onClose]);
 
   // Freed when the menu opens again, not when it closes: a touch that reached
   // a row before the menu's exit was drawn can arrive after the close.
@@ -127,8 +142,8 @@ export function useMenuHandoff<Row extends string>({
     const from = focusedRouteKey(navigation);
     // Set before navigating, so a navigation that throws still ends in the
     // fallback's exit rather than in a menu whose rows no longer answer.
-    setHandoff({ row, from, stalled: false });
-    if (navigate() === false) setHandoff({ row, from, stalled: true });
+    setHandoff({ row, from, landed: false, stalled: false });
+    if (navigate() === false) setHandoff({ row, from, landed: false, stalled: true });
   };
 
   return { chosen: handoff?.row ?? null, leaving, handOff, claim };

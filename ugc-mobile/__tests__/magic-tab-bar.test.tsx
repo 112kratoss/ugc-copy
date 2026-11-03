@@ -145,6 +145,7 @@ vi.mock('@/lib/use-active-generations', () => ({
   useActiveGenerationCount: () => runningGenerations,
 }));
 
+import { MagicCreateMenu } from '../components/magic-create-menu';
 import { MagicTabBar } from '../components/magic-tab-bar';
 import { appTheme, themes } from '../lib/theme';
 
@@ -711,6 +712,10 @@ describe('MagicTabBar create menu hand-off', () => {
     renderer.act(() => container.land('post-new-key'));
 
     expect(menuOpen(tree)).toBe(false);
+    // Post stays lit through the exit: the menu leaves as it was tapped.
+    const menu = tree.root.findByType(MagicCreateMenu);
+    expect(menu.props.visible).toBe(false);
+    expect(menu.props.chosen).toBe('post');
   });
 
   it('leaves at once when a listener prevents the jump', () => {
