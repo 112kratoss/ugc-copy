@@ -60,13 +60,15 @@ test("a creation post shows its settings under Made with to a signed-out visitor
 
   const setup = head.getByTestId('post-generation-setup');
   await expect(setup).toBeVisible();
-  // What a visitor reads, each value named on hover...
+  // What a visitor reads, each value named on hover. The creation ran with Google Search
+  // grounding off, as every run does now no image model offers it, so the line leaves it out...
   const terms = setup.locator('[aria-hidden="true"] > span:not(:empty)');
-  await expect(terms).toHaveText(['9:16', '·', '1K', '·', 'JPG', '·', 'Search grounding off']);
-  await expect(setup.getByText('Search grounding off')).toHaveAttribute('title', 'Google Search grounding');
+  await expect(terms).toHaveText(['9:16', '·', '1K', '·', 'JPG']);
+  await expect(setup.getByText('JPG', { exact: true })).toHaveAttribute('title', 'Output format');
+  await expect(setup).not.toContainText(/grounding/i);
   // ...and what a screen reader hears.
   await expect(setup.getByText(
-    'Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG, Google Search grounding: Off',
+    'Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG',
   )).toBeAttached();
   // The line sits between the byline and the title.
   const [bylineBottom, setupTop, setupBottom, titleTop] = await Promise.all([
@@ -89,6 +91,6 @@ test("a creation post shows its settings under Made with to a signed-out visitor
   // A phone wraps the byline, and the line keeps its place under it.
   await page.setViewportSize(PHONE);
   await expect(setup).toBeVisible();
-  await expect(terms).toHaveText(['9:16', '·', '1K', '·', 'JPG', '·', 'Search grounding off']);
+  await expect(terms).toHaveText(['9:16', '·', '1K', '·', 'JPG']);
   await page.screenshot({ path: testInfo.outputPath('creation-post-signed-out-phone.png') });
 });

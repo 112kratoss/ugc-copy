@@ -1155,7 +1155,6 @@ describe('Showcase detail page', () => {
         { label: 'Aspect ratio', value: '9:16' },
         { label: 'Resolution', value: '1K' },
         { label: 'Output format', value: 'JPG' },
-        { label: 'Google Search grounding', value: 'Off' },
       ];
 
       it('reads them under Made with, each value named for a mouse and a screen reader', async () => {
@@ -1166,17 +1165,28 @@ describe('Showcase detail page', () => {
 
         const line = within(head).getByTestId('post-generation-setup');
         const terms = line.querySelector('[aria-hidden="true"]');
-        expect(terms?.textContent).toBe('9:16·1K·JPG·Search grounding off');
-        expect(within(line).getByText('Search grounding off')).toHaveAttribute('title', 'Google Search grounding');
+        expect(terms?.textContent).toBe('9:16·1K·JPG');
+        expect(within(line).getByText('JPG')).toHaveAttribute('title', 'Output format');
         expect(within(line).getByText('9:16')).toHaveAttribute('title', 'Aspect ratio');
         expect(within(line).getByText(
-          'Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG, Google Search grounding: Off',
+          'Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG',
         )).toHaveClass('sr-only');
+        expect(line).not.toHaveTextContent(/grounding/i);
         // Under the byline that names the model, above the title.
         const madeWith = within(head).getByText('Made with Nano Banana 2.0');
         expect(madeWith.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
         expect(line.compareDocumentPosition(within(head).getByRole('heading', { level: 1 })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
         expect(line).not.toHaveTextContent(/nano banana|model/i);
+      });
+
+      it('names Search grounding on a run that had it on, as a switch with its name', async () => {
+        const head = await renderHead({
+          generationSetup: [...imageSetup, { label: 'Google Search grounding', value: 'On' }],
+        });
+
+        const line = within(head).getByTestId('post-generation-setup');
+        expect(line.querySelector('[aria-hidden="true"]')?.textContent).toBe('9:16·1K·JPG·Search grounding on');
+        expect(within(line).getByText('Search grounding on')).toHaveAttribute('title', 'Google Search grounding');
       });
 
       it('draws no line where the read sends none: an upload, a template result', async () => {

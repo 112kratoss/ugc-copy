@@ -426,7 +426,7 @@ export function PostDetailsPage({
               {meta.metaParts.join(' · ')}
             </Text>
           ) : null}
-          {/* "9:16 · 1K · JPG · Search grounding off", in the web post page's words; VoiceOver names each value. */}
+          {/* "9:16 · 1K · JPG", in the web post page's words; VoiceOver names each value. */}
           {generationSetup.entries.length > 0 ? (
             <Text
               accessibilityLabel={`Generation settings: ${describeGenerationSetup(generationSetup.entries)}`}

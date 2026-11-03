@@ -155,16 +155,16 @@ it('shows the caption a post read by id carries as its story when it has no body
 // read by id carries them; Details draws them under Made with in the web's words.
 it("draws the settings a post read by id carries under its Made with, and none for a template result", async () => {
   const { item } = await clientForEndpoint('getShowcasePost').getShowcasePost('post-1');
+  // Grounding is named only where it was on, which no image model offers any more.
   expect(item.generationSetup).toEqual([
     { label: 'Aspect ratio', value: '16:9' },
     { label: 'Resolution', value: '1K' },
     { label: 'Output format', value: 'JPG' },
-    { label: 'Google Search grounding', value: 'Off' },
   ]);
 
   const [reelItem] = buildImmersiveShowcaseItems('showcase-feed', [item]);
   expect(reelItem.details?.generationSetup).toEqual(item.generationSetup);
-  expect(formatGenerationSetupLine(reelItem.details?.generationSetup ?? [])).toBe('16:9 · 1K · JPG · Search grounding off');
+  expect(formatGenerationSetupLine(reelItem.details?.generationSetup ?? [])).toBe('16:9 · 1K · JPG');
   // It brought them, so Details reads nothing more.
   expect(shouldReadPostGenerationSetup(reelItem)).toBe(false);
 

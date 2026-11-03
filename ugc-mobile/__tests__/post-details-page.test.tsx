@@ -280,20 +280,19 @@ describe('PostDetailsPage', () => {
           { label: 'Aspect ratio', value: '9:16' },
           { label: 'Resolution', value: '1K' },
           { label: 'Output format', value: 'JPG' },
-          { label: 'Google Search grounding', value: 'Off' },
         ],
         pending: false,
       };
       const tree = render(page({ item: madeWithPost() }));
 
       const line = setupLine(tree);
-      expect(line.props.children).toBe('9:16 · 1K · JPG · Search grounding off');
+      expect(line.props.children).toBe('9:16 · 1K · JPG');
       expect(line.props.accessibilityLabel)
-        .toBe('Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG, Google Search grounding: Off');
+        .toBe('Generation settings: Aspect ratio: 9:16, Resolution: 1K, Output format: JPG');
       const values = textValues(tree);
       const madeWith = values.findIndex((value) => value.includes('Made with Nano Banana 2.0'));
       expect(madeWith).toBeGreaterThan(-1);
-      expect(values.indexOf('9:16 · 1K · JPG · Search grounding off')).toBe(madeWith + 1);
+      expect(values.indexOf('9:16 · 1K · JPG')).toBe(madeWith + 1);
       // The theme's colour and the body text it sits under, never a size of its own.
       expect(line.props.style).toMatchObject({ fontSize: 14 });
       expect(generationSetupState.calls.at(-1)).toEqual({ itemId: 'post-1', active: true });

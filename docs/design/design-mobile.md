@@ -527,7 +527,7 @@ Rules:
 `app/post/[id].tsx` and `components/post-details-page.tsx`.
 
 - Written posts read as a page, not a reel. Page 0 is the post, and a swipe left reaches the same details page media posts have: how it was made, references, and the recipe with its unlock.
-- Under the line that says what it was made with, a post made from a creation shows its settings in the web post page's words, "9:16 · 1K · JPG · Search grounding off" (owner, 2026-11-03: a standard detail, no unlock; `lib/generation-setup/`, shared with the web), in `bodySm` and `muted` like the line above it, and VoiceOver hears each value named. The post's read by id carries them; a post opened from a feed page reads the post for them once its details page is on screen (`lib/use-post-generation-setup.ts`), with the line's place held meanwhile so nothing under it moves. None for an upload, a written post, a template's result or a post under its NSFW cover.
+- Under the line that says what it was made with, a post made from a creation shows its settings in the web post page's words, "9:16 · 1K · JPG" (owner, 2026-11-03: a standard detail, no unlock; `lib/generation-setup/`, shared with the web), in `bodySm` and `muted` like the line above it, and VoiceOver hears each value named. The post's read by id carries them; a post opened from a feed page reads the post for them once its details page is on screen (`lib/use-post-generation-setup.ts`), with the line's place held meanwhile so nothing under it moves. None for an upload, a written post, a template's result or a post under its NSFW cover.
 - Every state keeps a way back: loaded, loading, or gone.
 
 ### Comments

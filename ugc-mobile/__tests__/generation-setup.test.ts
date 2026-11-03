@@ -19,9 +19,11 @@ describe('the generation setup line', () => {
       { label: 'Aspect ratio', value: '9:16' },
       { label: 'Resolution', value: '1K' },
       { label: 'Output format', value: 'JPG' },
-      { label: 'Google Search grounding', value: 'Off' },
     ];
-    expect(formatGenerationSetupLine(setup)).toBe('9:16 · 1K · JPG · Search grounding off');
+    expect(formatGenerationSetupLine(setup)).toBe('9:16 · 1K · JPG');
+    // The server names grounding only where it was on (no image model offers it any more).
+    expect(formatGenerationSetupLine([...setup, { label: 'Google Search grounding', value: 'On' }]))
+      .toBe('9:16 · 1K · JPG · Search grounding on');
   });
 
   it('names a switch and a count with what they are, and lets a value that names itself stand alone', () => {

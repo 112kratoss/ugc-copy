@@ -21,7 +21,7 @@ import { formatGenerationSetupLine } from '../../ugc-mobile/lib/generation-setup
  * with already names, and the inputs, which a locked recipe's preview counts.
  */
 describe('the settings a creation post shows everyone', () => {
-  it('shows an image run\'s aspect ratio, resolution, output format and Google Search grounding', () => {
+  it('shows an image run\'s aspect ratio, resolution and output format', () => {
     const setup = buildPublicGenerationSetup({
       category: 'image',
       model: 'nano-banana-2',
@@ -39,11 +39,29 @@ describe('the settings a creation post shows everyone', () => {
       { label: 'Aspect ratio', value: '9:16' },
       { label: 'Resolution', value: '1K' },
       { label: 'Output format', value: 'JPG' },
-      { label: 'Google Search grounding', value: 'Off' },
     ]);
-    expect(formatGenerationSetupLine(setup)).toBe('9:16 · 1K · JPG · Search grounding off');
+    expect(formatGenerationSetupLine(setup)).toBe('9:16 · 1K · JPG');
     // Made with names the model; the recipe's preview counts the references.
-    expect(JSON.stringify(setup)).not.toMatch(/model|nano|banana|input|reference|@bottle/i);
+    expect(JSON.stringify(setup)).not.toMatch(/model|nano|banana|input|reference|@bottle|grounding/i);
+  });
+
+  // No image model offers grounding any more, and every run stores `false`: "off"
+  // would read on every image post and say nothing. A run that had it on says so.
+  it('names Google Search grounding only where it was on', () => {
+    const settings = { aspectRatio: '4:5', resolution: '2K', outputFormat: 'png' };
+    const grounded = buildPublicGenerationSetup({ category: 'image', model: 'nano-banana-2', workflow_settings: { ...settings, googleSearch: true } });
+
+    expect(grounded).toEqual([
+      { label: 'Aspect ratio', value: '4:5' },
+      { label: 'Resolution', value: '2K' },
+      { label: 'Output format', value: 'PNG' },
+      { label: 'Google Search grounding', value: 'On' },
+    ]);
+    expect(formatGenerationSetupLine(grounded)).toBe('4:5 · 2K · PNG · Search grounding on');
+    for (const googleSearch of [false, undefined, 'true', null]) {
+      expect(buildPublicGenerationSetup({ category: 'image', model: 'nano-banana-2', workflow_settings: { ...settings, googleSearch } }))
+        .toEqual(grounded.slice(0, 3));
+    }
   });
 
   it('shows a video run\'s aspect ratio, resolution, length, sound, camera and shots, and none of its inputs', () => {

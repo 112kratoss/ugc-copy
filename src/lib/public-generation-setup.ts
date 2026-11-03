@@ -94,7 +94,9 @@ function imageSetup(settings: WorkflowSettings): GenerationSetupEntry[] {
     ...entry(LABELS.aspectRatio, aspectRatioValue(settings.aspectRatio)),
     ...entry(LABELS.resolution, resolutionValue(settings.resolution)),
     ...entry(LABELS.outputFormat, settingText(settings.outputFormat)?.toUpperCase() ?? null),
-    ...entry(LABELS.googleSearch, typeof settings.googleSearch === 'boolean' ? switchValue(settings.googleSearch) : null),
+    // Only where it was on: no image model offers grounding any more and every run stores
+    // `false`, so "off" would read on every image post and say nothing.
+    ...entry(LABELS.googleSearch, settings.googleSearch === true ? GENERATION_SETUP_SWITCH.on : null),
   ];
 }
 
@@ -126,9 +128,10 @@ function motionSetup(settings: WorkflowSettings): GenerationSetupEntry[] {
 /**
  * The settings a creation's post shows, in the order the creators set them:
  * image, its aspect ratio, resolution, output format and Google Search
- * grounding; video, its aspect ratio, resolution (or mode), length, sound,
- * camera and shots; motion, its length, render mode and character orientation.
- * None for a template's result, a creation of another kind, or no creation.
+ * grounding where it was on ("9:16 · 1K · JPG"); video, its aspect ratio,
+ * resolution (or mode), length, sound, camera and shots; motion, its length,
+ * render mode and character orientation. None for a template's result, a
+ * creation of another kind, or no creation.
  */
 export function buildPublicGenerationSetup(generation: PublicGenerationSetupRow | null | undefined): GenerationSetupEntry[] {
   if (!generation || isTemplateResultGeneration(generation)) {

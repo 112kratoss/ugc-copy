@@ -315,7 +315,7 @@ export default function ShowcaseDetailBody({
                   )}
                 </div>
 
-                {/* "9:16 · 1K · JPG · Search grounding off": each value names its setting on hover, and a screen reader hears them named. */}
+                {/* "9:16 · 1K · JPG": each value names its setting on hover, and a screen reader hears them named. */}
                 {generationSetup.length > 0 ? (
                   <p data-testid="post-generation-setup" className="mt-2 text-xs text-zinc-500">
                     <span className="sr-only">{`Generation settings: ${describeGenerationSetup(generationSetup)}`}</span>

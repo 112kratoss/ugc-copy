@@ -1,8 +1,7 @@
 /**
  * A creation's generation setup as its post shows it to everyone: the settings
  * the run was made with, in one quiet line under the post's Made with
- * ("9:16 · 1K · JPG · Search grounding off"), on the web's post page and in the
- * app's post Details. The owner's decision of 2026-11-03: the setup is a
+ * ("9:16 · 1K · JPG"), on the web's post page and in the app's post Details. The owner's decision of 2026-11-03: the setup is a
  * standard detail, seen without unlocking anything. Until then a recipe made
  * from a creation held it as a protected "Saved generation setup" note, which
  * the recipes published before keep (`parseGenerationSetupNotes` in
@@ -11,7 +10,8 @@
  * The server builds the pairs with the labels below
  * (`buildPublicGenerationSetup`, src/lib/public-generation-setup.ts), leaving
  * out the model, which Made with names, the inputs, which a locked recipe's
- * preview counts by kind, and a template's result, whose settings are its
+ * preview counts by kind, Google Search grounding unless it was on (no image
+ * model offers it any more), and a template's result, whose settings are its
  * author's. Each client draws them in the words below, so the web and the app
  * read alike.
  *
@@ -61,7 +61,7 @@ export function generationSetupTerm({ label, value }: GenerationSetupEntry): str
   return isSwitchValue(value) ? `${label} ${value.toLowerCase()}` : value;
 }
 
-/** "9:16 · 1K · JPG · Search grounding off": the setup as the post's line. */
+/** "9:16 · 1K · JPG", or "9:16 · 2K · PNG · Search grounding on": the setup as the post's line. */
 export function formatGenerationSetupLine(entries: readonly GenerationSetupEntry[]): string {
   return entries.map(generationSetupTerm).join(' · ');
 }

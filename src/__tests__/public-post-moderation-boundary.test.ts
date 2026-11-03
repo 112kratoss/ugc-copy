@@ -281,11 +281,11 @@ describe('public post detail read', () => {
 
       const detail = await getPublicPostDetail('post-1');
 
+      // Grounding was off, as on every run now, so it is left out.
       expect(detail?.generationSetup).toEqual([
         { label: 'Aspect ratio', value: '9:16' },
         { label: 'Resolution', value: '1K' },
         { label: 'Output format', value: 'JPG' },
-        { label: 'Google Search grounding', value: 'Off' },
       ]);
       expect(detail?.model).toBe('nano-banana-2');
       expect(JSON.stringify(detail?.generationSetup)).not.toMatch(/model|nano|bottle|input/i);
