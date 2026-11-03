@@ -1244,6 +1244,19 @@ const getCachedShowcaseFeedPageBase = unstable_cache(
   { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
 
+/**
+ * Whether a ranked candidate's post row could pass the lane's own checks once
+ * hydrated: `itemMatchesCategory` for a Notes lane and the tool check, read
+ * from the same columns the card is built from (`resolveItemCategory`, the
+ * post format, the tool's slug or, for a post stored without one, its name).
+ * Only those two are exact at the row; every other category keeps hydrating.
+ */
+function postRowCanMatchForYouLane(row: PostRow, category: ShowcaseCategory, toolSlug: string | null) {
+  if (toolSlug && (row.source_tool_slug ?? slugifySourceTool(row.source_tool)) !== toolSlug) return false;
+  if (category === 'text') return resolveItemCategory(row.category) === 'text' || row.post_format === 'mixed';
+  return true;
+}
+
 function isMissingIncrementalCacheError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('incrementalCache missing');
 }
@@ -1278,8 +1291,20 @@ async function getShowcaseForYouFeedPage(params: {
     hydratePostIds: async (postIds) => {
       const rows = await fetchPostRowsByIds(postIds, adminSupabase);
       if (rows === null) return [];
-      const items = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache, params.onPhaseTiming);
-      for (const postId of postIds) {
+      // The pool is retrieved for every category, so a Notes page used to
+      // hydrate whole batches of media posts only to drop each one below.
+      // A row its lane cannot keep is left out before the reads; the
+      // filter below still decides every row that is hydrated.
+      const lanePostIds = new Set(postIds);
+      const laneRows = rows.filter((row) => {
+        if (postRowCanMatchForYouLane(row, params.category, params.toolSlug)) return true;
+        lanePostIds.delete(row.id);
+        return false;
+      });
+      const items = await resolvePostRowsToFeedItems(laneRows, adminSupabase, hydrationCache, params.onPhaseTiming);
+      // Read and found unusable (or not public at all), never asked again. A
+      // row the lane skipped is not marked: nothing here hydrated it.
+      for (const postId of lanePostIds) {
         if (!hydrationCache.has(postId)) hydrationCache.set(postId, null);
       }
       return items.filter((item) => (

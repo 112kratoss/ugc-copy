@@ -1754,6 +1754,77 @@ describe('showcase feed', () => {
     }
   });
 
+  // Home's Notes chip waited 1.9-3.4 s for an empty page (device sweep,
+  // 2026-11-03): the ranked pool is retrieved for every category, and each
+  // batch of media posts was hydrated in full before the text filter dropped it.
+  it('hydrates none of the ranked candidates a text or tool lane would drop by their post row', async () => {
+    postsState = [
+      createPostRow({ id: 'image-1', created_at: '2026-03-21T10:00:00.000Z' }),
+      createPostRow({ id: 'image-2', created_at: '2026-03-20T10:00:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    let hydrated: string[] | null = null;
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      hydrated = (await options.hydratePostIds(['image-1', 'image-2'])).map((item) => item.id);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    await getShowcaseFeedPage({
+      category: 'text',
+      sort: 'for-you',
+      offset: 0,
+      limit: 12,
+      viewerUserId: 'viewer-1',
+      bypassCache: true,
+    });
+
+    expect(hydrated).toEqual([]);
+    expect(tableAccesses).not.toContain('profiles');
+    expect(tableAccesses).not.toContain('post_media');
+    expect(tableAccesses).not.toContain('post_source_tools');
+  });
+
+  it('still hydrates and keeps, in ranked order, the candidates a text or tool lane matches', async () => {
+    postsState = [
+      createPostRow({ id: 'note', created_at: '2026-03-22T10:00:00.000Z', category: 'text', post_format: 'text', output_url: null, body: 'A note.' }),
+      createPostRow({ id: 'mixed', created_at: '2026-03-21T10:00:00.000Z', post_format: 'mixed', body: 'A caption.' }),
+      createPostRow({ id: 'image', created_at: '2026-03-20T10:00:00.000Z' }),
+      createPostRow({ id: 'kling-image', created_at: '2026-03-19T10:00:00.000Z', source_tool: 'Kling', source_tool_slug: 'kling' }),
+      createPostRow({ id: 'kling-legacy', created_at: '2026-03-18T10:00:00.000Z', source_tool: 'Kling', source_tool_slug: null }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    const hydratedByLane: Record<string, string[]> = {};
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      const lane = `${options.filters.category}:${options.filters.toolSlug ?? 'all'}`;
+      hydratedByLane[lane] = (await options.hydratePostIds(['image', 'mixed', 'kling-legacy', 'note', 'kling-image']))
+        .map((item) => item.id);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    await getShowcaseFeedPage({ category: 'text', sort: 'for-you', offset: 0, limit: 12, viewerUserId: 'viewer-1', bypassCache: true });
+    await getShowcaseFeedPage({ category: 'all', sort: 'for-you', offset: 0, limit: 12, viewerUserId: 'viewer-1', tool: 'kling', bypassCache: true });
+
+    expect(hydratedByLane['text:all']).toEqual(['mixed', 'note']);
+    // A post stored before its tool had a slug matches by its tool's name, as its card does.
+    expect(hydratedByLane['all:kling']).toEqual(['kling-legacy', 'kling-image']);
+  });
+
   it('keeps filling For you\'s recent pool by the scan', async () => {
     // The ranked lane is not a sort lane: its pool reads what it always read.
     postsState = [
