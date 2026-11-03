@@ -21,6 +21,8 @@ const { state } = vi.hoisted(() => ({
     mutationFn: null as ((following: boolean) => unknown) | null,
     mutationArgs: null as MutationArgs | null,
     setCreatorFollowing: vi.fn(),
+    // React Query's own client, for a case that needs what it does with reads in flight.
+    client: null as unknown,
   },
 }));
 
@@ -41,7 +43,7 @@ vi.mock('@tanstack/react-query', () => ({
     __onError: args.onError,
     };
   },
-  useQueryClient: () => ({
+  useQueryClient: () => state.client ?? ({
     cancelQueries: async () => undefined,
     getQueryData: (key: unknown[]) => state.cache.get(JSON.stringify(key)),
     setQueryData: (key: unknown[], value: unknown) => state.cache.set(JSON.stringify(key), value),
@@ -67,7 +69,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import type { QueryClient } from '@tanstack/react-query';
-import { MutationObserver, QueryClient as RealQueryClient } from '@tanstack/query-core';
+import { InfiniteQueryObserver, MutationObserver, QueryClient as RealQueryClient } from '@tanstack/query-core';
 
 import { creatorFollowStateQueryKey, prefetchCreatorFollowState, useCreatorFollow } from '@/lib/use-creator-follow';
 
@@ -112,6 +114,25 @@ async function flushMicrotasks() {
   for (let tick = 0; tick < 5; tick += 1) await Promise.resolve();
 }
 
+/** A read the test lets land when it chooses. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+/** Luna's grid as her page asks for it, its first page held back until the test lets it land. */
+function lunaGridRead(read: Promise<unknown>) {
+  return {
+    queryKey: ['creator-profile', 'infinite', 'luna'],
+    queryFn: () => read,
+    initialPageParam: 0,
+    getNextPageParam: () => undefined,
+  };
+}
+
 describe('useCreatorFollow', () => {
   beforeEach(() => {
     state.user = { id: 'viewer-1' };
@@ -123,6 +144,7 @@ describe('useCreatorFollow', () => {
     state.mutationFn = null;
     state.mutationArgs = null;
     state.setCreatorFollowing.mockClear();
+    state.client = null;
     latest = null;
   });
 
@@ -164,6 +186,42 @@ describe('useCreatorFollow', () => {
 
     expect(followingIn(gridKey('luna'))).toEqual([false, false]);
     expect(state.cache.get(JSON.stringify(['creator-follow-state', 'creator-1']))).toEqual({ following: false });
+  });
+
+  // Review of #679: a creator page read set off before the press (a touch that
+  // rested on the creator's handle, then let go) landed after the Follow had
+  // written its answer into the cached pages, with the answer from before it.
+  it('drops a creator page read nobody is waiting on, so it cannot land with the answer from before the press', async () => {
+    const client = new RealQueryClient({ defaultOptions: { queries: { retry: false } } });
+    state.client = client;
+    const read = deferred<unknown>();
+    void client.prefetchInfiniteQuery(lunaGridRead(read.promise));
+    render({ creatorId: 'creator-1', enabled: true });
+
+    await state.mutationArgs!.onMutate(true);
+    read.resolve(creatorGrid('creator-1', false).pages[0]);
+    await flushMicrotasks();
+
+    // The page reads itself when it opens, after the press.
+    expect(client.getQueryData(['creator-profile', 'infinite', 'luna'])).toBeUndefined();
+  });
+
+  // Dropped, a page's first read would leave the page with nothing on its way,
+  // and its next page would hold its load-more at that page count.
+  it('leaves alone the read a page on screen is waiting for', async () => {
+    const client = new RealQueryClient({ defaultOptions: { queries: { retry: false } } });
+    state.client = client;
+    const read = deferred<unknown>();
+    const page = new InfiniteQueryObserver(client, lunaGridRead(read.promise));
+    const unsubscribe = page.subscribe(() => undefined);
+    render({ creatorId: 'creator-1', enabled: true });
+
+    await state.mutationArgs!.onMutate(true);
+    read.resolve(creatorGrid('creator-1', true).pages[0]);
+    await flushMicrotasks();
+
+    expect(page.getCurrentResult().data?.pages).toHaveLength(1);
+    unsubscribe();
   });
 
   it('asks the server only for an active slide about someone else', () => {
@@ -247,18 +305,34 @@ describe('prefetchCreatorFollowState', () => {
 
   // Device sweep 2026-11-03: asked for as the finger landed, the answer came
   // 1.1–2.4 s after the reel opened, and the pill popped in late.
-  it("answers at once from a fresh page of the creator, as of when that page was read, without a request", async () => {
+  it('draws the answer a fresh page of the creator gives at once, and still asks the server', async () => {
     const { client, api, prefetch } = setup();
-    const readAt = Date.now() - 2 * MINUTE;
-    client.setQueryData(gridQueryKey('luna'), creatorGrid('creator-1', true), { updatedAt: readAt });
+    api.getCreatorFollowState.mockResolvedValue({ following: true });
+    client.setQueryData(gridQueryKey('luna'), creatorGrid('creator-1', true), { updatedAt: Date.now() - 2 * MINUTE });
 
     const prefetched = prefetch('creator-1');
     // Before the prefetch settles: the window the post grows in reads this at once.
     expect(client.getQueryData(followKey('creator-1'))).toEqual({ following: true });
     await prefetched;
 
-    expect(api.getCreatorFollowState).not.toHaveBeenCalled();
-    expect(client.getQueryState(followKey('creator-1'))?.dataUpdatedAt).toBe(readAt);
+    expect(api.getCreatorFollowState).toHaveBeenCalledWith('creator-1');
+    expect(client.getQueryData(followKey('creator-1'))).toEqual({ following: true });
+  });
+
+  // Review of #679: a page can say no where the server says yes (one a guest
+  // read before signing in, one whose follow lookup failed on the server), and
+  // taken as fresh as the page, its answer stood for up to five minutes.
+  it("takes the server's answer over a page that says otherwise", async () => {
+    const { client, api, prefetch } = setup();
+    api.getCreatorFollowState.mockResolvedValue({ following: true });
+    client.setQueryData(gridQueryKey('luna'), creatorGrid('creator-1', false), { updatedAt: Date.now() - 10 * 1000 });
+
+    const prefetched = prefetch('creator-1');
+    expect(client.getQueryData(followKey('creator-1'))).toEqual({ following: false });
+    await prefetched;
+
+    expect(api.getCreatorFollowState).toHaveBeenCalledWith('creator-1');
+    expect(client.getQueryData(followKey('creator-1'))).toEqual({ following: true });
   });
 
   it('asks the server when the page is older than the reel keeps an answer for', async () => {
@@ -282,14 +356,31 @@ describe('prefetchCreatorFollowState', () => {
     expect(api.getCreatorFollowState).not.toHaveBeenCalled();
   });
 
-  it('replaces an answer read before the page', async () => {
-    const { client, prefetch } = setup();
+  it('draws a page read after the answer held, until the server answers again', async () => {
+    const { client, api, prefetch } = setup();
+    api.getCreatorFollowState.mockResolvedValue({ following: true });
     client.setQueryData(followKey('creator-1'), { following: false }, { updatedAt: Date.now() - 4 * MINUTE });
     client.setQueryData(gridQueryKey('luna'), creatorGrid('creator-1', true), { updatedAt: Date.now() - MINUTE });
 
+    const prefetched = prefetch('creator-1');
+    expect(client.getQueryData(followKey('creator-1'))).toEqual({ following: true });
+    await prefetched;
+
+    expect(api.getCreatorFollowState).toHaveBeenCalledWith('creator-1');
+    expect(client.getQueryData(followKey('creator-1'))).toEqual({ following: true });
+  });
+
+  // A return to a creator's page reads its first page again, so every tile
+  // pressed there finds a page newer than the answer held.
+  it('asks nothing when a later page says what the answer held says', async () => {
+    const { client, api, prefetch } = setup();
+    client.setQueryData(followKey('creator-1'), { following: true }, { updatedAt: Date.now() - MINUTE });
+    client.setQueryData(gridQueryKey('luna'), creatorGrid('creator-1', true), { updatedAt: Date.now() - 10 * 1000 });
+
     await prefetch('creator-1');
 
-    expect(client.getQueryData(followKey('creator-1'))).toEqual({ following: true });
+    expect(api.getCreatorFollowState).not.toHaveBeenCalled();
+    expect(client.getQueryState(followKey('creator-1'))?.dataUpdatedAt).toBeGreaterThan(Date.now() - 2 * MINUTE);
   });
 
   it("reads no other creator's page", async () => {

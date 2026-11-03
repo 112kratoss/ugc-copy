@@ -53,12 +53,19 @@ export function cachedCreatorPageFollowState(
  * reel opening on the post already knows (`ZoomPostPreparer`). An answer still
  * fresh is not asked for again.
  *
- * A fresh page of the creator, read later than any answer held, is that answer,
- * as of when the page was read: a tile on a creator's page knows whom the reader
- * follows without a request. Asked for as the finger landed, the answer still
+ * A fresh page of the creator, read later than any answer held, is drawn as
+ * the answer at once: a tile on a creator's page knows whom the reader follows
+ * before the request answers. Asked for as the finger landed, the answer still
  * came 1.1–2.4 s after the reel had opened, and the Follow pill popped in under
  * the reader (device sweep, Pixel 9a emulator, 2026-11-03). Home and Explore
  * cards carry no follow state, so a tile there still waits for the request.
+ *
+ * The server is asked all the same: the page's answer is written as already
+ * stale. A page can say no where the server says yes (one a guest read before
+ * signing in, one whose follow lookup failed on the server, one whose age a
+ * change in the app moved on), and kept as fresh as the page, it stood on the
+ * pill for up to five minutes (review of #679). A page that says what the
+ * answer held already says is no news, and asks nothing.
  */
 export function prefetchCreatorFollowState(
   queryClient: QueryClient,
@@ -67,8 +74,13 @@ export function prefetchCreatorFollowState(
 ) {
   const queryKey = creatorFollowStateQueryKey(creatorId);
   const fromPage = cachedCreatorPageFollowState(queryClient, creatorId);
-  if (fromPage && fromPage.updatedAt > (queryClient.getQueryState(queryKey)?.dataUpdatedAt ?? 0)) {
-    queryClient.setQueryData(queryKey, fromPage.state, { updatedAt: fromPage.updatedAt });
+  const held = queryClient.getQueryState<{ following: boolean }>(queryKey);
+  if (
+    fromPage
+    && fromPage.updatedAt > (held?.dataUpdatedAt ?? 0)
+    && fromPage.state.following !== held?.data?.following
+  ) {
+    queryClient.setQueryData(queryKey, fromPage.state, { updatedAt: 0 });
   }
   return queryClient.prefetchQuery({
     queryKey,
@@ -116,7 +128,16 @@ export function useCreatorFollow({
   const mutation = useMutation({
     mutationFn: (following: boolean) => api.setCreatorFollowing(creatorId!, following, attribution),
     onMutate: async (following) => {
-      await queryClient.cancelQueries({ queryKey });
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey }),
+        // A creator page read set off before the press (a finger rested on the
+        // creator's handle, then let go) would land after the answer below is
+        // written into the cached pages, with the answer from before it (review
+        // of #679). Dropped, as nobody is waiting on it: the page reads itself
+        // when it opens. A read a page on screen is waiting on is left to land;
+        // dropped, it would leave that page with nothing on its way.
+        queryClient.cancelQueries({ queryKey: ['creator-profile'], type: 'inactive' }),
+      ]);
       const previous = queryClient.getQueryData<{ following: boolean }>(queryKey);
       queryClient.setQueryData<{ following: boolean }>(queryKey, { following });
       setCachedCreatorProfileFollowing(queryClient, creatorId!, following);
