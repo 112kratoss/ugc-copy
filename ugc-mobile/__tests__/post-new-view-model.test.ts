@@ -61,6 +61,7 @@ import {
   RECIPE_TITLE_TOO_SHORT_REFUSAL,
 } from '../lib/post-publish-policy/post-publish-policy';
 import { normalizeAuthReturnTo } from '../lib/auth-navigation';
+import { describeCreationInputsSwitch } from '../lib/creation-recipe/creation-recipe';
 import { getPostComposerDraftSignature } from '../lib/post-composer-draft-resume';
 import type { GenerationListItem, PostResourceItem } from '../lib/types';
 
@@ -766,6 +767,17 @@ describe('post new view model', () => {
       expect(willAttachGenerationReferences(creation(), recipeDraft([copyCard('input-1'), copyCard('input-2')], switchedOn))).toBe(false);
       // Another creation's copies are not this one's.
       expect(getCreationInputsInRecipe([copyCard('input-1')], creation({ id: 'gen-2' })).included).toBe(0);
+    });
+
+    // #678's follow-up, for whichever of the two merged second: since a remix
+    // draws an empty box for an input it is not given, the switch says so.
+    it('says what leaving the inputs out does, with none in the recipe and with some', () => {
+      expect(describeCreationInputsSwitch(0, 2)).toBe(
+        'Attach the saved inputs above as reusable references. Off unless you choose it: inputs can be personal, and a remix gets an empty box for each one left out.',
+      );
+      expect(describeCreationInputsSwitch(1, 2)).toBe(
+        '1 of 2 are in this recipe already. Attach the rest as reusable references; a remix gets an empty box for each one left out.',
+      );
     });
 
     // #677's review: the client never learned what the copy did.

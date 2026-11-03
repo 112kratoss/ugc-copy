@@ -6056,7 +6056,7 @@ describe('NewPostClient', () => {
       expect(screen.getByRole('button', { name: 'Edit Product' })).toBeInTheDocument();
       const includeInputs = screen.getByRole('checkbox', { name: /include creation references/i });
       expect(includeInputs).not.toBeChecked();
-      expect(screen.getByText('1 of 2 are in this recipe already. Attach the rest as reusable references.')).toBeInTheDocument();
+      expect(screen.getByText('1 of 2 are in this recipe already. Attach the rest as reusable references; a remix gets an empty box for each one left out.')).toBeInTheDocument();
       // What the save stored is no unsaved work.
       const unload = new Event('beforeunload', { cancelable: true });
       window.dispatchEvent(unload);
