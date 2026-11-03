@@ -14,7 +14,7 @@ import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
 import { outsideAct } from './fixtures/outside-act';
-import { advancePastTheHour, expectOpensObject, movePageClock, signedStorageLink } from './fixtures/signed-storage-links';
+import { advancePastTheHour, expectOpensObject, movePageClock, previewLink, signedStorageLink } from './fixtures/signed-storage-links';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -3379,6 +3379,8 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
  */
 describe('CreateImageClient a remix kept open past its links’ hour', () => {
   const RESULT = 'generated_images/user-1/harbour.png';
+  /** The original's post's copy, in the public showcase bucket, once it is posted. */
+  const POSTED = 'showcase_media/showcase/gen-1/harbour.png';
   const PICTURE = 'generation_inputs/user-1/gen-1/00-reference_image.png';
   const originalCreateObjectURL = URL.createObjectURL;
   const originalRevokeObjectURL = URL.revokeObjectURL;
@@ -3447,6 +3449,29 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
     expect(await screen.findByText('This model supports up to 1 reference image.')).toBeInTheDocument();
     expect(remixReads(fetchMock)).toHaveLength(1);
     expect(screen.queryByAltText('Original result · Harbour')).toBeNull();
+  });
+
+  // A reference made from the original is the original: previewed past the hour after the original
+  // was posted, it shows the post's copy, as the original's own preview does. It was renewed as any
+  // other file, which the posted remix hands out no link to, and drew a link storage refuses.
+  it('shows a reference made from the original by its post’s copy past the hour, once the original is posted', async () => {
+    movePageClock();
+    let posted = false;
+    installFetch({
+      remixBundle: () => (posted
+        ? { ...ownRunRemix(), result: { mediaType: 'image', url: `https://project.supabase.co/storage/v1/object/public/${POSTED}` } }
+        : ownRunRemix()),
+    });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+    expect(await screen.findByAltText('Original result · Harbour')).toBeInTheDocument();
+
+    posted = true;
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Original result · Harbour' }));
+
+    expectOpensObject(await previewLink('Original result · Harbour'), POSTED);
   });
 
   it('shows the original past the hour by a link that opens', async () => {

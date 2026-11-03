@@ -70,13 +70,20 @@ describe('a remix link renewed', () => {
     expect(renewedRemixLink(signedStorageLink('uploads/user-1/hero.png', SIGNED_AT), fresh)).toBeNull();
   });
 
-  it('takes the answer’s own result for the original, posted since or not', () => {
+  it('takes the answer’s own result for a link to the original, posted since or not', () => {
     const lapsed = answerSignedAt(SIGNED_AT);
     const posted = { ...answerSignedAt(SIGNED_AT + 2 * HOUR_MS), result: { mediaType: 'video' as const, url: PUBLIC_RESULT } };
+    // The original as the form holds it: its link from the remix's first read.
+    const original = lapsed.result!.url!;
 
     // Posted since: the result is its post's copy, another file than the one the old link opened.
     expect(renewedRemixLink(lapsed.result!.url!, posted)).toBeNull();
-    expect(renewedRemixLink(lapsed.result!.url!, posted, { result: true })).toBe(PUBLIC_RESULT);
-    expect(renewedRemixLink(lapsed.result!.url!, { ...posted, result: null }, { result: true })).toBeNull();
+    expect(renewedRemixLink(lapsed.result!.url!, posted, original)).toBe(PUBLIC_RESULT);
+    // Any link to the original's file is the original's: a reference tile's, renewed when it was added.
+    const tileLink = signedStorageLink('generated_videos/user-1/result.mp4', SIGNED_AT + HOUR_MS / 2);
+    expect(renewedRemixLink(tileLink, posted, original)).toBe(PUBLIC_RESULT);
+    expect(renewedRemixLink(lapsed.result!.url!, { ...posted, result: null }, original)).toBeNull();
+    // Any other file is renewed as itself.
+    expect(renewedRemixLink(lapsed.inputs.motion!.referenceVideo!.url!, posted, original)).toBe(posted.inputs.motion!.referenceVideo!.url);
   });
 });

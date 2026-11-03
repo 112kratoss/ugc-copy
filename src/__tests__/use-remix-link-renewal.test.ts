@@ -15,6 +15,9 @@ vi.mock('@/lib/supabase', () => ({
 const RESULT = 'generated_videos/user-1/result.mp4';
 const CLIP = 'generation_inputs/user-1/gen-1/01-motion_reference_video.mp4';
 const PICTURE = 'generation_inputs/user-1/gen-1/00-character_image.png';
+/** The original's post's copy, in the public showcase bucket. */
+const POSTED = 'showcase_media/showcase/gen-1/result.mp4';
+const STORAGE_PUBLIC = 'https://project.supabase.co/storage/v1/object/public';
 
 /** The remix source's answer, signed as it answers. */
 function answerNow(): RemixSourceBundle {
@@ -45,8 +48,8 @@ function remixReads() {
   }));
 }
 
-function renew({ formAccount = 'user-1', remixId = 'gen-1' as string | null } = {}) {
-  return renderHook(() => useRemixLinkRenewal({ remixId, remixPostId: 'post-1', formAccount, pageToken: 'page-token' })).result.current;
+function renew({ formAccount = 'user-1', remixId = 'gen-1' as string | null, originalResult = null as string | null } = {}) {
+  return renderHook(() => useRemixLinkRenewal({ remixId, remixPostId: 'post-1', formAccount, pageToken: 'page-token', originalResult })).result.current;
 }
 
 beforeEach(() => {
@@ -93,12 +96,12 @@ describe('useRemixLinkRenewal', () => {
   it('serves the links asked for while a read is out from that one read', async () => {
     const opened = answerNow();
     advancePastTheHour();
-    const renewLink = renew();
+    const renewLink = renew({ originalResult: opened.result!.url! });
 
     const [clip, picture, result] = await Promise.all([
       renewLink(opened.inputs.motion!.referenceVideo!.url!),
       renewLink(opened.inputs.motion!.characterImage!.url!),
-      renewLink(opened.result!.url!, { result: true }),
+      renewLink(opened.result!.url!),
     ]);
 
     expectOpensObject(clip, CLIP);
@@ -135,6 +138,19 @@ describe('useRemixLinkRenewal', () => {
     expectOpensObject(await renewLink(opened.inputs.motion!.referenceVideo!.url!), CLIP);
     expectOpensObject(await renewLink(opened.inputs.motion!.characterImage!.url!), PICTURE);
     expect(remixReads()).toHaveLength(2);
+  });
+
+  // A link to the original is renewed as the original is now: once posted, its post's copy, a file
+  // of its own. Only the original's own preview asked for that, so a reference made from the
+  // original, previewed past the hour after the original was posted, drew a link storage refuses.
+  it('renews a link to the original as the original is now: its post’s copy, once it is posted', async () => {
+    const opened = answerNow();
+    advancePastTheHour();
+    answer = () => new Response(JSON.stringify({ ...answerNow(), result: { mediaType: 'video', url: `${STORAGE_PUBLIC}/${POSTED}` } }), { status: 200 });
+
+    const renewed = await renew({ originalResult: opened.result!.url! })(opened.result!.url!);
+
+    expectOpensObject(renewed, POSTED);
   });
 
   it('leaves the link as it was where the read fails, and reads again at the next use', async () => {
