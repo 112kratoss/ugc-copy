@@ -315,7 +315,23 @@ export async function retireGuestThroughAccountDeletion(
   admin: SupabaseClient,
   userId: string,
 ): Promise<ContentGuestRetirementOutcome> {
-  const start = await startInitialAccountDeletion({ admin, userId, identityKind: 'guest' });
+  const markFailed = async (error: unknown) => {
+    try {
+      await markAccountDeletionStage(admin, userId, 'failed', error);
+    } catch (stageError) {
+      logBackendError('operational_retention_content_guest_stage_failed', { userId, error: stageError });
+    }
+  };
+
+  let start: Awaited<ReturnType<typeof startInitialAccountDeletion>>;
+  try {
+    start = await startInitialAccountDeletion({ admin, userId, identityKind: 'guest' });
+  } catch (error) {
+    // A refusal changed nothing, so there is no job to mark. Anything after the
+    // preparation committed leaves a job, which the scheduler takes over.
+    if (!(error instanceof AccountDeletionNotStartedError)) await markFailed(error);
+    throw error;
+  }
   if (start.status === 'already_deleted') return 'already_deleted';
   try {
     await finishInitialAccountDeletion({
@@ -327,11 +343,7 @@ export async function retireGuestThroughAccountDeletion(
       },
     });
   } catch (error) {
-    try {
-      await markAccountDeletionStage(admin, userId, 'failed', error);
-    } catch (stageError) {
-      logBackendError('operational_retention_content_guest_stage_failed', { userId, error: stageError });
-    }
+    await markFailed(error);
     throw error;
   }
   return 'retired';
