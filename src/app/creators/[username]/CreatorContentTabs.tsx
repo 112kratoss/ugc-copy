@@ -38,6 +38,7 @@ import {
   type ReelHistoryMode,
 } from '@/lib/reel-history-entry';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
+import { displaySourceToolLabel } from '@/lib/source-tools';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
@@ -663,7 +664,7 @@ function CreatorCard({
           {item.title || itemDisplayText(item)}
         </h3>
         <div className="mt-2 min-h-4 truncate text-[11px] font-semibold text-zinc-500 sm:text-xs">
-          {item.sourceTool ? `Made with ${item.sourceTool}` : '\u00a0'}
+          {item.sourceTool ? `Made with ${displaySourceToolLabel(item.sourceTool)}` : '\u00a0'}
         </div>
         <div className="mt-3 flex items-center justify-between text-xs font-semibold text-zinc-500">
           <span className="inline-flex items-center gap-1.5"><Heart className="h-3.5 w-3.5" /> {item.saveCount}</span>

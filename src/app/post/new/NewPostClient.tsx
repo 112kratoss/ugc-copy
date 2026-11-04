@@ -86,7 +86,7 @@ import {
   POST_RESOURCE_WEB_CASH_MIN_TOKENS,
 } from '@/lib/post-resource-commerce';
 import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
-import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
+import { displaySourceToolLabel, slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
 import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import {
@@ -1428,7 +1428,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const bodyFieldLabel = proofMode === 'text' ? 'Post text' : 'Story';
   const primaryMadeWith = madeWithRows.find((row) => row.toolLabel.trim());
   const madeWithSummary = primaryMadeWith
-    ? [primaryMadeWith.toolLabel.trim(), primaryMadeWith.modelLabel.trim()].filter(Boolean).join(' · ')
+    ? [displaySourceToolLabel(primaryMadeWith.toolLabel.trim()), primaryMadeWith.modelLabel.trim()].filter(Boolean).join(' · ')
     : 'Add tool and model';
 
   useEffect(() => () => {
@@ -3873,7 +3873,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                               <div key={row.id} className="flex flex-wrap items-center gap-2">
                                 <CreatableCombobox
                                   ariaLabel={`Tool ${index + 1}`}
-                                  value={row.toolLabel}
+                                  value={hasGeneratedProof ? displaySourceToolLabel(row.toolLabel) : row.toolLabel}
                                   options={toolOptions}
                                   placeholder="Choose or search tool"
                                   disabled={hasGeneratedProof}

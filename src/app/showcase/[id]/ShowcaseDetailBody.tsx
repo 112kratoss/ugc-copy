@@ -18,6 +18,7 @@ import {
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
 import type { PublicPostDetail } from '@/lib/public-posts';
+import { isAppSourceToolLabel } from '@/lib/source-tools';
 
 import PostGenerationSetupLine from './PostGenerationSetupLine';
 import PostRelativeTime from './PostRelativeTime';
@@ -54,13 +55,11 @@ function normalizeComparableText(value: string): string {
 }
 
 /**
- * Posts made here record Magicbooklet as their tool, and its own name says
- * nothing on its own page; the app's post Details leave it out the same way
+ * Posts made here record the app as their tool, and its own name says nothing
+ * on its own page; the app's post Details leave it out the same way
  * (`isOwnTool` in ugc-mobile/lib/post-details-view-model.ts).
  */
-function isOwnSourceTool(label: string): boolean {
-  return label.replace(/[\s-]+/g, '').toLowerCase() === 'magicbooklet';
-}
+const isOwnSourceTool = isAppSourceToolLabel;
 
 function getPostTypeLabel({
   category,

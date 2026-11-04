@@ -47,7 +47,7 @@ describe('MarketplacePage first load', () => {
     expect(marketplaceBootstrapPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
       sourceToolOptions: [
         { slug: 'runway', label: 'Runway' },
-        { slug: 'magicbooklet', label: 'magicbooklet' },
+        { slug: 'magicbooklet', label: 'Magic Booklet' },
       ],
     }));
     // The cached page is the plain storefront: the address is read in the browser.

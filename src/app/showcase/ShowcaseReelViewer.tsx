@@ -67,6 +67,7 @@ import {
   type RazorpayCheckoutVerificationResult,
 } from '@/lib/razorpay-checkout-client';
 import { getCurrentInternalPath } from '@/lib/share';
+import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 
 declare global {
@@ -1962,7 +1963,7 @@ export default function ShowcaseReelViewer({
                     {dateLabel}
                   </span>
                   <span className="capitalize">{item.category}</span>
-                  {item.sourceTool ? <span>{item.sourceTool}</span> : null}
+                  {item.sourceTool ? <span>{displaySourceToolLabel(item.sourceTool)}</span> : null}
                 </div>
 
                 {detailsLede ? (
