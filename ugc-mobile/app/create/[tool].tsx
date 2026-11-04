@@ -28,7 +28,8 @@ export default function CreateToolScreen() {
   // The route's own params: the URL parse has decoded them once, as every link encoded its text
   // once. expo-router's `useLocalSearchParams` decodes them again, which turned each valid %XX in
   // a prompt, a source title or a poster URL into another character ("50%50" read "50P").
-  const params = (useRoute().params ?? {}) as {
+  const route = useRoute();
+  const params = (route.params ?? {}) as {
     tool?: string | string[];
     prompt?: string | string[];
     remix?: string | string[];
@@ -108,6 +109,8 @@ export default function CreateToolScreen() {
           initialPrompt={initialPrompt}
           remixSource={remixSource}
           remixLaunchId={firstParam(params.remixLaunch)}
+          // Each navigation here opens its remix from the source; one keyed afresh on this route resumes it.
+          remixOpening={route.key}
           guided={guided}
           registerBeforeClose={registerBeforeClose}
           onDirtyChange={setDirty}
