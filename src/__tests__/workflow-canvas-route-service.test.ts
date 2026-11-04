@@ -276,42 +276,80 @@ describe('the uploads a deleted canvas named', () => {
     };
   }
 
-  /** The service client the cleanup reads and removes with, answering from fixed rows. */
+  /**
+   * The service client the cleanup reads and removes with: filters, orders and
+   * pages as PostgREST does, and like PostgREST answers at most `maxRows` rows
+   * a request however many were asked for, with no error.
+   */
   function createCleanupClient({
     otherCanvases = [] as Array<{ id: string; graph: unknown }>,
-    runSteps = [] as Array<{ generation_id: string | null }>,
-    generations = [] as Array<{ id: string; status: string; workflow_settings: unknown }>,
-    inputMedia = [] as Array<{ generation_id: string; metadata: Record<string, unknown> | null }>,
-    legacy = [] as Array<{ id: string; user_id: string; workflow_settings: unknown }>,
+    generations = [] as Array<{ id: string; status: string; workflow_settings: unknown; created_at?: string; user_id?: string }>,
+    inputMedia = [] as Array<{ id?: string; generation_id: string; metadata: Record<string, unknown> | null }>,
+    uploadedAt = {} as Record<string, string | null>,
     failingTable = null as string | null,
-    legacyError = null as { message: string } | null,
+    infoError = null as { message: string } | null,
+    maxRows = 1000,
   } = {}) {
     const removals: Array<{ bucket: string; paths: string[] }> = [];
     const reads: string[] = [];
-    const rowsFor: Record<string, unknown[]> = {
-      workflow_canvas_runs: [{ id: 'run-1' }],
-      workflow_canvas_run_steps: runSteps,
-      workflow_canvases: otherCanvases,
-      generations,
-      generation_input_media: inputMedia,
+    const rowsFor: Record<string, Array<Record<string, unknown>>> = {
+      workflow_canvases: otherCanvases.map((canvas) => ({ user_id: 'user-1', ...canvas })),
+      generations: generations.map((generation) => ({ user_id: 'user-1', created_at: '2026-10-20T00:00:00.000Z', ...generation })),
+      generation_input_media: inputMedia.map((row, index) => ({ id: row.id ?? `media-${String(index).padStart(4, '0')}`, ...row })),
     };
     const client = {
       from(table: string) {
         reads.push(table);
+        const filters: Array<(row: Record<string, unknown>) => boolean> = [];
+        let orderColumn: string | null = null;
+        let limit = Infinity;
         const query = {
           select: () => query,
-          eq: () => query,
-          in: () => query,
+          eq: (column: string, value: unknown) => {
+            filters.push((row) => row[column] === value);
+            return query;
+          },
+          in: (column: string, values: unknown[]) => {
+            filters.push((row) => values.includes(row[column]));
+            return query;
+          },
+          gt: (column: string, value: unknown) => {
+            filters.push((row) => String(row[column]) > String(value));
+            return query;
+          },
+          gte: (column: string, value: unknown) => {
+            filters.push((row) => String(row[column]) >= String(value));
+            return query;
+          },
+          order: (column: string) => {
+            orderColumn = column;
+            return query;
+          },
+          limit: (count: number) => {
+            limit = count;
+            return query;
+          },
           then(resolve: (value: { data: unknown; error: unknown }) => unknown) {
             if (failingTable === table) return Promise.resolve({ data: null, error: { message: `${table} unavailable` } }).then(resolve);
-            return Promise.resolve({ data: rowsFor[table] ?? [], error: null }).then(resolve);
+            let rows = (rowsFor[table] ?? []).filter((row) => filters.every((filter) => filter(row)));
+            if (orderColumn) {
+              const column = orderColumn;
+              rows = [...rows].sort((a, b) => (String(a[column]) < String(b[column]) ? -1 : String(a[column]) > String(b[column]) ? 1 : 0));
+            }
+            return Promise.resolve({ data: rows.slice(0, Math.min(limit, maxRows)), error: null }).then(resolve);
           },
         };
         return query;
       },
-      rpc: vi.fn(async () => (legacyError ? { data: null, error: legacyError } : { data: legacy, error: null })),
+      rpc: vi.fn(async () => ({ data: [], error: null })),
       storage: {
         from: (bucket: string) => ({
+          info: async (objectPath: string) => {
+            if (infoError) return { data: null, error: infoError };
+            const key = `${bucket}/${objectPath}`;
+            if (uploadedAt[key] === null) return { data: null, error: { message: 'Object not found', statusCode: '404' } };
+            return { data: { createdAt: uploadedAt[key] ?? '2026-10-01T00:00:00.000Z' }, error: null };
+          },
           remove: async (paths: string[]) => {
             removals.push({ bucket, paths });
             return { data: [], error: null };
@@ -355,9 +393,8 @@ describe('the uploads a deleted canvas named', () => {
     ]);
   });
 
-  it('stay while a finished creation of its runs reads one it holds no copy of', async () => {
+  it('stay while a finished creation reads one it holds no copy of', async () => {
     const cleanup = createCleanupClient({
-      runSteps: [{ generation_id: 'gen-1' }, { generation_id: null }],
       generations: [{ id: 'gen-1', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
       inputMedia: [],
     });
@@ -367,9 +404,23 @@ describe('the uploads a deleted canvas named', () => {
     expect(cleanup.removals).toEqual([]);
   });
 
+  // A creation of a duplicate canvas deleted before this one names the file
+  // too: every creation of the account is asked, not only this canvas's runs.
+  it('stay while a creation from another canvas, deleted since, reads one', async () => {
+    const cleanup = createCleanupClient({
+      generations: [
+        { id: 'gen-0', status: 'succeeded', workflow_settings: { prompt: 'unrelated' } },
+        { id: 'gen-9', status: 'succeeded', workflow_settings: { imageUrls: [UPLOAD] } },
+      ],
+    });
+
+    await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+    expect(cleanup.removals).toEqual([]);
+  });
+
   it('go once each finished creation that read them keeps its own copy', async () => {
     const cleanup = createCleanupClient({
-      runSteps: [{ generation_id: 'gen-1' }],
       generations: [{ id: 'gen-1', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
       inputMedia: [{ generation_id: 'gen-1', metadata: { sourceStoragePath: UPLOAD } }],
     });
@@ -381,9 +432,10 @@ describe('the uploads a deleted canvas named', () => {
     ]);
   });
 
+  // Kie fetches the signed link while the run renders, and the kept copy is
+  // made after the task is created.
   it('stay while a creation that reads them is still rendering', async () => {
     const cleanup = createCleanupClient({
-      runSteps: [{ generation_id: 'gen-1' }],
       generations: [{ id: 'gen-1', status: 'processing', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
       inputMedia: [{ generation_id: 'gen-1', metadata: { sourceStoragePath: UPLOAD } }],
     });
@@ -393,26 +445,92 @@ describe('the uploads a deleted canvas named', () => {
     expect(cleanup.removals).toEqual([]);
   });
 
-  it('stay while a creation with no kept inputs names them', async () => {
+  // PostgREST answers at most max_rows rows a request, with no error: a read
+  // that stopped at the first page missed the newest rows.
+  describe('past the rows one request answers', () => {
+    const filler = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => `${prefix}-${String(index).padStart(5, '0')}`);
+
+    it('stay while a canvas past the first page names them', async () => {
+      const cleanup = createCleanupClient({
+        maxRows: 3,
+        otherCanvases: [
+          ...filler(5, 'canvas-a').map((id) => ({ id, graph: { nodes: [] } })),
+          { id: 'canvas-z', graph: canvasNaming([UPLOAD]).graph },
+        ],
+      });
+
+      await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+      expect(cleanup.removals).toEqual([]);
+    });
+
+    it('stay while a creation past the first page reads them', async () => {
+      const cleanup = createCleanupClient({
+        maxRows: 3,
+        generations: [
+          ...filler(7, 'gen-a').map((id) => ({ id, status: 'succeeded', workflow_settings: {} })),
+          { id: 'gen-z', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } },
+        ],
+      });
+
+      await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+      expect(cleanup.removals).toEqual([]);
+    });
+
+    it('go only when a copy past the first page covers the creation that read them', async () => {
+      const cleanup = createCleanupClient({
+        maxRows: 2,
+        generations: [{ id: 'gen-1', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
+        inputMedia: [
+          ...filler(4, 'media-a').map((id) => ({ id, generation_id: 'gen-1', metadata: { sourceStoragePath: 'uploads/user-1/other.png' } })),
+          { id: 'media-z', generation_id: 'gen-1', metadata: { sourceStoragePath: UPLOAD } },
+        ],
+      });
+
+      await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+      expect(cleanup.removals).toEqual([
+        { bucket: 'generated_images', paths: ['user-1/workflow-input-11111111-1111-4111-8111-111111111111-cat.png'] },
+      ]);
+    });
+  });
+
+  it('ask only creations made since the file was uploaded', async () => {
     const cleanup = createCleanupClient({
-      legacy: [{ id: 'gen-old', user_id: 'user-1', workflow_settings: { imageUrls: [UPLOAD] } }],
+      uploadedAt: { [UPLOAD]: '2026-10-15T00:00:00.000Z' },
+      generations: [
+        // Made a week before the upload: it cannot have read it.
+        { id: 'gen-old', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] }, created_at: '2026-10-08T00:00:00.000Z' },
+      ],
     });
 
     await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
 
-    expect(cleanup.removals).toEqual([]);
+    expect(cleanup.removals).toEqual([
+      { bucket: 'generated_images', paths: ['user-1/workflow-input-11111111-1111-4111-8111-111111111111-cat.png'] },
+    ]);
+  });
+
+  it('stay when the file cannot be described, and skip one already gone', async () => {
+    const failing = createCleanupClient({ infoError: { message: 'storage unavailable' } });
+    await deleteCanvas(canvasNaming([UPLOAD, SECOND_UPLOAD]), failing);
+    expect(failing.removals).toEqual([]);
+
+    const gone = createCleanupClient({ uploadedAt: { [UPLOAD]: null } });
+    await deleteCanvas(canvasNaming([UPLOAD, SECOND_UPLOAD]), gone);
+    expect(gone.removals).toEqual([
+      { bucket: 'generated_videos', paths: ['user-1/workflow-input-22222222-2222-4222-8222-222222222222-walk.mp4'] },
+    ]);
   });
 
   it.each([
-    'workflow_canvas_runs',
-    'workflow_canvas_run_steps',
     'workflow_canvases',
     'generations',
     'generation_input_media',
   ])('stay when %s cannot be read', async (failingTable) => {
     const cleanup = createCleanupClient({
       failingTable,
-      runSteps: [{ generation_id: 'gen-1' }],
       generations: [{ id: 'gen-1', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
       inputMedia: [{ generation_id: 'gen-1', metadata: { sourceStoragePath: UPLOAD } }],
     });
@@ -421,16 +539,6 @@ describe('the uploads a deleted canvas named', () => {
 
     expect(result).toEqual({ ok: true, body: { success: true } });
     expect(cleanup.removals).toEqual([]);
-  });
-
-  it('stay when the scan of creations with no kept inputs fails or may be cut short', async () => {
-    for (const cleanup of [
-      createCleanupClient({ legacyError: { message: 'rpc unavailable' } }),
-      createCleanupClient({ legacy: Array.from({ length: 1000 }, (_, index) => ({ id: `gen-${index}`, user_id: 'user-2', workflow_settings: {} })) }),
-    ]) {
-      await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
-      expect(cleanup.removals).toEqual([]);
-    }
   });
 
   it('stay when the canvas is not deleted', async () => {

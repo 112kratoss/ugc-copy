@@ -26,7 +26,6 @@ import {
 import { isDefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 import {
   listWorkflowInputUploads,
-  readWorkflowRunGenerationIds,
   removeUnreadWorkflowUploads,
 } from '@/lib/workflow-upload-cleanup';
 
@@ -179,12 +178,10 @@ export async function deleteWorkflowCanvasForRoute({
    */
   createCleanupClient?: () => SupabaseClient;
 }): Promise<WorkflowCanvasDeleteRouteResult> {
-  // What the canvas names, and the creations its runs made, read before the
-  // delete cascades to its runs and steps.
+  // What the canvas names, read before the delete.
   let cleanup: {
     client: SupabaseClient;
     uploads: ReturnType<typeof listWorkflowInputUploads>;
-    runGenerationIds: string[];
   } | null = null;
   if (createCleanupClient) {
     try {
@@ -195,11 +192,7 @@ export async function deleteWorkflowCanvasForRoute({
         .eq('user_id', userId)
         .single();
       const uploads = listWorkflowInputUploads((canvas as { graph?: unknown } | null)?.graph, userId);
-      if (uploads.length > 0) {
-        const client = createCleanupClient();
-        const runGenerationIds = await readWorkflowRunGenerationIds(client, canvasId);
-        if (runGenerationIds) cleanup = { client, uploads, runGenerationIds };
-      }
+      if (uploads.length > 0) cleanup = { client: createCleanupClient(), uploads };
     } catch (error) {
       logBackendError('failed_to_prepare_workflow_upload_cleanup', { error });
     }
@@ -221,7 +214,6 @@ export async function deleteWorkflowCanvasForRoute({
       userId,
       canvasId,
       uploads: cleanup.uploads,
-      runGenerationIds: cleanup.runGenerationIds,
     });
   }
 
