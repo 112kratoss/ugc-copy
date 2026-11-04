@@ -12,6 +12,7 @@ const cachedReads = vi.hoisted(() => [] as CachedRead[]);
 const readHomeFeedMock = vi.hoisted(() => vi.fn());
 const loadHomeShelfForApiMock = vi.hoisted(() => vi.fn());
 const logBackendErrorMock = vi.hoisted(() => vi.fn());
+const logBackendWarningMock = vi.hoisted(() => vi.fn());
 
 vi.mock('next/cache', () => ({
   revalidateTag: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock('@/lib/home-shelf-server', () => ({
 
 vi.mock('@/lib/backend-logger', () => ({
   logBackendError: (event: string, fields: unknown) => logBackendErrorMock(event, fields),
+  logBackendWarning: (event: string, fields: unknown) => logBackendWarningMock(event, fields),
 }));
 
 const RELEASE_VARIABLES = ['RELEASE_GIT_SHA', 'VERCEL_GIT_COMMIT_SHA', 'VERCEL_DEPLOYMENT_ID', 'VERCEL_URL'];
@@ -70,6 +72,7 @@ describe('the signed-out home reads', () => {
     loadHomeShelfForApiMock.mockReset();
     loadHomeShelfForApiMock.mockResolvedValue([]);
     logBackendErrorMock.mockReset();
+    logBackendWarningMock.mockReset();
   });
 
   afterEach(() => {
@@ -154,8 +157,8 @@ describe('the signed-out home reads', () => {
   // When the refresh of an expired entry throws, Next logs it and hands back the
   // entry it held: the failure arrives as data older than the window.
   it.each([
-    ['feed', 'anonymous-home-feed-v2', 'home_dashboard_feed_load_failed', FEED],
-    ['shelf', 'anonymous-home-shelf-v2', 'anonymous_home_shelf_load_failed', [{ kind: 'creation', id: 'boat' }]],
+    ['feed', 'anonymous-home-feed-v2', 'home_feed_kept_past_window', FEED],
+    ['shelf', 'anonymous-home-shelf-v2', 'home_shelf_kept_past_window', [{ kind: 'creation', id: 'boat' }]],
   ] as const)('keeps a %s handed back past its window, and asks for a rebuild within a minute', async (
     _section,
     key,
@@ -173,8 +176,10 @@ describe('the signed-out home reads', () => {
 
       expect(shown).toEqual(value);
       expect(cachedRead('anonymous-home-retry-window-v1').calls).toBe(1);
-      expect(logBackendErrorMock).toHaveBeenCalledWith(event, {
-        reason: 'kept_past_window',
+      // A warning of its own: a stale-session render is served an aged entry as a
+      // matter of course, and the error events stay for reads that threw.
+      expect(logBackendErrorMock).not.toHaveBeenCalled();
+      expect(logBackendWarningMock).toHaveBeenCalledWith(event, {
         builtAt: '2026-11-04T11:44:59.000Z',
         ageSeconds: 901,
       });
@@ -197,6 +202,7 @@ describe('the signed-out home reads', () => {
 
       expect(cachedRead('anonymous-home-retry-window-v1').calls).toBe(0);
       expect(logBackendErrorMock).not.toHaveBeenCalled();
+      expect(logBackendWarningMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

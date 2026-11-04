@@ -2,7 +2,7 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
-import { logBackendError } from '@/lib/backend-logger';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import { readHomeFeed } from '@/lib/home-dashboard-service';
 import type { HomeShelfItem } from '@/lib/home-shelf';
 import { loadHomeShelfForApi, withoutPost } from '@/lib/home-shelf-server';
@@ -98,9 +98,13 @@ function isKeptPastItsWindow(builtAt: number): boolean {
   return Date.now() - builtAt > ANONYMOUS_HOME_REVALIDATE_SECONDS * 1000;
 }
 
+/**
+ * Logged at warning level under events of their own: Next serves an aged entry
+ * to a stale-session render as a matter of course, so this is not by itself a
+ * failure, and the error events stay for reads that threw.
+ */
 function keptReadFields(builtAt: number) {
   return {
-    reason: 'kept_past_window',
     builtAt: new Date(builtAt).toISOString(),
     ageSeconds: Math.round((Date.now() - builtAt) / 1000),
   };
@@ -141,7 +145,7 @@ export async function loadAnonymousHomeFeed(): Promise<ShowcaseFeedPage | null> 
   }
   if (isKeptPastItsWindow(read.builtAt)) {
     // Better than no feed, but not for a whole window.
-    logBackendError('home_dashboard_feed_load_failed', keptReadFields(read.builtAt));
+    logBackendWarning('home_feed_kept_past_window', keptReadFields(read.builtAt));
     await retryAnonymousHomeSoon();
   }
   return read.value;
@@ -158,7 +162,7 @@ export async function loadAnonymousHomeShelf(): Promise<HomeShelfItem[]> {
     return [];
   }
   if (isKeptPastItsWindow(read.builtAt)) {
-    logBackendError('anonymous_home_shelf_load_failed', keptReadFields(read.builtAt));
+    logBackendWarning('home_shelf_kept_past_window', keptReadFields(read.builtAt));
     await retryAnonymousHomeSoon();
   }
   return read.value;
