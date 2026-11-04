@@ -73,6 +73,18 @@ describe('the idle guests with content migration', () => {
     }
   });
 
+  it('keeps any guest under moderation, whose creations\' history a deletion would cascade away', () => {
+    for (const exclusion of [
+      'AND NOT EXISTS ( SELECT 1 FROM public.post_reports AS post_report WHERE post_report.reporter_user_id = guest.id )',
+      'AND NOT EXISTS ( SELECT 1 FROM public.moderation_reports AS report_about WHERE report_about.reported_user_id = guest.id )',
+      'AND NOT EXISTS ( SELECT 1 FROM public.generations AS reported_generation JOIN public.moderation_reports AS generation_report ON generation_report.generation_id = reported_generation.id WHERE reported_generation.user_id = guest.id )',
+      'AND NOT EXISTS ( SELECT 1 FROM public.generations AS removed_generation WHERE removed_generation.user_id = guest.id AND removed_generation.moderation_removed_at IS NOT NULL )',
+      'AND NOT EXISTS ( SELECT 1 FROM public.generations AS moderated_generation JOIN public.admin_generation_moderation_actions AS moderation_action ON moderation_action.generation_id = moderated_generation.id WHERE moderated_generation.user_id = guest.id )',
+    ]) {
+      expect(sql).toContain(exclusion);
+    }
+  });
+
   it('requires something made or uploaded, so the two lists never overlap', () => {
     expect(sql).toContain('AND ( EXISTS (SELECT 1 FROM public.generations AS generation_row WHERE generation_row.user_id = guest.id) OR EXISTS');
   });

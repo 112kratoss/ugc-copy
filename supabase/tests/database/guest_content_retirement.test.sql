@@ -51,6 +51,11 @@ select is(
 --   ...0211  a guest idle 300 days with a creation           listed first
 --   ...0212  a guest idle 200 days with AI usage only        listed
 --   ...0213  ... with a creation made 10 days ago
+--   ...0214  ... with a creation and a report naming the guest
+--   ...0215  ... with a creation someone reported
+--   ...0216  ... with a creation a moderator removed
+--   ...0217  ... with a creation a moderation action was taken on
+--   ...0218  ... with a creation and a post report the guest filed
 
 insert into auth.users (
   id, email, aud, role, is_anonymous, raw_app_meta_data, raw_user_meta_data,
@@ -74,7 +79,12 @@ from (values
   ('c6000000-0000-4000-8000-000000000210', null, interval '200 days'),
   ('c6000000-0000-4000-8000-000000000211', null, interval '300 days'),
   ('c6000000-0000-4000-8000-000000000212', null, interval '200 days'),
-  ('c6000000-0000-4000-8000-000000000213', null, interval '200 days')
+  ('c6000000-0000-4000-8000-000000000213', null, interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000214', null, interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000215', null, interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000216', null, interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000217', null, interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000218', null, interval '200 days')
 ) as fixture(id, email, idle);
 
 -- A creation each, made when the guest was last used.
@@ -92,7 +102,12 @@ from (values
   ('c6000000-0000-4000-8000-000000000209', interval '400 days'),
   ('c6000000-0000-4000-8000-000000000210', interval '200 days'),
   ('c6000000-0000-4000-8000-000000000211', interval '300 days'),
-  ('c6000000-0000-4000-8000-000000000213', interval '10 days')
+  ('c6000000-0000-4000-8000-000000000213', interval '10 days'),
+  ('c6000000-0000-4000-8000-000000000214', interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000215', interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000216', interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000217', interval '200 days'),
+  ('c6000000-0000-4000-8000-000000000218', interval '200 days')
 ) as fixture(id, made);
 
 insert into public.media_upload_intents (id, user_id, storage_path, kind, created_at)
@@ -138,6 +153,32 @@ insert into public.feed_events (
   'content-guest-fixture-210', 'c6000000-0000-4000-8000-000000000210',
   'c6c00000-0000-4000-8000-000000000001', 'c6000000-0000-4000-8000-000000000001',
   'impression', 'feed', now() - interval '10 days', now() - interval '10 days'
+);
+
+-- Moderation of the guest and its creations.
+insert into public.moderation_reports (target_type, reported_user_id, reporter_user_id, reason, source_surface, created_at)
+values (
+  'user', 'c6000000-0000-4000-8000-000000000214', 'c6000000-0000-4000-8000-000000000001',
+  'spam', 'creator-profile', now() - interval '200 days'
+);
+insert into public.moderation_reports (target_type, generation_id, reporter_user_id, reason, source_surface, created_at)
+values (
+  'generation', 'c6b00000-0000-4000-8000-000000000215', 'c6000000-0000-4000-8000-000000000001',
+  'unsafe_content', 'generation-viewer', now() - interval '200 days'
+);
+update public.generations
+set moderation_removed_at = now() - interval '199 days',
+    moderation_removed_by = 'c6000000-0000-4000-8000-000000000001'
+where id = 'c6b00000-0000-4000-8000-000000000216';
+insert into public.admin_generation_moderation_actions (generation_id, reviewer_id, action, reason, idempotency_key, created_at)
+values (
+  'c6b00000-0000-4000-8000-000000000217', 'c6000000-0000-4000-8000-000000000001',
+  'restore', 'Reviewed and restored', 'content-guest-fixture-217', now() - interval '199 days'
+);
+insert into public.post_reports (post_id, reporter_user_id, reason, created_at)
+values (
+  'c6c00000-0000-4000-8000-000000000001', 'c6000000-0000-4000-8000-000000000218',
+  'spam', now() - interval '200 days'
 );
 
 -- ─── Who is listed ───────────────────────────────────────────────────────────
@@ -201,7 +242,12 @@ insert into content_guest_exclusion (id, reason) values
   ('c6000000-0000-4000-8000-000000000208', 'a guest with nothing is the first list''s, not this one''s'),
   ('c6000000-0000-4000-8000-000000000209', 'an account is never listed'),
   ('c6000000-0000-4000-8000-000000000210', 'a guest whose feed was read 10 days ago is kept'),
-  ('c6000000-0000-4000-8000-000000000213', 'a guest that made something 10 days ago is kept');
+  ('c6000000-0000-4000-8000-000000000213', 'a guest that made something 10 days ago is kept'),
+  ('c6000000-0000-4000-8000-000000000214', 'a guest a report names is kept for an operator'),
+  ('c6000000-0000-4000-8000-000000000215', 'a guest whose creation was reported is kept for an operator'),
+  ('c6000000-0000-4000-8000-000000000216', 'a guest with a creation a moderator removed is kept for an operator'),
+  ('c6000000-0000-4000-8000-000000000217', 'a guest with a moderation action on a creation is kept: deleting it would cascade the action away'),
+  ('c6000000-0000-4000-8000-000000000218', 'a guest that filed a post report is kept, as the first list keeps a reporter');
 
 select is(
   (select count(*)::integer

@@ -25,7 +25,11 @@
 --   * has nothing public: no post, comment, recipe, listing, authored
 --     template or shared workflow, since other people may have saved, remixed
 --     or bought it;
---   * has nothing an operator or a report recorded about it.
+--   * has nothing an operator or a report recorded about it or its work: no
+--     sanction, no report it filed (moderation or post reports), no report
+--     naming it or one of its creations, no creation a moderator removed and no
+--     moderation action on one (that history cascades away with a deleted
+--     creation, so a guest under moderation is never retired automatically).
 --
 -- Like the first list it only reads, answers the longest unused first, and is
 -- asked again for each identity (p_user_id) right before that one is retired.
@@ -287,7 +291,9 @@ BEGIN
       SELECT 1 FROM public.workflow_shares AS workflow_share
       WHERE workflow_share.owner_user_id = guest.id
     )
-    -- Records an operator or the guest itself filed.
+    -- Records an operator or the guest itself filed, and moderation of the
+    -- guest or its creations: deleting a creation would cascade its
+    -- moderation history away, so such a guest is left for an operator.
     AND NOT EXISTS (
       SELECT 1 FROM public.admin_user_sanctions AS sanction
       WHERE sanction.user_id = guest.id
@@ -295,6 +301,33 @@ BEGIN
     AND NOT EXISTS (
       SELECT 1 FROM public.moderation_reports AS report
       WHERE report.reporter_user_id = guest.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public.post_reports AS post_report
+      WHERE post_report.reporter_user_id = guest.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public.moderation_reports AS report_about
+      WHERE report_about.reported_user_id = guest.id
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.generations AS reported_generation
+      JOIN public.moderation_reports AS generation_report
+        ON generation_report.generation_id = reported_generation.id
+      WHERE reported_generation.user_id = guest.id
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public.generations AS removed_generation
+      WHERE removed_generation.user_id = guest.id
+        AND removed_generation.moderation_removed_at IS NOT NULL
+    )
+    AND NOT EXISTS (
+      SELECT 1
+      FROM public.generations AS moderated_generation
+      JOIN public.admin_generation_moderation_actions AS moderation_action
+        ON moderation_action.generation_id = moderated_generation.id
+      WHERE moderated_generation.user_id = guest.id
     )
   -- The longest idle first, so a backlog drains oldest first.
   ORDER BY activity.last_active_at, guest.id
@@ -308,4 +341,4 @@ GRANT EXECUTE ON FUNCTION public.list_idle_guest_identities_with_content(timesta
   TO service_role;
 
 COMMENT ON FUNCTION public.list_idle_guest_identities_with_content(timestamptz, integer, uuid) IS
-  'Idle guests that made or uploaded something and are unused for 180 days (the owner''s window): unlinked, no balance, no purchase or sale, nothing public, nothing moderated; oldest activity first, at most 100 per call; p_user_id re-checks one identity. Read only: the retention job retires each through the account-deletion pipeline, which removes its files. Service role only.';
+  'Idle guests that made or uploaded something and are unused for 180 days (the owner''s window): unlinked, no balance, no purchase or sale, nothing public, no report filed or naming it or its creations, no removed or moderated creation; oldest activity first, at most 100 per call; p_user_id re-checks one identity. Read only: the retention job retires each through the account-deletion pipeline, which removes its files. Service role only.';
