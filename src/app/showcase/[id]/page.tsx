@@ -85,8 +85,9 @@ const SHOWCASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 /**
  * One read per render, shared by the metadata and the page. Anything but a
  * UUID is no post: it answers not-found before any read, so an address made
- * up by a crawler costs no database read and leaves no cache entry, and the
- * database never sees text where it expects a UUID.
+ * up by a crawler costs no database read or data-cache entry (Next still keeps
+ * the not-found page for that address), and the database never sees text
+ * where it expects a UUID.
  */
 const loadShowcasePostPage = cache((id: string): Promise<ShowcasePostPageRead> => (
   SHOWCASE_ID_PATTERN.test(id) ? readCachedShowcasePostPage(id) : Promise.resolve({ kind: 'missing' })

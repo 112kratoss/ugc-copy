@@ -380,11 +380,13 @@ export async function deleteAccountRouteResponse({
     );
   }
 
-  // The identity is `deleting` from here, and every read of it says so (the
-  // creator page answers not-found, `loadCreatorProfileRow`). The cached pages
-  // that show the account (its creator page, its posts, the marketplace) drop it
-  // now, not after the storage sweep below, which can take minutes and be
-  // retried by the scheduler; they are invalidated again once it finishes.
+  // The identity is `deleting` from here. The creator page reads that
+  // (`loadCreatorProfileRow` answers not-found), so invalidating now drops it at
+  // once rather than after the storage sweep below, which can take minutes and
+  // be retried by the scheduler. Post pages and marketplace listings do not read
+  // the identity's state: they drop the account's posts only when the sweep's
+  // cascade removes them, and the second invalidation once it finishes covers
+  // that.
   resolved.invalidateShowcaseFeedCache();
 
   // The account can no longer be used and every session is gone, so nobody

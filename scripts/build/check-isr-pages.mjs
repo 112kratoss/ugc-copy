@@ -7,6 +7,11 @@
 // This reads the build's prerender manifest and fails when one of them is no longer ISR, and when a
 // cached page could be served more than an hour after it was drawn (`expireTime` in next.config.ts),
 // which the pages' media links are signed to outlive (src/lib/media-signature-scope.ts).
+// Its reach: `/` and `/marketplace` are drawn at build time, so a request read in their render code
+// fails here. `/showcase/[id]` and `/creators/[username]` are drawn on first visit, so for them this
+// catches route-config changes only; a request read added to their render code is caught by their
+// vitest page tests (headers, cookies and the session throw there), and at runtime Next would
+// answer such a page with a 500 rather than render it per request.
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
