@@ -902,7 +902,7 @@
       },
       "path": "/api/showcase/feed/newest",
       "auth": "none",
-      "cacheControl": "public, max-age=30",
+      "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
       "response": {
         "newestPostId": "8c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
         "newestPublishedAt": "2026-10-14T05:30:00.000Z"

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
+import { API_CACHE_CONTROL } from '@/lib/api-cache';
 import {
   SHOWCASE_FEED_NEWEST_CACHE_CONTROL,
   getNewestShowcaseFeedPost,
@@ -244,7 +245,7 @@ describe('showcase feed newest-post probe', () => {
     await expect((await probe(database, '?category=text')).json()).resolves.toMatchObject({ newestPostId: 'note' });
   });
 
-  it('serves one public answer for thirty seconds, whoever asks', async () => {
+  it("serves one public answer the CDN keeps for a minute, whoever asks", async () => {
     const database = createDatabase([post('picture', '2026-10-14T05:50:00.123456+00:00')]);
 
     const response = await probe(database, '?category=media', {
@@ -253,14 +254,30 @@ describe('showcase feed newest-post probe', () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Cache-Control')).toBe('public, max-age=30');
-    expect(SHOWCASE_FEED_NEWEST_CACHE_CONTROL).toBe('public, max-age=30');
+    // `max-age=30` alone was a browser cache: every ask still ran a function.
+    expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
+    expect(SHOWCASE_FEED_NEWEST_CACHE_CONTROL).toBe(API_CACHE_CONTROL.publicShortEdge);
     expect(response.headers.get('x-request-id')).toBe('newest-probe-1');
     expect(response.headers.get('set-cookie')).toBeNull();
+    // Nothing in it depends on who asked, so nothing for the CDN to vary on.
+    expect(response.headers.get('vary')).toBeNull();
     await expect(response.json()).resolves.toEqual({
       newestPostId: 'picture',
       newestPublishedAt: '2026-10-14T05:50:00.123Z',
     });
+  });
+
+  it('gives a signed-out caller and a signed-in one the same answer', async () => {
+    const database = createDatabase([post('picture', '2026-10-14T05:50:00.000Z')]);
+
+    const anonymous = await probe(database, '?category=media', {});
+    const signedIn = await probe(database, '?category=media', {
+      Authorization: 'Bearer viewer-token',
+      Cookie: 'sb-project-auth-token=session',
+    });
+
+    await expect(signedIn.json()).resolves.toEqual(await anonymous.json());
+    expect(signedIn.headers.get('Cache-Control')).toBe(anonymous.headers.get('Cache-Control'));
   });
 
   it('is charged to the general feed-read budget by network, and mints nothing', async () => {

@@ -5,8 +5,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
 import {
+  API_CACHE_CONTROL,
   applyPrivateNoStoreApiResponseHeaders,
-  createApiTraceHeaders,
+  createApiResponseHeaders,
   createPrivateNoStoreApiResponseHeaders,
 } from '@/lib/api-cache';
 import {
@@ -28,9 +29,12 @@ export type ShowcaseFeedNewestResponse = {
 };
 
 // A client asks on its return to the foreground, at most once per lane per
-// five minutes; thirty seconds of cache spares the database the same answer
-// many times over, and makes a new post at most that late to its pill.
-export const SHOWCASE_FEED_NEWEST_CACHE_CONTROL = 'public, max-age=30';
+// five minutes, and every caller gets the same answer for a lane. Vercel's CDN
+// keeps it (`max-age=30` alone was only a browser cache, so every ask ran a
+// function): fresh for a minute, then served up to five minutes stale while
+// one ask refreshes it. A new post reaches its pill about a minute late on a
+// busy lane, a few minutes late on a quiet one.
+export const SHOWCASE_FEED_NEWEST_CACHE_CONTROL = API_CACHE_CONTROL.publicShortEdge;
 
 type ShowcaseFeedNewestRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
@@ -130,12 +134,10 @@ async function handleShowcaseFeedNewestGET(
     }
 
     const newest = await dependencies.getNewestShowcaseFeedPost({ category, serviceClient });
-    // Every viewer gets the same answer, whatever token a client sends along.
+    // Every viewer gets the same answer, whatever token or cookie a client
+    // sends along, so the CDN may hand it to anyone who asks for the lane.
     return NextResponse.json(newest, {
-      headers: {
-        'Cache-Control': SHOWCASE_FEED_NEWEST_CACHE_CONTROL,
-        ...createApiTraceHeaders(request),
-      },
+      headers: createApiResponseHeaders(request, SHOWCASE_FEED_NEWEST_CACHE_CONTROL),
     });
   } catch (error) {
     dependencies.logError('Showcase feed newest probe failed:', error);
