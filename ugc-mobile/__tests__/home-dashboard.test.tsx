@@ -374,6 +374,7 @@ vi.mock('@/lib/feed-attention-view-model', async (importOriginal) => {
 
 import { HomeDashboard } from '../components/home-dashboard';
 import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
+import { flushShowcaseFeedEvents } from '../lib/feed-event-queue';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
@@ -966,6 +967,10 @@ describe('Home screen', () => {
       .toEqual({ pages: [firstPage], pageParams: [{ offset: 0 }] });
     expect(queryState.refetch).toHaveBeenCalledTimes(1);
     expect(list.scrollToOffset.mock.invocationCallOrder[0]).toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
+    // The lane's queued events leave with the refetch, which can be a new
+    // ranked session reading what was seen.
+    expect(vi.mocked(flushShowcaseFeedEvents).mock.invocationCallOrder.at(-1))
+      .toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
     // No pull is behind this refresh: the control stays down while the page loads.
     expect(listProps(tree).refreshControl.props.refreshing).toBe(false);
     await renderer.act(async () => {

@@ -8,6 +8,8 @@ vi.mock('expo-secure-store', () => ({
 }));
 
 import {
+  FEED_EVENT_QUEUE_FLUSH_DELAY_MS,
+  FEED_EVENT_QUEUE_FLUSH_SIZE,
   FEED_EVENT_QUEUE_MAX_AGE_MS,
   FEED_EVENT_QUEUE_MAX_ENTRIES,
   FEED_EVENT_QUEUE_STORAGE_KEY,
@@ -132,15 +134,54 @@ describe('feed event queue', () => {
       .toBe('2023-11-14T22:13:20.000Z');
   });
 
-  it('flushes at ten entries with a fresh token', async () => {
+  it('flushes a full batch of 25 at once, with a fresh token', async () => {
     const harness = createHarness();
-    for (let index = 0; index < 10; index += 1) await harness.queue.enqueue(event(index));
-    await harness.queue.flush();
+    for (let index = 0; index < FEED_EVENT_QUEUE_FLUSH_SIZE - 1; index += 1) await harness.queue.enqueue(event(index));
+    expect(harness.sendBatch).not.toHaveBeenCalled();
 
+    await harness.queue.enqueue(event(FEED_EVENT_QUEUE_FLUSH_SIZE - 1));
+    await vi.waitFor(() => expect(harness.queue.getEntriesForTests()).toHaveLength(0));
+
+    expect(FEED_EVENT_QUEUE_FLUSH_SIZE).toBe(25);
     expect(harness.sendBatch).toHaveBeenCalledTimes(1);
-    expect(harness.sendBatch.mock.calls[0]?.[0]).toHaveLength(10);
+    expect(harness.sendBatch.mock.calls[0]?.[0]).toHaveLength(25);
     expect(harness.sendBatch.mock.calls[0]?.[1]).toEqual({ accessToken: 'token:user:user-1' });
-    expect(harness.queue.getEntriesForTests()).toHaveLength(0);
+  });
+
+  // Every request costs a function, the proxy's admission and two rate-limit
+  // writes, so a reader's events wait to share one: 15 s from the oldest.
+  it('sends what a reader made 15 s after the oldest of it, however often more arrives', async () => {
+    const start = 1_700_000_000_000;
+    const harness = createHarness({ now: start });
+    await harness.queue.enqueue(event(1));
+    expect(harness.timers.at(-1)?.delayMs).toBe(FEED_EVENT_QUEUE_FLUSH_DELAY_MS);
+    expect(FEED_EVENT_QUEUE_FLUSH_DELAY_MS).toBe(15_000);
+
+    // Events that keep coming join the batch without pushing its time back.
+    harness.setNow(start + 6_000);
+    await harness.queue.enqueue(event(2));
+    expect(harness.timers.at(-1)?.delayMs).toBe(9_000);
+    harness.setNow(start + 12_000);
+    await harness.queue.enqueue(event(3));
+    expect(harness.timers.at(-1)?.delayMs).toBe(3_000);
+    expect(harness.sendBatch).not.toHaveBeenCalled();
+
+    harness.setNow(start + 15_000);
+    harness.timers.at(-1)?.callback();
+    await vi.waitFor(() => expect(harness.sendBatch).toHaveBeenCalledTimes(1));
+    expect(harness.sendBatch.mock.calls[0]?.[0].map(({ clientEventId }) => clientEventId))
+      .toEqual(['event-1', 'event-2', 'event-3']);
+  });
+
+  it('sends events a killed app left behind as soon as it is restored', async () => {
+    const start = 1_700_000_000_000;
+    const harness = createHarness({
+      initial: persistedEntries([persistedEntry(1, 'user:user-1', start - 60_000)]),
+      now: start,
+    });
+    await harness.queue.restore();
+
+    expect(harness.timers.at(-1)?.delayMs).toBe(1_000);
   });
 
   it('chunks thirty restored events as 25 plus 5', async () => {

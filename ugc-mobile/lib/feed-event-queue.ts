@@ -5,9 +5,26 @@ import { getFeedInstallationId } from './feed-installation-id';
 import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType } from './types';
 
 export const FEED_EVENT_QUEUE_STORAGE_KEY = 'magicbooklet.feedEvents.queue.v1';
-export const FEED_EVENT_QUEUE_FLUSH_SIZE = 10;
-export const FEED_EVENT_QUEUE_FLUSH_DELAY_MS = 2_000;
+/**
+ * A full batch, the most the server takes in one request
+ * (`SHOWCASE_FEED_EVENT_BATCH_LIMIT`). Every request costs a function, the
+ * proxy's admission and two rate-limit writes whatever it carries, so it goes
+ * full when the reader is busy.
+ */
+export const FEED_EVENT_QUEUE_FLUSH_SIZE = 25;
+/**
+ * The longest a new event waits for others to join its batch, counted from the
+ * oldest one waiting rather than from the latest (a reader who keeps scrolling
+ * slowly would otherwise hold a batch for minutes). Nothing ranks on fresher
+ * events: a feed session keeps the list it was ranked with for its next pages,
+ * and the queue is sent whenever a feed screen loses focus, the app leaves the
+ * foreground, the identity changes, or a feed is refreshed. Events wait in
+ * AsyncStorage, so a kill loses none.
+ */
+export const FEED_EVENT_QUEUE_FLUSH_DELAY_MS = 15_000;
 export const FEED_EVENT_QUEUE_CHUNK_SIZE = 25;
+/** The soonest a timer fires again, so entries already due never spin the queue. */
+const FEED_EVENT_QUEUE_MIN_TIMER_MS = 1_000;
 export const FEED_EVENT_QUEUE_MAX_ENTRIES = 200;
 export const FEED_EVENT_QUEUE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 export const FEED_EVENT_QUEUE_TRANSITION_DRAIN_MS = 2 * 60 * 1_000;
@@ -214,17 +231,22 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
     const retirementDeadlines = [...retiringIdentities.values()]
       .map(({ discardAt }) => discardAt);
     if (sendableEntries.length === 0 && retirementDeadlines.length === 0) return;
+    // A new event is due once the batching window has passed since it was
+    // queued, so the oldest one waiting sets the time and later ones only join
+    // its batch. A retried event is due when its backoff expires, neither
+    // earlier, which would leave the queue without another timer, nor later.
     const nextReadyAt = sendableEntries.length > 0
-      ? Math.min(...sendableEntries.map((entry) => entry.nextAttemptAt))
+      ? Math.min(...sendableEntries.map((entry) => (
+        entry.attempts === 0
+          ? Math.max(entry.nextAttemptAt, entry.enqueuedAt + FEED_EVENT_QUEUE_FLUSH_DELAY_MS)
+          : entry.nextAttemptAt
+      )))
       : Number.POSITIVE_INFINITY;
     const nextRetirementAt = retirementDeadlines.length > 0
       ? Math.min(...retirementDeadlines)
       : Number.POSITIVE_INFINITY;
-    // New events wait for the normal two-second batching window. Retried events
-    // wait until their actual backoff expires instead of firing early and
-    // leaving the queue without another timer.
     const delayMs = Math.max(
-      FEED_EVENT_QUEUE_FLUSH_DELAY_MS,
+      FEED_EVENT_QUEUE_MIN_TIMER_MS,
       Math.min(nextReadyAt, nextRetirementAt) - currentTime,
     );
     timer = setTimer(() => {

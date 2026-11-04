@@ -621,6 +621,9 @@ export default function ShowcaseScreen() {
   const refetchFirstPage = () => {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
+    // A refetched first page can be a new ranked session, whose seen check
+    // reads the events this lane has queued: they leave with the request.
+    void flushShowcaseFeedEvents();
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
       return {
