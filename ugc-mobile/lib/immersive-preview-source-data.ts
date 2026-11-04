@@ -2,7 +2,7 @@ import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query'
 
 import { selectCreationLibraryItems } from '@/lib/creation-library';
 import { dedupeInFlight } from '@/lib/in-flight';
-import { profileFailedGenerationsQueryKey } from '@/lib/profile-media-query';
+import { profileArchivedGenerationsQueryKey, profileFailedGenerationsQueryKey } from '@/lib/profile-media-query';
 import {
   buildImmersiveGenerationItems,
   buildImmersiveOwnerPostItems,
@@ -340,12 +340,12 @@ function cachedShowcaseItems(
  * posts are not merged in: generation viewers load linked-post details as
  * separate enrichment.
  *
- * The Failed scope's pages join only for a run those two lack: a failure past
- * the library's loaded pages then opens from them at once, and the library
- * rule keeps every other failure out of the reel. Read for every open, they
- * would date it: they are refreshed only while that scope is shown, so their
- * age would send a viewer opened from an alert back to the network for runs
- * the fresh library already holds.
+ * The Failed and Archived scopes' pages join only for a run those two lack: a
+ * failure or an archived creation past the library's loaded pages then opens
+ * from them at once, and the library rule keeps the rest of either out of the
+ * reel. Read for every open, they would date it: they are refreshed only while
+ * their scope is shown, so their age would send a viewer opened from an alert
+ * back to the network for runs the fresh library already holds.
  */
 function cachedGenerations(
   queryClient: QueryClient,
@@ -362,7 +362,11 @@ function cachedGenerations(
   const libraryKeys: QueryKey[] = [['profile-generations', userId], ['generations', userId]];
   const library = read(libraryKeys);
   if (!initialId || (library && sourceDataContains(library.data, initialId))) return library;
-  return read([...libraryKeys, profileFailedGenerationsQueryKey(userId)]) ?? library;
+  return read([
+    ...libraryKeys,
+    profileFailedGenerationsQueryKey(userId),
+    profileArchivedGenerationsQueryKey(userId),
+  ]) ?? library;
 }
 
 /** `profile-owner-posts` is paginated. */

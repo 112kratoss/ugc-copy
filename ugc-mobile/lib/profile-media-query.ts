@@ -76,6 +76,34 @@ export function profileFailedGenerationsQueryKey(userId: string | null | undefin
   return ['profile-failed-generations', userId] as const;
 }
 
+/**
+ * The Creations Archived scope's own pages: archived runs only
+ * (`archived=only`). The scope used to keep the archived creations of the
+ * library's pages, so with few of them in a large library it read page after
+ * page of the rest to find them. `includeArchived` goes with it, so a server
+ * from before the filter answers the whole library and the scope filters it.
+ */
+export function profileArchivedGenerationsQueryOptions(
+  api: Pick<MagicbookletApiClient, 'listGenerations'>,
+  userId: string | undefined
+) {
+  return {
+    queryKey: profileArchivedGenerationsQueryKey(userId),
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam }: { pageParam: string | null }) => api.listGenerations(true, {
+      cursor: pageParam ?? undefined,
+      limit: PROFILE_MEDIA_PAGE_SIZE,
+      archived: 'only',
+    }),
+    getNextPageParam: getNextProfileGenerationsCursor,
+    ...PROFILE_LIBRARY_QUERY_BEHAVIOUR,
+  };
+}
+
+export function profileArchivedGenerationsQueryKey(userId: string | null | undefined) {
+  return ['profile-archived-generations', userId] as const;
+}
+
 export function profileOwnerPostsQueryOptions(
   api: Pick<MagicbookletApiClient, 'listOwnerPosts'>,
   userId: string | undefined

@@ -131,6 +131,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const OWNER_GENERATIONS_STATUS_FILTERS = ['failed'] as const;
 type OwnerGenerationsStatusFilter = typeof OWNER_GENERATIONS_STATUS_FILTERS[number];
 
+/**
+ * The archive states a library read can be narrowed to (`archived=`). The app's
+ * Archived scope pages only archived runs with it, where it used to page the
+ * whole library and keep the archived ones. It implies `includeArchived=true`.
+ */
+const OWNER_GENERATIONS_ARCHIVED_FILTERS = ['only'] as const;
+type OwnerGenerationsArchivedFilter = typeof OWNER_GENERATIONS_ARCHIVED_FILTERS[number];
+
 /** A library read the route refuses before it reads anything; the adapter answers it 400. */
 export class OwnerGenerationsQueryError extends Error {
   readonly code = 'INVALID_GENERATIONS_QUERY';
@@ -144,6 +152,16 @@ function parseStatusFilter(value: string | null): OwnerGenerationsStatusFilter |
   }
   // Ignoring it would answer `status=succeeded` with every run as if it were filtered.
   throw new OwnerGenerationsQueryError(`status must be one of: ${OWNER_GENERATIONS_STATUS_FILTERS.join(', ')}.`);
+}
+
+function parseArchivedFilter(value: string | null): OwnerGenerationsArchivedFilter | null {
+  if (value === null) return null;
+  const candidate = value.trim();
+  if ((OWNER_GENERATIONS_ARCHIVED_FILTERS as readonly string[]).includes(candidate)) {
+    return candidate as OwnerGenerationsArchivedFilter;
+  }
+  // Ignoring it would answer `archived=none` with archived runs as if it were filtered.
+  throw new OwnerGenerationsQueryError(`archived must be one of: ${OWNER_GENERATIONS_ARCHIVED_FILTERS.join(', ')}.`);
 }
 
 function withoutWorkflowSettings<T extends { workflow_settings?: unknown }>(value: T): Omit<T, 'workflow_settings'> {
@@ -445,6 +463,7 @@ async function fetchOwnerGenerations({
   supabase,
   ownerUserIds,
   includeArchived,
+  archivedOnly,
   requestedGenerationId,
   requestedGenerationIds,
   statusFilter,
@@ -455,6 +474,7 @@ async function fetchOwnerGenerations({
   supabase: OwnerGenerationsRouteClient;
   ownerUserIds: string[];
   includeArchived: boolean;
+  archivedOnly: boolean;
   requestedGenerationId: string | null;
   requestedGenerationIds: string[] | null;
   statusFilter: OwnerGenerationsStatusFilter | null;
@@ -487,7 +507,9 @@ async function fetchOwnerGenerations({
     .or('and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true')
     .order('created_at', { ascending: false });
 
-  if (!includeArchived) {
+  if (archivedOnly) {
+    query = query.not('archived_at', 'is', null);
+  } else if (!includeArchived) {
     query = query.is('archived_at', null);
   }
 
@@ -621,12 +643,13 @@ export async function listOwnerGenerationsForRoute({
   getAdminSupabase: () => OwnerGenerationsRouteClient;
   searchParams: URLSearchParams;
 }): Promise<OwnerGenerationsRoutePayload> {
-  const includeArchived = searchParams.get('includeArchived') === 'true';
+  const statusFilter = parseStatusFilter(searchParams.get('status'));
+  const archivedOnly = parseArchivedFilter(searchParams.get('archived')) === 'only';
+  const includeArchived = archivedOnly || searchParams.get('includeArchived') === 'true';
   const requestedGenerationId = searchParams.get('id')?.trim() || null;
   const requestedGenerationIds = requestedGenerationId
     ? null
     : parseRequestedGenerationIds(searchParams.get('ids'));
-  const statusFilter = parseStatusFilter(searchParams.get('status'));
   const detailMode = searchParams.get('detail');
   const summaryOnly = detailMode === 'summary';
   const statusOnly = detailMode === 'status';
@@ -646,6 +669,7 @@ export async function listOwnerGenerationsForRoute({
     supabase: adminSupabase,
     ownerUserIds,
     includeArchived,
+    archivedOnly,
     requestedGenerationId,
     requestedGenerationIds,
     statusFilter,

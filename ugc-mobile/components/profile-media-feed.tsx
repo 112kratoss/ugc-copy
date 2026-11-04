@@ -233,10 +233,17 @@ export function ProfileMediaFeedScreen() {
     router.setParams({ comments: undefined, replyTo: undefined } as never);
   }, [items, requestedCommentsPostId, requestedReplyToId]);
 
-  // Coming back to the feed revalidates the library it shares with the grid.
+  // Coming back to the feed revalidates the library it shares with the grid,
+  // or for archived creations the Archived scope's own pages.
   const refreshLibraryHead = useCallback(
-    () => refreshProfileLibraryHead({ api, queryClient, userId: libraryOwnerId, library: libraryName }),
-    [api, libraryName, libraryOwnerId, queryClient]
+    () => refreshProfileLibraryHead({
+      api,
+      queryClient,
+      userId: libraryOwnerId,
+      library: libraryName,
+      archived: libraryName === 'Creations' && postsScope === 'archived',
+    }),
+    [api, libraryName, libraryOwnerId, postsScope, queryClient]
   );
   useProfileMediaRevalidation({
     enabled: isFocused && Boolean(libraryOwnerId),
