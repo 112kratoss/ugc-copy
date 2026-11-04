@@ -115,6 +115,8 @@ vi.mock('../lib/apple-auth', () => ({
 vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: vi.fn() }));
 vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
 vi.mock('../lib/notifications', () => ({
+  forgetLastPushRegistration: vi.fn(),
+  setPushRegistrationSession: vi.fn(),
   clearLocalMobilePushRegistration: state.clearLocalPush,
   registerForMobilePushNotifications: vi.fn(async () => undefined),
   subscribeToMobilePushTokenChanges: vi.fn(() => vi.fn()),

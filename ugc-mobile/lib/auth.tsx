@@ -63,11 +63,14 @@ import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-cata
 import { claimPendingReferral } from './referral-attribution';
 import {
   clearLocalMobilePushRegistration,
+  forgetLastPushRegistration,
   registerForMobilePushNotifications,
+  setPushRegistrationSession,
   subscribeToMobilePushTokenChanges,
   unregisterAccountMobilePushNotifications,
   unregisterMobilePushNotifications,
 } from './notifications';
+import { supabaseSessionId } from './supabase-session-id';
 import {
   clearPersistedAccountState,
   persistAccountStateOnChange,
@@ -719,6 +722,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.remove();
   }, [api, getAccessToken, session?.user?.id]);
   const registeredUser = useMemo(() => getRegisteredUser(session), [session]);
+  // The Supabase session a registered account is signed in on: a refreshed
+  // token keeps it, a new sign-in does not (`lib/supabase-session-id.ts`).
+  const registeredSessionId = useMemo(
+    () => (registeredUser ? supabaseSessionId(session?.access_token) : null),
+    [registeredUser, session?.access_token],
+  );
   const isGuest = isGuestSession(session);
   const identityUserId = session?.user?.id ?? null;
   const accountReauthenticationMethods = useMemo(
@@ -917,16 +926,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Registered accounts only. A guest has no way to receive a notification
     // worth sending — no follows, no comments, no marketplace — and push tokens
     // registered against a guest row would be stranded the moment it merges.
+    // A session that ended, however it ended (a refused refresh token, a sign-out
+    // everywhere from the web), leaves nothing confirmed for the next one.
     if (!registeredUser) {
+      setPushRegistrationSession(null);
       return;
     }
 
     const userId = registeredUser.id;
+    setPushRegistrationSession({ userId, sessionId: registeredSessionId });
     const syncPushRegistration = () => queryClient.fetchQuery({
       queryKey: devicePushQueryKey(userId),
-      // Checked at launch and on every return to the app; sent only when the
-      // account, the token, the app version or the permission changed, or a day
-      // after the last one the server confirmed (`PUSH_REGISTRATION_REFRESH_MS`).
+      // Checked at launch and on every return to the app; sent once a launch,
+      // and again only when the account, its session, the token, the app
+      // version or the permission changed, or a day after the last one the
+      // server confirmed (`PUSH_REGISTRATION_REFRESH_MS`).
       queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false, userId }),
       staleTime: 1000 * 30,
     }).catch((error) => {
@@ -945,7 +959,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubscribePushTokenChanges();
       appStateSubscription.remove();
     };
-  }, [api, queryClient, registeredUser]);
+  }, [api, queryClient, registeredSessionId, registeredUser]);
 
   // A balance this app moved itself, after a generation or a purchase. It is as
   // settled as a server answer, and the saved copy must not overwrite it either.
@@ -1943,6 +1957,10 @@ async function recoverInvalidAuthSession(error: unknown) {
     return false;
   }
 
+  // The session ended without the sign-out that retires this phone's push
+  // token ("Sign out everywhere" on the web, a revoked session): nothing the
+  // server confirmed under it stands for the next one.
+  forgetLastPushRegistration();
   await clearPersistedSupabaseAuthSession();
   await clearPersistedHomeFeed();
   await clearSearchHistory();
