@@ -296,6 +296,24 @@ export function flushShowcaseFeedEventsBeforeRefresh(): Promise<void> {
 }
 
 /**
+ * At a sign-out, while the viewer's token still works: what they watched is
+ * sent (`flushShowcaseFeedEventsBeforeRefresh`, 1.5 s at most), unless `send`
+ * is false (a deleted account's events are deleted with it), and whatever of
+ * theirs is left unsent then leaves this browser, the queue and the outbox
+ * alike. The outbox holds post, session and delivery ids with dwell and
+ * progress, and would otherwise outlive the session by up to a day.
+ */
+export async function sendAndForgetShowcaseFeedEventsOf(
+  userId: string,
+  { send = true }: { send?: boolean } = {},
+): Promise<void> {
+  if (send) await flushShowcaseFeedEventsBeforeRefresh();
+  const identity = `user:${userId}`;
+  pendingFeedEvents = pendingFeedEvents.filter((event) => event.identity !== identity);
+  changeFeedEventOutbox((entries) => entries.filter((entry) => entry.identity !== identity));
+}
+
+/**
  * The queue is module state, so it would otherwise leak across tests: events a
  * test queued and never flushed would ride along into the next one's assertions.
  * The deliveries that already reported a dwell or a resource open are too, and

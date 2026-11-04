@@ -5,6 +5,7 @@ import {
   flushShowcaseFeedEvents,
   flushShowcaseFeedEventsBeforeRefresh,
   resetShowcaseFeedEventQueueForTests,
+  sendAndForgetShowcaseFeedEventsOf,
   sendShowcaseFeedEvent,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import { FEED_EVENT_OUTBOX_ADOPT_AFTER_MS, FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
@@ -273,6 +274,24 @@ describe('showcase feed event batching', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('forgets a deleted account’s queued and kept events without sending them, and keeps everyone else’s', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await sendShowcaseFeedEvent({ item: rankedItem(), eventType: 'impression', sourceSurface: 'feed', accessToken: signedInToken('user-1'), feedSessionId: 'session-1' });
+    await sendShowcaseFeedEvent({ item: rankedItem(), eventType: 'impression', sourceSurface: 'feed', accessToken: signedInToken('user-2'), feedSessionId: 'session-2' });
+    expect(outboxIds()).toHaveLength(2);
+
+    await sendAndForgetShowcaseFeedEventsOf('user-1', { send: false });
+
+    expect(eventRequests(fetchMock)).toHaveLength(0);
+    expect(outboxIds()).toHaveLength(1);
+    await flushShowcaseFeedEvents();
+    // Only user-2's event goes, with user-2's token.
+    expect(eventRequests(fetchMock)).toHaveLength(1);
+    expect((fetchMock.mock.calls[0] as unknown[] as [string, RequestInit])[1].headers)
+      .toEqual(expect.objectContaining({ Authorization: `Bearer ${signedInToken('user-2')}` }));
   });
 
   it('keeps a queued batch separate from an immediate event', async () => {
