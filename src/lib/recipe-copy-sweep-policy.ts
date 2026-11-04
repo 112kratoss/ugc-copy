@@ -53,9 +53,12 @@ export const RECIPE_COPY_SWEEP_BATCH_LIMIT = 200;
 /**
  * Each run reads this many objects of each bucket, in name order on from where
  * the last run stopped (`list_recipe_file_sweep_candidates` keeps the place), so
- * no run reads a whole bucket; the walk starts over at the end.
+ * no run reads a whole bucket; the walk starts over at the end. Kept small: for
+ * the old copies and imports in the page, the read also takes in every
+ * generation, canvas and kept input of each person their paths name (publishers,
+ * buyers and sellers).
  */
-export const RECIPE_COPY_SWEEP_SCAN_LIMIT = 5000;
+export const RECIPE_COPY_SWEEP_SCAN_LIMIT = 2000;
 
 /**
  * How long a removed copy is watched for something naming it again: a save that

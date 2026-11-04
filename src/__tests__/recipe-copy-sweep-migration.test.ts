@@ -41,11 +41,12 @@ describe('the recipe copy sweep migration', () => {
     expect(all).toContain('ON CONFLICT (object_name) DO UPDATE SET used_at = excluded.used_at;');
   });
 
-  it('indexes the kept inputs that name a recipe file, by the paths they name', () => {
-    expect(all).toContain(
-      "CREATE INDEX generation_input_media_recipe_file_paths_idx ON public.generation_input_media USING gin (public.recipe_file_paths_in_text(metadata::text)) WHERE strpos(metadata::text, '/generation-references/') > 0 OR strpos(metadata::text, '/recipe-imports/') > 0;",
-    );
-    expect(all).toContain('CREATE FUNCTION public.recipe_file_paths_in_text(p_text text) RETURNS text[] LANGUAGE sql IMMUTABLE');
+  it('indexes only the kept inputs that name a copy, behind a lock timeout', () => {
+    expect(all).toContain("SET LOCAL lock_timeout = '5s'; CREATE INDEX generation_input_media_recipe_file_idx");
+    expect(all).toContain("CREATE INDEX generation_input_media_recipe_file_idx ON public.generation_input_media ((metadata ->> 'recipeFile')) WHERE metadata ? 'recipeFile';");
+    expect(all).toContain("CREATE INDEX generation_input_media_recipe_copy_source_idx ON public.generation_input_media ((metadata ->> 'sourceStoragePath')) WHERE (metadata ->> 'sourceStoragePath') LIKE 'post_resource_files/%';");
+    expect(all).not.toMatch(/USING gin/i);
+    expect(all).toContain('CREATE INDEX recipe_import_uses_copy_object_name_idx ON public.recipe_import_uses (copy_object_name);');
   });
 
   it('reads each source only through keys taken from the paths', () => {
@@ -62,7 +63,8 @@ describe('the recipe copy sweep migration', () => {
       'WHERE generations.id IN (SELECT creations.id FROM creations)',
       'WHERE generations.user_id IN (SELECT people.id FROM people)',
       'WHERE canvases.user_id IN (SELECT people.id FROM people)',
-      "AND public.recipe_file_paths_in_text(inputs.metadata::text) && (SELECT coalesce(array_agg(wanted.path), '{}'::text[]) FROM wanted)",
+      "WHERE inputs.metadata ? 'recipeFile' AND (inputs.metadata ->> 'recipeFile') IN (SELECT wanted.path FROM wanted)",
+      "WHERE (inputs.metadata ->> 'sourceStoragePath') LIKE 'post_resource_files/%' AND (inputs.metadata ->> 'sourceStoragePath') IN (SELECT wanted.path FROM wanted)",
     ]) {
       expect(named).toContain(keyed);
     }
@@ -115,6 +117,10 @@ describe('the recipe copy sweep migration', () => {
     expect(namedAgain).toContain('ORDER BY deletions.checked_at NULLS FIRST, deletions.deleted_at LIMIT p_limit FOR UPDATE SKIP LOCKED');
     expect(namedAgain).toContain("JOIN named ON named.path = 'post_resource_files/' || missing.object_name");
     expect(namedAgain).toContain("AND inputs.generation_id::text = split_part(missing.object_name, '/', 3)");
-    expect(namedAgain).toContain('CASE WHEN inputs.id IS NULL THEN ( SELECT objects.name FROM storage.objects AS objects');
+    expect(namedAgain).toContain('WHERE uses.copy_object_name = missing.object_name');
+    expect(namedAgain).toContain("AND (kept.metadata ->> 'recipeFile') = 'post_resource_files/' || missing.object_name");
+    expect(namedAgain).toContain("WHERE objects.bucket_id = 'generation_inputs' AND objects.name = imports.name");
+    // No scan of the bucket by pattern.
+    expect(namedAgain).not.toContain("objects.name ~ '^[^/]+/recipe-imports/");
   });
 });

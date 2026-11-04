@@ -11,9 +11,12 @@
 -- this is what it reads and writes:
 --
 -- * recipe_file_paths_in_text: the copy and import paths a text names, in any
---   form (bare, bucket-prefixed, inside a storage link), bucket-qualified. A
---   GIN index over it on generation_input_media.metadata finds the kept inputs
---   of anyone (a buyer's run included) that name a given file.
+--   form (bare, bucket-prefixed, inside a storage link), bucket-qualified.
+-- * Two small partial indexes on generation_input_media find the kept inputs of
+--   anyone (a buyer's run of a bought recipe) that name a given copy: by the
+--   copy the row recorded (metadata.recipeFile) and by a copy it ran from
+--   directly (metadata.sourceStoragePath). An import is in its buyer's folder,
+--   so the buyer's own kept inputs, read by user_id, cover it.
 -- * recipe_file_sweep_named: of a batch of paths, those something names. It
 --   reads only through indexed keys taken from the paths themselves (the
 --   publisher, buyer and seller, and the creation): their recipes and the
@@ -70,14 +73,21 @@ GRANT EXECUTE ON FUNCTION public.recipe_file_paths_in_text(text) TO service_role
 COMMENT ON FUNCTION public.recipe_file_paths_in_text(text) IS
   'The recipe copy (post_resource_files/...) and recipe import (generation_inputs/...) paths a text names, bare, bucket-prefixed or in a storage link.';
 
--- The kept inputs that name a recipe file: a buyer's run records the copy it
--- used (metadata.recipeFile) and the import it ran from (sourceStoragePath,
--- sourceUrl). Partial, so only those rows are in it.
-CREATE INDEX generation_input_media_recipe_file_paths_idx
-  ON public.generation_input_media
-  USING gin (public.recipe_file_paths_in_text(metadata::text))
-  WHERE strpos(metadata::text, '/generation-references/') > 0
-     OR strpos(metadata::text, '/recipe-imports/') > 0;
+-- The kept inputs that name a seller's copy: a buyer's run records the copy it
+-- used (metadata.recipeFile, src/lib/generation-input-media.ts) and may have run
+-- from it directly (sourceStoragePath). Both indexes are partial, so they hold
+-- only those rows, a small share of the table; the build still reads the table
+-- once under a SHARE lock, which holds new kept inputs back for that long, and
+-- waits at most five seconds for the lock itself.
+SET LOCAL lock_timeout = '5s';
+
+CREATE INDEX generation_input_media_recipe_file_idx
+  ON public.generation_input_media ((metadata ->> 'recipeFile'))
+  WHERE metadata ? 'recipeFile';
+
+CREATE INDEX generation_input_media_recipe_copy_source_idx
+  ON public.generation_input_media ((metadata ->> 'sourceStoragePath'))
+  WHERE (metadata ->> 'sourceStoragePath') LIKE 'post_resource_files/%';
 
 -- ─── State ──────────────────────────────────────────────────────────────────
 
@@ -128,10 +138,16 @@ CREATE TABLE public.recipe_import_uses (
   object_name text PRIMARY KEY CHECK (object_name ~ '^[^/]+/recipe-imports/[^/]+/[^/]+/[^/]+$'),
   buyer_user_id uuid NOT NULL,
   used_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+  -- The copy it was made from, in the recipe files: how a removed copy finds an import of it.
+  copy_object_name text GENERATED ALWAYS AS (
+    split_part(object_name, '/', 3) || '/generation-references/' || split_part(object_name, '/', 4)
+      || '/' || split_part(object_name, '/', 5)
+  ) STORED,
   CHECK (split_part(object_name, '/', 1) = buyer_user_id::text)
 );
 
 CREATE INDEX recipe_import_uses_used_at_idx ON public.recipe_import_uses (used_at);
+CREATE INDEX recipe_import_uses_copy_object_name_idx ON public.recipe_import_uses (copy_object_name);
 
 COMMENT ON TABLE public.recipe_import_uses IS
   'When a run start last made or reused each recipe import (generation_inputs/<buyer>/recipe-imports/...), recorded before it touches the file, so the recipe-copy-sweep job leaves an import in use alone. Written by record_recipe_import_use.';
@@ -287,13 +303,17 @@ AS $$
     WHERE strpos(texts.body, '/generation-references/') > 0
        OR strpos(texts.body, '/recipe-imports/') > 0
     UNION ALL
-    -- Anyone's kept input naming the path: a buyer's run of a bought recipe.
-    SELECT unnest(public.recipe_file_paths_in_text(inputs.metadata::text))
+    -- Anyone's kept input naming a copy: a buyer's run of a bought recipe,
+    -- through the two partial indexes.
+    SELECT inputs.metadata ->> 'recipeFile'
     FROM public.generation_input_media AS inputs
-    WHERE (strpos(inputs.metadata::text, '/generation-references/') > 0
-           OR strpos(inputs.metadata::text, '/recipe-imports/') > 0)
-      AND public.recipe_file_paths_in_text(inputs.metadata::text)
-          && (SELECT coalesce(array_agg(wanted.path), '{}'::text[]) FROM wanted)
+    WHERE inputs.metadata ? 'recipeFile'
+      AND (inputs.metadata ->> 'recipeFile') IN (SELECT wanted.path FROM wanted)
+    UNION ALL
+    SELECT inputs.metadata ->> 'sourceStoragePath'
+    FROM public.generation_input_media AS inputs
+    WHERE (inputs.metadata ->> 'sourceStoragePath') LIKE 'post_resource_files/%'
+      AND (inputs.metadata ->> 'sourceStoragePath') IN (SELECT wanted.path FROM wanted)
   )
   SELECT wanted.path
   FROM wanted
@@ -544,15 +564,28 @@ BEGIN
     inputs.sort_order,
     inputs.storage_path,
     inputs.media_type,
-    -- Where the saved input is gone, a buyer's import of the same copy holds its bytes.
+    -- Where the saved input is gone, a buyer's import of the same copy holds its
+    -- bytes. Found through indexes only: the imports run starts recorded, and the
+    -- buyers whose kept inputs recorded the copy (an import is at a fixed path in
+    -- the buyer's folder); then the object itself, by its name.
     CASE WHEN inputs.id IS NULL THEN (
-      SELECT objects.name
-      FROM storage.objects AS objects
-      WHERE objects.bucket_id = 'generation_inputs'
-        AND objects.name ~ '^[^/]+/recipe-imports/[^/]+/[^/]+/[^/]+$'
-        AND split_part(objects.name, '/', 3) || '/generation-references/' || split_part(objects.name, '/', 4)
-            || '/' || split_part(objects.name, '/', 5) = missing.object_name
-      ORDER BY objects.name
+      SELECT imports.name
+      FROM (
+        SELECT uses.object_name AS name
+        FROM public.recipe_import_uses AS uses
+        WHERE uses.copy_object_name = missing.object_name
+        UNION
+        SELECT kept.user_id::text || '/recipe-imports/' || split_part(missing.object_name, '/', 1) || '/'
+               || split_part(missing.object_name, '/', 3) || '/' || split_part(missing.object_name, '/', 4)
+        FROM public.generation_input_media AS kept
+        WHERE kept.metadata ? 'recipeFile'
+          AND (kept.metadata ->> 'recipeFile') = 'post_resource_files/' || missing.object_name
+      ) AS imports
+      WHERE EXISTS (
+        SELECT 1 FROM storage.objects AS objects
+        WHERE objects.bucket_id = 'generation_inputs' AND objects.name = imports.name
+      )
+      ORDER BY imports.name
       LIMIT 1
     ) END
   FROM missing

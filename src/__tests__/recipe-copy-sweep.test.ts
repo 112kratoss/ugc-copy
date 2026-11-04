@@ -34,6 +34,7 @@ function createFakeClient(options: {
   ledgerUpsertError?: { message: string } | null;
   /** Imports a run start used after the read. */
   usedImports?: string[];
+  namedAgainError?: { message: string } | null;
   removeResult?: (bucket: string, names: string[]) => { data: unknown; error: unknown };
   copyError?: unknown;
 } = {}) {
@@ -76,7 +77,7 @@ function createFakeClient(options: {
     rpc: vi.fn(async (name: string, args: unknown) => {
       calls.push({ op: `rpc.${name}`, args: [args] });
       if (name === 'list_swept_recipe_copies_named_again') {
-        return { data: options.namedAgain ?? [], error: null };
+        return { data: options.namedAgainError ? null : options.namedAgain ?? [], error: options.namedAgainError ?? null };
       }
       if (name === 'list_recipe_imports_used_since') {
         return { data: options.usedImports ?? [], error: null };
@@ -138,7 +139,7 @@ describe('the recipe-copy-sweep job', () => {
       p_created_before: new Date(NOW.getTime() - 7 * DAY).toISOString(),
       p_imports_quiet_since: new Date(NOW.getTime() - 6 * 60 * 60 * 1000).toISOString(),
       p_limit: 200,
-      p_scan_limit: 5000,
+      p_scan_limit: 2000,
     });
     // The ledger keeps two weeks of removals, and the import uses a week.
     const prune = calls.find((call) => call.op === 'recipe_file_sweep_deletions.delete');
@@ -241,6 +242,19 @@ describe('the recipe-copy-sweep job', () => {
     await expect(sweepRecipeFileCopies(client as never, { now: NOW, deleteEnabled: true }))
       .rejects.toThrow('Could not record the recipe files to remove');
     expect(calls.map((call) => call.op)).not.toContain('storage.remove');
+  });
+
+  it('goes on, removing nothing, when it cannot read what it removed before', async () => {
+    const { client, calls } = createFakeClient({
+      namedAgainError: { message: 'canceling statement due to statement timeout' },
+      candidates: { examined: 1, unnamed: 1, candidates: [candidate('post_resource_files', COPY, 9 * DAY)] },
+    });
+
+    const summary = await sweepRecipeFileCopies(client as never, { now: NOW, deleteEnabled: true });
+
+    expect(summary).toMatchObject({ mode: 'report', restoreReadFailed: true, wouldDelete: 1, deletedCopies: 0 });
+    expect(calls.map((call) => call.op)).not.toContain('storage.remove');
+    expect(logs.some((record) => record.msg === 'recipe_copy_sweep_restore_read_failed')).toBe(true);
   });
 
   it('fails the run when the candidates cannot be read, rather than taking that for none', async () => {

@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(43);
+select plan(45);
 
 -- ─── Grants and shape ───────────────────────────────────────────────────────
 select ok(
@@ -101,6 +101,7 @@ insert into public.generations (id, user_id, status, is_public, created_at, prom
   ('d7100005-0000-4000-8000-000000000005', 'd7000001-0000-4000-8000-000000000001', 'succeeded', false, now() - interval '20 days',
    'Again from d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/10-reference-in-generation.png'),
   ('d7100003-0000-4000-8000-000000000003', 'd7000003-0000-4000-8000-000000000003', 'succeeded', false, now() - interval '20 days', 'A remix'),
+  ('d7100002-0000-4000-8000-000000000002', 'd7000002-0000-4000-8000-000000000002', 'succeeded', false, now() - interval '20 days', 'Another remix'),
   ('d7100004-0000-4000-8000-000000000004', 'd7000004-0000-4000-8000-000000000004', 'succeeded', false, now() - interval '20 days',
    'Pasted d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/09-reference-unrelated-gen.png');
 
@@ -122,7 +123,16 @@ insert into public.generation_input_media (id, generation_id, user_id, media_typ
      'recipeFile', 'post_resource_files/d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/03-reference-kept-row.png',
      'sourceStoragePath', 'generation_inputs/d7000003-0000-4000-8000-000000000003/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/named-import.png',
      'sourceUrl', 'https://example.supabase.co/storage/v1/object/sign/post_resource_files/d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/04-reference-in-link.png?token=abc'
-   ));
+   )),
+  -- An unrelated user's kept input that ran from a copy directly, by its bucket-prefixed path.
+  ('d7200004-0000-4000-8000-000000000004', 'd7100004-0000-4000-8000-000000000004', 'd7000004-0000-4000-8000-000000000004',
+   'image', 'reference', 'generation_inputs/d7000004-0000-4000-8000-000000000004/d7100004-0000-4000-8000-000000000004/00-reference.png', 0,
+   jsonb_build_object('sourceStoragePath', 'post_resource_files/d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/18-reference-in-source.png')),
+  -- The active buyer's kept input of a copy removed since, whose saved input is gone too.
+  ('d7200002-0000-4000-8000-000000000002', 'd7100002-0000-4000-8000-000000000002', 'd7000002-0000-4000-8000-000000000002',
+   'image', 'reference', 'generation_inputs/d7000002-0000-4000-8000-000000000002/d7100002-0000-4000-8000-000000000002/00-reference.png', 0,
+   jsonb_build_object('sourceKind', 'recipe-file',
+     'recipeFile', 'post_resource_files/d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/17-reference-kept-fallback.png'));
 
 insert into public.posts (id, user_id, visibility, category, source_kind, post_format, body) values
   ('d7300001-0000-4000-8000-000000000001', 'd7000001-0000-4000-8000-000000000001', 'public', 'text', 'external', 'text', 'Sweep recipe post'),
@@ -186,6 +196,7 @@ insert into storage.objects (id, bucket_id, name, created_at) values
   (gen_random_uuid(), 'post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/13-reference-in-snapshot.png', now() - interval '10 days'),
   (gen_random_uuid(), 'post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/14-reference-in-escrow.png', now() - interval '10 days'),
   (gen_random_uuid(), 'post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/15-reference-in-supplement.png', now() - interval '10 days'),
+  (gen_random_uuid(), 'post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/18-reference-in-source.png', now() - interval '10 days'),
   -- Outside the copies' exact folder: never examined.
   (gen_random_uuid(), 'post_resource_files', 'd7000001-0000-4000-8000-000000000001/upload-1-photo.png', now() - interval '90 days'),
   (gen_random_uuid(), 'post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/deeper/x.png', now() - interval '90 days'),
@@ -253,9 +264,9 @@ select is(
   ],
   'hands back the unnamed copies, then the imports no start used lately, in name order'
 );
-select is((select (result->>'examined')::integer from sweep_read), 18, 'examines only the files in the two exact folders');
+select is((select (result->>'examined')::integer from sweep_read), 19, 'examines only the files in the two exact folders');
 select is((select (result->>'tooRecent')::integer from sweep_read), 1, 'keeps the copy inside the grace period');
-select is((select (result->>'named')::integer from sweep_read), 10, 'keeps what something names');
+select is((select (result->>'named')::integer from sweep_read), 11, 'keeps what something names');
 select is((select (result->>'importsInUse')::integer from sweep_read), 1, 'keeps the import a run start used today');
 select is((select (result->>'unnamed')::integer from sweep_read), 6, 'counts every candidate');
 select ok((select (result->>'readAt') is not null from sweep_read), 'says when it read, by the database''s clock');
@@ -264,7 +275,7 @@ create temporary table kept_names on commit drop as
 select unnest(array[
   '01-reference-live.png', '02-reference-edited-out.png', '03-reference-kept-row.png', '04-reference-in-link.png',
   '10-reference-in-generation.png', '11-reference-in-canvas.png', '13-reference-in-snapshot.png',
-  '14-reference-in-escrow.png', '15-reference-in-supplement.png'
+  '14-reference-in-escrow.png', '15-reference-in-supplement.png', '18-reference-in-source.png'
 ]) as file;
 select is(
   (select count(*)::integer from kept_names
@@ -273,7 +284,7 @@ select is(
      where candidate->>'name' like '%/' || kept_names.file
    )),
   0,
-  'never hands back a copy named by the recipe, its older revision, a kept input or a link in one, the publisher''s generation or canvas, a purchase snapshot, an escrow mapping or a supplement'
+  'never hands back a copy named by the recipe, its older revision, anyone''s kept input (its recipe file, its source or a link), the publisher''s generation or canvas, a purchase snapshot, an escrow mapping or a supplement'
 );
 select ok(
   not exists (
@@ -363,13 +374,23 @@ reset role;
 update public.post_resource_bundles
 set resource_items = '[{"id": "reference-d7200001-0000-4000-8000-000000000001", "storagePath": "d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/00-reference-d7200001-0000-4000-8000-000000000001.png"},
                        {"id": "reference-gone", "storagePath": "d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png"},
+                       {"id": "reference-kept-fallback", "storagePath": "d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/17-reference-kept-fallback.png"},
                        {"id": "reference-present", "storagePath": "d7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/03-reference-kept-row.png"}]'::jsonb
 where id = 'd7400001-0000-4000-8000-000000000001';
 insert into storage.objects (id, bucket_id, name, created_at) values
-  (gen_random_uuid(), 'generation_inputs', 'd7000003-0000-4000-8000-000000000003/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png', now() - interval '3 days');
+  (gen_random_uuid(), 'generation_inputs', 'd7000003-0000-4000-8000-000000000003/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png', now() - interval '3 days'),
+  (gen_random_uuid(), 'generation_inputs', 'd7000002-0000-4000-8000-000000000002/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/17-reference-kept-fallback.png', now() - interval '3 days');
+-- A start recorded the quiet buyer's import of the first; the active buyer's kept input names the second.
+insert into public.recipe_import_uses (object_name, buyer_user_id, used_at) values
+  ('d7000003-0000-4000-8000-000000000003/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png',
+   'd7000003-0000-4000-8000-000000000003', now() - interval '3 days'),
+  -- A recorded import that is gone is no fallback.
+  ('d7000004-0000-4000-8000-000000000004/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png',
+   'd7000004-0000-4000-8000-000000000004', now() - interval '3 days');
 insert into public.recipe_file_sweep_deletions (bucket_id, object_name, deleted_at) values
   ('post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/00-reference-d7200001-0000-4000-8000-000000000001.png', now() - interval '1 day'),
   ('post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png', now() - interval '1 day'),
+  ('post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/17-reference-kept-fallback.png', now() - interval '1 day'),
   ('post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/07-reference-forgotten.png', now() - interval '1 day'),
   ('post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/03-reference-kept-row.png', now() - interval '1 day'),
   ('post_resource_files', 'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/01-reference-live.png', now() - interval '30 days');
@@ -383,7 +404,8 @@ select is(
   (select array_agg(object_name order by object_name) from named_again),
   array[
     'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/00-reference-d7200001-0000-4000-8000-000000000001.png',
-    'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png'
+    'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png',
+    'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/17-reference-kept-fallback.png'
   ],
   'finds the removed copies named again, and not one nothing names, one already back or one removed long ago'
 );
@@ -399,11 +421,22 @@ select is(
 select is(
   (select array[coalesce(input_id::text, 'none'), surviving_import] from named_again where object_name like '%16-reference-gone-input.png'),
   array['none', 'd7000003-0000-4000-8000-000000000003/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png'],
-  'or, its input gone, with a buyer''s import of the same copy'
+  'or, its input gone, with an import of the same copy a start recorded that is still there'
+);
+select is(
+  (select surviving_import from named_again where object_name like '%17-reference-kept-fallback.png'),
+  'd7000002-0000-4000-8000-000000000002/recipe-imports/d7000001-0000-4000-8000-000000000001/d7100001-0000-4000-8000-000000000001/17-reference-kept-fallback.png',
+  'or the import at the fixed path of a buyer whose kept input names the copy'
+);
+select is(
+  (select copy_object_name from public.recipe_import_uses
+   where object_name like 'd7000003-%/16-reference-gone-input.png'),
+  'd7000001-0000-4000-8000-000000000001/generation-references/d7100001-0000-4000-8000-000000000001/16-reference-gone-input.png',
+  'each recorded import knows the copy it was made from'
 );
 select is(
   (select count(*)::integer from public.recipe_file_sweep_deletions where checked_at is not null),
-  4,
+  5,
   'it marks the removals it looked at, so the next read looks at others first'
 );
 

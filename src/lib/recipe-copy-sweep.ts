@@ -56,7 +56,9 @@ const IMPORT_USES_TABLE = 'recipe_import_uses';
 const SAMPLE_SIZE = 5;
 
 export interface RecipeCopySweepSummary {
+  /** `report` when removal is off, or when this run could not read what it removed before. */
   mode: 'delete' | 'report';
+  restoreReadFailed: boolean;
   /** Objects this run read, of both buckets. */
   scanned: number;
   /** Files in the two folders among them. */
@@ -267,8 +269,17 @@ export async function sweepRecipeFileCopies(
   const deleteEnabled = options.deleteEnabled ?? isRecipeCopySweepDeletionEnabled();
   const limit = Math.max(1, Math.min(options.limit ?? RECIPE_COPY_SWEEP_BATCH_LIMIT, RECIPE_COPY_SWEEP_BATCH_LIMIT));
 
-  // A removal recorded by an earlier deleting run is watched whatever this run's mode.
-  const restoredCopies = await restoreCopiesNamedAgain(client, nowMs);
+  // A removal recorded by an earlier deleting run is watched whatever this run's mode. A read that
+  // fails is logged and the run goes on, removing nothing: a bad batch never jams the job, and no file
+  // is removed while what was removed cannot be watched.
+  let restoredCopies = { restored: 0, failed: 0, unavailable: 0 };
+  let restoreReadFailed = false;
+  try {
+    restoredCopies = await restoreCopiesNamedAgain(client, nowMs);
+  } catch (error) {
+    restoreReadFailed = true;
+    logBackendError('recipe_copy_sweep_restore_read_failed', { error });
+  }
 
   const ledgerPruned = await pruneOlderThan(
     client, LEDGER_TABLE, 'deleted_at', nowMs - RECIPE_COPY_SWEEP_RESTORE_WINDOW_MS, 'recipe_copy_sweep_ledger_prune_failed',
@@ -293,7 +304,8 @@ export async function sweepRecipeFileCopies(
   const examined = count(read.examined);
 
   const summary: RecipeCopySweepSummary = {
-    mode: deleteEnabled ? 'delete' : 'report',
+    mode: deleteEnabled && !restoreReadFailed ? 'delete' : 'report',
+    restoreReadFailed,
     scanned: count(read.scanned),
     examined,
     kept: examined,
@@ -317,7 +329,7 @@ export async function sweepRecipeFileCopies(
     ledgerPruned,
   };
 
-  if (!deleteEnabled) {
+  if (summary.mode === 'report') {
     summary.wouldDelete = plan.deletions.length;
     logBackendInfo('recipe_copy_sweep_report', { ...summary });
     return summary;
