@@ -2,19 +2,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { projectGenerationModelDescriptor } from '@/lib/generation-model-catalog';
+import { parsePublishedModelDescriptor } from '@/lib/generation-model-descriptor-parser';
 import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
 
 /**
  * The motion descriptors both suites test against were read from production at one release. A
  * release that re-emits either model may publish another shape (Kling 3.0's plain reference slots
  * came from the compatibility release, which no release touched until kling-3-motion-inputs-20261101),
- * and nothing else would tell the two suites they now test a shape production no longer sends.
+ * and nothing else would tell the two suites they now test a shape production no longer sends. A
+ * re-emit that serves the same descriptor (kling-3-image-orientation-20261105 moved Kling 3.0's
+ * validation rules only) leaves the contract true.
  */
 
 type Manifest = {
   release: { revision: string; basedOnRevision: string };
-  entries: Array<{ modelId: string }>;
+  entries: Array<{
+    modelId: string;
+    webEnabled: boolean;
+    mobileEnabled: boolean;
+    publicDescriptor: Record<string, unknown>;
+  }>;
 };
+
+/** An entry's descriptor as the server serves it, in the contract's shape (schema 3, no `inputs`). */
+function served(entry: Manifest['entries'][number]): Record<string, unknown> {
+  const descriptor = projectGenerationModelDescriptor(parsePublishedModelDescriptor(
+    entry.publicDescriptor,
+    entry.modelId,
+    2,
+    { web: entry.webEnabled, mobile: entry.mobileEnabled },
+  ), 3) as unknown as Record<string, unknown>;
+  delete descriptor.inputs;
+  return descriptor;
+}
 
 const RELEASES = path.resolve(process.cwd(), 'config/generation-model-catalog/releases');
 
@@ -40,7 +61,7 @@ describe('the production motion descriptors contract', () => {
       .toBe(productionMotion.rollback.revision);
   });
 
-  it('was read at a release no later release re-emits either model after', () => {
+  it('was read at a release no later release serves either model differently after', () => {
     const releases = readReleases();
     const byBase = new Map(releases.map((manifest) => [manifest.release.basedOnRevision, manifest]));
     expect(
@@ -48,13 +69,18 @@ describe('the production motion descriptors contract', () => {
       `${productionMotion.revision} is a release in config/generation-model-catalog/releases`,
     ).toBe(true);
 
-    const motionIds = new Set(productionMotion.models.map((model) => model.id));
+    const contractModels = new Map(productionMotion.models.map((model) => [model.id, model as unknown]));
     const reEmitted: string[] = [];
+    let unchanged = 0;
     for (let next = byBase.get(productionMotion.revision); next; next = byBase.get(next.release.revision)) {
       for (const entry of next.entries) {
-        if (motionIds.has(entry.modelId)) reEmitted.push(`${next.release.revision}: ${entry.modelId}`);
+        if (!contractModels.has(entry.modelId)) continue;
+        if (JSON.stringify(served(entry)) === JSON.stringify(contractModels.get(entry.modelId))) unchanged += 1;
+        else reEmitted.push(`${next.release.revision}: ${entry.modelId}`);
       }
     }
+    // The comparison is live: kling-3-image-orientation-20261105 re-emits Kling 3.0 with the same descriptor.
+    expect(unchanged).toBeGreaterThan(0);
     expect(
       reEmitted,
       'a later release re-emits a motion model: read its descriptor from production again into '
