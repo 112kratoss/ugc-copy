@@ -108,13 +108,16 @@ export function getShowcaseRecommendation(item: ShowcaseFeedItem): ShowcaseRecom
  * for a single viewer watching a single clip. They are queued and flushed
  * together instead.
  *
- * A batch goes when it is full or 15 s after its first event. Nothing ranks on
- * fresher events: a feed session keeps the list it was ranked with for its next
- * pages, and the queue is sent whenever the page is hidden or left. Until the
- * server answers, the events are kept in localStorage too
- * (`feed-event-outbox.ts`), so a tab killed while a batch waits loses none.
+ * A batch goes when it is full, once 15 s pass without a new event, and a
+ * minute after its first event at the latest: a reader who keeps scrolling
+ * sends one request a minute rather than one per card. Nothing ranks on fresher
+ * events: a feed session keeps the list it was ranked with for its next pages,
+ * and the queue is sent whenever the page is hidden or left. Until the server
+ * answers, the events are kept in localStorage too (`feed-event-outbox.ts`), so
+ * a tab killed while a batch waits loses none.
  */
 const FEED_EVENT_FLUSH_DELAY_MS = 15_000;
+const FEED_EVENT_MAX_WAIT_MS = 60_000;
 /** Matches SHOWCASE_FEED_EVENT_BATCH_LIMIT, which the server enforces. */
 const FEED_EVENT_MAX_BATCH = 25;
 const FEED_EVENT_FLUSH_SIZE = FEED_EVENT_MAX_BATCH;
@@ -362,12 +365,13 @@ export async function sendShowcaseFeedEvent({
     return;
   }
 
-  if (feedEventFlushTimer === null) {
-    feedEventFlushTimer = setTimeout(() => {
-      feedEventFlushTimer = null;
-      void flushShowcaseFeedEvents();
-    }, FEED_EVENT_FLUSH_DELAY_MS);
-  }
+  // Each event starts the quiet window again, up to the longest the oldest may wait.
+  if (feedEventFlushTimer !== null) clearTimeout(feedEventFlushTimer);
+  const oldestWaitingAt = pendingFeedEvents[0]?.queuedAt ?? queued.queuedAt;
+  feedEventFlushTimer = setTimeout(() => {
+    feedEventFlushTimer = null;
+    void flushShowcaseFeedEvents();
+  }, Math.max(0, Math.min(FEED_EVENT_FLUSH_DELAY_MS, oldestWaitingAt + FEED_EVENT_MAX_WAIT_MS - Date.now())));
 }
 
 /**

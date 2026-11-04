@@ -10,6 +10,7 @@ vi.mock('expo-secure-store', () => ({
 import {
   FEED_EVENT_QUEUE_FLUSH_DELAY_MS,
   FEED_EVENT_QUEUE_FLUSH_SIZE,
+  FEED_EVENT_QUEUE_MAX_WAIT_MS,
   FEED_EVENT_QUEUE_MAX_AGE_MS,
   FEED_EVENT_QUEUE_MAX_ENTRIES,
   FEED_EVENT_QUEUE_STORAGE_KEY,
@@ -149,28 +150,42 @@ describe('feed event queue', () => {
   });
 
   // Every request costs a function, the proxy's admission and two rate-limit
-  // writes, so a reader's events wait to share one: 15 s from the oldest.
-  it('sends what a reader made 15 s after the oldest of it, however often more arrives', async () => {
+  // writes, so a reader's events wait to share one: until 15 s pass without a
+  // new one, and a minute at most.
+  it('sends what a reader made once 15 s pass without a new event', async () => {
     const start = 1_700_000_000_000;
     const harness = createHarness({ now: start });
     await harness.queue.enqueue(event(1));
     expect(harness.timers.at(-1)?.delayMs).toBe(FEED_EVENT_QUEUE_FLUSH_DELAY_MS);
     expect(FEED_EVENT_QUEUE_FLUSH_DELAY_MS).toBe(15_000);
 
-    // Events that keep coming join the batch without pushing its time back.
+    // Each new event joins the batch and starts the quiet window again.
     harness.setNow(start + 6_000);
     await harness.queue.enqueue(event(2));
-    expect(harness.timers.at(-1)?.delayMs).toBe(9_000);
+    expect(harness.timers.at(-1)?.delayMs).toBe(15_000);
     harness.setNow(start + 12_000);
     await harness.queue.enqueue(event(3));
-    expect(harness.timers.at(-1)?.delayMs).toBe(3_000);
+    expect(harness.timers.at(-1)?.delayMs).toBe(15_000);
     expect(harness.sendBatch).not.toHaveBeenCalled();
 
-    harness.setNow(start + 15_000);
+    harness.setNow(start + 27_000);
     harness.timers.at(-1)?.callback();
     await vi.waitFor(() => expect(harness.sendBatch).toHaveBeenCalledTimes(1));
     expect(harness.sendBatch.mock.calls[0]?.[0].map(({ clientEventId }) => clientEventId))
       .toEqual(['event-1', 'event-2', 'event-3']);
+  });
+
+  it('sends a batch a minute after its oldest event however busy the reader is', async () => {
+    const start = 1_700_000_000_000;
+    const harness = createHarness({ now: start });
+    expect(FEED_EVENT_QUEUE_MAX_WAIT_MS).toBe(60_000);
+    for (let second = 0; second <= 50; second += 10) {
+      harness.setNow(start + second * 1_000);
+      await harness.queue.enqueue(event(second));
+    }
+    // The last event came at 50 s: the batch is due at 60 s, not at 65 s.
+    expect(harness.timers.at(-1)?.delayMs).toBe(10_000);
+    expect(harness.sendBatch).not.toHaveBeenCalled();
   });
 
   it('sends events a killed app left behind as soon as it is restored', async () => {

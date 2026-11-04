@@ -113,8 +113,9 @@ describe('showcase feed event batching', () => {
   });
 
   // Every request costs a function, the proxy's admission and two rate-limit
-  // writes, so a batch waits 15 s for company, or goes when it is full.
-  it('sends a batch 15 s after its first event, or at once when 25 have queued', async () => {
+  // writes, so a batch waits for company: until 15 s pass without a new event,
+  // a minute at most, or until it is full.
+  it('sends a batch once 15 s pass without a new event, a minute after its first at the latest, or at once when 25 have queued', async () => {
     vi.useFakeTimers();
     try {
       const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
@@ -130,15 +131,23 @@ describe('showcase feed event batching', () => {
       await send();
       await vi.advanceTimersByTimeAsync(10_000);
       await send();
-      await vi.advanceTimersByTimeAsync(4_999);
+      await vi.advanceTimersByTimeAsync(14_999);
       expect(fetchMock).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       expect(eventRequests(fetchMock)).toHaveLength(1);
       expect(eventRequests(fetchMock)[0].events).toHaveLength(2);
 
-      for (let index = 0; index < 25; index += 1) await send();
+      // A reader who keeps going: one request a minute.
+      for (let second = 0; second < 60; second += 10) {
+        await send();
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
       expect(eventRequests(fetchMock)).toHaveLength(2);
-      expect(eventRequests(fetchMock)[1].events).toHaveLength(25);
+      expect(eventRequests(fetchMock)[1].events).toHaveLength(6);
+
+      for (let index = 0; index < 25; index += 1) await send();
+      expect(eventRequests(fetchMock)).toHaveLength(3);
+      expect(eventRequests(fetchMock)[2].events).toHaveLength(25);
     } finally {
       vi.useRealTimers();
     }

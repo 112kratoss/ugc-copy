@@ -13,15 +13,16 @@ export const FEED_EVENT_QUEUE_STORAGE_KEY = 'magicbooklet.feedEvents.queue.v1';
  */
 export const FEED_EVENT_QUEUE_FLUSH_SIZE = 25;
 /**
- * The longest a new event waits for others to join its batch, counted from the
- * oldest one waiting rather than from the latest (a reader who keeps scrolling
- * slowly would otherwise hold a batch for minutes). Nothing ranks on fresher
- * events: a feed session keeps the list it was ranked with for its next pages,
- * and the queue is sent whenever a feed screen loses focus, the app leaves the
- * foreground, the identity changes, or a feed is refreshed. Events wait in
- * AsyncStorage, so a kill loses none.
+ * A batch goes once the reader has made no new event for this long, and never
+ * later than `FEED_EVENT_QUEUE_MAX_WAIT_MS` after the oldest event in it: a
+ * reader who keeps scrolling sends one request a minute rather than one per
+ * card. Nothing ranks on fresher events: a feed session keeps the list it was
+ * ranked with for its next pages, and the queue is sent whenever a feed screen
+ * loses focus, the app leaves the foreground, the identity changes, or a feed
+ * is refreshed. Events wait in AsyncStorage, so a kill loses none.
  */
 export const FEED_EVENT_QUEUE_FLUSH_DELAY_MS = 15_000;
+export const FEED_EVENT_QUEUE_MAX_WAIT_MS = 60_000;
 export const FEED_EVENT_QUEUE_CHUNK_SIZE = 25;
 /** The soonest a timer fires again, so entries already due never spin the queue. */
 const FEED_EVENT_QUEUE_MIN_TIMER_MS = 1_000;
@@ -231,17 +232,22 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
     const retirementDeadlines = [...retiringIdentities.values()]
       .map(({ discardAt }) => discardAt);
     if (sendableEntries.length === 0 && retirementDeadlines.length === 0) return;
-    // A new event is due once the batching window has passed since it was
-    // queued, so the oldest one waiting sets the time and later ones only join
-    // its batch. A retried event is due when its backoff expires, neither
-    // earlier, which would leave the queue without another timer, nor later.
-    const nextReadyAt = sendableEntries.length > 0
-      ? Math.min(...sendableEntries.map((entry) => (
-        entry.attempts === 0
-          ? Math.max(entry.nextAttemptAt, entry.enqueuedAt + FEED_EVENT_QUEUE_FLUSH_DELAY_MS)
-          : entry.nextAttemptAt
-      )))
+    // New events are due together, once the reader has been quiet for the
+    // batching window or the oldest of them has waited the longest it may. A
+    // retried event is due when its backoff expires, neither earlier, which
+    // would leave the queue without another timer, nor later.
+    const fresh = sendableEntries.filter((entry) => entry.attempts === 0);
+    const freshDueAt = fresh.length > 0
+      ? Math.min(
+        Math.max(...fresh.map((entry) => entry.enqueuedAt)) + FEED_EVENT_QUEUE_FLUSH_DELAY_MS,
+        Math.min(...fresh.map((entry) => entry.enqueuedAt)) + FEED_EVENT_QUEUE_MAX_WAIT_MS,
+      )
       : Number.POSITIVE_INFINITY;
+    const retriedDueAt = Math.min(
+      Number.POSITIVE_INFINITY,
+      ...sendableEntries.filter((entry) => entry.attempts > 0).map((entry) => entry.nextAttemptAt),
+    );
+    const nextReadyAt = Math.min(freshDueAt, retriedDueAt);
     const nextRetirementAt = retirementDeadlines.length > 0
       ? Math.min(...retirementDeadlines)
       : Number.POSITIVE_INFINITY;
