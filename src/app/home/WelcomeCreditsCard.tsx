@@ -22,19 +22,58 @@ const SHARED_READ_TTL_MS = 5_000;
 let welcomeStatusPromise: Promise<WelcomeStatus | null> | null = null;
 let welcomeStatusReadAt = 0;
 
+/*
+ * An account this card can never be drawn for again: its name is claimed and
+ * its credits were claimed or never on offer (the statuses it does not leave;
+ * the app's `isWelcomeCreditAnswerSettled` reads them the same way). Every
+ * visit to Home asked the server again; this browser now remembers the answer
+ * for a week, per account.
+ */
+const SETTLED_KEY_PREFIX = 'magicbooklet:welcome-settled:v1:';
+const WELCOME_SETTLED_FOR_MS = 7 * 24 * 60 * 60 * 1_000;
+const SETTLED_STATUSES: ReadonlySet<string> = new Set([
+  'claimed',
+  'already_claimed',
+  'legacy_ineligible',
+  'identity_already_claimed',
+]);
+
+function isWelcomeSettledHere(userId: string) {
+  try {
+    const at = Number(window.localStorage.getItem(`${SETTLED_KEY_PREFIX}${userId}`));
+    const age = Date.now() - at;
+    return at > 0 && age >= 0 && age < WELCOME_SETTLED_FOR_MS;
+  } catch {
+    return false;
+  }
+}
+
+function rememberWelcomeSettled(userId: string) {
+  try {
+    window.localStorage.setItem(`${SETTLED_KEY_PREFIX}${userId}`, String(Date.now()));
+  } catch {
+    // Blocked storage: Home asks on its next visit, as it always did.
+  }
+}
+
 async function readWelcomeStatus(): Promise<WelcomeStatus | null> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) return null;
+  const userId = data.session?.user?.id ?? null;
+  if (userId && isWelcomeSettledHere(userId)) return null;
   const response = await fetch('/api/credits/welcome', { headers: { Authorization: `Bearer ${token}` } });
   if (!response.ok) return null;
   const body = await response.json() as Partial<WelcomeStatus>;
+  if (userId && body.identityComplete === true && typeof body.status === 'string' && SETTLED_STATUSES.has(body.status)) {
+    rememberWelcomeSettled(userId);
+  }
   return typeof body.status === 'string'
     ? {
       status: body.status,
       amount: typeof body.amount === 'number' ? body.amount : 0,
       identityComplete: typeof body.identityComplete === 'boolean' ? body.identityComplete : null,
-      userId: data.session?.user?.id ?? null,
+      userId,
     }
     : null;
 }

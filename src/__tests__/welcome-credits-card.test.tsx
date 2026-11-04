@@ -109,4 +109,45 @@ describe('WelcomeCreditsCard', () => {
         await settle();
         expect(container).toBeEmptyDOMElement();
     });
+
+    // Every visit to Home asked again, for a card that could never be drawn.
+    it.each(['already_claimed', 'claimed', 'legacy_ineligible', 'identity_already_claimed'])(
+        'stops asking for a week once an account with its name done reads %s',
+        async (status) => {
+            mockWelcome({ status, amount: 25, identityComplete: true });
+            render(<WelcomeCreditsCard />);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(1);
+
+            cleanup();
+            nextVisit();
+            const { container } = render(<WelcomeCreditsCard />);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(container).toBeEmptyDOMElement();
+
+            cleanup();
+            now += 7 * 24 * 60 * 60 * 1_000;
+            vi.spyOn(Date, 'now').mockReturnValue(now);
+            render(<WelcomeCreditsCard />);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it.each([
+        ['credits waiting', { status: 'eligible', identityComplete: true }],
+        ['a name still to choose', { status: 'legacy_ineligible', identityComplete: false }],
+        ['the programme off for now', { status: 'unavailable', identityComplete: true }],
+    ])('keeps asking at each visit with %s', async (_name, answer) => {
+        mockWelcome({ amount: 25, ...answer });
+        render(<WelcomeCreditsCard />);
+        await settle();
+
+        cleanup();
+        nextVisit();
+        render(<WelcomeCreditsCard />);
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(2);
+    });
 });
