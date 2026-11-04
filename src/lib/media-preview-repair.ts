@@ -747,6 +747,8 @@ export async function repairPostMediaRenditions(
     timeBudgetMs?: number;
     byteBudget?: number;
     lockedBy?: string;
+    /** Told the id of each `post_media` row whose rendition this run finished. */
+    onCompleted?: (postMediaId: string) => void;
   } = {},
 ): Promise<RepairSummary> {
   const batchSize = Math.max(1, Math.min(options.batchSize ?? RENDITION_REPAIR_BATCH_SIZE, 50));
@@ -779,6 +781,7 @@ export async function repairPostMediaRenditions(
     attempted += 1;
     if (await repairPostMediaRendition(supabase, row, claimed.leased ? lockedBy : undefined)) {
       completed += 1;
+      options.onCompleted?.(row.id);
     }
   }
 
@@ -1067,6 +1070,7 @@ export async function repairMediaPreviews(
       .filter((row) => canRepairPreview(row.preview_attempt_count, generations.leased))
       .map((row) => ({
         row,
+        kind: 'generation' as const,
         worker: () => repairGeneration(
           supabase,
           row,
@@ -1077,6 +1081,7 @@ export async function repairMediaPreviews(
       .filter((row) => canRepairPreview(row.preview_attempt_count, postMedia.leased))
       .map((row) => ({
         row,
+        kind: 'post_media' as const,
         worker: () => repairPostMedia(
           supabase,
           row,
@@ -1087,6 +1092,11 @@ export async function repairMediaPreviews(
   // Four lightweight poster/image workers at most; rendition work below stays
   // strictly single-file so ffmpeg and temporary disk cannot fan out.
   const results = await mapWithConcurrency(repairRows, 4, (entry) => entry.worker());
+  const finishedOf = (kind: 'generation' | 'post_media') => repairRows.flatMap((entry, index) => (
+    results[index] && entry.kind === kind ? [entry.row.id] : []
+  ));
+  const finishedGenerationIds = finishedOf('generation');
+  const finishedPostMediaIds = finishedOf('post_media');
 
   // Template demo posters are poster-frame work too, so they run with the
   // light pass — before renditions, which must never starve poster repair.
@@ -1097,6 +1107,7 @@ export async function repairMediaPreviews(
   const renditions = await repairPostMediaRenditions(supabase, {
     batchSize: options.renditionBatchSize,
     lockedBy: `${lockedBy}:rendition`,
+    onCompleted: (postMediaId) => { finishedPostMediaIds.push(postMediaId); },
   });
 
   // Teaser-only backfill uses the idle rendition slot, never another full
@@ -1113,11 +1124,68 @@ export async function repairMediaPreviews(
   const completed = results.filter(Boolean).length + templatePosters.completed + renditions.completed + teasers.completed + privatePlayback.completed;
   const attempted = results.length + templatePosters.attempted + renditions.attempted + teasers.attempted + privatePlayback.attempted;
 
-  if (completed > 0) {
+  // Every invalidation rebuilds the signed-out home page at its next visit, so
+  // only work a cached feed page can show asks for one.
+  if (await finishedWorkShowsOnTheFeed(supabase, {
+    generationIds: finishedGenerationIds,
+    postMediaIds: finishedPostMediaIds,
+    teasers: teasers.completed,
+  })) {
     (options.invalidateFeedCache ?? invalidateShowcaseFeedCache)();
   }
 
   return { attempted, completed, failed: attempted - completed };
+}
+
+/**
+ * Whether finished work shows on a page the feed's tag caches: the media of a
+ * post that is public, visible and not archived, or a creation's preview,
+ * which a post showing that creation takes as its poster while its cover has
+ * none of its own. Template demo posters and private playback encodes never
+ * do, nor do the media of a private or archived post. A finished teaser counts
+ * as yes, since its repair does not say which post it served, and so does a
+ * read that fails: one rebuild too many beats a public post kept poster-less.
+ */
+async function finishedWorkShowsOnTheFeed(
+  supabase: SupabaseClient,
+  finished: { generationIds: string[]; postMediaIds: string[]; teasers: number },
+): Promise<boolean> {
+  if (finished.teasers > 0) return true;
+  if (finished.generationIds.length === 0 && finished.postMediaIds.length === 0) return false;
+
+  try {
+    const postIds = new Set<string>();
+    if (finished.postMediaIds.length > 0) {
+      const media = await supabase
+        .from('post_media')
+        .select('post_id')
+        .in('id', finished.postMediaIds);
+      if (media.error) throw media.error;
+      for (const row of (media.data ?? []) as Array<{ post_id?: string | null }>) {
+        if (row.post_id) postIds.add(row.post_id);
+      }
+    }
+
+    const showing = [
+      ...(postIds.size > 0 ? [`id.in.(${[...postIds].join(',')})`] : []),
+      ...(finished.generationIds.length > 0 ? [`generation_id.in.(${finished.generationIds.join(',')})`] : []),
+    ];
+    if (showing.length === 0) return false;
+
+    const posts = await supabase
+      .from('posts')
+      .select('id')
+      .or(showing.join(','))
+      .eq('visibility', 'public')
+      .eq('review_status', 'visible')
+      .is('archived_at', null)
+      .limit(1);
+    if (posts.error) throw posts.error;
+    return (posts.data ?? []).length > 0;
+  } catch (error) {
+    logBackendError('media_preview_repair_feed_check_failed', { error });
+    return true;
+  }
 }
 
 export type VideoPosterRegenerationSummary = {
