@@ -186,9 +186,17 @@ export interface PostResourceBundlePanelProps {
   returnPath?: string;
   /** The host has just unlocked it (the reel): the panel says so, as it does after its own unlock. */
   announceUnlock?: boolean;
+  /**
+   * The panel unlocked or re-read the recipe for this viewer. The post page
+   * passes it: its other parts (Remix, the rail, the bottom bar) follow the
+   * viewer's recipe from the browser, because the page the server sends is the
+   * same cached one for everyone and drawing it again would not move them.
+   * Without it the panel asks the host's page to draw again from the server.
+   */
+  onAccessChange?: (bundle: BundleRefreshPayload) => void;
 }
 
-interface BundleRefreshPayload {
+export interface BundleRefreshPayload {
   viewerCanAccess: boolean;
   viewerIsOwner: boolean;
   resources: {
@@ -279,6 +287,7 @@ export default function PostResourceBundlePanel({
   remixIncluded = false,
   returnPath,
   announceUnlock = false,
+  onAccessChange,
 }: PostResourceBundlePanelProps) {
   const router = useRouter();
   const { session, credits, marketplaceSpendableCredits, updateCredits } = useAuth();
@@ -543,7 +552,12 @@ export default function PostResourceBundlePanel({
     setHasAccess(bundle.viewerCanAccess || bundle.viewerIsOwner);
     setResources(bundle.resources);
 
-    // The page's remix button is rendered from server-computed props
+    if (onAccessChange) {
+      onAccessChange(bundle);
+      return;
+    }
+
+    // The host's remix button is rendered from server-computed props
     // (canRemix), which just changed with this unlock. Re-fetch the RSC
     // payload so it appears without a hard reload; client state set above
     // survives a soft refresh.
