@@ -392,10 +392,9 @@ export async function readUploadBookkeeping(client: SupabaseClient, nowMs: numbe
   const expired = new Set<string>();
   const intentCutoff = nowMs - RECLAIM_AFTER_HOURS * HOUR_MS;
 
-  const intents = { table: 'media_upload_intents', columns: 'id, storage_path, created_at' };
   let after: string | null = null;
   for (;;) {
-    let query = client.from(intents.table).select(intents.columns).is('storage_cleared_at', null)
+    let query = client.from('media_upload_intents').select('id, storage_path, created_at').is('storage_cleared_at', null)
       .order('id', { ascending: true }).limit(PAGE_SIZE);
     if (after) query = query.gt('id', after);
     const { data, error } = await query;
