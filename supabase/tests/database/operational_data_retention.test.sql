@@ -11,7 +11,7 @@ select is(
   (
     select procedures.prosecdef
     from pg_catalog.pg_proc AS procedures
-    where procedures.oid = 'public.prune_operational_backend_data(timestamptz, integer, integer, integer, integer, integer, integer, integer)'::regprocedure
+    where procedures.oid = 'public.prune_operational_backend_data(timestamptz, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer)'::regprocedure
   ),
   true,
   'the retention sweep runs with its owner privileges'
@@ -22,7 +22,7 @@ select is(
     select pg_catalog.has_function_privilege('anon', procedures.oid, 'EXECUTE')
         or pg_catalog.has_function_privilege('authenticated', procedures.oid, 'EXECUTE')
     from pg_catalog.pg_proc AS procedures
-    where procedures.oid = 'public.prune_operational_backend_data(timestamptz, integer, integer, integer, integer, integer, integer, integer)'::regprocedure
+    where procedures.oid = 'public.prune_operational_backend_data(timestamptz, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer)'::regprocedure
   ),
   false,
   'client roles cannot invoke the retention sweep'
@@ -32,7 +32,7 @@ select is(
   (
     select pg_catalog.has_function_privilege('service_role', procedures.oid, 'EXECUTE')
     from pg_catalog.pg_proc AS procedures
-    where procedures.oid = 'public.prune_operational_backend_data(timestamptz, integer, integer, integer, integer, integer, integer, integer)'::regprocedure
+    where procedures.oid = 'public.prune_operational_backend_data(timestamptz, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer, integer)'::regprocedure
   ),
   true,
   'the service role can invoke the retention sweep'
