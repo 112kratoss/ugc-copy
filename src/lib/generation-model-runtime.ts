@@ -6,6 +6,7 @@ import {
   getImageResolutionOptions,
   isGptImage25ModelId,
   type ImageModelId,
+  type MotionModelId,
   type VideoModelId,
 } from '@/lib/models';
 import { catalogConditionMatches } from '../../ugc-mobile/lib/model-catalog/protocol';
@@ -134,10 +135,21 @@ export const WAN_REFERENCE_MAX_DURATION_SECONDS = 10;
 export const WAN_3_REFERENCE_MAX_DURATION_SECONDS = 15;
 
 /**
- * kling-2.6/motion-control: `character_orientation: image` is documented as "(max 10s
- * video)" where the video orientation allows 30. Kling 3.0 motion states no such limit.
+ * The longest clip each motion model takes under `character_orientation: image`, where the
+ * video orientation allows 30. kling-2.6/motion-control's spec says "(max 10s video)".
+ * kling-3.0/motion-control's spec names no cap, but its market page's form says the same, and
+ * so do fal.ai's and Vercel's hosts of the model (re-read 2026-11-01,
+ * docs/model-api-references/kling-3.0/kling-3.0/kling-3.0-motion-control.md).
  */
-export const KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS = 10;
+export const MOTION_IMAGE_ORIENTATION_MAX_DURATION_SECONDS: Record<string, number> = {
+  'kling-2.6': 10,
+  'kling-3.0': 10,
+};
+
+/** The quote's and the start's words for an image-oriented clip over its model's cap. */
+export function motionImageOrientationRefusal(modelId: MotionModelId): string {
+  return `${MOTION_MODELS[modelId].displayName} keeps image orientation to ${MOTION_IMAGE_ORIENTATION_MAX_DURATION_SECONDS[modelId]} seconds; use video orientation for longer clips.`;
+}
 
 /**
  * Reference-image capacity per video model, mirroring `VIDEO_INPUT_LIMITS.images` in
@@ -911,15 +923,16 @@ function validationConfigForModel(
       },
     );
   }
-  if (kind === 'motion' && modelId === 'kling-2.6') {
+  const imageOrientationMax = kind === 'motion' ? MOTION_IMAGE_ORIENTATION_MAX_DURATION_SECONDS[modelId] : undefined;
+  if (imageOrientationMax !== undefined) {
     rules.push({
       type: 'forbidden-combination',
       conditions: [
         { source: 'setting', key: 'characterOrientation', operator: 'equals', value: 'image' },
-        { source: 'setting', key: 'duration', operator: 'greaterThan', value: KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS },
+        { source: 'setting', key: 'duration', operator: 'greaterThan', value: imageOrientationMax },
       ],
       field: 'duration',
-      message: `Kling 2.6 keeps image orientation to ${KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS} seconds; use video orientation for longer clips.`,
+      message: motionImageOrientationRefusal(modelId as MotionModelId),
     });
   }
   if (kind === 'image' && modelId === 'wan-2.7-image-pro') {

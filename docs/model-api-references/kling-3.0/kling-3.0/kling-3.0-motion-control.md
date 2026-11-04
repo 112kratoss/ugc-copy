@@ -1,5 +1,19 @@
 # Motion Control API Documentation
 
+> **Re-read 2026-11-01** against the docs.kie.ai spec (`https://docs.kie.ai/market/kling/motion-control-v3.md`, and
+> its `cn/` twin) and the market page `https://kie.ai/kling-3-motion-control`; copies in
+> `archive/kling-3-image-orientation-2026-11-05/evidence/` of the parent folder (`UGC copy`). This capture is the
+> market page's parameter form, which still reads as below: `character_orientation` "'image': … (max 10s video).
+> 'video': … (max 30s video)" and `video_urls` "3-30 seconds duration depending on character_orientation". The
+> spec names no orientation cap: `character_orientation` is "(Optional) Reference source for character orientation.
+> video: Refer to video (recommended); image: Refer to image. Default value: video", and videos run "Between 3-30
+> seconds per video". Hosts of the same Kling model state the cap: fal.ai's `fal-ai/kling-video/v3/pro/motion-control`
+> ("Duration limit depends on character_orientation: 10s max for 'image', 30s max for 'video'") and Vercel's AI
+> Gateway `kling-v3.0-motion-control`, served by Kling (image mode "with output up to 10 seconds"). Shipped: image
+> orientation refuses a clip over 10 s at the quote and at the start, as Kling 2.6's does (release
+> `kling-3-image-orientation-20261105`). Also stale below: the spec asks for images over 340px (300 here) and caps
+> `input_urls` and `video_urls` at `maxItems: 1`.
+
 > Generate content using the Motion Control model
 
 ## Overview
