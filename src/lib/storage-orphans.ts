@@ -29,6 +29,9 @@
  *
  * No `server-only` import anywhere below: the CLI loads this under tsx.
  */
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
@@ -286,7 +289,8 @@ export class NameCorpus {
   private readonly chunks: string[] = [];
   private text: string | null = null;
   rows = 0;
-  readonly readAt: number;
+  /** When the read finished: what the confirm step's minute is counted from. */
+  readAt: number;
 
   constructor(readAt: number) {
     this.readAt = readAt;
@@ -381,6 +385,10 @@ export async function readNameCorpus(
     onTable?.(table.table);
     await readTable(client, table, corpus);
   }
+  // Dated from the end of the read: dated from its start, a read longer than
+  // a minute was stale on arrival, and the confirm step read it again for
+  // every entry.
+  corpus.readAt = clock();
   return corpus;
 }
 
@@ -578,6 +586,15 @@ export async function listStorageOrphans(
 }
 
 const LIST_COLUMNS = ['bucket', 'path', 'size_bytes', 'age_days', 'reason', 'object_id', 'created_at'] as const;
+
+/**
+ * Where a list goes unless asked: the system's temporary directory, never the
+ * checkout (the repository is public, and a list names accounts and their
+ * files). `.gitignore` covers the name wherever it lands.
+ */
+export function defaultOrphanListPath(listedAt: Date, directory: string = tmpdir()): string {
+  return join(directory, `storage-orphans-${listedAt.toISOString().replace(/[:.]/g, '-')}.tsv`);
+}
 
 /** A reviewable list: a header naming the project and the time, then one tab-separated line an object. */
 export function formatOrphanList(listing: OrphanListing, { projectHost, listedAt }: { projectHost: string; listedAt: Date }): string {

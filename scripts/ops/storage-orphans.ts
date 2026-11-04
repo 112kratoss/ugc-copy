@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js';
 
 import {
   confirmOrphanRemovals,
+  defaultOrphanListPath,
   formatOrphanList,
   listStorageOrphans,
   ORPHAN_MIN_AGE_MS,
@@ -17,6 +18,7 @@ Magicbooklet stored objects nothing names (service role only)
 
 Usage:
   npm run ops:storage-orphans -- list [--out <file>] [--buckets a,b] [--min-age-days 7] [--include-expired-uploads]
+      (the list goes to the system's temporary directory unless --out names a file)
   npm run ops:storage-orphans -- --confirm <list-file> [--include-expired-uploads]
 
 list (the default, reads only) writes a reviewable list (bucket, path, size, age,
@@ -126,7 +128,7 @@ export async function runStorageOrphans(
     includeExpiredUploads,
     onProgress: (message) => console.error(message),
   });
-  const outFile = stringFlag(flags, '--out') ?? `storage-orphans-${listedAt.toISOString().replace(/[:.]/g, '-')}.tsv`;
+  const outFile = stringFlag(flags, '--out') ?? defaultOrphanListPath(listedAt);
   writeFileSync(outFile, formatOrphanList(listing, { projectHost, listedAt }), { flag: 'wx' });
 
   const byBucket = new Map<string, { objects: number; bytes: number }>();

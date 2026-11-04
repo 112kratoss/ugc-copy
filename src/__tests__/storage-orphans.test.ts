@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   confirmOrphanRemovals,
+  defaultOrphanListPath,
   formatOrphanList,
   isObjectNamed,
   listStorageOrphans,
@@ -13,6 +14,7 @@ import {
   ORPHAN_SCANNED_TABLES,
   ORPHAN_SKIPPED_TABLES,
   parseOrphanList,
+  readNameCorpus,
 } from '@/lib/storage-orphans';
 
 type Row = Record<string, unknown>;
@@ -345,6 +347,22 @@ describe('listStorageOrphans', () => {
   });
 });
 
+describe('where the orphan list is written', () => {
+  // The list names accounts and their files, and the repo is public: it is
+  // written outside the checkout unless asked, and ignored if it lands there.
+  it('goes to the temporary directory by default', () => {
+    const file = defaultOrphanListPath(new Date(NOW), '/private/tmp/x');
+
+    expect(file).toBe('/private/tmp/x/storage-orphans-2026-11-04T12-00-00-000Z.tsv');
+  });
+
+  it('is ignored by git wherever it lands', () => {
+    const ignored = fs.readFileSync(path.resolve(process.cwd(), '.gitignore'), 'utf8').split('\n');
+
+    expect(ignored).toContain('storage-orphans-*.tsv');
+  });
+});
+
 describe('the orphan list file', () => {
   const listing = {
     orphans: [{
@@ -478,6 +496,16 @@ describe('confirmOrphanRemovals', () => {
       includeExpiredUploads: true,
       environment: { MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' },
     })).resolves.toMatchObject({ removed: 1 });
+  });
+
+  // A read that takes over a minute must not be read again for every entry.
+  it('dates a read of the rows from when it finished', async () => {
+    let now = 0;
+    const { client } = createClient({});
+
+    const corpus = await readNameCorpus(client, { clock: () => now, onTable: () => { now += 1_000; } });
+
+    expect(corpus.readAt).toBe(ORPHAN_SCANNED_TABLES.length * 1_000);
   });
 
   it('reads the rows again once its read is a minute old', async () => {
