@@ -119,6 +119,26 @@ describe('operational table growth', () => {
     expect(report.tables[0].liveRows).toBe(15660);
   });
 
+  it('budgets every blind spot the 2026-11-04 usage audit named', () => {
+    for (const table of [
+      'feed_viewer_daily', 'ai_usage_events', 'mobile_notifications', 'mobile_push_deliveries',
+      'playback_metrics', 'onboarding_events', 'backend_job_locks', 'auth.users', 'guest_identities',
+    ]) {
+      const budget = OPERATIONAL_TABLE_ROW_BUDGETS[table];
+      expect(budget, table).toBeDefined();
+      expect(budget.degraded, table).toBeGreaterThan(budget.warning);
+    }
+  });
+
+  it('warns when live guest identities climb, the sign guests are not being retired', () => {
+    const report = evaluateOperationalTableGrowth([
+      row('guest_identities', OPERATIONAL_TABLE_ROW_BUDGETS.guest_identities.warning),
+    ]);
+
+    expect(report.status).toBe('warning');
+    expect(report.issues[0]).toMatchObject({ tableName: 'guest_identities', code: 'OPERATIONAL_TABLE_GROWTH_ELEVATED' });
+  });
+
   it('throws when the RPC fails so the dashboard reports rather than hides it', async () => {
     const client = {
       rpc: async () => ({ data: null, error: new Error('permission denied') }),
