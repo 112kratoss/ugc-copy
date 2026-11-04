@@ -405,7 +405,7 @@ describe('AppShellClient', () => {
     // Invite & Earn the account menu's: each was named in both before.
     const sideNavigation = screen.getByRole('complementary', { name: 'Primary navigation' });
     expect(within(sideNavigation).getAllByRole('link').map((link) => link.textContent)).toEqual([
-      'magicbookletCreator studio',
+      'Magic BookletCreator studio',
       'Home',
       'Explore',
       'Marketplace',
@@ -900,7 +900,7 @@ describe('AppShellClient', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
 
       expect(drawerLinks()).toEqual([
-        ['magicbooklet', '/', null],
+        ['Magic Booklet', '/', null],
         ['Home', '/', null],
         ['Explore', '/showcase', null],
         ['Marketplace', '/marketplace', null],
@@ -967,7 +967,7 @@ describe('AppShellClient', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
 
       expect(drawerLinks().map(([label]) => label)).toEqual([
-        'magicbooklet', 'Home', 'Explore', 'Marketplace', 'Studio', 'Workflow Canvas', 'Profile', 'Help & feedback',
+        'Magic Booklet', 'Home', 'Explore', 'Marketplace', 'Studio', 'Workflow Canvas', 'Profile', 'Help & feedback',
       ]);
     });
   });

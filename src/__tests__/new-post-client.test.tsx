@@ -4391,10 +4391,10 @@ describe('NewPostClient', () => {
       render(<NewPostClient />);
 
       await waitFor(() => (
-        expect(screen.getByRole('button', { name: /^made with/i })).toHaveTextContent('magicbooklet · Nano Banana Pro')
+        expect(screen.getByRole('button', { name: /^made with/i })).toHaveTextContent('Magic Booklet · Nano Banana Pro')
       ));
       // The creation's card above it names the model the same way.
-      expect(screen.getByText('Created in magicbooklet with Nano Banana Pro.')).toBeInTheDocument();
+      expect(screen.getByText('Created in Magic Booklet with Nano Banana Pro.')).toBeInTheDocument();
     });
 
     // /api/generations names a template result's model `template-workflow`:
@@ -4418,10 +4418,10 @@ describe('NewPostClient', () => {
 
       await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Rider transformation'));
       const madeWith = screen.getByRole('button', { name: /^made with/i });
-      expect(madeWith).toHaveTextContent('magicbooklet');
+      expect(madeWith).toHaveTextContent('Magic Booklet');
       expect(madeWith).not.toHaveTextContent('·');
       expect(madeWith).not.toHaveTextContent('template-workflow');
-      expect(screen.getByText('Created in magicbooklet.')).toBeInTheDocument();
+      expect(screen.getByText('Created in Magic Booklet.')).toBeInTheDocument();
       expect(screen.queryByText(/template-workflow/)).not.toBeInTheDocument();
     });
 

@@ -142,7 +142,7 @@ export const GENERATION_ROUTE_RETIRED_CODE = 'GENERATION_ROUTE_RETIRED';
 
 /** Said to an app too old to start on POST /api/generations, and to any other caller. */
 export const GENERATION_ROUTE_RETIRED_MESSAGE =
-  'This way of starting a creation has been retired. Update Magicbooklet to keep creating, or start again from the current creator.';
+  'This way of starting a creation has been retired. Update Magic Booklet to keep creating, or start again from the current creator.';
 
 /**
  * A start on a per-kind route (product decision 21, 2026-10-17). Every supported

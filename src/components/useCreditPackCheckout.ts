@@ -117,7 +117,7 @@ export function useCreditPackCheckout({ onSignedOut, onBuyer }: {
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'magicbooklet',
+        name: 'Magic Booklet',
         description: `Purchase ${planId} credits`,
         order_id: orderData.orderId,
         handler: async function (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) {

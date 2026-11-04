@@ -86,7 +86,7 @@ import {
   POST_RESOURCE_WEB_CASH_MIN_TOKENS,
 } from '@/lib/post-resource-commerce';
 import { formatRecipeMoneyLine } from '@/lib/recipe-money-line';
-import { slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
+import { displaySourceToolLabel, slugifySourceTool, type SourceToolOption } from '@/lib/source-tools';
 import { buildGenerationPostSourceTools } from '@/lib/generation-post-source-tools';
 import { getPostModelDisplayName } from '@/lib/post-feed-presentation';
 import {
@@ -1428,7 +1428,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const bodyFieldLabel = proofMode === 'text' ? 'Post text' : 'Story';
   const primaryMadeWith = madeWithRows.find((row) => row.toolLabel.trim());
   const madeWithSummary = primaryMadeWith
-    ? [primaryMadeWith.toolLabel.trim(), primaryMadeWith.modelLabel.trim()].filter(Boolean).join(' · ')
+    ? [displaySourceToolLabel(primaryMadeWith.toolLabel.trim()), primaryMadeWith.modelLabel.trim()].filter(Boolean).join(' · ')
     : 'Add tool and model';
 
   useEffect(() => () => {
@@ -3419,10 +3419,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                           <div>
                             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Generated media</div>
                             <div className="mt-2 text-lg font-semibold text-white">
-                              {prefilledGeneration?.title || 'magicbooklet creation'}
+                              {prefilledGeneration?.title || 'Magic Booklet creation'}
                             </div>
                             <p className="mt-2 max-w-xl text-sm leading-6 text-zinc-300">
-                              Created in magicbooklet{generatedModelName ? ` with ${generatedModelName}` : ''}.
+                              Created in Magic Booklet{generatedModelName ? ` with ${generatedModelName}` : ''}.
                             </p>
                           </div>
                           <div className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-50">
@@ -3791,7 +3791,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     {isMadeWithOpen ? (
                       <div id={madeWithPanelId} className="mt-3 rounded-2xl border border-sky-300/15 bg-sky-400/5 p-4">
                         <p className="max-w-2xl text-sm leading-6 text-zinc-300">
-                          Add the tool and model you used.{hasGeneratedProof ? ' magicbooklet is already set.' : ''}
+                          Add the tool and model you used.{hasGeneratedProof ? ' Magic Booklet is already set.' : ''}
                         </p>
                         <p className="mt-1 text-xs leading-5 text-zinc-500">
                           Popular tools appear first. Search to find more editors, workflows, API platforms, or older tools.
@@ -3805,7 +3805,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                             const toolOptions: CreatableComboboxOption[] = [
                               ...sourceToolsData.map((tool) => ({
                                 value: tool.slug,
-                                label: tool.label,
+                                label: displaySourceToolLabel(tool.label),
                                 keywords: [
                                   ...(tool.aliases ?? []),
                                   tool.toolType ?? 'platform',
@@ -3873,7 +3873,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                               <div key={row.id} className="flex flex-wrap items-center gap-2">
                                 <CreatableCombobox
                                   ariaLabel={`Tool ${index + 1}`}
-                                  value={row.toolLabel}
+                                  value={hasGeneratedProof ? displaySourceToolLabel(row.toolLabel) : row.toolLabel}
                                   options={toolOptions}
                                   placeholder="Choose or search tool"
                                   disabled={hasGeneratedProof}

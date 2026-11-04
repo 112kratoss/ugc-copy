@@ -160,7 +160,7 @@ export function CreatorPageViewer({
     // The answer an unknown handle gets, its title included.
     return (
       <>
-        <title>Creator Not Found | magicbooklet</title>
+        <title>Creator Not Found | Magic Booklet</title>
         <CreatorNotFound />
       </>
     );

@@ -7,7 +7,7 @@ import { createNoIndexMetadata } from '@/lib/seo';
 
 export const metadata: Metadata = createNoIndexMetadata(
   'Credit history',
-  'Every credit added to and used from your magicbooklet balance: purchases, rewards, refunds and creations.'
+  'Every credit added to and used from your Magic Booklet balance: purchases, rewards, refunds and creations.'
 );
 
 /** A signed-out visitor is sent to sign in and brought back here. */

@@ -63,14 +63,14 @@ export async function generateMetadata({ params }: TemplatePageProps): Promise<M
   if (access.kind === 'unread') {
     return createMetadata({
       title: 'Media Template',
-      description: 'Make a community format your own on magicbooklet.',
+      description: 'Make a community format your own on Magic Booklet.',
       path,
     });
   }
   const { template } = access;
   return createMetadata({
     title: template.name,
-    description: template.description?.trim() || `Make the ${template.name} format your own on magicbooklet.`,
+    description: template.description?.trim() || `Make the ${template.name} format your own on Magic Booklet.`,
     path,
     noIndex: access.kind === 'owner-only',
   });

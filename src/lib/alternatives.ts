@@ -64,17 +64,17 @@ export const ALTERNATIVES: AlternativeEntry[] = [
         chooseThem:
             'Choose Arcads if your creative is presenter-led ads and little else, you want a large actor library without building personas yourself, and a predictable monthly bill matters more than paying only for what you use.',
         chooseUs:
-            'Choose magicbooklet if your output volume is uneven, if you need images and staged video as well as presenter work, or if you want to see and control what each generation costs.',
+            'Choose Magic Booklet if your output volume is uneven, if you need images and staged video as well as presenter work, or if you want to see and control what each generation costs.',
         faqs: [
             {
-                question: 'Is magicbooklet a direct replacement for Arcads?',
+                question: 'Is Magic Booklet a direct replacement for Arcads?',
                 answer:
-                    'Not exactly. Arcads is a focused tool for presenter-led UGC ads with a large ready-made actor library. magicbooklet is a broader studio — image, video, motion transfer, and workflows — priced per generation. If presenter ads are all you make, Arcads is the more specialised fit.',
+                    'Not exactly. Arcads is a focused tool for presenter-led UGC ads with a large ready-made actor library. Magic Booklet is a broader studio — image, video, motion transfer, and workflows — priced per generation. If presenter ads are all you make, Arcads is the more specialised fit.',
             },
             {
                 question: 'How does the pricing differ?',
                 answer:
-                    'Arcads sells monthly plans that include a set number of videos. magicbooklet sells credits that do not expire, and every generation has a published credit cost you see before running it. Uneven output favours credits; steady, predictable output favours a subscription.',
+                    'Arcads sells monthly plans that include a set number of videos. Magic Booklet sells credits that do not expire, and every generation has a published credit cost you see before running it. Uneven output favours credits; steady, predictable output favours a subscription.',
             },
             {
                 question: 'Do I need to bring my own AI actor?',
@@ -111,10 +111,10 @@ export const ALTERNATIVES: AlternativeEntry[] = [
         chooseThem:
             'Choose Creatify if you want the fastest path from a product URL to a first draft, you value a large template library, and pushing creative directly into ad platforms is part of your workflow.',
         chooseUs:
-            'Choose magicbooklet if your testing is bursty rather than steady, if you want per-generation costs visible before you commit, or if consistent persona identity across a campaign matters more than template variety.',
+            'Choose Magic Booklet if your testing is bursty rather than steady, if you want per-generation costs visible before you commit, or if consistent persona identity across a campaign matters more than template variety.',
         faqs: [
             {
-                question: 'Does magicbooklet generate ads from a product URL?',
+                question: 'Does Magic Booklet generate ads from a product URL?',
                 answer:
                     'No. You supply the inputs — a prompt, a reference frame, a persona, a script. That is more work up front and more control over the result. URL-to-video is genuinely faster to a first draft, and Creatify is better at it.',
             },
@@ -158,20 +158,20 @@ export const ALTERNATIVES: AlternativeEntry[] = [
         chooseThem:
             'Choose HeyGen if avatar realism and lip sync are the deciding factor, if you need translation into many languages with re-synced lips, or if you need enterprise team and brand controls.',
         chooseUs:
-            'Choose magicbooklet if you are making ad creative rather than corporate video, if you need images and staged scenes alongside presenter work, or if you would rather pay per generation than per seat.',
+            'Choose Magic Booklet if you are making ad creative rather than corporate video, if you need images and staged scenes alongside presenter work, or if you would rather pay per generation than per seat.',
         faqs: [
             {
-                question: 'Is magicbooklet cheaper than HeyGen?',
+                question: 'Is Magic Booklet cheaper than HeyGen?',
                 answer:
-                    'It depends entirely on volume and team size, and anyone claiming otherwise without knowing both is guessing. HeyGen prices per seat and plan; magicbooklet prices per generation with credits that do not expire. A small team generating heavily tends to favour the second; a large team generating occasionally tends to favour the first.',
+                    'It depends entirely on volume and team size, and anyone claiming otherwise without knowing both is guessing. HeyGen prices per seat and plan; Magic Booklet prices per generation with credits that do not expire. A small team generating heavily tends to favour the second; a large team generating occasionally tends to favour the first.',
             },
             {
-                question: 'Does magicbooklet do avatar translation?',
+                question: 'Does Magic Booklet do avatar translation?',
                 answer:
                     'No. Multilingual avatar video with re-synced lip movement is a HeyGen strength and not something this product targets. You can produce a separate motion-transfer clip per language from a per-language reference performance, which is more manual.',
             },
             {
-                question: 'What does magicbooklet do that HeyGen does not?',
+                question: 'What does Magic Booklet do that HeyGen does not?',
                 answer:
                     'Image generation and text-to-video for staged product scenes sit alongside presenter work, with reusable workflows chaining them, and every model publishes its per-generation cost up front.',
             },

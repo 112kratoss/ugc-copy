@@ -53,7 +53,7 @@
       "status": 426,
       "response": {
         "code": "MOBILE_UPDATE_REQUIRED",
-        "error": "Update Magicbooklet to continue using this service.",
+        "error": "Update Magic Booklet to continue using this service.",
         "compatibility": {
           "currentApiVersion": 1,
           "minimumApiVersion": 1,

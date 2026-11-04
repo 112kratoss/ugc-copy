@@ -30,7 +30,7 @@ export async function contentPreferencesResponse(request: Request) {
     // iOS opt-in is deliberately website-only. Cookie identity and same-origin
     // protection prevent a mobile bearer call from enabling the preference.
     if (request.headers.has('authorization') || request.headers.get('origin') !== new URL(request.url).origin) {
-      return json({ error: 'Manage mature content on the Magicbooklet website.' }, 403);
+      return json({ error: 'Manage mature content on the Magic Booklet website.' }, 403);
     }
     const body = await request.json();
     if (!body || typeof body.showMature !== 'boolean' || (body.showMature && body.confirmAdult !== true)) {

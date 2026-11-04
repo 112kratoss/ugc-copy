@@ -314,7 +314,7 @@ function Brand({ compact = false }: { compact?: boolean }) {
         <WandSparkles className="h-5 w-5" strokeWidth={2.4} aria-hidden />
       </span>
       <span className="min-w-0">
-        <span className="block truncate text-[15px] font-extrabold tracking-tight">magicbooklet</span>
+        <span className="block truncate text-[15px] font-extrabold tracking-tight">Magic Booklet</span>
         {!compact ? (
           <span className="mt-0.5 block text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--ui-text-faint)]">
             Creator studio
@@ -564,7 +564,7 @@ const AppShellFrame = memo(function AppShellFrame({
               <input
                 type="search"
                 name="q"
-                placeholder="Search Magicbooklet"
+                placeholder="Search Magic Booklet"
                 aria-label="Search creators, posts, and recipes"
                 autoComplete="off"
                 className="h-12 min-w-0 flex-1 bg-transparent text-sm text-[var(--ui-text-primary)] outline-none placeholder:text-[var(--ui-text-faint)]"

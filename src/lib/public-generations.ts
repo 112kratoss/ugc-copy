@@ -160,7 +160,7 @@ export async function getPublicGenerationDetail(id: string): Promise<PublicGener
 
   const title = generation.title?.trim() || 'Untitled Creation';
   const prompt = generation.prompt?.trim() || '';
-  const description = generation.description?.trim() || prompt || `Explore ${title} on magicbooklet.`;
+  const description = generation.description?.trim() || prompt || `Explore ${title} on Magic Booklet.`;
 
   return {
     id: generation.id,

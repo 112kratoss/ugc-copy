@@ -87,7 +87,10 @@ describe('what Explore and the marketplace write into a first load', () => {
   it('hands the tool filters only the slug and label each chip uses', () => {
     const options = toSourceToolFilterOptions(FALLBACK_SOURCE_TOOLS);
 
-    expect(options).toEqual(FALLBACK_SOURCE_TOOLS.map((tool) => ({ slug: tool.slug, label: tool.label })));
+    expect(options).toEqual(FALLBACK_SOURCE_TOOLS.map((tool) => ({
+      slug: tool.slug,
+      label: tool.slug === 'magicbooklet' ? 'Magic Booklet' : tool.label,
+    })));
     expect(options.every((option) => Object.keys(option).join(',') === 'slug,label')).toBe(true);
   });
 

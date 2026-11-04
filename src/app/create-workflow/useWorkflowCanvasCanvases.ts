@@ -305,7 +305,7 @@ export function useWorkflowCanvasCanvases({
             method: 'POST',
             headers: await authHeadersRef.current(),
             body: JSON.stringify({
-              title: 'magicbooklet workflow canvas',
+              title: 'Magic Booklet workflow canvas',
               graph: createStarterGraph(),
             }),
           });

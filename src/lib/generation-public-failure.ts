@@ -11,7 +11,7 @@ export type GenerationStartFailureCode =
 /** Shown when `generation-prompt-safety` refuses a prompt; kept here so client
  * code can reuse the copy without bundling the rules. */
 export const GENERATION_PROMPT_BLOCKED_MESSAGE =
-  'Magicbooklet can’t create this. We don’t make nude, undressed or see-through images of people, '
+  'Magic Booklet can’t create this. We don’t make nude, undressed or see-through images of people, '
   + 'or anything sexual involving minors. Edit your prompt and try again. No credits were used.';
 
 /** Shown while a submission's outcome is unknown and its credits are confirmed

@@ -463,7 +463,7 @@ function getSourceToolBySlug(
     return null;
   }
 
-  if (normalizedSlug === 'emptybooklet') {
+  if (normalizedSlug === 'emptybooklet' || isAppSourceToolLabel(normalizedSlug)) {
     return catalog.find((tool) => tool.slug === APP_SOURCE_TOOL.slug) ?? APP_SOURCE_TOOL;
   }
 
@@ -479,7 +479,7 @@ function getSourceToolByLabel(
     return null;
   }
 
-  if (normalizedLabel === 'emptybooklet') {
+  if (normalizedLabel === 'emptybooklet' || isAppSourceToolLabel(normalizedLabel)) {
     return catalog.find((tool) => tool.slug === APP_SOURCE_TOOL.slug) ?? APP_SOURCE_TOOL;
   }
 
@@ -493,8 +493,25 @@ export function getSourceToolOptionFromCatalog(
   return getSourceToolBySlug(catalog, slug);
 }
 
+/**
+ * The app's own tool is stored as `magicbooklet` (slug and label, on every post
+ * made here), and the stored value stays so that saved posts keep matching it.
+ * What a person reads is the product's name, "Magic Booklet" (owner,
+ * 2026-11-05). Pass a stored label through this wherever it is shown, and
+ * never store the result.
+ */
+export const APP_SOURCE_TOOL_DISPLAY_LABEL = 'Magic Booklet';
+
+export function isAppSourceToolLabel(label: string | null | undefined): boolean {
+  return (label ?? '').replace(/[\s-]+/g, '').toLowerCase() === APP_SOURCE_TOOL.slug;
+}
+
+export function displaySourceToolLabel(label: string): string {
+  return isAppSourceToolLabel(label) ? APP_SOURCE_TOOL_DISPLAY_LABEL : label;
+}
+
 export function toSourceToolFilterOptions(catalog: SourceToolOption[]): SourceToolFilterOption[] {
-  return catalog.map(({ slug, label }) => ({ slug, label }));
+  return catalog.map(({ slug, label }) => ({ slug, label: displaySourceToolLabel(label) }));
 }
 
 export function normalizeSourceToolInputWithCatalog(

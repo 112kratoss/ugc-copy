@@ -215,7 +215,7 @@ export async function authorizeAppleAccountDeletion({
   }
   if (!expectedAppleSubject.trim()) {
     throw new AppleAccountDeletionError(
-      'This Apple sign-in could not be matched to your Magicbooklet account. Your account was not deleted.',
+      'This Apple sign-in could not be matched to your Magic Booklet account. Your account was not deleted.',
       'ACCOUNT_REAUTH_MISMATCH',
       403,
       false,
@@ -290,7 +290,7 @@ export async function authorizeAppleAccountDeletion({
   }
   if (!appleSubject || appleSubject !== expectedAppleSubject) {
     throw new AppleAccountDeletionError(
-      'You continued with a different Apple account. Your Magicbooklet account was not deleted.',
+      'You continued with a different Apple account. Your Magic Booklet account was not deleted.',
       'ACCOUNT_REAUTH_MISMATCH',
       403,
       false,

@@ -447,7 +447,7 @@ describe('/api/generate-image route', () => {
     expectPrivateNoStoreTraceHeaders(response, 'image-retired-1');
     expect(await response.json()).toEqual({
       code: 'GENERATION_ROUTE_RETIRED',
-      error: expect.stringContaining('Update Magicbooklet'),
+      error: expect.stringContaining('Update Magic Booklet'),
     });
     expect(createUserClientMock).not.toHaveBeenCalled();
     expect(rawCreateClientMock).not.toHaveBeenCalled();

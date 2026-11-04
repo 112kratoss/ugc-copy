@@ -210,7 +210,7 @@ describe('creator page', () => {
       await renderPage();
 
       expect(await screen.findByRole('heading', { level: 1, name: 'Creator not found' })).toBeInTheDocument();
-      expect(document.title).toBe('Creator Not Found | magicbooklet');
+      expect(document.title).toBe('Creator Not Found | Magic Booklet');
       expect(screen.queryByTestId('creator-content-tabs')).not.toBeInTheDocument();
       expect(screen.queryByText('Creator bio')).not.toBeInTheDocument();
       // The page's own API, with the viewer's session, one post only.

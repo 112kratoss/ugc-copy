@@ -62,8 +62,8 @@ describe('ProfileShareButton', () => {
 
     await waitFor(() => {
       expect(shareMock).toHaveBeenCalledWith({
-        title: 'Creator Name on magicbooklet',
-        text: "Browse Creator Name's creator profile on magicbooklet.",
+        title: 'Creator Name on Magic Booklet',
+        text: "Browse Creator Name's creator profile on Magic Booklet.",
         url: shareUrl,
       });
     });

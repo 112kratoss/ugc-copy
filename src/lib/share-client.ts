@@ -101,18 +101,18 @@ export async function sharePublicGeneration({
   const shareText =
     normalizedTitle
       ? viewerIsOwner
-        ? `Look what I created on magicbooklet: ${normalizedTitle}`
-        : `See "${normalizedTitle}" on magicbooklet`
+        ? `Look what I created on Magic Booklet: ${normalizedTitle}`
+        : `See "${normalizedTitle}" on Magic Booklet`
       : normalizedDescription && normalizedDescription.length <= 80
         ? normalizedDescription
         : viewerIsOwner
-          ? `Look what I created on magicbooklet: ${buildShowcaseDetailPath(generationId)}`
-          : `See this creation on magicbooklet: ${buildShowcaseDetailPath(generationId)}`;
+          ? `Look what I created on Magic Booklet: ${buildShowcaseDetailPath(generationId)}`
+          : `See this creation on Magic Booklet: ${buildShowcaseDetailPath(generationId)}`;
 
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
       await navigator.share({
-        title: normalizedTitle || 'magicbooklet creation',
+        title: normalizedTitle || 'Magic Booklet creation',
         text: shareText,
         url,
       });
@@ -167,10 +167,10 @@ export async function shareCreatorProfile({
   const url = shareUrl.toString();
   const normalizedDisplayName = displayName.trim() || username.trim();
   const normalizedUsername = username.trim().replace(/^@+/, '').toLowerCase();
-  const title = `${normalizedDisplayName} on magicbooklet`;
+  const title = `${normalizedDisplayName} on Magic Booklet`;
   const text = normalizedUsername
-    ? `Browse ${normalizedDisplayName}'s creator profile on magicbooklet.`
-    : 'Browse this creator profile on magicbooklet.';
+    ? `Browse ${normalizedDisplayName}'s creator profile on Magic Booklet.`
+    : 'Browse this creator profile on Magic Booklet.';
 
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {

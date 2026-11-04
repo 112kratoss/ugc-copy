@@ -117,7 +117,7 @@ function renderConsumerTestSetupWindow(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="dark" />
-    <title>${isError ? 'Test setup needs attention' : 'Preparing consumer test'} · Magicbooklet</title>
+    <title>${isError ? 'Test setup needs attention' : 'Preparing consumer test'} · Magic Booklet</title>
     <style>
       * { box-sizing: border-box; }
       body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #070707; color: #fafafa; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -136,7 +136,7 @@ function renderConsumerTestSetupWindow(
   </head>
   <body>
     <main aria-live="polite">
-      <div class="brand">Magicbooklet · Creator test</div>
+      <div class="brand">Magic Booklet · Creator test</div>
       <div class="mark" aria-hidden="true">${isError ? '!' : '<div class="spinner"></div>'}</div>
       <h1>${isError ? 'We couldn\u2019t prepare this test' : 'Preparing your consumer test'}</h1>
       <p>${isError

@@ -73,7 +73,7 @@ describe('creator profile readiness', () => {
     expect(validateProfileUpdate({
       username: 'custom-creator',
       avatarUrl: 'https://tracker.example/avatar.png',
-    }).fieldErrors.avatarUrl).toMatch(/Magicbooklet/i);
+    }).fieldErrors.avatarUrl).toMatch(/Magic Booklet/i);
     expect(validateProfileUpdate({
       username: 'custom-creator',
       displayName: 'Custom Creator',

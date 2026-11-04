@@ -67,6 +67,7 @@ import {
   type RazorpayCheckoutVerificationResult,
 } from '@/lib/razorpay-checkout-client';
 import { getCurrentInternalPath } from '@/lib/share';
+import { displaySourceToolLabel } from '@/lib/source-tools';
 import { type ShowcaseFeedItem, type ShowcaseMediaItem, getShowcaseItemMediaItems } from '@/lib/showcase';
 
 declare global {
@@ -1129,7 +1130,7 @@ export default function ShowcaseReelViewer({
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'Magicbooklet recipe',
+        name: 'Magic Booklet recipe',
         description: orderData.bundleTitle || item.asset.title,
         order_id: orderData.orderId,
         handler: async (response: {
@@ -1529,7 +1530,7 @@ export default function ShowcaseReelViewer({
           <TextPostPreviewCard
             title={item.title}
             summary={summary}
-            sourceLabel={item.sourceTool || item.model}
+            sourceLabel={item.sourceTool ? displaySourceToolLabel(item.sourceTool) : item.model}
             dateLabel={dateLabel}
             saveCount={item.saveCount}
             remixCount={item.remixCount}
@@ -1962,7 +1963,7 @@ export default function ShowcaseReelViewer({
                     {dateLabel}
                   </span>
                   <span className="capitalize">{item.category}</span>
-                  {item.sourceTool ? <span>{item.sourceTool}</span> : null}
+                  {item.sourceTool ? <span>{displaySourceToolLabel(item.sourceTool)}</span> : null}
                 </div>
 
                 {detailsLede ? (

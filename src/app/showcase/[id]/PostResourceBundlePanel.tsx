@@ -721,7 +721,7 @@ export default function PostResourceBundlePanel({
         key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
         amount: orderData.amount,
         currency: orderData.currency,
-        name: 'Magicbooklet recipe',
+        name: 'Magic Booklet recipe',
         description: orderData.bundleTitle || title,
         order_id: orderData.orderId,
         handler: async (response: {

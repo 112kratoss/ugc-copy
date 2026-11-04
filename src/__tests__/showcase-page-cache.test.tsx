@@ -287,7 +287,7 @@ describe('ShowcasePage cacheability', () => {
       initialFeed: { items: Array<{ mediaItems: Array<Record<string, unknown>> }> };
       sourceToolOptions: unknown;
     };
-    expect(props.sourceToolOptions).toEqual([{ slug: 'magicbooklet', label: 'magicbooklet' }]);
+    expect(props.sourceToolOptions).toEqual([{ slug: 'magicbooklet', label: 'Magic Booklet' }]);
     expect(props.initialFeed.items[0]?.mediaItems[0]).toEqual({
       id: 'image-cover',
       url: 'https://example.com/image.webp',

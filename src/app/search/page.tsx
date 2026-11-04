@@ -14,7 +14,7 @@ function first(value: string | string[] | undefined) {
 
 export const metadata: Metadata = createMetadata({
   title: 'Search',
-  description: 'Find Magicbooklet creators, public posts, and reusable AI recipes.',
+  description: 'Find Magic Booklet creators, public posts, and reusable AI recipes.',
   path: '/search',
   noIndex: true,
 });

@@ -108,7 +108,7 @@ describe('InviteClient', () => {
 
     await waitFor(() => {
       expect(shareMock).toHaveBeenCalledWith({
-        title: 'Join me on magicbooklet',
+        title: 'Join me on Magic Booklet',
         text: buildReferralShareText(5),
         url: summary.shareUrl,
       });
