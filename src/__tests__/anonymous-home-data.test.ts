@@ -74,12 +74,12 @@ describe('the signed-out home reads', () => {
     vi.unstubAllEnvs();
   });
 
-  it('caches the feed and the shelf for the hour the page keeps, under the feed tag', async () => {
+  it('caches the feed and the shelf for the 15 minutes the page keeps, under the feed tag', async () => {
     const { ANONYMOUS_HOME_REVALIDATE_SECONDS } = await loadModule();
 
-    expect(ANONYMOUS_HOME_REVALIDATE_SECONDS).toBe(3600);
+    expect(ANONYMOUS_HOME_REVALIDATE_SECONDS).toBe(900);
     for (const name of ['anonymous-home-feed-v1', 'anonymous-home-shelf-v1']) {
-      expect(cachedRead(name).options).toEqual({ revalidate: 3600, tags: [SHOWCASE_FEED_CACHE_TAG] });
+      expect(cachedRead(name).options).toEqual({ revalidate: 900, tags: [SHOWCASE_FEED_CACHE_TAG] });
     }
   });
 

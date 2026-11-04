@@ -35,11 +35,13 @@ import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 /**
  * How long the signed-out `/` is reused between rebuilds: its `revalidate`,
  * which `src/app/page.tsx` must state as a literal (a test holds the two
- * equal). No longer: the feed signs a poster-less post's private preview for
- * an hour (`resolveOwnedStoredMediaUrl`), and a page kept past that would
- * serve dead links.
+ * equal). Fifteen minutes: at most 96 rebuilds a day beside the invalidations,
+ * against about 1,250 at one minute, and the bound on everything no tag
+ * reaches (counts, catalog changes, a take-down whose invalidation failed).
+ * It also keeps a page 45 minutes clear of the hour a poster-less post's
+ * signed private preview lasts (`resolveOwnedStoredMediaUrl`).
  */
-export const ANONYMOUS_HOME_REVALIDATE_SECONDS = 3600;
+export const ANONYMOUS_HOME_REVALIDATE_SECONDS = 900;
 
 /** How soon a signed-out home built without its feed or its shelf is rebuilt. */
 export const ANONYMOUS_HOME_RETRY_SECONDS = 60;
@@ -48,7 +50,7 @@ export const ANONYMOUS_HOME_RETRY_SECONDS = 60;
  * The deployment this server is, falling back to its release where Vercel
  * names none. Part of every key here: the Data Cache outlives a deploy, and a
  * deployment, even a configuration-only one of the same commit, must not
- * build `/` from an hour-old entry another one wrote, whatever shape that one
+ * build `/` from an entry another one wrote, whatever shape that one
  * gave a card and however old its signed links are.
  */
 function currentDeployment(): string {
@@ -81,7 +83,7 @@ const readCachedAnonymousHomeShelf = unstable_cache(
  * Holds nothing. Read by a render that could not read a section, it reports a
  * one-minute `revalidate`, which Next keeps as that page's window (see the
  * top of this file), so a home built without its feed is rebuilt a minute
- * later, not an hour later.
+ * later, not a whole window later.
  */
 const readRetryWindowMarker = unstable_cache(
   async () => true,

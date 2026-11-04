@@ -38,13 +38,13 @@ export const metadata: Metadata = createMetadata({
  * Keep this module's import graph free of `next/headers`, server auth reads,
  * and `searchParams` — pinned by anonymous-home-page-cache.test.tsx.
  *
- * Rebuilt at most once an hour (`ANONYMOUS_HOME_REVALIDATE_SECONDS`; Next
- * needs the literal here), and at the next visit after any change that
+ * Rebuilt at most every 15 minutes (`ANONYMOUS_HOME_REVALIDATE_SECONDS`;
+ * Next needs the literal here), and at the next visit after any change that
  * invalidates the feed's tag, which its reads carry (`anonymous-home-data.ts`).
  * At 60 seconds, Sentry's once-a-minute uptime check rebuilt it about 8,200
  * times a week, most of the Vercel usage.
  */
-export const revalidate = 3600;
+export const revalidate = 900;
 
 export default function Home() {
   return <AnonymousHome />;

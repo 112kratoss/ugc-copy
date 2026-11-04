@@ -158,8 +158,8 @@ function AnonymousFooter() {
 }
 
 export default function AnonymousHome() {
-  // The feed and the shelf through the page's own hour-long caches: read
-  // straight from theirs, they held `/` to a one-minute rebuild
+  // The feed and the shelf through caches kept as long as the page: read
+  // straight from their own, they held `/` to a one-minute rebuild
   // (anonymous-home-data.ts).
   const feedPromise = loadAnonymousHomeFeed();
   const modelsPromise = loadHomeWhatsNewModels();

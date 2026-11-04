@@ -230,7 +230,7 @@ describe('Anonymous home cacheability', () => {
     expect(pageModule.metadata).toBeDefined();
   });
 
-  it('is rebuilt at most once an hour, though the feed and shelf caches it reads keep a minute and five', async () => {
+  it('is rebuilt at most every 15 minutes, though the feed and shelf caches it reads keep a minute and five', async () => {
     const { unstable_cache } = await import('next/cache');
     const { ANONYMOUS_HOME_REVALIDATE_SECONDS } = await import('@/lib/anonymous-home-data');
     // Stand-ins for the feed's own 60-second cache and the shelf's 5-minute
@@ -258,11 +258,11 @@ describe('Anonymous home cacheability', () => {
     expect(html).toContain('feed-client');
     expect(html).toContain('Make this');
     // Next needs the literal in the page; the reads are cached for as long.
-    expect(pageModule.revalidate).toBe(3600);
+    expect(pageModule.revalidate).toBe(900);
     expect(pageModule.revalidate).toBe(ANONYMOUS_HOME_REVALIDATE_SECONDS);
-    expect(renderedWindow(pageModule.revalidate)).toBe(3600);
+    expect(renderedWindow(pageModule.revalidate)).toBe(900);
     // The feed's tag is on the page, so a publish, an edit, a delete or a
-    // take-down rebuilds it at its next visit rather than within the hour.
+    // take-down rebuilds it at its next visit rather than within the window.
     expect([...renderCache.tags]).toEqual([SHOWCASE_FEED_CACHE_TAG]);
   });
 
