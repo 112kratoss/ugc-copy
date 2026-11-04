@@ -2,7 +2,19 @@ import { pathToFileURL } from 'node:url';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-/** Only a different, valid build ID may be retried during alias propagation. */
+/**
+ * A request that timed out is retried, like a different but valid build id during alias
+ * propagation: the first request after a promotion can reach a cold instance and outlive its
+ * 5 s budget. Both are retried only inside the one verification window and attempt limit. Every
+ * other request failure (a redirect, a refused connection, a non-2xx answer, a body that is not
+ * the health JSON) still ends the check at once.
+ */
+function isRequestTimeout(error) {
+  return error instanceof Error || (typeof DOMException !== 'undefined' && error instanceof DOMException)
+    ? error.name === 'TimeoutError' || error.name === 'AbortError'
+    : false;
+}
+
 export async function verifyProductionHealth({
   origin, releaseSha, secret, timeoutMs = 60000, intervalMs = 5000,
   fetchImpl = fetch, now = Date.now, sleep = delay, log = console.log,
@@ -16,6 +28,7 @@ export async function verifyProductionHealth({
   }
   const deadline = now() + timeoutMs;
   let attempts = 0;
+  let lastRequestTimedOut = false;
   while (now() < deadline && attempts < 12) {
     attempts++;
     url.search = new URLSearchParams({ release: releaseSha, attempt: String(attempts) }).toString();
@@ -25,9 +38,16 @@ export async function verifyProductionHealth({
         headers: { Authorization: `Bearer ${secret}`, 'Cache-Control': 'no-cache' },
         redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - now()))),
       });
-    } catch {
-      throw Error('Protected production health request failed');
+    } catch (error) {
+      if (!isRequestTimeout(error)) throw Error('Protected production health request failed');
+      lastRequestTimedOut = true;
+      log(`Protected health request ${attempts} timed out; retrying inside the verification window.`);
+      const remaining = deadline - now();
+      if (remaining <= 0 || attempts >= 12) break;
+      await sleep(Math.min(intervalMs, remaining));
+      continue;
     }
+    lastRequestTimedOut = false;
     if (!response.ok) throw Error(`Protected production health returned HTTP ${response.status}`);
     let body;
     try { body = await response.json(); } catch { throw Error('Protected production health returned invalid JSON'); }
@@ -45,6 +65,7 @@ export async function verifyProductionHealth({
     if (remaining <= 0 || attempts >= 12) break;
     await sleep(Math.min(intervalMs, remaining));
   }
+  if (lastRequestTimedOut) throw Error('Protected production health request failed');
   throw Error('Protected production health did not serve the released commit within its verification window');
 }
 
