@@ -158,24 +158,33 @@ function readCreditHistoryRow(value: unknown): CreditHistoryRow {
   // The function's columns are pinned by supabase/tests/database/credit_history.test.sql.
   // A row outside them means the database and this build disagree, and a money
   // list with a row quietly dropped would be wrong, so the page fails instead.
-  if (
-    typeof entryId !== 'string' || !ENTRY_ID_PATTERN.test(entryId)
-    || typeof kind !== 'string' || !KIND_SET.has(kind)
-    || typeof amount !== 'number' || !Number.isInteger(amount)
-    || typeof occurredAt !== 'string' || !isDatabaseTimestamp(occurredAt)
-    || typeof title !== 'string' || !title.trim()
-    || (detail !== null && typeof detail !== 'string')
-  ) {
-    throw new Error('list_credit_history returned a row outside its contract');
+  // The message names the fields that broke and the source prefix of the entry
+  // id ("purchase", "grant"), never values, so the route's log says where to look.
+  const broken = [
+    typeof entryId !== 'string' || !ENTRY_ID_PATTERN.test(entryId) ? 'entry_id' : null,
+    typeof kind !== 'string' || !KIND_SET.has(kind) ? 'kind' : null,
+    typeof amount !== 'number' || !Number.isInteger(amount) ? 'amount' : null,
+    typeof occurredAt !== 'string' || !isDatabaseTimestamp(occurredAt) ? 'occurred_at' : null,
+    typeof title !== 'string' || !title.trim() ? 'title' : null,
+    detail !== null && typeof detail !== 'string' ? 'detail' : null,
+  ].filter((field): field is string => field !== null);
+
+  if (broken.length > 0) {
+    const source = typeof entryId === 'string' ? /^[a-z][a-z-]{0,39}(?=:)/.exec(entryId)?.[0] : undefined;
+    throw new Error(
+      `list_credit_history returned a row outside its contract (${broken.join(', ')}; source ${source ?? 'unknown'})`,
+    );
   }
 
+  // Every field was checked above; the list form of the check does not narrow.
+  const text = detail as string | null;
   return {
-    entry_id: entryId,
+    entry_id: entryId as string,
     kind: kind as CreditHistoryKind,
-    amount,
-    occurred_at: occurredAt,
-    title,
-    detail: detail === null || !detail.trim() ? null : detail,
+    amount: amount as number,
+    occurred_at: occurredAt as string,
+    title: title as string,
+    detail: text === null || !text.trim() ? null : text,
   };
 }
 
@@ -190,11 +199,76 @@ function toCreditHistoryEntry(row: CreditHistoryRow): CreditHistoryEntry {
   };
 }
 
+/** list_credit_history refuses a set of more than 100 ids, the account's own included. */
+export const CREDIT_HISTORY_IDS_PER_CALL = 100;
+
+/**
+ * The sets one page is read in: each starts with the account, as the database
+ * requires, and carries up to 99 of its linked guests. One set in the common case.
+ * An account can collect more guests than that (one signed in from a fresh guest
+ * session 156 times by 2026-11-04), and the whole set used to fail the page.
+ */
+function splitIdentitySet(userIds: string[]): string[][] {
+  const [accountId, ...linked] = userIds;
+  if (linked.length < CREDIT_HISTORY_IDS_PER_CALL) return [userIds];
+
+  const sets: string[][] = [];
+  for (let start = 0; start < linked.length; start += CREDIT_HISTORY_IDS_PER_CALL - 1) {
+    sets.push([accountId, ...linked.slice(start, start + CREDIT_HISTORY_IDS_PER_CALL - 1)]);
+  }
+  return sets;
+}
+
+/**
+ * Newest first, then by entry id in byte order: the database's own order
+ * (`occurred_at DESC, entry_id COLLATE "C" DESC`). Times compare to the
+ * microsecond, which a JS Date would drop.
+ */
+function compareNewestFirst(a: CreditHistoryRow, b: CreditHistoryRow): number {
+  const [aSeconds, aMicros] = timestampKey(a.occurred_at);
+  const [bSeconds, bMicros] = timestampKey(b.occurred_at);
+  if (aSeconds !== bSeconds) return bSeconds - aSeconds;
+  if (aMicros !== bMicros) return bMicros - aMicros;
+  if (a.entry_id === b.entry_id) return 0;
+  return a.entry_id < b.entry_id ? 1 : -1;
+}
+
+function timestampKey(value: string): [number, number] {
+  const fraction = /\.(\d{1,6})/.exec(value)?.[1] ?? '';
+  return [Date.parse(value.replace(/\.\d{1,6}/, '')), Number(fraction.padEnd(6, '0'))];
+}
+
+async function readCreditHistoryRows(
+  client: SupabaseClient,
+  userIds: string[],
+  cursor: CreditHistoryCursor | null,
+  rowLimit: number,
+): Promise<CreditHistoryRow[]> {
+  const { data, error } = await client.rpc('list_credit_history', {
+    p_user_ids: userIds,
+    p_before_occurred_at: cursor?.occurredAt ?? null,
+    p_before_id: cursor?.id ?? null,
+    p_limit: rowLimit,
+  });
+
+  // The logger keeps an Error's message and drops its cause, so the database's
+  // words travel in the message.
+  if (error) throw new Error(`list_credit_history failed: ${error.message}`);
+  if (!Array.isArray(data)) throw new Error('list_credit_history returned no rows array');
+
+  return data.slice(0, rowLimit).map(readCreditHistoryRow);
+}
+
 /**
  * One page of the history of `userIds`: the caller first, then the guest
  * identities linked to it (`resolveLinkedAccountIds`). The database refuses any
  * other set. `client` is the service-role client: the function is closed to
  * every other role.
+ *
+ * A set larger than one call takes is read in several, each the account plus a
+ * share of its guests, and merged: every call answers the same keyset with its
+ * own newest rows, so the newest of all of them is the page. The account's own
+ * rows come back from every call and are kept once.
  */
 export async function listCreditHistory({
   client,
@@ -208,20 +282,21 @@ export async function listCreditHistory({
   limit: number;
 }): Promise<CreditHistoryPage> {
   const pageLimit = Math.min(CREDIT_HISTORY_MAX_LIMIT, Math.max(1, Math.trunc(limit)));
-  const { data, error } = await client.rpc('list_credit_history', {
-    p_user_ids: userIds,
-    p_before_occurred_at: cursor?.occurredAt ?? null,
-    p_before_id: cursor?.id ?? null,
-    // One more than the page, to know whether another page follows.
-    p_limit: pageLimit + 1,
-  });
+  // One more than the page, to know whether another page follows.
+  const rowLimit = pageLimit + 1;
 
-  // The logger keeps an Error's message and drops its cause, so the database's
-  // words travel in the message.
-  if (error) throw new Error(`list_credit_history failed: ${error.message}`);
-  if (!Array.isArray(data)) throw new Error('list_credit_history returned no rows array');
+  const sets = splitIdentitySet(userIds);
+  const answers = await Promise.all(sets.map((set) => readCreditHistoryRows(client, set, cursor, rowLimit)));
 
-  const rows = data.slice(0, pageLimit + 1).map(readCreditHistoryRow);
+  let rows = answers[0];
+  if (answers.length > 1) {
+    const byId = new Map<string, CreditHistoryRow>();
+    for (const answer of answers) {
+      for (const entry of answer) byId.set(entry.entry_id, entry);
+    }
+    rows = [...byId.values()].sort(compareNewestFirst).slice(0, rowLimit);
+  }
+
   const pageRows = rows.slice(0, pageLimit);
   const last = pageRows.at(-1);
 
