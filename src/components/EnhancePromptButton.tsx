@@ -9,6 +9,7 @@ import {
     type PromptEnhancementResult,
     requestPromptEnhancement,
 } from '@/components/enhancePromptClient';
+import { useAuth } from '@/components/AuthProvider';
 import { SegmentedControl } from '@/components/DesignSystem';
 import { useUnmountSignal } from '@/lib/use-unmount-signal';
 
@@ -62,7 +63,8 @@ interface EnhancePromptButtonProps {
     onRequireAccount?: () => void;
     /**
      * The account whose form this is (the creators' `formAccount`): a press goes out only under its
-     * session. Left out, the press is the account its first ask finds.
+     * session. Left out, the account the page has signed in (the workflow editor's), and with none,
+     * the one its first ask finds.
      */
     account?: string | null;
 }
@@ -106,6 +108,8 @@ export default function EnhancePromptButton({
     // go in, and its last callbacks would still write back the shot list as it stood then, or set
     // the balance an earlier account's answer brings. Its press asks no more once it has gone.
     const unmountSignal = useUnmountSignal();
+    const { session } = useAuth();
+    const pressAccount = account ?? session?.user?.id ?? null;
 
     const canEnhance = prompt.trim().length > 0 && !isEnhancing && !disabled;
     // The undo chip only makes sense while the textbox still holds the enhancement.
@@ -158,7 +162,7 @@ export default function EnhancePromptButton({
                 selectedModel,
                 prompt: sentPrompt,
                 context: { ...requestContext, enhancementLevel: level },
-            }, { account, signal: gone });
+            }, { account: pressAccount, signal: gone });
 
             if (gone.aborted) {
                 readBalanceAgain();

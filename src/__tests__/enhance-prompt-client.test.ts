@@ -294,6 +294,23 @@ describe('one press, one key', () => {
       await expect(pressed).resolves.toMatchObject({ enhancedPrompt: 'Paid for before the button went' });
     });
 
+    it('sends nothing when the signal is aborted while the session is being read', async () => {
+      const asks = stubAsks([answer('Never asked for')]);
+      const { supabase } = await import('@/lib/supabase');
+      let readSession: () => void = () => undefined;
+      vi.mocked(supabase.auth.getSession).mockImplementationOnce(() => new Promise((resolve) => {
+        readSession = () => resolve({ data: { session: browser.session } } as Awaited<ReturnType<typeof supabase.auth.getSession>>);
+      }));
+      const gone = new AbortController();
+
+      const pressed = requestPromptEnhancement(poster, { signal: gone.signal }).catch((error: unknown) => error);
+      gone.abort();
+      readSession();
+
+      expect(await pressed).toBeInstanceOf(Error);
+      expect(asks).toHaveLength(0);
+    });
+
     it('sends nothing when the signal is aborted before the first ask', async () => {
       const asks = stubAsks([answer('Never asked for')]);
 

@@ -40,6 +40,13 @@ vi.mock('@/components/enhancePromptClient', () => {
   };
 });
 
+// The account the page has signed in, which the editor's presses go out under.
+const pageAuth = vi.hoisted(() => ({ session: { user: { id: 'user-1' } } as { user: { id: string } } | null }));
+vi.mock('@/components/AuthProvider', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/components/AuthProvider')>(),
+  useAuth: () => ({ session: pageAuth.session }),
+}));
+
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -1029,7 +1036,7 @@ describe('WorkflowNodeEditors', () => {
       expect(requestPromptEnhancementMock).toHaveBeenCalledWith(expect.objectContaining({
         medium: 'audio',
         selectedModel: 'text-to-speech-turbo-2-5',
-      }));
+      }), { account: 'user-1' });
     });
   });
 
@@ -1067,7 +1074,7 @@ describe('WorkflowNodeEditors', () => {
           googleSearch: false,
           referenceImageCount: 0,
         }),
-      }));
+      }), { account: 'user-1' });
     });
 
     expect(screen.getByDisplayValue('Refined still-image prompt')).toBeInTheDocument();
@@ -1144,7 +1151,7 @@ describe('WorkflowNodeEditors', () => {
           hasStartImage: true,
           referenceImageCount: 1,
         }),
-      }));
+      }), { account: 'user-1' });
     });
 
     expect(screen.getByDisplayValue('Enhanced video branch prompt')).toBeInTheDocument();

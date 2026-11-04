@@ -9,6 +9,12 @@ import {
 } from '@/components/enhancePromptClient';
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 
+// The account the page has signed in, which a press given no account of its own goes out under.
+const page = vi.hoisted(() => ({ session: null as { user: { id: string } } | null }));
+vi.mock('@/components/AuthProvider', () => ({
+  useAuth: () => ({ session: page.session }),
+}));
+
 vi.mock('@/components/enhancePromptClient', () => ({
   PromptEnhancementError: class PromptEnhancementError extends Error {
     remainingCredits?: number;
@@ -201,6 +207,23 @@ describe('EnhancePromptButton', () => {
 
       view.unmount();
       expect(press?.signal?.aborted).toBe(true);
+    });
+
+    // The workflow editor gives none: its press is the page's signed-in account's, not whichever
+    // account another tab has signed in since.
+    it('presses for the page’s signed-in account when given none', async () => {
+      answerLater();
+      vi.mocked(requestPromptEnhancement).mockClear();
+      page.session = { user: { id: 'user-7' } };
+      try {
+        render(<EnhancePromptButton prompt="A red fox" onEnhanced={vi.fn()} {...shared} />);
+        fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+        await act(async () => undefined);
+      } finally {
+        page.session = null;
+      }
+
+      expect(vi.mocked(requestPromptEnhancement).mock.calls[0][1]).toMatchObject({ account: 'user-7' });
     });
 
     // Frames go up before the request: a button gone by then sends nothing to pay for.
