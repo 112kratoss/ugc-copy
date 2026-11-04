@@ -23,8 +23,11 @@ list (the default, reads only) writes a reviewable list (bucket, path, size, age
 reason) of every object no content row names, by its name or, for a derived file,
 its base. It leaves out objects younger than seven days, objects upload
 bookkeeping still tracks, the recipe-copy sweep's folders and retained buyer
-copies. Expired staged uploads (what MEDIA_UPLOAD_RECLAIM_ABANDONED gates) are
-listed only with --include-expired-uploads, under reason expired_upload.
+copies. Staged uploads (the uploads bucket) and objects of expired upload
+bookkeeping are listed only with --include-expired-uploads, under reason
+expired_upload, and the flag is refused unless the reclaim interlock is on
+(MEDIA_UPLOAD_RECLAIM_ABANDONED=true and the app floor at its safe version):
+an app's draft can hold an uploads path no row records.
 
 --confirm removes exactly the objects of a reviewed list, through the Storage
 API, checking each again right before its removal (the same object, its age, the

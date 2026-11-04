@@ -268,11 +268,16 @@ describe('listStorageOrphans', () => {
       placeholder: 1,
       recipe_copy_sweep: 1,
       retained_buyer_copy: 1,
-      upload_bookkeeping: 2,
+      staged_upload: 2,
     });
   });
 
-  it('lists an expired staged upload only when asked, under its own reason', async () => {
+  // MEDIA_UPLOAD_RECLAIM_ABANDONED and the app floor gate deleting staged
+  // uploads (media-upload-reclaim-service): an app's remix draft can hold an
+  // uploads path no row records, and never expires.
+  const reclaimOn = { MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' };
+
+  it('lists an expired staged upload only when asked with the reclaim interlock on, under its own reason', async () => {
     const { client } = createClient({
       buckets: { uploads: [{ path: `${USER}/abandoned-upload.png` }] },
       tables: {
@@ -280,9 +285,38 @@ describe('listStorageOrphans', () => {
       },
     });
 
-    const listing = await listStorageOrphans(client, { clock, includeExpiredUploads: true });
+    const listing = await listStorageOrphans(client, { clock, includeExpiredUploads: true, environment: reclaimOn });
 
     expect(listing.orphans.map(({ reason }) => reason)).toEqual(['expired_upload']);
+  });
+
+  it('refuses to list expired staged uploads while the reclaim interlock is off', async () => {
+    const { client, reads } = createClient({ buckets: { uploads: [{ path: `${USER}/abandoned-upload.png` }] } });
+
+    await expect(listStorageOrphans(client, { clock, includeExpiredUploads: true, environment: {} }))
+      .rejects.toThrow('MEDIA_UPLOAD_RECLAIM_ABANDONED');
+    expect(reads).toEqual([]);
+  });
+
+  it('leaves out a staged upload no intent tracks, as the reclaim interlock does', async () => {
+    const buckets = { uploads: [{ path: `${USER}/before-intents.png` }, { path: `${USER}/cleared-intent.png` }] };
+    const tables = {
+      media_upload_intents: [{ id: 'c', storage_path: `${USER}/cleared-intent.png`, created_at: OLD, storage_cleared_at: OLD }],
+    };
+
+    const quiet = await listStorageOrphans(createClient({ buckets, tables }).client, { clock });
+    expect(quiet.orphans).toEqual([]);
+    expect(quiet.kept).toEqual({ staged_upload: 2 });
+
+    const asked = await listStorageOrphans(createClient({ buckets, tables }).client, {
+      clock,
+      includeExpiredUploads: true,
+      environment: reclaimOn,
+    });
+    expect(asked.orphans.map(({ path: objectPath, reason }) => [objectPath, reason])).toEqual([
+      [`${USER}/before-intents.png`, 'expired_upload'],
+      [`${USER}/cleared-intent.png`, 'expired_upload'],
+    ]);
   });
 
   it('reads a table past one page', async () => {
@@ -421,6 +455,29 @@ describe('confirmOrphanRemovals', () => {
 
     expect(counts).toMatchObject({ excluded: 2, removed: 0 });
     expect(mock.removals).toEqual([]);
+  });
+
+  it('never removes a staged upload unless asked with the reclaim interlock on', async () => {
+    const entry = { bucket: 'uploads', path: `${USER}/before-intents.png`, id: 'object-1' };
+    const quiet = createClient({ buckets: { uploads: [{ path: entry.path, id: 'object-1' }] } });
+
+    await expect(confirmOrphanRemovals(quiet.client, listOf(entry), { projectHost: 'abc.supabase.co', clock: () => NOW }))
+      .resolves.toMatchObject({ excluded: 1, removed: 0 });
+    await expect(confirmOrphanRemovals(quiet.client, listOf(entry), {
+      projectHost: 'abc.supabase.co',
+      clock: () => NOW,
+      includeExpiredUploads: true,
+      environment: {},
+    })).rejects.toThrow('MEDIA_UPLOAD_RECLAIM_ABANDONED');
+    expect(quiet.removals).toEqual([]);
+
+    const asked = createClient({ buckets: { uploads: [{ path: entry.path, id: 'object-1' }] } });
+    await expect(confirmOrphanRemovals(asked.client, listOf(entry), {
+      projectHost: 'abc.supabase.co',
+      clock: () => NOW,
+      includeExpiredUploads: true,
+      environment: { MEDIA_UPLOAD_RECLAIM_ABANDONED: 'true' },
+    })).resolves.toMatchObject({ removed: 1 });
   });
 
   it('reads the rows again once its read is a minute old', async () => {

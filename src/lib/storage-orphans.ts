@@ -10,10 +10,14 @@
  * base is. Left out of the listing, whatever the rows say:
  * - objects younger than seven days;
  * - objects upload bookkeeping still tracks (a live `media_upload_intents` or
- *   `upload_byte_reservations` row): their sweeps own them. An expired one is
- *   listed only when asked for (`includeExpiredUploads`), under its own reason,
- *   since a never-consumed staged upload is what MEDIA_UPLOAD_RECLAIM_ABANDONED
- *   gates;
+ *   `upload_byte_reservations` row): their sweeps own them;
+ * - every staged upload (the `uploads` bucket) and every object an expired
+ *   reservation tracks, unless asked for (`includeExpiredUploads`) while the
+ *   reclaim interlock is on (`getMediaUploadReclaimPolicy().effectiveEnabled`:
+ *   MEDIA_UPLOAD_RECLAIM_ABANDONED=true and the app floor). An app's draft can
+ *   hold an uploads path no row records and never expires, which is what that
+ *   interlock protects; staged uploads from before the intents table have no
+ *   row at all. They are then listed under their own reason;
  * - the recipe-copy sweep's two folders (`recipeFileKind`): that job owns them;
  * - retained buyer copies (`post_resource_files/retained/`), whatever names them.
  *
@@ -28,6 +32,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
+import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import { recipeFileKind } from '@/lib/recipe-copy-sweep-policy';
 import { STORAGE_BUCKET_IDS } from '@/lib/storage-buckets';
 import { iterateStorageObjectsV2 } from '@/lib/storage-list-v2';
@@ -452,7 +457,34 @@ export async function listStoredObjects(
   return objects;
 }
 
-type Exclusion = 'placeholder' | 'not_canonical' | 'too_young' | 'recipe_copy_sweep' | 'retained_buyer_copy' | 'upload_bookkeeping';
+type Exclusion =
+  | 'placeholder'
+  | 'not_canonical'
+  | 'too_young'
+  | 'recipe_copy_sweep'
+  | 'retained_buyer_copy'
+  | 'upload_bookkeeping'
+  | 'staged_upload';
+
+const STAGED_UPLOADS_BUCKET = 'uploads';
+
+/**
+ * Whether expired staged uploads may be listed and removed: only when asked,
+ * and never past the reclaim interlock, whatever the caller asks (the same
+ * rule `reclaimAbandonedMediaUploads` holds at its delete boundary).
+ */
+function expiredUploadsAllowed(
+  includeExpiredUploads: boolean,
+  environment: Record<string, string | undefined>,
+): boolean {
+  if (!includeExpiredUploads) return false;
+  if (!getMediaUploadReclaimPolicy({ environment }).effectiveEnabled) {
+    throw new Error(
+      'Expired staged uploads are listed and removed only while the reclaim interlock is on: MEDIA_UPLOAD_RECLAIM_ABANDONED=true and the app floor at or past its safe version.',
+    );
+  }
+  return true;
+}
 
 function exclusionOf(
   object: StoredObject,
@@ -475,6 +507,7 @@ function exclusionOf(
   if (object.bucket === 'post_resource_files' && object.path.startsWith('retained/')) return 'retained_buyer_copy';
   const key = `${object.bucket}/${object.path}`;
   if (bookkeeping.live.has(key)) return 'upload_bookkeeping';
+  if (object.bucket === STAGED_UPLOADS_BUCKET && !includeExpiredUploads) return 'staged_upload';
   if (bookkeeping.expired.has(key) && !includeExpiredUploads) return 'upload_bookkeeping';
   return null;
 }
@@ -486,16 +519,20 @@ export async function listStorageOrphans(
     clock = Date.now,
     minAgeMs = ORPHAN_MIN_AGE_MS,
     buckets = STORAGE_BUCKET_IDS,
-    includeExpiredUploads = false,
+    includeExpiredUploads: askedForExpiredUploads = false,
+    environment = process.env,
     onProgress,
   }: {
     clock?: () => number;
     minAgeMs?: number;
     buckets?: readonly string[];
     includeExpiredUploads?: boolean;
+    /** Where the reclaim interlock's flag is read from. */
+    environment?: Record<string, string | undefined>;
     onProgress?: (message: string) => void;
   } = {},
 ): Promise<OrphanListing> {
+  const includeExpiredUploads = expiredUploadsAllowed(askedForExpiredUploads, environment);
   const effectiveMinAgeMs = Math.max(minAgeMs, ORPHAN_MIN_AGE_MS);
   onProgress?.('Listing stored objects');
   const objects = await listStoredObjects(client, buckets);
@@ -531,7 +568,8 @@ export async function listStorageOrphans(
       keep('named');
       continue;
     }
-    const expiredUpload = bookkeeping.expired.has(`${object.bucket}/${object.path}`);
+    const expiredUpload = object.bucket === STAGED_UPLOADS_BUCKET
+      || bookkeeping.expired.has(`${object.bucket}/${object.path}`);
     listing.orphans.push({ ...object, reason: expiredUpload ? 'expired_upload' : 'unnamed' });
   }
 
@@ -621,17 +659,21 @@ export async function confirmOrphanRemovals(
   {
     projectHost,
     clock = Date.now,
-    includeExpiredUploads = false,
+    includeExpiredUploads: askedForExpiredUploads = false,
+    environment = process.env,
     onResult,
     readCorpus = readNameCorpus,
   }: {
     projectHost: string;
     clock?: () => number;
     includeExpiredUploads?: boolean;
+    /** Where the reclaim interlock's flag is read from. */
+    environment?: Record<string, string | undefined>;
     onResult?: (entry: ParsedOrphanList['entries'][number], outcome: OrphanRemovalOutcome) => void;
     readCorpus?: typeof readNameCorpus;
   },
 ): Promise<Record<OrphanRemovalOutcome, number>> {
+  const includeExpiredUploads = expiredUploadsAllowed(askedForExpiredUploads, environment);
   if (list.projectHost !== projectHost) {
     throw new Error(`The list was made for ${list.projectHost}, not ${projectHost}.`);
   }
