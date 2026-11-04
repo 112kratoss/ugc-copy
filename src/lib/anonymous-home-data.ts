@@ -63,27 +63,54 @@ function currentDeployment(): string {
 
 const SIGNED_OUT = { viewerUserId: null, isAnonymous: false } as const;
 
+/** A cached read with the time it finished, which tells a fresh read from a kept one. */
+type BuiltRead<T> = { builtAt: number; value: T };
+
+async function built<T>(read: Promise<T>): Promise<BuiltRead<T>> {
+  const value = await read;
+  return { builtAt: Date.now(), value };
+}
+
 const readCachedAnonymousHomeFeed = unstable_cache(
-  () => readHomeFeed({ viewerUserId: null, chip: getFeedChip(undefined) }),
-  ['anonymous-home-feed-v1', currentDeployment()],
+  () => built(readHomeFeed({ viewerUserId: null, chip: getFeedChip(undefined) })),
+  ['anonymous-home-feed-v2', currentDeployment()],
   { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
 );
 
 const readCachedAnonymousHomeShelf = unstable_cache(
-  async (): Promise<HomeShelfItem[]> => {
-    // The throwing read, so a failure is never kept for the window.
-    const items = await loadHomeShelfForApi(SIGNED_OUT);
-    return items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item));
-  },
-  ['anonymous-home-shelf-v1', currentDeployment()],
+  // The throwing read, so a failure is never kept for the window.
+  () => built(loadHomeShelfForApi(SIGNED_OUT).then((items): HomeShelfItem[] => (
+    items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item))
+  ))),
+  ['anonymous-home-shelf-v2', currentDeployment()],
   { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
 );
 
 /**
- * Holds nothing. Read by a render that could not read a section, it reports a
- * one-minute `revalidate`, which Next keeps as that page's window (see the
- * top of this file), so a home built without its feed is rebuilt a minute
- * later, not a whole window later.
+ * Whether a cached read came back older than its window. When the refresh of
+ * an expired entry throws, Next logs the error and hands back the old value
+ * (`unstable-cache.js`, the revalidation's catch), so during a rebuild this is
+ * how a failed read arrives. A request render (a stale session on `/home`)
+ * is also handed the old value while the refresh runs behind it; there the
+ * retry marker changes nothing and the log line is the only cost.
+ */
+function isKeptPastItsWindow(builtAt: number): boolean {
+  return Date.now() - builtAt > ANONYMOUS_HOME_REVALIDATE_SECONDS * 1000;
+}
+
+function keptReadFields(builtAt: number) {
+  return {
+    reason: 'kept_past_window',
+    builtAt: new Date(builtAt).toISOString(),
+    ageSeconds: Math.round((Date.now() - builtAt) / 1000),
+  };
+}
+
+/**
+ * Holds nothing. Read by a render that could not read a section, or that was
+ * handed a section kept past its window, it reports a one-minute `revalidate`,
+ * which Next keeps as that page's window (see the top of this file), so the
+ * home is rebuilt a minute later, not a whole window later.
  */
 const readRetryWindowMarker = unstable_cache(
   async () => true,
@@ -104,22 +131,35 @@ async function retryAnonymousHomeSoon() {
  * it cannot be read: the page then hands the lane to the client.
  */
 export async function loadAnonymousHomeFeed(): Promise<ShowcaseFeedPage | null> {
+  let read: BuiltRead<ShowcaseFeedPage>;
   try {
-    return await readCachedAnonymousHomeFeed();
+    read = await readCachedAnonymousHomeFeed();
   } catch (error) {
     logBackendError('home_dashboard_feed_load_failed', { error });
     await retryAnonymousHomeSoon();
     return null;
   }
+  if (isKeptPastItsWindow(read.builtAt)) {
+    // Better than no feed, but not for a whole window.
+    logBackendError('home_dashboard_feed_load_failed', keptReadFields(read.builtAt));
+    await retryAnonymousHomeSoon();
+  }
+  return read.value;
 }
 
 /** The "Make this" shelf as a signed-out visitor sees it, or none when it cannot be read. */
 export async function loadAnonymousHomeShelf(): Promise<HomeShelfItem[]> {
+  let read: BuiltRead<HomeShelfItem[]>;
   try {
-    return await readCachedAnonymousHomeShelf();
+    read = await readCachedAnonymousHomeShelf();
   } catch (error) {
     logBackendError('anonymous_home_shelf_load_failed', { error });
     await retryAnonymousHomeSoon();
     return [];
   }
+  if (isKeptPastItsWindow(read.builtAt)) {
+    logBackendError('anonymous_home_shelf_load_failed', keptReadFields(read.builtAt));
+    await retryAnonymousHomeSoon();
+  }
+  return read.value;
 }

@@ -27,6 +27,8 @@ const loadHomeShelfMock = vi.fn();
 const renderCache = vi.hoisted(() => ({
   shortestRevalidate: Number.POSITIVE_INFINITY,
   tags: new Set<string>(),
+  /** What Next hands back for a key instead of running its read: an entry it already holds. */
+  kept: new Map<string, unknown>(),
 }));
 
 vi.mock('next/cache', async () => {
@@ -36,7 +38,7 @@ vi.mock('next/cache', async () => {
     revalidateTag: vi.fn(),
     unstable_cache: <Args extends unknown[], Result>(
       read: (...args: Args) => Promise<Result>,
-      _keyParts?: string[],
+      keyParts?: string[],
       options: { revalidate?: number | false; tags?: string[] } = {},
     ) => (...args: Args): Promise<Result> => {
       if (!insideCachedRead.getStore()) {
@@ -45,6 +47,8 @@ vi.mock('next/cache', async () => {
         }
         for (const tag of options.tags ?? []) renderCache.tags.add(tag);
       }
+      const kept = renderCache.kept.get(keyParts?.[0] ?? '');
+      if (kept !== undefined) return Promise.resolve(kept as Result);
       return insideCachedRead.run(true, () => read(...args));
     },
   };
@@ -192,6 +196,7 @@ describe('Anonymous home cacheability', () => {
     loadHomeShelfMock.mockResolvedValue(SHELF);
     renderCache.shortestRevalidate = Number.POSITIVE_INFINITY;
     renderCache.tags.clear();
+    renderCache.kept.clear();
     getServerAuthStateMock.mockImplementation(() => {
       throw new Error('Anonymous home must not read server auth — / must stay statically prerenderable');
     });
@@ -274,6 +279,36 @@ describe('Anonymous home cacheability', () => {
 
     expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({ initialFeed: null }));
     expect(renderedWindow(pageModule.revalidate)).toBe(60);
+  });
+
+  // Next answers a refresh that throws with the entry it held: the page shows
+  // that feed rather than none, and must not keep it for a whole window.
+  it('shows a feed kept past its window when its refresh fails, and is rebuilt a minute later', async () => {
+    const keptFeed = {
+      items: [buildFeedItem('kept')],
+      availableTools: [],
+      pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 },
+    };
+    renderCache.kept.set('anonymous-home-feed-v2', { builtAt: Date.now() - 16 * 60_000, value: keptFeed });
+    const pageModule = await import('@/app/page');
+
+    await renderPageToHtml(<pageModule.default />);
+
+    expect(getShowcaseFeedPageMock).not.toHaveBeenCalled();
+    expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({ initialFeed: keptFeed }));
+    expect(renderedWindow(pageModule.revalidate)).toBe(60);
+  });
+
+  it('keeps its whole window for an entry still inside it', async () => {
+    renderCache.kept.set('anonymous-home-feed-v2', {
+      builtAt: Date.now() - 14 * 60_000,
+      value: { items: [buildFeedItem('a')], availableTools: [], pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 } },
+    });
+    const pageModule = await import('@/app/page');
+
+    await renderPageToHtml(<pageModule.default />);
+
+    expect(renderedWindow(pageModule.revalidate)).toBe(900);
   });
 
   it('is rebuilt a minute later when it had to go without its shelf', async () => {
