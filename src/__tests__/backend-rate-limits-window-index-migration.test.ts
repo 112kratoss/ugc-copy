@@ -25,11 +25,16 @@ describe('the backend rate-limit window index migration', () => {
     );
   });
 
-  it('waits at most five seconds for the build\'s lock, as the repository\'s index builds do', () => {
-    expect(sql.indexOf("SET LOCAL lock_timeout = '5s';")).toBeGreaterThanOrEqual(0);
-    expect(sql.indexOf("SET LOCAL lock_timeout = '5s';")).toBeLessThan(
-      sql.indexOf('CREATE INDEX backend_rate_limits_window_start_idx'),
-    );
+  it('waits at most five seconds for the build\'s lock, in or out of a transaction block', () => {
+    // SET LOCAL is a no-op outside a transaction block, which is how
+    // `supabase db reset` applies a file; a plain SET, reset after, holds both ways.
+    const set = sql.indexOf("SET lock_timeout = '5s';");
+    const build = sql.indexOf('CREATE INDEX backend_rate_limits_window_start_idx');
+    const reset = sql.indexOf('RESET lock_timeout;');
+    expect(set).toBeGreaterThanOrEqual(0);
+    expect(set).toBeLessThan(build);
+    expect(reset).toBeGreaterThan(build);
+    expect(sql).not.toContain('SET LOCAL lock_timeout');
   });
 
   it('changes nothing else: no function, grant or table rewrite', () => {

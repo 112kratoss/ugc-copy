@@ -24,8 +24,10 @@
 -- out on their own; rewriting them would cost more WAL than they hold.
 --
 -- Reproduced from 20260922054500_atomic_feed_session.sql with those two column
--- expressions changed and nothing else. Grants and comment restated.
-SET LOCAL lock_timeout = '2s';
+-- expressions changed and nothing else. Grants and comment restated. Replacing
+-- a function takes no table lock; the timeout only bounds an unexpected wait
+-- (a plain SET, reset at the end: see 20261104135153).
+SET lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION public.persist_ranked_feed_session(
   p_session jsonb,
@@ -130,3 +132,5 @@ GRANT EXECUTE ON FUNCTION public.persist_ranked_feed_session(jsonb, jsonb, jsonb
 
 COMMENT ON FUNCTION public.persist_ranked_feed_session(jsonb, jsonb, jsonb, integer, integer)
   IS 'Atomically persists 1-60 ranked candidates and only the requested exposure slice; a served item keeps only the score keys serving reads again, and its fact the whole object. Service-role only.';
+
+RESET lock_timeout;

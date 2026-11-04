@@ -155,13 +155,14 @@ COMMENT ON VIEW public.playback_metrics_daily IS
 --
 -- Both partial, so each holds only the rows its phase can still act on. Each
 -- build reads its table once under a SHARE lock (both tables are a few hundred
--- rows) and waits at most five seconds for the lock itself, as 20261103232038
--- does. onboarding_events (created_at), playback_metrics (received_at) and
+-- rows) and waits at most five seconds for the lock itself: a plain SET, reset
+-- after the builds, because SET LOCAL is a no-op outside a transaction block
+-- (see 20261104135153). onboarding_events (created_at), playback_metrics (received_at) and
 -- backend_job_locks need none: the first two are indexed on their window
 -- already, and a lock row is read by name alone; an index on locked_until
 -- would end the heap-only updates every lock renewal makes, for a daily scan
 -- of a small table.
-SET LOCAL lock_timeout = '5s';
+SET lock_timeout = '5s';
 
 CREATE INDEX mobile_notifications_unread_retention_idx
   ON public.mobile_notifications (updated_at, id)
@@ -170,6 +171,8 @@ CREATE INDEX mobile_notifications_unread_retention_idx
 CREATE INDEX ai_usage_events_payload_retention_idx
   ON public.ai_usage_events (created_at, id)
   WHERE input_prompt IS NOT NULL OR output_text IS NOT NULL OR response_payload IS NOT NULL;
+
+RESET lock_timeout;
 
 -- ─── The sweep ──────────────────────────────────────────────────────────────
 

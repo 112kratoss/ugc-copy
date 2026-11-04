@@ -114,14 +114,17 @@ describe('the operational retention migration for the unbounded tables', () => {
   });
 
   it('indexes only what the new phases act on, behind a lock timeout', () => {
-    const timeout = all.indexOf("SET LOCAL lock_timeout = '5s';");
+    const timeout = all.indexOf("SET lock_timeout = '5s';");
+    const reset = all.indexOf('RESET lock_timeout;');
     expect(timeout).toBeGreaterThan(0);
     for (const index of [
       'CREATE INDEX mobile_notifications_unread_retention_idx ON public.mobile_notifications (updated_at, id) WHERE is_read = false;',
       'CREATE INDEX ai_usage_events_payload_retention_idx ON public.ai_usage_events (created_at, id) WHERE input_prompt IS NOT NULL OR output_text IS NOT NULL OR response_payload IS NOT NULL;',
     ]) {
       expect(all.indexOf(index)).toBeGreaterThan(timeout);
+      expect(all.indexOf(index)).toBeLessThan(reset);
     }
+    expect(all).not.toContain('SET LOCAL lock_timeout');
     // A lock renewal keeps its heap-only update: nothing indexes locked_until.
     expect(all).not.toMatch(/CREATE INDEX [a-z_]+ ON public\.backend_job_locks/);
   });

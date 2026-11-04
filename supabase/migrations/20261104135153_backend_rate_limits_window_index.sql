@@ -16,11 +16,17 @@
 --
 -- The build reads the table once under a SHARE lock, which holds rate-limit
 -- writes back for that long (the table is a few thousand rows: milliseconds),
--- and waits at most five seconds for the lock itself, as 20261103232038 does.
-SET LOCAL lock_timeout = '5s';
+-- and waits at most five seconds for the lock itself, as 20261103232038 means
+-- to. That migration's SET LOCAL is a no-op wherever the file is not run
+-- inside a transaction block: `supabase db reset` applies statements outside
+-- one and warns "SET LOCAL can only be used in transaction blocks". A plain
+-- SET, reset at the end, holds either way, and a failed transaction reverts it.
+SET lock_timeout = '5s';
 
 CREATE INDEX backend_rate_limits_window_start_idx
   ON public.backend_rate_limits (window_start, scope, subject_key);
+
+RESET lock_timeout;
 
 COMMENT ON INDEX public.backend_rate_limits_window_start_idx IS
   'Serves the retention prune (window_start < cutoff, in this order) and the cost report''s window_start >= since aggregate, which both scanned the table.';
