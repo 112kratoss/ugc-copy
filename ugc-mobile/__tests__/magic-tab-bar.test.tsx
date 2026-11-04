@@ -110,6 +110,19 @@ vi.mock('@/components/magic-create-menu', async () =>
   vi.importActual('../components/magic-create-menu')
 );
 
+// The ☰ side menu the bar draws for Home and Explore (lib/side-menu-host.ts).
+// Its own suite is side-menu-host.test.tsx; here it is a host element that
+// counts its mounts, so a case can ask whether a tab switch rebuilt it.
+const sideMenuMounts = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/components/workspace-side-menu', () => ({
+  TabBarSideMenu: () => {
+    React.useEffect(() => {
+      sideMenuMounts.count += 1;
+    }, []);
+    return React.createElement('tab-bar-side-menu');
+  },
+}));
+
 vi.mock('@/lib/create-menu-view-model', async () =>
   vi.importActual('../lib/create-menu-view-model')
 );
@@ -744,6 +757,36 @@ describe('MagicTabBar create menu hand-off', () => {
 
     expect(barRoot().props.collapsable).toBe(false);
     expect((barRoot().props.style as Record<string, unknown>).opacity).toBe(0);
+  });
+
+  it('draws the ☰ side menu in its root view, kept through tab switches', () => {
+    // Profile and Credits switch tabs from the side menu, and the tab that is
+    // left goes off the window at once on Android: drawn inside Home, the
+    // menu's Modal went with it and Home showed bare for two frames (Pixel 9a
+    // emulator, 2026-11-03). The bar's root stays, so the menu is drawn there,
+    // and a switch must not rebuild it while it leaves over the new tab.
+    sideMenuMounts.count = 0;
+    const { tree, navigation } = renderTabBar(0);
+    const barRoot = () => tree.root.findAll((node) => String(node.type) === 'view')[0];
+    const menuParent = () => tree.root.find((node) => String(node.type) === 'tab-bar-side-menu').parent?.parent;
+    expect(menuParent()).toBe(barRoot());
+    expect(sideMenuMounts.count).toBe(1);
+
+    for (const index of [4, 1, 2, 0]) {
+      renderer.act(() => {
+        tree.update(
+          <MagicTabBar
+            state={{ index, key: 'tabs-key', routeNames: routes.map((route) => route.name), routes, stale: false, type: 'tab', history: [] } as never}
+            descriptors={{} as never}
+            navigation={navigation as never}
+            insets={{ top: 0, right: 0, bottom: 0, left: 0 }}
+            hidden={routes[index].name === 'creator'}
+          />
+        );
+      });
+      expect(menuParent()).toBe(barRoot());
+    }
+    expect(sideMenuMounts.count).toBe(1);
   });
 
   it('jumps to the creator at the tap and leaves in the same render', () => {

@@ -18,6 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MagicCreateMenu } from '@/components/magic-create-menu';
+import { TabBarSideMenu } from '@/components/workspace-side-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
 import { haptic } from '@/lib/haptics';
 import { useMenuHandoff } from '@/lib/menu-handoff';
@@ -232,7 +233,8 @@ export function MagicTabBar({
       // (opacity 0, no pointer events, hidden from accessibility) made Fabric
       // create one and move the bar's children into it
       // (`ViewShadowNode.cpp`, `formsStackingContext`). The create menu's Modal
-      // is one of them, and a Modal host taken off the window dismisses its
+      // is one of them (the ☰ side menu's is another), and a Modal host taken
+      // off the window dismisses its
       // window: Android's `onDetachedFromWindow` drops the Dialog until a later
       // prop update shows it again, and iOS dismisses when it loses its
       // superview. Generate hides the bar while the menu is still leaving over
@@ -265,6 +267,11 @@ export function MagicTabBar({
         horizontalInset={metrics.horizontalPadding}
         bottomInset={metrics.bottomPadding}
       />
+      {/* The ☰ menu Home and Explore open. Drawn here for the reason the
+          Create menu is: this view stays on the window across tab switches,
+          so the Profile and Credits rows, which switch tabs, no longer take
+          the menu's Modal down with the tab they leave (lib/side-menu-host.ts). */}
+      <TabBarSideMenu />
       <View
         pointerEvents="none"
         style={{

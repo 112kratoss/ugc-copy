@@ -1,11 +1,12 @@
 import { Tabs, useNavigation } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
 import { ZoomVeilScope } from '@/components/zoom-veil';
 import { useReducedMotion } from '@/lib/motion';
+import { createSideMenuStore, SideMenuHostContext } from '@/lib/side-menu-host';
 import { useAppTheme } from '@/lib/theme-context';
 import { zoomUnderlayDetached, zoomUnderlayHidden } from '@/lib/zoom-underlay';
 
@@ -13,6 +14,10 @@ export default function TabLayout() {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const navigation = useNavigation();
+  // The ☰ menu's open state, for Home and Explore to open and the tab bar to
+  // draw: hosted by the bar, the menu outlives the tab it was opened from
+  // (lib/side-menu-host.ts).
+  const [sideMenu] = useState(createSideMenuStore);
   // Skipped by the renderer while a settled reel covers it (see zoom-underlay),
   // but only the tabs the reel is covering. Tabs opened on top of a reel — a
   // tab route pushed from a screen the reel led to — are the focused screen,
@@ -37,6 +42,7 @@ export default function TabLayout() {
       {/* Over the tabs and their dock while a reel grows out of one of them or
           shrinks back into it under UIKit's zoom (lib/zoom-veil.ts). */}
       <ZoomVeilScope fillsWindow>
+      <SideMenuHostContext.Provider value={sideMenu}>
       <Tabs
         backBehavior="history"
         tabBar={(props) => (
@@ -95,6 +101,7 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
+      </SideMenuHostContext.Provider>
       </ZoomVeilScope>
     </Animated.View>
   );
