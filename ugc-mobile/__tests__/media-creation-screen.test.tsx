@@ -4973,7 +4973,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         });
         await settle();
 
-        expect(notificationsMock.registerForMobilePushNotifications).toHaveBeenCalledWith(authState.api, { requestPermission: true });
+        // Named by its account, as every check is (`registerForMobilePushNotifications`).
+        expect(notificationsMock.registerForMobilePushNotifications).toHaveBeenCalledWith(
+          authState.api,
+          { requestPermission: true, userId: authState.user?.id },
+        );
         const text = collectText(tree.root);
         expect(text).toContain('Couldn’t turn on notifications. Try again.');
         expect(text).toContain('Notify me');
