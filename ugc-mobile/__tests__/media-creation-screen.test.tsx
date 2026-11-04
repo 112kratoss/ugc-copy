@@ -6825,6 +6825,27 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
       });
 
+      // Review item 7: a price the creators remember (`lib/quote-memo.ts`) never
+      // outlives a refusal of a run at its price, on this screen or the next.
+      it('forgets every remembered price when the start refuses a run at its price', async () => {
+        const refused = await openTyped();
+        expect(text(refused)).toContain('Generate · 8 credits');
+        authState.api.startGeneration.mockRejectedValueOnce(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        // The asking again that the refusal brings is still on its way when the screen closes.
+        authState.api.quoteGenerationModel.mockImplementation(() => new Promise(() => undefined));
+        await pressGenerate(refused);
+        renderer.act(() => refused.unmount());
+
+        // The same draft on a creator opened afresh is priced by the server, not from memory.
+        quoteEchoingSettings(9);
+        const quotesBefore = authState.api.quoteGenerationModel.mock.calls.length;
+        const next = await openTyped();
+        await settle();
+        expect(authState.api.quoteGenerationModel.mock.calls.length).toBeGreaterThan(quotesBefore);
+        expect(text(next)).toContain('Generate · 9 credits');
+        renderer.act(() => next.unmount());
+      });
+
       it('prices the run again when the price changed', async () => {
         authState.api.startGeneration.mockRejectedValue(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
         const tree = await openTyped();
