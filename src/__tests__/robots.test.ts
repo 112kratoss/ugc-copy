@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest';
 
 import robots from '@/app/robots';
 
-type RobotsRule = Extract<MetadataRoute.Robots['rules'], unknown[]>[number];
+/** What either form of `rules` holds, as far as matching reads it. */
+type RobotsRule = {
+  userAgent?: string | string[];
+  allow?: string | string[];
+  disallow?: string | string[];
+};
 
 function list(value: string | string[] | undefined): string[] {
   return value === undefined ? [] : [value].flat();
