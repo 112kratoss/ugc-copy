@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { FEED_WINDOW_PAGE_LIMIT } from '../lib/feed-page-window';
 import { HOME_FEED_CHIPS } from '../lib/home-feed-view-model';
+import { QueryClient } from '@tanstack/react-query';
+
+import {
+  EXPLORE_READ_AHEAD_FILTERS,
+  noteShowcaseFeedReadAheadSupport,
+  resetExploreReadAheadForTests,
+  startExploreReadAhead,
+} from '../lib/explore-read-ahead';
 import { installRankedFirstPageDrain } from '../lib/feed-ranked-page-drain';
 import { createShowcaseFeedQueryKey, type ShowcaseFeedFilters } from '../lib/showcase-feed-query';
 import {
@@ -109,6 +117,26 @@ describe('the lane query', () => {
           expect(api.getShowcaseFeed).toHaveBeenCalledTimes(1);
         }
       } finally {
+        installRankedFirstPageDrain(null);
+      }
+    });
+
+    it('is not held when Explore claims a ranking read ahead, which was ranked already', async () => {
+      const { drain } = heldDrain();
+      noteShowcaseFeedReadAheadSupport({ sort: 'for-you' }, { readAheadSupported: true });
+      try {
+        startExploreReadAhead({
+          api: { prepareShowcaseFeedReadAhead: vi.fn(async () => ({ readAhead: { token: 'read-ahead-1', expiresInMs: 60_000 } })) },
+          identityUserId: 'user-1',
+          queryClient: new QueryClient(),
+        });
+        const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
+        await showcaseFeedLaneQueryOptions(api, EXPLORE_READ_AHEAD_FILTERS, 'user-1').queryFn({ pageParam: { offset: 0 } });
+
+        expect(drain).not.toHaveBeenCalled();
+        expect(api.getShowcaseFeed).toHaveBeenCalledWith(expect.objectContaining({ readAheadToken: 'read-ahead-1' }));
+      } finally {
+        resetExploreReadAheadForTests();
         installRankedFirstPageDrain(null);
       }
     });
