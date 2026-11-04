@@ -26,7 +26,10 @@ import {
   type ShowcaseVisibility,
 } from '@/lib/showcase';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
-import { parseCanonicalStorageObjectPath } from '@/lib/storage-ownership';
+import {
+  getCanonicalStoredMediaLocation,
+  parseCanonicalStorageObjectPath,
+} from '@/lib/storage-ownership';
 
 import {
   POST_MEDIA_PATH_COLUMNS,
@@ -92,7 +95,66 @@ type DeletablePostRow = {
   title: string | null;
   source_kind: RawShowcaseSourceKind;
   showcase_asset_path: string | null;
+  /** A creation post's private original, which its creation's delete kept for it. */
+  output_url?: string | null;
 };
+
+/** The buckets a creation's original is written to. */
+const GENERATED_MEDIA_BUCKETS = ['generated_images', 'generated_videos', 'generated_audio'] as const;
+
+/**
+ * Deleting a creation that has a post keeps the creation's private original
+ * for the post (`posts.output_url`): a private post plays it, and making the
+ * post private again serves it (generation-delete-service). Once that post is
+ * deleted too, nothing names the original. It goes now, unless:
+ * - the creation still exists (its own delete decides),
+ * - the path is outside the generated buckets or the folders of the owner and
+ *   the guests linked to them, or the link cannot be read,
+ * - another creation or post names it, or that cannot be read.
+ * A failed removal is logged; the post is deleted either way.
+ */
+async function removeDeletedCreationOriginal(
+  adminSupabase: SupabaseClient,
+  post: DeletablePostRow,
+  ownerUserId: string,
+): Promise<void> {
+  if (post.generation_id || !post.deleted_generation_id || !post.output_url) return;
+  const location = getCanonicalStoredMediaLocation(post.output_url, { allowedBuckets: GENERATED_MEDIA_BUCKETS });
+  if (!location) return;
+
+  const ownedByPostOwner = await readIsOwnOrLinkedAccountId(
+    adminSupabase,
+    ownerUserId,
+    location.filePath.split('/')[0],
+  );
+  if (ownedByPostOwner !== true) return;
+
+  const storedValues = [...new Set([post.output_url, `${location.bucket}/${location.filePath}`])];
+  const [generations, posts] = await Promise.all([
+    adminSupabase.from('generations').select('id').in('output_url', storedValues).limit(1),
+    adminSupabase.from('posts').select('id').in('output_url', storedValues).limit(1),
+  ]);
+  if (generations.error || posts.error) {
+    logBackendWarning('failed_to_check_deleted_creation_original_references', {
+      error: generations.error ?? posts.error,
+      postId: post.id,
+    });
+    return;
+  }
+  if ((generations.data ?? []).length > 0 || (posts.data ?? []).length > 0) return;
+
+  try {
+    const { error } = await adminSupabase.storage.from(location.bucket).remove([location.filePath]);
+    if (error) throw error;
+  } catch (error) {
+    logBackendError('failed_to_remove_deleted_creation_original', {
+      error,
+      postId: post.id,
+      bucket: location.bucket,
+      path: location.filePath,
+    });
+  }
+}
 
 type DeletableBundleRow = {
   id: string;
@@ -157,7 +219,7 @@ async function loadOwnedPost(
 ): Promise<DeletablePostRow | null> {
   const { data, error } = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, deleted_generation_id, visibility, title, source_kind, showcase_asset_path')
+    .select('id, user_id, generation_id, deleted_generation_id, visibility, title, source_kind, showcase_asset_path, output_url')
     .eq('id', postId)
     .eq('user_id', ownerUserId)
     .maybeSingle();
@@ -476,6 +538,7 @@ export async function deleteOwnerPostForRoute({
   if (removablePaths.length > 0) {
     await removePostMediaObjects(adminSupabase, removablePaths);
   }
+  await removeDeletedCreationOriginal(adminSupabase, post, ownerUserId);
 
   return {
     ok: true,

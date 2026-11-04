@@ -24,6 +24,8 @@ type MockPost = {
   title: string | null;
   source_kind: string;
   showcase_asset_path: string | null;
+  /** The private original a creation post names; kept by its creation's delete. */
+  output_url?: string | null;
 };
 
 type MockBundle = {
@@ -55,6 +57,9 @@ function createSupabaseMock({
   postMedia = [],
   postMediaError = null,
   deleteError = null,
+  outputNamers = {},
+  outputNamerError = null,
+  removeError = null,
 }: {
   post: MockPost | null;
   bundle: MockBundle | null;
@@ -70,9 +75,16 @@ function createSupabaseMock({
   postMediaError?: { message: string } | null;
   /** Answers the posts delete, as the database refusing it would. */
   deleteError?: { message: string } | null;
+  /** Rows a read by `output_url` finds, by table. */
+  outputNamers?: Partial<Record<'generations' | 'posts', Array<{ id: string }>>>;
+  outputNamerError?: { message: string } | null;
+  /** Answers every storage removal with this error. */
+  removeError?: { message: string } | null;
 }) {
   const calls = {
     rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
+    /** Reads asking which rows name a stored original. */
+    outputReads: [] as Array<{ table: string; values: unknown[] }>,
     audits: [] as Array<Record<string, unknown>>,
     updates: [] as Array<{ table: string; patch: Record<string, unknown>; filters: Record<string, unknown> }>,
     deletes: [] as Array<{ table: string; filters: Record<string, unknown> }>,
@@ -147,7 +159,17 @@ function createSupabaseMock({
         filters[`${column}:gt`] = value;
         return query;
       },
+      in(column: string, values: unknown[]) {
+        filters[`${column}:in`] = values;
+        return query;
+      },
       limit() {
+        if (filters['output_url:in'] && (table === 'generations' || table === 'posts')) {
+          calls.outputReads.push({ table, values: filters['output_url:in'] as unknown[] });
+          return Promise.resolve(outputNamerError
+            ? { data: null, error: outputNamerError }
+            : { data: outputNamers[table] ?? [], error: null });
+        }
         if (table === 'post_resource_bundle_purchases') {
           return Promise.resolve({ data: purchases, error: null });
         }
@@ -232,7 +254,7 @@ function createSupabaseMock({
         remove: vi.fn((paths: string[]) => {
           calls.removals.push({ bucket, paths });
           calls.sequence.push(`remove ${bucket}`);
-          return Promise.resolve({ data: null, error: null });
+          return Promise.resolve({ data: null, error: removeError });
         }),
       })),
     },
@@ -815,8 +837,8 @@ describe('deleteOwnerPostForRoute', () => {
       showcase_asset_path: 'showcase/generation-4/public.jpg',
     };
 
-    async function deletePost(post: MockPost) {
-      const mock = createSupabaseMock({ post, bundle: null });
+    async function deletePost(post: MockPost, options: Omit<Parameters<typeof createSupabaseMock>[0], 'post' | 'bundle'> = {}) {
+      const mock = createSupabaseMock({ post, bundle: null, ...options });
       await expect(deleteOwnerPostForRoute({
         adminSupabase: mock.client,
         ownerUserId: 'user-1',
@@ -846,6 +868,128 @@ describe('deleteOwnerPostForRoute', () => {
       const calls = await deletePost({ ...unlinkedPost, deleted_generation_id: null });
 
       expect(calls.removals).toEqual([]);
+    });
+
+    // The creation's delete kept its private original for the post
+    // (`posts.output_url`): a private post plays it, and making the post
+    // private again needs it. Nothing else names it once the post is gone.
+    describe('the private original its creation left it', () => {
+      const withOriginal: MockPost = {
+        ...unlinkedPost,
+        output_url: 'generated_images/user-1/generated_p1.png',
+      };
+
+      it('goes with the post', async () => {
+        const calls = await deletePost(withOriginal);
+
+        expect(calls.removals).toEqual([
+          { bucket: 'showcase_media', paths: ['showcase/generation-4/public.jpg'] },
+          { bucket: 'generated_images', paths: ['user-1/generated_p1.png'] },
+        ]);
+        // Asked of both tables by the stored value, after the post was gone.
+        expect(calls.outputReads).toEqual([
+          { table: 'generations', values: ['generated_images/user-1/generated_p1.png'] },
+          { table: 'posts', values: ['generated_images/user-1/generated_p1.png'] },
+        ]);
+        expect(calls.sequence.indexOf('delete posts')).toBeLessThan(calls.sequence.indexOf('remove generated_images'));
+      });
+
+      it.each(['generations', 'posts'] as const)('stays while a row of %s names it', async (table) => {
+        const calls = await deletePost(withOriginal, { outputNamers: { [table]: [{ id: 'other' }] } });
+
+        expect(calls.removals).toEqual([
+          { bucket: 'showcase_media', paths: ['showcase/generation-4/public.jpg'] },
+        ]);
+      });
+
+      it('stays when the rows naming it cannot be read', async () => {
+        const calls = await deletePost(withOriginal, { outputNamerError: { message: 'database unavailable' } });
+
+        expect(calls.removals).toEqual([
+          { bucket: 'showcase_media', paths: ['showcase/generation-4/public.jpg'] },
+        ]);
+      });
+
+      it("goes when a guest the account was linked to made the creation", async () => {
+        const calls = await deletePost(
+          { ...withOriginal, output_url: 'generated_videos/guest-1/generated_p2.mp4' },
+          { profiles: [{ id: 'guest-1', merged_into_user_id: 'user-1' }] },
+        );
+
+        expect(calls.removals).toContainEqual({ bucket: 'generated_videos', paths: ['guest-1/generated_p2.mp4'] });
+      });
+
+      it.each([
+        ['another account', 'generated_images/user-2/generated_p1.png'],
+        ['a bucket no creation writes', 'generation_inputs/user-1/gen-4/00-reference.png'],
+        ['a provider link', 'https://tempfile.example.com/p1.png'],
+        ['an escaping path', 'generated_images/user-1/..%252fuser-2/p1.png'],
+      ])('stays when it is in %s', async (_label, outputUrl) => {
+        const calls = await deletePost({ ...withOriginal, output_url: outputUrl });
+
+        expect(calls.removals).toEqual([
+          { bucket: 'showcase_media', paths: ['showcase/generation-4/public.jpg'] },
+        ]);
+      });
+
+      it('stays when the accounts linked to the owner cannot be read', async () => {
+        const calls = await deletePost(
+          { ...withOriginal, output_url: 'generated_images/guest-1/generated_p1.png' },
+          { profilesError: { message: 'profiles unavailable' } },
+        );
+
+        expect(calls.removals).toEqual([
+          { bucket: 'showcase_media', paths: ['showcase/generation-4/public.jpg'] },
+        ]);
+      });
+
+      it('stays while the creation is live: its own delete decides', async () => {
+        const calls = await deletePost(
+          { ...withOriginal, generation_id: 'generation-4', deleted_generation_id: null },
+          { generation: { id: 'generation-4', user_id: 'user-1', showcase_asset_path: 'showcase/generation-4/public.jpg' } },
+        );
+
+        expect(calls.removals.some(({ bucket }) => bucket === 'generated_images')).toBe(false);
+      });
+
+      it('stays with a post kept for its buyers', async () => {
+        const mock = createSupabaseMock({
+          post: withOriginal,
+          bundle: {
+            id: 'bundle-1',
+            access_mode: 'paid',
+            status: 'published',
+            price_usd_cents: 500,
+            sales_count: 1,
+            earnings_usd_cents: 500,
+            prompt_text: 'Prompt',
+            notes_markdown: null,
+            workflow_share_url: null,
+            workflow_snapshot: null,
+            attachments: [],
+            allow_remix: false,
+          },
+          purchases: [{ bundle_id: 'bundle-1' }],
+        });
+
+        await expect(deleteOwnerPostForRoute({
+          adminSupabase: mock.client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+          forceDelete: true,
+        })).resolves.toMatchObject({ ok: true, body: { tombstoned: true } });
+        expect(mock.calls.removals).toEqual([]);
+      });
+
+      it('a failed removal leaves the post deleted', async () => {
+        const mock = createSupabaseMock({ post: withOriginal, bundle: null, removeError: { message: 'storage unavailable' } });
+
+        await expect(deleteOwnerPostForRoute({
+          adminSupabase: mock.client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+        })).resolves.toEqual({ ok: true, body: { success: true, deleted: true } });
+      });
     });
   });
 
