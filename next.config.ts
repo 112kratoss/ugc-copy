@@ -259,7 +259,22 @@ const nextConfig: NextConfig = {
     ],
   },
   images: {
+    // Not raised past a day for content-hashed sources (asked in the
+    // 2026-11-04 usage audit). It is one value for every source, and an
+    // optimized copy cannot be purged before it runs out (Next's docs: "There is
+    // no mechanism to invalidate the cache"), so it is the bound on how long a
+    // taken-down picture keeps being served from `/_next/image`, set with the
+    // storage TTL in `showcase-media-cache.ts`. The content-hashed renditions
+    // (the 720px preview and the 1440px display copy) skip the optimizer
+    // altogether (`isGeneratedPreviewImage`), so this TTL no longer governs them.
     minimumCacheTTL: SHOWCASE_PUBLIC_MEDIA_MINIMUM_CACHE_TTL_SECONDS,
+    // Next's defaults less 2048 and 3840. The widest frame on the web is the
+    // creator page's banner (1560px) and the post page's media at 60vw; a 2x
+    // laptop asked those for 3840px copies of the uploaded original, the most
+    // expensive transformation the optimizer makes, for a frame that shows
+    // 1920 at most. `imageSizes` keeps its defaults: avatars and thumbnails from
+    // 24px to 210px wide use all of 32-384 at 1x-3x.
+    deviceSizes: [640, 750, 828, 1080, 1200, 1920],
     // Static preview art is confined to the public image tree and never needs
     // a query string. Stored-media helpers deliberately return the separate
     // authenticated proxy path; omitting `search` only there permits its

@@ -16,6 +16,15 @@ function getSupabaseStorageOrigin(): string | null {
 
 const supabaseStorageOrigin = getSupabaseStorageOrigin();
 
+/**
+ * A rendition the media workers already encoded as a bounded, content-hashed
+ * WebP on our own storage: the 720px grid preview (`.preview.<hash>.webp`) or
+ * the 1440px display copy (`.display.<hash>.webp`, `media-display-rendition.ts`).
+ * Neither is worth a trip through Next's optimizer: it returned the same bytes
+ * for previews while adding a serverless fetch, and every optimized copy sits in
+ * a cache no takedown can purge for `images.minimumCacheTTL`. The browser reads
+ * them straight from the storage CDN instead.
+ */
 export function isGeneratedPreviewImage(src: string): boolean {
   if (!supabaseStorageOrigin) {
     return false;
@@ -28,7 +37,7 @@ export function isGeneratedPreviewImage(src: string): boolean {
       && !url.password
       && url.origin === supabaseStorageOrigin
       && url.pathname.startsWith('/storage/v1/object/')
-      && /\.preview\.[a-f0-9]{8,}\.webp$/i.test(url.pathname);
+      && /\.(?:preview|display)\.[a-f0-9]{8,}\.webp$/i.test(url.pathname);
   } catch {
     return false;
   }

@@ -49,6 +49,15 @@ describe('preview image optimization', () => {
     expect(optimized.searchParams.get('q')).toBe('75');
     expect(isGeneratedPreviewImage(generatedPreview)).toBe(true);
     expect(buildOptimizedPreviewImageUrl(generatedPreview)).toBe(generatedPreview);
+    // The 1440px display copy is as bounded and content-hashed as the preview,
+    // so it is read straight from storage too, never through the optimizer.
+    const displayRendition = 'https://project.supabase.co/storage/v1/object/public/showcase_media/posts/post-1/0/cover.display.abcdef0123456789.webp';
+    expect(isGeneratedPreviewImage(displayRendition)).toBe(true);
+    expect(buildOptimizedPreviewImageUrl(displayRendition)).toBe(displayRendition);
+    // A source that merely ends in .webp is still optimized.
+    expect(isGeneratedPreviewImage(
+      'https://project.supabase.co/storage/v1/object/public/showcase_media/posts/post-1/0/cover.display.webp'
+    )).toBe(false);
     expect(isGeneratedPreviewImage(
       'https://other.example/storage/v1/object/public/showcase_media/cover.preview.abcdef0123456789.webp'
     )).toBe(false);

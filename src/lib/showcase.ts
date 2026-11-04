@@ -107,6 +107,15 @@ export interface ShowcaseMediaItem {
      */
     feedStreamUrl?: string | null;
     previewUrl?: string | null;
+    /**
+     * The 1440px WebP an image is viewed at full frame (`media-display-rendition.ts`),
+     * between the 720px preview and the source. Null or absent when none was worth
+     * storing: the slide then shows `url`, which stays the download, the zoom
+     * target and the fullscreen fallback either way. The app has read it since
+     * it existed; the web's post page, reel and lightbox read it too since
+     * 2026-11-04, where they ran the uploaded original through the optimizer.
+     */
+    displayUrl?: string | null;
     previewThumbhash?: string | null;
     previewStatus?: 'pending' | 'processing' | 'ready' | 'failed';
     gridReady?: boolean;
@@ -351,11 +360,12 @@ export function sanitizeShowcaseFeedPage(feed: ShowcaseFeedPage): ShowcaseFeedPa
 /**
  * What the server's media rows carry for the app alone: `preview`, a copy of
  * the item's own preview fields; `previewCacheKey`, the app's image-cache key;
- * `displayUrl`, the app's image slide; and `renditionStatus`, which the server
- * has already turned into `feedStreamUrl`. None of them is on
- * ShowcaseMediaItem, so the web cannot read them.
+ * and `renditionStatus`, which the server has already turned into
+ * `feedStreamUrl`. None of them is on ShowcaseMediaItem, so the web cannot read
+ * them. `displayUrl` left this list on 2026-11-04: the web's reel opens a first
+ * page's image on it rather than on the original.
  */
-export const SHOWCASE_APP_ONLY_MEDIA_FIELDS = ['preview', 'previewCacheKey', 'displayUrl', 'renditionStatus'] as const;
+export const SHOWCASE_APP_ONLY_MEDIA_FIELDS = ['preview', 'previewCacheKey', 'renditionStatus'] as const;
 
 /**
  * What the server's cards carry for the app alone: `generationSetup`, the
