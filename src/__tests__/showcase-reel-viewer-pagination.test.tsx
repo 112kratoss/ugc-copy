@@ -867,10 +867,11 @@ describe('ShowcaseReelViewer pagination', () => {
       });
       unmount();
 
-      // Drain the event queue. dwell and quick_skip are emitted as the reel
-      // closes, so this has to come after unmount or they are never queued.
+      // Drain the event queue (a batch goes 15 s after its first event). dwell
+      // and quick_skip are emitted as the reel closes, so this has to come
+      // after unmount or they are never queued.
       await act(async () => {
-        vi.advanceTimersByTime(2_000);
+        vi.advanceTimersByTime(15_000);
         await Promise.resolve();
       });
 
@@ -942,10 +943,11 @@ describe('ShowcaseReelViewer pagination', () => {
       });
       unmount();
 
-      // Drain the event queue. dwell and quick_skip are emitted as the reel
-      // closes, so this has to come after unmount or they are never queued.
+      // Drain the event queue (a batch goes 15 s after its first event). dwell
+      // and quick_skip are emitted as the reel closes, so this has to come
+      // after unmount or they are never queued.
       await act(async () => {
-        vi.advanceTimersByTime(2_000);
+        vi.advanceTimersByTime(15_000);
         await Promise.resolve();
       });
 

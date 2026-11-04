@@ -127,11 +127,12 @@ describe('showcase feed interactions', () => {
       await Promise.resolve();
     });
 
-    // Qualification happened, but events are queued and flushed together now.
+    // Qualification happened, but events are queued and flushed together now:
+    // a batch goes 15 s after its first event.
     expect(fetch).not.toHaveBeenCalled();
 
     await act(async () => {
-      vi.advanceTimersByTime(2_000);
+      vi.advanceTimersByTime(15_000);
       await Promise.resolve();
     });
 
