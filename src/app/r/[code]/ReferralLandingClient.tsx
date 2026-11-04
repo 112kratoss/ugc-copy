@@ -82,7 +82,7 @@ export default function ReferralLandingClient({
     <main className="ui-page ui-page-ambient min-h-screen px-4 py-10 sm:px-6 sm:py-16">
       <div className="mx-auto max-w-3xl">
         <Link href="/" className="ui-focus-ring inline-flex rounded-full px-3 py-2 text-sm font-extrabold text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]">
-          magicbooklet
+          Magic Booklet
         </Link>
 
         <section className="mt-8 overflow-hidden rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] shadow-[var(--ui-shadow-panel)]">
@@ -90,7 +90,7 @@ export default function ReferralLandingClient({
             <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--ui-accent-commerce)] text-zinc-950 shadow-lg">
               <Gift className="h-8 w-8" aria-hidden />
             </span>
-            <p className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[var(--ui-accent-commerce)]">A Magicbooklet invite</p>
+            <p className="mt-6 text-xs font-black uppercase tracking-[0.2em] text-[var(--ui-accent-commerce)]">A Magic Booklet invite</p>
             <h1 className="mx-auto mt-3 max-w-xl text-4xl font-black tracking-tight text-[var(--ui-text-primary)] sm:text-5xl">
               {program
                 ? `Get ${numberFormatter.format(program.inviteeFirstPurchasePercent)}% bonus credits on your first top-up.`

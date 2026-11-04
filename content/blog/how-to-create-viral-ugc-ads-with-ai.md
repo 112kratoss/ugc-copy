@@ -56,7 +56,7 @@ For a deeper treatment of reference performance and source image selection, see 
 
 ### 3. Generate and Scale
 
-Upload both assets into magicbooklet. Within minutes you'll have a video featuring your chosen character delivering your exact performance.
+Upload both assets into Magic Booklet. Within minutes you'll have a video featuring your chosen character delivering your exact performance.
 
 Because each generation costs credits rather than a shoot, you can afford to A/B test ten different opening hooks before putting budget behind any of them.
 

@@ -543,6 +543,6 @@ export function getPublicPostMetaDescription(detail: PublicPostDetail): string {
     detail.resourceBundle?.summary ||
     detail.resourceBundle?.previewText ||
     detail.prompt ||
-    `Explore ${detail.title} on magicbooklet.`
+    `Explore ${detail.title} on Magic Booklet.`
   );
 }

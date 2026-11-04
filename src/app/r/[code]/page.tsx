@@ -10,8 +10,8 @@ import {
 import ReferralLandingClient from './ReferralLandingClient';
 
 export const metadata: Metadata = {
-  title: 'Your Magicbooklet invite',
-  description: 'Get bonus credits when you join Magicbooklet through an eligible invite.',
+  title: 'Your Magic Booklet invite',
+  description: 'Get bonus credits when you join Magic Booklet through an eligible invite.',
   robots: { index: false, follow: false },
 };
 

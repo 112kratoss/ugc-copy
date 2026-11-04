@@ -3230,6 +3230,6 @@ describe('what each alert opens and says', () => {
       `Open ${siteConfig.name} to try again or adjust the prompt.`,
       `Your ${siteConfig.name} credit balance was checked against verified purchase history.`,
     ]);
-    expect(bodies.join(' ')).not.toMatch(/mobile|Magic Booklet/i);
+    expect(bodies.join(' ')).not.toMatch(/mobile|magicbooklet/i);
   });
 });

@@ -128,7 +128,7 @@ function normalizeReferralSummary(value: unknown): ReferralProgramSummary {
 }
 
 export function buildReferralShareText(inviteePercent: number) {
-  return `Create with me on magicbooklet and get ${percentFormatter.format(inviteePercent)}% bonus credits on your first top-up.\n\n${REFERRAL_DISCLOSURE}`;
+  return `Create with me on Magic Booklet and get ${percentFormatter.format(inviteePercent)}% bonus credits on your first top-up.\n\n${REFERRAL_DISCLOSURE}`;
 }
 
 export function buildReferralCopyText(shareUrl: string, inviteePercent: number) {
@@ -339,7 +339,7 @@ export default function InviteClient() {
     if (typeof navigator.share === 'function') {
       try {
         await navigator.share({
-          title: 'Join me on magicbooklet',
+          title: 'Join me on Magic Booklet',
           text,
           url: summary.shareUrl,
         });

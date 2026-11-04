@@ -208,7 +208,7 @@ describe('generation route adapter service', () => {
     expect(postResponse.headers.get('x-request-id')).toBe('generation-factory-post');
     await expect(postResponse.json()).resolves.toEqual({
       code: 'GENERATION_ROUTE_RETIRED',
-      error: 'This way of starting a creation has been retired. Update Magicbooklet to keep creating, or start again from the current creator.',
+      error: 'This way of starting a creation has been retired. Update Magic Booklet to keep creating, or start again from the current creator.',
     });
     // Answered before the body is read, anyone is asked who is calling, or anything is quoted or held.
     expect(startBody).not.toHaveBeenCalled();

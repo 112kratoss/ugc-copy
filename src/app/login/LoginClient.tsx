@@ -145,7 +145,7 @@ export default function LoginClient({
                     <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
                         <WandSparkles className="h-4 w-4" aria-hidden />
                     </span>
-                    <span className="hidden text-sm font-extrabold sm:inline">magicbooklet</span>
+                    <span className="hidden text-sm font-extrabold sm:inline">Magic Booklet</span>
                 </Link>
             </div>
 

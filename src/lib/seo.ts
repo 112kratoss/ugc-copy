@@ -83,9 +83,9 @@ function resolveSiteUrl() {
 }
 
 export const siteConfig = {
-    name: 'magicbooklet',
-    title: 'magicbooklet',
-    defaultTitle: 'magicbooklet: Create the magic. Sell the method.',
+    name: 'Magic Booklet',
+    title: 'Magic Booklet',
+    defaultTitle: 'Magic Booklet: Create the magic. Sell the method.',
     // The same tagline as `defaultTitle`, addressable on its own so the hero can
     // show it without the brand prefix reading as part of the sentence, and in
     // its two sentences so the hero can draw the selling one apart. Kept in sync

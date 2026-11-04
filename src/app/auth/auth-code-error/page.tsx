@@ -31,7 +31,7 @@ export default async function AuthCodeErrorPage({ searchParams }: AuthCodeErrorP
         <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--ui-primary)] text-[var(--ui-primary-on)]">
           <WandSparkles className="h-5 w-5" aria-hidden />
         </span>
-        <span className="text-sm font-extrabold">magicbooklet</span>
+        <span className="text-sm font-extrabold">Magic Booklet</span>
       </Link>
 
       <div className="flex flex-1 items-center justify-center py-10">

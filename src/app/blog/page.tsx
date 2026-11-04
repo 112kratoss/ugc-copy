@@ -36,7 +36,7 @@ export default function BlogIndex() {
             <JsonLd
                 data={[
                     buildItemListSchema(
-                        'magicbooklet blog',
+                        'Magic Booklet blog',
                         '/blog',
                         posts.map((post) => ({ name: post.title, path: `/blog/${post.slug}` }))
                     ),

@@ -26,7 +26,7 @@ export default function ChildSafetyPage() {
             className="ui-focus-ring rounded-xl text-lg font-extrabold tracking-tight text-[var(--ui-text-primary)]"
             href="/"
           >
-            magicbooklet
+            Magic Booklet
           </Link>
           <Link
             className="ui-focus-ring rounded-full border border-[var(--ui-border-default)] px-4 py-2 text-sm font-bold text-[var(--ui-text-secondary)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"

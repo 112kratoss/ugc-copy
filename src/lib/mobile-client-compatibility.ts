@@ -143,7 +143,7 @@ export function evaluateMobileClientCompatibility(
       allowed: false,
       status: 426,
       code: 'MOBILE_UPDATE_REQUIRED',
-      message: 'Update Magicbooklet to continue using this service.',
+      message: 'Update Magic Booklet to continue using this service.',
     };
   }
 

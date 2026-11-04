@@ -221,7 +221,7 @@ describe('WorkflowTemplatePublishDrawer', () => {
 
     expect(await screen.findByText(/template test service is temporarily unavailable/i)).toBeInTheDocument();
     expect(openSpy).toHaveBeenCalledWith('about:blank', 'magicbooklet-template-consumer-test');
-    expect(popupDocument.title).toMatch(/test setup needs attention.*magicbooklet/i);
+    expect(popupDocument.title).toMatch(/test setup needs attention.*Magic Booklet/i);
     expect(popupDocument.body.textContent).toMatch(/we couldn’t prepare this test/i);
     expect(popupDocument.body.textContent).toMatch(/template test service is temporarily unavailable/i);
     expect(popupDocument.body.textContent).toMatch(/return to the workflow tab/i);

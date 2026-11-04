@@ -95,7 +95,7 @@ export async function generateMetadata({ searchParams }: ShowcasePageProps): Pro
     return createMetadata({
         title: 'Explore',
         description:
-            'Browse public magicbooklet creations, creator notes, and production-ready examples of AI images, videos, motion-transfer ads, and reusable workflows.',
+            'Browse public Magic Booklet creations, creator notes, and production-ready examples of AI images, videos, motion-transfer ads, and reusable workflows.',
         path: '/showcase',
         keywords: ['AI showcase', 'UGC ad examples', 'AI image examples', 'AI video examples', 'creator tips'],
         noIndex: hasNonDefaultVariant,
@@ -164,7 +164,7 @@ export default async function ShowcasePage({ searchParams }: ShowcasePageProps) 
                 <JsonLd
                     data={[
                         buildItemListSchema(
-                            'magicbooklet showcase',
+                            'Magic Booklet showcase',
                             '/showcase',
                             initialFeed.items.map((item) => ({
                                 name: item.title,

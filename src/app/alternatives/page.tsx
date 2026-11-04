@@ -14,7 +14,7 @@ import {
 export const metadata: Metadata = createMetadata({
     title: 'AI UGC Ad Tool Comparisons',
     description:
-        'Honest comparisons between magicbooklet and the other tools teams evaluate for AI ad creative — including where each competitor is the better choice.',
+        'Honest comparisons between Magic Booklet and the other tools teams evaluate for AI ad creative — including where each competitor is the better choice.',
     path: '/alternatives',
     keywords: [
         'AI UGC ad tools compared',

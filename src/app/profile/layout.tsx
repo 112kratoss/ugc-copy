@@ -10,7 +10,7 @@ import ProfileSignInRedirect from './ProfileSignInRedirect';
 
 export const metadata: Metadata = createNoIndexMetadata(
   'Profile',
-  'Manage your creator profile, public identity, and showcase links inside magicbooklet.'
+  'Manage your creator profile, public identity, and showcase links inside Magic Booklet.'
 );
 
 export default async function ProfileLayout({ children }: { children: React.ReactNode }) {

@@ -67,7 +67,7 @@ export async function reportPostAfterConfirmation({
 }): Promise<FeedSafetyOutcome> {
   const confirmed = await requestConfirmation({
     title: 'Report content?',
-    message: 'Magicbooklet will send this post to the moderation team for a safety review.',
+    message: 'Magic Booklet will send this post to the moderation team for a safety review.',
     confirmLabel: 'Report content',
     tone: 'danger',
   });

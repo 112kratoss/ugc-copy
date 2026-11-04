@@ -157,7 +157,7 @@ export default async function ModelPage({ params }: ModelPageProps) {
             <JsonLd
                 data={[
                     buildSoftwareApplicationSchema({
-                        name: `${model.displayName} on magicbooklet`,
+                        name: `${model.displayName} on Magic Booklet`,
                         path: `/models/${slug}`,
                         description: model.description,
                         applicationCategory: 'MultimediaApplication',

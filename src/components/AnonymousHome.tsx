@@ -99,7 +99,7 @@ function AnonymousHero({ shelf }: { shelf: Promise<HomeShelfItem[]> }) {
         prerendered page exists to win.
 
         It is the tagline, its selling half in the commerce accent: the hero
-        says Magicbooklet is somewhere to sell what you make, not only a tool to
+        says Magic Booklet is somewhere to sell what you make, not only a tool to
         make it (owner, 2026-10-31). It replaced "Create AI videos, images, and
         motion-transfer UGC ads", which framed the product as an ad generator;
         the category words a search matches stay in this page's title and
@@ -133,7 +133,7 @@ function AnonymousFooter() {
   return (
     <footer className="relative z-10 border-t border-[var(--ui-border-subtle)] bg-[var(--ui-bg-app)] px-6 py-8 text-sm text-[var(--ui-text-faint)]">
       <div className="studio-shell flex flex-col items-center justify-between gap-4 sm:flex-row">
-        <p>© {new Date().getFullYear()} magicbooklet.</p>
+        <p>© {new Date().getFullYear()} Magic Booklet.</p>
         {/* The model price list, comparisons, guides and feature pages were
             reachable only through sitemap.xml. */}
         <nav className="flex flex-wrap justify-center gap-x-5 gap-y-2" aria-label="Product">
@@ -173,7 +173,7 @@ export default function AnonymousHome() {
           name: siteConfig.name,
           path: '/',
           description:
-            'magicbooklet helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.',
+            'Magic Booklet helps teams generate AI images, AI videos, motion-transfer ads, and reusable creative workflows.',
           featureList: ['AI images', 'AI videos', 'Motion transfer', 'Workflows'],
           offers: [
             {
