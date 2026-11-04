@@ -121,6 +121,31 @@ export interface ProfileUpdatePayload {
 }
 
 /**
+ * The body the web profile form saves: the profile's text, and a photo only
+ * when this save uploaded it, as the app's `buildProfileUpdateBody` does. The
+ * form is opened once and never reloaded, so the photo URLs it read when it
+ * opened may be ones another device has replaced since; sending them back
+ * would ask the server to show them again.
+ */
+export function buildProfileSaveBody(
+  form: EditableCreatorProfile,
+  uploaded: { avatarUrl?: string; coverUrl?: string } = {},
+): ProfileUpdatePayload {
+  return {
+    username: form.username,
+    displayName: form.displayName,
+    bio: form.bio,
+    ...(uploaded.avatarUrl ? { avatarUrl: uploaded.avatarUrl } : {}),
+    ...(uploaded.coverUrl ? { coverUrl: uploaded.coverUrl } : {}),
+    websiteUrl: form.websiteUrl,
+    twitterHandle: form.twitterHandle,
+    instagramHandle: form.instagramHandle,
+    tiktokHandle: form.tiktokHandle,
+    location: form.location,
+  };
+}
+
+/**
  * One field of a partial PATCH: `undefined` when the request left the key out
  * (the stored value stays), `null` to clear it, or the new value.
  */

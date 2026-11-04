@@ -157,26 +157,64 @@ async function readStoredProfileMedia(
 }
 
 /**
- * Removes the photo a saved profile no longer shows: an avatar or cover the
- * save replaced or cleared. Only an object in this account's own folder of the
- * profiles bucket, and only when no profile names it once the save has landed
- * (the same file can be the avatar and the cover, and a guest linked to the
- * account keeps its own row); the read is made after the save, right before
- * the removal. A photo outside the folder (a sign-in provider's picture, a
- * linked guest's) is left alone. Never fails the save: a failed read or
- * removal is logged and leaves the file, as before.
+ * The submitted profile photos that are a new upload a client is sending: a
+ * file of the account's folder whose reservation no save has consumed yet.
+ * Every other file of the folder a save can carry was put there by an earlier
+ * save (a consumed upload, or a normalised copy, which has no reservation):
+ * the photo the profile shows, or one a form still showed after another
+ * device replaced it. Null when the reservations could not be read.
+ */
+async function readNewProfileUploads(
+  client: ProfileRouteClient,
+  userId: string,
+  filePaths: string[],
+): Promise<Set<string> | null> {
+  if (filePaths.length === 0) return new Set();
+  try {
+    const { data, error } = await client
+      .from('upload_byte_reservations')
+      .select('storage_path, finalization_status')
+      .eq('user_id', userId)
+      .eq('bucket_id', PROFILE_MEDIA_BUCKET)
+      .in('storage_path', filePaths);
+    if (error) throw error;
+    return new Set(((data ?? []) as Array<{ storage_path: string; finalization_status: string }>)
+      .filter((row) => row.finalization_status !== 'consumed')
+      .map((row) => row.storage_path));
+  } catch (error) {
+    logBackendError('failed_to_read_profile_upload_reservations', { error });
+    return null;
+  }
+}
+
+/**
+ * Removes the photo a save replaced with one it uploaded: the avatar or cover
+ * the profile showed before, for each column whose saved value is an upload
+ * this request finalized or its normalised copy (`savedUploads`). Nothing else
+ * replaces a photo: a clear, or a form re-sending what it showed, never
+ * removes one. Only an object in this account's own folder of the profiles
+ * bucket, and only when no profile names it once the save has landed (the
+ * same file can be the avatar and the cover, and a guest linked to the account
+ * keeps its own row); the read is made after the save, right before the
+ * removal. A photo outside the folder (a sign-in provider's picture, a linked
+ * guest's) is left alone. Never fails the save: a failed read or removal is
+ * logged and leaves the file, as before.
  */
 async function removeReplacedProfileMedia(
   client: ProfileRouteClient,
   userId: string,
   previous: StoredProfileMedia,
   saved: Partial<StoredProfileMedia>,
+  savedUploads: ReadonlySet<string>,
 ): Promise<void> {
-  const savedValues = new Set([saved.avatar_url, saved.cover_url].filter(Boolean));
   const replaced = new Map<string, string>();
-  for (const value of [previous.avatar_url, previous.cover_url]) {
-    if (!value || savedValues.has(value)) continue;
-    const location = getUserOwnedStoredMediaLocation(value, userId, { allowedBuckets: [PROFILE_MEDIA_BUCKET] });
+  for (const column of ['avatar_url', 'cover_url'] as const) {
+    const savedValue = saved[column];
+    const before = previous[column];
+    if (!savedValue || !before || savedValue === before) continue;
+    const savedLocation = getUserOwnedStoredMediaLocation(savedValue, userId, { allowedBuckets: [PROFILE_MEDIA_BUCKET] });
+    if (!savedLocation || !savedUploads.has(savedLocation.filePath)) continue;
+    const location = getUserOwnedStoredMediaLocation(before, userId, { allowedBuckets: [PROFILE_MEDIA_BUCKET] });
     if (location) replaced.set(location.filePath, location.filePath);
   }
   if (replaced.size === 0) return;
@@ -355,6 +393,36 @@ export async function updateProfileForRoute({
     .filter((media, index, entries) => entries.findIndex((candidate) => (
       candidate.location.filePath === media.location.filePath
     )) === index);
+  // What the profile showed, read when a save sends a photo: the photo a new
+  // upload replaces goes once the new one is saved.
+  const previousMedia = submittedProfileMedia.length > 0
+    ? await readStoredProfileMedia(resolvedClient, userId)
+    : null;
+  // Only a new upload is taken from the request. A file the account's folder
+  // already held is what the profile shows or what a form still showed after
+  // another device replaced it: its column keeps the stored value, and is left
+  // out of the write (a stale form neither brings back a photo nor fails).
+  const newUploads = await readNewProfileUploads(
+    resolvedClient,
+    userId,
+    submittedProfileMedia.map((media) => media.location.filePath),
+  );
+  if (!newUploads) {
+    return { ok: false, status: 500, error: 'Failed to verify profile media.' };
+  }
+  const keptStoredColumns = (['avatarUrl', 'coverUrl'] as const).filter((field) => {
+    const value = data[field];
+    if (typeof value !== 'string') return false;
+    const location = getUserOwnedStoredMediaLocation(value, userId);
+    return location?.bucket === PROFILE_MEDIA_BUCKET && !newUploads.has(location.filePath);
+  });
+  const staleColumns = keptStoredColumns.filter((field) => (
+    previousMedia && data[field] !== previousMedia[field === 'avatarUrl' ? 'avatar_url' : 'cover_url']
+  ));
+  if (staleColumns.length > 0) {
+    logBackendWarning('profile_save_kept_stored_photo', { fields: staleColumns });
+  }
+
   const consumptionClaims: UploadConsumptionClaim[] = [];
   // An upload the profile will point at is kept for good. One whose
   // normalised copy takes its place is referenced by nothing once the row is
@@ -362,8 +430,10 @@ export async function updateProfileForRoute({
   const preservedClaims: UploadConsumptionClaim[] = [];
   const supersededClaims: UploadConsumptionClaim[] = [];
   const normalizedUrls = new Map<string, string>();
+  // The files this save finalized or wrote as their normalised copies.
+  const savedUploads = new Set<string>();
   try {
-    for (const media of submittedProfileMedia) {
+    for (const media of submittedProfileMedia.filter((candidate) => newUploads.has(candidate.location.filePath))) {
       const finalization = await finalizeUploadForConsumption(resolvedClient, {
         userId,
         bucket: media.location.bucket,
@@ -390,8 +460,10 @@ export async function updateProfileForRoute({
         filePath: media.location.filePath,
         sourceUrl: media.url,
       });
+      savedUploads.add(media.location.filePath);
       if (normalized) {
         normalizedUrls.set(`${media.location.bucket}/${media.location.filePath}`, normalized.url);
+        savedUploads.add(normalized.filePath);
       }
       if (finalization.consumptionClaim) {
         (normalized ? supersededClaims : preservedClaims).push(finalization.consumptionClaim);
@@ -405,14 +477,10 @@ export async function updateProfileForRoute({
     return { ok: false, status: 500, error: 'Failed to verify profile media.' };
   }
 
-  // A save that sends a photo may replace one: what the profile showed is read
-  // first, so the replaced file can go once the new one is saved.
-  const previousMedia = data.avatarUrl !== undefined || data.coverUrl !== undefined
-    ? await readStoredProfileMedia(resolvedClient, userId)
-    : null;
-
-  const toStoredMediaUrl = (value: ProfileFieldUpdate): ProfileFieldUpdate => {
+  const toStoredMediaUrl = (field: 'avatarUrl' | 'coverUrl'): ProfileFieldUpdate => {
+    const value = data[field];
     if (typeof value !== 'string') return value;
+    if (keptStoredColumns.includes(field)) return undefined;
     const location = getUserOwnedStoredMediaLocation(value, userId);
     return (location && normalizedUrls.get(`${location.bucket}/${location.filePath}`)) ?? value;
   };
@@ -427,8 +495,8 @@ export async function updateProfileForRoute({
     ...presentColumns({
       display_name: data.displayName,
       bio: data.bio,
-      avatar_url: toStoredMediaUrl(data.avatarUrl),
-      cover_url: toStoredMediaUrl(data.coverUrl),
+      avatar_url: toStoredMediaUrl('avatarUrl'),
+      cover_url: toStoredMediaUrl('coverUrl'),
       website_url: data.websiteUrl,
       twitter_handle: data.twitterHandle,
       instagram_handle: data.instagramHandle,
@@ -485,8 +553,14 @@ export async function updateProfileForRoute({
   const [completed] = await Promise.all([
     completeUploadByteConsumptions(resolvedClient, preservedClaims),
     releaseSupersededProfileUploads(resolvedClient, supersededClaims),
-    previousMedia
-      ? removeReplacedProfileMedia(resolvedClient, userId, previousMedia, updatedProfile as Partial<StoredProfileMedia>)
+    previousMedia && savedUploads.size > 0
+      ? removeReplacedProfileMedia(
+        resolvedClient,
+        userId,
+        previousMedia,
+        updatedProfile as Partial<StoredProfileMedia>,
+        savedUploads,
+      )
       : null,
   ]);
   if (!completed.ok) {
