@@ -234,6 +234,57 @@ describe('MarketplacePage', () => {
     expect(screen.getByRole('button', { name: /load more recipes/i })).toBeInTheDocument();
   });
 
+  // Supabase renews a session's token about hourly. The listing is the same
+  // viewer's either way: a renewal must not read page one again and put it
+  // back in place of what "Load more" added.
+  it("keeps a signed-in viewer's listing, Load more's included, when their token is renewed", async () => {
+    const firstPage = {
+      items: [createMarketplaceResourceItem({ id: 'bundle-1', title: 'First recipe', post: null })],
+      pageInfo: { hasMore: true, nextOffset: 1, offset: 0, limit: 1 },
+    };
+    const secondPage = {
+      items: [createMarketplaceResourceItem({ id: 'bundle-2', postId: 'post-2', title: 'Second recipe', post: null })],
+      pageInfo: { hasMore: false, nextOffset: null, offset: 1, limit: 1 },
+    };
+    getMarketplaceResourceListMock.mockResolvedValue(firstPage);
+    answerListing((url) => ({ body: url.searchParams.get('offset') === '1' ? secondPage : firstPage }));
+    authState.session = { access_token: 'viewer-token' };
+    authState.user = { id: 'viewer-1' };
+    const firstPageReads = () => listingReads().filter(({ query }) => query.offset === '0');
+
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(await MarketplacePage());
+    });
+    await waitFor(() => expect(firstPageReads()).toHaveLength(1));
+    // The first press opens the buyer tools; theirs reads the next page.
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    await waitFor(() => expect(screen.queryByText('Opening buyer tools…')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    expect(await screen.findByText('Second recipe')).toBeInTheDocument();
+
+    authState.session = { access_token: 'renewed-token' };
+    await act(async () => {
+      view.rerender(await MarketplacePage());
+    });
+
+    expect(screen.getByText('First recipe')).toBeInTheDocument();
+    expect(screen.getByText('Second recipe')).toBeInTheDocument();
+    expect(firstPageReads()).toEqual([{
+      query: { sort: 'recent', offset: '0', limit: '4' },
+      authorization: 'Bearer viewer-token',
+    }]);
+
+    // Another account in the same tab is another listing, read with its own session.
+    authState.session = { access_token: 'other-token' };
+    authState.user = { id: 'viewer-2' };
+    await act(async () => {
+      view.rerender(await MarketplacePage());
+    });
+    await waitFor(() => expect(firstPageReads()).toHaveLength(2));
+    expect(firstPageReads()[1].authorization).toBe('Bearer other-token');
+  });
+
   it("draws a filtered address's own listing, never the cached one while it loads", async () => {
     getMarketplaceResourceListMock.mockResolvedValue({
       items: [createMarketplaceResourceItem({ title: 'Newest free recipe', post: null })],

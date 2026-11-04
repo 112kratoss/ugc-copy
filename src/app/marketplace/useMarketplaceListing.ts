@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 import { useAuth } from '@/components/AuthProvider';
@@ -105,22 +105,30 @@ export function useMarketplaceListing({
     limit: MARKETPLACE_INITIAL_PAGE_SIZE,
   }).toString();
   // A query under the minimum is answered with the hint and lists nothing.
+  // Keyed on who is looking, never on their token: Supabase renews the token
+  // about hourly, and a read for each renewal would put page one back in place
+  // of what "Load more" added and the search typed.
   const requestKey = search === null || viewerKey === null || address.shortQuery
     ? null
     : `${listQuery}\u0001${viewerKey}\u0001${attempt}`;
 
-  useEffect(() => {
-    if (requestKey === null) return;
-    const controller = new AbortController();
-    // A signed-in viewer's page is filtered for their blocks, which the API can
-    // do only with the session; a visitor's request stays bare so the edge can
-    // keep serving its shared copy.
-    void fetch(`/api/marketplace/resources?${listQuery}`, {
+  // A signed-in viewer's page is filtered for their blocks, which the API can
+  // do only with the session; a visitor's request stays bare so the edge can
+  // keep serving its shared copy. The token is the one current when it is sent.
+  const requestListing = useEffectEvent((query: string, signal: AbortSignal) => fetch(
+    `/api/marketplace/resources?${query}`,
+    {
       headers: accessToken
         ? { Accept: 'application/json', Authorization: `Bearer ${accessToken}` }
         : { Accept: 'application/json' },
-      signal: controller.signal,
-    }).then(async (response) => {
+      signal,
+    },
+  ));
+
+  useEffect(() => {
+    if (requestKey === null) return;
+    const controller = new AbortController();
+    void requestListing(listQuery, controller.signal).then(async (response) => {
       const body = await response.json().catch(() => null) as Partial<MarketplaceListingPage> | null;
       if (controller.signal.aborted) return;
       if (!response.ok || !Array.isArray(body?.items) || !body?.pageInfo) {
@@ -132,7 +140,7 @@ export function useMarketplaceListing({
       if (!controller.signal.aborted) setRead({ key: requestKey, page: null });
     });
     return () => controller.abort();
-  }, [accessToken, listQuery, requestKey]);
+  }, [listQuery, requestKey]);
 
   const landed = read && read.key === requestKey ? read : null;
   // The cached page stands for its own address while the read is out, and if
