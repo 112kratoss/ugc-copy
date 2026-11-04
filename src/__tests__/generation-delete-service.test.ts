@@ -92,6 +92,7 @@ function createAdminSupabaseMock({
   const storageRemovals: Array<{ bucket: string; paths: string[] }> = [];
   const postReads: Array<Record<string, unknown>> = [];
   const queuedShowcasePaths: string[][] = [];
+  const privateCleanupTickets: Array<Record<string, unknown>> = [];
   const remainingPosts: RemainingPost[] = postsAfterDelete ?? linkedPosts.map((post) => ({
     id: post.id,
     output_url: generation?.output_url ?? null,
@@ -124,6 +125,7 @@ function createAdminSupabaseMock({
     deletes,
     ownerFilters,
     postReads,
+    privateCleanupTickets,
     queuedShowcasePaths,
     rpc,
     selects,
@@ -132,6 +134,12 @@ function createAdminSupabaseMock({
       rpc,
       from(table: string) {
         return {
+          // The private cleanup outbox, as the service role writes it.
+          async upsert(rows: Array<Record<string, unknown>>, options: Record<string, unknown>) {
+            if (table !== 'post_media_object_cleanup') throw new Error(`Unexpected upsert into ${table}`);
+            privateCleanupTickets.push(...rows.map((row) => ({ ...row, options })));
+            return { data: null, error: null };
+          },
           select(columns = '') {
             selects.push(`${table}:${columns}`);
             const filters: Record<string, unknown> = {};
@@ -682,6 +690,58 @@ describe('generation delete service', () => {
         'failed_to_load_posts_after_generation_delete',
         expect.anything(),
       );
+    });
+
+    // A post marked NSFW serves a private copy, private-posts/<creation>/, in
+    // the private bucket. With no post left, nothing else names it.
+    describe('the private copy of a creation marked NSFW', () => {
+      const nsfwGeneration: GenerationRow = {
+        ...imageGeneration,
+        showcase_asset_path: 'private-posts/gen-1/generated_p1_0.abc123.png',
+      };
+
+      it('goes with the creation when no post remains', async () => {
+        const { admin } = await deleteCreation({ generation: nsfwGeneration });
+
+        expect(removedPaths(admin.storageRemovals)).toContain('post_media/private-posts/gen-1/generated_p1_0.abc123.png');
+      });
+
+      it('stays while a remaining post serves it', async () => {
+        const { admin } = await deleteCreation({
+          generation: nsfwGeneration,
+          linkedPosts: [{ id: 'post-1' }],
+          postsAfterDelete: [{
+            id: 'post-1',
+            output_url: 'generated_images/user-1/generated_p1_0.png',
+            showcase_asset_path: 'private-posts/gen-1/generated_p1_0.abc123.png',
+            post_media: [],
+          }],
+        });
+
+        expect(removedPaths(admin.storageRemovals)).not.toContain('post_media/private-posts/gen-1/generated_p1_0.abc123.png');
+        expect(admin.privateCleanupTickets).toEqual([]);
+      });
+
+      it('goes to the private cleanup outbox, which checks references again, when its removal fails', async () => {
+        const { admin, result } = await deleteCreation({
+          generation: nsfwGeneration,
+          storageRemoveErrors: { post_media: { message: 'storage unavailable' } },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(admin.privateCleanupTickets).toEqual([{
+          storage_path: 'private-posts/gen-1/generated_p1_0.abc123.png',
+          options: expect.objectContaining({ onConflict: 'storage_path', ignoreDuplicates: true }),
+        }]);
+      });
+
+      it('never takes a path outside the creation\'s own folder', async () => {
+        const { admin } = await deleteCreation({
+          generation: { ...nsfwGeneration, showcase_asset_path: 'private-posts/gen-2/other.png' },
+        });
+
+        expect(removedPaths(admin.storageRemovals).some((path) => path.startsWith('post_media/'))).toBe(false);
+      });
     });
 
     it('logs a failed removal and hands failed public paths to the revocation queue', async () => {

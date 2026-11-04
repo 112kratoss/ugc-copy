@@ -8,7 +8,12 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { isMediaBucket, type MediaBucket } from '@/lib/media-urls';
-import { POST_MEDIA_PATH_COLUMNS } from '@/lib/post-media-storage';
+import {
+  POST_MEDIA_PATH_COLUMNS,
+  PRIVATE_POST_MEDIA_BUCKET,
+  PRIVATE_POST_MEDIA_PREFIX,
+  postMediaStorageBucket,
+} from '@/lib/post-media-storage';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import {
   getCanonicalStoredMediaLocation,
@@ -19,7 +24,8 @@ import { queueUnrecordedShowcaseMedia } from '@/lib/unrecorded-showcase-media';
 
 type RouteBody = Record<string, unknown>;
 type GenerationDeleteClient = SupabaseClient;
-type ShowcaseBucket = 'showcase_media';
+/** The creation's copy: `showcase/<creation>/` in public, `private-posts/<creation>/` for one marked NSFW. */
+type CopyBucket = 'showcase_media' | typeof PRIVATE_POST_MEDIA_BUCKET;
 
 type GenerationDeleteRow = {
   id: string;
@@ -41,7 +47,7 @@ type RemainingPostRow = {
 };
 
 type RemovablePath = {
-  bucket: MediaBucket | ShowcaseBucket;
+  bucket: MediaBucket | CopyBucket;
   path: string;
 };
 
@@ -106,7 +112,8 @@ function addUserOwnedStoredMediaPath(
   });
 }
 
-function getShowcaseMediaPath(
+/** The creation's copy under its own folder, public or (marked NSFW) private; null for anything else. */
+function getCreationCopyPath(
   value: string | null | undefined,
   generationId: string,
 ): string | null {
@@ -114,7 +121,7 @@ function getShowcaseMediaPath(
   const canonicalPath = parseCanonicalStorageObjectPath(value, { minimumSegments: 3 });
   if (!canonicalPath) return null;
   const [namespace, scopedGenerationId] = canonicalPath.split('/');
-  if (namespace !== 'showcase' || scopedGenerationId !== generationId) return null;
+  if ((namespace !== 'showcase' && namespace !== 'private-posts') || scopedGenerationId !== generationId) return null;
   return canonicalPath;
 }
 
@@ -212,6 +219,7 @@ async function removeStoragePaths(
   }
 
   const failedPublicPaths: string[] = [];
+  const failedPrivateCopies: string[] = [];
   for (const [bucket, paths] of pathsByBucket) {
     let error: unknown = null;
     try {
@@ -223,10 +231,37 @@ async function removeStoragePaths(
 
     logBackendError('failed_to_remove_deleted_generation_media', { error, generationId, bucket, paths });
     if (bucket === 'showcase_media') failedPublicPaths.push(...paths);
+    if (bucket === PRIVATE_POST_MEDIA_BUCKET) failedPrivateCopies.push(...paths);
   }
 
   if (failedPublicPaths.length > 0) {
     await queueUnrecordedShowcaseMedia(adminSupabase, failedPublicPaths);
+  }
+  if (failedPrivateCopies.length > 0) {
+    await queuePrivateCopyCleanup(adminSupabase, failedPrivateCopies, generationId);
+  }
+}
+
+/**
+ * A creation's private copy (`private-posts/<creation>/`) that failed to go
+ * goes to the private bucket's cleanup outbox, whose job removes it only once
+ * `private_post_media_is_referenced` finds nothing naming it (purchase
+ * snapshots included). Handed over only when no post of the deleted creation
+ * remains: that function finds a post's own folder, not a creation's, and no
+ * new post can link a deleted creation. Never throws.
+ */
+async function queuePrivateCopyCleanup(
+  adminSupabase: GenerationDeleteClient,
+  paths: string[],
+  generationId: string,
+) {
+  try {
+    const { error } = await adminSupabase
+      .from('post_media_object_cleanup')
+      .upsert(paths.map((storage_path) => ({ storage_path })), { onConflict: 'storage_path', ignoreDuplicates: true });
+    if (error) throw error;
+  } catch (error) {
+    logBackendError('failed_to_queue_deleted_generation_private_copy', { error, generationId, paths });
   }
 }
 
@@ -357,7 +392,7 @@ export async function deleteOwnerGenerationForRoute({
     // (post-delete-service). Unreadable posts keep everything a post could name.
     const remainingPosts = await loadNamesOfRemainingPosts(adminSupabase, deleted.id);
     const postsRemain = hasLinkedPosts || (remainingPosts?.posts ?? 0) > 0;
-    const showcasePath = getShowcaseMediaPath(deleted.showcase_asset_path, deleted.id);
+    const copyPath = getCreationCopyPath(deleted.showcase_asset_path, deleted.id);
     const queuedPublicPaths: string[] = [];
 
     if (remainingPosts !== null) {
@@ -365,14 +400,16 @@ export async function deleteOwnerGenerationForRoute({
         !remainingPosts.names.has(`${bucket}/${path}`)
       )));
 
-      if (showcasePath && !remainingPosts.names.has(showcasePath)) {
+      if (copyPath && !remainingPosts.names.has(copyPath)) {
         if (remainingPosts.posts === 0) {
-          removablePaths.push({ bucket: 'showcase_media', path: showcasePath });
-        } else {
+          removablePaths.push({ bucket: postMediaStorageBucket(copyPath), path: copyPath });
+        } else if (!copyPath.startsWith(PRIVATE_POST_MEDIA_PREFIX)) {
           // A post still serves the creation's folder: the revocation job
           // decides, keeping the copy if a post or its media row names it and
-          // waiting out a sweep's lease before it removes it.
-          queuedPublicPaths.push(showcasePath);
+          // waiting out a sweep's lease before it removes it. A private copy no
+          // remaining post names has no such queue: the post's own delete
+          // queues what it names, and the orphan listing finds the rest.
+          queuedPublicPaths.push(copyPath);
         }
       }
     }
