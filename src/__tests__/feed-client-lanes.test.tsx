@@ -365,6 +365,46 @@ describe('FeedClient lanes and card actions', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
+    // Page one starts a new ranked session, whose seen check reads the
+    // impressions recorded by then.
+    it('asks for page one only once the queued feed events are recorded', async () => {
+        const actual = await vi.importActual<typeof import('@/app/showcase/ShowcaseFeedInteraction')>('@/app/showcase/ShowcaseFeedInteraction');
+        actual.resetShowcaseFeedEventQueueForTests();
+        let recordEvents: () => void = () => undefined;
+        const fetchMock = vi.fn((url: string) => {
+            if (url === '/api/showcase/feed/events') {
+                return new Promise((resolve) => {
+                    recordEvents = () => resolve({ ok: true, status: 200, json: async () => ({ success: true }) });
+                });
+            }
+            return Promise.resolve({ ok: true, json: async () => page([item('late-1', 'Late one')]) });
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        await actual.sendShowcaseFeedEvent({
+            item: { ...item('post-seen', 'Seen'), recommendation: { deliveryId: 'delivery-seen', position: 1 } } as ShowcaseFeedItem,
+            eventType: 'impression',
+            sourceSurface: 'feed',
+            accessToken: null,
+            feedSessionId: 'session-1',
+        });
+        const pageRequests = () => fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/showcase/feed?'));
+
+        render(<FeedClient initialFeed={null} initialChipId="for-you" />);
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/feed/events', expect.anything()));
+        await act(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(pageRequests()).toHaveLength(0);
+
+        await act(async () => {
+            recordEvents();
+        });
+        expect(await screen.findByText('Late one')).toBeInTheDocument();
+        expect(pageRequests()).toHaveLength(1);
+        actual.resetShowcaseFeedEventQueueForTests();
+    });
+
     it('fetches page one itself when the server render had none', async () => {
         const fetchMock = mockFetchPage([item('late-1', 'Late one')]);
         render(<FeedClient initialFeed={null} initialChipId="for-you" />);

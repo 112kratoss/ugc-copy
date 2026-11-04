@@ -224,6 +224,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/feed-event-queue', () => ({
   enqueueShowcaseFeedEvent: vi.fn(() => Promise.resolve()),
   flushShowcaseFeedEvents: vi.fn(() => Promise.resolve()),
+  flushShowcaseFeedEventsBeforeRefresh: vi.fn(() => Promise.resolve()),
   isBatchedShowcaseFeedEventType: () => false,
 }));
 
@@ -242,6 +243,7 @@ vi.mock('@/lib/motion', () => ({
 import ShowcaseScreen, { partitionAspectRatiosByViewport } from '../app/(tabs)/showcase';
 import { resetAutoplayPreferenceForTests, type AutoplayPreference } from '../lib/autoplay-preference';
 import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
+import { flushShowcaseFeedEventsBeforeRefresh } from '../lib/feed-event-queue';
 import { createFeedVideoActivationStore, FeedVideoActivationContext } from '../lib/feed-video-activation';
 import { haptic } from '../lib/haptics';
 import { resolvedBottomInset, resolvedTopInset } from '../lib/safe-area';
@@ -930,8 +932,10 @@ describe('Showcase screen', () => {
       expect(applied()).toEqual({ 'post-5': 2, 'post-2': 0.5 });
 
       // A refresh re-places every card anyway, so whatever still waits lands.
+      // (It asks for the page once the queued events are recorded.)
       await renderer.act(async () => {
         listProps().onRefresh();
+        for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
       });
       expect(queryState.refetch).toHaveBeenCalledTimes(1);
       expect(applied()).toEqual({ 'post-5': 2, 'post-2': 0.5, 'post-0': 1.25 });
@@ -1023,6 +1027,12 @@ describe('Showcase screen', () => {
         list.scrollToOffset.mockClear();
 
         queryState.refetch.mockImplementationOnce(heldRefetch);
+        // The page can be a new ranked session, whose seen check reads the
+        // impressions still queued: it is asked for once they are recorded.
+        let recordEvents!: () => void;
+        vi.mocked(flushShowcaseFeedEventsBeforeRefresh).mockReturnValueOnce(new Promise<void>((resolve) => {
+          recordEvents = resolve;
+        }));
         renderer.act(() => pill().onPress());
 
         expect(pill().visible).toBe(false);
@@ -1036,6 +1046,10 @@ describe('Showcase screen', () => {
         const pages = [lanePage([{ id: 'post-1' }]), lanePage([{ id: 'post-2' }])];
         expect((trim as (lane: Lane) => Lane)({ pages, pageParams: [{ offset: 0 }, { offset: 12 }] }))
           .toEqual({ pages: [pages[0]], pageParams: [{ offset: 0 }] });
+        await settle();
+        expect(queryState.refetch).not.toHaveBeenCalled();
+        recordEvents();
+        await settle();
         expect(queryState.refetch).toHaveBeenCalledTimes(1);
         expect(list.scrollToOffset.mock.invocationCallOrder[0])
           .toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
@@ -1049,6 +1063,8 @@ describe('Showcase screen', () => {
         // The same reading sees a pull's own spinner.
         queryState.refetch.mockImplementationOnce(heldRefetch);
         renderer.act(() => hostElement(tree, 'flash-list').props.onRefresh());
+        expect(refreshing()).toBe(true);
+        await settle();
         expect(refreshing()).toBe(true);
         finishRefetch();
         await settle();

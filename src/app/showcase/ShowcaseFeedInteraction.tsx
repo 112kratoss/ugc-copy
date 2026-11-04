@@ -151,6 +151,8 @@ type QueuedFeedEvent = {
 let pendingFeedEvents: QueuedFeedEvent[] = [];
 /** Sent, and the answer not yet heard. */
 const inFlightFeedEventIds = new Set<string>();
+/** The batch requests on their way, for a refresh to wait on. */
+const inFlightFeedEventRequests = new Set<Promise<unknown>>();
 let feedEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let feedEventUnloadBound = false;
 /** This page, as the owner of the outbox entries it is sending. */
@@ -256,12 +258,41 @@ export function flushShowcaseFeedEvents({ unloading = false }: { unloading?: boo
           ? entries.filter((entry) => !ids.has(entry.id))
           : entries.map((entry) => (ids.has(entry.id) ? { ...entry, owner: '' } : entry))));
       };
-      requests.push(postFeedEvents(chunk[0].accessToken, { events: chunk.map((entry) => entry.body) })
-        .then((response) => settle(isSettledFeedEventResponse(response.status)), () => settle(false)));
+      const request = postFeedEvents(chunk[0].accessToken, { events: chunk.map((entry) => entry.body) })
+        .then((response) => settle(isSettledFeedEventResponse(response.status)), () => settle(false));
+      inFlightFeedEventRequests.add(request);
+      void request.finally(() => inFlightFeedEventRequests.delete(request));
+      requests.push(request);
     }
   }
 
   return Promise.all(requests).then(() => undefined);
+}
+
+/**
+ * The longest a feed refresh waits for the queue before it asks for a first
+ * page: long enough for a batch to be recorded, short enough that a slow
+ * network leaves the refresh to go on without it.
+ */
+export const FEED_EVENT_FLUSH_BEFORE_REFRESH_MS = 1_500;
+
+/**
+ * Before a feed asks for a first page. A first page can start a new ranked
+ * session (one the viewer has not opened for two minutes), and the session's
+ * seen check reads the impressions recorded by then: the ones still queued, or
+ * sent and unanswered, would have the feed show again what the reader has just
+ * scrolled past. So the queue is sent, and the refresh waits for every answer,
+ * at most `FEED_EVENT_FLUSH_BEFORE_REFRESH_MS`. Never rejects.
+ */
+export function flushShowcaseFeedEventsBeforeRefresh(): Promise<void> {
+  const sending = Promise.all([flushShowcaseFeedEvents(), ...inFlightFeedEventRequests]);
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, FEED_EVENT_FLUSH_BEFORE_REFRESH_MS);
+    void sending.catch(() => undefined).finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 /**
@@ -277,6 +308,7 @@ export function resetShowcaseFeedEventQueueForTests() {
   }
   pendingFeedEvents = [];
   inFlightFeedEventIds.clear();
+  inFlightFeedEventRequests.clear();
   dwellDeliveryIds.clear();
   resourceOpenDeliveryIds.clear();
   feedEventOutboxStorage()?.removeItem(FEED_EVENT_OUTBOX_STORAGE_KEY);

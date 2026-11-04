@@ -28,6 +28,7 @@ import {
     FEED_UNDO_FAILED_MESSAGE,
     FeedRemovalUndoRow,
     feedRemovalLabel,
+    flushShowcaseFeedEventsBeforeRefresh,
     getShowcaseFeedSessionId,
     getShowcaseRecommendation,
     putBackRemovedFeedItems,
@@ -465,6 +466,9 @@ export default function FeedClient({
             if (chip.unlock !== 'all') params.set('unlock', chip.unlock);
             if (chip.category !== 'all') params.set('category', chip.category);
 
+            // Page one starts a new ranked session, which reads the impressions recorded by then.
+            if (!append) await flushShowcaseFeedEventsBeforeRefresh();
+            if (requestId !== requestIdRef.current) return;
             const response = await fetch(
                 `/api/showcase/feed?${params.toString()}`,
                 {

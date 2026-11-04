@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  FEED_EVENT_FLUSH_BEFORE_REFRESH_MS,
   flushShowcaseFeedEvents,
+  flushShowcaseFeedEventsBeforeRefresh,
   resetShowcaseFeedEventQueueForTests,
   sendShowcaseFeedEvent,
 } from '@/app/showcase/ShowcaseFeedInteraction';
@@ -229,6 +231,48 @@ describe('showcase feed event batching', () => {
 
     expect(eventRequests(fetchMock)).toHaveLength(2);
     expect(outboxIds()).toEqual([]);
+  });
+
+  // A first page can start a new ranked session, whose seen check reads the
+  // impressions recorded by then: a refresh waits until the queued ones are.
+  it('lets a feed refresh wait for every queued and unanswered event, 1.5 s at most', async () => {
+    const answers: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(() => new Promise<Response>((resolve) => { answers.push(resolve); }));
+    vi.stubGlobal('fetch', fetchMock);
+    const send = () => sendShowcaseFeedEvent({ item: rankedItem(), eventType: 'impression', sourceSurface: 'feed', accessToken: 'token-1', feedSessionId: 'session-1' });
+
+    // One batch already on its way, one still queued.
+    await send();
+    void flushShowcaseFeedEvents();
+    await send();
+    let ready = false;
+    const waiting = flushShowcaseFeedEventsBeforeRefresh().then(() => { ready = true; });
+    expect(eventRequests(fetchMock)).toHaveLength(2);
+    await Promise.resolve();
+    expect(ready).toBe(false);
+
+    answers[1](new Response(JSON.stringify({ success: true }), { status: 200 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ready).toBe(false);
+    answers[0](new Response(JSON.stringify({ success: true }), { status: 200 }));
+    await waiting;
+    expect(ready).toBe(true);
+
+    // A send that never answers holds a refresh 1.5 s, no more.
+    vi.useFakeTimers();
+    try {
+      await send();
+      let released = false;
+      const held = flushShowcaseFeedEventsBeforeRefresh().then(() => { released = true; });
+      await vi.advanceTimersByTimeAsync(FEED_EVENT_FLUSH_BEFORE_REFRESH_MS - 1);
+      expect(released).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await held;
+      expect(released).toBe(true);
+      expect(FEED_EVENT_FLUSH_BEFORE_REFRESH_MS).toBe(1_500);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps a queued batch separate from an immediate event', async () => {

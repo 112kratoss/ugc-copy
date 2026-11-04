@@ -258,6 +258,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/feed-event-queue', () => ({
   enqueueShowcaseFeedEvent: vi.fn(() => Promise.resolve()),
   flushShowcaseFeedEvents: vi.fn(() => Promise.resolve()),
+  flushShowcaseFeedEventsBeforeRefresh: vi.fn(() => Promise.resolve()),
   isBatchedShowcaseFeedEventType: () => false,
 }));
 
@@ -374,7 +375,7 @@ vi.mock('@/lib/feed-attention-view-model', async (importOriginal) => {
 
 import { HomeDashboard } from '../components/home-dashboard';
 import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
-import { flushShowcaseFeedEvents } from '../lib/feed-event-queue';
+import { flushShowcaseFeedEventsBeforeRefresh } from '../lib/feed-event-queue';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
@@ -948,6 +949,10 @@ describe('Home screen', () => {
     });
     const refetched = deferred<void>();
     queryState.refetch.mockImplementation(() => refetched.promise);
+    // The refetch can be a new ranked session, whose seen check reads the
+    // impressions the queue holds: it waits until they are recorded.
+    const eventsRecorded = deferred<void>();
+    vi.mocked(flushShowcaseFeedEventsBeforeRefresh).mockReturnValueOnce(eventsRecorded.promise);
     const lightHaptic = vi.spyOn(haptic, 'light');
     const { tree, list } = renderHome();
     await returnToApp();
@@ -965,12 +970,14 @@ describe('Home screen', () => {
     const firstPage = page([mediaItem('a', 'delivery-tap-a')]);
     expect(trim({ pages: [firstPage, page([mediaItem('b', 'delivery-tap-b')])], pageParams: [{ offset: 0 }, { offset: 1 }] }))
       .toEqual({ pages: [firstPage], pageParams: [{ offset: 0 }] });
+    expect(flushShowcaseFeedEventsBeforeRefresh).toHaveBeenCalledTimes(1);
+    await renderer.act(async () => { await settlePromises(); });
+    expect(queryState.refetch).not.toHaveBeenCalled();
+    await renderer.act(async () => {
+      eventsRecorded.resolve();
+      await settlePromises();
+    });
     expect(queryState.refetch).toHaveBeenCalledTimes(1);
-    expect(list.scrollToOffset.mock.invocationCallOrder[0]).toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
-    // The lane's queued events leave with the refetch, which can be a new
-    // ranked session reading what was seen.
-    expect(vi.mocked(flushShowcaseFeedEvents).mock.invocationCallOrder.at(-1))
-      .toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
     // No pull is behind this refresh: the control stays down while the page loads.
     expect(listProps(tree).refreshControl.props.refreshing).toBe(false);
     await renderer.act(async () => {

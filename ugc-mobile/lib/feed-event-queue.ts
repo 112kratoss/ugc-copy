@@ -477,6 +477,23 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
     return flushPromise;
   }
 
+  /**
+   * Sends everything ready now and settles once the server has answered for
+   * it. A send already under way took its events before later ones joined the
+   * queue, so a second one follows it when any are left ready (retries keep
+   * their backoff).
+   */
+  async function drain() {
+    await flush();
+    const identityKey = await dependencies.getCurrentIdentityKey().catch(() => null);
+    const currentTime = now();
+    if (entries.some((entry) => (
+      isSendableForIdentity(entry, identityKey, currentTime) && entry.nextAttemptAt <= currentTime
+    ))) {
+      await flush();
+    }
+  }
+
   function beginIdentityTransition({
     identityKey,
     accessToken,
@@ -573,6 +590,7 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
   return {
     enqueue,
     flush,
+    drain,
     restore,
     beginIdentityTransition,
     getEntriesForTests: () => entries.map((entry) => ({ ...entry, event: { ...entry.event } })),
@@ -612,6 +630,36 @@ export function enqueueShowcaseFeedEvent(event: ShowcaseFeedEventRequest) {
 
 export function flushShowcaseFeedEvents() {
   return feedEventQueue.flush();
+}
+
+/**
+ * The longest a feed refresh waits for the queue before it asks for its first
+ * page: long enough for a batch to be recorded, short enough that a slow
+ * network leaves the refresh to go on without it.
+ */
+export const FEED_EVENT_FLUSH_BEFORE_REFRESH_MS = 1_500;
+
+/** Settles when `promise` does or after `ms`, whichever comes first; never rejects. */
+export function waitAtMost(promise: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    promise.catch(() => undefined).finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Before a feed asks for a first page. A first page can start a new ranked
+ * session (one the viewer has not opened for two minutes), and the session's
+ * seen check reads the impressions recorded by then: the ones still queued
+ * here would have the feed show again what the reader has just scrolled past.
+ * So the queue is sent and the refresh waits for the answer, at most
+ * `FEED_EVENT_FLUSH_BEFORE_REFRESH_MS`.
+ */
+export function flushShowcaseFeedEventsBeforeRefresh() {
+  return waitAtMost(feedEventQueue.drain(), FEED_EVENT_FLUSH_BEFORE_REFRESH_MS);
 }
 
 export function beginShowcaseFeedEventIdentityTransition(options: {

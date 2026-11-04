@@ -8,6 +8,7 @@ vi.mock('expo-secure-store', () => ({
 }));
 
 import {
+  FEED_EVENT_FLUSH_BEFORE_REFRESH_MS,
   FEED_EVENT_QUEUE_FLUSH_DELAY_MS,
   FEED_EVENT_QUEUE_FLUSH_SIZE,
   FEED_EVENT_QUEUE_MAX_WAIT_MS,
@@ -17,6 +18,7 @@ import {
   FEED_EVENT_QUEUE_TRANSITION_DRAIN_MS,
   createFeedEventQueue,
   isBatchedShowcaseFeedEventType,
+  waitAtMost,
   type FeedEventQueueStorage,
 } from '../lib/feed-event-queue';
 import { ApiError } from '../lib/api-client';
@@ -186,6 +188,51 @@ describe('feed event queue', () => {
     // The last event came at 50 s: the batch is due at 60 s, not at 65 s.
     expect(harness.timers.at(-1)?.delayMs).toBe(10_000);
     expect(harness.sendBatch).not.toHaveBeenCalled();
+  });
+
+  // A refreshed feed can start a new ranked session, whose seen check reads the
+  // impressions this queue holds: the refresh waits for them to be recorded.
+  it('drains everything ready, including events queued while a send was already under way', async () => {
+    const harness = createHarness();
+    let acknowledgeFirst!: () => void;
+    harness.sendBatch.mockImplementationOnce(() => new Promise((resolve) => {
+      acknowledgeFirst = () => resolve({ success: true });
+    }));
+    await harness.queue.enqueue(event(1));
+    const underWay = harness.queue.flush();
+    await vi.waitFor(() => expect(harness.sendBatch).toHaveBeenCalledTimes(1));
+    await harness.queue.enqueue(event(2));
+
+    let drained = false;
+    const draining = harness.queue.drain().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    acknowledgeFirst();
+    await underWay;
+    await draining;
+
+    expect(harness.sendBatch.mock.calls.map(([events]) => events.map(({ clientEventId }) => clientEventId)))
+      .toEqual([['event-1'], ['event-2']]);
+    expect(harness.queue.getEntriesForTests()).toHaveLength(0);
+  });
+
+  it('waits for a drain at most the time it is given, and never fails', async () => {
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      const waiting = waitAtMost(new Promise<void>(() => undefined), FEED_EVENT_FLUSH_BEFORE_REFRESH_MS)
+        .then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(FEED_EVENT_FLUSH_BEFORE_REFRESH_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await waiting;
+      expect(settled).toBe(true);
+      expect(FEED_EVENT_FLUSH_BEFORE_REFRESH_MS).toBe(1_500);
+
+      await expect(waitAtMost(Promise.reject(new Error('offline')), 1_000)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('sends events a killed app left behind as soon as it is restored', async () => {

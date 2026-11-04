@@ -91,6 +91,7 @@ import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib
 import {
   enqueueShowcaseFeedEvent,
   flushShowcaseFeedEvents,
+  flushShowcaseFeedEventsBeforeRefresh,
   isBatchedShowcaseFeedEventType,
 } from '@/lib/feed-event-queue';
 import {
@@ -618,12 +619,9 @@ export default function ShowcaseScreen() {
   };
 
   /** The lane trimmed to its first page and that page fetched again: a pull, Refresh, and the "New posts" pill. */
-  const refetchFirstPage = () => {
+  const refetchFirstPage = async () => {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
-    // A refetched first page can be a new ranked session, whose seen check
-    // reads the events this lane has queued: they leave with the request.
-    void flushShowcaseFeedEvents();
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
       return {
@@ -631,6 +629,10 @@ export default function ShowcaseScreen() {
         pageParams: current.pageParams.slice(0, 1),
       };
     });
+    // A refetched first page can be a new ranked session, whose seen check
+    // reads the impressions this lane has queued: they are recorded first, so
+    // the posts just scrolled past are not served again (1.5 s at most).
+    await flushShowcaseFeedEventsBeforeRefresh();
     return showcaseQuery.refetch().finally(() => {
       // Cards that left through the top kept their placeholder height until
       // now; the refreshed page re-places every card anyway.
