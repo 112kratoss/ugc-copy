@@ -37,6 +37,8 @@ let selectedColumnsState: string[] = [];
 let tableQueryErrorState: TestDatabaseError | null = null;
 /** Fails only the fallback's second read, the one that selects published details. */
 let detailQueryErrorState: TestDatabaseError | null = null;
+/** The creations a page's recipes hold copies of, with their two marks (`loadWithheldCopyCreations`). */
+let generationsState: Array<{ id: string; archived_at: string | null; moderation_removed_at: string | null }> = [];
 
 function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
   const filters: Array<(row: T) => boolean> = [];
@@ -116,6 +118,7 @@ vi.mock('@/lib/server-helpers', () => ({
     },
     from(table: string) {
       tableAccessesState.push(table);
+      if (table === 'generations') return createThenableQuery(generationsState);
       if (table !== 'post_resource_bundles' && table !== 'marketplace_assets') {
         throw new Error(`Unexpected table access: ${table}`);
       }
@@ -137,6 +140,7 @@ describe('posts-server marketplace summaries', () => {
     tableQueryErrorState = null;
     detailQueryErrorState = null;
     draftFreeUnlockCountState = null;
+    generationsState = [];
     resourceBundlesState = [
       {
         id: 'asset-active',
@@ -190,6 +194,31 @@ describe('posts-server marketplace summaries', () => {
         remixUse: 'direct_remix',
       }),
     ]);
+  });
+
+  // Owner, 2026-11-04: the feed, the reel, saved posts and the home shelf sell a recipe by this
+  // summary, so it leaves out the copies of a creation now removed or archived, which no buyer gets,
+  // with one read of those creations for the whole page.
+  it('counts no copy of a creation now off public view, reading the creations once per page', async () => {
+    const CREATION = '22222222-2222-4222-8222-222222222222';
+    const copy = (id: string, file: string) => ({ id, type: 'reference_image', title: 'Reference', storagePath: `user-1/generation-references/${CREATION}/${file}` });
+    resourceBundlesState = [
+      { ...resourceBundlesState[0], resource_items: [copy('reference-a', '00-a.png'), copy('reference-b', '01-b.png')] },
+      { ...resourceBundlesState[0], id: 'asset-second', post_id: 'post-3', resource_items: [copy('reference-c', '02-c.png')] },
+    ];
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+
+    generationsState = [{ id: CREATION, archived_at: null, moderation_removed_at: null }];
+    const live = await getMarketplaceAssetSummaryHydration(['post-1', 'post-3']);
+    expect(live.assetMap.get('post-1')?.itemCounts).toMatchObject({ reference_image: 2 });
+
+    generationsState = [{ id: CREATION, archived_at: '2026-11-04T00:00:00.000Z', moderation_removed_at: null }];
+    tableAccessesState = [];
+    const archived = await getMarketplaceAssetSummaryHydration(['post-1', 'post-3']);
+    expect(archived.assetMap.get('post-1')?.itemCounts?.reference_image ?? 0).toBe(0);
+    expect(archived.assetMap.get('post-3')?.itemCounts?.reference_image ?? 0).toBe(0);
+    expect(archived.assetMap.get('post-1')?.resourceKinds).not.toContain('files');
+    expect(tableAccessesState.filter((table) => table === 'generations')).toHaveLength(1);
   });
 
   // Recipe audit H1 (2026-10-27): the summaries RPC answers allow_remix true
