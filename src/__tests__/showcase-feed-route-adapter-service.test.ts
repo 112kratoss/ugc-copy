@@ -330,7 +330,9 @@ describe('showcase feed route adapter service', () => {
       });
 
       expect(getShowcaseFeedPageMock).toHaveBeenCalledOnce();
-      expect(getShowcaseFeedPageMock.mock.calls[0][0]).not.toHaveProperty('seedBucket');
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.not.objectContaining({
+        seedBucket: expect.anything(),
+      }));
     });
   });
 
