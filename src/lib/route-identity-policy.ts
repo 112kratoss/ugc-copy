@@ -281,6 +281,8 @@ const SERVICE_ROUTES = [
   '/api/cron/operational-data-retention',
   '/api/cron/recipe-copy-sweep',
   '/api/cron/referral-rewards',
+  // A manual trigger, no scheduled job: the moderation CLI refreshes the feed's cached pages.
+  '/api/cron/showcase-feed-invalidate',
   '/api/cron/showcase-media-revocations',
   '/api/cron/workflow-run-steps',
   '/api/ops/backend-alerts',

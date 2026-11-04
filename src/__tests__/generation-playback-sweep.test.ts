@@ -31,13 +31,16 @@ function emptyClient() {
 }
 it('admits a private rendition even when all preview/post work has drained', async () => {
   const client = emptyClient();
+  const invalidateFeedCache = vi.fn();
   expect(await hasRepairableMediaPreviews(client as never)).toBe(true);
-  expect(await repairMediaPreviews(client as never, { invalidateFeedCache: vi.fn() })).toEqual({
+  expect(await repairMediaPreviews(client as never, { invalidateFeedCache })).toEqual({
     attempted: 1,
     completed: 1,
     failed: 0,
   });
   expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(client);
+  // A private playback encode shows on no feed page, so it rebuilds none.
+  expect(invalidateFeedCache).not.toHaveBeenCalled();
 });
 it('does not start an encode after idle probes have already consumed its headroom', async () => {
   const now = vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(30_000);

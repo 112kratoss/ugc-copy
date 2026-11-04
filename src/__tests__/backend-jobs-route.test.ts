@@ -226,11 +226,8 @@ describe('/api/cron/backend-jobs route', () => {
       ...expectedOptions,
       requestId: 'iad1::scheduler-1:feed-embeddings',
     });
-    // The Kie credit balance is read every tick, inside this same invocation.
-    expect(mocks.runKieAccountBalanceBackendJob).toHaveBeenCalledWith({
-      ...expectedOptions,
-      requestId: 'iad1::scheduler-1:kie-account-balance',
-    });
+    // The Kie credit balance is read once an hour, on the :10 tick.
+    expect(mocks.runKieAccountBalanceBackendJob).not.toHaveBeenCalled();
     // F14: both are dedicated crons now. Vercel invokes their routes directly,
     // so the shared scheduler must leave them alone -- running them here too
     // would put the memory-heavy work straight back into this invocation.
@@ -239,7 +236,27 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'kie-account-balance', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'mobile-push-receipts', 'workflow-run-steps'],
+    });
+  });
+
+  it('reads the Kie credit balance on the :10 tick, inside this same invocation', async () => {
+    vi.setSystemTime(new Date('2026-06-22T10:10:00.000Z'));
+
+    const { GET } = await import('@/app/api/cron/backend-jobs/route');
+    const response = await GET(new Request('http://localhost/api/cron/backend-jobs', {
+      headers: {
+        authorization: 'Bearer secret-123',
+        'x-vercel-id': 'iad1::scheduler-10',
+      },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.runKieAccountBalanceBackendJob).toHaveBeenCalledWith({
+      requestId: 'iad1::scheduler-10:kie-account-balance',
+      startedAtMs: Date.parse('2026-06-22T10:10:00.000Z'),
+      serviceClient: { service: 'supabase' },
+      triggerRoute: '/api/cron/backend-jobs',
     });
   });
 
@@ -301,15 +318,14 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ job: 'backend-alert-delivery', status: 'skipped' }),
         expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
-        expect.objectContaining({ job: 'kie-account-balance', status: 'succeeded' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'succeeded' }),
       ],
     });
   });
 
-  it('skips hourly jobs on ordinary ten-minute scheduler ticks', async () => {
-    vi.setSystemTime(new Date('2026-06-22T10:10:00.000Z'));
+  it('skips hourly and half-hourly jobs on ordinary ten-minute scheduler ticks', async () => {
+    vi.setSystemTime(new Date('2026-06-22T10:50:00.000Z'));
 
     const { GET } = await import('@/app/api/cron/backend-jobs/route');
     const response = await GET(new Request('http://localhost/api/cron/backend-jobs', {
@@ -318,13 +334,15 @@ describe('/api/cron/backend-jobs route', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.runAccountDeletionResweepsBackendJob).toHaveBeenCalledTimes(1);
-    expect(mocks.runBackendAlertDeliveryJob).toHaveBeenCalledTimes(1);
+    // The alert push runs on the :00 and :30 ticks, the Kie balance on :10.
+    expect(mocks.runBackendAlertDeliveryJob).not.toHaveBeenCalled();
+    expect(mocks.runKieAccountBalanceBackendJob).not.toHaveBeenCalled();
     expect(mocks.runFeedMaintenanceBackendJob).not.toHaveBeenCalled();
     expect(mocks.runGenerationCompletionsBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'kie-account-balance', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'feed-embeddings', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -349,7 +367,7 @@ describe('/api/cron/backend-jobs route', () => {
     });
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'feed-maintenance', 'kie-account-balance', 'mobile-push-receipts', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'feed-embeddings', 'feed-maintenance', 'mobile-push-receipts', 'workflow-run-steps'],
     });
   });
 
@@ -377,9 +395,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       dueJobs: [
         'account-deletion-resweeps',
-        'backend-alert-delivery',
         'feed-embeddings',
-        'kie-account-balance',
         'mobile-push-receipts',
         'referral-reward-reconciliation',
         'workflow-run-steps',
@@ -411,7 +427,6 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ job: 'account-deletion-resweeps', status: 'skipped' }),
         expect.objectContaining({ status: 'skipped' }),
         expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
-        expect.objectContaining({ job: 'kie-account-balance', status: 'succeeded' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'failed' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),
       ],

@@ -20,6 +20,27 @@ const CSP_REPORT_CONTENT_TYPES = [
   'application/reports+json',
 ];
 
+/**
+ * A browser extension's own code or files (Safari reports some as
+ * `webkit-masked-url`): the visitor's add-on, which nothing here can change.
+ */
+const EXTENSION_SCHEMES = new Set([
+  'chrome-extension',
+  'moz-extension',
+  'safari-extension',
+  'safari-web-extension',
+  'webkit-masked-url',
+]);
+
+/**
+ * Documents no page of this site is. Code running in one was put there by
+ * something else, such as an extension's frame, so what it trips is not the
+ * site's to fix. A blocked `data:` or `about:` resource is
+ * kept: the site's own code can ask for one, and the report says what an
+ * enforcing policy would break.
+ */
+const FOREIGN_SOURCE_SCHEMES = new Set(['about', 'data']);
+
 type CspReportRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
@@ -78,6 +99,31 @@ function normalizeReportTo(value: unknown) {
   return entry && isRecord(entry.body) ? entry.body : null;
 }
 
+/** A URL's scheme, or a browser's scheme-only form of one (`"data"`, `"chrome-extension"`), lower-cased. */
+function uriScheme(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const match = /^\s*([a-z][a-z0-9+.-]*)(?::|$)/i.exec(value);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/** What a browser always sends with a violation: the directive it broke. */
+function namesADirective(report: Record<string, unknown>): boolean {
+  return [
+    report['effective-directive'],
+    report['violated-directive'],
+    report.effectiveDirective,
+    report.violatedDirective,
+  ].some((value) => typeof value === 'string' && value.trim() !== '');
+}
+
+/** Whether a violation is someone else's code, not the site's: dropped before any database work. */
+function isForeignViolation(report: Record<string, unknown>): boolean {
+  const blocked = uriScheme(report['blocked-uri'] ?? report.blockedURL);
+  const source = uriScheme(report['source-file'] ?? report.sourceFile);
+  if ((blocked && EXTENSION_SCHEMES.has(blocked)) || (source && EXTENSION_SCHEMES.has(source))) return true;
+  return source !== null && FOREIGN_SOURCE_SCHEMES.has(source);
+}
+
 function reportFields(report: Record<string, unknown>) {
   return {
     blockedResource: safeUrlLabel(report['blocked-uri'] ?? report.blockedURL),
@@ -99,25 +145,15 @@ function reportFields(report: Record<string, unknown>) {
   };
 }
 
+/**
+ * Everything that can be refused or dropped is, before the one database write:
+ * the rate limit bounds what this public sink logs, so a body no browser sent
+ * and a violation the site cannot act on cost no write at all.
+ */
 async function handleCspReportPost(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
-  try {
-    const serviceClient = dependencies.createServiceClient();
-    await dependencies.enforceBackendRateLimit(serviceClient, {
-      ...CSP_REPORT_RATE_LIMIT,
-      key: dependencies.getRateLimitKey(request.headers),
-    });
-  } catch (error) {
-    if (error instanceof BackendRateLimitError) {
-      return createBackendRateLimitResponse(error);
-    }
-
-    dependencies.logError('CSP report rate limit failed:', error);
-    return Response.json({ error: 'Failed to check CSP report limits.' }, { status: 500 });
-  }
-
   const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   if (!contentType || !CSP_REPORT_CONTENT_TYPES.includes(contentType)) {
     return Response.json({ error: 'Unsupported CSP report content type.' }, { status: 415 });
@@ -140,8 +176,28 @@ async function handleCspReportPost(
   }
 
   const report = normalizeReportTo(boundedBody.value) ?? normalizeLegacyReport(boundedBody.value);
-  if (!report) {
+  if (!report || !namesADirective(report)) {
     return Response.json({ error: 'Invalid CSP report.' }, { status: 400 });
+  }
+
+  // Answered as any report is: a browser does nothing with the reply.
+  if (isForeignViolation(report)) {
+    return new Response(null, { status: 204 });
+  }
+
+  try {
+    const serviceClient = dependencies.createServiceClient();
+    await dependencies.enforceBackendRateLimit(serviceClient, {
+      ...CSP_REPORT_RATE_LIMIT,
+      key: dependencies.getRateLimitKey(request.headers),
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) {
+      return createBackendRateLimitResponse(error);
+    }
+
+    dependencies.logError('CSP report rate limit failed:', error);
+    return Response.json({ error: 'Failed to check CSP report limits.' }, { status: 500 });
   }
 
   dependencies.logWarning('content_security_policy_violation', {

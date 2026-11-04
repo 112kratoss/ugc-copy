@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const VERSION_CHECK_INTERVAL_MS = 15000;
+/**
+ * How often a shown page asks for the live build. Each ask runs the proxy and
+ * a function: at 15 seconds, and in hidden tabs too, one creator tab left open
+ * made about 10,000 a week.
+ */
+const VERSION_CHECK_INTERVAL_MS = 60_000;
 /**
  * How long a page stays hidden before it reloads onto a newer build: long
  * enough for a draft save the creator's last edit scheduled, or a file just
@@ -111,6 +116,11 @@ type DeploymentRefreshOptions = {
  * and reload while the references uploaded or the start was in flight. A
  * visible page learns `newBuildAvailable` instead, and the creator saves its
  * draft and reloads at the next press rather than sending from an old build.
+ *
+ * It asks only while the page is shown: once a minute, and at once when the
+ * page is shown again. A hidden page asks nothing, so one that heard of a
+ * newer build before it was hidden still reloads onto it, and a deploy made
+ * while it was hidden is found the moment it is shown.
  */
 export function useDeploymentRefresh(
   enabled: boolean,
@@ -135,6 +145,7 @@ export function useDeploymentRefresh(
 
     let cancelled = false;
     let hiddenReloadTimer: number | null = null;
+    let checkInterval: number | null = null;
 
     const scheduleReloadWhileHidden = () => {
       if (hiddenReloadTimer !== null) {
@@ -188,19 +199,42 @@ export function useDeploymentRefresh(
       }
     };
 
-    void refreshForNewBuild();
-    const intervalId = window.setInterval(() => {
+    const stopChecking = () => {
+      if (checkInterval !== null) {
+        window.clearInterval(checkInterval);
+        checkInterval = null;
+      }
+    };
+
+    const startChecking = () => {
+      stopChecking();
       void refreshForNewBuild();
-    }, intervalMs);
-    document.addEventListener('visibilitychange', scheduleReloadWhileHidden);
+      checkInterval = window.setInterval(() => {
+        void refreshForNewBuild();
+      }, intervalMs);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        stopChecking();
+      } else {
+        startChecking();
+      }
+      scheduleReloadWhileHidden();
+    };
+
+    if (document.visibilityState !== 'hidden') {
+      startChecking();
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       cancelled = true;
-      window.clearInterval(intervalId);
+      stopChecking();
       if (hiddenReloadTimer !== null) {
         window.clearTimeout(hiddenReloadTimer);
       }
-      document.removeEventListener('visibilitychange', scheduleReloadWhileHidden);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [enabled, intervalMs]);
 

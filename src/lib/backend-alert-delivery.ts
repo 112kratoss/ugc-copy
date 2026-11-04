@@ -83,7 +83,7 @@ export async function deliverBackendAlerts(
 
   const collectAlerts = options.collectAlerts ?? collectBackendAlerts;
   // The Kie balance job posts its own alert once per episode; leaving it out
-  // here keeps this ten-minute push from re-sending it on every tick.
+  // here keeps this half-hourly push from re-sending it on every run.
   const summary = await collectAlerts(client, {
     ...(options.now ? { now: options.now } : {}),
     includeKieBalance: false,

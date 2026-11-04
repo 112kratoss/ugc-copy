@@ -387,7 +387,10 @@ describe('media preview repair retries', () => {
                 content_type: 'image/png',
                 preview_attempt_count: 0,
               }]
-            : [],
+            // The post the preview belongs to is on the feed.
+            : table === 'posts'
+              ? [{ id: 'user', visibility: 'public', review_status: 'visible', archived_at: null }]
+              : [],
           error: null,
         })),
         update: vi.fn((payload: unknown) => {
@@ -525,7 +528,10 @@ describe('media preview repair retries', () => {
                 category: 'image',
                 preview_attempt_count: 0,
               }]
-            : [],
+            // A public post shows the creation, so its preview can be a card's poster.
+            : table === 'posts'
+              ? [{ id: 'post-1', generation_id: 'gen-1', visibility: 'public', review_status: 'visible', archived_at: null }]
+              : [],
           error: null,
         })),
         update: vi.fn((payload: Record<string, unknown>) => {
@@ -848,6 +854,116 @@ describe('media preview repair retries', () => {
     })).resolves.toEqual({ attempted: 0, completed: 0, failed: 0 });
 
     expect(invalidateFeedCache).not.toHaveBeenCalled();
+  });
+
+  // Every invalidation rebuilds the signed-out home page at its next visit, so
+  // finished work asks for one only when a cached feed page can show it.
+  describe('which finished work refreshes the feed', () => {
+    const previewRow = {
+      id: 'media-1',
+      post_id: 'post-1',
+      storage_path: 'posts/post-1/source.png',
+      media_kind: 'image',
+      content_type: 'image/png',
+      preview_attempt_count: 0,
+    };
+
+    function previewClient(posts: { data: unknown[] | null; error: Error | null }) {
+      const reads: string[] = [];
+      const supabase = {
+        from: vi.fn((table: string) => ({
+          select: vi.fn(() => {
+            reads.push(table);
+            return createSelectChain(table === 'post_media'
+              ? { data: [previewRow], error: null }
+              : table === 'posts' ? posts : { data: [], error: null });
+          }),
+          update: vi.fn(() => createUpdateQuery()),
+        })),
+        storage: {
+          from: vi.fn(() => ({
+            download: vi.fn(async () => ({ data: new Blob(['image'], { type: 'image/png' }), error: null })),
+          })),
+        },
+      };
+      return { supabase, reads };
+    }
+
+    it.each([
+      ['a public, visible', { visibility: 'public', review_status: 'visible', archived_at: null }, 1],
+      ['a private', { visibility: 'private', review_status: 'visible', archived_at: null }, 0],
+      ['a taken-down', { visibility: 'public', review_status: 'hidden', archived_at: null }, 0],
+      ['an archived', { visibility: 'public', review_status: 'visible', archived_at: '2026-11-01T00:00:00.000Z' }, 0],
+    ])('refreshes it as it should for a finished preview of %s post', async (_case, post, refreshes) => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      const { supabase } = previewClient({ data: [{ id: 'post-1', ...post }], error: null });
+      const invalidateFeedCache = vi.fn();
+
+      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateFeedCache });
+
+      expect(summary.completed).toBe(1);
+      expect(invalidateFeedCache).toHaveBeenCalledTimes(refreshes);
+    });
+
+    it('refreshes it when it cannot tell whether the post is public', async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      const { supabase } = previewClient({ data: null, error: new Error('statement timeout') });
+      const invalidateFeedCache = vi.fn();
+
+      await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateFeedCache });
+
+      // One rebuild too many beats a public post kept without its poster.
+      expect(invalidateFeedCache).toHaveBeenCalledOnce();
+    });
+
+    it("leaves it alone for a creation's preview that no public post shows", async () => {
+      const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+      const { createGenerationOutputPreview } = await import('@/lib/generation-output-preview');
+      vi.mocked(createGenerationOutputPreview).mockResolvedValue({
+        previewStoragePath: 'generated/user/output.preview.webp',
+        previewThumbhash: 'thumbhash',
+        previewStatus: 'ready',
+      } as never);
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), {
+        headers: { 'content-type': 'image/png' },
+      })));
+      const supabase = {
+        from: vi.fn((table: string) => ({
+          select: vi.fn(() => createSelectChain({
+            data: table === 'generations'
+              ? [{ id: 'gen-1', user_id: 'user-1', output_url: 'https://provider.example.com/output.png', category: 'image', preview_attempt_count: 0 }]
+              : [],
+            error: null,
+          })),
+          update: vi.fn(() => ({ eq: vi.fn(async () => ({ error: null })) })),
+        })),
+        storage: { from: vi.fn() },
+      };
+      const invalidateFeedCache = vi.fn();
+
+      const summary = await repairMediaPreviews(withAdmissionFallback(supabase) as never, { batchSize: 10, invalidateFeedCache });
+
+      expect(summary.completed).toBe(1);
+      expect(invalidateFeedCache).not.toHaveBeenCalled();
+    });
+
+    it('names each rendition it finishes, for the sweep to check', async () => {
+      const { repairPostMediaRenditions } = await import('@/lib/media-preview-repair');
+      const { supabase } = createRenditionClient([{
+        id: 'media-video-1',
+        post_id: 'post-1',
+        storage_path: 'posts/post-1/clip.mp4',
+        media_kind: 'video',
+        content_type: 'video/mp4',
+        rendition_status: 'pending',
+        rendition_attempt_count: 0,
+      }]);
+      const onCompleted = vi.fn();
+
+      await repairPostMediaRenditions(withAdmissionFallback(supabase) as never, { onCompleted });
+
+      expect(onCompleted).toHaveBeenCalledExactlyOnceWith('media-video-1');
+    });
   });
 });
 

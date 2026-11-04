@@ -22,7 +22,7 @@ import {
  */
 
 export const KIE_ACCOUNT_BALANCE_ENDPOINT = 'https://api.kie.ai/api/v1/chat/credit';
-/** A read, so the status-poll budget. The job runs every ten minutes; a slow read waits for the next one. */
+/** A read, so the status-poll budget. The job runs hourly; a slow read waits for the next one. */
 export const KIE_ACCOUNT_BALANCE_TIMEOUT_MS = PROVIDER_STATUS_POLL_TIMEOUT_MS;
 export const KIE_ACCOUNT_BALANCE_SERVICE_NAME = 'KIE account balance';
 

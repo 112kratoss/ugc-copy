@@ -139,10 +139,12 @@ describe('backend job registry', () => {
     // Showcase media revocations retry hourly (+24/day) inside the shared
     // scheduler invocation, so they add no Vercel cron invocation of their own.
     // So does feed-embeddings every ten minutes (+144/day): logical runs, not
-    // Vercel invocations. The Kie balance check (+144/day) is the same: it
-    // rides the shared scheduler and adds no cron entry of its own. So does the
-    // recipe copy sweep every six hours (+4/day).
-    expect(logicalDailyRuns).toBe(1231);
+    // Vercel invocations. The Kie balance check (+24/day, hourly) is the same:
+    // it rides the shared scheduler and adds no cron entry of its own. So does
+    // the recipe copy sweep every six hours (+4/day). Both the Kie check and
+    // the alert push (48/day) counted being configured as work and ran on all
+    // 144 ticks until 2026-11-04 (1,231 runs a day then).
+    expect(logicalDailyRuns).toBe(1015);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking
@@ -169,13 +171,11 @@ describe('backend job registry', () => {
       'account-deletion-resweeps',
       'backend-alert-delivery',
       'feed-embeddings',
-      'kie-account-balance',
       'mobile-push-receipts',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:10:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
-      'backend-alert-delivery',
       'feed-embeddings',
       'kie-account-balance',
       'mobile-push-receipts',
@@ -183,22 +183,67 @@ describe('backend job registry', () => {
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:20:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
-      'backend-alert-delivery',
       'feed-embeddings',
       'feed-maintenance',
-      'kie-account-balance',
       'mobile-push-receipts',
+      'workflow-run-steps',
+    ]);
+    expect(getDueBackendJobs(Date.parse('2026-06-22T10:30:00.000Z')).map((job) => job.name)).toEqual([
+      'account-deletion-resweeps',
+      'backend-alert-delivery',
+      'feed-embeddings',
+      'mobile-push-receipts',
+      'showcase-media-revocations',
       'workflow-run-steps',
     ]);
     expect(getDueBackendJobs(Date.parse('2026-06-22T10:40:00.000Z')).map((job) => job.name)).toEqual([
       'account-deletion-resweeps',
-      'backend-alert-delivery',
       'feed-embeddings',
-      'kie-account-balance',
       'mobile-push-receipts',
       'referral-reward-reconciliation',
       'workflow-run-steps',
     ]);
+  });
+
+  it('reads the Kie balance hourly and pushes alerts half-hourly, inside the shared tick', () => {
+    // Both counted being configured as work, so each ran on every ten-minute
+    // tick: a Kie API call each time, and, with a destination set, the full
+    // health and cost sweep the hourly GitHub watchdog also pulls. The push
+    // stays twice as often as that watchdog, which the runbook promises.
+    const job = (name: string) => BACKEND_JOB_REGISTRY.find((candidate) => candidate.name === name);
+    expect(job('kie-account-balance')).toMatchObject({
+      dispatch: 'scheduler',
+      schedule: '10 * * * *',
+      cadenceMinutes: 60,
+      dailyInvocations: 24,
+      healthExpectedMaxAgeMinutes: 180,
+    });
+    expect(job('backend-alert-delivery')).toMatchObject({
+      dispatch: 'scheduler',
+      schedule: '*/30 * * * *',
+      cadenceMinutes: 30,
+      dailyInvocations: 48,
+      healthExpectedMaxAgeMinutes: 120,
+    });
+
+    const ticks = Array.from({ length: 144 }, (_, tick) => Date.parse('2026-06-22T00:00:00.000Z') + tick * 10 * 60_000);
+    const runsOf = (name: string) => ticks.filter((at) => getDueBackendJobs(at).some((due) => due.name === name)).length;
+    expect(runsOf('kie-account-balance')).toBe(24);
+    expect(runsOf('backend-alert-delivery')).toBe(48);
+    expect(BACKEND_JOB_VERCEL_CRONS.map((cron) => cron.path)).not.toContain('/api/cron/kie-account-balance');
+    expect(BACKEND_JOB_VERCEL_CRONS.map((cron) => cron.path)).not.toContain('/api/cron/backend-alert-delivery');
+  });
+
+  it('still notices a dead scheduler within an hour through the jobs that run every tick', () => {
+    // The hourly watchdog pages on degraded health; these jobs go stale first.
+    const everyTick = BACKEND_JOB_REGISTRY.filter((job) => job.dispatch === 'scheduler' && job.cadenceMinutes === 10);
+    expect(everyTick.map((job) => job.name)).toEqual([
+      'account-deletion-resweeps',
+      'feed-embeddings',
+      'mobile-push-receipts',
+      'workflow-run-steps',
+    ]);
+    expect(Math.min(...everyTick.map((job) => job.healthExpectedMaxAgeMinutes))).toBeLessThanOrEqual(30);
   });
 
   it('runs the recipe copy sweep four times a day inside the shared tick', () => {

@@ -13,7 +13,7 @@ import {
  * Delivery Wiring").
  *
  * Split out of `backend-alert-delivery.ts` so a sender that is not the
- * ten-minute summary (the Kie balance alert, which also runs behind a
+ * half-hourly summary (the Kie balance alert, which also runs behind a
  * generation request) can post the same envelope without importing the
  * health, cost and moderation collectors.
  */

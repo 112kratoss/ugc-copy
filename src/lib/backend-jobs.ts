@@ -64,7 +64,7 @@ export type BackendJobDefinition = {
  * free.
  *
  * A `scheduler` job adds logical runs, never invocations: `kie-account-balance`
- * runs inside the shared `/api/cron/backend-jobs` tick (144 logical runs a
+ * runs inside the shared `/api/cron/backend-jobs` tick (24 logical runs a
  * day) and adds nothing here. Its provider-refusal checks run behind a
  * generation request's response, not on a cron, and are latched to one per
  * ten minutes (`kie-account-balance-refusal.ts`). `recipe-copy-sweep` is the
@@ -223,9 +223,14 @@ export const BACKEND_JOB_REGISTRY = [
     maxMissedRunsBeforeDegraded: 3,
   }),
   defineBackendJob({
+    // Every half hour, at :00 and :30. Configured, a run is a full health and
+    // cost sweep (the one the hourly GitHub watchdog pulls from
+    // /api/ops/backend-alerts) and posts only when something is wrong, so it
+    // runs as often as it must to stay ahead of that hourly poll, as the
+    // runbook's "Production Alert Delivery Wiring" promises, and no more often.
     name: 'backend-alert-delivery',
     route: '/api/cron/backend-alert-delivery',
-    schedule: '*/10 * * * *',
+    schedule: '*/30 * * * *',
     maxDurationSeconds: 300,
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'alert_delivery_not_configured',
@@ -281,11 +286,14 @@ export const BACKEND_JOB_REGISTRY = [
     // Reads the Kie.ai prepaid credit balance that pays for every generation
     // and alerts the operator once per crossing below KIE_BALANCE_ALERT_CREDITS
     // (kie-account-balance-alert.ts). Shared dispatch: one bounded Kie read and
-    // at most one alert post. Kie rate-limits the whole account, so this polls
-    // no faster than the scheduler and never retries within a run.
+    // at most one alert post. Kie rate-limits the whole account, so this never
+    // retries within a run. Hourly, at :10: the poll only has to catch a
+    // balance sliding under the threshold, which is set to leave time for a
+    // top-up by hand, and a generation start Kie refuses for credits checks
+    // at once behind its answer (kie-account-balance-refusal.ts).
     name: 'kie-account-balance',
     route: '/api/cron/kie-account-balance',
-    schedule: '*/10 * * * *',
+    schedule: '10 * * * *',
     maxDurationSeconds: 60,
     lockTtlSeconds: 120,
     noWorkSkipReason: 'kie_api_key_not_configured',

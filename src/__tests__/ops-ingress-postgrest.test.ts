@@ -142,7 +142,8 @@ describe.skipIf(!configPath || !connectionString)('operations ingress through ac
     }
   });
   it('accepts Reporting API CSP arrays and strips URL query/fragment from logged labels', async () => {
-    const result = await send(ingress[0].path, [{ type: 'csp-violation', body: { documentURL: 'https://audit.local/create?token=fixture-secret#fixture-secret', blockedURL: 'https://assets.local/a.js?token=fixture-secret' } }], 'application/reports+json');
+    // A browser always names the directive a violation broke; a body without one is refused as malformed.
+    const result = await send(ingress[0].path, [{ type: 'csp-violation', body: { documentURL: 'https://audit.local/create?token=fixture-secret#fixture-secret', blockedURL: 'https://assets.local/a.js?token=fixture-secret', effectiveDirective: 'script-src-elem' } }], 'application/reports+json');
     expect(result.status).toBe(204);
     expect(JSON.stringify(warnings)).not.toContain('fixture-secret');
   });

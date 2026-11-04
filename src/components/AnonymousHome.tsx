@@ -9,11 +9,10 @@ import { JsonLd } from '@/components/JsonLd';
 import SignInWorkspaceCard from '@/components/SignInWorkspaceCard';
 import WhatsNewModelsCard from '@/components/WhatsNewModelsCard';
 import FeedClient from '@/app/feed/FeedClient';
+import { loadAnonymousHomeFeed, loadAnonymousHomeShelf } from '@/lib/anonymous-home-data';
 import type { HomeWhatsNewModel } from '@/lib/home-dashboard';
-import { loadHomeFeed, loadHomeWhatsNewModels } from '@/lib/home-dashboard-service';
+import { loadHomeWhatsNewModels } from '@/lib/home-dashboard-service';
 import type { HomeShelfItem } from '@/lib/home-shelf';
-import { loadHomeShelf } from '@/lib/home-shelf-server';
-import { getFeedChip } from '@/lib/post-feed-chips';
 import { PRICING_CURRENCY, PRICING_PLAN_MAP } from '@/lib/pricing';
 import { getInlineShowcasePriorityPoster } from '@/lib/showcase-priority-poster';
 import {
@@ -159,9 +158,12 @@ function AnonymousFooter() {
 }
 
 export default function AnonymousHome() {
-  const feedPromise = loadHomeFeed({ viewerUserId: null, chip: getFeedChip(undefined) });
+  // The feed and the shelf through caches kept as long as the page: read
+  // straight from their own, they held `/` to a one-minute rebuild
+  // (anonymous-home-data.ts).
+  const feedPromise = loadAnonymousHomeFeed();
   const modelsPromise = loadHomeWhatsNewModels();
-  const shelfPromise = loadHomeShelf();
+  const shelfPromise = loadAnonymousHomeShelf();
 
   return (
     <>

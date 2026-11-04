@@ -147,7 +147,7 @@ describe('useDeploymentRefresh', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it('checks every 15 seconds, starting at once', async () => {
+  it('checks once a minute while shown, starting at once', async () => {
     latestBuildId = 'build-1';
     const useDeploymentRefresh = await loadHook();
     const { result } = renderHook(() => useDeploymentRefresh(true, { reload: vi.fn() }));
@@ -158,11 +158,86 @@ describe('useDeploymentRefresh', () => {
     expect(result.current.newBuildAvailable).toBe(false);
 
     latestBuildId = 'build-2';
-    await advance(14_999);
+    await advance(59_999);
     expect(fetch).toHaveBeenCalledTimes(1);
     await advance(1);
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(result.current.newBuildAvailable).toBe(true);
+  });
+
+  // Every check runs the proxy and a function: a creator tab left open in the
+  // background asked every 15 seconds for as long as it stayed open.
+  it('asks nothing while hidden, and asks at once when shown again', async () => {
+    latestBuildId = 'build-1';
+    const useDeploymentRefresh = await loadHook();
+    const reload = vi.fn();
+    const { result } = renderHook(() => useDeploymentRefresh(true, { reload }));
+    await advance(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    setVisibility('hidden');
+    latestBuildId = 'build-2';
+    await advance(60 * 60_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+
+    // The deploy made while it was hidden is found the moment it is shown, and
+    // a shown page is told rather than reloaded.
+    setVisibility('visible');
+    await advance(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.current.newBuildAvailable).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+
+    // Then once a minute again, counted from the return.
+    await advance(59_999);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await advance(1);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('waits to be shown before its first check when it opens hidden', async () => {
+    visibility = 'hidden';
+    const useDeploymentRefresh = await loadHook();
+    const { result } = renderHook(() => useDeploymentRefresh(true, { reload: vi.fn() }));
+
+    await advance(5 * 60_000);
+    expect(fetch).not.toHaveBeenCalled();
+
+    setVisibility('visible');
+    await advance(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result.current.newBuildAvailable).toBe(true);
+  });
+
+  it('still reloads a page hidden after it heard of a newer build, without asking again', async () => {
+    const useDeploymentRefresh = await loadHook();
+    const reload = vi.fn();
+    renderHook(() => useDeploymentRefresh(true, { reload }));
+    await advance(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    setVisibility('hidden');
+    await advance(10_000);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops asking when it turns off while shown', async () => {
+    latestBuildId = 'build-1';
+    const useDeploymentRefresh = await loadHook();
+    const { rerender } = renderHook(
+      ({ enabled }) => useDeploymentRefresh(enabled, { reload: vi.fn() }),
+      { initialProps: { enabled: true } },
+    );
+    await advance(0);
+    rerender({ enabled: false });
+
+    // Nor does showing the page again start it while the run is in flight.
+    setVisibility('hidden');
+    setVisibility('visible');
+    await advance(5 * 60_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
 

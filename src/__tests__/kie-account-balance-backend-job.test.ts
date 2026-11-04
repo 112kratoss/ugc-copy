@@ -55,10 +55,11 @@ describe('the kie-account-balance backend job', () => {
     });
   }
 
-  it('is a light ten-minute job on the shared scheduler', () => {
+  it('is a light hourly job on the shared scheduler', () => {
+    // Every ten minutes until 2026-11-04: a Kie API call on all 144 ticks a day.
     expect(BACKEND_JOBS_BY_NAME['kie-account-balance']).toMatchObject({
       route: '/api/cron/kie-account-balance',
-      schedule: '*/10 * * * *',
+      schedule: '10 * * * *',
       dispatch: 'scheduler',
       noWorkSkipReason: 'kie_api_key_not_configured',
     });
