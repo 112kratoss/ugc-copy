@@ -1638,6 +1638,11 @@ export default function ShowcaseClient({
                 params.set('cursor', nextCursor);
             } else if (nextOffset !== null) {
                 params.set('offset', String(nextOffset));
+                // A For you page ranked from the shared seed names its bucket;
+                // sent back, the next page is cut from the same order.
+                if (sort === DEFAULT_SHOWCASE_SORT && typeof pageInfo.seedBucket === 'number') {
+                    params.set('seedBucket', String(pageInfo.seedBucket));
+                }
             }
             setNonDefaultParam(params, 'category', requestCategoryFor(category), 'all');
             setNonDefaultParam(params, 'sort', sort, DEFAULT_SHOWCASE_SORT);
@@ -1701,6 +1706,7 @@ export default function ShowcaseClient({
         pageInfo.hasMore,
         pageInfo.nextCursor,
         pageInfo.nextOffset,
+        pageInfo.seedBucket,
         resource,
         setItems,
         setSavedItemIds,

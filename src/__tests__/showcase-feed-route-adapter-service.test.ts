@@ -284,6 +284,56 @@ describe('showcase feed route adapter service', () => {
     });
   });
 
+  // A For you page ranked from the shared seed names its bucket; the reader
+  // sends it back with the next offset page so that page continues the order.
+  describe('the seed bucket a reader sends back', () => {
+    function seedDependencies(getShowcaseFeedPageMock: ReturnType<typeof vi.fn>) {
+      return {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+        })),
+        getFeedNetworkKeyHash: vi.fn(() => 'anonymous-network-hash'),
+        resolveFeedAnonymousIdentity: vi.fn(() => ({
+          anonymousKeyHash: 'anonymous-feed-hash',
+          cookieValueToSet: null,
+          source: 'web-cookie' as const,
+        })),
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      };
+    }
+
+    it('passes a For you offset page the bucket its previous page named', async () => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?offset=12&seedBucket=2970123'),
+        dependencies: seedDependencies(getShowcaseFeedPageMock),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+        sort: 'for-you',
+        offset: 12,
+        seedBucket: 2970123,
+      }));
+    });
+
+    it.each([
+      ['a cursor page, which keeps its session\'s seed', '?cursor=eyJzIjoiYSIsInAiOjEyfQ&seedBucket=2970123'],
+      ['another sort, which has no seed', '?sort=recent&offset=12&seedBucket=2970123'],
+      ['a value that is not a bucket', '?offset=12&seedBucket=-5'],
+      ['a value that is not a number', '?offset=12&seedBucket=12abc'],
+    ])('passes no bucket for %s', async (_case, query) => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      await getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed${query}`),
+        dependencies: seedDependencies(getShowcaseFeedPageMock),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledOnce();
+      expect(getShowcaseFeedPageMock.mock.calls[0][0]).not.toHaveProperty('seedBucket');
+    });
+  });
+
   it.each(['video', 'media'])('passes the %s filter with viewer auth and disables shared caching', async (category) => {
     const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
 

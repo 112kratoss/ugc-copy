@@ -48,7 +48,7 @@ function item(id: string): ShowcaseFeedItem {
 
 function page(
     items: ShowcaseFeedItem[],
-    pageInfo: { nextOffset: number | null; nextCursor?: string | null },
+    pageInfo: { nextOffset: number | null; nextCursor?: string | null; seedBucket?: number },
 ): ShowcaseFeedPage {
     return {
         items,
@@ -143,6 +143,71 @@ describe('FeedClient cursor pagination', () => {
         const [url] = requestedUrls(fetchMock);
         expect(url).toContain('offset=2');
         expect(url).not.toContain('cursor=');
+    });
+
+    it('sends back the seed bucket of a For you page with no cursor, so the next page continues its order', async () => {
+        // The static `/` (or the server's cache) can serve page one from a
+        // ranking older than its ten-minute seed bucket. Ranked from the
+        // current bucket, page two would repeat some posts and skip others.
+        const responses = [
+            // The guest's own page one fails, so the lane stays as drawn.
+            new Response('{}', { status: 503 }),
+            new Response(
+                JSON.stringify(page([item('post-3')], { nextOffset: 3, seedBucket: 2970123 })),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+            ),
+            new Response(
+                JSON.stringify(page([item('post-4')], { nextOffset: null, seedBucket: 2970123 })),
+                { status: 200, headers: { 'Content-Type': 'application/json' } },
+            ),
+        ];
+        const fetchMock = vi.fn(async () => responses.shift() as Response);
+        vi.stubGlobal('fetch', fetchMock);
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        render(<FeedClient
+            initialFeed={page([item('post-1'), item('post-2')], { nextOffset: 2, seedBucket: 2970123 })}
+            initialChipId="for-you"
+        />);
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        expect(requestedUrls(fetchMock)[0]).toContain('offset=0');
+        expect(requestedUrls(fetchMock)[0]).not.toContain('seedBucket=');
+
+        await act(async () => {
+            intersect?.();
+        });
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+        expect(requestedUrls(fetchMock)[1]).toContain('offset=2');
+        expect(requestedUrls(fetchMock)[1]).toContain('seedBucket=2970123');
+        await waitFor(() => expect(screen.getByText('card:post-3')).toBeInTheDocument());
+
+        await act(async () => {
+            intersect?.();
+        });
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+        // The page that came back named its bucket again, and that is what goes on.
+        expect(requestedUrls(fetchMock)[2]).toContain('offset=3');
+        expect(requestedUrls(fetchMock)[2]).toContain('seedBucket=2970123');
+    });
+
+    it('sends no seed bucket for a lane that is not ranked from a seed', async () => {
+        const fetchMock = vi.fn(async () => new Response(
+            JSON.stringify(page([item('post-3')], { nextOffset: null })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ));
+        vi.stubGlobal('fetch', fetchMock);
+
+        render(<FeedClient
+            initialFeed={page([item('post-1'), item('post-2')], { nextOffset: 2, seedBucket: 2970123 })}
+            initialChipId="recent"
+        />);
+
+        intersect?.();
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+        expect(requestedUrls(fetchMock)[0]).toContain('offset=2');
+        expect(requestedUrls(fetchMock)[0]).not.toContain('seedBucket=');
     });
 
     it('carries the cursor forward across successive pages', async () => {

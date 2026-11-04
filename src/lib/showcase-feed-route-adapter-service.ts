@@ -156,6 +156,12 @@ async function handleShowcaseFeedGET(
         { status: 400, headers: createPrivateNoStoreApiResponseHeaders(request) },
       );
     }
+    // The seed bucket the reader's previous For you page named, sent back
+    // when it pages on by offset; the ranking checks it is recent.
+    const seedBucketParam = searchParams.get('seedBucket');
+    const seedBucket = sort === 'for-you' && !cursor && seedBucketParam && /^\d{1,12}$/.test(seedBucketParam)
+      ? Number(seedBucketParam)
+      : null;
     const readAheadTokenParam = searchParams.get('readAheadToken');
     const readAheadToken = sort === 'for-you' && !cursor && offset === 0
       && isShowcaseFeedReadAheadToken(readAheadTokenParam)
@@ -247,6 +253,7 @@ async function handleShowcaseFeedGET(
       // identity-less For you first page is the cached bootstrap.
       bypassCache: (sort === 'for-you' && !identityless) || Boolean(cursor),
       ...(readAheadToken ? { readAheadToken } : {}),
+      ...(seedBucket === null ? {} : { seedBucket }),
       ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
     });
     recordPhase('feed_total', performance.now() - feedStartedAt);

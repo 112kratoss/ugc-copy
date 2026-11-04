@@ -184,6 +184,15 @@ interface ShowcaseFeedPageInfo {
     nextCursor?: string | null;
     limit: number;
     offset: number;
+    /**
+     * For you only, on a page ranked from the shared seed (an identity-less
+     * page, or any page past the first ranked without a cursor): the
+     * ten-minute bucket of that seed. A reader paging on by offset sends it
+     * back as `seedBucket`, so the next page is cut from the same order even
+     * when this page came from a cache older than its bucket. Optional: a
+     * reader that never sends it, the app included, gets the current bucket.
+     */
+    seedBucket?: number;
 }
 
 export interface ShowcaseFeedPage {
