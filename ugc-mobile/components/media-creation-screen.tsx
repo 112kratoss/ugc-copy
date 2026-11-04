@@ -74,6 +74,7 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from '@/lib/generation';
 import { subscribeToGenerationSettledPush } from '@/lib/generation-settled-push';
+import { forgetQuotedCosts, recallQuotedCost, rememberQuotedCost } from '@/lib/quote-memo';
 import {
   applyCatalogModelDefaults,
   applyVerifiedInputDurations,
@@ -1592,11 +1593,20 @@ function IdentityCreationScreen({
       setQuoteState({ key: null, attempt, status: 'idle', cost: null, error: null });
       return;
     }
+    // This very run was priced minutes ago (a setting switched away and back):
+    // that price stands, unless this screen is asking again after a refusal or
+    // Retry quote (`lib/quote-memo.ts`).
+    const recalled = attempt === 0 ? recallQuotedCost(quoteKey) : null;
+    if (recalled !== null) {
+      setQuoteState({ key: quoteKey, attempt, status: 'ready', cost: recalled, error: null });
+      return;
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => {
       void api.quoteGenerationModel(quoteRequest, controller.signal)
         .then((quote) => {
           if (controller.signal.aborted) return;
+          rememberQuotedCost(quoteKey, quote.costCredits);
           setQuoteState({
             key: quoteKey,
             attempt,
@@ -2968,6 +2978,8 @@ function IdentityCreationScreen({
         // Priced again at once, so Try again states what the run now costs. The refused run is kept
         // with the asking, so a price that comes back unmoved for it says this app is out of date.
         if (refusal === 'cost_changed') {
+          // The server prices runs otherwise than this app was told: no price it remembers stands.
+          forgetQuotedCosts();
           const refused = request ? catalogRefusedRunPrice(request) : null;
           setQuoteAsking((current) => ({ attempt: current.attempt + 1, refused }));
         }

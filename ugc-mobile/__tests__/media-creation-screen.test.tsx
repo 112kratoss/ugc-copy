@@ -315,6 +315,7 @@ import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.jso
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
 import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
 import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
+import { forgetQuotedCosts } from '../lib/quote-memo';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
 const frameSlots: CatalogInputSlot[] = [
@@ -581,6 +582,8 @@ vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof rend
 // stays out of the cases that are not about it. The client above is shared, so
 // the device's push state is dropped between cases too.
 beforeEach(() => {
+  // Prices the creators remember for this launch (`lib/quote-memo.ts`): each case is priced afresh.
+  forgetQuotedCosts();
   notificationsMock.registerForMobilePushNotifications
     .mockReset()
     .mockResolvedValue({ status: 'registered', expoPushToken: 'ExponentPushToken[test]' });
@@ -3221,6 +3224,47 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
     expect(collectText(tree!.root)).toContain('Generate · 123 credits');
     vi.useRealTimers();
+  });
+
+  // A setting switched away and back, or a creator opened again on the same
+  // draft, asked the server again for a run just priced.
+  it('shows a price quoted for this very run minutes ago without asking again, until a refusal forgets it', async () => {
+    vi.useFakeTimers();
+    try {
+      authState.api.quoteGenerationModel.mockResolvedValue({
+        modelId: 'nano-banana-2',
+        catalogRevision: 'test-catalog-rev',
+        normalizedSettings: { aspectRatio: '4:5', resolution: '1K' },
+        costCredits: 123,
+      });
+      const priced = async () => {
+        let tree: renderer.ReactTestRenderer | undefined;
+        renderer.act(() => {
+          tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+        });
+        const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+        renderer.act(() => {
+          promptInput.props.onChangeText('Create a glossy product hero shot.');
+        });
+        await renderer.act(async () => {
+          await vi.advanceTimersByTimeAsync(200);
+        });
+        const text = collectText(tree!.root);
+        renderer.act(() => tree!.unmount());
+        return text;
+      };
+
+      expect(await priced()).toContain('Generate · 123 credits');
+      expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(1);
+      expect(await priced()).toContain('Generate · 123 credits');
+      expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(1);
+
+      forgetQuotedCosts();
+      expect(await priced()).toContain('Generate · 123 credits');
+      expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not show bundled pricing before a server quote exists', () => {
