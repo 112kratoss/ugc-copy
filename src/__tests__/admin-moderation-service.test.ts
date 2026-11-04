@@ -119,6 +119,48 @@ describe('applyAdminPostReportDecision', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
+  // The take-down commits before its media cleanup, which can fail after it
+  // (and refuses on every retry for media outside the post's scope).
+  it('invalidates when a take-down fails after its commit, and passes the error on', async () => {
+    const failure = new Error('Refusing to revoke a taken-down media path outside the reported post scope.');
+    moderationOpsMocks.resolvePostReport.mockRejectedValue(failure);
+
+    await expect(applyAdminPostReportDecision(client, {
+      reportId: REPORT_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'take_down',
+      resolutionNote: 'Confirmed policy violation.',
+    })).rejects.toBe(failure);
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the moderation error when the invalidation after it throws too', async () => {
+    const failure = new Error('Failed to delete taken-down post media from storage.');
+    moderationOpsMocks.resolvePostReport.mockRejectedValue(failure);
+    cacheMocks.invalidateShowcaseFeedCache.mockImplementationOnce(() => { throw new Error('no request store'); });
+
+    await expect(applyAdminPostReportDecision(client, {
+      reportId: REPORT_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'take_down',
+      resolutionNote: 'Confirmed policy violation.',
+    })).rejects.toBe(failure);
+  });
+
+  it('leaves the cache alone when a dismissal fails, as when one succeeds', async () => {
+    moderationOpsMocks.resolvePostReport.mockRejectedValue(new Error('Failed to resolve post report'));
+
+    await expect(applyAdminPostReportDecision(client, {
+      reportId: REPORT_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'dismiss',
+      resolutionNote: 'Report was not actionable.',
+    })).rejects.toThrow('Failed to resolve post report');
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+  });
+
   it('requires a resolution note before touching the moderation core', async () => {
     await expect(applyAdminPostReportDecision(client, {
       reportId: REPORT_ID,
@@ -197,6 +239,21 @@ describe('applyAdminPostModeration', () => {
   beforeEach(() => {
     cacheMocks.invalidateShowcaseFeedCache.mockClear();
     moderationOpsMocks.applyPostModerationAction.mockReset();
+  });
+
+  it('invalidates when a take-down fails after its commit, and passes the error on', async () => {
+    const failure = new Error('Failed to delete taken-down post media from storage.');
+    moderationOpsMocks.applyPostModerationAction.mockRejectedValue(failure);
+
+    await expect(applyAdminPostModeration(client, {
+      postId: POST_ID,
+      reviewerId: REVIEWER_ID,
+      action: 'take_down',
+      reason: 'policy 4.2',
+      idempotencyKey: 'key-failed-cleanup',
+    })).rejects.toBe(failure);
+
+    expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
   });
 
   it('refuses an action with no rationale before touching the database', async () => {

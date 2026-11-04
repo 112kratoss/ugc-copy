@@ -156,12 +156,21 @@ export async function applyAdminPostReportDecision(
     throw new Error('A resolution note is required.');
   }
 
-  const resolution = await resolvePostReport(client, {
-    reportId: options.reportId,
-    reviewerId: options.reviewerId,
-    action: options.action,
-    resolutionNote: note,
-  });
+  let resolution: PostReportResolution;
+  try {
+    resolution = await resolvePostReport(client, {
+      reportId: options.reportId,
+      reviewerId: options.reviewerId,
+      action: options.action,
+      resolutionNote: note,
+    });
+  } catch (error) {
+    // A take-down commits before its media cleanup, which can fail, and
+    // refuses the same way on every retry for media outside the post's scope:
+    // the post may be hidden already, so cached pages stop serving it first.
+    if (options.action === 'take_down') invalidateFeedAfterFailure();
+    throw error;
+  }
 
   // Hiding the post is not enough on its own: cached feed pages keep serving it
   // until their tag is revalidated. This lives here rather than in
@@ -228,11 +237,28 @@ export async function applyAdminPostModeration(
     throw new Error('A reason is required.');
   }
 
-  const result = await applyPostModerationAction(client, { ...options, reason });
+  let result: PostModerationActionResult;
+  try {
+    result = await applyPostModerationAction(client, { ...options, reason });
+  } catch (error) {
+    // As on the report path: a take-down commits before its media cleanup,
+    // which can fail after the post is hidden.
+    invalidateFeedAfterFailure();
+    throw error;
+  }
 
   if (result.status === 'applied' || result.status === 'already_applied') {
     invalidateShowcaseFeedCache();
   }
 
   return result;
+}
+
+/** Invalidates after a moderation call threw, never hiding that call's error behind its own. */
+function invalidateFeedAfterFailure() {
+  try {
+    invalidateShowcaseFeedCache();
+  } catch {
+    // The caller rethrows the moderation error, which is the one to report.
+  }
 }

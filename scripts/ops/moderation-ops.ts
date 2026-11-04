@@ -30,13 +30,59 @@ function writeNote(message: string) {
 }
 
 /**
+ * The refresh to run by hand, from the ugc-app folder. It reads CRON_SECRET as
+ * this CLI does, the shell's first and then `.env.local`'s, through Node's own
+ * env-file parser, quoted values included, so the secret is never typed,
+ * printed or left in the shell's history.
+ */
+export function manualFeedRefreshCommand(origin: string): string {
+  return `curl -fsS -H "Authorization: Bearer $(node --env-file-if-exists=.env.local -p 'process.env.CRON_SECRET')" ${origin}${SHOWCASE_FEED_INVALIDATE_PATH}`;
+}
+
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]']);
+
+/** Whether a refresh reaches the public site: over https, and not on this machine. */
+function isPublicSite(url: URL): boolean {
+  const hostname = url.hostname.toLowerCase();
+  return url.protocol === 'https:' && !LOCAL_HOSTNAMES.has(hostname) && !hostname.endsWith('.localhost');
+}
+
+type FeedRefreshAttempt = { refreshed: true; origin: string } | { refreshed: false; reason: string };
+
+async function attemptFeedRefresh(
+  endpoint: URL | null,
+  { siteUrl, secret }: { siteUrl: string | null; secret: string | null },
+  dependencies: ModerationOpsDependencies,
+): Promise<FeedRefreshAttempt> {
+  if (!secret) return { refreshed: false, reason: 'CRON_SECRET is not set' };
+  if (!siteUrl) return { refreshed: false, reason: 'NEXT_PUBLIC_SITE_URL is not set' };
+  if (!endpoint) return { refreshed: false, reason: 'NEXT_PUBLIC_SITE_URL is not a URL' };
+  try {
+    const response = await (dependencies.fetch ?? fetch)(endpoint, {
+      headers: { Authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(FEED_REFRESH_TIMEOUT_MS),
+    });
+    return response.ok
+      ? { refreshed: true, origin: endpoint.origin }
+      : { refreshed: false, reason: `${endpoint.origin} answered ${response.status}` };
+  } catch (error) {
+    return {
+      refreshed: false,
+      reason: `the request to ${endpoint.origin} failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
  * Asks the app to refresh the feed's cached pages after a decision changed
  * what they show. The CLI runs outside the app, where `next/cache` does not
  * exist, so without this a taken-down post stayed on the signed-out home page
  * until its window (15 minutes) ran out; its first card's poster is inlined
  * into that page, so deleting the stored files does not hide it either. Never
- * throws: the decision is already committed. Without the address or the
- * secret, or when the request fails, it says so and gives the command to run.
+ * throws. Without the address or the secret, or when the request fails, it
+ * says so and gives the command to run, and it warns when the address is not
+ * the public site: a run against the production database with a local address
+ * would otherwise refresh only that server's pages and look done.
  */
 export async function requestShowcaseFeedRefresh(
   environment: NodeJS.ProcessEnv,
@@ -45,39 +91,35 @@ export async function requestShowcaseFeedRefresh(
   const note = dependencies.note ?? writeNote;
   const siteUrl = environment.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '') || null;
   const secret = environment.CRON_SECRET?.trim() || null;
-  const manualCommand = `curl -fsS -H "Authorization: Bearer $CRON_SECRET" ${siteUrl ?? DEFAULT_SITE_URL}${SHOWCASE_FEED_INVALIDATE_PATH}`;
-  const notRefreshed = (reason: string) => {
-    note([
-      `Warning: the decision is recorded, but the feed's cached pages were not refreshed (${reason}).`,
-      'The signed-out home page can show the post as it was for up to 15 minutes. Refresh them now with:',
-      `  ${manualCommand}`,
-    ].join('\n'));
-    return false;
-  };
-
-  if (!secret) return notRefreshed('CRON_SECRET is not set');
-  if (!siteUrl) return notRefreshed('NEXT_PUBLIC_SITE_URL is not set');
-  let endpoint: URL;
-  try {
-    endpoint = new URL(SHOWCASE_FEED_INVALIDATE_PATH, `${siteUrl}/`);
-  } catch {
-    return notRefreshed('NEXT_PUBLIC_SITE_URL is not a URL');
-  }
-
-  try {
-    const response = await (dependencies.fetch ?? fetch)(endpoint, {
-      headers: { Authorization: `Bearer ${secret}` },
-      signal: AbortSignal.timeout(FEED_REFRESH_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      return notRefreshed(`${endpoint.origin} answered ${response.status}`);
+  let endpoint: URL | null = null;
+  if (siteUrl) {
+    try {
+      endpoint = new URL(SHOWCASE_FEED_INVALIDATE_PATH, `${siteUrl}/`);
+    } catch {
+      endpoint = null;
     }
-  } catch (error) {
-    return notRefreshed(`the request to ${endpoint.origin} failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  note(`Refreshed the feed's cached pages at ${endpoint.origin}.`);
-  return true;
+  const attempt = await attemptFeedRefresh(endpoint, { siteUrl, secret }, dependencies);
+  if (attempt.refreshed) {
+    note(`Refreshed the feed's cached pages at ${attempt.origin}.`);
+  } else {
+    note([
+      `Warning: the feed's cached pages were not refreshed (${attempt.reason}).`,
+      'The signed-out home page can show the post as it was for up to 15 minutes. Refresh them now, from the ugc-app folder, with:',
+      `  ${manualFeedRefreshCommand(endpoint?.origin ?? DEFAULT_SITE_URL)}`,
+    ].join('\n'));
+  }
+
+  if (endpoint && !isPublicSite(endpoint)) {
+    note([
+      `Warning: NEXT_PUBLIC_SITE_URL is ${endpoint.origin}, not the public site, so the public site's cached pages were not asked to refresh.`,
+      'If this decision was made on the production database, refresh them, from the ugc-app folder, with:',
+      `  ${manualFeedRefreshCommand(DEFAULT_SITE_URL)}`,
+    ].join('\n'));
+  }
+
+  return attempt.refreshed;
 }
 
 /**
@@ -251,12 +293,26 @@ export async function runModerationOps(
   const reviewerId = requireFlag(flags, '--reviewer-id');
 
   if (command === 'take-down-post' || command === 'dismiss-post') {
-    const result = await resolvePostReport(supabase, {
-      reportId,
-      reviewerId,
-      action: command === 'take-down-post' ? 'take_down' : 'dismiss',
-      resolutionNote: typeof flags.get('--note') === 'string' ? flags.get('--note') as string : null,
-    });
+    let result: PostReportResolution;
+    try {
+      result = await resolvePostReport(supabase, {
+        reportId,
+        reviewerId,
+        action: command === 'take-down-post' ? 'take_down' : 'dismiss',
+        resolutionNote: typeof flags.get('--note') === 'string' ? flags.get('--note') as string : null,
+      });
+    } catch (error) {
+      // The decision commits before the work that can fail after it: a
+      // take-down's media cleanup runs after the commit, and refuses the same
+      // way on every rerun for media outside the post's scope. The post may be
+      // hidden (or back) already, so the cached pages are refreshed before the
+      // error goes on, exit code and all.
+      (dependencies.note ?? writeNote)(
+        'The decision may have been recorded before this failure: refreshing the feed\'s cached pages in case it was.',
+      );
+      await requestShowcaseFeedRefresh(environment, dependencies);
+      throw error;
+    }
     console.log(JSON.stringify(result, null, 2));
     if (changesWhatTheFeedShows(result)) {
       await requestShowcaseFeedRefresh(environment, dependencies);
