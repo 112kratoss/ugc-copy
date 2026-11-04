@@ -1,6 +1,7 @@
 import { loadNsfwPostIds, hasNsfwReveal } from '@/lib/nsfw-content-server';
 import 'server-only';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
+import { heldItemsForReferenceCopies, referenceCopiesToMake } from '@/lib/recipe-copy-sent-items';
 
 import { unstable_cache } from 'next/cache';
 import { cache } from 'react';
@@ -1228,7 +1229,13 @@ export async function prepareCreationRecipeBundle(params: {
         ownerUserId: params.ownerUserId,
         generationId: params.creation.id,
         ...(params.onlyRowIds ? { onlyRowIds: params.onlyRowIds } : {}),
-        heldItems: [...sentItems, ...(params.storedItems ?? [])],
+        // A copy is held only where the recipe as stored names it (`heldItemsForReferenceCopies`).
+        heldItems: heldItemsForReferenceCopies({
+          sentItems,
+          storedItems: params.storedItems,
+          ownerUserId: params.ownerUserId,
+          generationId: params.creation.id,
+        }),
       });
       if (!planned.ok) {
         return { ok: false, status: 500, error: GENERATION_REFERENCES_UNREADABLE_ERROR };
@@ -1239,10 +1246,13 @@ export async function prepareCreationRecipeBundle(params: {
       const toAdd = planned.references.filter((reference) => !holdsResourceItem(sentPaths, sentIds, reference.item));
       if (!params.mayShareCreation) {
         refusedReferenceCount = toAdd.length;
-      } else if (toAdd.length > 0) {
-        bundle = mergeGenerationReferenceItemsIntoBundle(bundle, toAdd.map((reference) => reference.item));
-        addedItemIds.push(...toAdd.flatMap((reference) => (reference.item.id ? [reference.item.id] : [])));
-        pendingCopies = toAdd.filter((reference) => reference.source);
+      } else {
+        if (toAdd.length > 0) {
+          bundle = mergeGenerationReferenceItemsIntoBundle(bundle, toAdd.map((reference) => reference.item));
+          addedItemIds.push(...toAdd.flatMap((reference) => (reference.item.id ? [reference.item.id] : [])));
+        }
+        // The copies of the added references, and of sent ones the recipe does not hold yet.
+        pendingCopies = referenceCopiesToMake({ references: planned.references, added: toAdd, sentItems });
       }
     }
   }
