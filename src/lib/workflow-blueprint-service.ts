@@ -225,7 +225,10 @@ export async function planWorkflowBlueprintForRoute(
       );
       const responsePayload = { blueprint, remainingCredits: ledger.remainingCredits };
 
-      await markAiUsageSucceeded(adminSupabase, ledger, JSON.stringify(blueprint), responsePayload);
+      // The whole blueprint is the replay payload already; the usage event's
+      // text names it rather than storing it a second time (usage audit,
+      // 2026-11-04). Nothing reads output_text back.
+      await markAiUsageSucceeded(adminSupabase, ledger, blueprint.title, responsePayload);
 
       return { ok: true, body: responsePayload };
     } catch (error) {
