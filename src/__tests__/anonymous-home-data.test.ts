@@ -83,16 +83,17 @@ describe('the signed-out home reads', () => {
     }
   });
 
-  it("keys every cached read by the release, so a deploy never draws the page from the last one's data", async () => {
-    await loadModule({ RELEASE_GIT_SHA: 'sha-new', VERCEL_GIT_COMMIT_SHA: 'sha-git', VERCEL_DEPLOYMENT_ID: 'dpl_1' });
-    expect(cachedRead('anonymous-home-feed-v1').keyParts).toEqual(['anonymous-home-feed-v1', 'sha-new']);
-    expect(cachedRead('anonymous-home-shelf-v1').keyParts).toEqual(['anonymous-home-shelf-v1', 'sha-new']);
+  it("keys every cached read by the deployment, so a deploy never draws the page from another's data", async () => {
+    // A configuration-only redeploy keeps the commit, so the deployment comes first.
+    await loadModule({ VERCEL_DEPLOYMENT_ID: 'dpl_2', RELEASE_GIT_SHA: 'sha-new', VERCEL_GIT_COMMIT_SHA: 'sha-git' });
+    expect(cachedRead('anonymous-home-feed-v1').keyParts).toEqual(['anonymous-home-feed-v1', 'dpl_2']);
+    expect(cachedRead('anonymous-home-shelf-v1').keyParts).toEqual(['anonymous-home-shelf-v1', 'dpl_2']);
 
-    // The same order the root layout's data-build-id reads them in.
-    await loadModule({ VERCEL_GIT_COMMIT_SHA: 'sha-git', VERCEL_DEPLOYMENT_ID: 'dpl_1' });
+    // Off Vercel, the release, as the root layout's data-build-id reads it.
+    await loadModule({ RELEASE_GIT_SHA: 'sha-new', VERCEL_GIT_COMMIT_SHA: 'sha-git' });
+    expect(cachedRead('anonymous-home-feed-v1').keyParts).toEqual(['anonymous-home-feed-v1', 'sha-new']);
+    await loadModule({ VERCEL_GIT_COMMIT_SHA: 'sha-git' });
     expect(cachedRead('anonymous-home-feed-v1').keyParts).toEqual(['anonymous-home-feed-v1', 'sha-git']);
-    await loadModule({ VERCEL_DEPLOYMENT_ID: 'dpl_1' });
-    expect(cachedRead('anonymous-home-feed-v1').keyParts).toEqual(['anonymous-home-feed-v1', 'dpl_1']);
     await loadModule();
     expect(cachedRead('anonymous-home-feed-v1').keyParts).toEqual(['anonymous-home-feed-v1', 'dev']);
   });

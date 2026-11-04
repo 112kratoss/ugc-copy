@@ -35,8 +35,9 @@ import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 /**
  * How long the signed-out `/` is reused between rebuilds: its `revalidate`,
  * which `src/app/page.tsx` must state as a literal (a test holds the two
- * equal). The feed signs a poster-less post's private preview for an hour
- * (`resolveOwnedStoredMediaUrl`), so a longer window would serve dead links.
+ * equal). No longer: the feed signs a poster-less post's private preview for
+ * an hour (`resolveOwnedStoredMediaUrl`), and a page kept past that would
+ * serve dead links.
  */
 export const ANONYMOUS_HOME_REVALIDATE_SECONDS = 3600;
 
@@ -44,15 +45,16 @@ export const ANONYMOUS_HOME_REVALIDATE_SECONDS = 3600;
 export const ANONYMOUS_HOME_RETRY_SECONDS = 60;
 
 /**
- * The release this server runs, as the root layout's `data-build-id` and
- * `/api/app-version` name it. Part of every key here: the Data Cache outlives a
- * deploy, and a release that changed what a feed card or a shelf card holds
- * must not draw `/` from the one before it for up to an hour.
+ * The deployment this server is, falling back to its release where Vercel
+ * names none. Part of every key here: the Data Cache outlives a deploy, and a
+ * deployment, even a configuration-only one of the same commit, must not
+ * build `/` from an hour-old entry another one wrote, whatever shape that one
+ * gave a card and however old its signed links are.
  */
-function currentRelease(): string {
-  return process.env.RELEASE_GIT_SHA?.trim()
+function currentDeployment(): string {
+  return process.env.VERCEL_DEPLOYMENT_ID?.trim()
+    || process.env.RELEASE_GIT_SHA?.trim()
     || process.env.VERCEL_GIT_COMMIT_SHA?.trim()
-    || process.env.VERCEL_DEPLOYMENT_ID?.trim()
     || process.env.VERCEL_URL?.trim()
     || 'dev';
 }
@@ -61,7 +63,7 @@ const SIGNED_OUT = { viewerUserId: null, isAnonymous: false } as const;
 
 const readCachedAnonymousHomeFeed = unstable_cache(
   () => readHomeFeed({ viewerUserId: null, chip: getFeedChip(undefined) }),
-  ['anonymous-home-feed-v1', currentRelease()],
+  ['anonymous-home-feed-v1', currentDeployment()],
   { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
 );
 
@@ -71,7 +73,7 @@ const readCachedAnonymousHomeShelf = unstable_cache(
     const items = await loadHomeShelfForApi(SIGNED_OUT);
     return items.map((item) => (item.kind === 'creation' ? withoutPost(item) : item));
   },
-  ['anonymous-home-shelf-v1', currentRelease()],
+  ['anonymous-home-shelf-v1', currentDeployment()],
   { revalidate: ANONYMOUS_HOME_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] },
 );
 
