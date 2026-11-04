@@ -13,7 +13,8 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => ({})) }));
 
 const REPORT_ID = '1b4e28ba-2fa1-41d2-883f-0016d3cca427';
 const REVIEWER_ID = '6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b';
-const ENVIRONMENT = {
+const ENVIRONMENT: NodeJS.ProcessEnv = {
+  NODE_ENV: 'test',
   SUPABASE_URL: 'https://project.supabase.test',
   SUPABASE_SERVICE_ROLE_KEY: 'service-role-test',
   NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.test',
@@ -35,7 +36,7 @@ function resolution(overrides: Partial<PostReportResolution>): PostReportResolut
 async function run(
   command: string,
   {
-    environment = ENVIRONMENT as NodeJS.ProcessEnv,
+    environment = ENVIRONMENT,
     fetchImpl = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 })),
   }: { environment?: NodeJS.ProcessEnv; fetchImpl?: ReturnType<typeof vi.fn> } = {},
 ) {
@@ -130,7 +131,7 @@ describe('moderation CLI: refreshing the feed after a post decision', () => {
     const failing = vi.fn(async () => new Response('', { status: 503 }));
 
     const { fetchImpl, notes } = await run('take-down-post', {
-      environment: { ...ENVIRONMENT, NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.test/' } as NodeJS.ProcessEnv,
+      environment: { ...ENVIRONMENT, NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.test/' },
       fetchImpl: failing,
     });
 
