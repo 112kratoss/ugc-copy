@@ -61,7 +61,7 @@ Home sends no dwell, progress or skip events yet (plan §6), so meaningful and q
 
 After the delivery block, `scorecard` prints three sections from the v4 functions (plan `docs/plans/feed-algorithm-v4-industry-parity-2026-10-12.md` §2.8), over the same `--days` window with one block per version and arm. Before the v4 migration each prints `Not available` and the delivery block still prints.
 
-**Viewer grain** (`feed_scorecard_viewers`, over the last `--days` UTC days, today included). A viewer is an account (a registered one, or an app guest's anonymous session: the app signs its guests in anonymously, and the feed ranks and logs them as users) or a web guest's feed cookie key, so a guest who signs up counts twice. Each rate prints its numerator and denominator, people rather than deliveries; `–` means nobody qualified for the denominator.
+**Viewer grain** (`feed_scorecard_viewers`, over the last `--days` UTC days, today included). A viewer is an account (a registered one, or an app guest's anonymous session: the app signs its guests in anonymously, and the feed ranks and logs them as users) or a web guest's feed cookie key, so a guest who signs up counts twice. A caller with neither a feed cookie nor an installation id that is not a browser fetching from our pages (a script, crawler or unfurler; told apart by `Sec-Fetch-Site`) is served the cached identity-less first page and logs no session, delivery or viewer, so it is in no count here (usage audit, 2026-11-04); a browser's first fetch is ranked and logged as before. Each rate prints its numerator and denominator, people rather than deliveries; `–` means nobody qualified for the denominator.
 
 | Line | What it counts | How to read it |
 | --- | --- | --- |
@@ -112,7 +112,7 @@ npm run ops:feed-ranker -- replay --weights '<json>' [--days 30]
 
 What it does:
 
-- **Data.** Every rendered delivery served in the last `--days` days (1–30) by any version of the key, from `feed_delivery_facts` with the post's category. `dataset` prints the counts and positives by version and changes nothing.
+- **Data.** Every rendered delivery served in the last `--days` days (1–30) by any version of the key, from `feed_delivery_facts` with the post's category. Callers with no identity that are not a browser on our pages log no deliveries, so they never enter it. `dataset` prints the counts and positives by version and changes nothing.
 - **Labels.** `meaningful` is `is_meaningful_feed_engagement` (a video played to half, anything else held for 3 s, a save, remix start, resource open, purchase or comment); `quick_skip` is a quick skip; `negative` is not interested, hide creator or report.
 - **Features.** The 13 weight keys as stored in the delivery's `score_components` when it was ranked (a missing key reads 0: rankings before v4 stored no `semantic_similarity`), plus position, `is_following`, `served_recently` and `is_exploration`. Position is in the model so the top slots' extra attention is not credited to whatever the top items had.
 - **Model.** One L2-regularised logistic regression per label, fitted by gradient descent over standardised features. A fixed fifth of the feed sessions is held out, each session's rows kept together, and each model reports holdout log-loss and AUC next to a constant at the training rate.

@@ -13,12 +13,16 @@ const supplementary = [
   'prune_account_merge_tickets',
   'prune_upload_byte_reservations',
 ];
-// The idle-guest step (D5) runs last; with no candidates it lists and stops.
-const allCalls = ['prune_operational_backend_data', ...supplementary, 'list_idle_guest_identities'];
+// The guest steps (D5, then guests with content) run last; with no candidates
+// each lists and stops.
+const allCalls = [
+  'prune_operational_backend_data', ...supplementary,
+  'list_idle_guest_identities', 'list_idle_guest_identities_with_content',
+];
 
 function answer(name: string) {
   if (name === 'prune_operational_backend_data') return { total_deleted: 12, job_runs_deleted: 12 };
-  if (name === 'list_idle_guest_identities') return [];
+  if (name === 'list_idle_guest_identities' || name === 'list_idle_guest_identities_with_content') return [];
   return 3;
 }
 
@@ -56,7 +60,9 @@ describe('supplementary retention failure visibility and progress', () => {
   it('does not carry old failures into a successful retry', async () => {
     let fail = true;
     const rpc = vi.fn(async (name: string) => ({
-      data: name === 'prune_operational_backend_data' ? { total_deleted: 1 } : name === 'list_idle_guest_identities' ? [] : 1,
+      data: name === 'prune_operational_backend_data'
+        ? { total_deleted: 1 }
+        : name.startsWith('list_idle_guest_identities') ? [] : 1,
       error: fail && name === supplementary[0] ? new Error('temporary fixture failure') : null,
     }));
     const client = { rpc } as unknown as SupabaseClient;

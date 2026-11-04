@@ -69,6 +69,8 @@ import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import {
+  SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS,
+  SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS,
   shouldCacheIdentitylessForYouBootstrap,
   shouldCacheViewerNeutralShowcaseBasePage,
 } from '@/lib/showcase-feed-cache-policy';
@@ -1249,7 +1251,7 @@ async function getLegacyShowcaseFeedPageBase(
 const getCachedShowcaseFeedPageBase = unstable_cache(
   getShowcaseFeedPageBase,
   ['showcase-feed-base-v3'],
-  { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
+  { revalidate: SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
 
 /**
@@ -1346,6 +1348,8 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
   anonymousKeyHash: string | null;
   cursor: string | null;
   prepared?: PreparedRankedFeedSession | null;
+  /** The previous page's `pageInfo.seedBucket`, for a ranking the shared seed drives. */
+  seedBucket?: number | null;
   adminSupabase?: ReturnType<typeof createServiceClient>;
 }): Promise<ShowcaseFeedPage> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
@@ -1362,6 +1366,7 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
     limit: params.limit,
     offset: params.offset,
     prepared: params.prepared ?? null,
+    seedBucket: params.seedBucket ?? null,
     serviceClient: adminSupabase,
     viewerUserId: params.viewerUserId,
     onPhaseTiming: params.onPhaseTiming,
@@ -1436,7 +1441,7 @@ const getCachedIdentitylessShowcaseForYouBootstrap = unstable_cache(
     }
   },
   ['showcase-for-you-bootstrap-v3'],
-  { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
+  { revalidate: SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
 
 async function loadIdentitylessShowcaseForYouBootstrap(
@@ -1523,6 +1528,12 @@ export async function getShowcaseFeedPage(options: {
    * place of a new one; an unknown, spent or expired token ranks afresh.
    */
   readAheadToken?: string | null;
+  /**
+   * The `pageInfo.seedBucket` of the For you page before this one, when the
+   * reader pages on by offset: the next ranking uses that page's seed if the
+   * bucket is recent, so it continues the same order.
+   */
+  seedBucket?: number | null;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<ShowcaseFeedPage> {
   const { category, sort, offset, limit } = options;
@@ -1558,6 +1569,7 @@ export async function getShowcaseFeedPage(options: {
         viewerUserId,
         anonymousKeyHash: options.anonymousKeyHash ?? null,
         cursor: options.cursor ?? null,
+        seedBucket: options.seedBucket ?? null,
         prepared: options.readAheadToken && offset === 0 && !options.cursor
           ? await measureReadAheadTake(() => takePreparedShowcaseFeedSession(options.readAheadToken as string, {
             anonymousKeyHash: options.anonymousKeyHash ?? null,

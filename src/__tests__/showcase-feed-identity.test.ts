@@ -4,6 +4,7 @@ import {
   FEED_ANONYMOUS_COOKIE_NAME,
   FEED_INSTALLATION_ID_HEADER,
   getFeedNetworkKeyHash,
+  isSameSiteBrowserFetch,
   isValidFeedInstallationId,
   resolveFeedAnonymousIdentity,
 } from '@/lib/showcase-feed-identity';
@@ -84,5 +85,17 @@ describe('showcase feed anonymous identity', () => {
 
     expect(rotatedAgent).toBe(first);
     expect(differentNetwork).not.toBe(first);
+  });
+
+  it('tells a browser\'s fetch from our pages by its Sec-Fetch-Site', () => {
+    const request = (site?: string) => new Request('https://magicbooklet.test/api/showcase/feed', {
+      headers: site ? { 'sec-fetch-site': site } : {},
+    });
+
+    expect(isSameSiteBrowserFetch(request('same-origin'))).toBe(true);
+    expect(isSameSiteBrowserFetch(request('same-site'))).toBe(true);
+    expect(isSameSiteBrowserFetch(request('cross-site'))).toBe(false);
+    expect(isSameSiteBrowserFetch(request('none'))).toBe(false);
+    expect(isSameSiteBrowserFetch(request())).toBe(false);
   });
 });

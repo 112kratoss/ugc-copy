@@ -299,5 +299,11 @@ describe('workflow blueprint service', () => {
       }),
       }),
     });
+    // The blueprint is stored once, as the replay payload; the event's text
+    // only names it.
+    const settle = adminClient.rpcCalls.find((call) => call.fn === 'settle_ai_usage_event');
+    const blueprint = (settle?.args.p_response_payload as { blueprint: { title: string } }).blueprint;
+    expect(settle?.args.p_output_text).toBe(blueprint.title);
+    expect(String(settle?.args.p_output_text)).not.toContain('deliveryPlan');
   });
 });

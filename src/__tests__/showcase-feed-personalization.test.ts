@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  FEED_SEED_BUCKET_MAX_AGE_BUCKETS,
+  FEED_SHARED_SEED_BUCKET_MS,
   PREPARED_FEED_SESSION_TTL_MS,
+  currentFeedSeedBucket,
   getPersonalizedShowcaseFeedPage,
   normalizeRetrievalConfig,
   prepareRankedShowcaseFeedSession,
+  resolveFeedSeedBucket,
   type PreparedRankedFeedSession,
 } from '@/lib/showcase-feed-personalization';
 import {
@@ -1312,6 +1316,111 @@ describe('for-you-rules v3 wiring', () => {
     ));
     expect(coldStarts.every((coldStart) => coldStart !== null)).toBe(true);
     expect(coldStarts.filter((coldStart) => coldStart?.picked)).toHaveLength(1);
+  });
+
+  // Usage audit follow-up (2026-11-04): a page one served from a cache can be
+  // older than its seed's bucket, so a page ranked from the shared seed names
+  // the bucket, and the next offset page, sent it back, ranks from the same seed.
+  describe('the shared seed bucket a page names and the next page sends back', () => {
+    const NOW = Date.UTC(2026, 10, 4, 18, 35, 0);
+    const coldCandidates = () => Array.from({ length: 8 }, (_, index) => v3Candidate(`new-${index}`, {
+      candidate_source: 'cold',
+      sources: ['cold'],
+      author_rendered_30d: 2,
+      post_age_hours: 3 + index,
+      post_rendered_30d: index,
+      post_meaningful_30d: 0,
+    }));
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(NOW);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function pageAt(client: SupabaseClient, options: {
+      offset: number;
+      viewerUserId: string | null;
+      seedBucket?: number | null;
+    }) {
+      return getPersonalizedShowcaseFeedPage({
+        anonymousKeyHash: null,
+        cursor: null,
+        fallbackItems: async () => [],
+        filters: { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+        hydratePostIds: async (ids) => ids.map(item),
+        limit: 2,
+        offset: options.offset,
+        seedBucket: options.seedBucket ?? null,
+        serviceClient: client,
+        viewerUserId: options.viewerUserId,
+      });
+    }
+
+    it('ranks a later page from the bucket its reader sends back, and names that bucket', async () => {
+      const rankSpy = await spyOnRanking();
+      const { client, persisted } = v3Client({ candidates: coldCandidates() });
+      const earlier = currentFeedSeedBucket(NOW) - 3;
+
+      const page = await pageAt(client, { offset: 2, viewerUserId: 'viewer-1', seedBucket: earlier });
+
+      expect(rankSpy.mock.calls[0][0].seed).toBe(earlier % 2_147_483_647);
+      expect(persisted[0].p_session.random_seed).toBe(earlier % 2_147_483_647);
+      expect(page.pageInfo.seedBucket).toBe(earlier);
+    });
+
+    it('cuts the next page from the order page one was cut from, a bucket later', async () => {
+      const rankSpy = await spyOnRanking();
+      const { client } = v3Client({ candidates: coldCandidates() });
+
+      // Page one, identity-less, ranked in its bucket (as the cached bootstrap is).
+      const pageOne = await pageAt(client, { offset: 0, viewerUserId: null });
+      const order = rankSpy.mock.results[0].value.map((entry: RankedShowcaseItem) => entry.item.id);
+      expect(pageOne.pageInfo.seedBucket).toBe(currentFeedSeedBucket(NOW));
+
+      // Read from the cache fifteen minutes on: the bucket has turned.
+      vi.setSystemTime(NOW + 15 * 60 * 1000);
+      await pageAt(client, { offset: 2, viewerUserId: null, seedBucket: pageOne.pageInfo.seedBucket });
+      const continued = rankSpy.mock.results[1].value.map((entry: RankedShowcaseItem) => entry.item.id);
+
+      expect(rankSpy.mock.calls[1][0].seed).toBe(rankSpy.mock.calls[0][0].seed);
+      expect(continued).toEqual(order);
+    });
+
+    it('ignores a bucket that is stale, from the future or not one, and ranks from the current one', async () => {
+      const current = currentFeedSeedBucket(NOW);
+      for (const seedBucket of [current - FEED_SEED_BUCKET_MAX_AGE_BUCKETS - 1, current + 1, 1.5, -4, Number.NaN]) {
+        const rankSpy = await spyOnRanking();
+        const { client } = v3Client({ candidates: coldCandidates() });
+
+        const page = await pageAt(client, { offset: 2, viewerUserId: null, seedBucket });
+
+        expect(rankSpy.mock.calls[0][0].seed, String(seedBucket)).toBe(current % 2_147_483_647);
+        expect(page.pageInfo.seedBucket).toBe(current);
+        vi.restoreAllMocks();
+      }
+    });
+
+    it('keeps a signed-in first page on its own random seed, naming no bucket', async () => {
+      const { client, persisted } = v3Client({ candidates: coldCandidates() });
+
+      const page = await pageAt(client, { offset: 0, viewerUserId: 'viewer-1', seedBucket: currentFeedSeedBucket(NOW) - 1 });
+
+      expect(page.pageInfo.seedBucket).toBeUndefined();
+      expect(persisted[0].p_session.random_seed).not.toBe((currentFeedSeedBucket(NOW) - 1) % 2_147_483_647);
+    });
+
+    it('honours a bucket up to two hours old', () => {
+      expect(FEED_SHARED_SEED_BUCKET_MS * FEED_SEED_BUCKET_MAX_AGE_BUCKETS).toBe(2 * 60 * 60 * 1000);
+      const current = currentFeedSeedBucket(NOW);
+      expect(resolveFeedSeedBucket(current - FEED_SEED_BUCKET_MAX_AGE_BUCKETS, NOW)).toBe(current - FEED_SEED_BUCKET_MAX_AGE_BUCKETS);
+      expect(resolveFeedSeedBucket(current, NOW)).toBe(current);
+      expect(resolveFeedSeedBucket(null, NOW)).toBe(current);
+      expect(resolveFeedSeedBucket(undefined, NOW)).toBe(current);
+    });
   });
 
   it("keeps a blocked creator's posts out of ranking and persistence, in either direction", async () => {

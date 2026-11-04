@@ -88,6 +88,8 @@ type LaneCacheEntry = {
     items: ShowcaseFeedItem[];
     nextOffset: number | null;
     nextCursor: string | null;
+    /** The seed bucket the lane's last page named, for its next offset page. */
+    nextSeedBucket: number | null;
     feedSessionId: string | null;
     cachedAt: number;
     /** When the lane's page one was fetched; null for the page the feed opened with. */
@@ -295,6 +297,13 @@ export default function FeedClient({
     const [nextCursor, setNextCursor] = useState<string | null>(
         seedFeed.pageInfo.hasMore ? seedFeed.pageInfo.nextCursor ?? null : null
     );
+    // A page with no cursor that For you ranked from the shared seed names the
+    // seed's bucket. The next offset page sends it back and is ranked from the
+    // same seed, so it continues the order this page was cut from: a page one
+    // from the static `/` or the server's cache can be older than its bucket.
+    const [nextSeedBucket, setNextSeedBucket] = useState<number | null>(
+        seedFeed.pageInfo.seedBucket ?? null
+    );
     const [loadingMore, setLoadingMore] = useState(false);
     // The ranker groups a viewer's events into one session. It arrives on the
     // feed page rather than the item, so it has to be carried forward as pages
@@ -408,6 +417,7 @@ export default function FeedClient({
         offset: number,
         mode: FeedFetchMode,
         cursor: string | null = null,
+        seedBucket: number | null = null,
     ) => {
         const append = mode === 'append';
         if (append && pagingBlockedRef.current) return;
@@ -447,6 +457,10 @@ export default function FeedClient({
                 params.set('cursor', continuationCursor);
             } else {
                 params.set('offset', String(offset));
+                // Only For you ranks from a seed, and only a later page needs it.
+                if (append && chip.sort === 'for-you' && seedBucket !== null) {
+                    params.set('seedBucket', String(seedBucket));
+                }
             }
             if (chip.unlock !== 'all') params.set('unlock', chip.unlock);
             if (chip.category !== 'all') params.set('category', chip.category);
@@ -485,6 +499,7 @@ export default function FeedClient({
             addSavedItemIds(visibleItems.filter((item) => item.isSaved).map((item) => item.id));
             setNextOffset(page.pageInfo.hasMore ? page.pageInfo.nextOffset : null);
             setNextCursor(page.pageInfo.hasMore ? page.pageInfo.nextCursor ?? null : null);
+            setNextSeedBucket(page.pageInfo.seedBucket ?? null);
             // Page one starts a new session and adopts whatever the page says,
             // including nothing. Paging within a lane keeps the session it
             // already has rather than dropping it for an unranked page.
@@ -504,6 +519,7 @@ export default function FeedClient({
                 setItems([]);
                 setNextOffset(null);
                 setNextCursor(null);
+                setNextSeedBucket(null);
                 setLoadError('Could not load this lane.');
             } else {
                 setLoadError('Could not load more posts. What you already loaded is still here.');
@@ -576,6 +592,7 @@ export default function FeedClient({
                         hasMore: nextOffset !== null || nextCursor !== null,
                         nextOffset,
                         nextCursor,
+                        ...(nextSeedBucket === null ? { seedBucket: undefined } : { seedBucket: nextSeedBucket }),
                     },
                 },
                 renderedItemCount: items.length,
@@ -587,7 +604,7 @@ export default function FeedClient({
             FEED_SNAPSHOT_QUIET_PERIOD_MS,
             FEED_SNAPSHOT_IDLE_TIMEOUT_MS,
         );
-    }, [cacheKey, feedSessionId, flushFeedSnapshot, items, nextCursor, nextOffset, savedItemIds, seedFeed]);
+    }, [cacheKey, feedSessionId, flushFeedSnapshot, items, nextCursor, nextOffset, nextSeedBucket, savedItemIds, seedFeed]);
 
     useEffect(() => flushFeedSnapshot, [flushFeedSnapshot]);
 
@@ -607,13 +624,13 @@ export default function FeedClient({
                 !pagingBlockedRef.current
                 && entries.some((entry) => entry.isIntersecting)
             ) {
-                void fetchPage(chipId, nextOffset ?? 0, 'append', nextCursor);
+                void fetchPage(chipId, nextOffset ?? 0, 'append', nextCursor, nextSeedBucket);
             }
         }, { rootMargin: '600px 0px' });
 
         observer.observe(sentinel);
         return () => observer.disconnect();
-    }, [chipId, fetchPage, loadingMore, nextCursor, nextOffset, switching]);
+    }, [chipId, fetchPage, loadingMore, nextCursor, nextOffset, nextSeedBucket, switching]);
 
     // `snapshot`: the lane as an earlier mount of the feed left it, shown when
     // this mount has no fresher copy of its own.
@@ -627,6 +644,7 @@ export default function FeedClient({
             items,
             nextOffset,
             nextCursor,
+            nextSeedBucket,
             feedSessionId,
             cachedAt: Date.now(),
             fetchedAt: laneFetchedAt,
@@ -661,6 +679,7 @@ export default function FeedClient({
             setItems(kept.items.filter((item) => !isHiddenFromLane(removedForViewer, item)));
             setNextOffset(kept.nextOffset);
             setNextCursor(kept.nextCursor);
+            setNextSeedBucket(kept.nextSeedBucket);
             setFeedSessionId(kept.feedSessionId);
             setLaneFetchedAt(kept.fetchedAt);
             return;
@@ -668,8 +687,9 @@ export default function FeedClient({
         setItems([]);
         setNextOffset(null);
         setNextCursor(null);
+        setNextSeedBucket(null);
         void fetchPage(nextChipId, 0, 'replace');
-    }, [chipId, feedSessionId, fetchPage, items, laneFetchedAt, nextCursor, nextOffset, removedForViewer, setItems]);
+    }, [chipId, feedSessionId, fetchPage, items, laneFetchedAt, nextCursor, nextOffset, nextSeedBucket, removedForViewer, setItems]);
 
     // The static `/` renders For you whatever `?chip=` says. Back from a post
     // opened in another lane lands here, so that lane is shown after mount, as
@@ -692,6 +712,7 @@ export default function FeedClient({
             items: feed.items,
             nextOffset: feed.pageInfo.hasMore ? feed.pageInfo.nextOffset : null,
             nextCursor: feed.pageInfo.hasMore ? feed.pageInfo.nextCursor ?? null : null,
+            nextSeedBucket: feed.pageInfo.seedBucket ?? null,
             feedSessionId: getShowcaseFeedSessionId(feed),
             cachedAt: snapshot.cachedAt,
             // Kept after its page one came, so its page is no younger.
@@ -1135,6 +1156,7 @@ export default function FeedClient({
                             // to restart the lane rather than page on.
                             nextOffset === null && nextCursor === null ? 'replace' : 'append',
                             nextCursor,
+                            nextSeedBucket,
                         )}
                         className="ui-focus-ring min-h-11 rounded-full border border-current px-4 text-xs font-bold"
                     >

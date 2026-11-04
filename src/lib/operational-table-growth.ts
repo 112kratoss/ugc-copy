@@ -65,6 +65,25 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   workflow_canvas_run_steps: { warning: 500_000, degraded: 2_000_000 },
   template_runs: { warning: 100_000, degraded: 500_000 },
   template_run_steps: { warning: 500_000, degraded: 2_000_000 },
+  // Usage audit, 2026-11-04: the blind spots. Each is a backstop against
+  // runaway growth, sized well above its steady state at today's traffic.
+  // A viewer-day row per viewer, kept 400 days.
+  feed_viewer_daily: { warning: 1_000_000, degraded: 4_000_000 },
+  // Kept for good: the accounting never goes; text is cleared after 90 days.
+  ai_usage_events: { warning: 500_000, degraded: 2_000_000 },
+  // Read alerts go after 180 days, unread ones after 365.
+  mobile_notifications: { warning: 500_000, degraded: 2_000_000 },
+  mobile_push_deliveries: { warning: 200_000, degraded: 1_000_000 },
+  // Up to four rows per app flush, kept 90 days.
+  playback_metrics: { warning: 200_000, degraded: 1_000_000 },
+  onboarding_events: { warning: 500_000, degraded: 2_000_000 },
+  // Expired locks go after a day, so this holds about a day of polling.
+  backend_job_locks: { warning: 20_000, degraded: 100_000 },
+  // Every identity, registered or guest; Pro includes 100,000 MAU.
+  'auth.users': { warning: 100_000, degraded: 500_000 },
+  // Live anonymous users: idle ones are deleted after 90 days, or 180 days
+  // with content, so a climb here means guests are not being retired.
+  guest_identities: { warning: 50_000, degraded: 250_000 },
 };
 
 const DEFAULT_BUDGET = { warning: 100_000, degraded: 500_000 };

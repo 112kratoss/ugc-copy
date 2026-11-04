@@ -102,7 +102,7 @@ describe('feed retention lag', () => {
     ]), NOW);
 
     expect(report.status).toBe('degraded');
-    expect(report.issues[0].message).toContain('5,000 rows/hour');
+    expect(report.issues[0].message).toContain('5,000-row batches for at most three minutes an hour');
     expect(report.issues[0].tableName).toBe('feed_delivery_facts');
     // bigint arrives as a string over PostgREST.
     expect(report.tables[0].rowCount).toBe(900000);

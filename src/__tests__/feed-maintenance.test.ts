@@ -87,6 +87,10 @@ describe('maintainFeedPersonalization', () => {
         post_feedback_deleted: 0,
         creator_feedback_deleted: 0,
         facts_deleted: 5,
+        // No table filled its batch of 5,000, so one call was the whole prune.
+        batches: 1,
+        batch_limit_reached: false,
+        time_budget_reached: false,
       },
     });
     expect(db.rpc.mock.calls).toEqual([
@@ -335,5 +339,121 @@ describe('maintainFeedPersonalization', () => {
     });
 
     expect(logBackendWarning).not.toHaveBeenCalled();
+  });
+});
+
+// Usage audit (2026-11-04): the prune deletes at most 5,000 rows per table per
+// call, so the hourly run calls it again while a table fills its batch, until
+// the backlog is gone or three minutes of the run have passed.
+describe('maintainFeedPersonalization prune batches', () => {
+  function batchedClient(prunes: Array<{ data: unknown; error: unknown }>) {
+    const queue = [...prunes];
+    const rpc = vi.fn(async (name: string) => {
+      if (name === 'prune_feed_personalization_data') {
+        const next = queue.length > 1 ? queue.shift() : queue[0];
+        if (!next) throw new Error('no prune answer');
+        return next;
+      }
+      if (name === 'refresh_feed_delivery_fact_daily') return { data: {}, error: null };
+      if (name === 'refresh_feed_viewer_daily') return { data: 0, error: null };
+      return { data: 0, error: null };
+    });
+    return { client: { rpc }, rpc };
+  }
+
+  const full = { data: { skipped: false, events_deleted: 5000, facts_deleted: 1200, sessions_deleted: 3 }, error: null };
+  const short = { data: { skipped: false, events_deleted: 900, facts_deleted: 0, sessions_deleted: 0 }, error: null };
+  const pruneCalls = (rpc: ReturnType<typeof vi.fn>) => rpc.mock.calls.filter(([name]) => name === 'prune_feed_personalization_data');
+
+  it('calls the prune again while a table fills its batch and sums the counts', async () => {
+    const db = batchedClient([full, full, short]);
+
+    const summary = await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-11-04T07:20:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
+    });
+
+    expect(pruneCalls(db.rpc)).toHaveLength(3);
+    expect(summary.retention).toEqual({
+      skipped: false,
+      events_deleted: 10_900,
+      facts_deleted: 2400,
+      sessions_deleted: 6,
+      batches: 3,
+      batch_limit_reached: false,
+      time_budget_reached: false,
+    });
+  });
+
+  it('asks every batch with the same arguments, so they all prune to the same instant', async () => {
+    const db = batchedClient([full, short]);
+
+    await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-11-04T07:20:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
+    });
+
+    const [first, second] = pruneCalls(db.rpc).map(([, args]) => args);
+    expect(second).toEqual(first);
+    expect(first).toMatchObject({ p_as_of: '2026-11-04T07:20:00.000Z', p_limit: 5000 });
+  });
+
+  it('starts no batch after three minutes of the run and says a backlog remains', async () => {
+    let clockMs = 0;
+    const db = batchedClient([full]);
+    const answer = db.rpc.getMockImplementation()!;
+    db.rpc.mockImplementation(async (name: string) => {
+      if (name === 'prune_feed_personalization_data') clockMs += 70_000;
+      return answer(name);
+    });
+
+    const summary = await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-11-04T07:20:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
+      clock: () => clockMs,
+    });
+
+    // Batches start at 0, 70 and 140 s; the third ends at 210 s, past the mark.
+    expect(pruneCalls(db.rpc)).toHaveLength(3);
+    expect(summary.retention).toMatchObject({ batches: 3, batch_limit_reached: true, time_budget_reached: true });
+  });
+
+  it('stops when another run holds the prune, keeping what its earlier batches did', async () => {
+    const db = batchedClient([full, { data: { skipped: true, reason: 'already_running' }, error: null }]);
+
+    const summary = await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-11-04T07:20:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
+    });
+
+    expect(pruneCalls(db.rpc)).toHaveLength(2);
+    expect(summary.retention).toMatchObject({ skipped: false, events_deleted: 5000, batches: 1, batch_limit_reached: true });
+  });
+
+  it('answers a first call that found the prune running exactly as the RPC did', async () => {
+    const db = batchedClient([{ data: { skipped: true, reason: 'already_running' }, error: null }]);
+
+    const summary = await maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-11-04T07:20:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
+    });
+
+    expect(pruneCalls(db.rpc)).toHaveLength(1);
+    expect(summary.retention).toEqual({ skipped: true, reason: 'already_running' });
+  });
+
+  it('fails the run when a later batch fails', async () => {
+    const db = batchedClient([full, { data: null, error: { message: 'canceling statement due to lock timeout' } }]);
+
+    await expect(maintainFeedPersonalization(db.client as never, {
+      now: new Date('2026-11-04T07:20:00.000Z'),
+      invalidateFeedCache: vi.fn(),
+      refreshAccountLabels: labelPass(),
+    })).rejects.toThrow('prune_feed_personalization_data failed: canceling statement due to lock timeout');
   });
 });

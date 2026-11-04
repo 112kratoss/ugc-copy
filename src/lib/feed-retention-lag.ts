@@ -8,10 +8,12 @@ import {
  *
  * Growth reporting and retention lag answer different questions, and only the
  * second one catches a prune that has stopped keeping up. `prune_feed_
- * personalization_data` deletes at most `FEED_RETENTION_PRUNE_LIMIT` (5,000)
- * rows an hour, so once the insert rate exceeds that ceiling the oldest row
- * ages past its window and the table simply looks "large" — which is
- * indistinguishable from ordinary growth in a row-count budget.
+ * personalization_data` deletes `FEED_RETENTION_PRUNE_LIMIT` (5,000) rows per
+ * table per call, and the hourly run calls it again while a batch is full for
+ * at most `FEED_RETENTION_PRUNE_TIME_BUDGET_MS` (three minutes), so once the
+ * insert rate exceeds what that drains the oldest row ages past its window and
+ * the table simply looks "large" — which is indistinguishable from ordinary
+ * growth in a row-count budget.
  *
  * Lag is measured in days past the configured window, so a table pruning
  * correctly reads 0 no matter how big it is.
@@ -197,7 +199,7 @@ export async function collectFeedRetentionLag(
         severity: entry.status === 'degraded' ? 'degraded' as const : 'warning' as const,
         code: 'FEED_RETENTION_LAG' as const,
         tableName: entry.tableName,
-        message: `${entry.tableName} retains rows ${entry.ageDays} day(s) old against a ${entry.retentionDays}-day window (${entry.lagDays} day(s) past). The prune is capped at 5,000 rows/hour and is not keeping up.`,
+        message: `${entry.tableName} retains rows ${entry.ageDays} day(s) old against a ${entry.retentionDays}-day window (${entry.lagDays} day(s) past). The prune deletes 5,000-row batches for at most three minutes an hour and is not keeping up.`,
       })),
   ];
 

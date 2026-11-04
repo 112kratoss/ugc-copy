@@ -132,7 +132,14 @@ const FEED_SESSION_REUSE_TTL_MS = 2 * 60 * 1000;
 const FEED_SESSION_EXPIRY_MS = 2 * 60 * 60 * 1000;
 const FEED_HYDRATION_BATCH_SIZE = 60;
 const FEED_RANDOM_SEED_MODULUS = 2_147_483_647;
-const FEED_SHARED_SEED_BUCKET_MS = 10 * 60 * 1000;
+/** How long an identity-less ranking keeps its shared seed. */
+export const FEED_SHARED_SEED_BUCKET_MS = 10 * 60 * 1000;
+/**
+ * How many buckets back a page's seed bucket is still honoured when a reader
+ * sends it with the next page: two hours, longer than any cache a page one is
+ * served from.
+ */
+export const FEED_SEED_BUCKET_MAX_AGE_BUCKETS = 12;
 const COLD_CANDIDATE_RESERVED_PLACES = 10;
 
 export type RankedFeedFilters = {
@@ -503,6 +510,7 @@ function buildPage({
   limit,
   nextCursor,
   offset,
+  seedBucket = null,
 }: {
   algorithmVersion?: string;
   feedSessionId?: string | null;
@@ -511,6 +519,8 @@ function buildPage({
   limit: number;
   nextCursor: string | null;
   offset: number;
+  /** The shared seed's bucket the ranking used, when it used one. */
+  seedBucket?: number | null;
 }): ShowcaseFeedPage {
   return {
     items,
@@ -522,6 +532,7 @@ function buildPage({
       nextCursor,
       limit,
       offset,
+      ...(seedBucket === null ? {} : { seedBucket }),
     },
   };
 }
@@ -1249,6 +1260,27 @@ function reserveColdCandidateRows(rows: RankedFeedFeatureRow[], limit: number) {
   ];
 }
 
+/** The shared seed's bucket for a moment, by default now. */
+export function currentFeedSeedBucket(nowMs = Date.now()) {
+  return Math.floor(nowMs / FEED_SHARED_SEED_BUCKET_MS);
+}
+
+/**
+ * The bucket a ranking no cursor resumes is seeded from: the one a reader's
+ * previous page was ranked in, when the reader sends it back and it is no
+ * older than FEED_SEED_BUCKET_MAX_AGE_BUCKETS, else the current one. Anything
+ * else (not an integer, from the future, too old) is ignored.
+ */
+export function resolveFeedSeedBucket(requested: number | null | undefined, nowMs = Date.now()) {
+  const current = currentFeedSeedBucket(nowMs);
+  return typeof requested === 'number'
+    && Number.isSafeInteger(requested)
+    && requested <= current
+    && requested >= current - FEED_SEED_BUCKET_MAX_AGE_BUCKETS
+    ? requested
+    : current;
+}
+
 /**
  * The seed the cold-start draws come from. A ranking a cursor can resume keeps
  * a random seed, persisted with its session. A ranking no cursor resumes is
@@ -1257,10 +1289,21 @@ function reserveColdCandidateRows(rows: RankedFeedFeatureRow[], limit: number) {
  * bucket, so the next page is cut from the order the last one was. With a
  * fresh seed the next ranking's slot could hold a different post, above the
  * cut where it is never shown, and the previous pick could come round again.
+ *
+ * A page one served from a cache can be older than its bucket, so each such
+ * page names its bucket (`pageInfo.seedBucket`) and the reader sends it back
+ * with the next page, which is then ranked from the same seed.
  */
-function rankingSeed({ identityless, offset }: { identityless: boolean; offset: number }) {
-  if (!identityless && offset === 0) return Math.floor(Math.random() * FEED_RANDOM_SEED_MODULUS);
-  return Math.floor(Date.now() / FEED_SHARED_SEED_BUCKET_MS) % FEED_RANDOM_SEED_MODULUS;
+function rankingSeed({
+  identityless,
+  offset,
+  seedBucket,
+}: { identityless: boolean; offset: number; seedBucket?: number | null }) {
+  if (!identityless && offset === 0) {
+    return { randomSeed: Math.floor(Math.random() * FEED_RANDOM_SEED_MODULUS), seedBucket: null };
+  }
+  const bucket = resolveFeedSeedBucket(seedBucket);
+  return { randomSeed: bucket % FEED_RANDOM_SEED_MODULUS, seedBucket: bucket };
 }
 
 function mergeUniqueFeedItems(
@@ -1303,6 +1346,7 @@ async function rankFreshCandidates({
   filters,
   hydratePostIds,
   offset,
+  seedBucket = null,
   serviceClient,
   timed,
   viewerUserId,
@@ -1312,11 +1356,13 @@ async function rankFreshCandidates({
   anonymousKeyHash: string | null;
   filters: RankedFeedFilters;
   offset: number;
+  /** The previous page's seed bucket, for a ranking the shared seed drives. */
+  seedBucket?: number | null;
   serviceClient: SupabaseClient;
   timed: PhaseTimer;
   viewerUserId: string | null;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
-}): Promise<{ ranked: RankedShowcaseItem[]; randomSeed: number }> {
+}): Promise<{ ranked: RankedShowcaseItem[]; randomSeed: number; seedBucket: number | null }> {
   const featureRows = await timed('candidate_rpc', () => loadCandidateFeatures({
     algorithm,
     anonymousKeyHash,
@@ -1403,7 +1449,8 @@ async function rankFreshCandidates({
     }));
   // Drawn before ranking and persisted with the session: the cold-start slot's
   // Thompson draws replay exactly from it.
-  const randomSeed = rankingSeed({ identityless: !viewerUserId && !anonymousKeyHash, offset });
+  const seed = rankingSeed({ identityless: !viewerUserId && !anonymousKeyHash, offset, seedBucket });
+  const { randomSeed } = seed;
   const rankingStartedAt = performance.now();
   const ranked = rankAndDiversifyShowcaseItems({
     items: candidateItems,
@@ -1415,7 +1462,7 @@ async function rankFreshCandidates({
     seed: randomSeed,
   }).slice(0, algorithm.eligibleItemLimit);
   onPhaseTiming?.('ranking', performance.now() - rankingStartedAt);
-  return { ranked, randomSeed };
+  return { ranked, randomSeed, seedBucket: seed.seedBucket };
 }
 
 /**
@@ -1436,6 +1483,7 @@ async function persistAndBuildRankedPage({
   offset,
   randomSeed,
   ranked,
+  seedBucket = null,
   serviceClient,
   timed,
   viewerUserId,
@@ -1452,6 +1500,8 @@ async function persistAndBuildRankedPage({
   offset: number;
   randomSeed: number;
   ranked: RankedShowcaseItem[];
+  /** The shared seed's bucket `ranked` was ranked with, if the shared seed was used. */
+  seedBucket?: number | null;
   serviceClient: SupabaseClient;
   timed: PhaseTimer;
   viewerUserId: string | null;
@@ -1504,6 +1554,7 @@ async function persistAndBuildRankedPage({
     limit,
     nextCursor,
     offset,
+    seedBucket,
   });
 }
 
@@ -1691,6 +1742,7 @@ export async function getPersonalizedShowcaseFeedPage({
   limit,
   offset,
   prepared = null,
+  seedBucket = null,
   serviceClient,
   viewerUserId,
   onPhaseTiming,
@@ -1710,6 +1762,11 @@ export async function getPersonalizedShowcaseFeedPage({
    * assignment is no longer the one it was ranked under.
    */
   prepared?: PreparedRankedFeedSession | null;
+  /**
+   * The seed bucket the reader's previous page named (`pageInfo.seedBucket`),
+   * for a ranking the shared seed drives; ignored when stale or absent.
+   */
+  seedBucket?: number | null;
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
@@ -1831,13 +1888,14 @@ export async function getPersonalizedShowcaseFeedPage({
     }
   }
 
-  const { ranked, randomSeed } = await rankFreshCandidates({
+  const ranking = await rankFreshCandidates({
     algorithm,
     anonymousKeyHash,
     fallbackItems,
     filters,
     hydratePostIds,
     offset,
+    seedBucket,
     serviceClient,
     timed,
     viewerUserId,
@@ -1854,8 +1912,9 @@ export async function getPersonalizedShowcaseFeedPage({
     filters,
     limit,
     offset,
-    randomSeed,
-    ranked,
+    randomSeed: ranking.randomSeed,
+    ranked: ranking.ranked,
+    seedBucket: ranking.seedBucket,
     serviceClient,
     timed,
     viewerUserId,
