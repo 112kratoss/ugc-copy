@@ -79,21 +79,23 @@ const WELCOME_CREDITS_STALE_MS = 1000 * 60;
 
 /**
  * Statuses an account does not leave (the server's `loadWelcomeCreditStatus`,
- * in `src/lib/onboarding-route-adapter-service.ts`): claimed, or created before
- * the program. Not `not_eligible`, which turns `eligible` once the creator name
- * is done, nor `unavailable`, which turns back when the program does.
+ * in `src/lib/onboarding-route-adapter-service.ts`): the credits claimed, by
+ * this account or by another of the same person. Not `not_eligible`, which
+ * turns `eligible` once the creator name is done, nor `unavailable`, nor
+ * `legacy_ineligible`, which the server also answers an account holding 25
+ * credits or more while the program is off: either can turn `eligible` when it
+ * comes back.
  */
 const SETTLED_WELCOME_STATUSES: ReadonlySet<WelcomeCreditResponse['status']> = new Set([
   'claimed',
   'already_claimed',
-  'legacy_ineligible',
   'identity_already_claimed',
 ] as const);
 
 /**
  * Whether a welcome answer leaves the setup entry points with nothing to offer
- * for good: the creator name is done and the credits can no longer be claimed.
- * The balance it carries is never read from here.
+ * for good: the creator name is done and the credits have been claimed. The
+ * balance it carries is never read from here.
  */
 export function isWelcomeCreditAnswerSettled(welcome: WelcomeCreditResponse | undefined): boolean {
   return Boolean(welcome?.identityComplete) && SETTLED_WELCOME_STATUSES.has(welcome!.status);

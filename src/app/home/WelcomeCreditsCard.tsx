@@ -24,17 +24,18 @@ let welcomeStatusReadAt = 0;
 
 /*
  * An account this card can never be drawn for again: its name is claimed and
- * its credits were claimed or never on offer (the statuses it does not leave;
- * the app's `isWelcomeCreditAnswerSettled` reads them the same way). Every
- * visit to Home asked the server again; this browser now remembers the answer
- * for a week, per account.
+ * its credits were claimed, by it or by another account of the same person
+ * (statuses it does not leave; the app's `isWelcomeCreditAnswerSettled` reads
+ * them the same way). Not `legacy_ineligible`, which the server also answers an
+ * account holding 25 credits or more while the programme is off. Every visit
+ * to Home asked the server again; this browser now remembers the answer for a
+ * week, per account.
  */
 const SETTLED_KEY_PREFIX = 'magicbooklet:welcome-settled:v1:';
 const WELCOME_SETTLED_FOR_MS = 7 * 24 * 60 * 60 * 1_000;
 const SETTLED_STATUSES: ReadonlySet<string> = new Set([
   'claimed',
   'already_claimed',
-  'legacy_ineligible',
   'identity_already_claimed',
 ]);
 
