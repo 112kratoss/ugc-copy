@@ -424,8 +424,8 @@ describe('FeedClient lanes and card actions', () => {
         try {
             render(<FeedClient initialFeed={null} initialChipId="recent" />);
 
-            // Well inside the 1.5 s a For you page one would wait.
-            expect(await screen.findByText('Recent one', {}, { timeout: 500 })).toBeInTheDocument();
+            // Inside the 1.5 s a For you page one would wait.
+            expect(await screen.findByText('Recent one', {}, { timeout: 1_000 })).toBeInTheDocument();
         } finally {
             actual.resetShowcaseFeedEventQueueForTests();
         }

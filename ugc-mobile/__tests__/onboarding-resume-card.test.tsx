@@ -207,8 +207,11 @@ describe('the welcome answer on a return to the app', () => {
       await act(async () => {
         focusManager.setFocused(false);
         focusManager.setFocused(true);
-        await new Promise((resolve) => setTimeout(resolve, 0));
       });
+      // The answer, React Query's notice of it on a zero timer, and the card it draws.
+      for (let turn = 0; turn < 5; turn += 1) {
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      }
       expect(rendered(tree)).toContain('Your welcome credits are waiting');
       act(() => tree.unmount());
     } finally {

@@ -148,7 +148,10 @@ describe("the account's onboarding progress", () => {
 
     onboardingState.isHydrated = true;
     sync.update();
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    // The answer, React Query's notice of it on a zero timer, and the fold it brings.
+    for (let turn = 0; turn < 5; turn += 1) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    }
     expect(authState.api.getOnboardingState).toHaveBeenCalledTimes(1);
     expect(onboardingState.reconcileFromServer).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
 

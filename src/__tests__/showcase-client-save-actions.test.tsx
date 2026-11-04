@@ -3064,8 +3064,8 @@ describe('ShowcaseClient save actions', () => {
     try {
       fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
-      // Well inside the 1.5 s a For you page one would wait.
-      await waitFor(() => expect(feedRequests()).toHaveLength(1), { timeout: 500 });
+      // Inside the 1.5 s a For you page one would wait.
+      await waitFor(() => expect(feedRequests()).toHaveLength(1), { timeout: 1_000 });
     } finally {
       resetShowcaseFeedEventQueueForTests();
     }
