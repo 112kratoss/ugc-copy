@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { applyPrivateNoStoreApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
 import { logBackendEvent } from '@/lib/backend-logger';
 import { isAuthorizedCronRequest } from '@/lib/cron-auth';
+import { PUBLIC_PAGE_CACHE_TAG } from '@/lib/public-page-cache';
 import { invalidateShowcaseFeedCache, SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 
 export const SHOWCASE_FEED_INVALIDATE_ROUTE = '/api/cron/showcase-feed-invalidate';
@@ -65,7 +66,7 @@ export async function getShowcaseFeedInvalidateRouteResponse({
     requestId,
   });
   return applyPrivateNoStoreApiResponseHeaders(
-    NextResponse.json({ success: true, invalidated: [SHOWCASE_FEED_CACHE_TAG] }),
+    NextResponse.json({ success: true, invalidated: [SHOWCASE_FEED_CACHE_TAG, PUBLIC_PAGE_CACHE_TAG] }),
     request,
   );
 }
