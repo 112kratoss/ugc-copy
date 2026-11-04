@@ -220,8 +220,12 @@ const DEFAULT_BUDGET_POLICY: BackendCostBudgetPolicy = {
   quoteRequestsDegraded: 5_000,
   mediaReadRequestsWarning: 5_000,
   mediaReadRequestsDegraded: 20_000,
-  storageGrowthWarningBytes: 1024 * 1024 * 1024,
-  storageGrowthDegradedBytes: 5 * 1024 * 1024 * 1024,
+  // Growth is counted in every bucket (REPORTED_STORAGE_BUCKETS), no longer in
+  // the four generated ones alone, so these are those buckets' 1 and 5 GiB
+  // scaled by all stored bytes over theirs on 2026-11-04 (709 MB to 466 MB,
+  // about 1.5): a warning still stands for the same growth in creations.
+  storageGrowthWarningBytes: 1.5 * 1024 * 1024 * 1024,
+  storageGrowthDegradedBytes: 7.5 * 1024 * 1024 * 1024,
 };
 const BUDGET_POLICY_ENV_KEYS: Record<keyof BackendCostBudgetPolicy, string> = {
   generationCreditCostWarning: 'BACKEND_BUDGET_GENERATION_CREDITS_WARNING',

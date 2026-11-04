@@ -854,6 +854,8 @@ migrations over destructive rollback.
 
 The protected `/api/ops/backend-dashboard`, `/api/ops/backend-health`, `/api/ops/backend-costs`, and `/api/ops/backend-alerts` endpoints are the canonical operational views. Check the dashboard after each release and on every incident. Configure external alert delivery when you want push notifications to a monitored incident channel.
 
+Storage growth in `/api/ops/backend-costs` counts the bytes created in the last 24 hours in every bucket (`src/lib/storage-buckets.ts`), by bucket. `STORAGE_GROWTH_ELEVATED` warns from 1.5 GiB and degrades from 7.5 GiB (`BACKEND_BUDGET_STORAGE_BYTES_WARNING` and `_DEGRADED`): the 1 and 5 GiB the four generated buckets had, scaled by all stored bytes over theirs on 2026-11-04 (709 MB to 466 MB). An environment that sets those variables keeps its own values.
+
 ## Production Alert Delivery Wiring
 
 The internal `/api/ops/backend-dashboard` endpoint is the cost-conscious production dashboarding baseline. It aggregates health, costs, and alerts behind the `Authorization: Bearer $OPS_READ_SECRET` guard and must remain private with `Cache-Control: private, no-store`. The ops endpoints continue to accept `CRON_SECRET` for compatibility, but monitors should use `OPS_READ_SECRET` so read-only checks do not share scheduler credentials.

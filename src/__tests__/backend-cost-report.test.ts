@@ -75,8 +75,18 @@ describe('collectBackendCostReport', () => {
       generationCreditCostDegraded: 42,
       quoteRequestsWarning: 20,
       quoteRequestsDegraded: 20,
-      storageGrowthWarningBytes: 1024 * 1024 * 1024,
-      storageGrowthDegradedBytes: 1024 * 1024 * 1024,
+      storageGrowthWarningBytes: 1.5 * 1024 * 1024 * 1024,
+      storageGrowthDegradedBytes: 1.5 * 1024 * 1024 * 1024,
+    });
+  });
+
+  // Growth counts every bucket now, not the four generated ones: the defaults
+  // rise by the ratio of all stored bytes to those buckets' (709 MB to 466 MB
+  // on 2026-11-04), so a warning still means what it did.
+  it('defaults the storage growth thresholds to 1.5 and 7.5 GiB', () => {
+    expect(buildBackendCostBudgetPolicy({}, { NODE_ENV: 'test' })).toMatchObject({
+      storageGrowthWarningBytes: 1.5 * 1024 * 1024 * 1024,
+      storageGrowthDegradedBytes: 7.5 * 1024 * 1024 * 1024,
     });
   });
 
