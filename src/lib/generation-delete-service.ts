@@ -406,11 +406,15 @@ export async function deleteOwnerGenerationForRoute({
         } else if (!copyPath.startsWith(PRIVATE_POST_MEDIA_PREFIX)) {
           // A post still serves the creation's folder: the revocation job
           // decides, keeping the copy if a post or its media row names it and
-          // waiting out a sweep's lease before it removes it. A private copy no
-          // remaining post names has no such queue: the post's own delete
-          // queues what it names, and the orphan listing finds the rest.
+          // waiting out a sweep's lease before it removes it.
           queuedPublicPaths.push(copyPath);
         }
+        // A private copy (marked NSFW) stays here while a post remains: the
+        // revocation queue's RPC takes only showcase/ paths. The post's own
+        // delete queues the copy its showcase_asset_path names, under the
+        // creation it recorded (posts_sync_generation_exposure), and the job
+        // removes it from post_media (showcase-revocation-postgrest pins it).
+        // A private copy no remaining post names is left to the orphan listing.
       }
     }
 
