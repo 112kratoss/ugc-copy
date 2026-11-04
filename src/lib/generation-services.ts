@@ -159,6 +159,11 @@ import {
   type GenericGenerationAdapterOperation,
 } from '@/lib/generation-model-adapters';
 import { summarizeMediaToolError } from '@/lib/media-tool-error';
+import {
+  isGenerationGoneSettlementError,
+  recordGenerationDisplayRendition,
+  removeUnrecordedGenerationOutputs,
+} from '@/lib/generation-output-recording';
 
 const PROVIDER_TASK_ATTACH_ATTEMPTS = 3;
 const START_FAILURE_SETTLEMENT_ATTEMPTS = 3;
@@ -1712,21 +1717,55 @@ export async function persistGeneratedOutput(
         storagePath,
         supabase,
       });
+      const uploaded = [storagePath, preview.previewUrl, preview.displayUrl];
 
       // Awaited so the staged file outlives the settle. Same trap as
       // `createVideoPosterBuffer`: a bare `return` completes the try block
       // immediately and lets the `finally` cleanup run alongside the work.
-      return await settleGenerationSucceeded(settlementSupabase, {
-        predictionId: generation.prediction_id!,
-        outputUrl: storagePath,
-        previewUrl: preview.previewUrl,
-        previewThumbhash: preview.previewThumbhash,
-        previewStatus: preview.previewStatus,
-        previewAttemptCount: 1,
-        previewError: preview.previewError,
-        previewGeneratedAt: preview.previewStatus === 'ready' ? new Date().toISOString() : null,
-        completedAt: settledAt,
-      });
+      let status: GenerationTerminalSettlementStatus;
+      try {
+        status = await settleGenerationSucceeded(settlementSupabase, {
+          predictionId: generation.prediction_id!,
+          outputUrl: storagePath,
+          previewUrl: preview.previewUrl,
+          previewThumbhash: preview.previewThumbhash,
+          previewStatus: preview.previewStatus,
+          previewAttemptCount: 1,
+          previewError: preview.previewError,
+          previewGeneratedAt: preview.previewStatus === 'ready' ? new Date().toISOString() : null,
+          completedAt: settledAt,
+        });
+      } catch (settleError) {
+        // Deleted by its owner while it rendered: nothing will name these.
+        if (isGenerationGoneSettlementError(settleError)) {
+          await removeUnrecordedGenerationOutputs(supabase, {
+            generationId: generation.id,
+            ownerUserId: generation.user_id,
+            uploaded,
+          });
+        }
+        throw settleError;
+      }
+
+      if (status !== 'succeeded') {
+        // Already settled as failed: the run keeps no output.
+        await removeUnrecordedGenerationOutputs(supabase, {
+          generationId: generation.id,
+          ownerUserId: generation.user_id,
+          uploaded,
+        });
+      } else if (preview.displayUrl) {
+        // Recorded after the settlement, as a run of several does: see there.
+        await recordGenerationDisplayRendition(supabase, {
+          generationId: generation.id,
+          predictionId: generation.prediction_id,
+          ownerUserId: generation.user_id,
+          outputPath: storagePath,
+          displayUrl: preview.displayUrl,
+          uploaded,
+        });
+      }
+      return status;
     } finally {
       await stagedMedia.cleanup().catch((cleanupError) => {
         logBackendError('generation_staged_output_cleanup_failed', { predictionId: generation.prediction_id, error: cleanupError });
@@ -1846,20 +1885,45 @@ export async function persistGeneratedOutputList(
     };
   }
 
-  const status = await settleGenerationSucceeded(settlementSupabase, {
-    predictionId: generation.prediction_id!,
-    outputUrl: primaryOutput,
-    previewUrl: typeof updatePayload.preview_url === 'string' ? updatePayload.preview_url : null,
-    previewThumbhash: typeof updatePayload.preview_thumbhash === 'string' ? updatePayload.preview_thumbhash : null,
-    previewStatus: typeof updatePayload.preview_status === 'string' ? updatePayload.preview_status : null,
-    previewAttemptCount: typeof updatePayload.preview_attempt_count === 'number' ? updatePayload.preview_attempt_count : null,
-    previewError: typeof updatePayload.preview_error === 'string' ? updatePayload.preview_error : null,
-    previewGeneratedAt: typeof updatePayload.preview_generated_at === 'string' ? updatePayload.preview_generated_at : null,
-    completedAt: completedAt ?? new Date().toISOString(),
-    workflowSettings: updatePayload.workflow_settings as Record<string, unknown> | undefined,
-  });
+  const uploaded = [
+    ...outputs.map((output) => output.storagePath),
+    primaryPreview.previewUrl,
+    primaryPreview.displayUrl,
+  ];
+  let status: GenerationTerminalSettlementStatus;
+  try {
+    status = await settleGenerationSucceeded(settlementSupabase, {
+      predictionId: generation.prediction_id!,
+      outputUrl: primaryOutput,
+      previewUrl: typeof updatePayload.preview_url === 'string' ? updatePayload.preview_url : null,
+      previewThumbhash: typeof updatePayload.preview_thumbhash === 'string' ? updatePayload.preview_thumbhash : null,
+      previewStatus: typeof updatePayload.preview_status === 'string' ? updatePayload.preview_status : null,
+      previewAttemptCount: typeof updatePayload.preview_attempt_count === 'number' ? updatePayload.preview_attempt_count : null,
+      previewError: typeof updatePayload.preview_error === 'string' ? updatePayload.preview_error : null,
+      previewGeneratedAt: typeof updatePayload.preview_generated_at === 'string' ? updatePayload.preview_generated_at : null,
+      completedAt: completedAt ?? new Date().toISOString(),
+      workflowSettings: updatePayload.workflow_settings as Record<string, unknown> | undefined,
+    });
+  } catch (settleError) {
+    // Deleted by its owner while it rendered: nothing will name these.
+    if (isGenerationGoneSettlementError(settleError)) {
+      await removeUnrecordedGenerationOutputs(supabase, {
+        generationId: generation.id,
+        ownerUserId: generation.user_id,
+        uploaded,
+      });
+    }
+    throw settleError;
+  }
 
-  if (status === 'succeeded' && primaryPreview.displayUrl && primaryOutput) {
+  if (status !== 'succeeded') {
+    // Already settled as failed: the run keeps no output.
+    await removeUnrecordedGenerationOutputs(supabase, {
+      generationId: generation.id,
+      ownerUserId: generation.user_id,
+      uploaded,
+    });
+  } else if (primaryPreview.displayUrl && primaryOutput) {
     // Stamped after settlement rather than inside it, on purpose. The
     // settlement RPC owns the single-effect credit decision and its pgTAP
     // proof; widening its signature for a cache would put the money path
@@ -1867,18 +1931,16 @@ export async function persistGeneratedOutputList(
     // reader serves the source when this is null — so a lost write here costs
     // one fewer optimisation, and the backfill closes it. Conditioned on the
     // output so a row that has since been repaired to a different file never
-    // carries a display of one it no longer serves.
-    const { error: displayError } = await supabase
-      .from('generations')
-      .update({ display_url: primaryPreview.displayUrl })
-      .eq('id', generation.id)
-      .eq('output_url', primaryOutput);
-    if (displayError) {
-      logBackendWarning('generation_display_rendition_not_recorded', {
-        predictionId: generation.prediction_id,
-        error: displayError,
-      });
-    }
+    // carries a display of one it no longer serves; what that row does not
+    // name of this run's uploads is removed (generation-output-recording).
+    await recordGenerationDisplayRendition(supabase, {
+      generationId: generation.id,
+      predictionId: generation.prediction_id,
+      ownerUserId: generation.user_id,
+      outputPath: primaryOutput,
+      displayUrl: primaryPreview.displayUrl,
+      uploaded,
+    });
   }
 
   return { status, outputs };
