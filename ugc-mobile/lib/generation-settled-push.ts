@@ -30,3 +30,22 @@ export function subscribeToGenerationSettledPush(listener: () => void) {
     listeners.delete(entry);
   };
 }
+
+/**
+ * What wakes a creator's poll of the run it watches (`pollGenerationStatus`'s
+ * `wake`): a run's completion push, and the app coming back to the front, where
+ * a push that arrived meanwhile never reached JS. `subscribeToAppActive` is the
+ * caller's, so this module stays free of React Native.
+ */
+export function wakeOnGenerationSettledOrAppActive(
+  subscribeToAppActive: (onActive: () => void) => () => void,
+) {
+  return (onWake: () => void) => {
+    const stopPush = subscribeToGenerationSettledPush(onWake);
+    const stopActive = subscribeToAppActive(onWake);
+    return () => {
+      stopPush();
+      stopActive();
+    };
+  };
+}

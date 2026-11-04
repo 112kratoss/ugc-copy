@@ -72,8 +72,9 @@ import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDr
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
-import { getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from '@/lib/generation';
-import { subscribeToGenerationSettledPush } from '@/lib/generation-settled-push';
+import { generationPollMaxDelayMs, getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from '@/lib/generation';
+import { wakeOnGenerationSettledOrAppActive } from '@/lib/generation-settled-push';
+import { devicePushQueryKey } from '@/lib/push-registration';
 import { forgetQuotedCosts, recallQuotedCost, rememberQuotedCost } from '@/lib/quote-memo';
 import {
   applyCatalogModelDefaults,
@@ -250,6 +251,14 @@ function waitUntilAppActive(signal?: AbortSignal) {
     });
     signal?.addEventListener('abort', handleAbort, { once: true });
   });
+}
+
+/** Calls back each time the app comes back to the front; returns the unsubscribe. */
+function subscribeToAppActive(onActive: () => void) {
+  const subscription = AppState.addEventListener('change', (state) => {
+    if (state === 'active') onActive();
+  });
+  return () => subscription.remove();
 }
 
 function isTool(value: unknown): value is CreatorToolId {
@@ -2812,8 +2821,25 @@ function IdentityCreationScreen({
       : tool === 'video'
         ? api.getVideoGeneration(predictionId)
         : api.getMotionGeneration(predictionId),
-    // A completion push reads the run at once instead of at the end of a wait.
-    { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive, wake: subscribeToGenerationSettledPush, isGuest },
+    {
+      onTick: setStatus,
+      signal: controller.signal,
+      waitUntilReady: waitUntilAppActive,
+      // A completion push, or the app coming back to the front, reads the run
+      // at once instead of at the end of a wait; waits reach 30 s only where
+      // that push can come to this phone.
+      wake: wakeOnGenerationSettledOrAppActive(subscribeToAppActive),
+      maxDelayMs: generationPollMaxDelayMs({
+        isGuest,
+        devicePush: identityUserId ? queryClient.getQueryData<{ status: string }>(devicePushQueryKey(identityUserId)) : null,
+        preferences: identityUserId
+          ? queryClient.getQueryData<{ preferences?: { pushEnabled?: boolean; generationEnabled?: boolean } }>(
+            ['mobile-notification-preferences', identityUserId],
+          )?.preferences
+          : null,
+      }),
+      isGuest,
+    },
   );
 
   // Cleared only for the run it names: a start from another creator screen keeps its own.
