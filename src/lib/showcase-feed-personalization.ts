@@ -132,7 +132,8 @@ const FEED_SESSION_REUSE_TTL_MS = 2 * 60 * 1000;
 const FEED_SESSION_EXPIRY_MS = 2 * 60 * 60 * 1000;
 const FEED_HYDRATION_BATCH_SIZE = 60;
 const FEED_RANDOM_SEED_MODULUS = 2_147_483_647;
-const FEED_SHARED_SEED_BUCKET_MS = 10 * 60 * 1000;
+/** How long an identity-less ranking keeps its shared seed. */
+export const FEED_SHARED_SEED_BUCKET_MS = 10 * 60 * 1000;
 const COLD_CANDIDATE_RESERVED_PLACES = 10;
 
 export type RankedFeedFilters = {

@@ -44,3 +44,19 @@ describe('showcase For You bootstrap cache policy', () => {
     }
   });
 });
+
+describe('shared feed data-cache windows', () => {
+  it('holds the identity-less For you page for no longer than one turn of its shared seed', async () => {
+    const { SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS } = await import('@/lib/showcase-feed-cache-policy');
+    const { FEED_SHARED_SEED_BUCKET_MS } = await import('@/lib/showcase-feed-personalization');
+
+    expect(SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS * 1000).toBeLessThanOrEqual(FEED_SHARED_SEED_BUCKET_MS);
+    expect(SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS).toBeGreaterThanOrEqual(600);
+  });
+
+  it('holds a sort lane\'s page for half an hour: its order does not decay, and content changes drop it', async () => {
+    const { SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS } = await import('@/lib/showcase-feed-cache-policy');
+
+    expect(SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS).toBe(1800);
+  });
+});
