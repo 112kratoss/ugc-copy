@@ -292,6 +292,11 @@ export class NameCorpus {
   private readonly chunks: string[] = [];
   private text: string | null = null;
   rows = 0;
+  /**
+   * The ids of the `generations` rows read: a creation that exists. Its id alone in some row
+   * is no such sign, as a deleted paid run's spend audit keeps it for good.
+   */
+  readonly generationIds = new Set<string>();
   /** When the read finished: what the confirm step's minute is counted from. */
   readAt: number;
 
@@ -299,8 +304,9 @@ export class NameCorpus {
     this.readAt = readAt;
   }
 
-  addRow(row: Row): void {
+  addRow(row: Row, table?: string): void {
     this.rows += 1;
+    if (table === 'generations' && typeof row.id === 'string') this.generationIds.add(row.id);
     const strings: string[] = [];
     collectStrings(row, strings);
     for (const value of strings) {
@@ -345,9 +351,10 @@ export function isObjectNamed(corpus: NameCorpus, bucket: string, path: string):
   // Any file of the stem (the original under any extension, a sibling
   // derivative) named anywhere keeps it: a derivative goes with its base.
   if (stem && corpus.containsAny(nameForms(bucket, `${stem}.`))) return true;
-  const creation = PLAYBACK_FILE.exec(path)
-    ?? (bucket === 'generation_inputs' ? PROVIDER_TRACK_FILE.exec(path) : null);
-  return Boolean(creation && corpus.containsAny([creation[1]]));
+  const providerTrack = bucket === 'generation_inputs' ? PROVIDER_TRACK_FILE.exec(path) : null;
+  if (providerTrack) return corpus.generationIds.has(providerTrack[1]);
+  const playback = PLAYBACK_FILE.exec(path);
+  return Boolean(playback && corpus.containsAny([playback[1]]));
 }
 
 async function readTable(
@@ -364,7 +371,7 @@ async function readTable(
       const { data, error } = await query;
       if (error) throw new Error(`Could not read ${table}: ${error.message ?? 'unknown error'}`);
       const rows = (data ?? []) as Row[];
-      for (const row of rows) corpus.addRow(row);
+      for (const row of rows) corpus.addRow(row, table);
       if (rows.length < PAGE_SIZE) return;
       after = rows[rows.length - 1]?.[column] ?? null;
       if (after === null) throw new Error(`Could not page ${table} by ${column}.`);
@@ -377,7 +384,7 @@ async function readTable(
     const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
     if (error) throw new Error(`Could not read ${table}: ${error.message ?? 'unknown error'}`);
     const rows = (data ?? []) as Row[];
-    for (const row of rows) corpus.addRow(row);
+    for (const row of rows) corpus.addRow(row, table);
     if (rows.length < PAGE_SIZE) return;
   }
 }

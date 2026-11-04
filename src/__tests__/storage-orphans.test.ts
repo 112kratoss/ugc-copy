@@ -230,11 +230,22 @@ describe('isObjectNamed', () => {
   it('keeps a track converted for the provider while its run is named, and lists it after', () => {
     // generation-provider-tracks: no row names the copy; the run's delete takes its folder.
     const copy = `${USER}/${GENERATION}/provider-tracks/00.wav`;
-    expect(isObjectNamed(corpusOf({ id: GENERATION }), 'generation_inputs', copy)).toBe(true);
-    expect(isObjectNamed(corpusOf({ id: '33333333-3333-4333-8333-333333333333' }), 'generation_inputs', copy)).toBe(false);
+    const withRuns = (...ids: string[]) => {
+      const corpus = new NameCorpus(NOW);
+      ids.forEach((id) => corpus.addRow({ id }, 'generations'));
+      return corpus;
+    };
+    expect(isObjectNamed(withRuns(GENERATION), 'generation_inputs', copy)).toBe(true);
+    expect(isObjectNamed(withRuns('33333333-3333-4333-8333-333333333333'), 'generation_inputs', copy)).toBe(false);
+    // Only its generations row keeps it: a deleted paid run's spend audit, or a post that
+    // remembers the deleted creation, holds the id for good.
+    const deletedRun = withRuns();
+    deletedRun.addRow({ id: '44444444-4444-4444-8444-444444444444', generation_id: GENERATION }, 'generation_spend_audits');
+    deletedRun.addRow({ id: 'post-1', deleted_generation_id: GENERATION }, 'posts');
+    expect(isObjectNamed(deletedRun, 'generation_inputs', copy)).toBe(false);
     // Only that folder, and only in generation_inputs.
-    expect(isObjectNamed(corpusOf({ id: GENERATION }), 'generation_inputs', `${USER}/${GENERATION}/other/00.wav`)).toBe(false);
-    expect(isObjectNamed(corpusOf({ id: GENERATION }), 'uploads', copy)).toBe(false);
+    expect(isObjectNamed(withRuns(GENERATION), 'generation_inputs', `${USER}/${GENERATION}/other/00.wav`)).toBe(false);
+    expect(isObjectNamed(withRuns(GENERATION), 'uploads', copy)).toBe(false);
   });
 });
 
