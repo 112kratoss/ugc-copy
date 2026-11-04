@@ -67,3 +67,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Orphan listings name accounts and their files (npm run ops:storage-orphans)
+storage-orphans-*.tsv

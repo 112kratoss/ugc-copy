@@ -690,3 +690,180 @@ describe('ensureGenerationPostCoverMedia', () => {
   });
 
 });
+
+describe('createGenerationShowcaseDerivative', () => {
+  const OUTPUT = 'generated_images/user-1/generated_p1.png';
+
+  /**
+   * Storage as the copy sees it: the source's metadata, a server-side copy that
+   * keeps it (or does not, or refuses), and the old download and upload.
+   */
+  function createStorage({
+    sourceCacheControl = 'max-age=86400',
+    sourceContentType = 'image/png',
+    copiedCacheControl,
+    copyError = null,
+    existing = false,
+    uploadError = null,
+  }: {
+    sourceCacheControl?: string;
+    sourceContentType?: string;
+    /** What the copy ends up with, when it is not the source's. */
+    copiedCacheControl?: string;
+    copyError?: { message: string; statusCode?: string } | null;
+    existing?: boolean;
+    uploadError?: { message: string } | null;
+  } = {}) {
+    const calls: string[] = [];
+    const queued: unknown[] = [];
+    const objects = new Map<string, { cacheControl: string; contentType: string }>();
+    if (existing) objects.set('showcase_media/showcase/gen-1/generated_p1.KEY.png', { cacheControl: 'max-age=86400', contentType: 'image/png' });
+    const client = {
+      storage: {
+        from(bucket: string) {
+          return {
+            info: async (path: string) => {
+              calls.push(`info ${bucket}/${path}`);
+              if (bucket === 'generated_images') {
+                return { data: { cacheControl: sourceCacheControl, contentType: sourceContentType, size: 7 }, error: null };
+              }
+              const object = objects.get(`${bucket}/${path}`);
+              return object ? { data: { ...object, size: 7 }, error: null } : { data: null, error: { message: 'Object not found', statusCode: '404' } };
+            },
+            copy: async (from: string, to: string, options: { destinationBucket: string }) => {
+              calls.push(`copy ${bucket}/${from} -> ${options.destinationBucket}/${to}`);
+              if (copyError) return { data: null, error: copyError };
+              const key = `${options.destinationBucket}/${to}`;
+              if (objects.has(key)) return { data: null, error: { message: 'The resource already exists', statusCode: '409' } };
+              objects.set(key, { cacheControl: copiedCacheControl ?? sourceCacheControl, contentType: sourceContentType });
+              return { data: { path: to }, error: null };
+            },
+            // storage-js streams a download, so the upload's type is the one the name implies.
+            download: (path: string) => ({
+              asStream: async () => {
+                calls.push(`download ${bucket}/${path}`);
+                return {
+                  data: new ReadableStream<Uint8Array>({
+                    start(controller) {
+                      controller.enqueue(new Uint8Array([1, 2, 3]));
+                      controller.close();
+                    },
+                  }),
+                  error: null,
+                };
+              },
+            }),
+            upload: async (path: string, _body: unknown, options: { cacheControl: string; contentType: string; upsert: boolean }) => {
+              calls.push(`upload ${bucket}/${path} upsert=${options.upsert}`);
+              if (uploadError) return { data: null, error: uploadError };
+              objects.set(`${bucket}/${path}`, { cacheControl: `max-age=${options.cacheControl}`, contentType: options.contentType });
+              return { data: { path }, error: null };
+            },
+            remove: async (paths: string[]) => {
+              calls.push(`remove ${bucket}/${paths.join(',')}`);
+              return { data: [], error: null };
+            },
+          };
+        },
+      },
+    };
+    const withRpc = {
+      ...client,
+      rpc: async (name: string, args: unknown) => {
+        calls.push(`rpc ${name}`);
+        queued.push(args);
+        return { data: 1, error: null };
+      },
+    };
+    return { client: withRpc as never, calls, objects, queued };
+  }
+
+  async function publish(storage: ReturnType<typeof createStorage>, outputUrl = OUTPUT) {
+    const { createGenerationShowcaseDerivative } = await import('@/lib/generation-post-media');
+    const path = await createGenerationShowcaseDerivative({
+      adminSupabase: storage.client,
+      category: 'image',
+      generationId: 'gen-1',
+      ownerUserId: 'user-1',
+      outputUrl,
+    });
+    return path.replace(/\.[0-9a-f]{12}\./, '.KEY.');
+  }
+
+  it('copies a stored output inside Storage when it already carries the public header, reading no bytes', async () => {
+    const storage = createStorage();
+
+    await expect(publish(storage)).resolves.toBe('showcase/gen-1/generated_p1.KEY.png');
+
+    expect(storage.calls.map((call) => call.replace(/\.[0-9a-f]{12}\./, '.KEY.'))).toEqual([
+      'info generated_images/user-1/generated_p1.png',
+      'copy generated_images/user-1/generated_p1.png -> showcase_media/showcase/gen-1/generated_p1.KEY.png',
+      'info showcase_media/showcase/gen-1/generated_p1.KEY.png',
+    ]);
+    expect([...storage.objects.values()]).toEqual([{ cacheControl: 'max-age=86400', contentType: 'image/png' }]);
+  });
+
+  it('reads and writes the bytes, as before, when the source carries another header', async () => {
+    const storage = createStorage({ sourceCacheControl: 'max-age=3600' });
+
+    await publish(storage);
+
+    expect(storage.calls.some((call) => call.startsWith('copy'))).toBe(false);
+    expect(storage.calls.some((call) => call.startsWith('download generated_images/user-1/generated_p1.png'))).toBe(true);
+    expect(storage.calls.find((call) => call.startsWith('upload'))).toMatch(/upsert=false$/);
+    expect([...storage.objects.values()]).toEqual([{ cacheControl: 'max-age=86400', contentType: 'image/png' }]);
+  });
+
+  it('writes the bytes again over a copy whose header did not come across', async () => {
+    const storage = createStorage({ copiedCacheControl: 'no-cache' });
+
+    await publish(storage);
+
+    expect(storage.calls.find((call) => call.startsWith('upload'))).toMatch(/upsert=true$/);
+    expect([...storage.objects.values()]).toEqual([{ cacheControl: 'max-age=86400', contentType: 'image/png' }]);
+  });
+
+  it('reads and writes the bytes when the type the copy would keep is not the one the upload sets', async () => {
+    const storage = createStorage({ sourceContentType: 'image/x-png' });
+
+    await publish(storage);
+
+    expect(storage.calls.some((call) => call.startsWith('copy'))).toBe(false);
+    expect([...storage.objects.values()]).toEqual([{ cacheControl: 'max-age=86400', contentType: 'image/png' }]);
+  });
+
+  it('takes a copy already there as published, as the upload did', async () => {
+    const { createGenerationShowcaseDerivative } = await import('@/lib/generation-post-media');
+    const storage = createStorage();
+    const first = await createGenerationShowcaseDerivative({
+      adminSupabase: storage.client, category: 'image', generationId: 'gen-1', ownerUserId: 'user-1', outputUrl: OUTPUT,
+    });
+    storage.calls.length = 0;
+
+    await expect(createGenerationShowcaseDerivative({
+      adminSupabase: storage.client, category: 'image', generationId: 'gen-1', ownerUserId: 'user-1', outputUrl: OUTPUT,
+    })).resolves.toBe(first);
+    expect(storage.calls.filter((call) => call.startsWith('download') || call.startsWith('upload'))).toEqual([]);
+  });
+
+  // Another publish of the same creation may have recorded the copy's name in
+  // the meantime: the revocation job keeps it if so, and removes it if not.
+  it('hands a copy it made and could not write over to the revocation queue, removing nothing itself', async () => {
+    const storage = createStorage({ copiedCacheControl: 'no-cache', uploadError: { message: 'storage unavailable' } });
+
+    await expect(publish(storage)).rejects.toThrow('Failed to upload showcase derivative');
+
+    expect(storage.calls.some((call) => call.startsWith('remove'))).toBe(false);
+    expect(storage.calls).toContain('rpc queue_unrecorded_showcase_media');
+    expect(JSON.stringify(storage.queued)).toMatch(/showcase\/gen-1\/generated_p1\.[0-9a-f]{12}\.png/);
+  });
+
+  it('reads and writes the bytes when the copy is refused', async () => {
+    const storage = createStorage({ copyError: { message: 'copy unavailable', statusCode: '500' } });
+
+    await publish(storage);
+
+    expect(storage.calls.some((call) => call.startsWith('download'))).toBe(true);
+    expect([...storage.objects.values()]).toEqual([{ cacheControl: 'max-age=86400', contentType: 'image/png' }]);
+  });
+});

@@ -266,6 +266,7 @@ describe('workflow canvas route adapter service', () => {
       canvasId: 'canvas-1',
       supabase,
       userId: 'user-1',
+      createCleanupClient: expect.any(Function),
     });
   });
 
@@ -289,6 +290,7 @@ describe('workflow canvas route adapter service', () => {
       canvasId: 'canvas-from-context',
       supabase,
       userId: 'user-1',
+      createCleanupClient: expect.any(Function),
     });
   });
 
@@ -345,6 +347,7 @@ describe('workflow canvas route adapter service', () => {
       canvasId: 'canvas-from-factory',
       supabase,
       userId: 'user-1',
+      createCleanupClient: createServiceClient,
     });
   });
 });

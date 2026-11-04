@@ -105,6 +105,12 @@ export interface EditableCreatorProfile {
   credits: number | null;
   promotionalCredits?: number | null;
   marketplaceSpendableCredits?: number | null;
+  /**
+   * The sign-in provider's picture the editor shows because no avatar is
+   * stored (load-owner-profile). A save sends it, so the public profile shows
+   * what the editor does; absent once an avatar is stored.
+   */
+  authProviderAvatarUrl?: string | null;
 }
 
 export interface ProfileUpdatePayload {
@@ -118,6 +124,38 @@ export interface ProfileUpdatePayload {
   instagramHandle?: unknown;
   tiktokHandle?: unknown;
   location?: unknown;
+}
+
+/**
+ * The body the web profile form saves: the profile's text, and a photo only
+ * when this save uploaded it, as the app's `buildProfileUpdateBody` does. The
+ * form is opened once and never reloaded, so the photo URLs it read when it
+ * opened may be ones another device has replaced since; sending them back
+ * would ask the server to show them again. One exception: while no avatar is
+ * stored, the sign-in provider's picture the editor shows goes in the save
+ * (`authProviderAvatarUrl`), as every save sent it before; the server saves
+ * it as a plain URL, outside the account's folder, and removes nothing for it.
+ */
+export function buildProfileSaveBody(
+  form: EditableCreatorProfile,
+  uploaded: { avatarUrl?: string; coverUrl?: string } = {},
+): ProfileUpdatePayload {
+  const providerAvatarUrl = form.authProviderAvatarUrl && form.avatarUrl === form.authProviderAvatarUrl
+    ? form.authProviderAvatarUrl
+    : null;
+  const avatarUrl = uploaded.avatarUrl || providerAvatarUrl;
+  return {
+    username: form.username,
+    displayName: form.displayName,
+    bio: form.bio,
+    ...(avatarUrl ? { avatarUrl } : {}),
+    ...(uploaded.coverUrl ? { coverUrl: uploaded.coverUrl } : {}),
+    websiteUrl: form.websiteUrl,
+    twitterHandle: form.twitterHandle,
+    instagramHandle: form.instagramHandle,
+    tiktokHandle: form.tiktokHandle,
+    location: form.location,
+  };
 }
 
 /**

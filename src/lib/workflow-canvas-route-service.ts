@@ -24,6 +24,10 @@ import {
   type PreparedWorkflowUploadLocation,
 } from '@/lib/workflow-upload-consumption';
 import { isDefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
+import {
+  listWorkflowInputUploads,
+  removeUnreadWorkflowUploads,
+} from '@/lib/workflow-upload-cleanup';
 
 type WorkflowCanvasRouteRow = {
   id: string;
@@ -163,11 +167,37 @@ export async function deleteWorkflowCanvasForRoute({
   canvasId,
   supabase,
   userId,
+  createCleanupClient,
 }: {
   canvasId: string;
   supabase: SupabaseClient;
   userId: string;
+  /**
+   * The service client the canvas's input files are cleaned up with once it is
+   * deleted (workflow-upload-cleanup). Without one, they stay, as before.
+   */
+  createCleanupClient?: () => SupabaseClient;
 }): Promise<WorkflowCanvasDeleteRouteResult> {
+  // What the canvas names, read before the delete.
+  let cleanup: {
+    client: SupabaseClient;
+    uploads: ReturnType<typeof listWorkflowInputUploads>;
+  } | null = null;
+  if (createCleanupClient) {
+    try {
+      const { data: canvas } = await supabase
+        .from('workflow_canvases')
+        .select('graph')
+        .eq('id', canvasId)
+        .eq('user_id', userId)
+        .single();
+      const uploads = listWorkflowInputUploads((canvas as { graph?: unknown } | null)?.graph, userId);
+      if (uploads.length > 0) cleanup = { client: createCleanupClient(), uploads };
+    } catch (error) {
+      logBackendError('failed_to_prepare_workflow_upload_cleanup', { error });
+    }
+  }
+
   const { error } = await supabase
     .from('workflow_canvases')
     .delete()
@@ -177,6 +207,14 @@ export async function deleteWorkflowCanvasForRoute({
   if (error) {
     logBackendError('failed_to_delete_workflow_canvas', { error: error });
     return { ok: false, status: 500, body: { error: 'Failed to delete workflow canvas.' } };
+  }
+
+  if (cleanup) {
+    await removeUnreadWorkflowUploads(cleanup.client, {
+      userId,
+      canvasId,
+      uploads: cleanup.uploads,
+    });
   }
 
   return { ok: true, body: { success: true } };

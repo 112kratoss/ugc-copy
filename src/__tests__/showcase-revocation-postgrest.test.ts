@@ -135,6 +135,36 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     await assertRemoved();
   });
 
+  // A creation marked NSFW keeps its copy in the private bucket, private-posts/<creation>/. A creation delete
+  // leaves the copy to the post that serves it; the post's delete queues the copy its showcase_asset_path names,
+  // under the creation it links or recorded (posts_sync_generation_exposure), and the job removes it from
+  // post_media. Review follow-up, 2026-11-04: a creation deleted first, its post afterwards.
+  it.each(['live','deleted'] as const)("removes the NSFW private copy of a %s creation once its post is deleted",async creation=>{
+    const privateCopy=`private-posts/${generationId}/nsfw-copy.abc123.png`;
+    expect((await admin.storage.from('post_media').upload(privateCopy,new Blob([bytes],{type:'image/png'}),{contentType:'image/png'})).error).toBeNull();
+    try{
+      // A post marked NSFW names only private media: its copy, and a cover row for it.
+      await db.query('delete from public.post_media where post_id=$1',[postId]);
+      await db.query("insert into public.post_media(post_id,media_kind,storage_path) values($1,'image',$2)",[postId,privateCopy]);
+      await db.query("update public.posts set visibility='public',is_nsfw=true,showcase_asset_path=$2 where id=$1",[postId,privateCopy]);
+      await db.query('delete from public.showcase_media_revocations where generation_id=$1',[generationId]);
+      if(creation==='deleted'){
+        await db.query('delete from public.generations where id=$1',[generationId]);
+        expect((await db.query('select deleted_generation_id from public.posts where id=$1',[postId])).rows).toEqual([{deleted_generation_id:generationId}]);
+      }
+      await db.query('delete from public.posts where id=$1',[postId]);
+      expect((await db.query('select showcase_asset_path from public.showcase_media_revocations where generation_id=$1 and showcase_asset_path=$2',[generationId,privateCopy])).rows)
+        .toEqual([{showcase_asset_path:privateCopy}]);
+      await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
+      await processShowcaseMediaRevocations(admin,{now:new Date()});
+      const stored=await admin.storage.from('post_media').download(privateCopy);
+      expect(stored.data,`Still stored: ${privateCopy}`).toBeNull();
+      expect((await db.query('select id from public.showcase_media_revocations where generation_id=$1',[generationId])).rows).toEqual([]);
+    }finally{
+      await admin.storage.from('post_media').remove([privateCopy]);
+    }
+  });
+
   // Public again, then deleted outright: the delete cascades to the media row before the posts AFTER DELETE triggers run.
   const deletePublicPost=async(creation:'live'|'deleted')=>{
     await db.query("update public.posts set visibility='public',showcase_asset_path=$2 where id=$1",[postId,paths[0]]);

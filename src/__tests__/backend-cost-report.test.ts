@@ -75,8 +75,18 @@ describe('collectBackendCostReport', () => {
       generationCreditCostDegraded: 42,
       quoteRequestsWarning: 20,
       quoteRequestsDegraded: 20,
-      storageGrowthWarningBytes: 1024 * 1024 * 1024,
-      storageGrowthDegradedBytes: 1024 * 1024 * 1024,
+      storageGrowthWarningBytes: 1.5 * 1024 * 1024 * 1024,
+      storageGrowthDegradedBytes: 1.5 * 1024 * 1024 * 1024,
+    });
+  });
+
+  // Growth counts every bucket now, not the four generated ones: the defaults
+  // rise by the ratio of all stored bytes to those buckets' (709 MB to 466 MB
+  // on 2026-11-04), so a warning still means what it did.
+  it('defaults the storage growth thresholds to 1.5 and 7.5 GiB', () => {
+    expect(buildBackendCostBudgetPolicy({}, { NODE_ENV: 'test' })).toMatchObject({
+      storageGrowthWarningBytes: 1.5 * 1024 * 1024 * 1024,
+      storageGrowthDegradedBytes: 7.5 * 1024 * 1024 * 1024,
     });
   });
 
@@ -269,11 +279,20 @@ describe('collectBackendCostReport', () => {
     expect(db.builders.backend_rate_limits[0].select).toHaveBeenCalledWith('scope,request_count,window_start,updated_at');
     expect(db.builders.backend_rate_limits[0].select).not.toHaveBeenCalledWith(expect.stringContaining('subject_key'));
     expect(db.builders['storage.objects'][0].select).toHaveBeenCalledWith('bucket_id,name,metadata,created_at');
+    // Every bucket: public copies, uploaded posts, staging, profiles, recipe
+    // files and templates grow too.
     expect(db.builders['storage.objects'][0].in).toHaveBeenCalledWith('bucket_id', [
       'generated_images',
       'generated_videos',
       'generated_audio',
       'generation_inputs',
+      'uploads',
+      'showcase_media',
+      'post_media',
+      'post_resource_files',
+      'profiles',
+      'template_inputs',
+      'template_assets',
     ]);
   });
 

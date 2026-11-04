@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowRight, AtSign, BadgeCheck, CheckCircle2, ExternalLink, Loader2, Save, UserRound, Camera, ImagePlus, Globe2, MapPin, Minus, Plus, RotateCcw } from 'lucide-react';
 
 import {
+  buildProfileSaveBody,
   getCreatorProfileReadiness,
   getSafeProfileNextPath,
   isGeneratedProfileUsername,
@@ -89,30 +90,17 @@ function clampZoom(value: number) {
   return Math.min(MAX_AVATAR_ZOOM, Math.max(MIN_AVATAR_ZOOM, Number(value.toFixed(2))));
 }
 
-function buildProfilePayload(
-  form: EditableCreatorProfile,
-  overrides?: Partial<Pick<EditableCreatorProfile, 'avatarUrl' | 'coverUrl'>>
-): ProfileUpdatePayload {
-  return {
-    username: form.username,
-    displayName: form.displayName,
-    bio: form.bio,
-    avatarUrl: overrides?.avatarUrl ?? form.avatarUrl,
-    coverUrl: overrides?.coverUrl ?? form.coverUrl,
-    websiteUrl: form.websiteUrl,
-    twitterHandle: form.twitterHandle,
-    instagramHandle: form.instagramHandle,
-    tiktokHandle: form.tiktokHandle,
-    location: form.location,
-  };
-}
-
 function getProfileFormFingerprint(profile: EditableCreatorProfile | null): string {
   if (!profile) {
     return '';
   }
 
-  return JSON.stringify(buildProfilePayload(profile));
+  const fingerprint: ProfileUpdatePayload = {
+    ...buildProfileSaveBody(profile),
+    avatarUrl: profile.avatarUrl,
+    coverUrl: profile.coverUrl,
+  };
+  return JSON.stringify(fingerprint);
 }
 
 function getMediaObjectStyle(crop: MediaCrop): CSSProperties {
@@ -759,7 +747,7 @@ export default function CreatorProfileCard({
           'Content-Type': 'application/json',
           Authorization: `Bearer ${session.access_token}`,
         },
-        body: JSON.stringify(buildProfilePayload(form)),
+        body: JSON.stringify(buildProfileSaveBody(form)),
       });
       const validationData = await validationResponse.json();
       if (!validationResponse.ok) {
@@ -773,8 +761,9 @@ export default function CreatorProfileCard({
         return;
       }
 
-      let finalAvatarUrl = form.avatarUrl;
-      let finalCoverUrl = form.coverUrl;
+      // A photo goes in the save only when this save uploaded it.
+      let finalAvatarUrl: string | undefined;
+      let finalCoverUrl: string | undefined;
 
       if (avatarFile || coverFile) {
         setSuccessMessage('Uploading new media...');
@@ -813,7 +802,7 @@ export default function CreatorProfileCard({
           Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify(
-          buildProfilePayload(form, {
+          buildProfileSaveBody(form, {
             avatarUrl: finalAvatarUrl,
             coverUrl: finalCoverUrl,
           })

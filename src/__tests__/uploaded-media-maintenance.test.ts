@@ -54,3 +54,67 @@ describe('uploaded media maintenance', () => {
     expect(f.deleted).not.toHaveBeenCalled();
   });
 });
+
+describe('uploaded media maintenance throughput', () => {
+  /** An outbox of `count` tickets that really drain: each processed ticket is gone from the next page. */
+  function backlog(count: number) {
+    const tickets = Array.from({ length: count }, (_, index) => ({
+      storage_path: `private-posts/b9100000-0000-4000-8000-${String(index).padStart(12, '0')}/video.mp4`,
+    }));
+    const pages: number[] = [];
+    const from = (table: string) => ({
+      select: () => {
+        let limit = Infinity;
+        const query = {
+          is: () => query,
+          order: () => query,
+          limit: async (count: number) => {
+            limit = count;
+            const rows = table === 'post_media_object_cleanup' ? tickets.slice(0, limit) : [];
+            if (table === 'post_media_object_cleanup') pages.push(rows.length);
+            return { error: null, data: rows };
+          },
+        };
+        return query;
+      },
+      update: () => ({ eq: async () => ({ error: null }) }),
+      delete: () => ({
+        eq: async (_column: string, path: string) => {
+          const index = tickets.findIndex((ticket) => ticket.storage_path === path);
+          if (index >= 0) tickets.splice(index, 1);
+          return { error: null };
+        },
+      }),
+    });
+    const admin = {
+      from,
+      rpc: vi.fn(async () => ({ data: true, error: null })),
+      storage: { from: vi.fn(() => ({ remove: vi.fn(), exists: async () => ({ data: false, error: null }) })) },
+    };
+    return { admin: admin as unknown as SupabaseClient, tickets, pages };
+  }
+
+  it('drains a backlog past one page within its time budget', async () => {
+    const { admin, tickets, pages } = backlog(45);
+
+    const summary = await processUploadedMediaMaintenance(admin);
+
+    expect(summary).toMatchObject({ retainedPrivateObjects: 45 });
+    expect(tickets).toEqual([]);
+    expect(pages).toEqual([20, 20, 5]);
+  });
+
+  it('stops between pages once its time budget is spent', async () => {
+    const { admin, tickets, pages } = backlog(45);
+    let now = 0;
+
+    const summary = await processUploadedMediaMaintenance(admin, {
+      timeBudgetMs: 1_000,
+      clock: () => (now += 600),
+    });
+
+    expect(pages).toEqual([20, 20]);
+    expect(summary.retainedPrivateObjects).toBe(40);
+    expect(tickets).toHaveLength(5);
+  });
+});

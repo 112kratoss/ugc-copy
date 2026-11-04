@@ -24,7 +24,7 @@ describe('backend cost aggregates migration', () => {
 
   it('takes the storage bucket list as a parameter rather than hard-coding it', () => {
     // This one has to be a filter or the function scans every bucket, so it is
-    // passed in from GENERATED_STORAGE_BUCKETS instead of duplicated.
+    // passed in from REPORTED_STORAGE_BUCKETS (every bucket) instead of duplicated.
     expect(migration).toContain('p_storage_buckets text[]');
     expect(migration).toContain('rows.bucket_id = ANY (coalesce(p_storage_buckets, ARRAY[]::text[]))');
     expect(migration).not.toContain("'generated_videos'");

@@ -107,10 +107,56 @@ async function downloadStoredShowcaseSource(
   return { body: data, contentType: data.type || null };
 }
 
+const SHOWCASE_PUBLIC_CACHE_HEADER = `max-age=${SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL}`;
+
+type StorageCopyOutcome = 'copied' | 'existing' | 'rewrite' | 'unavailable';
+
+/**
+ * The copy made inside Storage, which reads no bytes into this function. Storage
+ * keeps the source's own cache header and type on a copy, so it is made only
+ * when those already are the ones the upload would set, and the copy is read
+ * back to be sure: the object then is exactly the one the upload made. A
+ * generation output written since 2026-11-04 carries the public header
+ * (persistGeneratedOutput); an older one is read and written as before.
+ */
+async function copyStoredShowcaseSource(
+  adminSupabase: SupabaseClient,
+  source: { bucket: string; filePath: string },
+  target: { bucket: string; path: string },
+  contentType: string,
+): Promise<StorageCopyOutcome> {
+  try {
+    const sourceFiles = adminSupabase.storage.from(source.bucket);
+    const { data: sourceInfo, error: sourceError } = await sourceFiles.info(source.filePath);
+    if (sourceError || !sourceInfo) return 'unavailable';
+    if (sourceInfo.cacheControl !== SHOWCASE_PUBLIC_CACHE_HEADER || sourceInfo.contentType !== contentType) {
+      return 'unavailable';
+    }
+
+    const { error: copyError } = await sourceFiles.copy(source.filePath, target.path, {
+      destinationBucket: target.bucket,
+    });
+    if (copyError) return isExistingStorageObjectError(copyError) ? 'existing' : 'unavailable';
+
+    const { data: copied, error: copiedError } = await adminSupabase.storage.from(target.bucket).info(target.path);
+    return !copiedError
+      && copied?.cacheControl === SHOWCASE_PUBLIC_CACHE_HEADER
+      && copied.contentType === contentType
+      ? 'copied'
+      // This call made the object: its bytes are written over it below.
+      : 'rewrite';
+  } catch {
+    return 'unavailable';
+  }
+}
+
 /**
  * Copies a generation's output into the public showcase bucket and returns the
  * derivative's storage path. The path is content-addressed from the source
  * URL, so publishing the same output twice is a no-op on the existing object.
+ * A stored output is copied inside Storage when it can be made exactly as the
+ * upload would make it (`copyStoredShowcaseSource`); otherwise its bytes are
+ * read and written, as every publish did before.
  */
 export async function createGenerationShowcaseDerivative({
   adminSupabase,
@@ -133,9 +179,19 @@ export async function createGenerationShowcaseDerivative({
   let fileBody: Blob | ReadableStream<Uint8Array>;
   let sourceName: string;
   let contentType: string | null = null;
+  let upsert = false;
 
   if (storedLocation) {
     sourceName = storedLocation.filePath.split('/').pop() || `${generationId}.${inferExtension(outputUrl, category)}`;
+    const storedAssetPath = buildShowcaseAssetPath({ generationId, outputUrl, sourceName, category, privateMedia });
+    const copy = await copyStoredShowcaseSource(
+      adminSupabase,
+      storedLocation,
+      { bucket: postMediaStorageBucket(storedAssetPath), path: storedAssetPath },
+      inferShowcaseContentType(sourceName, category),
+    );
+    if (copy === 'copied' || copy === 'existing') return storedAssetPath;
+    upsert = copy === 'rewrite';
     const source = await downloadStoredShowcaseSource(
       adminSupabase,
       storedLocation.bucket,
@@ -155,23 +211,50 @@ export async function createGenerationShowcaseDerivative({
     throw new Error('Unsupported media source for showcase publishing');
   }
 
-  const baseName = path.basename(sourceName, path.extname(sourceName)) || generationId;
-  const sourceVersion = createHash('sha256').update(outputUrl).digest('hex').slice(0, 12);
-  const showcaseAssetPath = `${privateMedia ? 'private-posts' : 'showcase'}/${generationId}/${baseName}.${sourceVersion}.${inferExtension(sourceName, category)}`;
+  const showcaseAssetPath = buildShowcaseAssetPath({ generationId, outputUrl, sourceName, category, privateMedia });
 
   const { error: uploadError } = await adminSupabase.storage
     .from(postMediaStorageBucket(showcaseAssetPath))
     .upload(showcaseAssetPath, fileBody, {
       cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
       contentType: contentType || inferShowcaseContentType(sourceName, category),
-      upsert: false,
+      upsert,
     });
 
   if (uploadError && !isExistingStorageObjectError(uploadError)) {
+    if (upsert) {
+      // The copy this call made keeps a header or type the upload would not
+      // set, and this publish records nothing. Another publish of the same
+      // creation may have recorded its name meanwhile (the name is the source
+      // URL's), so it goes to the revocation queue rather than an inline
+      // remove: the job keeps it if something names it, and removes it if
+      // not. A private-posts copy has no such queue and stays to the orphan
+      // listing; it is private either way.
+      await queueUnrecordedShowcaseMedia(adminSupabase, [showcaseAssetPath]);
+    }
     throw new Error(`Failed to upload showcase derivative: ${uploadError.message}`);
   }
 
   return showcaseAssetPath;
+}
+
+/** The copy's path: content-addressed from the source URL, so no bytes are needed to name it. */
+function buildShowcaseAssetPath({
+  generationId,
+  outputUrl,
+  sourceName,
+  category,
+  privateMedia,
+}: {
+  generationId: string;
+  outputUrl: string;
+  sourceName: string;
+  category: GenerationShowcaseCategory;
+  privateMedia: boolean;
+}): string {
+  const baseName = path.basename(sourceName, path.extname(sourceName)) || generationId;
+  const sourceVersion = createHash('sha256').update(outputUrl).digest('hex').slice(0, 12);
+  return `${privateMedia ? 'private-posts' : 'showcase'}/${generationId}/${baseName}.${sourceVersion}.${inferExtension(sourceName, category)}`;
 }
 
 type GenerationPostCoverRow = {
