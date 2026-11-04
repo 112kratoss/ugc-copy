@@ -2,7 +2,7 @@
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 (global as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -55,7 +55,11 @@ vi.mock('@/lib/onboarding', () => ({
 }));
 
 import { OnboardingResumeCard } from '../components/onboarding-resume-card';
-import { primeWelcomeCredits, welcomeCreditsQueryKey } from '../lib/use-onboarding-destination';
+import {
+  isWelcomeCreditAnswerSettled,
+  primeWelcomeCredits,
+  welcomeCreditsQueryKey,
+} from '../lib/use-onboarding-destination';
 
 const welcomeAtSignIn: WelcomeCreditResponse = {
   programKey: 'welcome_credits_v1',
@@ -128,5 +132,59 @@ describe('the creator-setup card', () => {
     const tree = renderCard(new QueryClient());
     expect(rendered(tree)).toContain('See the new creator setup');
     act(() => tree.unmount());
+  });
+});
+
+// Home's card read the answer again on every return to the app (330 requests a
+// week). An answer that can lead nowhere any more is read once a launch.
+describe('the welcome answer on a return to the app', () => {
+  beforeEach(() => {
+    authState.user = { id: 'creator-1' };
+    authState.isLoading = false;
+    authState.api.getWelcomeCredits.mockReset();
+  });
+
+  async function returnToTheAppAfter(minutes: number, answer: WelcomeCreditResponse) {
+    authState.api.getWelcomeCredits.mockResolvedValue(answer);
+    const start = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    try {
+      const tree = renderCard(queryClient);
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+      expect(authState.api.getWelcomeCredits).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(start + minutes * 60_000);
+      await act(async () => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      act(() => tree.unmount());
+      return authState.api.getWelcomeCredits.mock.calls.length;
+    } finally {
+      focusManager.setFocused(undefined);
+      now.mockRestore();
+      queryClient.clear();
+    }
+  }
+
+  it.each([
+    ['claimed', { status: 'already_claimed', identityComplete: true }],
+    ['from before the program', { status: 'legacy_ineligible', identityComplete: true }],
+    ['claimed by another account of the same person', { status: 'identity_already_claimed', identityComplete: true }],
+  ] as const)('is not asked again for an account whose credits are %s and whose name is done', async (_name, answer) => {
+    expect(isWelcomeCreditAnswerSettled({ ...welcomeAtSignIn, ...answer })).toBe(true);
+    expect(await returnToTheAppAfter(30, { ...welcomeAtSignIn, ...answer })).toBe(1);
+  });
+
+  it.each([
+    ['credits waiting', { status: 'eligible', identityComplete: true }],
+    ['a name still to choose', { status: 'not_eligible', identityComplete: false }],
+    ['the program off for now', { status: 'unavailable', identityComplete: true }],
+    ['a claimed name still open', { status: 'already_claimed', identityComplete: false }],
+  ] as const)('is asked again after a minute with %s', async (_name, answer) => {
+    expect(isWelcomeCreditAnswerSettled({ ...welcomeAtSignIn, ...answer })).toBe(false);
+    expect(await returnToTheAppAfter(2, { ...welcomeAtSignIn, ...answer })).toBe(2);
   });
 });

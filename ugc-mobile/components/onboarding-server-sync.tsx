@@ -25,13 +25,21 @@ export function OnboardingServerSync() {
   const { api, user } = useAuth();
   const { isHydrated, reconcileFromServer, state, update } = useOnboarding();
 
+  // The fold only promotes: an install that has finished onboarding has nothing
+  // left to learn from the account (a goal chosen elsewhere afterwards aside,
+  // which only the flow reopened from Settings would show).
+  const installFinished = state.status === 'completed' && Boolean(state.completedAt);
   const { data } = useQuery<OnboardingStateResponse>({
     queryKey: ['onboarding-state', user?.id],
     // Guests are entirely install-local. See `useWelcomeCreditsQuery` for why
     // reading account state for an anonymous session creates a launch loop.
-    enabled: Boolean(user),
+    // Asked once the install's own state is read, and not by a finished one.
+    enabled: Boolean(user) && isHydrated && !installFinished,
     queryFn: () => api.getOnboardingState(),
-    staleTime: 1000 * 60,
+    // Once a launch. What it promotes is read only while the install is signed
+    // out (the launch redirect, a guest's setup card), never within a minute of
+    // a return to the app, which re-read it every minute (282 requests a week).
+    staleTime: Infinity,
   });
 
   useEffect(() => {
