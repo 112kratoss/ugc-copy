@@ -44,6 +44,7 @@ import { useAuth } from '@/lib/auth';
 import { env } from '@/lib/env';
 import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
 import { holdsRemixOriginal, remixOriginalMedia, remixOriginalOf, remixOriginalPlace, replacedRemixOriginal, storedRemixOriginal, withRenewedRemixOriginal, type RemixOriginal, type RemixOriginalPlace } from '@/lib/remix-original-reference';
+import { claimRemixFreshStart } from '@/lib/remix-opening';
 import { findRemixLaunch, type RemixLaunchAnswer } from '@/lib/remix-start';
 import { APP_CREATOR_OPENINGS } from '@/lib/app-creator-opening/app-creator-opening';
 import { creatorParameterSummary } from '@/lib/creator-parameter-summary';
@@ -999,6 +1000,11 @@ type MediaCreationScreenProps = {
   remixSource?: RemixSourceSeed;
   /** The Remix tap that opened this creator before its start was answered, as its link names it (`REMIX_LAUNCH_PARAM`). */
   remixLaunchId?: string | null;
+  /**
+   * The navigation that opened this creator, its route's key. A remix starts from its source once per
+   * opening (`claimRemixFreshStart`); without one, a saved remix session is resumed.
+   */
+  remixOpening?: string | null;
   guided?: boolean;
   onClose?: () => void;
   registerBeforeClose?: (guard: (() => Promise<boolean>) | null) => void;
@@ -1035,6 +1041,7 @@ function IdentityCreationScreen({
   initialPrompt,
   remixSource,
   remixLaunchId,
+  remixOpening,
   guided = false,
   onClose,
   registerBeforeClose,
@@ -1291,17 +1298,24 @@ function IdentityCreationScreen({
     // replaced on every token refresh, and reloading then would pull the drafts
     // out from under someone typing.
     const signedInAt = session?.user?.last_sign_in_at ?? null;
-    // A remix can resume its own session. A prompt-only entry resumes the saved drafts too and
-    // replaces only its own tool's prompt: it used to skip the load, and its first save then
-    // wrote the defaults over every tool's saved draft.
+    // A remix resumes only its own opening's session: opening one shows the post as its creator
+    // made it, as the web's creators do (owner, 2026-11-04), and drops a session an earlier
+    // opening saved, an input or the prompt taken out, so no later load of this one finds it
+    // (`claimRemixFreshStart`). A prompt-only entry resumes the saved drafts and replaces only
+    // its own tool's prompt: it used to skip the load, and its first save then wrote the defaults
+    // over every tool's saved draft.
     const seedsPrompt = Boolean(initialPrompt) && !remixScope;
     const seed = <T extends CreationDraft>(draft: T): T => (
       seedsPrompt && draft.tool === initialTool ? { ...draft, prompt: initialPrompt ?? '' } : draft
     );
+    const startsAfresh = Boolean(identityUserId && remixScope && remixOpening && claimRemixFreshStart(remixOpening, remixScope));
     const load = !identityUserId
       ? Promise.resolve(null)
       : remixScope
-        ? loadPersistedCreationDrafts(remixScope)
+        ? startsAfresh
+          // Left behind if it cannot be removed: the restore still goes ahead, and the first save replaces it.
+          ? clearPersistedCreationDrafts(remixScope).then(() => null, () => null)
+          : loadPersistedCreationDrafts(remixScope)
         : loadOrdinaryCreationDrafts({ identityUserId, signedInAt });
     void load.then((persisted) => {
       if (!active) return;
@@ -2822,8 +2836,8 @@ function IdentityCreationScreen({
     if (isGuest) void ensureGuestMergeTicket().catch(() => undefined);
     // Profile → Creations read in the last minute would otherwise go on without the new creation.
     void invalidateProfileCreations(queryClient, identityUserId).catch(() => undefined);
-    // A remix link reopens its session until a run in it succeeds. The ordinary drafts stay
-    // saved, as on the web, so what is on screen is still what is stored.
+    // A remix's session serves its own opening until a run in it succeeds. The ordinary drafts
+    // stay saved, as on the web, so what is on screen is still what is stored.
     if (remixScope) void clearPersistedCreationDrafts(remixScope).catch(() => undefined);
     if (guided) void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });
   };

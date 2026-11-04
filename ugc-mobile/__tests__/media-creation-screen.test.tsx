@@ -2413,9 +2413,9 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       canRemix: true,
     } as unknown as ShowcaseFeedItem;
     const onClose = vi.fn();
-    /** The creator the tap's link opens, its launch named as the route hands it on. */
+    /** The creator the tap's link opens, its launch named as the route hands it on, on a route of its own. */
     const editor = (launchId: string | null) => (
-      <MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} remixLaunchId={launchId} onClose={onClose} />
+      <MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} remixLaunchId={launchId} remixOpening={`create-${launchId}`} onClose={onClose} />
     );
     // Past the quote's delay and the autosave's, and past every storage read a load makes.
     const settle = () => renderer.act(async () => { await new Promise((resolve) => setTimeout(resolve, 450)); });
@@ -2549,43 +2549,135 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       expect(remixDraftWrites()).toEqual([]);
     });
 
-    it('shows a session it saved before at once, and runs and saves nothing until the start is answered', async () => {
-      draftStorage.getItem.mockResolvedValue(JSON.stringify({
-        image: createDefaultCreationDraft('image'),
-        video: {
-          ...createDefaultCreationDraft('video'),
-          model: 'seedance-2',
-          prompt: 'My edited scene: @girl is crying',
-          aspectRatio: '9:16',
-          resolution: '480p',
-          duration: 4,
-          references: [{ id: 'girl', kind: 'image', url: 'https://cdn.example.com/girl.png', storagePath: 'generation_inputs/owner/gen-girl/girl.png', fileName: 'girl.png', displayName: 'Girl', handle: '@girl', sourceGenerationId: 'gen-girl' }],
-        },
-        motion: createDefaultCreationDraft('motion'),
-        updatedAt: '2026-10-04T00:00:00.000Z',
-        remixRestored: true,
-        remixEditedKeys: { video: ['prompt'] },
-        remixOriginal: null,
-      }));
-      authState.api.getRemixSourceBundle.mockResolvedValue(source);
-      const { control, href, launchId } = tap();
-      const tree = await open(launchId);
-      await settle();
+    // Each opening shows the post as its creator made it, as the web's creators do (owner, 2026-11-04):
+    // what an earlier visit took out, an input or the prompt, is not resumed by the next tap, nor by any
+    // other way in.
+    describe('a session an earlier visit saved', () => {
+      const remixKey = creationDraftStorageKey(remixDraftScope('user-123', { generationId: 'gen-girl', postId: 'post-girl' }));
+      /** AsyncStorage as the phone keeps it, so a later tap meets what an earlier visit saved. */
+      const stored = new Map<string, string>();
+      const removeGirlAndEmptyThePrompt = async (tree: renderer.ReactTestRenderer) => {
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Open details for Girl' }).props.onPress(); });
+        renderer.act(() => { tree.root.findByProps({ accessibilityLabel: 'Remove Girl' }).props.onPress(); });
+        const buttons = nativeAlertState.alert.mock.calls[0][2] as Array<{ text: string; onPress?: () => void }>;
+        await renderer.act(async () => {
+          buttons.find((button) => button.text === 'Remove')?.onPress?.();
+          await Promise.resolve();
+        });
+        type(tree, '');
+        await settle();
+      };
 
-      expect(promptOf(tree)).toBe('My edited scene: @girl is crying');
-      expect(collectText(tree.root)).not.toContain(RESTORING);
-      // Priced while the start is out, so it can run the moment the answer comes.
-      expect(action(tree)).toMatchObject({ accessibilityLabel: 'Generate · 8 credits', disabled: true });
-      type(tree, 'My edited scene: @girl is crying again');
-      await settle();
-      expect(remixDraftWrites()).toEqual([]);
+      beforeEach(() => {
+        stored.clear();
+        draftStorage.getItem.mockImplementation(async (key: string) => stored.get(key) ?? null);
+        draftStorage.setItem.mockImplementation(async (key: string, value: string) => { stored.set(key, value); });
+        draftStorage.removeItem.mockImplementation(async (key: string) => { stored.delete(key); });
+        authState.api.getRemixSourceBundle.mockResolvedValue(source);
+      });
 
-      await renderer.act(async () => { control.land(href); });
-      await settle();
+      it('is not resumed by the next tap, which restores the post again and drops it', async () => {
+        const first = tap();
+        const visit = await open(first.launchId);
+        await renderer.act(async () => { first.control.land(first.href); });
+        await settle();
+        expect(promptOf(visit)).toBe('The girl from @girl is crying');
+        await removeGirlAndEmptyThePrompt(visit);
+        // What the next tap must not bring back: the visit saved the remix without Girl or a prompt.
+        expect(JSON.parse(stored.get(remixKey)!)).toMatchObject({ remixRestored: true, video: { prompt: '', references: [] } });
+        renderer.act(() => visit.unmount());
 
-      expect(action(tree)).toMatchObject({ accessibilityLabel: 'Generate · 8 credits', disabled: false });
-      expect(promptOf(tree)).toBe('My edited scene: @girl is crying again');
-      expect(remixDraftWrites().length).toBeGreaterThan(0);
+        const second = tap();
+        const again = await open(second.launchId);
+        await settle();
+        // It waits for its source as a first visit does, and keeps nothing for another way in.
+        expect(collectText(again.root)).toContain(RESTORING);
+        expect(stored.has(remixKey)).toBe(false);
+        // Priced while the start is out, so it can run the moment the answer comes.
+        expect(action(again)).toMatchObject({ accessibilityLabel: 'Calculating…', disabled: true });
+
+        await renderer.act(async () => { second.control.land(second.href); });
+        await settle();
+
+        expect(promptOf(again)).toBe('The girl from @girl is crying');
+        expect(again.root.findAllByProps({ accessibilityLabel: 'Open details for Girl' })).not.toHaveLength(0);
+        expect(collectText(again.root)).not.toContain(RESTORING);
+        expect(action(again)).toMatchObject({ accessibilityLabel: 'Generate · 8 credits', disabled: false });
+      });
+
+      // Profile → Posts' Remix, Recreate and links open the creator with no tap's launch.
+      it('is not resumed by an opening without a tap either', async () => {
+        const first = tap();
+        const visit = await open(first.launchId);
+        await renderer.act(async () => { first.control.land(first.href); });
+        await settle();
+        await removeGirlAndEmptyThePrompt(visit);
+        expect(JSON.parse(stored.get(remixKey)!)).toMatchObject({ video: { prompt: '', references: [] } });
+        renderer.act(() => visit.unmount());
+
+        let fromProfile!: renderer.ReactTestRenderer;
+        await renderer.act(async () => {
+          fromProfile = renderer.create(
+            <MediaCreationScreen initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} remixOpening="create-profile" onClose={onClose} />,
+          );
+        });
+        await settle();
+
+        expect(promptOf(fromProfile)).toBe('The girl from @girl is crying');
+        expect(fromProfile.root.findAllByProps({ accessibilityLabel: 'Open details for Girl' })).not.toHaveLength(0);
+        expect(collectText(fromProfile.root)).not.toContain(RESTORING);
+        expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(2);
+      });
+
+      // The creator is keyed afresh on its route for a new identity (`MediaCreationScreen`), the same
+      // account signed out and in again included: that is still the same opening.
+      it('is the opening’s own once it has saved, when the creator is keyed afresh on its route', async () => {
+        const { control, href, launchId } = tap();
+        const keyed = (key: string) => (
+          <MediaCreationScreen key={key} initialTool="video" remixSource={{ generationId: 'gen-girl', postId: 'post-girl' }} remixLaunchId={launchId} remixOpening={`create-${launchId}`} onClose={onClose} />
+        );
+        let tree!: renderer.ReactTestRenderer;
+        await renderer.act(async () => { tree = renderer.create(keyed('first')); });
+        await renderer.act(async () => { control.land(href); });
+        await settle();
+        type(tree, 'My own scene with @girl');
+        await settle();
+        expect(JSON.parse(stored.get(remixKey)!)).toMatchObject({ video: { prompt: 'My own scene with @girl' } });
+
+        await renderer.act(async () => { tree.update(keyed('again')); });
+        await settle();
+
+        expect(promptOf(tree)).toBe('My own scene with @girl');
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Girl' })).not.toHaveLength(0);
+        expect(collectText(tree.root)).not.toContain(RESTORING);
+        expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      });
+
+      // Only the creator's first load starts afresh. When every effect runs again over the open
+      // creator (a hidden <Activity> shown, as Fast Refresh does), the session saved is its own.
+      it('is the creator’s own once it has saved, when every effect runs again', async () => {
+        const { control, href, launchId } = tap();
+        const inActivity = (mode: 'visible' | 'hidden') => <React.Activity mode={mode}>{editor(launchId)}</React.Activity>;
+        let tree!: renderer.ReactTestRenderer;
+        await renderer.act(async () => { tree = renderer.create(inActivity('visible')); });
+        await renderer.act(async () => { control.land(href); });
+        await settle();
+        type(tree, 'My own scene with @girl');
+        await settle();
+        const reads = () => draftStorage.getItem.mock.calls.filter(([key]) => key === remixKey).length;
+        expect(reads()).toBe(0);
+
+        await renderer.act(async () => { tree.update(inActivity('hidden')); });
+        await renderer.act(async () => { tree.update(inActivity('visible')); });
+        await settle();
+
+        // The effects did run again: the session was read this time.
+        expect(reads()).toBe(1);
+        expect(promptOf(tree)).toBe('My own scene with @girl');
+        expect(tree.root.findAllByProps({ accessibilityLabel: 'Open details for Girl' })).not.toHaveLength(0);
+        expect(collectText(tree.root)).not.toContain(RESTORING);
+        expect(authState.api.getRemixSourceBundle).toHaveBeenCalledTimes(1);
+      });
     });
 
     // A start that fails at once (offline) can answer before the creator's first render, which
