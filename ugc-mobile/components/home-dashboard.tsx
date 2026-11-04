@@ -89,7 +89,6 @@ import {
 import {
   enqueueShowcaseFeedEvent,
   flushShowcaseFeedEvents,
-  flushShowcaseFeedEventsBeforeRefresh,
   isBatchedShowcaseFeedEventType,
 } from '@/lib/feed-event-queue';
 import {
@@ -604,17 +603,17 @@ export function HomeDashboard() {
 
   // The lane cut back to its first page and fetched again: what a pull to
   // refresh and the "New posts" pill both do.
-  const refreshFirstPage = async () => {
+  // Trimmed, reset and asked again in one tick, so the lane is busy from the
+  // tap and no page of the old session can be asked meanwhile. A ranked page
+  // one waits for the queued impressions inside its own read
+  // (`showcaseFeedLaneQueryOptions`), as a lane switch's does.
+  const refreshFirstPage = () => {
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
       return { pages: current.pages.slice(0, 1), pageParams: [{ offset: 0 }] };
     });
-    // A refetched first page can be a new ranked session, whose seen check
-    // reads the impressions this lane has queued: they are recorded first, so
-    // the posts just scrolled past are not served again (1.5 s at most).
-    await flushShowcaseFeedEventsBeforeRefresh();
     return feedQuery.refetch();
   };
 

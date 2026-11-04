@@ -405,6 +405,32 @@ describe('FeedClient lanes and card actions', () => {
         actual.resetShowcaseFeedEventQueueForTests();
     });
 
+    it('asks for a Recent page one at once: it has no seen check to wait for', async () => {
+        const actual = await vi.importActual<typeof import('@/app/showcase/ShowcaseFeedInteraction')>('@/app/showcase/ShowcaseFeedInteraction');
+        actual.resetShowcaseFeedEventQueueForTests();
+        const fetchMock = vi.fn((url: string) => (url === '/api/showcase/feed/events'
+            ? new Promise(() => undefined)
+            : Promise.resolve({ ok: true, json: async () => page([item('recent-1', 'Recent one')]) })));
+        vi.stubGlobal('fetch', fetchMock);
+        await actual.sendShowcaseFeedEvent({
+            item: { ...item('post-seen', 'Seen'), recommendation: { deliveryId: 'delivery-seen', position: 1 } } as ShowcaseFeedItem,
+            eventType: 'impression',
+            sourceSurface: 'feed',
+            accessToken: null,
+            feedSessionId: 'session-1',
+        });
+        void actual.flushShowcaseFeedEvents();
+
+        try {
+            render(<FeedClient initialFeed={null} initialChipId="recent" />);
+
+            // Well inside the 1.5 s a For you page one would wait.
+            expect(await screen.findByText('Recent one', {}, { timeout: 500 })).toBeInTheDocument();
+        } finally {
+            actual.resetShowcaseFeedEventQueueForTests();
+        }
+    });
+
     it('fetches page one itself when the server render had none', async () => {
         const fetchMock = mockFetchPage([item('late-1', 'Late one')]);
         render(<FeedClient initialFeed={null} initialChipId="for-you" />);

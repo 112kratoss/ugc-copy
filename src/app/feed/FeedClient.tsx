@@ -466,9 +466,12 @@ export default function FeedClient({
             if (chip.unlock !== 'all') params.set('unlock', chip.unlock);
             if (chip.category !== 'all') params.set('category', chip.category);
 
-            // Page one starts a new ranked session, which reads the impressions recorded by then.
-            if (!append) await flushShowcaseFeedEventsBeforeRefresh();
-            if (requestId !== requestIdRef.current) return;
+            // A For you page one starts a new ranked session, which reads the
+            // impressions recorded by then; Recent has no seen check to wait for.
+            if (!append && chip.sort === 'for-you') {
+                await flushShowcaseFeedEventsBeforeRefresh();
+                if (requestId !== requestIdRef.current) return;
+            }
             const response = await fetch(
                 `/api/showcase/feed?${params.toString()}`,
                 {

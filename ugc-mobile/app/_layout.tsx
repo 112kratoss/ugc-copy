@@ -40,6 +40,8 @@ import {
 import { ACCOUNT_DELETION_SCHEDULED_NOTICE, AuthProvider, useAuth } from '@/lib/auth';
 import { showMessageDialog } from '@/lib/dialog';
 import { invalidateActiveGenerations } from '@/lib/active-generations';
+import { flushShowcaseFeedEventsBeforeRefresh } from '@/lib/feed-event-queue';
+import { installRankedFirstPageDrain } from '@/lib/feed-ranked-page-drain';
 import { announceGenerationSettledPush, isGenerationSettledPush } from '@/lib/generation-settled-push';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { CREATOR_PAYOUTS_QUERY_KEY } from '@/lib/use-creator-payout-state';
@@ -137,6 +139,11 @@ const queryClient = new QueryClient({
 });
 
 installMediaQueryRetention(queryClient);
+
+// A For you page one, from any reader, waits for the feed events queued so far
+// to be recorded (1.5 s at most): it can start a ranked session whose seen
+// check reads them. Installed here, where launch-time wiring is never late.
+installRankedFirstPageDrain(flushShowcaseFeedEventsBeforeRefresh);
 AppState.addEventListener('memoryWarning', () => pruneInactiveMediaQueries(queryClient, true));
 
 // The For You page the last launch saved goes back into the cache while the

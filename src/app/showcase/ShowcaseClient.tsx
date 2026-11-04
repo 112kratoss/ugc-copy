@@ -1766,8 +1766,9 @@ export default function ShowcaseClient({
             setNonDefaultParam(params, 'unlock', unlock, 'all');
             setNonDefaultParam(params, 'resource', resource, 'all');
 
-            // A new ranked session reads the impressions recorded by then.
-            await flushShowcaseFeedEventsBeforeRefresh();
+            // A new ranked session reads the impressions recorded by then; the
+            // other sorts have no seen check to wait for.
+            if (sort === DEFAULT_SHOWCASE_SORT) await flushShowcaseFeedEventsBeforeRefresh();
             const response = await fetch(`/api/showcase/feed?${params.toString()}`, accessToken ? {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,

@@ -2977,10 +2977,8 @@ describe('ShowcaseClient save actions', () => {
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
   });
 
-  // Page one can start a new ranked session, whose seen check reads the
-  // impressions recorded by then: those still queued would put the posts just
-  // scrolled past back at the top.
-  it('asks for page one only once the queued feed events are recorded', async () => {
+  it("asks for the viewer's own For you page one only once the queued feed events are recorded", async () => {
+    resetShowcaseFeedEventQueueForTests();
     let recordEvents: (response: unknown) => void = () => undefined;
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -2989,6 +2987,54 @@ describe('ShowcaseClient save actions', () => {
           recordEvents = resolve;
         });
       }
+      if (url.startsWith('/api/showcase/feed?')) return new Promise(() => undefined);
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await sendShowcaseFeedEvent({
+      item: createShowcaseItem({ id: 'post-seen', recommendation: { deliveryId: 'delivery-seen', position: 1 } } as never),
+      eventType: 'impression',
+      sourceSurface: 'showcase',
+      accessToken: 'test-token',
+      feedSessionId: 'session-1',
+    });
+    const feedRequests = () => fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/showcase/feed?'));
+    try {
+      render(
+        <ShowcaseClient
+          initialFeed={createFeed(createShowcaseItem({ id: 'post-server', generationId: 'gen-server', title: 'Server Frame' }))}
+          initialCategory="all"
+          initialSort="for-you"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/feed/events', expect.anything()));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(feedRequests()).toHaveLength(0);
+
+      await act(async () => {
+        recordEvents({ ok: true, status: 200, json: async () => ({ success: true }) });
+      });
+      await waitFor(() => expect(feedRequests()).toHaveLength(1));
+    } finally {
+      resetShowcaseFeedEventQueueForTests();
+    }
+  });
+
+  // Only a For you page one starts a ranked session with a seen check: Recent
+  // and the top lists have none, so their Refresh does not wait for the queue
+  // (review follow-up 2).
+  it('asks for a Recent page one at once, without waiting for the queued feed events', async () => {
+    resetShowcaseFeedEventQueueForTests();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/showcase/feed/events') return new Promise(() => undefined);
       if (url.startsWith('/api/showcase/feed?')) return new Promise(() => undefined);
       return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
     });
@@ -3011,20 +3057,18 @@ describe('ShowcaseClient save actions', () => {
       accessToken: 'test-token',
       feedSessionId: 'session-1',
     });
+    // An events request of its own already on its way, unanswered.
+    void flushShowcaseFeedEvents();
     const feedRequests = () => fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/showcase/feed?'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/feed/events', expect.anything()));
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    expect(feedRequests()).toHaveLength(0);
-
-    await act(async () => {
-      recordEvents({ ok: true, status: 200, json: async () => ({ success: true }) });
-    });
-    await waitFor(() => expect(feedRequests()).toHaveLength(1));
+      // Well inside the 1.5 s a For you page one would wait.
+      await waitFor(() => expect(feedRequests()).toHaveLength(1), { timeout: 500 });
+    } finally {
+      resetShowcaseFeedEventQueueForTests();
+    }
   });
 
   // A reload asks for the page afresh. The kept grid came back for ten

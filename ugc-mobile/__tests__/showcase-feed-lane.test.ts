@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { FEED_WINDOW_PAGE_LIMIT } from '../lib/feed-page-window';
 import { HOME_FEED_CHIPS } from '../lib/home-feed-view-model';
+import { installRankedFirstPageDrain } from '../lib/feed-ranked-page-drain';
 import { createShowcaseFeedQueryKey, type ShowcaseFeedFilters } from '../lib/showcase-feed-query';
 import {
   getReelEndSlideState,
@@ -79,6 +80,53 @@ describe('the lane query', () => {
     const recent = showcaseFeedLaneQueryOptions(api, { sort: 'recent' }, 'user-1');
     expect(recent).not.toHaveProperty('refetchOnWindowFocus');
     expect(recent).not.toHaveProperty('refetchOnMount');
+  });
+
+  // Review follow-up 2: a For you page one starts a ranked session, whose seen
+  // check reads the impressions recorded by then; no other sort has one.
+  describe('page one of a ranked lane', () => {
+    function heldDrain() {
+      let release!: () => void;
+      const drain = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+      installRankedFirstPageDrain(drain);
+      return { drain, release: () => release() };
+    }
+
+    it('is asked for only once the queued feed events are recorded, on every reader and lane switch', async () => {
+      const { drain, release } = heldDrain();
+      try {
+        const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
+        for (const filters of [{}, { category: 'media' }, { sort: 'for-you', unlock: 'free' }] as ShowcaseFeedFilters[]) {
+          api.getShowcaseFeed.mockClear();
+          drain.mockClear();
+          const reading = showcaseFeedLaneQueryOptions(api, filters, 'user-1').queryFn({ pageParam: { offset: 0 } });
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(drain, JSON.stringify(filters)).toHaveBeenCalledTimes(1);
+          expect(api.getShowcaseFeed).not.toHaveBeenCalled();
+          release();
+          await reading;
+          expect(api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        installRankedFirstPageDrain(null);
+      }
+    });
+
+    it('is not held for a next page, nor for a lane with no seen check (Recent, the top lists)', async () => {
+      const { drain } = heldDrain();
+      try {
+        const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
+        await showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1').queryFn({ pageParam: { cursor: 'cursor-2', feedSessionId: 'session-1' } });
+        for (const sort of ['recent', 'top-saves', 'top-remixes', 'top-sales'] as const) {
+          await showcaseFeedLaneQueryOptions(api, { sort }, 'user-1').queryFn({ pageParam: { offset: 0 } });
+        }
+        expect(drain).not.toHaveBeenCalled();
+        expect(api.getShowcaseFeed).toHaveBeenCalledTimes(5);
+      } finally {
+        installRankedFirstPageDrain(null);
+      }
+    });
   });
 
   it("asks for the lane's next page with its cursor and session", async () => {
