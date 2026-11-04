@@ -1412,9 +1412,12 @@ export function createApiClient({
       request<ShowcasePostResponse>(`/api/showcase/posts/${encodeURIComponent(postId)}`),
     // Names the live post behind an id the by-id read did not find: an old
     // link carries a generation id, which the web's post page has always
-    // followed. A post id answers with itself; anything else is a 404.
+    // followed. A post id answers with itself; anything else is a 404. Sent
+    // without the session token: every caller gets the same answer (the token
+    // only keyed the rate limit), so the edge may keep it, and the by-id read
+    // of the post it names still applies the viewer's blocks.
     resolveShowcasePost: (id: string) =>
-      request<{ success: true; postId: string }>(`/api/showcase/posts/${encodeURIComponent(id)}/resolve`),
+      request<{ success: true; postId: string }>(`/api/showcase/posts/${encodeURIComponent(id)}/resolve`, {}, { auth: false }),
     listPostComments: (postId: string, params?: Record<string, QueryValue>) =>
       request<PostCommentsResponse>(
         `/api/showcase/posts/${encodeURIComponent(postId)}/comments${buildQuery(params)}`
@@ -1579,8 +1582,11 @@ export function createApiClient({
       request<CreatePostResponse>('/api/showcase/publish', { method: 'POST', body: JSON.stringify(body) }),
     createPost: (body: FormData) =>
       request<CreatePostResponse>('/api/posts', { method: 'POST', body }, POST_CREATE_REQUEST_OPTIONS),
+    // The same public catalog for everyone, which the server marks cacheable
+    // for five minutes: sent without the session token, so no identity check
+    // runs for it and the edge may serve it.
     listSourceTools: () =>
-      request<{ tools: SourceToolOption[] }>('/api/source-tools'),
+      request<{ tools: SourceToolOption[] }>('/api/source-tools', {}, { auth: false, cacheTtlMs: CONTENT_CACHE_TTL_MS }),
     fetchModelCatalogCurrent: (query: string, etag?: string) => readCatalogTransport(`/current?${query}`, etag),
     fetchModelCatalogPage: (query: string) => readCatalogTransport(`/models?${query}`),
     fetchModelCatalogDetails: (query: string) => readCatalogTransport(`/details?${query}`),
@@ -1643,12 +1649,16 @@ export function createApiClient({
         notModified: false,
       };
     },
+    // Priced from the run and the published catalog alone (the server reads no
+    // identity, and limits by network), so it goes without the session token:
+    // no identity check runs for each change of a setting, and a price never
+    // waits on a token refresh.
     quoteGenerationModel: (body: GenerationModelQuoteRequest, signal?: AbortSignal) =>
       request<GenerationModelQuote>('/api/generation-models/quote', {
         method: 'POST',
         body: JSON.stringify(body),
         signal,
-      }),
+      }, { auth: false }),
     ...(catalogSchemaVersion >= 2
       ? {
           startGeneration: (body: CatalogGenerationRequest, idempotencyKey?: string) =>

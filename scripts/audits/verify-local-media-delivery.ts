@@ -53,14 +53,18 @@ async function verify() {
     checked(await admin.rpc('commit_uploaded_media_private_copy', { p_public_path: publicPath }));
     const denied = await readPostMedia({ admin, path: privatePath, viewerUserId: null });
     if (denied !== null) throw new Error('Private media was exposed');
-    const ownerUrl = await readPostMedia({ admin, path: privatePath, viewerUserId: ownerId });
-    if (!ownerUrl) throw new Error('Owner read denied');
-    const partial = await fetch(ownerUrl, { headers: { Range: 'bytes=0-1023' } });
+    const ownerRead = await readPostMedia({ admin, path: privatePath, viewerUserId: ownerId });
+    if (!ownerRead) throw new Error('Owner read denied');
+    // A private post's media: the short signature no browser may keep.
+    if (ownerRead.browserCacheSeconds !== 0) throw new Error('Private media redirect was made cacheable');
+    const partial = await fetch(ownerRead.signedUrl, { headers: { Range: 'bytes=0-1023' } });
     if (partial.status !== 206 || (await partial.arrayBuffer()).byteLength !== 1024) throw new Error('Range playback failed');
     const direct = await fetch(admin.storage.from('post_media').getPublicUrl(privatePath).data.publicUrl);
     if (direct.ok) throw new Error('Private bucket has a public download');
     sql(`update public.posts set visibility='public' where id='${postId}';`);
-    if (!await readPostMedia({ admin, path: privatePath, viewerUserId: null })) throw new Error('Public read failed');
+    const publicRead = await readPostMedia({ admin, path: privatePath, viewerUserId: null });
+    if (!publicRead) throw new Error('Public read failed');
+    if (publicRead.browserCacheSeconds < 60) throw new Error('Public media redirect was not made cacheable');
     sql(`update public.posts set visibility='private' where id='${postId}';`);
     if (await readPostMedia({ admin, path: privatePath, viewerUserId: null })) throw new Error('Cached signature bypassed new visibility');
     await processUploadedMediaMaintenance(admin);

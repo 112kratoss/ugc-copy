@@ -1240,7 +1240,7 @@
     "resolveShowcasePost": {
       "method": "GET",
       "path": "/api/showcase/posts/:postId/resolve",
-      "auth": "optional",
+      "auth": "none",
       "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
       "pathParams": {
         "postId": "generation-1"
@@ -1543,8 +1543,8 @@
     "listSourceTools": {
       "method": "GET",
       "path": "/api/source-tools",
-      "auth": "required",
-      "cacheControl": "private, no-store",
+      "auth": "none",
+      "cacheControl": "public, max-age=300, s-maxage=300, stale-while-revalidate=3600",
       "response": {
         "tools": [
           {
@@ -1752,7 +1752,7 @@
     "quoteGenerationModel": {
       "method": "POST",
       "path": "/api/generation-models/quote",
-      "auth": "required",
+      "auth": "none",
       "cacheControl": "private, no-store",
       "response": {
         "modelId": "nano-banana",
@@ -2633,6 +2633,17 @@
       "headers": {
         "Vary": "Authorization, Cookie",
         "Location": "https://project.supabase.co/storage/v1/object/sign/post_media/private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg?token=short-lived"
+      },
+      "responseVariants": {
+        "publicPost": {
+          "cacheControl": "private, max-age=780",
+          "status": 302,
+          "response": null,
+          "headers": {
+            "Vary": "Authorization, Cookie",
+            "Location": "https://project.supabase.co/storage/v1/object/sign/post_media/private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg?token=fifteen-minutes"
+          }
+        }
       }
     },
     "recordReferralVisit": {

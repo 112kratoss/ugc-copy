@@ -22,6 +22,8 @@ import {
 } from '@/lib/mobile-client-compatibility';
 import { MobileCommerceError, unlockPostResourceBundleWithCredits } from '@/lib/mobile-commerce';
 import { listOwnerPostsForRoute } from '@/lib/owner-post-list-route-service';
+import { readPostMedia, resetPostMediaSignaturesForTests } from '@/lib/post-media-read-service';
+import { getPostMediaRouteResponse } from '@/lib/post-media-route-adapter-service';
 import { POST_RESOURCE_FILE_URL_BATCH_LIMIT } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
 import { createPostResourceFileReadUrlForRoute } from '@/lib/post-resource-file-url-service';
@@ -42,6 +44,8 @@ import {
 import type { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 import { getShowcasePostResolveRouteResponse } from '@/lib/showcase-post-resolve-route-adapter-service';
 import { postSaverNoticeRouteResponse } from '@/lib/saver-notice-route-adapter-service';
+import type { SourceToolOption } from '@/lib/source-tools';
+import { getSourceToolsRouteResponse } from '@/lib/source-tools-route-adapter-service';
 import { postShowcaseSaveRouteResponse } from '@/lib/showcase-save-route-adapter-service';
 import type { ShowcaseSaveResponseBody } from '@/lib/showcase-save-service';
 import {
@@ -791,6 +795,26 @@ describe('shared mobile API v1 contract fixture', () => {
     const missing = await resolve('nothing-1');
     expect(missing.status).toBe(endpoint.errors.notFound.status);
     await expect(missing.json()).resolves.toEqual(endpoint.errors.notFound.response);
+    // The app asks without its token: every caller gets this same answer.
+    expect(endpoint.auth).toBe('none');
+    expect(mobileApiOperationsV1.operations.resolveShowcasePost.auth).toBe('none');
+  });
+
+  // The Made With picker's catalog is the same for everyone: the app asks for
+  // it without its token, so no identity check runs and the edge may keep it.
+  it('answers the source-tools catalog with the cache policy the fixture pins, for no one in particular', async () => {
+    const endpoint = mobileApiContract.endpoints.listSourceTools;
+    const listSourceToolsCatalog = vi.fn(async () => endpoint.response.tools as SourceToolOption[]);
+    const response = await getSourceToolsRouteResponse({
+      request: new Request(`http://localhost${endpoint.path}`),
+      dependencies: { listSourceToolsCatalog },
+    });
+
+    expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(response.json()).resolves.toEqual(endpoint.response);
+    expect(listSourceToolsCatalog).toHaveBeenCalledWith();
+    expect(endpoint.auth).toBe('none');
+    expect(mobileApiOperationsV1.operations.listSourceTools.auth).toBe('none');
   });
 
   // A bundle's files signed in one call: the request and the answer the app
@@ -1132,9 +1156,74 @@ describe('shared mobile API v1 contract fixture', () => {
   });
 });
 
- it('keeps uploaded-media redirects optional-auth and uncacheable', () => {
-  expect(mobileApiContract.endpoints.readPostMedia).toMatchObject({
-    path: '/api/media', auth: 'optional', status: 302, cacheControl: 'private, no-store',
+// The route and its read service together, against the database's answer for
+// the viewer and for no viewer: only media anyone may read right now is let
+// into the viewer's own browser cache, and never into a shared one.
+describe('uploaded-post media redirects', () => {
+  const endpoint = mobileApiContract.endpoints.readPostMedia;
+  const now = Date.parse('2026-11-04T12:00:00.000Z');
+
+  async function redirect(answers: { viewer: string | null; anonymous: string | null }, viewerUserId: string | null) {
+    resetPostMediaSignaturesForTests();
+    const admin = {
+      rpc: vi.fn(async (_name: string, args: { p_viewer_id: string | null }) => ({
+        data: args.p_viewer_id === null ? answers.anonymous : answers.viewer,
+        error: null,
+      })),
+      storage: {
+        from: () => ({
+          createSignedUrl: async (_path: string, ttlSeconds: number) => ({
+            data: {
+              signedUrl: ttlSeconds === 120 ? endpoint.headers.Location : endpoint.responseVariants.publicPost.headers.Location,
+            },
+            error: null,
+          }),
+        }),
+      },
+    } as unknown as SupabaseClient;
+    const response = await getPostMediaRouteResponse(
+      new Request(`http://localhost${endpoint.path}?${new URLSearchParams(endpoint.request)}`, {
+        headers: viewerUserId ? { Authorization: `Bearer ${viewerUserId}` } : {},
+      }),
+      {
+        createServiceClient: () => admin,
+        createMediaSupabaseClient: async () => admin,
+        requireIdentity: async () => (viewerUserId
+          ? {
+            ok: true,
+            identity: { userId: viewerUserId, user: { id: viewerUserId } as User, kind: 'registered', isGuest: false },
+          }
+          : { ok: false, status: 401, code: 'UNAUTHORIZED', error: 'Unauthorized' }),
+        readPostMedia: (read) => readPostMedia({ ...read, now: () => now }),
+      },
+    );
+    return {
+      status: response.status,
+      cacheControl: response.headers.get('Cache-Control'),
+      headers: { Vary: response.headers.get('Vary'), Location: response.headers.get('Location') },
+    };
+  }
+
+  it('keeps a redirect only some viewers may follow optional-auth and uncacheable', async () => {
+    expect(endpoint).toMatchObject({ path: '/api/media', auth: 'optional', status: 302, cacheControl: 'private, no-store' });
+    // An owner's private post: nobody signed out may read it.
+    await expect(redirect({ viewer: endpoint.request.path, anonymous: null }, 'owner-1')).resolves.toEqual({
+      status: endpoint.status,
+      cacheControl: endpoint.cacheControl,
+      headers: endpoint.headers,
+    });
+  });
+
+  it('lets the viewer\'s own browser keep a public post\'s redirect while its signature stays usable', async () => {
+    const variant = endpoint.responseVariants.publicPost;
+    expect(variant.cacheControl).toMatch(/^private, max-age=\d+$/);
+    for (const viewerUserId of [null, 'viewer-1']) {
+      await expect(redirect({ viewer: endpoint.request.path, anonymous: endpoint.request.path }, viewerUserId)).resolves.toEqual({
+        status: variant.status,
+        cacheControl: variant.cacheControl,
+        headers: variant.headers,
+      });
+    }
   });
 });
 
