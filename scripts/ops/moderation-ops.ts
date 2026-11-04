@@ -6,7 +6,91 @@ import {
   listOpenModerationReports,
   resolvePostReport,
   resolveSubjectReport,
+  type PostReportResolution,
 } from '../../src/lib/moderation-ops';
+
+/**
+ * The app route that refreshes the feed's cached pages
+ * (`SHOWCASE_FEED_INVALIDATE_ROUTE`; this script loads under plain tsx, so it
+ * cannot import that server-only module, and a test holds the two equal).
+ */
+export const SHOWCASE_FEED_INVALIDATE_PATH = '/api/cron/showcase-feed-invalidate';
+/** The site's address when NEXT_PUBLIC_SITE_URL is not given, as in src/lib/seo.ts. */
+const DEFAULT_SITE_URL = 'https://magicbooklet.com';
+const FEED_REFRESH_TIMEOUT_MS = 10_000;
+
+export type ModerationOpsDependencies = {
+  fetch?: typeof fetch;
+  /** Where notes for the operator go: stderr, so the JSON on stdout stays parseable. */
+  note?: (message: string) => void;
+};
+
+function writeNote(message: string) {
+  process.stderr.write(`${message}\n`);
+}
+
+/**
+ * Asks the app to refresh the feed's cached pages after a decision changed
+ * what they show. The CLI runs outside the app, where `next/cache` does not
+ * exist, so without this a taken-down post stayed on the signed-out home page
+ * until its window (15 minutes) ran out; its first card's poster is inlined
+ * into that page, so deleting the stored files does not hide it either. Never
+ * throws: the decision is already committed. Without the address or the
+ * secret, or when the request fails, it says so and gives the command to run.
+ */
+export async function requestShowcaseFeedRefresh(
+  environment: NodeJS.ProcessEnv,
+  dependencies: ModerationOpsDependencies = {},
+): Promise<boolean> {
+  const note = dependencies.note ?? writeNote;
+  const siteUrl = environment.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/+$/, '') || null;
+  const secret = environment.CRON_SECRET?.trim() || null;
+  const manualCommand = `curl -fsS -H "Authorization: Bearer $CRON_SECRET" ${siteUrl ?? DEFAULT_SITE_URL}${SHOWCASE_FEED_INVALIDATE_PATH}`;
+  const notRefreshed = (reason: string) => {
+    note([
+      `Warning: the decision is recorded, but the feed's cached pages were not refreshed (${reason}).`,
+      'The signed-out home page can show the post as it was for up to 15 minutes. Refresh them now with:',
+      `  ${manualCommand}`,
+    ].join('\n'));
+    return false;
+  };
+
+  if (!secret) return notRefreshed('CRON_SECRET is not set');
+  if (!siteUrl) return notRefreshed('NEXT_PUBLIC_SITE_URL is not set');
+  let endpoint: URL;
+  try {
+    endpoint = new URL(SHOWCASE_FEED_INVALIDATE_PATH, `${siteUrl}/`);
+  } catch {
+    return notRefreshed('NEXT_PUBLIC_SITE_URL is not a URL');
+  }
+
+  try {
+    const response = await (dependencies.fetch ?? fetch)(endpoint, {
+      headers: { Authorization: `Bearer ${secret}` },
+      signal: AbortSignal.timeout(FEED_REFRESH_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      return notRefreshed(`${endpoint.origin} answered ${response.status}`);
+    }
+  } catch (error) {
+    return notRefreshed(`the request to ${endpoint.origin} failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  note(`Refreshed the feed's cached pages at ${endpoint.origin}.`);
+  return true;
+}
+
+/**
+ * Whether a post decision changes what a cached feed page shows. A take-down
+ * hides the post; a rerun of one refreshes again, as it sweeps the media
+ * again. A dismissal returns a flagged post to the feed once its last open
+ * report is closed, and the resolver does not say whether this one did.
+ */
+function changesWhatTheFeedShows(result: PostReportResolution): boolean {
+  return result.status === 'taken_down'
+    || result.status === 'dismissed'
+    || (result.status === 'already_resolved' && result.resolutionAction === 'take_down');
+}
 
 const USAGE = `
 Magicbooklet moderation operations (service role only)
@@ -21,6 +105,8 @@ Usage:
 Environment:
   SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)
   SUPABASE_SERVICE_ROLE_KEY
+  NEXT_PUBLIC_SITE_URL and CRON_SECRET, to refresh the feed's cached pages after a
+    post decision (without them the command prints the request to make by hand)
 
 Notes:
   - Apply all pending Supabase migrations before using mutation commands.
@@ -128,6 +214,7 @@ function printQueue(snapshot: Awaited<ReturnType<typeof listOpenModerationReport
 export async function runModerationOps(
   args: string[],
   environment: NodeJS.ProcessEnv = process.env,
+  dependencies: ModerationOpsDependencies = {},
 ) {
   const { command, flags } = parseArguments(args);
   if (!command || command === 'help' || command === '--help' || flags.has('--help')) {
@@ -171,6 +258,9 @@ export async function runModerationOps(
       resolutionNote: typeof flags.get('--note') === 'string' ? flags.get('--note') as string : null,
     });
     console.log(JSON.stringify(result, null, 2));
+    if (changesWhatTheFeedShows(result)) {
+      await requestShowcaseFeedRefresh(environment, dependencies);
+    }
     return;
   }
 

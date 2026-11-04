@@ -166,8 +166,10 @@ export async function applyAdminPostReportDecision(
   // Hiding the post is not enough on its own: cached feed pages keep serving it
   // until their tag is revalidated. This lives here rather than in
   // moderation-ops.ts because that module is also driven by the tsx ops CLI,
-  // where next/cache does not exist -- a CLI take-down stays bounded by the
-  // feed's own 60s revalidate instead.
+  // where next/cache does not exist. The CLI asks the app to do it instead
+  // (/api/cron/showcase-feed-invalidate, from scripts/ops/moderation-ops.ts);
+  // when that request cannot be made, the signed-out home page keeps the post
+  // for up to its 15-minute window.
   //
   // The predicate matches the one moderation-ops uses to decide media
   // revocation, so a retried take-down re-invalidates just as it re-sweeps.
