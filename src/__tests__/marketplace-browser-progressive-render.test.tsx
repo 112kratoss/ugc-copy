@@ -13,6 +13,8 @@ const pushMock = routerMock.push;
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
+  // No router around these lists: the shell keeps the address it was given.
+  useSearchParams: () => null,
 }));
 
 const authState = vi.hoisted(() => ({
@@ -247,6 +249,82 @@ describe('MarketplaceBrowser bootstrap pagination', () => {
     expect(screen.getByRole('heading', { name: 'No recipes match' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Clear filters' })).toHaveAttribute('href', '/marketplace');
     expect(screen.queryByRole('link', { name: 'Share a post' })).not.toBeInTheDocument();
+  });
+
+  // The page is cached for everyone: a filter or a search moves the listing in
+  // place (`useMarketplaceListing`), and the list says so while it is read.
+  describe('on the cached page', () => {
+    it('moves a filter, a sort, Clear and the search in place, and the router is not asked', () => {
+      const onNavigate = vi.fn();
+      render(
+        <MarketplaceBrowser
+          initialPage={createPage(2, false)}
+          initialFilters={{ ...INITIAL_FILTERS, access: 'paid' }}
+          sourceToolOptions={[{ slug: 'runway', label: 'Runway' }]}
+          onNavigate={onNavigate}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('link', { name: 'Free' }));
+      fireEvent.click(screen.getByRole('link', { name: 'Top sales' }));
+      fireEvent.click(screen.getByRole('link', { name: 'Runway' }));
+      fireEvent.click(screen.getByRole('link', { name: 'Clear' }));
+      fireEvent.change(screen.getByPlaceholderText('Search prompts, tools, creators'), { target: { value: 'neon' } });
+      fireEvent.submit(screen.getByPlaceholderText('Search prompts, tools, creators').closest('form')!);
+
+      expect(onNavigate.mock.calls.map(([href]) => href)).toEqual([
+        '/marketplace?access=free&sort=recent',
+        '/marketplace?access=paid&sort=top-sales',
+        '/marketplace?access=paid&tool=runway&sort=recent',
+        '/marketplace',
+        '/marketplace?access=paid&q=neon&sort=recent',
+      ]);
+      expect(pushMock).not.toHaveBeenCalled();
+    });
+
+    it('leaves a click with a modifier to the link itself', () => {
+      const onNavigate = vi.fn();
+      render(
+        <MarketplaceBrowser
+          initialPage={createPage(2, false)}
+          initialFilters={INITIAL_FILTERS}
+          sourceToolOptions={[]}
+          onNavigate={onNavigate}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('link', { name: 'Free' }), { ctrlKey: true });
+      expect(onNavigate).not.toHaveBeenCalled();
+    });
+
+    it('draws the listing loading, then failed with Try again, in place of the cards', () => {
+      const onRetry = vi.fn();
+      const view = render(
+        <MarketplaceBrowser
+          initialPage={createPage(0, false)}
+          initialFilters={{ ...INITIAL_FILTERS, access: 'free' }}
+          sourceToolOptions={[]}
+          listingStatus="loading"
+          onNavigate={vi.fn()}
+          onRetry={onRetry}
+        />
+      );
+      expect(screen.getByLabelText('Loading marketplace recipes')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'No recipes match' })).not.toBeInTheDocument();
+
+      view.rerender(
+        <MarketplaceBrowser
+          initialPage={createPage(0, false)}
+          initialFilters={{ ...INITIAL_FILTERS, access: 'free' }}
+          sourceToolOptions={[]}
+          listingStatus="failed"
+          onNavigate={vi.fn()}
+          onRetry={onRetry}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('says no recipes yet only when nothing is filtered', () => {

@@ -20,24 +20,12 @@ const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
 ]);
 
-vi.mock('next/headers', () => ({
-  headers: async () => ({ get: () => null }),
-}));
-
 vi.mock('@/lib/post-resource-bundles-server', () => ({
   getMarketplaceResourceList: async () => ({ items: [] }),
 }));
 
 vi.mock('@/lib/source-tools-server', () => ({
   listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
-}));
-
-vi.mock('@/lib/supabase-server', () => ({
-  getServerAuthState: async () => ({ session: null, credits: null }),
-}));
-
-vi.mock('@/lib/marketplace-viewer-filter', () => ({
-  filterMarketplaceItemsForViewer: async (items: unknown[]) => items,
 }));
 
 vi.mock('@/app/marketplace/MarketplaceBootstrap', () => ({
@@ -52,7 +40,7 @@ describe('MarketplacePage first load', () => {
   // first load; the tool filters draw each tool's label and link its slug.
   it('hands the client each tool filter’s slug and label alone', async () => {
     await act(async () => {
-      render(MarketplacePage({ searchParams: Promise.resolve({}) }));
+      render(await MarketplacePage());
     });
 
     expect(await screen.findByTestId('marketplace-bootstrap')).toBeInTheDocument();
@@ -62,5 +50,10 @@ describe('MarketplacePage first load', () => {
         { slug: 'magicbooklet', label: 'magicbooklet' },
       ],
     }));
+    // The cached page is the plain storefront: the address is read in the browser.
+    expect(marketplaceBootstrapPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      initialFilters: { access: 'all', resource: 'all', tool: '', sort: 'recent', q: '' },
+    }));
+    expect(Object.keys(marketplaceBootstrapPropsMock.mock.lastCall?.[0] ?? {})).not.toContain('shortQuery');
   });
 });

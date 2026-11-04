@@ -3,11 +3,13 @@
 /* eslint-disable @next/next/no-html-link-for-pages -- Native links keep this demand shell independent of Next's interactive router chunk. */
 
 import {
+  Suspense,
   useCallback,
   useEffect,
   useRef,
   useState,
-  type ComponentProps,
+  type FormEvent,
+  type MouseEvent,
 } from 'react';
 
 import type MarketplaceBrowser from '@/app/marketplace/MarketplaceBrowser';
@@ -18,12 +20,32 @@ import {
 import MarketplaceToolFilter from '@/app/marketplace/MarketplaceToolFilter';
 import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
+import type { SourceToolFilterOption } from '@/lib/source-tools';
 import { useViewerRecipeState } from '@/app/marketplace/useViewerRecipeState';
 
-export type MarketplaceBootstrapProps = ComponentProps<typeof MarketplaceBrowser>;
+import { isPlainLinkClick, type MarketplaceFilters } from './marketplace-address';
+import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
+import {
+  MarketplaceSearchParamsReporter,
+  useMarketplaceListing,
+  type MarketplaceListingPage,
+} from './useMarketplaceListing';
+
+export interface MarketplaceBootstrapProps {
+  /** The first page the server drew for `initialFilters`: the plain address, for the cached page. */
+  initialPage: MarketplaceListingPage;
+  /** The address the server drew; the address bar's is read once the page is live. */
+  initialFilters?: MarketplaceFilters;
+  shortQuery?: string;
+  sourceToolOptions: SourceToolFilterOption[];
+}
 
 type MarketplaceBrowserComponent = typeof MarketplaceBrowser;
-type MarketplaceFilters = MarketplaceBootstrapProps['initialFilters'];
+
+const EMPTY_PAGE: MarketplaceListingPage = {
+  items: [],
+  pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: MARKETPLACE_INITIAL_PAGE_SIZE },
+};
 
 const ACCESS_FILTERS = [
   { label: 'All', value: 'all' },
@@ -61,7 +83,17 @@ function loadMarketplaceBrowser() {
 }
 
 export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
-  const { initialPage, initialFilters, shortQuery = '', sourceToolOptions } = props;
+  const { sourceToolOptions } = props;
+  // The listing the address names: the server's page for the plain address
+  // until the browser has read it, then the list API's for whatever the
+  // address and the viewer are (`useMarketplaceListing`).
+  const listing = useMarketplaceListing({
+    serverPage: props.initialPage,
+    serverFilters: props.initialFilters,
+    serverShortQuery: props.shortQuery,
+  });
+  const { filters: initialFilters, shortQuery, navigate } = listing;
+  const initialPage = listing.page ?? EMPTY_PAGE;
   const [InteractiveBrowser, setInteractiveBrowser] = useState<MarketplaceBrowserComponent | null>(null);
   // The signed-in viewer's own recipes, read apart from the cached catalog.
   const viewer = useViewerRecipeState();
@@ -135,17 +167,51 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
     };
   }, [activateInteractiveBrowser, initialPage.pageInfo.hasMore]);
 
+  // The address, read once the page is live; mounted whichever browser draws the list.
+  const addressReporter = (
+    <Suspense fallback={null}>
+      <MarketplaceSearchParamsReporter onSearch={listing.reportSearch} />
+    </Suspense>
+  );
+
   if (InteractiveBrowser) {
-    return <InteractiveBrowser {...props} />;
+    return (
+      <>
+        {addressReporter}
+        <InteractiveBrowser
+          initialPage={initialPage}
+          initialFilters={initialFilters}
+          shortQuery={shortQuery}
+          sourceToolOptions={sourceToolOptions}
+          listingStatus={listing.status}
+          onNavigate={navigate}
+          onRetry={listing.retry}
+        />
+      </>
+    );
   }
 
   const marketplaceReturnPath = buildMarketplacePath(initialFilters);
   const activeFilterLabels = getActiveFilterLabels(initialFilters, sourceToolOptions);
   const hasActiveFilters = activeFilterLabels.length > 0 || initialFilters.sort !== 'recent';
   const bootstrapItems = initialPage.items.slice(0, MARKETPLACE_INITIAL_PAGE_SIZE);
+  // A plain click on a filter or the search moves the listing in place; the
+  // links and the form keep working as before without script.
+  const navigateOnPlainClick = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!isPlainLinkClick(event)) return;
+    event.preventDefault();
+    navigate(href);
+  };
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    warmInteractiveBrowser();
+    const query = new FormData(event.currentTarget).get('q');
+    event.preventDefault();
+    navigate(buildMarketplacePath({ ...initialFilters, q: typeof query === 'string' ? query : '' }));
+  };
 
   return (
     <div data-marketplace-bootstrap-shell>
+      {addressReporter}
       <section
         aria-labelledby="marketplace-filter-heading"
         // `relative z-20`: backdrop-blur makes this a stacking context, so the
@@ -172,12 +238,14 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
             method="get"
             role="search"
             className="flex min-w-0 rounded-full border border-white/10 bg-black/35 p-1"
-            onSubmit={warmInteractiveBrowser}
+            onSubmit={submitSearch}
           >
             <PreservedFilterInputs filters={initialFilters} />
             <label className="min-w-0 flex-1 px-3">
               <span className="sr-only">Search marketplace recipes</span>
               <input
+                // A new address's query, once it is read, stands in the box.
+                key={initialFilters.q || shortQuery}
                 type="search"
                 name="q"
                 defaultValue={initialFilters.q || shortQuery}
@@ -206,6 +274,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               active: initialFilters.access === item.value,
             }))}
             onIntent={warmInteractiveBrowser}
+            onNavigate={navigateOnPlainClick}
           />
           <BootstrapFilterGroup
             label="Kind"
@@ -215,10 +284,12 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               active: initialFilters.resource === item.value,
             }))}
             onIntent={warmInteractiveBrowser}
+            onNavigate={navigateOnPlainClick}
           />
           {/* Shares the hydrated browser's control so the strip does not swap
               shape under the viewer when the real browser takes over. */}
           <MarketplaceToolFilter
+            onNavigate={navigate}
             options={[
               {
                 label: 'All tools',
@@ -242,12 +313,14 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
               href={buildMarketplacePath({ ...initialFilters, sort: item.value })}
               active={initialFilters.sort === item.value}
               onIntent={warmInteractiveBrowser}
+              onNavigate={navigateOnPlainClick}
               activeClassName="border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]"
             />
           ))}
           {hasActiveFilters ? (
             <a
               href="/marketplace"
+              onClick={navigateOnPlainClick('/marketplace')}
               onFocus={warmInteractiveBrowser}
               onPointerDown={warmInteractiveBrowser}
               className="rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
@@ -266,7 +339,12 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
           body="Keep typing, or clear the search to see every recipe."
           actionLabel="Clear search"
           actionHref={marketplaceReturnPath}
+          onNavigate={navigateOnPlainClick}
         />
+      ) : listing.status === 'loading' ? (
+        <MarketplaceListingSkeleton />
+      ) : listing.status === 'failed' ? (
+        <MarketplaceListingFailed onRetry={listing.retry} />
       ) : bootstrapItems.length === 0 && !initialPage.pageInfo.hasMore ? (
         // "No recipes yet" with a Share a post button answered a search or a
         // filter that matched nothing, as if the storefront were empty.
@@ -276,6 +354,7 @@ export default function MarketplaceBootstrap(props: MarketplaceBootstrapProps) {
             body="Try another search, or clear the filters to see every recipe."
             actionLabel="Clear filters"
             actionHref="/marketplace"
+            onNavigate={navigateOnPlainClick}
           />
         ) : (
           <BootstrapResultsMessage
@@ -330,11 +409,14 @@ function BootstrapResultsMessage({
   body,
   actionLabel,
   actionHref,
+  onNavigate,
 }: {
   title: string;
   body: string;
   actionLabel: string;
   actionHref: string;
+  /** For an address on this page: moves the listing in place. */
+  onNavigate?: (href: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   return (
     <div className="mt-10 rounded-3xl border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
@@ -342,6 +424,7 @@ function BootstrapResultsMessage({
       <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-zinc-400">{body}</p>
       <a
         href={actionHref}
+        onClick={onNavigate?.(actionHref)}
         className="mt-6 inline-flex rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
       >
         {actionLabel}
@@ -365,10 +448,12 @@ function BootstrapFilterGroup({
   label,
   links,
   onIntent,
+  onNavigate,
 }: {
   label: string;
   links: Array<{ label: string; href: string; active: boolean }>;
   onIntent: () => void;
+  onNavigate?: (href: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   return (
     <div className="min-w-0">
@@ -377,7 +462,7 @@ function BootstrapFilterGroup({
       </div>
       <div className="flex gap-2 overflow-x-auto pb-1">
         {links.map((link) => (
-          <BootstrapFilterLink key={link.label} {...link} onIntent={onIntent} />
+          <BootstrapFilterLink key={link.label} {...link} onIntent={onIntent} onNavigate={onNavigate} />
         ))}
       </div>
     </div>
@@ -389,6 +474,7 @@ function BootstrapFilterLink({
   href,
   active,
   onIntent,
+  onNavigate,
   // Must stay in step with MarketplaceBrowser's active pill, or hydration
   // swaps one selected style for another in front of the viewer.
   activeClassName = 'border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]',
@@ -397,12 +483,14 @@ function BootstrapFilterLink({
   href: string;
   active: boolean;
   onIntent: () => void;
+  onNavigate?: (href: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
   activeClassName?: string;
 }) {
   return (
     <a
       href={href}
       aria-current={active ? 'page' : undefined}
+      onClick={onNavigate?.(href)}
       onFocus={onIntent}
       onPointerDown={onIntent}
       className={`shrink-0 rounded-full border px-3 py-1.5 text-sm transition ${
