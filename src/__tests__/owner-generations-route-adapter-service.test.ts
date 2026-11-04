@@ -123,8 +123,11 @@ describe('owner generations route adapter service', () => {
     expect(logError).toHaveBeenCalledWith('Error fetching generations:', expect.any(Error));
   });
 
-  it('answers a status the library cannot be narrowed to 400, as the contract pins, and logs no failure', async () => {
-    const refusal = mobileApiContract.endpoints.listGenerations.errors.invalidStatusFilter;
+  it.each([
+    ['a status', 'invalidStatusFilter'],
+    ['an archive state', 'invalidArchivedFilter'],
+  ] as const)('answers %s the library cannot be narrowed to 400, as the contract pins, and logs no failure', async (_kind, errorKey) => {
+    const refusal = mobileApiContract.endpoints.listGenerations.errors[errorKey];
     const logError = vi.fn();
 
     // The real read service: it refuses the filter before it reads anything.

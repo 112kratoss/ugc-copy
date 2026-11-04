@@ -2,8 +2,17 @@ import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query'
 
 import type { MagicbookletApiClient } from '@/lib/api-client';
 import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
-import { refreshProfileFailedCreationsHead, refreshProfileLibraryHead } from '@/lib/profile-library-head';
-import { profileFailedGenerationsQueryKey, truncateInfiniteDataToFirstPage } from '@/lib/profile-media-query';
+import {
+  refreshProfileArchivedCreationsHead,
+  refreshProfileFailedCreationsHead,
+  refreshProfileLibraryHead,
+} from '@/lib/profile-library-head';
+import {
+  profileArchivedGenerationsQueryKey,
+  profileFailedGenerationsQueryKey,
+  truncateInfiniteDataToFirstPage,
+} from '@/lib/profile-media-query';
+import { applyArchivedScopeChange } from '@/lib/profile-media-refresh';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import type { GenerationListItem, GenerationListResponse, OwnerPostsResponse } from '@/lib/types';
 
@@ -36,12 +45,14 @@ export async function applyPostVisibilityToCaches(
     ...page,
     posts: page.posts.map((post) => (post.id === postId ? { ...post, visibility } as typeof post : post)),
   }));
-  patchPages<GenerationListResponse>(['profile-generations', userId], (page) => ({
-    ...page,
-    generations: page.generations.map((item) => (
-      item.linked_post_id === postId ? { ...item, linked_post_visibility: visibility } : item
-    )),
-  }));
+  for (const key of [['profile-generations', userId], profileArchivedGenerationsQueryKey(userId)]) {
+    patchPages<GenerationListResponse>(key, (page) => ({
+      ...page,
+      generations: page.generations.map((item) => (
+        item.linked_post_id === postId ? { ...item, linked_post_visibility: visibility } : item
+      )),
+    }));
+  }
 
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
@@ -51,12 +62,39 @@ export async function applyPostVisibilityToCaches(
   ]);
 }
 
+/** A creation as the first cache that holds it has it: the pages, a looked-up one, a reel's window. */
+function findCachedGeneration(
+  queryClient: QueryClient,
+  userId: string | undefined,
+  generationId: string
+): GenerationListItem | null {
+  for (const key of [
+    ['profile-generations', userId],
+    profileFailedGenerationsQueryKey(userId),
+    profileArchivedGenerationsQueryKey(userId),
+  ]) {
+    const data = queryClient.getQueryData<InfiniteData<GenerationListResponse>>(key);
+    const found = data?.pages.flatMap((page) => page.generations ?? []).find((item) => item.id === generationId);
+    if (found) return found;
+  }
+  const selected = queryClient.getQueryData<GenerationListItem | null>(
+    ['profile-library-selection', 'profile-creations', userId, generationId]
+  );
+  if (selected) return selected;
+  for (const [, data] of queryClient.getQueriesData<ImmersiveSourceData>({ queryKey: ['immersive-preview-source'] })) {
+    const found = data?.generations?.find((item) => item.id === generationId);
+    if (found) return found;
+  }
+  return null;
+}
+
 /**
  * One creation rewritten in every cache that lists it, each keeping its own age:
- * the Profile library's loaded pages and the Failed scope's, a creation a screen
- * looked up on its own (`useProfileLibrarySource`), and the window a reel opened
- * from an alert or from Home loaded for itself. `change` returns the new row, or
- * null to take the row out.
+ * the Profile library's loaded pages and the Failed and Archived scopes', a
+ * creation a screen looked up on its own (`useProfileLibrarySource`), and the
+ * window a reel opened from an alert or from Home loaded for itself. `change`
+ * returns the new row, or null to take the row out. The Archived scope's pages
+ * also take in a run archived anew, from whichever cache holds it.
  */
 function rewriteCachedGeneration(
   queryClient: QueryClient,
@@ -73,6 +111,12 @@ function rewriteCachedGeneration(
     const updatedAt = queryClient.getQueryState(key)?.dataUpdatedAt;
     queryClient.setQueryData<T>(key, (data) => (data === undefined ? data : update(data)), updatedAt ? { updatedAt } : undefined);
   };
+  // Read before any cache is rewritten.
+  const cached = findCachedGeneration(queryClient, userId, generationId);
+  keepingAge<InfiniteData<GenerationListResponse, string | null>>(
+    profileArchivedGenerationsQueryKey(userId),
+    (data) => applyArchivedScopeChange(data, generationId, cached ? change(cached) : null)
+  );
 
   for (const key of [['profile-generations', userId], profileFailedGenerationsQueryKey(userId)]) {
     keepingAge<InfiniteData<GenerationListResponse>>(key, (data) => ({
@@ -103,6 +147,9 @@ function rewriteCachedGeneration(
  * the library's first page is read again and merged, and the profile's counts,
  * which is all an archive can move. The Failed scope's first page is read
  * again too, once it has been opened: a restored failure belongs back on it.
+ * So is the Archived scope's for an archive, but not for a restore: the
+ * restored row stays where the reader left it in a card feed opened from
+ * Archived, and a first page read now would take it out from under them.
  */
 export async function applyGenerationArchiveToCaches({
   api,
@@ -121,6 +168,7 @@ export async function applyGenerationArchiveToCaches({
   await Promise.all([
     refreshProfileLibraryHead({ api, queryClient, userId, library: 'Creations' }).catch(() => undefined),
     refreshProfileFailedCreationsHead({ api, queryClient, userId }).catch(() => undefined),
+    archivedAt ? refreshProfileArchivedCreationsHead({ api, queryClient, userId }).catch(() => undefined) : undefined,
     invalidateProfileStats(queryClient, userId),
   ]);
 }
@@ -151,6 +199,7 @@ export async function refreshViewerMediaCaches(
   queryClient.setQueryData(['profile-saved-media', userId], truncateInfiniteDataToFirstPage);
   queryClient.setQueryData(['profile-generations', userId], truncateInfiniteDataToFirstPage);
   queryClient.setQueryData(profileFailedGenerationsQueryKey(userId), truncateInfiniteDataToFirstPage);
+  queryClient.setQueryData(profileArchivedGenerationsQueryKey(userId), truncateInfiniteDataToFirstPage);
   queryClient.setQueryData(['profile-owner-posts', userId], truncateInfiniteDataToFirstPage);
 
   await Promise.all([
@@ -161,6 +210,7 @@ export async function refreshViewerMediaCaches(
     queryClient.invalidateQueries({ queryKey: ['profile-saved-media', userId] }),
     queryClient.invalidateQueries({ queryKey: ['profile-generations', userId] }),
     queryClient.invalidateQueries({ queryKey: profileFailedGenerationsQueryKey(userId) }),
+    queryClient.invalidateQueries({ queryKey: profileArchivedGenerationsQueryKey(userId) }),
     queryClient.invalidateQueries({ queryKey: ['profile-owner-posts', userId] }),
     // The header counts and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),

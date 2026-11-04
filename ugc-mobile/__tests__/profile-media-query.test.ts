@@ -12,6 +12,8 @@ import {
   getNextProfileSavedMediaOffset,
   invalidateProfileCreations,
   PROFILE_MEDIA_PAGE_SIZE,
+  profileArchivedGenerationsQueryKey,
+  profileArchivedGenerationsQueryOptions,
   profileFailedGenerationsQueryKey,
   profileFailedGenerationsQueryOptions,
   profileGenerationsQueryOptions,
@@ -227,6 +229,31 @@ describe('the Failed scope query', () => {
     // Not under the library's key, so collapsing the library to one page leaves these pages alone.
     expect(failed.queryKey[0]).not.toBe(library.queryKey[0]);
     expect({ ...failed, queryKey: undefined, queryFn: undefined }).toEqual({ ...library, queryKey: undefined, queryFn: undefined });
+  });
+});
+
+describe('the Archived scope query', () => {
+  it('pages archived runs alone, archived ones asked for too, through the cursor the server hands back', async () => {
+    const listGenerations = vi.fn(async () => generationPage(['archived-1'], { hasMore: true, nextCursor: '24' }));
+    const options = profileArchivedGenerationsQueryOptions({ listGenerations } as never, 'user-1');
+
+    await options.queryFn({ pageParam: null });
+    await options.queryFn({ pageParam: '24' });
+
+    // `true` as well as `archived`: a server from before the filter then answers the whole library.
+    expect(listGenerations).toHaveBeenNthCalledWith(1, true, { cursor: undefined, limit: PROFILE_MEDIA_PAGE_SIZE, archived: 'only' });
+    expect(listGenerations).toHaveBeenNthCalledWith(2, true, { cursor: '24', limit: PROFILE_MEDIA_PAGE_SIZE, archived: 'only' });
+    expect(options.getNextPageParam(generationPage(['archived-1'], { hasMore: true, nextCursor: '24' }))).toBe('24');
+  });
+
+  it('keeps a cache of its own beside the library’s and the Failed scope’s, refreshed the way the library is', () => {
+    const library = profileGenerationsQueryOptions({ listGenerations: vi.fn() } as never, 'user-1');
+    const failed = profileFailedGenerationsQueryOptions({ listGenerations: vi.fn() } as never, 'user-1');
+    const archived = profileArchivedGenerationsQueryOptions({ listGenerations: vi.fn() } as never, 'user-1');
+
+    expect(archived.queryKey).toEqual(profileArchivedGenerationsQueryKey('user-1'));
+    expect(new Set([library.queryKey[0], failed.queryKey[0], archived.queryKey[0]]).size).toBe(3);
+    expect({ ...archived, queryKey: undefined, queryFn: undefined }).toEqual({ ...library, queryKey: undefined, queryFn: undefined });
   });
 });
 

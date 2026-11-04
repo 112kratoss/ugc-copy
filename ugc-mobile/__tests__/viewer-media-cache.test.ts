@@ -2,10 +2,11 @@ import { QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ImmersiveSourceData } from '../lib/immersive-preview-source-data';
-import { profileFailedGenerationsQueryKey, selectFailedCreations } from '../lib/profile-media-query';
+import { profileArchivedGenerationsQueryKey, profileFailedGenerationsQueryKey, selectFailedCreations } from '../lib/profile-media-query';
 import type { GenerationListItem, GenerationListResponse } from '../lib/types';
 import {
   applyGenerationArchiveToCaches,
+  applyPostVisibilityToCaches,
   refreshViewerMediaCaches,
   removeGenerationFromCaches,
 } from '../lib/viewer-media-cache';
@@ -238,5 +239,95 @@ describe("the Failed scope's pages", () => {
 
     expect(queryClient.getQueryData<InfiniteData<GenerationListResponse>>(FAILED)?.pages).toHaveLength(1);
     expect(queryClient.getQueryState(FAILED)?.isInvalidated).toBe(true);
+  });
+});
+
+describe("the Archived scope's pages", () => {
+  const ARCHIVED = profileArchivedGenerationsQueryKey(USER);
+  const archivedAt = '2026-10-10T09:00:00.000Z';
+  const put = (id: string, createdAt: string) => creation(id, createdAt, { archived_at: archivedAt });
+  // Two loaded pages of archived runs, the next one starting at the 48th.
+  const archivedPages = (): InfiniteData<GenerationListResponse, string | null> => ({
+    pages: [
+      { generations: [put('put-1', '2026-10-13T05:00:00.000Z'), put('put-2', '2026-10-05T05:00:00.000Z')], pagination: { limit: 24, hasMore: true, nextCursor: '24' } },
+      { generations: [put('put-25', '2026-09-20T05:00:00.000Z'), put('put-26', '2026-09-01T05:00:00.000Z')], pagination: { limit: 24, hasMore: true, nextCursor: '48' } },
+    ],
+    pageParams: [null, '24'],
+  });
+  const archivedData = () => queryClient.getQueryData<InfiniteData<GenerationListResponse, string | null>>(ARCHIVED);
+  const archivedIds = () => archivedData()?.pages.flatMap((page) => page.generations).map((item) => item.id);
+  const shownIds = () => archivedData()?.pages.flatMap((page) => page.generations)
+    .filter((item) => Boolean(item.archived_at)).map((item) => item.id);
+  const nextCursor = () => archivedData()?.pages.at(-1)?.pagination?.nextCursor;
+
+  beforeEach(() => {
+    api.listGenerations.mockImplementation(async (_includeArchived?: boolean, options?: { archived?: string }) => (
+      options?.archived === 'only' ? archivedPages().pages[0] : firstPage()
+    ));
+    queryClient.setQueryData(ARCHIVED, archivedPages(), { updatedAt: PAGE_UPDATED_AT });
+  });
+
+  afterEach(() => {
+    api.listGenerations.mockImplementation(async () => firstPage());
+  });
+
+  it('take a creation archived anew in at its place, from the library page that held it, and read their first page again', async () => {
+    await applyGenerationArchiveToCaches({
+      api, queryClient, userId: USER, generationId: 'card-40', archivedAt: '2026-10-14T09:00:00.000Z',
+    });
+
+    // Card 40 was made on 1 October: after the first page, at the head of the second.
+    expect(archivedIds()).toEqual(['put-1', 'put-2', 'card-40', 'put-25', 'put-26']);
+    expect(archivedData()?.pages[1].generations[0]).toMatchObject({ id: 'card-40', archived_at: '2026-10-14T09:00:00.000Z' });
+    expect(nextCursor()).toBe('49');
+    expect(api.listGenerations.mock.calls).toEqual(expect.arrayContaining([[true, { limit: 24, archived: 'only' }]]));
+  });
+
+  it('keep a restored creation where it was, out of the scope, the next page starting one earlier, and read nothing for it', async () => {
+    await applyGenerationArchiveToCaches({ api, queryClient, userId: USER, generationId: 'put-25', archivedAt: null });
+
+    expect(archivedIds()).toEqual(['put-1', 'put-2', 'put-25', 'put-26']);
+    expect(shownIds()).toEqual(['put-1', 'put-2', 'put-26']);
+    expect(nextCursor()).toBe('47');
+    expect(api.listGenerations.mock.calls).not.toContainEqual([true, { limit: 24, archived: 'only' }]);
+  });
+
+  it('lose a deleted creation, the next page starting one earlier', () => {
+    removeGenerationFromCaches(queryClient, USER, 'put-2');
+
+    expect(archivedIds()).toEqual(['put-1', 'put-25', 'put-26']);
+    expect(nextCursor()).toBe('47');
+    expect(api.listGenerations).not.toHaveBeenCalled();
+    // Taking one row out does not make the rest fresh.
+    expect(queryClient.getQueryState(ARCHIVED)?.dataUpdatedAt).toBe(PAGE_UPDATED_AT);
+  });
+
+  it('are not read or written for a reader who never opened the scope', async () => {
+    queryClient.removeQueries({ queryKey: ARCHIVED });
+
+    await applyGenerationArchiveToCaches({
+      api, queryClient, userId: USER, generationId: 'card-40', archivedAt: '2026-10-14T09:00:00.000Z',
+    });
+
+    expect(api.listGenerations.mock.calls).toEqual([[true, { limit: 24 }]]);
+    expect(queryClient.getQueryState(ARCHIVED)).toBeUndefined();
+  });
+
+  it('collapse to their first page and are read again with every profile library', async () => {
+    await refreshViewerMediaCaches(queryClient, USER);
+
+    expect(archivedData()?.pages).toHaveLength(1);
+    expect(queryClient.getQueryState(ARCHIVED)?.isInvalidated).toBe(true);
+  });
+
+  it("carry a linked post's new visibility, as the library's pages do", async () => {
+    queryClient.setQueryData(ARCHIVED, {
+      ...archivedPages(),
+      pages: [{ generations: [put('put-1', '2026-10-13T05:00:00.000Z')].map((item) => ({ ...item, linked_post_id: 'post-1', linked_post_visibility: 'public' })) }],
+    });
+
+    await applyPostVisibilityToCaches(queryClient, USER, 'post-1', 'private');
+
+    expect(archivedData()?.pages[0].generations[0].linked_post_visibility).toBe('private');
   });
 });

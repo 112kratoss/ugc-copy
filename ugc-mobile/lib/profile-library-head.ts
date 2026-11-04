@@ -1,7 +1,11 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
 import type { MagicbookletApiClient } from './api-client';
-import { PROFILE_MEDIA_PAGE_SIZE, profileFailedGenerationsQueryKey } from './profile-media-query';
+import {
+  PROFILE_MEDIA_PAGE_SIZE,
+  profileArchivedGenerationsQueryKey,
+  profileFailedGenerationsQueryKey,
+} from './profile-media-query';
 import {
   PROFILE_GENERATION_PAGES,
   PROFILE_OWNER_POST_PAGES,
@@ -19,23 +23,28 @@ type LibraryApi = Pick<MagicbookletApiClient, 'listGenerations' | 'listOwnerPost
  *
  * The request is the one the library's infinite query makes for its first page,
  * so the merged page is exactly what a full refresh would have put there.
+ * `archived` reads the Creations Archived scope's own pages instead.
  */
 export async function refreshProfileLibraryHead({
   api,
   queryClient,
   userId,
   library,
+  archived = false,
 }: {
   api: LibraryApi;
   queryClient: Pick<QueryClient, 'setQueryData'>;
   userId: string | undefined;
   library: ProfileMediaTab;
+  archived?: boolean;
 }) {
   if (library === 'Creations') {
-    const fresh = await api.listGenerations(true, { limit: PROFILE_MEDIA_PAGE_SIZE });
+    const fresh = await api.listGenerations(true, archived
+      ? { limit: PROFILE_MEDIA_PAGE_SIZE, archived: 'only' }
+      : { limit: PROFILE_MEDIA_PAGE_SIZE });
     if (!fresh) return;
     queryClient.setQueryData<InfiniteData<GenerationListResponse, string | null>>(
-      ['profile-generations', userId],
+      archived ? profileArchivedGenerationsQueryKey(userId) : ['profile-generations', userId],
       (current) => mergeRefreshedFirstPage(current, fresh, null, PROFILE_GENERATION_PAGES)
     );
     return;
@@ -87,4 +96,18 @@ export async function refreshProfileFailedCreationsHead({
     key,
     (current) => mergeRefreshedFirstPage(current, fresh, null, PROFILE_GENERATION_PAGES)
   );
+}
+
+/** The Creations Archived scope's first page, read again and merged as the Failed scope's is. */
+export async function refreshProfileArchivedCreationsHead({
+  api,
+  queryClient,
+  userId,
+}: {
+  api: LibraryApi;
+  queryClient: Pick<QueryClient, 'getQueryData' | 'setQueryData'>;
+  userId: string | undefined;
+}) {
+  if (!queryClient.getQueryData(profileArchivedGenerationsQueryKey(userId))) return;
+  await refreshProfileLibraryHead({ api, queryClient, userId, library: 'Creations', archived: true });
 }

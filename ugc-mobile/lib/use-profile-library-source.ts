@@ -13,6 +13,7 @@ import {
 import {
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
+  profileArchivedGenerationsQueryOptions,
   profileGenerationsQueryOptions,
   profileOwnerPostsQueryOptions,
 } from './profile-media-query';
@@ -79,20 +80,27 @@ export function useProfileLibrarySource({
   const guestLibrary = !userId && creations && isGuest && Boolean(identityUserId);
   const ownerId = guestLibrary ? identityUserId ?? undefined : userId;
   const active = enabled && Boolean(ownerId) && isProfileLibrarySource(source);
+  // Archived creations page the query the grid's Archived scope pages.
+  const archivedCreations = creations && postsScope === 'archived';
 
   const generationsQuery = useInfiniteQuery({
     ...profileGenerationsQueryOptions(api, ownerId),
-    enabled: active && creations,
+    enabled: active && creations && !archivedCreations,
   });
+  const archivedGenerationsQuery = useInfiniteQuery({
+    ...profileArchivedGenerationsQueryOptions(api, ownerId),
+    enabled: active && archivedCreations,
+  });
+  const creationsQuery = archivedCreations ? archivedGenerationsQuery : generationsQuery;
   const postsQuery = useInfiniteQuery({
     ...profileOwnerPostsQueryOptions(api, ownerId),
     enabled: active && !guestLibrary,
   });
-  const primaryQuery = creations ? generationsQuery : postsQuery;
+  const primaryQuery = creations ? creationsQuery : postsQuery;
 
   const generations = useMemo(
-    () => flattenProfileGenerationPages(generationsQuery.data?.pages),
-    [generationsQuery.data]
+    () => flattenProfileGenerationPages(creationsQuery.data?.pages),
+    [creationsQuery.data]
   );
   const ownerPosts = useMemo(
     () => flattenProfileOwnerPostPages(postsQuery.data?.pages),
