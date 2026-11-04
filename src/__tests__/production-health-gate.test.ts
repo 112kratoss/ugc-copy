@@ -86,13 +86,78 @@ it('aborts an actual nonresponding endpoint within its total deadline', async ()
   const server = createServer(() => {});
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw Error('Missing fixture port');
+  const logs: string[] = [];
   try {
-    await expect(verifyProductionHealth({ origin: `http://127.0.0.1:${address.port}`, releaseSha: sha, secret: 'local-only', timeoutMs: 50, log: () => {} }))
-      .rejects.toThrow('request failed');
+    await expect(verifyProductionHealth({ origin: `http://127.0.0.1:${address.port}`, releaseSha: sha, secret: 'local-only', timeoutMs: 50, log: (line: string) => { logs.push(line); } }))
+      .rejects.toThrow('request failed: it timed out');
+    // The real fetch's rejection is classified as a timeout, not as any other request failure.
+    expect(logs.some(line => line.includes('timed out'))).toBe(true);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
+});
+
+// The first request after a promotion can reach a cold instance and outlive its 5 s timeout
+// (release 41892543056, 2026-11-05; also 41294585849, 2026-11-01). A timeout is retried inside
+// the same window as a stale build id; every other request failure still ends the check at once.
+it('retries a request that timed out, inside the verification window', async () => {
+  let time = 0, calls = 0;
+  const result = await verifyProductionHealth({
+    origin: 'https://unused.invalid', releaseSha: sha, secret: 'local-only', timeoutMs: 60000, intervalMs: 5000,
+    now: () => time, sleep: async (ms: number) => { time += ms; }, log: () => {},
+    fetchImpl: async () => {
+      calls++;
+      if (calls === 1) { time += 5000; throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }
+      return new Response(JSON.stringify({ buildId: sha, status: 'ok' }));
+    },
+  });
+  expect(result).toEqual({ buildId: sha, status: 'ok', attempts: 2 });
+  expect(calls).toBe(2);
+});
+
+it('fails as a request failure when every request times out until the window closes', async () => {
+  let time = 0, calls = 0;
+  await expect(verifyProductionHealth({
+    origin: 'https://unused.invalid', releaseSha: sha, secret: 'local-only', timeoutMs: 60000, intervalMs: 5000,
+    now: () => time, sleep: async (ms: number) => { time += ms; }, log: () => {},
+    fetchImpl: async () => { calls++; time += 5000; throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); },
+  })).rejects.toThrow('Protected production health request failed');
+  expect(calls).toBe(6);
+});
+
+it('retries a body that timed out while it was read, inside the verification window', async () => {
+  let time = 0, calls = 0;
+  const result = await verifyProductionHealth({
+    origin: 'https://unused.invalid', releaseSha: sha, secret: 'local-only', timeoutMs: 60000, intervalMs: 5000,
+    now: () => time, sleep: async (ms: number) => { time += ms; }, log: () => {},
+    fetchImpl: async () => {
+      calls++;
+      if (calls === 1) {
+        return { ok: true, status: 200, json: async () => { time += 5000; throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); } } as unknown as Response;
+      }
+      return new Response(JSON.stringify({ buildId: sha, status: 'ok' }));
+    },
+  });
+  expect(result).toEqual({ buildId: sha, status: 'ok', attempts: 2 });
+});
+
+it('ends the check at once on an abort that is not a timeout', async () => {
+  let calls = 0;
+  await expect(verifyProductionHealth({
+    origin: 'https://unused.invalid', releaseSha: sha, secret: 'local-only', intervalMs: 1, log: () => {},
+    fetchImpl: async () => { calls++; throw new DOMException('This operation was aborted', 'AbortError'); },
+  })).rejects.toThrow('Protected production health request failed');
+  expect(calls).toBe(1);
+});
+
+it('still ends the check at once on a request failure that is not a timeout', async () => {
+  let calls = 0;
+  await expect(verifyProductionHealth({
+    origin: 'https://unused.invalid', releaseSha: sha, secret: 'local-only', intervalMs: 1, log: () => {},
+    fetchImpl: async () => { calls++; throw new TypeError('fetch failed'); },
+  })).rejects.toThrow('Protected production health request failed');
+  expect(calls).toBe(1);
 });
 
 it.each(['matching', 'missing', 'stale', 'degraded'] as const)('runs the actual staged health verifier: %s', async mode => {
