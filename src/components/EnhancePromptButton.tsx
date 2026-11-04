@@ -10,6 +10,7 @@ import {
     requestPromptEnhancement,
 } from '@/components/enhancePromptClient';
 import { SegmentedControl } from '@/components/DesignSystem';
+import { useUnmountSignal } from '@/lib/use-unmount-signal';
 
 // The service debits this same constant, so the price on the button is the charge.
 const ENHANCEMENT_PRICE_LABEL = `${PROMPT_ENHANCEMENT_COST_CREDITS} ${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? 'credit' : 'credits'}`;
@@ -59,6 +60,11 @@ interface EnhancePromptButtonProps {
      * through this instead of sending the prompt.
      */
     onRequireAccount?: () => void;
+    /**
+     * The account whose form this is (the creators' `formAccount`): a press goes out only under its
+     * session. Left out, the press is the account its first ask finds.
+     */
+    account?: string | null;
 }
 
 export default function EnhancePromptButton({
@@ -78,6 +84,7 @@ export default function EnhancePromptButton({
     variant = 'inline',
     leading,
     onRequireAccount,
+    account,
 }: EnhancePromptButtonProps) {
     const [isEnhancing, setIsEnhancing] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -95,15 +102,10 @@ export default function EnhancePromptButton({
     useLayoutEffect(() => {
         latest.current = { prompt, onEnhanced, onResult, onCreditsUpdate };
     });
-    // A button gone with its shot or its node has no words for a late answer to go in,
-    // and its last callbacks would still write back the shot list as it stood then.
-    const mounted = useRef(false);
-    useLayoutEffect(() => {
-        mounted.current = true;
-        return () => {
-            mounted.current = false;
-        };
-    }, []);
+    // A button gone with its shot, its node or its owner's form has no words for a late answer to
+    // go in, and its last callbacks would still write back the shot list as it stood then, or set
+    // the balance an earlier account's answer brings. Its press asks no more once it has gone.
+    const unmountSignal = useUnmountSignal();
 
     const canEnhance = prompt.trim().length > 0 && !isEnhancing && !disabled;
     // The undo chip only makes sense while the textbox still holds the enhancement.
@@ -118,6 +120,13 @@ export default function EnhancePromptButton({
         setWarnings(result.warnings?.filter((warning) => warning.severity !== 'blocking'));
     };
 
+    // A press that ends after its button has gone may still have been paid for, or refunded. The
+    // balance it brings is the pressing account's, which need not hold the session any more, so
+    // whoever does reads their own (a plain event, unlike the figure `updateCredits` sends).
+    const readBalanceAgain = () => {
+        window.dispatchEvent(new Event('credits_updated'));
+    };
+
     const handleEnhance = async () => {
         if (!canEnhance) return;
         if (onRequireAccount) {
@@ -126,6 +135,7 @@ export default function EnhancePromptButton({
         }
 
         const sentPrompt = prompt;
+        const gone = unmountSignal.current;
         setIsEnhancing(true);
         setError(null);
         setWarnings(undefined);
@@ -140,7 +150,7 @@ export default function EnhancePromptButton({
                     requestContext = context;
                 }
                 // Gone while its frames went up: its answer would have nowhere to go, so nothing is paid for.
-                if (!mounted.current) return;
+                if (gone.aborted) return;
             }
 
             const result = await requestPromptEnhancement({
@@ -148,12 +158,15 @@ export default function EnhancePromptButton({
                 selectedModel,
                 prompt: sentPrompt,
                 context: { ...requestContext, enhancementLevel: level },
-            });
+            }, { account, signal: gone });
 
+            if (gone.aborted) {
+                readBalanceAgain();
+                return;
+            }
             if (result.remainingCredits !== undefined) {
                 latest.current.onCreditsUpdate(result.remainingCredits);
             }
-            if (!mounted.current) return;
             const current = latest.current.prompt;
             if (current === sentPrompt) {
                 applyEnhancement(result, sentPrompt);
@@ -161,6 +174,10 @@ export default function EnhancePromptButton({
                 setOffer({ result, kept: current });
             }
         } catch (err) {
+            if (gone.aborted) {
+                readBalanceAgain();
+                return;
+            }
             console.error('Enhance prompt error:', err);
             if (err instanceof PromptEnhancementError) {
                 if (err.remainingCredits !== undefined) {

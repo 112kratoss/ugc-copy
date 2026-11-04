@@ -2,10 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
+// The session each ask finds; a test signs another account in by changing it.
+const browser = vi.hoisted(() => ({ session: { access_token: 'token-1', user: { id: 'account-a' } } as object | null }));
+
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
-      getSession: vi.fn(async () => ({ data: { session: { access_token: 'token-1' } } })),
+      getSession: vi.fn(async () => ({ data: { session: browser.session } })),
     },
   },
 }));
@@ -29,6 +32,7 @@ import {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  browser.session = { access_token: 'token-1', user: { id: 'account-a' } };
 });
 
 describe('the web page’s enhancement request', () => {
@@ -200,5 +204,101 @@ describe('one press, one key', () => {
 
     await expect(requestPromptEnhancement(poster)).rejects.toBeInstanceOf(PromptEnhancementError);
     expect(asks).toHaveLength(1);
+  });
+
+  // A press is paid for by the account whose form pressed it. Another account signed in from
+  // another tab takes the session before the page hears of it, and an ask sent under its token
+  // would be a new paid press charged to it, with an answer that has nowhere to go.
+  describe('under the account it was pressed for', () => {
+    const signInAs = (id: string) => {
+      browser.session = { access_token: `token-${id}`, user: { id } };
+    };
+
+    it('sends nothing under another account’s session', async () => {
+      signInAs('account-b');
+      const asks = stubAsks([answer('Never asked for')]);
+
+      const error = await requestPromptEnhancement(poster, { account: 'account-a' }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(PromptEnhancementError);
+      expect(asks).toHaveLength(0);
+    });
+
+    it('asks again under the account it was pressed for, with that session’s newest token', async () => {
+      vi.useFakeTimers();
+      const tokens: Array<string | null> = [];
+      stubAsks([dropped(), answer('The answer the first ask paid for')]);
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockImplementation(((original) => (input: RequestInfo | URL, init?: RequestInit) => {
+        tokens.push(new Headers(init?.headers).get('Authorization'));
+        return original(input, init);
+      })(fetchMock.getMockImplementation()!));
+
+      const pressed = requestPromptEnhancement(poster, { account: 'account-a' });
+      await vi.advanceTimersByTimeAsync(1);
+      browser.session = { access_token: 'token-refreshed', user: { id: 'account-a' } };
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs);
+
+      await expect(pressed).resolves.toMatchObject({ enhancedPrompt: 'The answer the first ask paid for' });
+      expect(tokens).toEqual(['Bearer token-1', 'Bearer token-refreshed']);
+    });
+
+    it.each([
+      { pressedFor: 'account-a' },
+      // Given no account (the workflow editor), the press is the first ask's session's.
+      { pressedFor: undefined },
+    ])('sends no retry once another account has the session (pressed for $pressedFor)', async ({ pressedFor }) => {
+      vi.useFakeTimers();
+      const asks = stubAsks([dropped(), answer('Charged to the other account')]);
+
+      const pressed = requestPromptEnhancement(poster, { account: pressedFor }).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(1);
+      signInAs('account-b');
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs * askAgain.afterConnectionFailure);
+
+      expect(await pressed).toBeInstanceOf(PromptEnhancementError);
+      expect(asks).toHaveLength(1);
+    });
+  });
+
+  // Nothing is left to take the answer once the button has gone with its form, shot or node.
+  describe('stopped by its signal', () => {
+    it('asks no more once the signal is aborted, and ends without waiting out the delay', async () => {
+      vi.useFakeTimers();
+      const asks = stubAsks([refusal(errors.stillRunning), answer('Never asked for')]);
+      const gone = new AbortController();
+
+      let ended = false;
+      const pressed = requestPromptEnhancement(poster, { signal: gone.signal }).catch((error: unknown) => error)
+        .finally(() => { ended = true; });
+      await vi.advanceTimersByTimeAsync(1);
+      gone.abort();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(ended).toBe(true);
+      expect(await pressed).toBeInstanceOf(Error);
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs * 3);
+      expect(asks).toHaveLength(1);
+    });
+
+    it('lets the ask already sent finish, so its answer is not lost', async () => {
+      let send: (response: Response) => void = () => undefined;
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { send = resolve; })));
+      const gone = new AbortController();
+
+      const pressed = requestPromptEnhancement(poster, { signal: gone.signal });
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      gone.abort();
+      send(answer('Paid for before the button went'));
+
+      await expect(pressed).resolves.toMatchObject({ enhancedPrompt: 'Paid for before the button went' });
+    });
+
+    it('sends nothing when the signal is aborted before the first ask', async () => {
+      const asks = stubAsks([answer('Never asked for')]);
+
+      await expect(requestPromptEnhancement(poster, { signal: AbortSignal.abort() })).rejects.toBeInstanceOf(Error);
+      expect(asks).toHaveLength(0);
+    });
   });
 });

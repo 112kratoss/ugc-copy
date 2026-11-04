@@ -2,11 +2,17 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import EnhancePromptButton from '@/components/EnhancePromptButton';
-import { requestPromptEnhancement, type PromptEnhancementResult } from '@/components/enhancePromptClient';
+import {
+  PromptEnhancementError,
+  requestPromptEnhancement,
+  type PromptEnhancementResult,
+} from '@/components/enhancePromptClient';
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 vi.mock('@/components/enhancePromptClient', () => ({
-  PromptEnhancementError: class PromptEnhancementError extends Error {},
+  PromptEnhancementError: class PromptEnhancementError extends Error {
+    remainingCredits?: number;
+  },
   requestPromptEnhancement: vi.fn(),
 }));
 
@@ -139,19 +145,62 @@ describe('EnhancePromptButton', () => {
     });
 
     // A shot's button goes with its shot (keyed by its id), the workflow editor's with its
-    // node, and their last callbacks would write back the shot list as it stood then.
-    it('lets an answer go whose button has gone', async () => {
+    // node, a creator's with its owner's form, and their last callbacks would write back the
+    // shot list as it stood then, or set the balance an earlier account's answer brings.
+    it('lets an answer go whose button has gone, and has the balance read again', async () => {
       const answer = answerLater();
       const onEnhanced = vi.fn();
       const onCreditsUpdate = vi.fn();
+      const balanceReads: Event[] = [];
+      const listen = (event: Event) => balanceReads.push(event);
+      window.addEventListener('credits_updated', listen);
       const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={onEnhanced} {...shared} onCreditsUpdate={onCreditsUpdate} />);
 
       fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
       view.unmount();
       await answer({ enhancedPrompt: 'A red fox at dawn, rim light.', remainingCredits: 40 });
+      window.removeEventListener('credits_updated', listen);
 
       expect(onEnhanced).not.toHaveBeenCalled();
-      expect(onCreditsUpdate).toHaveBeenCalledWith(40);
+      expect(onCreditsUpdate).not.toHaveBeenCalled();
+      // A plain event: whoever holds the session reads their own balance.
+      expect(balanceReads).toHaveLength(1);
+      expect(balanceReads[0]).not.toBeInstanceOf(CustomEvent);
+    });
+
+    it('has the balance read again for a refusal that comes back after the button went', async () => {
+      let refuse: (error: Error) => void = () => undefined;
+      vi.mocked(requestPromptEnhancement).mockReturnValueOnce(new Promise((_resolve, reject) => { refuse = reject; }));
+      const onCreditsUpdate = vi.fn();
+      const balanceReads: Event[] = [];
+      const listen = (event: Event) => balanceReads.push(event);
+      window.addEventListener('credits_updated', listen);
+      const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={vi.fn()} {...shared} onCreditsUpdate={onCreditsUpdate} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      view.unmount();
+      await act(async () => { refuse(Object.assign(new PromptEnhancementError('Refunded'), { remainingCredits: 42 })); });
+      window.removeEventListener('credits_updated', listen);
+
+      expect(onCreditsUpdate).not.toHaveBeenCalled();
+      expect(balanceReads).toHaveLength(1);
+      expect(balanceReads[0]).not.toBeInstanceOf(CustomEvent);
+    });
+
+    // The press goes out under the form's account only, and stops asking when the button goes.
+    it('presses for its account, under a signal that ends with the button', async () => {
+      answerLater();
+      vi.mocked(requestPromptEnhancement).mockClear();
+      const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={vi.fn()} {...shared} account="user-1" />);
+
+      fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+      await act(async () => undefined);
+      const [, press] = vi.mocked(requestPromptEnhancement).mock.calls[0];
+      expect(press).toMatchObject({ account: 'user-1' });
+      expect(press?.signal?.aborted).toBe(false);
+
+      view.unmount();
+      expect(press?.signal?.aborted).toBe(true);
     });
 
     // Frames go up before the request: a button gone by then sends nothing to pay for.

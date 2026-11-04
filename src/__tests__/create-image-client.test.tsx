@@ -112,7 +112,7 @@ vi.mock('@/components/AuthProvider', () => ({
 
 // What the Enhance button was last given, which a button answering through what it had when pressed
 // calls, and the newest callbacks of the mounted button, which one keeping them in a ref calls.
-type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void };
+type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void; account?: string | null };
 const enhanceButton = vi.hoisted(() => ({
   props: null as EnhanceAnswerProps | null,
   mounted: null as { current: EnhanceAnswerProps } | null,
@@ -1651,24 +1651,24 @@ describe('CreateImageClient generation pipeline', () => {
         typePrompt('Asha’s harbour at dusk');
         const pressedForAsha = enhanceButton.props!;
         const buttonAshaPressed = enhanceButton.mounted!;
+        // Her press goes out under her session only.
+        expect(pressedForAsha.account).toBe('user-1');
 
         ownDraftAs('user-2');
         view.rerender(page());
         await settleDraftRead();
+        // The balance an answer brings after its button went is the button's to have read again (enhance-prompt-button.test.tsx).
         act(() => {
           pressedForAsha.onEnhanced('Asha’s harbour at dusk, golden hour, 35mm');
-          pressedForAsha.onCreditsUpdate(41);
           // A button answering through its newest callbacks is drawn anew for Ben: the one Asha pressed has only hers.
           buttonAshaPressed.current.onEnhanced('Asha’s harbour at dusk, golden hour, 35mm');
-          buttonAshaPressed.current.onCreditsUpdate(43);
         });
         expect(box()).toHaveValue('');
-        expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
-        expect(authState.updateCredits).not.toHaveBeenCalledWith(43);
         await waitFor(() => expect(promptsSavedFor('user-2')).toContain(''), { timeout: 2_000 });
         expect(promptsSavedFor('user-2')).not.toContain('Asha’s harbour at dusk, golden hour, 35mm');
 
         // One pressed for the account on the page lands.
+        expect(enhanceButton.props!.account).toBe('user-2');
         act(() => {
           enhanceButton.props!.onEnhanced('Ben’s glasshouse at dawn');
           enhanceButton.props!.onCreditsUpdate(12);
@@ -2191,24 +2191,6 @@ describe('CreateImageClient generation pipeline', () => {
       expect(screen.getByAltText('Asha’s harbour')).toBeInTheDocument();
       expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('Asha’s harbour at dusk');
       expect(screen.queryByRole('dialog', { name: 'Continue to generate' })).toBeNull();
-    });
-
-    it('reads the balance again when a paid Enhance answers after the page was left', async () => {
-      installFetch();
-      const view = render(page());
-      await settleDraftRead();
-      const pressed = enhanceButton.props!;
-      const balanceEvents: Event[] = [];
-      const listen = (event: Event) => balanceEvents.push(event);
-      window.addEventListener('credits_updated', listen);
-
-      view.unmount();
-      act(() => pressed.onCreditsUpdate(41));
-      window.removeEventListener('credits_updated', listen);
-
-      // Not set to the balance the answer brings, which need not be the session's any more.
-      expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
-      expect(balanceEvents.some((event) => !(event instanceof CustomEvent))).toBe(true);
     });
 
     it('drops the earlier account’s remix pictures and its own, and reads the remix again for the next', async () => {

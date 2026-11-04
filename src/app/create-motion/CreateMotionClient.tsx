@@ -1379,18 +1379,6 @@ function MotionCreator({
         await startFreshRun();
     };
 
-    /**
-     * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
-     * another owner's form took its place) is read again for whoever holds the session instead.
-     */
-    const reportEnhanceBalance = (credits: number) => {
-        if (unmountSignal.current.aborted) {
-            window.dispatchEvent(new Event('credits_updated'));
-            return;
-        }
-        updateCredits(credits);
-    };
-
     /** The explicit choice to run again while the unconfirmed start may exist. */
     const startNewRunInstead = async () => {
         if (activeGenerationRequestKeyRef.current) return;
@@ -1957,7 +1945,8 @@ function MotionCreator({
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
                             onEnhanced={(text) => handlePromptChange(text)}
-                            onCreditsUpdate={reportEnhanceBalance}
+                            onCreditsUpdate={updateCredits}
+                            account={formAccount}
                             medium="motion"
                             selectedModel={selectedModel}
                             context={{

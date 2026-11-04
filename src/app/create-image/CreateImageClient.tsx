@@ -1899,18 +1899,6 @@ function ImageCreator({
         }
     };
 
-    /**
-     * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
-     * another owner's form took its place) is read again for whoever holds the session instead.
-     */
-    const reportEnhanceBalance = (credits: number) => {
-        if (unmountSignal.current.aborted) {
-            window.dispatchEvent(new Event('credits_updated'));
-            return;
-        }
-        updateCredits(credits);
-    };
-
     const handleStartNewRun = () => {
         // The creator's own choice, priced on the button: the last start may still be running.
         forgetPendingStart();
@@ -2318,7 +2306,8 @@ function ImageCreator({
                             leading={<CreatorTemplatesTile />}
                             prompt={prompt}
                             onEnhanced={setPrompt}
-                            onCreditsUpdate={reportEnhanceBalance}
+                            onCreditsUpdate={updateCredits}
+                            account={formAccount}
                             onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
                             medium="image"
                             selectedModel={selectedModel}
