@@ -1530,7 +1530,7 @@ export default function ShowcaseReelViewer({
           <TextPostPreviewCard
             title={item.title}
             summary={summary}
-            sourceLabel={item.sourceTool || item.model}
+            sourceLabel={item.sourceTool ? displaySourceToolLabel(item.sourceTool) : item.model}
             dateLabel={dateLabel}
             saveCount={item.saveCount}
             remixCount={item.remixCount}

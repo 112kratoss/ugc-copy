@@ -6,6 +6,7 @@ import type { GenerationModelCatalog } from '@/lib/generation-model-catalog';
 import { loadPublishedGenerationModelCatalog } from '@/lib/generation-model-catalog-store';
 import { createServiceClient } from '@/lib/server-helpers';
 import {
+  APP_SOURCE_TOOL_DISPLAY_LABEL,
   FALLBACK_SOURCE_TOOLS,
   type SourceToolCapability,
   type SourceToolCatalogTier,
@@ -106,7 +107,12 @@ function withGenerationCatalogModels(
   }));
 
   return tools.map((tool) => tool.slug === 'magicbooklet'
-    ? { ...tool, models: generationModels }
+    ? {
+      ...tool,
+      models: generationModels,
+      // The product's name, so a search for it finds this tool (source-tools.ts).
+      aliases: Array.from(new Set([...(tool.aliases ?? []), APP_SOURCE_TOOL_DISPLAY_LABEL])),
+    }
     : tool);
 }
 

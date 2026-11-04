@@ -33,6 +33,14 @@ describe('the app tool’s shown name', () => {
     expect(own).toEqual({ slug: 'magicbooklet', label: 'Magic Booklet' });
   });
 
+  it('files a typed "Magic Booklet" under the app tool, not a new one', () => {
+    for (const typed of [{ label: 'Magic Booklet' }, { label: 'magic booklet' }, { slug: 'magic-booklet' }]) {
+      expect(normalizeSourceToolInputWithCatalog(FALLBACK_SOURCE_TOOLS, typed)).toEqual({ label: 'magicbooklet', slug: 'magicbooklet' });
+    }
+    const own = FALLBACK_SOURCE_TOOLS.find((tool) => tool.slug === 'magicbooklet');
+    expect(own?.aliases).toContain('Magic Booklet');
+  });
+
   it('still stores the app tool as magicbooklet', () => {
     const stored = normalizeSourceToolInputWithCatalog(FALLBACK_SOURCE_TOOLS, { label: 'magicbooklet', slug: 'magicbooklet' });
     expect(JSON.stringify(stored)).not.toContain('Magic Booklet');

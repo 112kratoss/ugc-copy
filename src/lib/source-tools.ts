@@ -463,7 +463,7 @@ function getSourceToolBySlug(
     return null;
   }
 
-  if (normalizedSlug === 'emptybooklet') {
+  if (normalizedSlug === 'emptybooklet' || isAppSourceToolLabel(normalizedSlug)) {
     return catalog.find((tool) => tool.slug === APP_SOURCE_TOOL.slug) ?? APP_SOURCE_TOOL;
   }
 
@@ -479,7 +479,7 @@ function getSourceToolByLabel(
     return null;
   }
 
-  if (normalizedLabel === 'emptybooklet') {
+  if (normalizedLabel === 'emptybooklet' || isAppSourceToolLabel(normalizedLabel)) {
     return catalog.find((tool) => tool.slug === APP_SOURCE_TOOL.slug) ?? APP_SOURCE_TOOL;
   }
 

@@ -3805,7 +3805,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                             const toolOptions: CreatableComboboxOption[] = [
                               ...sourceToolsData.map((tool) => ({
                                 value: tool.slug,
-                                label: tool.label,
+                                label: displaySourceToolLabel(tool.label),
                                 keywords: [
                                   ...(tool.aliases ?? []),
                                   tool.toolType ?? 'platform',
