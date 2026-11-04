@@ -36,8 +36,8 @@ import {
  *  - pushed, when `BACKEND_ALERT_DELIVERY_URL` is set: one `backend_alerts`
  *    envelope per change of episode (opened, escalated to exhausted, and
  *    closed, the last only with `BACKEND_ALERT_DELIVERY_NOTIFY_OK=true`), all
- *    under one dedupe key per episode. The ten-minute summary push leaves the
- *    balance out, so it is never re-sent on every tick.
+ *    under one dedupe key per episode. The half-hourly summary push leaves the
+ *    balance out, so it is never re-sent on every run.
  *
  * The state is the job's own run summary in `backend_job_runs`. A check reads
  * the newest one under the job lock and writes its own onto its run row before

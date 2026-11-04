@@ -85,8 +85,8 @@ type CollectBackendAlertsOptions = {
   ) => Promise<BackendModerationHealth>;
   collectKieBalance?: (client: SupabaseClient) => Promise<KieBalanceStatus>;
   /**
-   * False for the ten-minute alert push: the balance job pushes its own alert
-   * once per episode, so the summary push must not re-send it every tick.
+   * False for the half-hourly alert push: the balance job pushes its own alert
+   * once per episode, so the summary push must not re-send it every run.
    */
   includeKieBalance?: boolean;
 };

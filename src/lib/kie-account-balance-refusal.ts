@@ -18,7 +18,7 @@ import { createServiceClient } from '@/lib/server-helpers';
 
 /**
  * Kie refusing a generation for insufficient credits, told to the operator now
- * rather than at the next ten-minute balance poll: the balance can run out
+ * rather than at the next hourly balance poll: the balance can run out
  * between two polls, and from then on every start is refunded and reads as an
  * outage.
  *

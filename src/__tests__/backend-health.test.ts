@@ -415,7 +415,7 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 456,
-      logicalDailyInvocations: 1231,
+      logicalDailyInvocations: 1015,
       coveredJobCount: 15,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
@@ -425,8 +425,8 @@ describe('collectBackendHealth', () => {
         }),
         expect.objectContaining({
           name: 'backend-alert-delivery',
-          cadenceMinutes: 10,
-          dailyInvocations: 144,
+          cadenceMinutes: 30,
+          dailyInvocations: 48,
         }),
         expect.objectContaining({
           name: 'feed-embeddings',
@@ -473,8 +473,8 @@ describe('collectBackendHealth', () => {
     });
     expect(health.jobs.find((job) => job.name === 'kie-account-balance')).toMatchObject({
       status: 'ok',
-      dailyInvocations: 144,
-      expectedMaxAgeMinutes: 30,
+      dailyInvocations: 24,
+      expectedMaxAgeMinutes: 180,
     });
     expect(health.jobs.find((job) => job.name === 'feed-embeddings')).toMatchObject({
       status: 'ok',
@@ -488,8 +488,8 @@ describe('collectBackendHealth', () => {
     });
     expect(health.jobs.find((job) => job.name === 'backend-alert-delivery')).toMatchObject({
       status: 'ok',
-      dailyInvocations: 144,
-      expectedMaxAgeMinutes: 40,
+      dailyInvocations: 48,
+      expectedMaxAgeMinutes: 120,
     });
     expect(health.jobs.find((job) => job.name === 'generation-completions')).toMatchObject({
       status: 'ok',
@@ -1257,9 +1257,9 @@ describe('collectBackendHealth', () => {
         name: 'backend-alert-delivery',
         status: 'ok',
         route: '/api/cron/backend-alert-delivery',
-        schedule: '*/10 * * * *',
-        cadenceMinutes: 10,
-        dailyInvocations: 144,
+        schedule: '*/30 * * * *',
+        cadenceMinutes: 30,
+        dailyInvocations: 48,
         maxMissedRunsBeforeDegraded: 4,
         lastHealthyAt: '2026-06-21T09:59:00.000Z',
         lastSuccessAt: null,
