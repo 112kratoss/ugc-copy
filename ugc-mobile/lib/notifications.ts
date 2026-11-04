@@ -1,4 +1,5 @@
 import { accentFill } from '@/lib/theme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
@@ -13,6 +14,23 @@ import { ALERTS_LIST_QUERY_KEY, NOTIFICATION_BADGE_QUERY_KEY } from './notificat
 
 const DEVICE_ID_KEY = 'magicbooklet.mobileNotifications.deviceId';
 const EXPO_PUSH_TOKEN_KEY = 'magicbooklet.mobileNotifications.expoPushToken';
+/**
+ * The registration the server last confirmed from this install. In
+ * AsyncStorage, which an uninstall wipes, rather than beside the token: the
+ * keychain behind SecureStore outlives an uninstall on iOS, and a reinstall,
+ * whose token the server may have retired as `DeviceNotRegistered`, must
+ * register again.
+ */
+const LAST_PUSH_REGISTRATION_KEY = 'magicbooklet.mobileNotifications.lastRegistration.v1';
+/**
+ * How long a confirmed registration stands before it is sent again unchanged.
+ * Every launch and every return to the app checked the registration, and each
+ * check sent it (417 requests a week at a few dozen people), though the server
+ * keeps one row per account and token and nothing reads when it was last sent.
+ * A day still revives, within a day, a token the server retired while the app
+ * kept it.
+ */
+export const PUSH_REGISTRATION_REFRESH_MS = 24 * 60 * 60 * 1_000;
 /**
  * Every push this launch has handled, by its key. A push is claimed before any
  * of its handling is awaited: reading the launch push again while the first
@@ -202,6 +220,44 @@ function exchangeForExpoPushToken(projectId: string, devicePushToken: Notificati
 /** The owner of the registrations on the wire (`trackInFlight`), keyed by Expo token. */
 const expoTokenRegistrations = {};
 
+type PushRegistrationRecord = { fingerprint: string; registeredAt: number };
+
+/** Everything a registration tells the server. Any change to it is sent at once. */
+function pushRegistrationFingerprint(parts: {
+  userId: string;
+  expoPushToken: string;
+  deviceId: string | null;
+  appVersion: string | null;
+  platform: 'ios' | 'android';
+}) {
+  return JSON.stringify([parts.userId, parts.expoPushToken, parts.deviceId, parts.appVersion, parts.platform]);
+}
+
+async function readLastPushRegistration(): Promise<PushRegistrationRecord | null> {
+  try {
+    const raw = await AsyncStorage.getItem(LAST_PUSH_REGISTRATION_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (
+      !parsed || typeof parsed !== 'object'
+      || typeof (parsed as PushRegistrationRecord).fingerprint !== 'string'
+      || typeof (parsed as PushRegistrationRecord).registeredAt !== 'number'
+    ) return null;
+    return parsed as PushRegistrationRecord;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Forget the confirmed registration, so the next check sends one: on every way
+ * a session or this install's registration ends (`clearLocalMobilePushRegistration`),
+ * and whenever notifications are found switched off, so turning them back on
+ * registers at once.
+ */
+export async function forgetLastPushRegistration() {
+  await AsyncStorage.removeItem(LAST_PUSH_REGISTRATION_KEY).catch(() => undefined);
+}
+
 /**
  * Store the token, then tell the API about it. Both registration paths — the
  * cold-start sync and the rotation listener — go through here, so the stored
@@ -209,23 +265,55 @@ const expoTokenRegistrations = {};
  * runs, so the listener can leave a token to the registration already sending
  * it. Never shared, unlike the exchange: each registration is sent with the
  * session it was asked under, across a sign-out too.
+ *
+ * With the account it is for (`userId`), a registration the server confirmed
+ * less than `PUSH_REGISTRATION_REFRESH_MS` ago with the same account, token,
+ * device id, app version and platform is not sent again, unless `force` (the
+ * person just turned notifications on). Without one it is always sent, and the
+ * next named registration goes out too.
  */
-function persistAndRegisterExpoPushToken(api: MagicbookletApiClient, expoPushToken: string) {
+function persistAndRegisterExpoPushToken(
+  api: MagicbookletApiClient,
+  expoPushToken: string,
+  { userId = null, force = false }: { userId?: string | null; force?: boolean } = {},
+) {
   return trackInFlight(expoTokenRegistrations, expoPushToken, (async () => {
     const deviceId = await getStableDeviceId();
     await SecureStore.setItemAsync(EXPO_PUSH_TOKEN_KEY, expoPushToken);
+    const platform = Platform.OS === 'ios' ? 'ios' : 'android';
+    const appVersion = Constants.expoConfig?.version ?? null;
+    const fingerprint = userId
+      ? pushRegistrationFingerprint({ userId, expoPushToken, deviceId, appVersion, platform })
+      : null;
+    if (fingerprint && !force) {
+      const last = await readLastPushRegistration();
+      const age = last ? Date.now() - last.registeredAt : Number.POSITIVE_INFINITY;
+      if (last?.fingerprint === fingerprint && age >= 0 && age < PUSH_REGISTRATION_REFRESH_MS) return;
+    }
     await api.registerMobilePushToken({
       expoPushToken,
-      platform: Platform.OS === 'ios' ? 'ios' : 'android',
+      platform,
       deviceId,
-      appVersion: Constants.expoConfig?.version ?? null,
+      appVersion,
     });
+    if (fingerprint) {
+      await AsyncStorage.setItem(
+        LAST_PUSH_REGISTRATION_KEY,
+        JSON.stringify({ fingerprint, registeredAt: Date.now() } satisfies PushRegistrationRecord),
+      ).catch(() => undefined);
+    } else {
+      await forgetLastPushRegistration();
+    }
   })());
 }
 
 export async function registerForMobilePushNotifications(
   api: MagicbookletApiClient,
-  options: { requestPermission?: boolean } = {}
+  options: {
+    requestPermission?: boolean;
+    /** The registered account the check is for; without it a registration is always sent. */
+    userId?: string | null;
+  } = {}
 ): Promise<MobilePushRegistrationResult> {
   if (!isNativeMobile()) {
     return { status: 'not-mobile' };
@@ -238,12 +326,14 @@ export async function registerForMobilePushNotifications(
   let finalPermissions = currentPermissions;
   if (!currentPermissions.granted) {
     if (!options.requestPermission) {
+      await forgetLastPushRegistration();
       return { status: currentPermissions.canAskAgain === false ? 'denied' : 'permission-required' };
     }
     finalPermissions = withBasePermissionFields(await Notifications.requestPermissionsAsync());
   }
 
   if (!finalPermissions.granted) {
+    await forgetLastPushRegistration();
     return { status: 'denied' };
   }
 
@@ -266,7 +356,10 @@ export async function registerForMobilePushNotifications(
     throw error;
   }
   const expoPushToken = token.data;
-  await persistAndRegisterExpoPushToken(api, expoPushToken);
+  await persistAndRegisterExpoPushToken(api, expoPushToken, {
+    userId: options.userId ?? null,
+    force: options.requestPermission === true,
+  });
 
   return { status: 'registered' as const, expoPushToken };
 }
@@ -336,6 +429,7 @@ export async function clearLocalMobilePushRegistration() {
     console.error('Failed to unregister native push notifications', error);
   });
   await SecureStore.deleteItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => undefined);
+  await forgetLastPushRegistration();
 }
 
 export function navigateToNotificationDeepLink(deepLink: unknown) {
@@ -543,7 +637,8 @@ export function subscribeToNotificationResponses(options: { handleResponse?: Mob
  */
 async function registerRotatedDevicePushToken(
   api: MagicbookletApiClient,
-  devicePushToken: Notifications.DevicePushToken
+  devicePushToken: Notifications.DevicePushToken,
+  userId: string | null,
 ) {
   const permissions = withBasePermissionFields(await Notifications.getPermissionsAsync());
   if (!permissions.granted) {
@@ -572,7 +667,7 @@ async function registerRotatedDevicePushToken(
     return;
   }
 
-  await persistAndRegisterExpoPushToken(api, token.data);
+  await persistAndRegisterExpoPushToken(api, token.data, { userId });
 }
 
 /**
@@ -581,13 +676,16 @@ async function registerRotatedDevicePushToken(
  * path's own token fetch is emitted through it; the exchange above turns that
  * into a no-op unless Expo actually returned a different token.
  */
-export function subscribeToMobilePushTokenChanges(api: MagicbookletApiClient) {
+export function subscribeToMobilePushTokenChanges(
+  api: MagicbookletApiClient,
+  { userId = null }: { userId?: string | null } = {},
+) {
   if (!isNativeMobile()) {
     return () => undefined;
   }
 
   const subscription = Notifications.addPushTokenListener((devicePushToken) => {
-    void registerRotatedDevicePushToken(api, devicePushToken).catch((error) => {
+    void registerRotatedDevicePushToken(api, devicePushToken, userId).catch((error) => {
       console.error('Failed to register rotated mobile push token', error);
     });
   });

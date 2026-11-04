@@ -30,6 +30,25 @@ const routerMocks = vi.hoisted(() => ({
   push: vi.fn(),
 }));
 
+/** AsyncStorage, where the last confirmed registration is kept: a map that outlives `vi.resetModules`. */
+const asyncStorage = vi.hoisted(() => {
+  const values = new Map<string, string>();
+  return {
+    values,
+    getItem: vi.fn(async (key: string) => values.get(key) ?? null),
+    setItem: vi.fn(async (key: string, value: string) => { values.set(key, value); }),
+    removeItem: vi.fn(async (key: string) => { values.delete(key); }),
+  };
+});
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: asyncStorage.getItem,
+    setItem: asyncStorage.setItem,
+    removeItem: asyncStorage.removeItem,
+  },
+}));
+
 vi.mock('expo-notifications', () => ({
   AndroidImportance: {
     DEFAULT: 'default',
@@ -100,6 +119,7 @@ describe('mobile notifications helper', () => {
     secureStoreMocks.setItemAsync.mockReset();
     secureStoreMocks.deleteItemAsync.mockReset();
     routerMocks.push.mockReset();
+    asyncStorage.values.clear();
     secureStoreMocks.getItemAsync.mockResolvedValue(null);
     secureStoreMocks.setItemAsync.mockResolvedValue(undefined);
     secureStoreMocks.deleteItemAsync.mockResolvedValue(undefined);
@@ -157,6 +177,115 @@ describe('mobile notifications helper', () => {
       expoPushToken: 'ExponentPushToken[abc123]',
       platform: expect.any(String),
     }));
+  });
+
+  describe('a registration the server confirmed', () => {
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+
+    // The keychain keeps what it is given: the device id is made once.
+    beforeEach(() => {
+      const keychain = new Map<string, string>();
+      secureStoreMocks.getItemAsync.mockImplementation(async (key: string) => keychain.get(key) ?? null);
+      secureStoreMocks.setItemAsync.mockImplementation(async (key: string, value: string) => { keychain.set(key, value); });
+      secureStoreMocks.deleteItemAsync.mockImplementation(async (key: string) => { keychain.delete(key); });
+    });
+
+    function grantedWithToken(token = 'ExponentPushToken[abc123]') {
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+      notificationsMocks.getExpoPushTokenAsync.mockResolvedValue({ data: token });
+    }
+
+    async function load() {
+      const module = await import('../lib/notifications');
+      const api = { registerMobilePushToken: vi.fn(async () => ({ success: true })) };
+      return { ...module, api };
+    }
+
+    // Every launch and every return to the app checked the registration, and
+    // each check sent it: 417 a week at a few dozen people.
+    it('is not sent again unchanged until a day has passed', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, api, PUSH_REGISTRATION_REFRESH_MS } = await load();
+      expect(PUSH_REGISTRATION_REFRESH_MS).toBe(DAY_MS);
+      const start = Date.now();
+      const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' }))
+          .resolves.toEqual({ status: 'registered', expoPushToken: 'ExponentPushToken[abc123]' });
+        now.mockReturnValue(start + DAY_MS - 1);
+        // Still answered as registered: the screens that read this see no change.
+        await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' }))
+          .resolves.toEqual({ status: 'registered', expoPushToken: 'ExponentPushToken[abc123]' });
+        expect(api.registerMobilePushToken).toHaveBeenCalledTimes(1);
+
+        now.mockReturnValue(start + DAY_MS);
+        await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+        expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it('is sent again at once for another account, another token or another app version', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, api } = await load();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+
+      grantedWithToken('ExponentPushToken[rotated]');
+      await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(3);
+      expect(api.registerMobilePushToken).toHaveBeenLastCalledWith(expect.objectContaining({ expoPushToken: 'ExponentPushToken[rotated]' }));
+
+      const Constants = (await import('expo-constants')).default as { expoConfig: { version: string } };
+      const version = Constants.expoConfig.version;
+      Constants.expoConfig.version = '1.0.1';
+      try {
+        await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
+      } finally {
+        Constants.expoConfig.version = version;
+      }
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(4);
+    });
+
+    it('is sent again once notifications were found off and then allowed, and when the person turns them on', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, api } = await load();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: false, canAskAgain: false, status: 'denied' });
+      await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' })).resolves.toEqual({ status: 'denied' });
+      grantedWithToken();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+
+      // The explicit enable always tells the server.
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1', requestPermission: true });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(3);
+    });
+
+    it('is forgotten with the rest of the local registration, so the next session sends one', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, clearLocalMobilePushRegistration, api } = await load();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await clearLocalMobilePushRegistration();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+    });
+
+    it('is always sent when the check names no account, and a failed send is not remembered', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, api } = await load();
+      await registerForMobilePushNotifications(api as never, {});
+      await registerForMobilePushNotifications(api as never, {});
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+
+      api.registerMobilePushToken.mockRejectedValueOnce(new Error('offline'));
+      await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' })).rejects.toThrow('offline');
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(4);
+    });
   });
 
   it('routes the last notification response on cold start', async () => {

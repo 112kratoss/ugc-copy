@@ -924,14 +924,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const userId = registeredUser.id;
     const syncPushRegistration = () => queryClient.fetchQuery({
       queryKey: devicePushQueryKey(userId),
-      queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false }),
+      // Checked at launch and on every return to the app; sent only when the
+      // account, the token, the app version or the permission changed, or a day
+      // after the last one the server confirmed (`PUSH_REGISTRATION_REFRESH_MS`).
+      queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false, userId }),
       staleTime: 1000 * 30,
     }).catch((error) => {
       console.error('Failed to register mobile push notifications', error);
     });
 
     void syncPushRegistration();
-    const unsubscribePushTokenChanges = subscribeToMobilePushTokenChanges(api);
+    const unsubscribePushTokenChanges = subscribeToMobilePushTokenChanges(api, { userId });
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         void syncPushRegistration();
