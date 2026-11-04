@@ -189,6 +189,7 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   nsfw_post_reveals: NO_TEXT,
   onboarding_events: TELEMETRY,
   playback_metrics: TELEMETRY,
+  playback_metrics_daily_rollup: TELEMETRY,
   post_content_embeddings: TELEMETRY,
   post_feed_stats: TELEMETRY,
   post_media_object_cleanup: UPLOAD_BOOKKEEPING,
