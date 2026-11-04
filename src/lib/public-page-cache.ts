@@ -16,11 +16,12 @@ import { unstable_cache } from 'next/cache';
  * cannot reach the cache. A post it takes down leaves Explore within the feed
  * cache's minute; a page here that is being visited drops it within this
  * window (the first visit after it is still answered from the cache while the
- * page is drawn again), and any page at the latest at the hourly feed
- * maintenance run, which invalidates the tag. Five minutes is what the
- * runbook already accepts for the template catalog after a take-down; the
- * post's media goes at once, deleted from storage. An hour is safe once that
- * command invalidates the tag too.
+ * page is drawn again), and no page is served older than an hour
+ * (`expireTime` in next.config.ts), whether or not the hourly feed
+ * maintenance run, which invalidates only after its RPCs succeed, got there.
+ * Five minutes is what the runbook already accepts for the template catalog
+ * after a take-down; the post's media goes at once, deleted from storage. An
+ * hour is safe once that command invalidates the tag too.
  *
  * Each page's `export const revalidate` repeats the number (Next reads the
  * segment config as a literal); the pages' tests hold them equal.

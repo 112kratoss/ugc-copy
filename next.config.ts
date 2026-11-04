@@ -156,6 +156,18 @@ const SHARP_ROUTES = [
 ];
 
 const nextConfig: NextConfig = {
+  // How old a cached ISR page may be and still be served while it is drawn
+  // again: past an hour it never is, and the next request waits for a fresh
+  // render. Next's default is a year, which let a page whose invalidation was
+  // missed (the hourly feed maintenance invalidates only after its RPCs
+  // succeed; a take-down made outside Next) be served stale once, long after.
+  // Each route keeps its own `revalidate`: the header becomes
+  // `s-maxage=<revalidate>, stale-while-revalidate=<3600 - revalidate>` (the
+  // 300 s public pages, the 900 s signed-out home), and a route revalidated
+  // every hour (`/models`, the sitemap) is drawn again on the first request
+  // after its hour instead of answering stale. Routes with no `revalidate`
+  // (`force-static`, the blog) never expire, as before.
+  expireTime: 3600,
   // Pin the workspace root instead of letting Next infer it from lockfiles.
   // Inference walks up from the project directory and selects the OUTERMOST
   // lockfile, so a build inside .claude/worktrees/<name>/ — which carries its
