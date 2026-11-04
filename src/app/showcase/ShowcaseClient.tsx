@@ -24,6 +24,7 @@ import {
     QualifiedImpressionBoundary,
     ShowcaseFeedbackMenu,
     feedRemovalLabel,
+    flushShowcaseFeedEventsBeforeRefresh,
     getShowcaseFeedSessionId,
     putBackRemovedFeedItems,
     sendShowcaseFeedEvent,
@@ -1408,13 +1409,13 @@ export default function ShowcaseClient({
         setNonDefaultParam(params, 'resource', resource, 'all');
 
         const refreshPersonalizedFeed = (retryCount = 0) => {
-            const token = accessTokenRef.current;
-            void fetch(`/api/showcase/feed?${params.toString()}`, {
-                headers: token
-                    ? { Authorization: `Bearer ${token}` }
+            // A new ranked session reads the impressions recorded by then.
+            void flushShowcaseFeedEventsBeforeRefresh().then(() => fetch(`/api/showcase/feed?${params.toString()}`, {
+                headers: accessTokenRef.current
+                    ? { Authorization: `Bearer ${accessTokenRef.current}` }
                     : undefined,
                 signal: controller.signal,
-            })
+            }))
                 .then(async (response) => {
                     if (!response.ok) {
                         throw new Error(`Personalized feed request failed with ${response.status}`);
@@ -1765,6 +1766,9 @@ export default function ShowcaseClient({
             setNonDefaultParam(params, 'unlock', unlock, 'all');
             setNonDefaultParam(params, 'resource', resource, 'all');
 
+            // A new ranked session reads the impressions recorded by then; the
+            // other sorts have no seen check to wait for.
+            if (sort === DEFAULT_SHOWCASE_SORT) await flushShowcaseFeedEventsBeforeRefresh();
             const response = await fetch(`/api/showcase/feed?${params.toString()}`, accessToken ? {
                 headers: {
                     Authorization: `Bearer ${accessToken}`,

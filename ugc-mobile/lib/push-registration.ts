@@ -44,12 +44,12 @@ export function useDevicePushRegistration({
   const query = useQuery({
     queryKey,
     enabled: Boolean(userId),
-    queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false }),
+    queryFn: () => registerForMobilePushNotifications(api, { requestPermission: false, userId }),
     staleTime: 1000 * 30,
   });
 
   const mutation = useMutation({
-    mutationFn: () => registerForMobilePushNotifications(api, { requestPermission: true }),
+    mutationFn: () => registerForMobilePushNotifications(api, { requestPermission: true, userId }),
     onSuccess: (result) => {
       queryClient.setQueryData(queryKey, result);
     },

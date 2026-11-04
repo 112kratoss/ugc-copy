@@ -61,7 +61,8 @@ describe('useDevicePushRegistration', () => {
     const { client, latest } = renderRegistration('user-1');
     await settle();
 
-    expect(notifications.registerForMobilePushNotifications).toHaveBeenCalledWith(api, { requestPermission: false });
+    // Named by its account, so a registration the server confirmed is not sent again unchanged.
+    expect(notifications.registerForMobilePushNotifications).toHaveBeenCalledWith(api, { requestPermission: false, userId: 'user-1' });
     expect(latest.current?.result).toEqual({ status: 'permission-required' });
 
     renderer.act(() => {
@@ -69,7 +70,7 @@ describe('useDevicePushRegistration', () => {
     });
     await settle();
 
-    expect(notifications.registerForMobilePushNotifications).toHaveBeenCalledWith(api, { requestPermission: true });
+    expect(notifications.registerForMobilePushNotifications).toHaveBeenCalledWith(api, { requestPermission: true, userId: 'user-1' });
     expect(client.getQueryData(devicePushQueryKey('user-1'))).toEqual({ status: 'registered', expoPushToken: 'ExponentPushToken[1]' });
     expect(latest.current?.result?.status).toBe('registered');
   });

@@ -72,7 +72,10 @@ import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDr
 import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
-import { getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from '@/lib/generation';
+import { generationPollMaxDelayMs, getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from '@/lib/generation';
+import { wakeOnGenerationSettledOrAppActive } from '@/lib/generation-settled-push';
+import { devicePushQueryKey } from '@/lib/push-registration';
+import { forgetQuotedCosts, recallQuotedCost, rememberQuotedCost } from '@/lib/quote-memo';
 import {
   applyCatalogModelDefaults,
   applyVerifiedInputDurations,
@@ -248,6 +251,14 @@ function waitUntilAppActive(signal?: AbortSignal) {
     });
     signal?.addEventListener('abort', handleAbort, { once: true });
   });
+}
+
+/** Calls back each time the app comes back to the front; returns the unsubscribe. */
+function subscribeToAppActive(onActive: () => void) {
+  const subscription = AppState.addEventListener('change', (state) => {
+    if (state === 'active') onActive();
+  });
+  return () => subscription.remove();
 }
 
 function isTool(value: unknown): value is CreatorToolId {
@@ -1591,11 +1602,20 @@ function IdentityCreationScreen({
       setQuoteState({ key: null, attempt, status: 'idle', cost: null, error: null });
       return;
     }
+    // This very run was priced minutes ago (a setting switched away and back):
+    // that price stands, unless this screen is asking again after a refusal or
+    // Retry quote (`lib/quote-memo.ts`).
+    const recalled = attempt === 0 ? recallQuotedCost(quoteKey) : null;
+    if (recalled !== null) {
+      setQuoteState({ key: quoteKey, attempt, status: 'ready', cost: recalled, error: null });
+      return;
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => {
       void api.quoteGenerationModel(quoteRequest, controller.signal)
         .then((quote) => {
           if (controller.signal.aborted) return;
+          rememberQuotedCost(quoteKey, quote.costCredits);
           setQuoteState({
             key: quoteKey,
             attempt,
@@ -2801,8 +2821,42 @@ function IdentityCreationScreen({
       : tool === 'video'
         ? api.getVideoGeneration(predictionId)
         : api.getMotionGeneration(predictionId),
-    { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive, isGuest },
+    {
+      onTick: setStatus,
+      signal: controller.signal,
+      waitUntilReady: waitUntilAppActive,
+      // A completion push, or the app coming back to the front, reads the run
+      // at once instead of at the end of a wait; waits reach 30 s only where
+      // that push can come to this phone.
+      wake: wakeOnGenerationSettledOrAppActive(subscribeToAppActive),
+      maxDelayMs: generationPollCap(),
+      isGuest,
+    },
   );
+
+  /**
+   * The poll's longest wait, asked again before each wait (`generationPollMaxDelayMs`):
+   * from this phone's push registration and the account's notification settings
+   * as this launch has read them. Settings not read yet count as off; the first
+   * wait of a run on a phone with a push registration reads them, once a poll
+   * (the same read and key as Alerts'), so the waits after can know.
+   */
+  const generationPollCap = () => {
+    let askedForPreferences = false;
+    return () => {
+      const userId = isGuest ? null : identityUserId;
+      const devicePush = userId ? queryClient.getQueryData<{ status: string }>(devicePushQueryKey(userId)) : null;
+      const preferencesKey = ['mobile-notification-preferences', userId] as const;
+      const preferences = userId
+        ? queryClient.getQueryData<{ preferences?: { pushEnabled?: boolean; generationEnabled?: boolean } }>(preferencesKey)?.preferences
+        : null;
+      if (userId && devicePush?.status === 'registered' && preferences === undefined && !askedForPreferences) {
+        askedForPreferences = true;
+        void queryClient.prefetchQuery({ queryKey: preferencesKey, queryFn: api.getMobileNotificationPreferences, staleTime: 60_000 });
+      }
+      return generationPollMaxDelayMs({ isGuest, devicePush, preferences });
+    };
+  };
 
   // Cleared only for the run it names: a start from another creator screen keeps its own.
   const forgetActiveRun = async (identity: string, predictionId: string) => {
@@ -2816,6 +2870,9 @@ function IdentityCreationScreen({
     setLastPredictionId(null);
     // Over either way, so there is nothing left for a creator opened again to resume.
     if (identityUserId) void forgetActiveRun(identityUserId, predictionId);
+    // The create control's ring reads the count every 30 s while a run works:
+    // this run's end is known now.
+    invalidateActiveGenerations(queryClient, identityUserId);
     if (finalStatus.status === 'failed') {
       setMessage(finalStatus.error?.trim() || 'Generation failed. Your inputs are still here, so you can adjust them and retry.');
       // A failed run's settlement returns what its start held; the balance on screen predates it.
@@ -2963,6 +3020,8 @@ function IdentityCreationScreen({
         // Priced again at once, so Try again states what the run now costs. The refused run is kept
         // with the asking, so a price that comes back unmoved for it says this app is out of date.
         if (refusal === 'cost_changed') {
+          // The server prices runs otherwise than this app was told: no price it remembers stands.
+          forgetQuotedCosts();
           const refused = request ? catalogRefusedRunPrice(request) : null;
           setQuoteAsking((current) => ({ attempt: current.attempt + 1, refused }));
         }

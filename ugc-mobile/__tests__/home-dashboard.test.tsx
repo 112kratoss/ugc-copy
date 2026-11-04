@@ -30,6 +30,10 @@ const queryState = vi.hoisted(() => ({
   pages: [] as Array<Record<string, unknown>>,
   // When the lane's pages were fetched (React Query's `dataUpdatedAt`).
   dataUpdatedAt: 1,
+  // The lane's paging, as React Query reports it.
+  hasNextPage: false,
+  isFetching: false,
+  fetchNextPage: vi.fn(() => Promise.resolve()),
   refetch: vi.fn(() => Promise.resolve()),
   // Every other query's refetch (the profile, the shelf), kept apart from the lane's.
   otherRefetch: vi.fn(() => Promise.resolve()),
@@ -103,13 +107,13 @@ vi.mock('@tanstack/react-query', () => ({
   useInfiniteQuery: (options: { enabled?: boolean }) => (queryState.enabled.push(options.enabled), {
     data: { pages: queryState.pages, pageParams: [{ offset: 0 }] },
     dataUpdatedAt: queryState.dataUpdatedAt,
-    fetchNextPage: vi.fn(() => Promise.resolve()),
+    fetchNextPage: queryState.fetchNextPage,
     fetchPreviousPage: vi.fn(() => Promise.resolve()),
-    hasNextPage: false,
+    hasNextPage: queryState.hasNextPage,
     hasPreviousPage: false,
     isError: false,
     isFetchNextPageError: false,
-    isFetching: false,
+    isFetching: queryState.isFetching,
     isFetchingNextPage: false,
     isLoading: false,
     isSuccess: true,
@@ -258,6 +262,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/feed-event-queue', () => ({
   enqueueShowcaseFeedEvent: vi.fn(() => Promise.resolve()),
   flushShowcaseFeedEvents: vi.fn(() => Promise.resolve()),
+  flushShowcaseFeedEventsBeforeRefresh: vi.fn(() => Promise.resolve()),
   isBatchedShowcaseFeedEventType: () => false,
 }));
 
@@ -695,6 +700,8 @@ describe('Home screen', () => {
     activeGenerationState.count = 0;
     queryState.pages = [];
     queryState.dataUpdatedAt = 1;
+    queryState.hasNextPage = false;
+    queryState.isFetching = false;
     // Back to each double's own answer after a test that changed it.
     queryState.refetch.mockReset();
     queryState.otherRefetch.mockReset();
@@ -964,6 +971,8 @@ describe('Home screen', () => {
     const firstPage = page([mediaItem('a', 'delivery-tap-a')]);
     expect(trim({ pages: [firstPage, page([mediaItem('b', 'delivery-tap-b')])], pageParams: [{ offset: 0 }, { offset: 1 }] }))
       .toEqual({ pages: [firstPage], pageParams: [{ offset: 0 }] });
+    // Trimmed and asked again in the same tick. The wait for the queued
+    // impressions belongs to the lane's own page one (`showcaseFeedLaneQueryOptions`).
     expect(queryState.refetch).toHaveBeenCalledTimes(1);
     expect(list.scrollToOffset.mock.invocationCallOrder[0]).toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
     // No pull is behind this refresh: the control stays down while the page loads.
@@ -985,6 +994,33 @@ describe('Home screen', () => {
     });
     expect(listProps(tree).refreshControl.props.refreshing).toBe(false);
 
+    renderer.act(() => tree.unmount());
+  });
+
+  // Review follow-up 1: trimmed and with its load-more guards reset while it
+  // waited for the queue, a short lane could fetch page 2 of the OLD session.
+  it('asks for no page of the old session between the tap and the refetch', async () => {
+    queryState.pages = [page([mediaItem('a', 'delivery-gap-a')])];
+    queryState.dataUpdatedAt = T0 - 10 * 60_000;
+    queryState.hasNextPage = true;
+    authState.api.getShowcaseFeedNewest.mockResolvedValue({
+      newestPostId: 'fresh',
+      newestPublishedAt: '2026-10-14T08:58:00.000Z',
+    });
+    // React Query reports the lane busy from the moment its refetch starts.
+    queryState.refetch.mockImplementation(() => {
+      queryState.isFetching = true;
+      return new Promise<void>(() => undefined);
+    });
+    const { tree } = renderHome();
+    await returnToApp();
+
+    renderer.act(() => hostProps(tree, 'new-posts-pill').onPress());
+    renderer.act(() => listProps(tree).onEndReached());
+    await renderer.act(async () => { await settlePromises(); });
+
+    expect(queryState.refetch).toHaveBeenCalledTimes(1);
+    expect(queryState.fetchNextPage).not.toHaveBeenCalled();
     renderer.act(() => tree.unmount());
   });
 

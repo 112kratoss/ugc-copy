@@ -7,6 +7,9 @@ import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { resetFeedbackState } from '@/components/feedback-state';
 import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
+import { resetShowcaseFeedEventQueueForTests, sendShowcaseFeedEvent } from '@/app/showcase/ShowcaseFeedInteraction';
+import { FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
+import type { ShowcaseFeedItem } from '@/lib/showcase';
 import { unsignedJwt } from '@/__tests__/fixtures/unsigned-jwt';
 
 const mocks = vi.hoisted(() => ({
@@ -514,6 +517,50 @@ describe('AppShellAccount', () => {
 
     // The browser's other tabs read the mark as their session ends, and a creator page there
     // clears, where a lapse keeps it (owner, 2026-11-01).
+    // Review finding 5: the feed-event outbox holds the viewer's watch history
+    // (post, session and delivery ids, dwell, progress), which outlived a
+    // sign-out by up to a day.
+    it('sends the viewer’s queued feed events while the session still works, and leaves none of theirs in the browser', async () => {
+      resetShowcaseFeedEventQueueForTests();
+      const order: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (url === '/api/showcase/feed/events') order.push('events');
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }));
+      mocks.signOut.mockImplementation(async () => {
+        order.push('signOut');
+        return { error: null };
+      });
+      const entry = (id: string, identity: string) => ({
+        id, identity, owner: 'another-tab', queuedAt: Date.now(), body: { clientEventId: id, eventType: 'dwell' },
+      });
+      window.localStorage.setItem(FEED_EVENT_OUTBOX_STORAGE_KEY, JSON.stringify({
+        version: 1,
+        entries: [entry('theirs-elsewhere', 'user:user-1'), entry('someone-else', 'user:user-2')],
+      }));
+      try {
+        await sendShowcaseFeedEvent({
+          item: { id: 'post-1', recommendation: { deliveryId: 'delivery-1', position: 1 } } as unknown as ShowcaseFeedItem,
+          eventType: 'impression',
+          sourceSurface: 'feed',
+          accessToken: authenticatedSession.access_token,
+          feedSessionId: 'session-feed',
+        });
+        await openAccountMenu();
+
+        fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+        await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+        expect(order).toEqual(['events', 'signOut']);
+        const left = JSON.parse(window.localStorage.getItem(FEED_EVENT_OUTBOX_STORAGE_KEY) ?? '{"entries":[]}').entries
+          .map(({ id }: { id: string }) => id);
+        expect(left).toEqual(['someone-else']);
+      } finally {
+        vi.unstubAllGlobals();
+        resetShowcaseFeedEventQueueForTests();
+      }
+    });
+
     it('marks the sign-out for the browser’s other tabs before the session ends', async () => {
       let markedAsItEnded = false;
       mocks.signOut.mockImplementation(async () => {
@@ -642,6 +689,37 @@ describe('AppShellAccount', () => {
         expect(order.indexOf('retire')).toBeLessThan(order.indexOf('signOut'));
       } finally {
         vi.unstubAllGlobals();
+      }
+    });
+
+    it('sends the viewer’s queued feed events before it signs out everywhere, and leaves none of theirs in the browser', async () => {
+      resetShowcaseFeedEventQueueForTests();
+      const order: string[] = [];
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        order.push(url === '/api/showcase/feed/events' ? 'events' : 'retire');
+        return new Response(JSON.stringify({ success: true }), { status: 200 });
+      }));
+      mocks.signOut.mockImplementation(async () => {
+        order.push('signOut');
+        return { error: null };
+      });
+      try {
+        await sendShowcaseFeedEvent({
+          item: { id: 'post-1', recommendation: { deliveryId: 'delivery-1', position: 1 } } as unknown as ShowcaseFeedItem,
+          eventType: 'impression',
+          sourceSurface: 'feed',
+          accessToken: authenticatedSession.access_token,
+          feedSessionId: 'session-feed',
+        });
+        const dialog = await chooseSignOutEverywhere();
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+        await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+        expect(order).toEqual(['events', 'retire', 'signOut']);
+        expect(window.localStorage.getItem(FEED_EVENT_OUTBOX_STORAGE_KEY)).toBeNull();
+      } finally {
+        vi.unstubAllGlobals();
+        resetShowcaseFeedEventQueueForTests();
       }
     });
 

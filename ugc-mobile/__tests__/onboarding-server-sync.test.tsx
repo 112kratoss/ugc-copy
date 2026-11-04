@@ -2,7 +2,7 @@
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 (global as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -15,9 +15,11 @@ const authState = vi.hoisted(() => ({
   user: null as AccountUser | null,
 }));
 
+type InstallState = { identityDeferredAt: string | null; status?: string; completedAt?: string | null };
+
 const onboardingState = vi.hoisted(() => ({
   isHydrated: true,
-  state: { identityDeferredAt: null as string | null },
+  state: { identityDeferredAt: null } as InstallState,
   reconcileFromServer: vi.fn(async () => undefined),
   // As the provider's does: the in-memory state changes before the write.
   update: vi.fn(async (value: { identityDeferredAt?: string | null }) => {
@@ -120,5 +122,56 @@ describe("the account's Set up later on this install", () => {
     renderSync();
 
     expect(onboardingState.update).not.toHaveBeenCalled();
+  });
+});
+
+// It read the account's progress again on every return to the app after a
+// minute (282 requests a week), for a fold that only promotes this install.
+describe("the account's onboarding progress", () => {
+  const remote = {
+    state: {
+      flowVersion: 1,
+      status: 'completed',
+      goal: 'image',
+      usernameCompletedAt: null,
+      rewardClaimedAt: null,
+      completedAt: '2026-10-01T09:00:00.000Z',
+      updatedAt: '2026-10-01T09:00:00.000Z',
+    },
+  };
+
+  it('is read once a launch, after the install state, and not again on a return to the app', async () => {
+    authState.api.getOnboardingState.mockResolvedValue(remote);
+    onboardingState.isHydrated = false;
+    const sync = renderSync();
+    expect(authState.api.getOnboardingState).not.toHaveBeenCalled();
+
+    onboardingState.isHydrated = true;
+    sync.update();
+    // The answer, React Query's notice of it on a zero timer, and the fold it brings.
+    for (let turn = 0; turn < 5; turn += 1) {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    }
+    expect(authState.api.getOnboardingState).toHaveBeenCalledTimes(1);
+    expect(onboardingState.reconcileFromServer).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' }));
+
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60 * 60_000);
+    try {
+      await act(async () => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    } finally {
+      focusManager.setFocused(undefined);
+      later.mockRestore();
+    }
+    expect(authState.api.getOnboardingState).toHaveBeenCalledTimes(1);
+  });
+
+  it('is not read by an install that has finished onboarding, which it could only promote', () => {
+    onboardingState.state = { identityDeferredAt: null, status: 'completed', completedAt: '2026-10-01T09:00:00.000Z' };
+    renderSync();
+    expect(authState.api.getOnboardingState).not.toHaveBeenCalled();
   });
 });

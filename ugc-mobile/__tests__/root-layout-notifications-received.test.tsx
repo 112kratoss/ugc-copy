@@ -38,8 +38,8 @@ describe('an alert that moved the balance, landing while the app is in front', (
   it('reads the balance again', () => {
     const effect = receivedEffect();
     expect(effect).toContain(REFRESH_LINE);
-    expect(effect).toContain('[queryClient, refreshProfile, user?.id]');
-    expect(rootLayout).toContain('const { api, user, refreshProfile } = useAuth();');
+    expect(effect).toContain('[identityUserId, queryClient, refreshProfile, user?.id]');
+    expect(rootLayout).toContain('const { api, user, identityUserId, refreshProfile } = useAuth();');
   });
 
   it('for a refund, a purchase, restored purchases and either referral reward, and nothing else', () => {
@@ -58,6 +58,21 @@ describe('an alert that moved the balance, landing while the app is in front', (
     expect(effect.indexOf('notificationBadgeQueryKey(user?.id)')).toBeGreaterThan(-1);
     expect(effect.indexOf('notificationBadgeQueryKey(user?.id)')).toBeLessThan(refresh);
     expect(effect.indexOf("['mobile-notifications', user?.id]")).toBeLessThan(refresh);
+  });
+});
+
+describe("a run's completion push landing while the app is in front", () => {
+  // The create control's ring reads the count only every 30 s while runs work,
+  // and a creator watching a run waits up to 30 s between its reads: both learn
+  // of the end from the push at once.
+  it('reads the in-flight count again and wakes a creator watching a run, for either outcome only', () => {
+    const effect = receivedEffect();
+    expect(effect).toContain(`if (isGenerationSettledPush(type)) {
+      invalidateActiveGenerations(queryClient, identityUserId);
+      announceGenerationSettledPush();
+    }`);
+    expect(rootLayout).toContain("import { announceGenerationSettledPush, isGenerationSettledPush } from '@/lib/generation-settled-push';");
+    expect(rootLayout).toContain("import { invalidateActiveGenerations } from '@/lib/active-generations';");
   });
 });
 

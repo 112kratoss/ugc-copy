@@ -39,6 +39,10 @@ import {
 } from '@/lib/api-client';
 import { ACCOUNT_DELETION_SCHEDULED_NOTICE, AuthProvider, useAuth } from '@/lib/auth';
 import { showMessageDialog } from '@/lib/dialog';
+import { invalidateActiveGenerations } from '@/lib/active-generations';
+import { flushShowcaseFeedEventsBeforeRefresh } from '@/lib/feed-event-queue';
+import { installRankedFirstPageDrain } from '@/lib/feed-ranked-page-drain';
+import { announceGenerationSettledPush, isGenerationSettledPush } from '@/lib/generation-settled-push';
 import { notificationBadgeQueryKey } from '@/lib/notification-badge';
 import { CREATOR_PAYOUTS_QUERY_KEY } from '@/lib/use-creator-payout-state';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
@@ -135,6 +139,11 @@ const queryClient = new QueryClient({
 });
 
 installMediaQueryRetention(queryClient);
+
+// A For you page one, from any reader, waits for the feed events queued so far
+// to be recorded (1.5 s at most): it can start a ranked session whose seen
+// check reads them. Installed here, where launch-time wiring is never late.
+installRankedFirstPageDrain(flushShowcaseFeedEventsBeforeRefresh);
 AppState.addEventListener('memoryWarning', () => pruneInactiveMediaQueries(queryClient, true));
 
 // The For You page the last launch saved goes back into the cache while the
@@ -692,7 +701,7 @@ const BALANCE_CHANGING_ALERTS: ReadonlySet<string> = new Set<MobileNotificationT
 ]);
 
 function NotificationResponseCoordinator() {
-  const { api, user, refreshProfile } = useAuth();
+  const { api, user, identityUserId, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
 
   // Once for the app, not again for each account: subscribing reads the push
@@ -720,7 +729,13 @@ function NotificationResponseCoordinator() {
     // Generate on it and point at Pricing. A purchase or a reward settled while
     // the app was in front left the old balance up just the same.
     if (type && BALANCE_CHANGING_ALERTS.has(type)) void refreshProfile().catch(() => undefined);
-  }), [queryClient, refreshProfile, user?.id]);
+    // A run ended: the create control's ring, which reads the count only every
+    // 30 s while runs work, and a creator watching a run read it now.
+    if (isGenerationSettledPush(type)) {
+      invalidateActiveGenerations(queryClient, identityUserId);
+      announceGenerationSettledPush();
+    }
+  }), [identityUserId, queryClient, refreshProfile, user?.id]);
 
   return null;
 }

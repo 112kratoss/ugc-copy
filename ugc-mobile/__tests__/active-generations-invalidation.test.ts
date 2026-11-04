@@ -83,7 +83,7 @@ describe('every path that starts a run tells the ring', () => {
   });
 
   it('counts from the status projection, not the list that signs every run’s media', () => {
-    // Every 10 s while a run is working, beside the creator's own poll: the summary
+    // Every 30 s while a run is working (10 s until 2026-11), beside the creator's own poll: the summary
     // list loaded linked posts and signed output and preview URLs for 20 runs to
     // count them. The web notifier reads `detail=status` for the same question.
     const source = read('lib/use-active-generations.ts');

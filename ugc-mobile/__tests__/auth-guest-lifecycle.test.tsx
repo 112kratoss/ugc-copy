@@ -148,7 +148,9 @@ vi.mock('../lib/google-auth', () => ({ signInWithGoogleOAuth: state.signInWithGo
 vi.mock('../lib/referral-attribution', () => ({ claimPendingReferral: vi.fn(async () => undefined) }));
 vi.mock('../lib/notifications', () => ({
   clearLocalMobilePushRegistration: vi.fn(async () => undefined),
+  forgetLastPushRegistration: vi.fn(),
   registerForMobilePushNotifications: vi.fn(async () => undefined),
+  setPushRegistrationSession: vi.fn(),
   subscribeToMobilePushTokenChanges: vi.fn(() => vi.fn()),
   unregisterMobilePushNotifications: vi.fn(async () => undefined),
 }));
@@ -199,6 +201,7 @@ import {
   storeGuestMergeOutcome,
   storeGuestMergeTicket,
 } from '../lib/guest-merge-ticket-storage';
+import { forgetLastPushRegistration, setPushRegistrationSession } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
 import { cachedVideoStill, cacheVideoStill } from '../lib/video-still-cache';
 
@@ -1364,6 +1367,83 @@ describe('the creator pages read before a sign-in', () => {
 
     expect(latest.current?.identityUserId).toBe('guest-1');
     expect(state.queryClient.removeQueries).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+/** An access token as Supabase signs one, its session named in `session_id`. */
+function tokenInSession(sessionId: string, subject = 'account-a') {
+  const encode = (value: unknown) => btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${encode({ alg: 'ES256' })}.${encode({ sub: subject, session_id: sessionId })}.signature`;
+}
+
+// Review finding 2: a session can end without the sign-out that tears down
+// push (a refused refresh token, "Sign out everywhere" on the web dropping the
+// phone to a guest), and a sign-in soon after matched what was confirmed
+// before, so nothing was sent and pushes stayed off.
+describe('the push registration and the session it was confirmed in', () => {
+  const refused = () => ({
+    data: { session: null },
+    error: Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), { code: 'refresh_token_not_found' }),
+  });
+
+  beforeEach(() => {
+    state.platform = 'ios';
+    vi.mocked(forgetLastPushRegistration).mockClear();
+    vi.mocked(setPushRegistrationSession).mockClear();
+  });
+
+  it("is told the signed-in account's session, a refreshed token's being the same one", async () => {
+    const signedIn = sessionFor({ id: 'account-a', email: 'a@example.com' }, tokenInSession('session-a1'));
+    const { unmount } = await mount(signedIn);
+    expect(setPushRegistrationSession).toHaveBeenLastCalledWith({ userId: 'account-a', sessionId: 'session-a1' });
+    vi.mocked(setPushRegistrationSession).mockClear();
+
+    await renderer.act(async () => {
+      state.authCallback?.('TOKEN_REFRESHED', sessionFor({ id: 'account-a', email: 'a@example.com' }, tokenInSession('session-a1')));
+    });
+    await flush();
+    // Told again, if at all, of the same session: nothing confirmed is forgotten.
+    expect(vi.mocked(setPushRegistrationSession).mock.calls.every(([value]) => (
+      value?.userId === 'account-a' && value.sessionId === 'session-a1'
+    ))).toBe(true);
+    unmount();
+  });
+
+  it('forgets what was confirmed when a refresh token is refused mid-session, and is told of no session once it is gone', async () => {
+    // An account whose access token has run out, so a request asks auth-js.
+    const expiring = sessionFor({ id: 'account-a', email: 'a@example.com' }, tokenInSession('session-a1'), -60);
+    const { unmount } = await mount(expiring);
+    vi.mocked(forgetLastPushRegistration).mockClear();
+
+    // The web's "Sign out everywhere" revoked this phone's session.
+    state.getSession.mockResolvedValue(refused());
+    await renderer.act(async () => {
+      await state.getAccessToken?.();
+    });
+    await flush();
+    expect(forgetLastPushRegistration).toHaveBeenCalled();
+
+    // auth-js drops the session; the provider tells push there is none.
+    await renderer.act(async () => {
+      state.authCallback?.('SIGNED_OUT', null);
+    });
+    await flush();
+    expect(setPushRegistrationSession).toHaveBeenLastCalledWith(null);
+
+    // Signed in again within the day: a new session, whatever was confirmed before.
+    await renderer.act(async () => {
+      state.authCallback?.('SIGNED_IN', sessionFor({ id: 'account-a', email: 'a@example.com' }, tokenInSession('session-a2')));
+    });
+    await flush();
+    expect(setPushRegistrationSession).toHaveBeenLastCalledWith({ userId: 'account-a', sessionId: 'session-a2' });
+    unmount();
+  });
+
+  it('forgets what was confirmed when the stored session is refused at launch', async () => {
+    state.getSession.mockResolvedValueOnce(refused());
+    const { unmount } = await mount();
+    expect(forgetLastPushRegistration).toHaveBeenCalled();
     unmount();
   });
 });

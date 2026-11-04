@@ -258,8 +258,9 @@ async function signOutHere({ deliberate }: { deliberate: boolean }) {
  */
 async function clearCreatorDataHere(userId: string) {
   try {
-    const { clearCreatorDataForSignOut } = await import('@/components/AppShellAccount');
-    await clearCreatorDataForSignOut(userId);
+    const { clearCreatorDataForSignOut, releaseFeedEventsForSignOut } = await import('@/components/AppShellAccount');
+    // Its feed events too, unsent: they go with the account.
+    await Promise.all([clearCreatorDataForSignOut(userId), releaseFeedEventsForSignOut(userId, { send: false })]);
   } catch {
     // The keys are per account: whatever is left stays out of the next account's reach.
   }

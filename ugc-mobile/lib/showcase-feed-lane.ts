@@ -1,5 +1,6 @@
 import type { MagicbookletApiClient } from './api-client';
 import { noteShowcaseFeedReadAheadSupport, takeExploreReadAheadToken } from './explore-read-ahead';
+import { drainBeforeRankedFirstPage } from './feed-ranked-page-drain';
 import { FEED_WINDOW_PAGE_LIMIT, getPreviousFeedPageParam } from './feed-page-window';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import {
@@ -73,11 +74,19 @@ export function showcaseFeedLaneQueryOptions(
     queryKey: createShowcaseFeedQueryKey(filters, identityUserId),
     initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
     queryFn: async ({ pageParam }: { pageParam: ShowcaseFeedPageParam }) => {
+      const firstPage = !pageParam.cursor && !pageParam.offset;
       // The read that draws Explore's first page claims the ranking read
       // ahead for it, which the server persists and marks served only now.
-      const readAheadToken = !pageParam.cursor && !pageParam.offset
+      const readAheadToken = firstPage
         ? await takeExploreReadAheadToken({ filters, identityUserId })
         : null;
+      // A For you page one ranked now can be a new session, whose seen check
+      // reads the impressions recorded by then: the queued ones go first (1.5 s
+      // at most). Not for a ranking read ahead, ranked already, nor for a sort
+      // with no seen check. A refresh, a lane switch and a first load alike.
+      if (firstPage && !readAheadToken && normalizeShowcaseFeedLane(filters).sort === 'for-you') {
+        await drainBeforeRankedFirstPage();
+      }
       const page = await api.getShowcaseFeed(getShowcaseFeedPageParams({
         ...filters,
         ...pageParam,

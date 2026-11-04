@@ -552,6 +552,43 @@ describe('pull to refresh (finding 03-10)', () => {
   });
 });
 
+// A tab once visited stays mounted, and its list (every page) and preferences
+// were read again at every return to the app after their stale time, whichever
+// tab was in front.
+describe('coming back to the app', () => {
+  /** What the app's return does to this screen's cache (`focusManager`, which every mounted screen hears). */
+  async function returnToTheAppLater(queryClient: QueryClient) {
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 5 * 60_000);
+    try {
+      await act(async () => {
+        queryClient.getQueryCache().onFocus();
+      });
+      await settle();
+    } finally {
+      later.mockRestore();
+    }
+  }
+
+  it('reads the list and the preferences again only while this tab is the one in front', async () => {
+    const { queryClient } = await renderAlerts();
+    mocks.api.listMobileNotifications.mockClear();
+    mocks.api.getMobileNotificationPreferences.mockClear();
+
+    await returnToTheAppLater(queryClient);
+    expect(mocks.api.listMobileNotifications).toHaveBeenCalledTimes(1);
+    expect(mocks.api.getMobileNotificationPreferences).toHaveBeenCalledTimes(1);
+
+    // Another tab in front: the badge keeps the count, and coming to this tab reads a stale list.
+    await act(async () => {
+      if (typeof mocks.focus.cleanup === 'function') mocks.focus.cleanup();
+      mocks.focus.cleanup = null;
+    });
+    await returnToTheAppLater(queryClient);
+    expect(mocks.api.listMobileNotifications).toHaveBeenCalledTimes(1);
+    expect(mocks.api.getMobileNotificationPreferences).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('coming back to the tab (finding 03-10)', () => {
   it('reads a stale list again, every page it holds', async () => {
     const newest = twoPages();

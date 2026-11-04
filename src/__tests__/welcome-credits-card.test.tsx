@@ -109,4 +109,64 @@ describe('WelcomeCreditsCard', () => {
         await settle();
         expect(container).toBeEmptyDOMElement();
     });
+
+    // Every visit to Home asked again, for a card that could never be drawn.
+    it.each(['already_claimed', 'claimed', 'identity_already_claimed'])(
+        'stops asking for a week once an account with its name done reads %s',
+        async (status) => {
+            mockWelcome({ status, amount: 25, identityComplete: true });
+            render(<WelcomeCreditsCard />);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(1);
+
+            cleanup();
+            nextVisit();
+            const { container } = render(<WelcomeCreditsCard />);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(container).toBeEmptyDOMElement();
+
+            cleanup();
+            now += 7 * 24 * 60 * 60 * 1_000;
+            vi.spyOn(Date, 'now').mockReturnValue(now);
+            render(<WelcomeCreditsCard />);
+            await settle();
+            expect(fetch).toHaveBeenCalledTimes(2);
+        },
+    );
+
+    it.each([
+        ['credits waiting', { status: 'eligible', identityComplete: true }],
+        ['a name still to choose', { status: 'legacy_ineligible', identityComplete: false }],
+        ['the programme off for now', { status: 'unavailable', identityComplete: true }],
+        // The server's answer to an account holding 25 credits or more while the
+        // programme is off: it can be eligible once the programme is back.
+        ['the programme off, and credits held', { status: 'legacy_ineligible', identityComplete: true }],
+    ])('keeps asking at each visit with %s', async (_name, answer) => {
+        mockWelcome({ amount: 25, ...answer });
+        render(<WelcomeCreditsCard />);
+        await settle();
+
+        cleanup();
+        nextVisit();
+        render(<WelcomeCreditsCard />);
+        await settle();
+        expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('offers the credits on the next visit once the programme is turned back on', async () => {
+        const answers = [
+            { status: 'legacy_ineligible', amount: 25, identityComplete: true },
+            { status: 'eligible', amount: 25, identityComplete: true },
+        ];
+        vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => answers.shift() })));
+        const { container } = render(<WelcomeCreditsCard />);
+        await settle();
+        expect(container).toBeEmptyDOMElement();
+
+        cleanup();
+        nextVisit();
+        render(<WelcomeCreditsCard />);
+        expect(await screen.findByRole('link', { name: /welcome credits are waiting/ })).toBeInTheDocument();
+    });
 });

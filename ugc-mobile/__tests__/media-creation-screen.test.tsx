@@ -52,6 +52,9 @@ const authState = vi.hoisted(() => ({
     getImageGeneration: vi.fn(),
     getVideoGeneration: vi.fn(),
     getMotionGeneration: vi.fn(),
+    // The account's notification settings, read once a poll needs to know
+    // whether a completion push can wake it.
+    getMobileNotificationPreferences: vi.fn(),
     quoteGenerationModel: vi.fn(),
     getRemixSourceBundle: vi.fn(),
     // The remix source row's post, read when a link names it by id alone.
@@ -315,6 +318,7 @@ import subjectsContract from '../../contracts/model-catalog-subjects-mode-v1.jso
 import liveCatalog from './fixtures/live-catalog-descriptors.json';
 import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
 import { parseModelCatalogDetail } from '../lib/generation-model-catalog';
+import { forgetQuotedCosts } from '../lib/quote-memo';
 
 const referenceModeIs = (value: 'frames' | 'elements') => [{ source: 'setting' as const, key: 'referenceMode', operator: 'equals' as const, value }];
 const frameSlots: CatalogInputSlot[] = [
@@ -581,6 +585,8 @@ vi.spyOn(renderer, 'create').mockImplementation((...args: Parameters<typeof rend
 // stays out of the cases that are not about it. The client above is shared, so
 // the device's push state is dropped between cases too.
 beforeEach(() => {
+  // Prices the creators remember for this launch (`lib/quote-memo.ts`): each case is priced afresh.
+  forgetQuotedCosts();
   notificationsMock.registerForMobilePushNotifications
     .mockReset()
     .mockResolvedValue({ status: 'registered', expoPushToken: 'ExponentPushToken[test]' });
@@ -3223,6 +3229,47 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.useRealTimers();
   });
 
+  // A setting switched away and back, or a creator opened again on the same
+  // draft, asked the server again for a run just priced.
+  it('shows a price quoted for this very run minutes ago without asking again, until a refusal forgets it', async () => {
+    vi.useFakeTimers();
+    try {
+      authState.api.quoteGenerationModel.mockResolvedValue({
+        modelId: 'nano-banana-2',
+        catalogRevision: 'test-catalog-rev',
+        normalizedSettings: { aspectRatio: '4:5', resolution: '1K' },
+        costCredits: 123,
+      });
+      const priced = async () => {
+        let tree: renderer.ReactTestRenderer | undefined;
+        renderer.act(() => {
+          tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+        });
+        const promptInput = tree!.root.findAll((node) => String(node.type) === 'textinput')[0];
+        renderer.act(() => {
+          promptInput.props.onChangeText('Create a glossy product hero shot.');
+        });
+        await renderer.act(async () => {
+          await vi.advanceTimersByTimeAsync(200);
+        });
+        const text = collectText(tree!.root);
+        renderer.act(() => tree!.unmount());
+        return text;
+      };
+
+      expect(await priced()).toContain('Generate · 123 credits');
+      expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(1);
+      expect(await priced()).toContain('Generate · 123 credits');
+      expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(1);
+
+      forgetQuotedCosts();
+      expect(await priced()).toContain('Generate · 123 credits');
+      expect(authState.api.quoteGenerationModel).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not show bundled pricing before a server quote exists', () => {
     catalogState.catalog = null;
     catalogState.isLoading = true;
@@ -4956,6 +5003,46 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       vi.useRealTimers();
     });
 
+    // Review follow-up 3: a poll waits 30 s only once this launch has read that
+    // run alerts are on; it reads them once, the first time a wait asks.
+    it('reads the notification settings once for a run on a phone with push, and waits 15 s at most until they say runs alert', async () => {
+      vi.useFakeTimers();
+      authState.api.getMobileNotificationPreferences.mockReset().mockResolvedValue({
+        success: true,
+        preferences: { pushEnabled: true, generationEnabled: false, commerceEnabled: true, socialEnabled: true },
+      });
+      authState.api.getImageGeneration.mockReset().mockResolvedValue({ status: 'processing' });
+      const tree = await openWaitingWorkspace();
+      renderer.act(() => tree.unmount());
+      authState.api.startGeneration.mockResolvedValue({
+        success: true, predictionId: 'pred-alerts', generationId: 'gen-alerts', status: 'processing', remainingCredits: 990, cost: 8,
+      });
+      let running: renderer.ReactTestRenderer | undefined;
+      renderer.act(() => {
+        running = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
+      });
+      renderer.act(() => {
+        running!.root.findAll((node) => String(node.type) === 'textinput')[0].props.onChangeText('Create an editorial product image.');
+      });
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      await renderer.act(async () => {
+        void findPressableByText(running!.root, 'Generate · 8 credits').props.onPress();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // Reads at 0, 8 and 20 s (each wait up to a second longer, for jitter);
+      // with run alerts off the next comes 15 s later, by 40 s, where 30 s
+      // waits would leave it to 47 s at the earliest.
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(40_000);
+      });
+
+      expect(authState.api.getMobileNotificationPreferences).toHaveBeenCalledTimes(1);
+      expect(authState.api.getImageGeneration).toHaveBeenCalledTimes(4);
+      renderer.act(() => running!.unmount());
+    });
+
     it('offers notifications while a creation runs, and reports a failed enable instead of leaving it unhandled', async () => {
       vi.useFakeTimers();
       const unhandled: unknown[] = [];
@@ -4973,7 +5060,11 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         });
         await settle();
 
-        expect(notificationsMock.registerForMobilePushNotifications).toHaveBeenCalledWith(authState.api, { requestPermission: true });
+        // Named by its account, as every check is (`registerForMobilePushNotifications`).
+        expect(notificationsMock.registerForMobilePushNotifications).toHaveBeenCalledWith(
+          authState.api,
+          { requestPermission: true, userId: authState.user?.id },
+        );
         const text = collectText(tree.root);
         expect(text).toContain('Couldn’t turn on notifications. Try again.');
         expect(text).toContain('Notify me');
@@ -6775,6 +6866,27 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         renderer.act(() => { labelled(tree.root.findByProps({ testID: 'generation-workspace' }), 'Get credits').props.onPress(); });
         expect(routerState.push).toHaveBeenCalledWith('/(tabs)/pricing');
         expect(tree.root.findAllByProps({ testID: 'generation-workspace' })).toHaveLength(0);
+      });
+
+      // Review item 7: a price the creators remember (`lib/quote-memo.ts`) never
+      // outlives a refusal of a run at its price, on this screen or the next.
+      it('forgets every remembered price when the start refuses a run at its price', async () => {
+        const refused = await openTyped();
+        expect(text(refused)).toContain('Generate · 8 credits');
+        authState.api.startGeneration.mockRejectedValueOnce(refusal(409, 'cost_changed', 'The price of this run changed. Check the updated cost and generate again.'));
+        // The asking again that the refusal brings is still on its way when the screen closes.
+        authState.api.quoteGenerationModel.mockImplementation(() => new Promise(() => undefined));
+        await pressGenerate(refused);
+        renderer.act(() => refused.unmount());
+
+        // The same draft on a creator opened afresh is priced by the server, not from memory.
+        quoteEchoingSettings(9);
+        const quotesBefore = authState.api.quoteGenerationModel.mock.calls.length;
+        const next = await openTyped();
+        await settle();
+        expect(authState.api.quoteGenerationModel.mock.calls.length).toBeGreaterThan(quotesBefore);
+        expect(text(next)).toContain('Generate · 9 credits');
+        renderer.act(() => next.unmount());
       });
 
       it('prices the run again when the price changed', async () => {

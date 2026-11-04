@@ -100,7 +100,7 @@ describe('an alert arriving while the app is in front', () => {
 
   it('lets the screen report itself in and out of view', () => {
     expect(alertsScreen).toContain('setAlertsScreenFocused(true)');
-    expect(alertsScreen).toContain('return () => setAlertsScreenFocused(false)');
+    expect(alertsScreen).toMatch(/return \(\) => \{\s*setAlertsScreenFocused\(false\);/);
     expect(alertsScreen).toContain('useFocusEffect(useCallback(');
   });
 

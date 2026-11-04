@@ -1036,6 +1036,8 @@ describe('Showcase screen', () => {
         const pages = [lanePage([{ id: 'post-1' }]), lanePage([{ id: 'post-2' }])];
         expect((trim as (lane: Lane) => Lane)({ pages, pageParams: [{ offset: 0 }, { offset: 12 }] }))
           .toEqual({ pages: [pages[0]], pageParams: [{ offset: 0 }] });
+        // Trimmed and asked again in the same tick: the wait for the queued
+        // impressions belongs to the lane's own page one.
         expect(queryState.refetch).toHaveBeenCalledTimes(1);
         expect(list.scrollToOffset.mock.invocationCallOrder[0])
           .toBeLessThan(queryState.refetch.mock.invocationCallOrder[0]);
@@ -1053,6 +1055,30 @@ describe('Showcase screen', () => {
         finishRefetch();
         await settle();
         expect(refreshing()).toBe(false);
+      } finally {
+        renderer.act(() => tree.unmount());
+      }
+    });
+
+    // Review follow-up 1: trimmed and with its load-more guards reset while it
+    // waited for the queue, a short lane could fetch page 2 of the OLD session.
+    it('asks for no page of the old session between the tap and the refetch', async () => {
+      queryState.dataUpdatedAt = fiveMinutesOld();
+      queryState.hasNextPage = true;
+      const { tree, pill } = renderWithList();
+      queryState.refetch.mockImplementationOnce(() => {
+        // React Query reports the lane busy from the moment its refetch starts.
+        queryState.isFetching = true;
+        return new Promise<void>(() => undefined);
+      });
+      try {
+        await returnToApp();
+        renderer.act(() => pill().onPress());
+        renderer.act(() => hostElement(tree, 'flash-list').props.onEndReached());
+        await settle();
+
+        expect(queryState.refetch).toHaveBeenCalledTimes(1);
+        expect(queryState.fetchNextPage).not.toHaveBeenCalled();
       } finally {
         renderer.act(() => tree.unmount());
       }

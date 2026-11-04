@@ -9,6 +9,7 @@ import {
   FEED_REMOVAL_UNDO_MS,
   flushShowcaseFeedEvents,
   resetShowcaseFeedEventQueueForTests,
+  sendShowcaseFeedEvent,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import {
   SHOWCASE_INITIAL_RENDER_COUNT,
@@ -1007,7 +1008,7 @@ describe('ShowcaseClient save actions', () => {
     });
   });
 
-  it('establishes an anonymous feed session only after demand and an idle window', () => {
+  it('establishes an anonymous feed session only after demand and an idle window', async () => {
     vi.useFakeTimers();
     authState.session = null;
     authState.user = null;
@@ -1077,6 +1078,10 @@ describe('ShowcaseClient save actions', () => {
     );
 
     drainIdleCallbacks();
+    // Asked for once the queued feed events are recorded (none here).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media`,
@@ -2947,10 +2952,12 @@ describe('ShowcaseClient save actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 
     expect(readShowcaseClientSnapshot(cacheKey)).toBeNull();
-    expect(fetch).toHaveBeenCalledWith(
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
+    // Asked for once the queued feed events are recorded.
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
       `/api/showcase/feed?limit=${SHOWCASE_PAGE_SIZE}&category=media&sort=recent`,
       { headers: { Authorization: 'Bearer test-token' } }
-    );
+    ));
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeDisabled();
 
     await act(async () => {
@@ -2968,6 +2975,100 @@ describe('ShowcaseClient save actions', () => {
     expect(window.scrollTo).toHaveBeenCalledTimes(1);
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0 });
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
+  });
+
+  it("asks for the viewer's own For you page one only once the queued feed events are recorded", async () => {
+    resetShowcaseFeedEventQueueForTests();
+    let recordEvents: (response: unknown) => void = () => undefined;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/showcase/feed/events') {
+        return new Promise((resolve) => {
+          recordEvents = resolve;
+        });
+      }
+      if (url.startsWith('/api/showcase/feed?')) return new Promise(() => undefined);
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await sendShowcaseFeedEvent({
+      item: createShowcaseItem({ id: 'post-seen', recommendation: { deliveryId: 'delivery-seen', position: 1 } } as never),
+      eventType: 'impression',
+      sourceSurface: 'showcase',
+      accessToken: 'test-token',
+      feedSessionId: 'session-1',
+    });
+    const feedRequests = () => fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/showcase/feed?'));
+    try {
+      render(
+        <ShowcaseClient
+          initialFeed={createFeed(createShowcaseItem({ id: 'post-server', generationId: 'gen-server', title: 'Server Frame' }))}
+          initialCategory="all"
+          initialSort="for-you"
+          initialTool={null}
+          initialUnlock="all"
+          initialResource="all"
+          sourceToolOptions={SOURCE_TOOL_OPTIONS}
+        />
+      );
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/showcase/feed/events', expect.anything()));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(feedRequests()).toHaveLength(0);
+
+      await act(async () => {
+        recordEvents({ ok: true, status: 200, json: async () => ({ success: true }) });
+      });
+      await waitFor(() => expect(feedRequests()).toHaveLength(1));
+    } finally {
+      resetShowcaseFeedEventQueueForTests();
+    }
+  });
+
+  // Only a For you page one starts a ranked session with a seen check: Recent
+  // and the top lists have none, so their Refresh does not wait for the queue
+  // (review follow-up 2).
+  it('asks for a Recent page one at once, without waiting for the queued feed events', async () => {
+    resetShowcaseFeedEventQueueForTests();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/showcase/feed/events') return new Promise(() => undefined);
+      if (url.startsWith('/api/showcase/feed?')) return new Promise(() => undefined);
+      return { ok: true, json: async () => (url.startsWith('/api/showcase/saved-state') ? [] : { success: true }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ id: 'post-server', generationId: 'gen-server', title: 'Server Frame' }))}
+        initialCategory="all"
+        initialSort="recent"
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+    await sendShowcaseFeedEvent({
+      item: createShowcaseItem({ id: 'post-seen', recommendation: { deliveryId: 'delivery-seen', position: 1 } } as never),
+      eventType: 'impression',
+      sourceSurface: 'showcase',
+      accessToken: 'test-token',
+      feedSessionId: 'session-1',
+    });
+    // An events request of its own already on its way, unanswered.
+    void flushShowcaseFeedEvents();
+    const feedRequests = () => fetchMock.mock.calls.filter(([input]) => String(input).startsWith('/api/showcase/feed?'));
+
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+
+      // Inside the 1.5 s a For you page one would wait.
+      await waitFor(() => expect(feedRequests()).toHaveLength(1), { timeout: 1_000 });
+    } finally {
+      resetShowcaseFeedEventQueueForTests();
+    }
   });
 
   // A reload asks for the page afresh. The kept grid came back for ten

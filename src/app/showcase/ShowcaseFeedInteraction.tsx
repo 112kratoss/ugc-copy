@@ -20,6 +20,16 @@ import { hideCreatorLabel } from '@/lib/hide-creator-label';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 import { createShowcaseMediaProgressTracker } from '@/lib/showcase-media-progress';
 
+import {
+  FEED_EVENT_OUTBOX_STORAGE_KEY,
+  adoptFeedEventOutboxEntries,
+  feedEventIdentity,
+  readFeedEventOutbox,
+  writeFeedEventOutbox,
+  type FeedEventOutboxEntry,
+  type FeedEventOutboxStorage,
+} from './feed-event-outbox';
+
 export type ShowcaseFeedbackAction = 'not_interested' | 'hide_creator';
 export type ShowcaseFeedEventType =
   | 'impression'
@@ -98,13 +108,19 @@ export function getShowcaseRecommendation(item: ShowcaseFeedItem): ShowcaseRecom
  * for a single viewer watching a single clip. They are queued and flushed
  * together instead.
  *
- * Kept small and time-bounded: these feed live ranking signals, so holding them
- * for long would make the feed react late to what someone just watched.
+ * A batch goes when it is full, once 15 s pass without a new event, and a
+ * minute after its first event at the latest: a reader who keeps scrolling
+ * sends one request a minute rather than one per card. Nothing ranks on fresher
+ * events: a feed session keeps the list it was ranked with for its next pages,
+ * and the queue is sent whenever the page is hidden or left. Until the server
+ * answers, the events are kept in localStorage too (`feed-event-outbox.ts`), so
+ * a tab killed while a batch waits loses none.
  */
-const FEED_EVENT_FLUSH_SIZE = 10;
-const FEED_EVENT_FLUSH_DELAY_MS = 2_000;
+const FEED_EVENT_FLUSH_DELAY_MS = 15_000;
+const FEED_EVENT_MAX_WAIT_MS = 60_000;
 /** Matches SHOWCASE_FEED_EVENT_BATCH_LIMIT, which the server enforces. */
 const FEED_EVENT_MAX_BATCH = 25;
+const FEED_EVENT_FLUSH_SIZE = FEED_EVENT_MAX_BATCH;
 
 /**
  * Only pure telemetry is queued — precisely the events a watch session emits in
@@ -124,11 +140,47 @@ const BATCHED_EVENT_TYPES = new Set<ShowcaseFeedEventType>([
   'resource_open',
 ]);
 
-type QueuedFeedEvent = { accessToken: string | null; body: Record<string, unknown> };
+type QueuedFeedEvent = {
+  accessToken: string | null;
+  body: Record<string, unknown>;
+  /** Whose event it is (`feedEventIdentity`); null keeps it out of the outbox. */
+  identity: string | null;
+  queuedAt: number;
+};
 
 let pendingFeedEvents: QueuedFeedEvent[] = [];
+/** Sent, and the answer not yet heard. */
+const inFlightFeedEventIds = new Set<string>();
+/** The batch requests on their way, for a refresh to wait on. */
+const inFlightFeedEventRequests = new Set<Promise<unknown>>();
 let feedEventFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let feedEventUnloadBound = false;
+/** This page, as the owner of the outbox entries it is sending. */
+const feedEventPageOwner = createClientEventId();
+
+function feedEventOutboxStorage(): FeedEventOutboxStorage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function changeFeedEventOutbox(change: (entries: FeedEventOutboxEntry[]) => FeedEventOutboxEntry[]) {
+  const storage = feedEventOutboxStorage();
+  if (!storage) return;
+  writeFeedEventOutbox(storage, change(readFeedEventOutbox(storage, Date.now())));
+}
+
+function eventIdsOf(events: QueuedFeedEvent[]) {
+  return new Set(events.map((event) => String(event.body.clientEventId)));
+}
+
+/** Answered for good: recorded, or refused in a way a resend would not change. */
+function isSettledFeedEventResponse(status: number) {
+  return (status >= 200 && status < 300)
+    || (status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429);
+}
 
 function postFeedEvents(accessToken: string | null, body: unknown) {
   return fetch('/api/showcase/feed/events', {
@@ -147,16 +199,38 @@ function postFeedEvents(accessToken: string | null, body: unknown) {
 /**
  * Send everything queued now. Exported so a surface that is about to unmount,
  * or a test, can drain deterministically rather than waiting on the timer.
+ *
+ * With `unloading` (the page is going away) the request still leaves with
+ * `keepalive`, but its answer can never be heard, so what it carries, and every
+ * send still unanswered (the hidden page's own, a moment before), leaves the
+ * outbox as it goes, as it always left memory: a later page resending each
+ * departing page's last batch would cost a request per page view.
  */
-export function flushShowcaseFeedEvents(): Promise<void> {
+export function flushShowcaseFeedEvents({ unloading = false }: { unloading?: boolean } = {}): Promise<void> {
   if (feedEventFlushTimer !== null) {
     clearTimeout(feedEventFlushTimer);
     feedEventFlushTimer = null;
   }
-  if (pendingFeedEvents.length === 0) return Promise.resolve();
 
   const queued = pendingFeedEvents;
   pendingFeedEvents = [];
+  // What a dead page left for this viewer rides along, while this page can
+  // still hear the answer.
+  const newest = queued.at(-1);
+  const storage = unloading ? null : feedEventOutboxStorage();
+  if (newest?.identity && storage) {
+    const { accessToken, identity } = newest;
+    queued.unshift(...adoptFeedEventOutboxEntries(storage, {
+      identity,
+      owner: feedEventPageOwner,
+      now: Date.now(),
+    }).map((adopted) => ({ ...adopted, accessToken, identity })));
+  }
+  if (unloading) {
+    const leaving = new Set([...eventIdsOf(queued), ...inFlightFeedEventIds]);
+    if (leaving.size > 0) changeFeedEventOutbox((entries) => entries.filter((entry) => !leaving.has(entry.id)));
+  }
+  if (queued.length === 0) return Promise.resolve();
 
   // One request carries one Authorization header, and a viewer can sign in or
   // out mid-session, so events travel with the token they were queued under.
@@ -172,10 +246,23 @@ export function flushShowcaseFeedEvents(): Promise<void> {
   for (const bucket of byToken.values()) {
     for (let index = 0; index < bucket.length; index += FEED_EVENT_MAX_BATCH) {
       const chunk = bucket.slice(index, index + FEED_EVENT_MAX_BATCH);
-      // Swallowed on purpose: these are telemetry, and the queue has already
-      // released them, so there is nothing a caller could usefully retry.
-      requests.push(postFeedEvents(chunk[0].accessToken, { events: chunk.map((entry) => entry.body) })
-        .catch(() => undefined));
+      const ids = eventIdsOf(chunk);
+      if (!unloading) ids.forEach((id) => inFlightFeedEventIds.add(id));
+      // Nothing is thrown to the caller: these are telemetry. A send that is
+      // not answered for good leaves its events in the outbox, unclaimed, for
+      // this page or a later one to send again.
+      const settle = (answered: boolean) => {
+        if (unloading) return;
+        ids.forEach((id) => inFlightFeedEventIds.delete(id));
+        changeFeedEventOutbox((entries) => (answered
+          ? entries.filter((entry) => !ids.has(entry.id))
+          : entries.map((entry) => (ids.has(entry.id) ? { ...entry, owner: '' } : entry))));
+      };
+      const request = postFeedEvents(chunk[0].accessToken, { events: chunk.map((entry) => entry.body) })
+        .then((response) => settle(isSettledFeedEventResponse(response.status)), () => settle(false));
+      inFlightFeedEventRequests.add(request);
+      void request.finally(() => inFlightFeedEventRequests.delete(request));
+      requests.push(request);
     }
   }
 
@@ -183,9 +270,54 @@ export function flushShowcaseFeedEvents(): Promise<void> {
 }
 
 /**
+ * The longest a feed refresh waits for the queue before it asks for a first
+ * page: long enough for a batch to be recorded, short enough that a slow
+ * network leaves the refresh to go on without it.
+ */
+export const FEED_EVENT_FLUSH_BEFORE_REFRESH_MS = 1_500;
+
+/**
+ * Before a feed asks for a first page. A first page can start a new ranked
+ * session (one the viewer has not opened for two minutes), and the session's
+ * seen check reads the impressions recorded by then: the ones still queued, or
+ * sent and unanswered, would have the feed show again what the reader has just
+ * scrolled past. So the queue is sent, and the refresh waits for every answer,
+ * at most `FEED_EVENT_FLUSH_BEFORE_REFRESH_MS`. Never rejects.
+ */
+export function flushShowcaseFeedEventsBeforeRefresh(): Promise<void> {
+  const sending = Promise.all([flushShowcaseFeedEvents(), ...inFlightFeedEventRequests]);
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, FEED_EVENT_FLUSH_BEFORE_REFRESH_MS);
+    void sending.catch(() => undefined).finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * At a sign-out, while the viewer's token still works: what they watched is
+ * sent (`flushShowcaseFeedEventsBeforeRefresh`, 1.5 s at most), unless `send`
+ * is false (a deleted account's events are deleted with it), and whatever of
+ * theirs is left unsent then leaves this browser, the queue and the outbox
+ * alike. The outbox holds post, session and delivery ids with dwell and
+ * progress, and would otherwise outlive the session by up to a day.
+ */
+export async function sendAndForgetShowcaseFeedEventsOf(
+  userId: string,
+  { send = true }: { send?: boolean } = {},
+): Promise<void> {
+  if (send) await flushShowcaseFeedEventsBeforeRefresh();
+  const identity = `user:${userId}`;
+  pendingFeedEvents = pendingFeedEvents.filter((event) => event.identity !== identity);
+  changeFeedEventOutbox((entries) => entries.filter((entry) => entry.identity !== identity));
+}
+
+/**
  * The queue is module state, so it would otherwise leak across tests: events a
  * test queued and never flushed would ride along into the next one's assertions.
- * The deliveries that already reported a dwell or a resource open are too.
+ * The deliveries that already reported a dwell or a resource open are too, and
+ * so is the outbox in the test's localStorage.
  */
 export function resetShowcaseFeedEventQueueForTests() {
   if (feedEventFlushTimer !== null) {
@@ -193,8 +325,11 @@ export function resetShowcaseFeedEventQueueForTests() {
     feedEventFlushTimer = null;
   }
   pendingFeedEvents = [];
+  inFlightFeedEventIds.clear();
+  inFlightFeedEventRequests.clear();
   dwellDeliveryIds.clear();
   resourceOpenDeliveryIds.clear();
+  feedEventOutboxStorage()?.removeItem(FEED_EVENT_OUTBOX_STORAGE_KEY);
 }
 
 function bindFeedEventUnloadFlush() {
@@ -204,7 +339,7 @@ function bindFeedEventUnloadFlush() {
   // pagehide rather than unload: it fires for the back/forward cache, which
   // `unload` does not, and losing a watch session to a back navigation is the
   // common case on a feed.
-  window.addEventListener('pagehide', () => { void flushShowcaseFeedEvents(); });
+  window.addEventListener('pagehide', () => { void flushShowcaseFeedEvents({ unloading: true }); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') void flushShowcaseFeedEvents();
   });
@@ -260,19 +395,33 @@ export async function sendShowcaseFeedEvent({
   }
 
   bindFeedEventUnloadFlush();
-  pendingFeedEvents.push({ accessToken: accessToken ?? null, body });
+  const queued: QueuedFeedEvent = {
+    accessToken: accessToken ?? null,
+    body,
+    identity: feedEventIdentity(accessToken),
+    queuedAt: Date.now(),
+  };
+  pendingFeedEvents.push(queued);
+  if (queued.identity) {
+    const { identity, queuedAt } = queued;
+    changeFeedEventOutbox((entries) => [
+      ...entries,
+      { id: body.clientEventId, identity, owner: feedEventPageOwner, queuedAt, body },
+    ]);
+  }
 
   if (pendingFeedEvents.length >= FEED_EVENT_FLUSH_SIZE) {
     await flushShowcaseFeedEvents();
     return;
   }
 
-  if (feedEventFlushTimer === null) {
-    feedEventFlushTimer = setTimeout(() => {
-      feedEventFlushTimer = null;
-      void flushShowcaseFeedEvents();
-    }, FEED_EVENT_FLUSH_DELAY_MS);
-  }
+  // Each event starts the quiet window again, up to the longest the oldest may wait.
+  if (feedEventFlushTimer !== null) clearTimeout(feedEventFlushTimer);
+  const oldestWaitingAt = pendingFeedEvents[0]?.queuedAt ?? queued.queuedAt;
+  feedEventFlushTimer = setTimeout(() => {
+    feedEventFlushTimer = null;
+    void flushShowcaseFeedEvents();
+  }, Math.max(0, Math.min(FEED_EVENT_FLUSH_DELAY_MS, oldestWaitingAt + FEED_EVENT_MAX_WAIT_MS - Date.now())));
 }
 
 /**
@@ -603,19 +752,20 @@ export function QualifiedImpressionBoundary({
     attentionRef.current = attention;
     // The page going away is a card leaving view: what the card was given is
     // sent then, and the queue flushed, rather than lost with the tab.
-    const leavePage = () => {
+    const leavePage = (unloading: boolean) => {
       sendAttention(attention.pageHidden(Date.now()));
-      void flushShowcaseFeedEvents();
+      void flushShowcaseFeedEvents({ unloading });
     };
     const onVisibilityChange = () => {
-      if (isPageHidden()) leavePage();
+      if (isPageHidden()) leavePage(false);
       else sendAttention(attention.pageShown(Date.now()));
     };
+    const onPageHide = () => leavePage(true);
     document.addEventListener('visibilitychange', onVisibilityChange);
-    window.addEventListener('pagehide', leavePage);
+    window.addEventListener('pagehide', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      window.removeEventListener('pagehide', leavePage);
+      window.removeEventListener('pagehide', onPageHide);
       if (attentionRef.current === attention) attentionRef.current = null;
       sendAttention(attention.end(Date.now()));
     };

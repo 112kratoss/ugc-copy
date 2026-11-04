@@ -30,6 +30,7 @@ const routerMocks = vi.hoisted(() => ({
   push: vi.fn(),
 }));
 
+
 vi.mock('expo-notifications', () => ({
   AndroidImportance: {
     DEFAULT: 'default',
@@ -157,6 +158,184 @@ describe('mobile notifications helper', () => {
       expoPushToken: 'ExponentPushToken[abc123]',
       platform: expect.any(String),
     }));
+  });
+
+  describe('a registration the server confirmed', () => {
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+
+    // The keychain keeps what it is given: the device id is made once.
+    beforeEach(() => {
+      const keychain = new Map<string, string>();
+      secureStoreMocks.getItemAsync.mockImplementation(async (key: string) => keychain.get(key) ?? null);
+      secureStoreMocks.setItemAsync.mockImplementation(async (key: string, value: string) => { keychain.set(key, value); });
+      secureStoreMocks.deleteItemAsync.mockImplementation(async (key: string) => { keychain.delete(key); });
+    });
+
+    function grantedWithToken(token = 'ExponentPushToken[abc123]') {
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: true, canAskAgain: true, status: 'granted' });
+      notificationsMocks.getExpoPushTokenAsync.mockResolvedValue({ data: token });
+    }
+
+    /** This launch's module, signed in to `user-1` on `session-1` unless told otherwise. */
+    async function load(session: { userId: string; sessionId: string | null } | null = { userId: 'user-1', sessionId: 'session-1' }) {
+      const module = await import('../lib/notifications');
+      module.setPushRegistrationSession(session);
+      const api = {
+        registerMobilePushToken: vi.fn(async () => ({ success: true })),
+        unregisterMobilePushToken: vi.fn(async () => ({ success: true })),
+      };
+      return { ...module, api };
+    }
+
+    // Every launch and every return to the app checked the registration, and
+    // each check sent it: 417 a week at a few dozen people.
+    it('is sent once a launch and not again unchanged, until a day has passed', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, api, PUSH_REGISTRATION_REFRESH_MS } = await load();
+      expect(PUSH_REGISTRATION_REFRESH_MS).toBe(DAY_MS);
+      const start = Date.now();
+      const now = vi.spyOn(Date, 'now').mockReturnValue(start);
+      try {
+        await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' }))
+          .resolves.toEqual({ status: 'registered', expoPushToken: 'ExponentPushToken[abc123]' });
+        now.mockReturnValue(start + DAY_MS - 1);
+        // Still answered as registered: the screens that read this see no change.
+        await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' }))
+          .resolves.toEqual({ status: 'registered', expoPushToken: 'ExponentPushToken[abc123]' });
+        expect(api.registerMobilePushToken).toHaveBeenCalledTimes(1);
+
+        now.mockReturnValue(start + DAY_MS);
+        await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+        expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+      } finally {
+        now.mockRestore();
+      }
+
+      // A cold launch keeps nothing of it, and sends again: a token the server
+      // retired while this phone kept it comes back at the next launch.
+      vi.resetModules();
+      const relaunched = await load();
+      await relaunched.registerForMobilePushNotifications(relaunched.api as never, { userId: 'user-1' });
+      expect(relaunched.api.registerMobilePushToken).toHaveBeenCalledTimes(1);
+    });
+
+    it('is sent again at once for another session, account, token or app version', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, setPushRegistrationSession, api } = await load();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      // The same account signed in again, after "Sign out everywhere" dropped this phone to a guest.
+      setPushRegistrationSession({ userId: 'user-1', sessionId: 'session-2' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+
+      setPushRegistrationSession({ userId: 'user-2', sessionId: 'session-3' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(3);
+
+      grantedWithToken('ExponentPushToken[rotated]');
+      await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(4);
+      expect(api.registerMobilePushToken).toHaveBeenLastCalledWith(expect.objectContaining({ expoPushToken: 'ExponentPushToken[rotated]' }));
+
+      const Constants = (await import('expo-constants')).default as { expoConfig: { version: string } };
+      const version = Constants.expoConfig.version;
+      Constants.expoConfig.version = '1.0.1';
+      try {
+        await registerForMobilePushNotifications(api as never, { userId: 'user-2' });
+      } finally {
+        Constants.expoConfig.version = version;
+      }
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(5);
+    });
+
+    it('is sent again once notifications were found off and then allowed, and when the person turns them on', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, api } = await load();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+
+      notificationsMocks.getPermissionsAsync.mockResolvedValue({ granted: false, canAskAgain: false, status: 'denied' });
+      await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' })).resolves.toEqual({ status: 'denied' });
+      grantedWithToken();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+
+      // The explicit enable always tells the server.
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1', requestPermission: true });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(3);
+    });
+
+    it('is forgotten when the session ends, before the server is asked to retire the token', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, unregisterMobilePushNotifications, setPushRegistrationSession, api } = await load();
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      let retired!: () => void;
+      api.unregisterMobilePushToken.mockImplementationOnce(() => new Promise((resolve) => {
+        retired = () => resolve({ success: true });
+      }));
+      const unregistering = unregisterMobilePushNotifications(api as never);
+      await vi.waitFor(() => expect(api.unregisterMobilePushToken).toHaveBeenCalledTimes(1));
+      // Asked meanwhile, the check sends: nothing confirmed is remembered any more.
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+      retired();
+      await unregistering;
+
+      // A session dropped to a guest (no teardown ran) forgets it too.
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(3);
+      setPushRegistrationSession(null);
+      setPushRegistrationSession({ userId: 'user-1', sessionId: 'session-1' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(4);
+    });
+
+    it('keeps no answer that lands after the memory was forgotten or the session changed', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, forgetLastPushRegistration, setPushRegistrationSession, api } = await load();
+      let confirm!: () => void;
+      api.registerMobilePushToken.mockImplementationOnce(() => new Promise((resolve) => {
+        confirm = () => resolve({ success: true });
+      }));
+      const first = registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await vi.waitFor(() => expect(api.registerMobilePushToken).toHaveBeenCalledTimes(1));
+      forgetLastPushRegistration();
+      confirm();
+      await first;
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+
+      api.registerMobilePushToken.mockImplementationOnce(() => new Promise((resolve) => {
+        confirm = () => resolve({ success: true });
+      }));
+      setPushRegistrationSession({ userId: 'user-1', sessionId: 'session-2' });
+      const second = registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await vi.waitFor(() => expect(api.registerMobilePushToken).toHaveBeenCalledTimes(3));
+      setPushRegistrationSession({ userId: 'user-1', sessionId: 'session-3' });
+      confirm();
+      await second;
+      setPushRegistrationSession({ userId: 'user-1', sessionId: 'session-2' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(4);
+    });
+
+    it('is always sent when the check names no session, and a failed send is not remembered', async () => {
+      grantedWithToken();
+      const { registerForMobilePushNotifications, setPushRegistrationSession, api } = await load(null);
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(2);
+      // A token whose session cannot be read is no session either.
+      setPushRegistrationSession({ userId: 'user-1', sessionId: null });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(4);
+
+      setPushRegistrationSession({ userId: 'user-1', sessionId: 'session-1' });
+      api.registerMobilePushToken.mockRejectedValueOnce(new Error('offline'));
+      await expect(registerForMobilePushNotifications(api as never, { userId: 'user-1' })).rejects.toThrow('offline');
+      await registerForMobilePushNotifications(api as never, { userId: 'user-1' });
+      expect(api.registerMobilePushToken).toHaveBeenCalledTimes(6);
+    });
   });
 
   it('routes the last notification response on cold start', async () => {

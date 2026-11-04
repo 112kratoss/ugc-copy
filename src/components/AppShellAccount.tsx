@@ -61,6 +61,28 @@ export async function clearCreatorDataForSignOut(userId: string) {
   window.clearTimeout(timer);
 }
 
+/**
+ * The feed events this account made in this browser: sent while its session
+ * still works, then whatever of them is left goes (`sendAndForgetShowcaseFeedEventsOf`),
+ * so its watch history does not outlive the sign-out in the outbox. Loaded on
+ * demand, like the creators' clean-up, and bounded the same way.
+ */
+export async function releaseFeedEventsForSignOut(userId: string, options: { send?: boolean } = {}) {
+  const releasing = import('@/app/showcase/ShowcaseFeedInteraction')
+    .then(({ sendAndForgetShowcaseFeedEventsOf }) => sendAndForgetShowcaseFeedEventsOf(userId, options))
+    .catch(() => {
+      // Telemetry: the sign-out goes ahead.
+    });
+  let timer: number | undefined;
+  await Promise.race([
+    releasing,
+    new Promise<void>((resolve) => {
+      timer = window.setTimeout(resolve, SIGN_OUT_CLEAR_WAIT_MS);
+    }),
+  ]);
+  window.clearTimeout(timer);
+}
+
 type AccountAvatarProps = {
   session: Session | null;
   profile: ProfileSummary | null;
@@ -394,7 +416,7 @@ export default function AppShellAccount({
     setIsSigningOut(true);
     const userId = session?.user?.id;
     if (userId) {
-      await clearCreatorDataForSignOut(userId);
+      await Promise.all([clearCreatorDataForSignOut(userId), releaseFeedEventsForSignOut(userId)]);
     }
     markBrowserSignOut(...await sessionsEnding());
     // This browser only. The default (global) also ends the account's session
@@ -456,6 +478,8 @@ export default function AppShellAccount({
     if (!confirmed) return;
     setIsSigningOutEverywhere(true);
     const userId = session?.user?.id;
+    // While this session can still send them.
+    if (userId) await releaseFeedEventsForSignOut(userId);
     await retireAccountPushTokens();
     markBrowserSignOut(...await sessionsEnding());
     const { error } = await supabase.auth.signOut({ scope: 'global' })

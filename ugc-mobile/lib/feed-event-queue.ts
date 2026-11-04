@@ -5,9 +5,27 @@ import { getFeedInstallationId } from './feed-installation-id';
 import type { ShowcaseFeedEventRequest, ShowcaseFeedEventType } from './types';
 
 export const FEED_EVENT_QUEUE_STORAGE_KEY = 'magicbooklet.feedEvents.queue.v1';
-export const FEED_EVENT_QUEUE_FLUSH_SIZE = 10;
-export const FEED_EVENT_QUEUE_FLUSH_DELAY_MS = 2_000;
+/**
+ * A full batch, the most the server takes in one request
+ * (`SHOWCASE_FEED_EVENT_BATCH_LIMIT`). Every request costs a function, the
+ * proxy's admission and two rate-limit writes whatever it carries, so it goes
+ * full when the reader is busy.
+ */
+export const FEED_EVENT_QUEUE_FLUSH_SIZE = 25;
+/**
+ * A batch goes once the reader has made no new event for this long, and never
+ * later than `FEED_EVENT_QUEUE_MAX_WAIT_MS` after the oldest event in it: a
+ * reader who keeps scrolling sends one request a minute rather than one per
+ * card. Nothing ranks on fresher events: a feed session keeps the list it was
+ * ranked with for its next pages, and the queue is sent whenever a feed screen
+ * loses focus, the app leaves the foreground, the identity changes, or a feed
+ * is refreshed. Events wait in AsyncStorage, so a kill loses none.
+ */
+export const FEED_EVENT_QUEUE_FLUSH_DELAY_MS = 15_000;
+export const FEED_EVENT_QUEUE_MAX_WAIT_MS = 60_000;
 export const FEED_EVENT_QUEUE_CHUNK_SIZE = 25;
+/** The soonest a timer fires again, so entries already due never spin the queue. */
+const FEED_EVENT_QUEUE_MIN_TIMER_MS = 1_000;
 export const FEED_EVENT_QUEUE_MAX_ENTRIES = 200;
 export const FEED_EVENT_QUEUE_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 export const FEED_EVENT_QUEUE_TRANSITION_DRAIN_MS = 2 * 60 * 1_000;
@@ -214,17 +232,27 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
     const retirementDeadlines = [...retiringIdentities.values()]
       .map(({ discardAt }) => discardAt);
     if (sendableEntries.length === 0 && retirementDeadlines.length === 0) return;
-    const nextReadyAt = sendableEntries.length > 0
-      ? Math.min(...sendableEntries.map((entry) => entry.nextAttemptAt))
+    // New events are due together, once the reader has been quiet for the
+    // batching window or the oldest of them has waited the longest it may. A
+    // retried event is due when its backoff expires, neither earlier, which
+    // would leave the queue without another timer, nor later.
+    const fresh = sendableEntries.filter((entry) => entry.attempts === 0);
+    const freshDueAt = fresh.length > 0
+      ? Math.min(
+        Math.max(...fresh.map((entry) => entry.enqueuedAt)) + FEED_EVENT_QUEUE_FLUSH_DELAY_MS,
+        Math.min(...fresh.map((entry) => entry.enqueuedAt)) + FEED_EVENT_QUEUE_MAX_WAIT_MS,
+      )
       : Number.POSITIVE_INFINITY;
+    const retriedDueAt = Math.min(
+      Number.POSITIVE_INFINITY,
+      ...sendableEntries.filter((entry) => entry.attempts > 0).map((entry) => entry.nextAttemptAt),
+    );
+    const nextReadyAt = Math.min(freshDueAt, retriedDueAt);
     const nextRetirementAt = retirementDeadlines.length > 0
       ? Math.min(...retirementDeadlines)
       : Number.POSITIVE_INFINITY;
-    // New events wait for the normal two-second batching window. Retried events
-    // wait until their actual backoff expires instead of firing early and
-    // leaving the queue without another timer.
     const delayMs = Math.max(
-      FEED_EVENT_QUEUE_FLUSH_DELAY_MS,
+      FEED_EVENT_QUEUE_MIN_TIMER_MS,
       Math.min(nextReadyAt, nextRetirementAt) - currentTime,
     );
     timer = setTimer(() => {
@@ -449,6 +477,23 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
     return flushPromise;
   }
 
+  /**
+   * Sends everything ready now and settles once the server has answered for
+   * it. A send already under way took its events before later ones joined the
+   * queue, so a second one follows it when any are left ready (retries keep
+   * their backoff).
+   */
+  async function drain() {
+    await flush();
+    const identityKey = await dependencies.getCurrentIdentityKey().catch(() => null);
+    const currentTime = now();
+    if (entries.some((entry) => (
+      isSendableForIdentity(entry, identityKey, currentTime) && entry.nextAttemptAt <= currentTime
+    ))) {
+      await flush();
+    }
+  }
+
   function beginIdentityTransition({
     identityKey,
     accessToken,
@@ -545,6 +590,7 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
   return {
     enqueue,
     flush,
+    drain,
     restore,
     beginIdentityTransition,
     getEntriesForTests: () => entries.map((entry) => ({ ...entry, event: { ...entry.event } })),
@@ -584,6 +630,36 @@ export function enqueueShowcaseFeedEvent(event: ShowcaseFeedEventRequest) {
 
 export function flushShowcaseFeedEvents() {
   return feedEventQueue.flush();
+}
+
+/**
+ * The longest a feed refresh waits for the queue before it asks for its first
+ * page: long enough for a batch to be recorded, short enough that a slow
+ * network leaves the refresh to go on without it.
+ */
+export const FEED_EVENT_FLUSH_BEFORE_REFRESH_MS = 1_500;
+
+/** Settles when `promise` does or after `ms`, whichever comes first; never rejects. */
+export function waitAtMost(promise: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    promise.catch(() => undefined).finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Before a feed asks for a first page. A first page can start a new ranked
+ * session (one the viewer has not opened for two minutes), and the session's
+ * seen check reads the impressions recorded by then: the ones still queued
+ * here would have the feed show again what the reader has just scrolled past.
+ * So the queue is sent and the refresh waits for the answer, at most
+ * `FEED_EVENT_FLUSH_BEFORE_REFRESH_MS`.
+ */
+export function flushShowcaseFeedEventsBeforeRefresh() {
+  return waitAtMost(feedEventQueue.drain(), FEED_EVENT_FLUSH_BEFORE_REFRESH_MS);
 }
 
 export function beginShowcaseFeedEventIdentityTransition(options: {
