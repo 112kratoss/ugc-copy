@@ -1,7 +1,7 @@
 import { loadNsfwPostIds, hasNsfwReveal } from '@/lib/nsfw-content-server';
 import 'server-only';
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
-import { heldItemsForReferenceCopies, referenceCopiesToMake } from '@/lib/recipe-copy-sent-items';
+import { heldItemsForReferenceCopies, referenceCopiesToMake, sendsUnheldCreationCopies } from '@/lib/recipe-copy-sent-items';
 
 import { unstable_cache } from 'next/cache';
 import { cache } from 'react';
@@ -1221,9 +1221,12 @@ export async function prepareCreationRecipeBundle(params: {
       }
     }
 
-    if (params.includeReferences && bundle) {
-      const resources = bundle.resources ?? {};
-      const sentItems = normalizePostResourceItems(resources.items, resources);
+    const sentItems = bundle ? normalizePostResourceItems(bundle.resources?.items, bundle.resources ?? {}) : [];
+    // A composer that turned the switch off after a save still sends the copies it holds: any of them the
+    // stored recipe lacks is copied again whatever the switch says (`sendsUnheldCreationCopies`).
+    if (bundle && (params.includeReferences || sendsUnheldCreationCopies({
+      sentItems, storedItems: params.storedItems, ownerUserId: params.ownerUserId, generationId: params.creation.id,
+    }))) {
       const planned = await plan({
         supabase: params.supabase,
         ownerUserId: params.ownerUserId,
@@ -1243,7 +1246,9 @@ export async function prepareCreationRecipeBundle(params: {
 
       const sentPaths = new Set(sentItems.flatMap((item) => (item.storagePath ? [item.storagePath] : [])));
       const sentIds = new Set(sentItems.map((item) => item.id));
-      const toAdd = planned.references.filter((reference) => !holdsResourceItem(sentPaths, sentIds, reference.item));
+      const toAdd = params.includeReferences
+        ? planned.references.filter((reference) => !holdsResourceItem(sentPaths, sentIds, reference.item))
+        : [];
       if (!params.mayShareCreation) {
         refusedReferenceCount = toAdd.length;
       } else {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { prepareCreationRecipeBundle } from '@/lib/post-resource-bundles-server';
-import { heldItemsForReferenceCopies, referenceCopiesToMake } from '@/lib/recipe-copy-sent-items';
+import { heldItemsForReferenceCopies, referenceCopiesToMake, sendsUnheldCreationCopies } from '@/lib/recipe-copy-sent-items';
 import { recordRecipeImportUse } from '@/lib/recipe-import-use';
 
 const OWNER = 'user-1';
@@ -71,6 +71,13 @@ describe('a sent copy of a saved input is made again unless the recipe holds it'
     })).toEqual([sentOnly, added]);
   });
 
+  it('says whether a sent copy of this creation is missing from the stored recipe', () => {
+    const params = { ownerUserId: OWNER, generationId: CREATION };
+    expect(sendsUnheldCreationCopies({ ...params, sentItems: [copyItem], storedItems: [] })).toBe(true);
+    expect(sendsUnheldCreationCopies({ ...params, sentItems: [copyItem], storedItems: [copyItem] })).toBe(false);
+    expect(sendsUnheldCreationCopies({ ...params, sentItems: [creatorsOwnFile], storedItems: null })).toBe(false);
+  });
+
   it('plans a sent copy the stored recipe lacks as one to make again', async () => {
     const planGenerationReferenceCopies = vi.fn(async () => ({ ok: true as const, references: [plannedInput] }));
 
@@ -118,6 +125,63 @@ describe('a sent copy of a saved input is made again unless the recipe holds it'
 
     expect(planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({ heldItems: [copyItem, copyItem] }));
     expect(prepared).toMatchObject({ ok: true, pendingCopies: [] });
+  });
+});
+
+// 2026-11-04 fix check: both composers turn "Include creation references" off once a save has the inputs,
+// and send the copies back from their drafts with the switch off, so the check above never ran on a re-save.
+describe('a re-save with the switch off', () => {
+  const bundle = {
+    accessMode: 'free' as const,
+    previewText: 'The product reference behind this still.',
+    resources: { promptText: null, notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix: false, sections: [], items: [copyItem] },
+  };
+
+  it('copies again a sent copy the stored recipe no longer names, and adds nothing new', async () => {
+    const otherInput = { ...plannedInput, item: { ...copyItem, id: 'reference-ref-2', storagePath: `${OWNER}/generation-references/${CREATION}/01-reference-ref-2.png` } };
+    const planGenerationReferenceCopies = vi.fn(async () => ({ ok: true as const, references: [plannedInput, otherInput] }));
+
+    const prepared = await prepareCreationRecipeBundle({
+      supabase: {} as never,
+      ownerUserId: OWNER,
+      bundle,
+      creation: { id: CREATION, prompt: null },
+      includeReferences: false,
+      mayShareCreation: true,
+      addsCreationPrompt: false,
+      // The recipe was turned off and on again: deleted, so nothing is stored.
+      storedItems: [],
+      mediaKeys: ['media-1'],
+      dependencies: { planGenerationReferenceCopies, validatePostResourceBundleInput: () => null },
+    });
+
+    expect(planGenerationReferenceCopies).toHaveBeenCalledTimes(1);
+    expect(prepared).toMatchObject({ ok: true, addedItemIds: [], pendingCopies: [plannedInput] });
+    expect(prepared.ok && prepared.bundle?.resources?.items?.map((item) => item.id)).toEqual(['reference-ref-1']);
+  });
+
+  it('reads no saved inputs when every sent copy is stored, or none is sent', async () => {
+    const planGenerationReferenceCopies = vi.fn(async () => ({ ok: true as const, references: [plannedInput] }));
+    const cases: Array<[typeof bundle, Array<typeof copyItem>]> = [
+      [bundle, [copyItem]],
+      [{ ...bundle, resources: { ...bundle.resources, items: [creatorsOwnFile] } }, []],
+    ];
+    for (const [sent, stored] of cases) {
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: OWNER,
+        bundle: sent,
+        creation: { id: CREATION, prompt: null },
+        includeReferences: false,
+        mayShareCreation: true,
+        addsCreationPrompt: false,
+        storedItems: stored,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies, validatePostResourceBundleInput: () => null },
+      });
+      expect(prepared).toMatchObject({ ok: true, pendingCopies: [] });
+    }
+    expect(planGenerationReferenceCopies).not.toHaveBeenCalled();
   });
 });
 

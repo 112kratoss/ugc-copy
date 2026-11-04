@@ -60,3 +60,21 @@ export function referenceCopiesToMake<R extends { item: ItemLike; source: unknow
     && (added.has(reference) || (Boolean(reference.item.storagePath) && sentPaths.has(reference.item.storagePath as string)))
   ));
 }
+
+/**
+ * Whether the composer sent a copy of this creation's inputs that the recipe as
+ * stored does not name. Both composers turn "Include creation references" off once
+ * a save has the inputs, and send the copies back from their drafts on every later
+ * save, so such a copy is made again even with the switch off.
+ */
+export function sendsUnheldCreationCopies(params: {
+  sentItems: readonly ItemLike[];
+  storedItems?: readonly ItemLike[] | null;
+  ownerUserId: string;
+  generationId: string;
+}): boolean {
+  const storedPaths = new Set((params.storedItems ?? []).flatMap((item) => (item.storagePath ? [item.storagePath] : [])));
+  return params.sentItems.some((item) => (
+    isCopyOfCreation(item, params.ownerUserId, params.generationId) && !storedPaths.has(item.storagePath as string)
+  ));
+}
