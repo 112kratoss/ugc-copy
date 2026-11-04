@@ -8,7 +8,7 @@ import { postMediaStorageBucket } from '@/lib/post-media-storage';
  * capability minted after that answer, and how long it lives depends on who
  * else may read the same media right now.
  *
- * Media the function serves to no viewer at all (a public or unlisted post's,
+ * Media the function serves to someone signed out (a public or unlisted post's,
  * visible, not archived, not tombstoned, not marked NSFW, its owner active) is
  * the same object for everyone. Its signature lasts an hour and is handed out
  * again for its first 45 minutes, and the viewer's own browser may keep the
