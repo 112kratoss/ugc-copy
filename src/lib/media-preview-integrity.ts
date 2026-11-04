@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
@@ -48,6 +50,8 @@ export async function assertStoredPreviewIsIntact({
   location: { bucket: string; filePath: string };
   expected: Buffer;
 }) {
+  if (await isProvedByEtag(supabase, location, expected)) return;
+
   let mismatch = '';
 
   for (let attempt = 1; attempt <= PREVIEW_READBACK_ATTEMPTS; attempt += 1) {
@@ -72,4 +76,43 @@ export async function assertStoredPreviewIsIntact({
   }
 
   throw new Error(`Preview ${location.filePath} ${mismatch}`);
+}
+
+/** A strong ETag holding one MD5, as a single-part upload is given: `"<32 hex>"`. */
+const SINGLE_PART_MD5_ETAG = /^"([0-9a-f]{32})"$/;
+
+/**
+ * Proves the stored bytes without reading them back, when Storage can.
+ *
+ * Storage records each object's ETag, and for a single-part upload (every
+ * preview, display and normalised copy here is one) that is the MD5 of the
+ * bytes it stored, computed by the backend from those bytes (S3's PutObject;
+ * the file backend the same). An ETag equal to the MD5 of the encoded bytes,
+ * at the encoded size, therefore says the stored object is those bytes, which
+ * the read-back would compare in full; the encoded bytes must be a WebP, as
+ * the read-back also requires. The Buffer-to-UTF-8 corruption this guards
+ * against changes the stored bytes, and so the MD5 Storage computes, and fails
+ * this check as it fails the comparison.
+ *
+ * Anything else (a multipart or encrypted object's ETag, which is not an MD5
+ * of the bytes, a weak ETag, another size, no answer, an error) is not proof,
+ * and the full read-back below runs exactly as before. `info` reads the
+ * object's recorded metadata rather than serving its bytes.
+ */
+async function isProvedByEtag(
+  supabase: SupabaseClient,
+  location: { bucket: string; filePath: string },
+  expected: Buffer,
+): Promise<boolean> {
+  if (!isDecodableWebp(expected)) return false;
+  try {
+    const { data, error } = await supabase.storage.from(location.bucket).info(location.filePath);
+    if (error || !data) return false;
+    const etag = typeof data.etag === 'string' ? SINGLE_PART_MD5_ETAG.exec(data.etag) : null;
+    return Boolean(etag)
+      && data.size === expected.length
+      && etag![1] === createHash('md5').update(expected).digest('hex');
+  } catch {
+    return false;
+  }
 }
