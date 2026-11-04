@@ -16,8 +16,8 @@ import {
  *   `generation_inputs/<buyer>/recipe-imports/<seller>/<generation>/<file>`.
  *
  * What nothing names is found in the database (`list_recipe_file_sweep_candidates`,
- * which reads every recipe, every revision of one, every kept generation input and
- * more). This module holds the part of the rule that does not need it, so it is
+ * which reads, for each file, the recipes, revisions, kept inputs and more that
+ * could name it, through keys taken from its path). This module holds the part of the rule that does not need it, so it is
  * applied again to whatever the database hands back: the folder, the grace period
  * and the batch bound. Nothing outside the two folders, and nothing younger than
  * the grace period, is ever removed, whatever a read returns.
@@ -39,30 +39,42 @@ const DAY_MS = 24 * HOUR_MS;
 export const RECIPE_COPY_SWEEP_GRACE_MS = 7 * DAY_MS;
 
 /**
- * An import stays while its buyer has started a run this recently: a run start
- * reuses an import already at its path and hands the provider a link to it that
- * lives an hour (`importGenerationReferenceCopy`). The database refuses under an hour.
+ * An import stays while a run start made or reused it this recently. A start
+ * records each use before it touches the file (`recordRecipeImportUse`), signs
+ * a link that lives an hour, and resolves all its inputs before it writes its
+ * generation row; the Seedance asset prepare writes none. Six hours is well past
+ * all of that. The database refuses under two.
  */
-export const RECIPE_IMPORT_QUIET_MS = 2 * HOUR_MS;
+export const RECIPE_IMPORT_QUIET_MS = 6 * HOUR_MS;
 
 /** At most this many files are removed in one run; the rest wait for the next. */
 export const RECIPE_COPY_SWEEP_BATCH_LIMIT = 200;
 
 /**
- * How long a removed copy is watched for a recipe naming it again: a save that
- * found the copy at its path just before the sweep removed it writes its recipe
- * after, and a composer left open can send an item it holds.
+ * Each run reads this many objects of each bucket, in name order on from where
+ * the last run stopped (`list_recipe_file_sweep_candidates` keeps the place), so
+ * no run reads a whole bucket; the walk starts over at the end.
  */
-export const RECIPE_COPY_SWEEP_RESTORE_WINDOW_MS = 7 * DAY_MS;
-export const RECIPE_COPY_SWEEP_RESTORE_LIMIT = 100;
+export const RECIPE_COPY_SWEEP_SCAN_LIMIT = 5000;
 
 /**
- * A run start's generation row is written before it reuses an import, so a
- * buyer's run started since the candidates were read means an import removed in
- * this run may be in use: it is put back. The margin covers the clock of the
- * database against this one's.
+ * How long a removed copy is watched for something naming it again: a save that
+ * found the copy at its path just before the sweep removed it writes its recipe
+ * after, and a composer's draft can send an item it holds. Each run looks at the
+ * least recently checked removals first, this many at a time.
  */
-export const RECIPE_IMPORT_RESTORE_MARGIN_MS = 60 * 1000;
+export const RECIPE_COPY_SWEEP_RESTORE_WINDOW_MS = 14 * DAY_MS;
+export const RECIPE_COPY_SWEEP_RESTORE_LIMIT = 200;
+
+/**
+ * A use recorded after the candidates were read means an import removed in this
+ * run may be in use: it is put back. The margin covers a use whose transaction
+ * began before the read and committed after it.
+ */
+export const RECIPE_IMPORT_RESTORE_MARGIN_MS = 5 * 60 * 1000;
+
+/** Uses older than this are dropped: the sweep only asks about the last few hours. */
+export const RECIPE_IMPORT_USE_RETENTION_MS = 7 * DAY_MS;
 
 /** Deletion is off unless the operator sets this to `true`: the job then only reports. */
 export const RECIPE_COPY_SWEEP_DELETE_FLAG = 'RECIPE_COPY_SWEEP_DELETE';

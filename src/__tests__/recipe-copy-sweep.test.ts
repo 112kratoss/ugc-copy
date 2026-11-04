@@ -32,7 +32,8 @@ function createFakeClient(options: {
   candidatesError?: { message: string } | null;
   namedAgain?: unknown[];
   ledgerUpsertError?: { message: string } | null;
-  recentRunners?: string[];
+  /** Imports a run start used after the read. */
+  usedImports?: string[];
   removeResult?: (bucket: string, names: string[]) => { data: unknown; error: unknown };
   copyError?: unknown;
 } = {}) {
@@ -64,9 +65,6 @@ function createFakeClient(options: {
     };
     builder.then = (resolve: (value: unknown) => unknown) => {
       calls.push({ op: `${name}.${op}`, table: name, args });
-      if (name === 'generations') {
-        return resolve({ data: (options.recentRunners ?? []).map((user_id) => ({ user_id })), error: null });
-      }
       if (op === 'upsert') return resolve({ data: null, error: options.ledgerUpsertError ?? null });
       if (op === 'delete') return resolve({ data: null, error: null, count: 0 });
       return resolve({ data: [], error: null });
@@ -79,6 +77,9 @@ function createFakeClient(options: {
       calls.push({ op: `rpc.${name}`, args: [args] });
       if (name === 'list_swept_recipe_copies_named_again') {
         return { data: options.namedAgain ?? [], error: null };
+      }
+      if (name === 'list_recipe_imports_used_since') {
+        return { data: options.usedImports ?? [], error: null };
       }
       if (name === 'list_recipe_file_sweep_candidates') {
         return { data: options.candidates ?? null, error: options.candidatesError ?? null };
@@ -135,12 +136,15 @@ describe('the recipe-copy-sweep job', () => {
     const read = calls.find((call) => call.op === 'rpc.list_recipe_file_sweep_candidates');
     expect(read?.args[0]).toEqual({
       p_created_before: new Date(NOW.getTime() - 7 * DAY).toISOString(),
-      p_imports_quiet_since: new Date(NOW.getTime() - 2 * 60 * 60 * 1000).toISOString(),
+      p_imports_quiet_since: new Date(NOW.getTime() - 6 * 60 * 60 * 1000).toISOString(),
       p_limit: 200,
+      p_scan_limit: 5000,
     });
-    // The ledger keeps a week of removals.
+    // The ledger keeps two weeks of removals, and the import uses a week.
     const prune = calls.find((call) => call.op === 'recipe_file_sweep_deletions.delete');
-    expect(prune?.args).toContainEqual(['lt', 'deleted_at', new Date(NOW.getTime() - 7 * DAY).toISOString()]);
+    expect(prune?.args).toContainEqual(['lt', 'deleted_at', new Date(NOW.getTime() - 14 * DAY).toISOString()]);
+    const usesPrune = calls.find((call) => call.op === 'recipe_import_uses.delete');
+    expect(usesPrune?.args).toContainEqual(['lt', 'used_at', new Date(NOW.getTime() - 7 * DAY).toISOString()]);
   });
 
   it('only reports while removal is off, which is the default', async () => {
@@ -218,9 +222,9 @@ describe('the recipe-copy-sweep job', () => {
     expect(ledgerAt).toBeGreaterThan(-1);
     expect(ops.indexOf('storage.remove')).toBeGreaterThan(ledgerAt);
     expect(calls[ledgerAt]?.args[0]).toEqual([
-      { bucket_id: 'post_resource_files', object_name: COPY, deleted_at: NOW.toISOString() },
-      { bucket_id: 'post_resource_files', object_name: OTHER_COPY, deleted_at: NOW.toISOString() },
-      { bucket_id: 'generation_inputs', object_name: IMPORT, deleted_at: NOW.toISOString() },
+      { bucket_id: 'post_resource_files', object_name: COPY, deleted_at: NOW.toISOString(), checked_at: null },
+      { bucket_id: 'post_resource_files', object_name: OTHER_COPY, deleted_at: NOW.toISOString(), checked_at: null },
+      { bucket_id: 'generation_inputs', object_name: IMPORT, deleted_at: NOW.toISOString(), checked_at: null },
     ]);
     expect(calls.filter((call) => call.op === 'storage.remove')).toEqual([
       { op: 'storage.remove', bucket: 'post_resource_files', args: [[COPY, OTHER_COPY]] },
@@ -267,10 +271,11 @@ describe('the recipe-copy-sweep job', () => {
     expect(summary.batchLimitReached).toBe(true);
   });
 
-  it('puts an import back at once when its buyer started a run after the read', async () => {
+  it('puts an import back at once when a run start used it after the read', async () => {
+    const READ_AT = '2026-11-04T06:50:03.000Z';
     const { client, calls } = createFakeClient({
-      candidates: { examined: 1, unnamed: 1, candidates: [candidate('generation_inputs', IMPORT, 8 * DAY)] },
-      recentRunners: [BUYER],
+      candidates: { readAt: READ_AT, examined: 1, unnamed: 1, candidates: [candidate('generation_inputs', IMPORT, 8 * DAY)] },
+      usedImports: [IMPORT],
     });
 
     const summary = await sweepRecipeFileCopies(client as never, { now: NOW, deleteEnabled: true });
@@ -281,8 +286,23 @@ describe('the recipe-copy-sweep job', () => {
       bucket: 'post_resource_files',
       args: [COPY, IMPORT, { destinationBucket: 'generation_inputs' }],
     }]);
-    const runs = calls.find((call) => call.op === 'generations.select');
-    expect(runs?.args).toContainEqual(['in', 'user_id', [BUYER]]);
+    // Asked by the database's time of the read, less a margin, in the request body.
+    expect(calls.find((call) => call.op === 'rpc.list_recipe_imports_used_since')?.args[0]).toEqual({
+      p_object_names: [IMPORT],
+      p_since: new Date(Date.parse(READ_AT) - 5 * 60 * 1000).toISOString(),
+    });
+  });
+
+  it('leaves a removed import gone when no run start used it since the read', async () => {
+    const { client, calls } = createFakeClient({
+      candidates: { examined: 1, unnamed: 1, candidates: [candidate('generation_inputs', IMPORT, 8 * DAY)] },
+      usedImports: [],
+    });
+
+    const summary = await sweepRecipeFileCopies(client as never, { now: NOW, deleteEnabled: true });
+
+    expect(summary).toMatchObject({ deletedImports: 1, restoredImports: 0 });
+    expect(calls.map((call) => call.op)).not.toContain('storage.copy');
   });
 
   it('copies a removed copy back from its saved input once a recipe names it again', async () => {
@@ -296,6 +316,7 @@ describe('the recipe-copy-sweep job', () => {
         input_sort_order: 0,
         input_storage_path: INPUT_PATH,
         input_media_type: 'image',
+        surviving_import: null,
       }],
     });
 
@@ -311,18 +332,45 @@ describe('the recipe-copy-sweep job', () => {
       (arg) => Array.isArray(arg) && arg[0] === 'eq' && arg[2] === COPY,
     ));
     expect(forget).toBeDefined();
-    // Asked about the past week's removals.
+    // Asked about the past two weeks' removals, a batch at a time.
     expect(calls.find((call) => call.op === 'rpc.list_swept_recipe_copies_named_again')?.args[0]).toEqual({
-      p_deleted_since: new Date(NOW.getTime() - 7 * DAY).toISOString(),
-      p_limit: 100,
+      p_deleted_since: new Date(NOW.getTime() - 14 * DAY).toISOString(),
+      p_limit: 200,
     });
+  });
+
+  it('copies a removed copy back from a surviving import of it when its saved input is gone', async () => {
+    const { client, calls } = createFakeClient({
+      candidates: { examined: 0, candidates: [] },
+      namedAgain: [{
+        object_name: COPY,
+        input_id: null,
+        input_user_id: null,
+        input_role: null,
+        input_sort_order: null,
+        input_storage_path: null,
+        input_media_type: null,
+        surviving_import: IMPORT,
+      }],
+    });
+
+    const summary = await sweepRecipeFileCopies(client as never, { now: NOW, deleteEnabled: true });
+
+    expect(summary).toMatchObject({ restoredCopies: 1, restoreUnavailable: 0 });
+    expect(calls.filter((call) => call.op === 'storage.copy')).toEqual([{
+      op: 'storage.copy',
+      bucket: 'generation_inputs',
+      args: [IMPORT, COPY, { destinationBucket: 'post_resource_files' }],
+    }]);
   });
 
   it('copies nothing back from an input that is gone or does not build that path', async () => {
     const { client, calls } = createFakeClient({
       candidates: { examined: 0, candidates: [] },
       namedAgain: [
-        { object_name: COPY, input_id: null, input_user_id: null, input_role: null, input_sort_order: null, input_storage_path: null, input_media_type: null },
+        { object_name: COPY, input_id: null, input_user_id: null, input_role: null, input_sort_order: null, input_storage_path: null, input_media_type: null, surviving_import: null },
+        // An import of another copy is no source of this one.
+        { object_name: COPY, input_id: null, input_user_id: null, input_role: null, input_sort_order: null, input_storage_path: null, input_media_type: null, surviving_import: `${BUYER}/recipe-imports/${PUBLISHER}/${CREATION}/01-reference-other.png` },
         {
           object_name: COPY,
           input_id: ROW,
@@ -332,14 +380,15 @@ describe('the recipe-copy-sweep job', () => {
           input_sort_order: 0,
           input_storage_path: INPUT_PATH,
           input_media_type: 'image',
+          surviving_import: null,
         },
       ],
     });
 
     const summary = await sweepRecipeFileCopies(client as never, { now: NOW, deleteEnabled: true });
 
-    expect(summary).toMatchObject({ restoredCopies: 0, restoreUnavailable: 2 });
+    expect(summary).toMatchObject({ restoredCopies: 0, restoreUnavailable: 3 });
     expect(calls.map((call) => call.op)).not.toContain('storage.copy');
-    expect(logs.filter((record) => record.msg === 'recipe_copy_sweep_restore_unavailable')).toHaveLength(2);
+    expect(logs.filter((record) => record.msg === 'recipe_copy_sweep_restore_unavailable')).toHaveLength(3);
   });
 });

@@ -11,8 +11,10 @@ import {
   RECIPE_COPY_SWEEP_GRACE_MS,
   RECIPE_COPY_SWEEP_RESTORE_LIMIT,
   RECIPE_COPY_SWEEP_RESTORE_WINDOW_MS,
+  RECIPE_COPY_SWEEP_SCAN_LIMIT,
   RECIPE_IMPORT_QUIET_MS,
   RECIPE_IMPORT_RESTORE_MARGIN_MS,
+  RECIPE_IMPORT_USE_RETENTION_MS,
   recipeImportSourceCopy,
   type RecipeFileSweepDeletion,
 } from '@/lib/recipe-copy-sweep-policy';
@@ -26,21 +28,23 @@ import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
  * `20261103232038_recipe_copy_sweep.sql` the reads).
  *
  * A run, in order:
- * 1. Copies back any copy it removed in the past week that a recipe names again
- *    (`list_swept_recipe_copies_named_again`), from the saved input it was made
- *    of. A save that found a copy at its path (the path is fixed by the input,
- *    so it copies nothing again) just before this removed it writes its recipe
- *    after; this puts the file back under it.
- * 2. Drops ledger rows older than that week.
- * 3. Reads the candidates: files in the two folders, older than the grace
- *    period, that nothing names, and for an import, whose buyer has started no
- *    run lately (`list_recipe_file_sweep_candidates`), and applies the rule to
- *    them again (`planRecipeFileSweep`).
+ * 1. Looks at up to 200 of the copies it removed in the past two weeks, least
+ *    recently looked at first, and copies back any that something names again
+ *    (`list_swept_recipe_copies_named_again`): from the saved input it was made
+ *    of, or where that is gone, from a buyer's import of it that survives. A
+ *    save that found a copy at its path (the path is fixed by the input, so it
+ *    copies nothing again) just before this removed it writes its recipe after.
+ * 2. Drops ledger rows past those two weeks, and import uses past a week.
+ * 3. Reads the candidates (`list_recipe_file_sweep_candidates`): it walks each
+ *    bucket a page on from where the last run stopped, and hands back the files
+ *    in the two folders older than the grace period that nothing names, and for
+ *    an import, that no run start used in the last six hours. The rule is
+ *    applied to them again here (`planRecipeFileSweep`).
  * 4. With `RECIPE_COPY_SWEEP_DELETE=true` only: records each in the ledger,
  *    then removes it. Without it the run reports what it would remove.
- * 5. Puts back any import removed in this run whose buyer started a run since
- *    the read, from the copy it was made of: a run start reuses an import
- *    already at its path, and writes its generation row before it does.
+ * 5. Puts back any import removed in this run that a run start used since the
+ *    read (each start records its use before it touches the file,
+ *    `recordRecipeImportUse`), from the copy it was made of.
  *
  * Idempotent: a file already gone counts as such, a ledger row is written again
  * in place, and the next run reads everything afresh.
@@ -48,11 +52,14 @@ import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 
 const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 const LEDGER_TABLE = 'recipe_file_sweep_deletions';
+const IMPORT_USES_TABLE = 'recipe_import_uses';
 const SAMPLE_SIZE = 5;
 
 export interface RecipeCopySweepSummary {
   mode: 'delete' | 'report';
-  /** Files in the two folders. */
+  /** Objects this run read, of both buckets. */
+  scanned: number;
+  /** Files in the two folders among them. */
   examined: number;
   /** Files left in place, for whichever reason. */
   kept: number;
@@ -74,12 +81,14 @@ export interface RecipeCopySweepSummary {
   restoredCopies: number;
   restoredImports: number;
   restoreFailed: number;
-  /** A swept copy named again whose saved input is gone: nothing to copy it back from. */
+  /** A removed copy named again with nothing left to copy it back from. */
   restoreUnavailable: number;
   ledgerPruned: number;
 }
 
 type CandidateRead = {
+  readAt?: string;
+  scanned?: number;
   examined?: number;
   tooRecent?: number;
   named?: number;
@@ -96,6 +105,7 @@ type NamedAgainRow = {
   input_sort_order: number | null;
   input_storage_path: string | null;
   input_media_type: string | null;
+  surviving_import: string | null;
 };
 
 function count(value: unknown): number {
@@ -131,7 +141,30 @@ async function forgetDeletion(client: SupabaseClient, bucketId: string, objectNa
   if (error) logBackendWarning('recipe_copy_sweep_ledger_forget_failed', { error });
 }
 
-/** Step 1: a swept copy a recipe names again goes back, from the saved input it was copied from. */
+/** Where a removed copy named again is copied back from: its saved input, or a surviving import of it. */
+function restoreSourceOf(row: NamedAgainRow): { bucket: string; filePath: string } | null {
+  const copy = parseGenerationReferenceCopyPath(row.object_name);
+  if (!copy) return null;
+  if (row.input_id && row.input_storage_path && row.input_media_type) {
+    // The copy's path is fixed by its input: only the row that builds exactly this path is its source.
+    const rebuilt = buildGenerationReferenceCopyPath(copy.ownerUserId, copy.generationId, {
+      id: row.input_id,
+      role: row.input_role ?? '',
+      sort_order: row.input_sort_order ?? 0,
+      storage_path: row.input_storage_path,
+      media_type: row.input_media_type as 'image' | 'video' | 'audio',
+    });
+    const source = getCanonicalStoredMediaLocation(row.input_storage_path);
+    if (source && rebuilt === row.object_name) return source;
+  }
+  // An import of the copy is a byte-for-byte copy of it (`importGenerationReferenceCopy`).
+  if (row.surviving_import && recipeImportSourceCopy(row.surviving_import) === row.object_name) {
+    return { bucket: GENERATION_INPUTS_BUCKET, filePath: row.surviving_import };
+  }
+  return null;
+}
+
+/** Step 1: a removed copy something names again goes back. */
 async function restoreCopiesNamedAgain(client: SupabaseClient, nowMs: number) {
   const result = { restored: 0, failed: 0, unavailable: 0 };
   const { data, error } = await client.rpc('list_swept_recipe_copies_named_again', {
@@ -141,26 +174,15 @@ async function restoreCopiesNamedAgain(client: SupabaseClient, nowMs: number) {
   if (error) throw new Error(`Could not read swept recipe copies named again: ${error.message}`);
 
   for (const row of (data ?? []) as NamedAgainRow[]) {
-    const copy = parseGenerationReferenceCopyPath(row.object_name);
-    const source = row.input_storage_path ? getCanonicalStoredMediaLocation(row.input_storage_path) : null;
-    // The copy's path is fixed by its input: only the row that builds exactly this path is its source.
-    const rebuilt = copy && row.input_id && row.input_storage_path && row.input_media_type
-      ? buildGenerationReferenceCopyPath(copy.ownerUserId, copy.generationId, {
-        id: row.input_id,
-        role: row.input_role ?? '',
-        sort_order: row.input_sort_order ?? 0,
-        storage_path: row.input_storage_path,
-        media_type: row.input_media_type as 'image' | 'video' | 'audio',
-      })
-      : null;
-    if (!copy || !source || rebuilt !== row.object_name) {
+    const source = restoreSourceOf(row);
+    if (!source) {
       result.unavailable += 1;
       logBackendError('recipe_copy_sweep_restore_unavailable', { objectName: row.object_name });
       continue;
     }
     if (await copyInto(client, source, { bucket: RECIPE_FILES_BUCKET, filePath: row.object_name })) {
       result.restored += 1;
-      logBackendWarning('recipe_copy_sweep_copy_restored', { objectName: row.object_name });
+      logBackendWarning('recipe_copy_sweep_copy_restored', { objectName: row.object_name, from: source.bucket });
       await forgetDeletion(client, RECIPE_FILES_BUCKET, row.object_name);
     } else {
       result.failed += 1;
@@ -170,7 +192,7 @@ async function restoreCopiesNamedAgain(client: SupabaseClient, nowMs: number) {
   return result;
 }
 
-/** Step 5: an import removed in this run whose buyer started a run since the read goes back. */
+/** Step 5: an import removed in this run that a run start used since the read goes back. */
 async function restoreImportsInUse(
   client: SupabaseClient,
   removedImports: readonly string[],
@@ -178,20 +200,21 @@ async function restoreImportsInUse(
 ) {
   const result = { restored: 0, failed: 0 };
   if (removedImports.length === 0) return result;
-  const buyers = [...new Set(removedImports.map((name) => name.split('/')[0]!))];
-  const { data, error } = await client
-    .from('generations')
-    .select('user_id')
-    .in('user_id', buyers)
-    .gte('created_at', new Date(readAtMs - RECIPE_IMPORT_RESTORE_MARGIN_MS).toISOString());
+  // Asked in the request body: two hundred paths make too long a query string.
+  const { data, error } = await client.rpc('list_recipe_imports_used_since', {
+    p_object_names: removedImports,
+    p_since: new Date(readAtMs - RECIPE_IMPORT_RESTORE_MARGIN_MS).toISOString(),
+  });
   // Unread, every removed import is taken for one in use.
-  const active = error
-    ? new Set(buyers)
-    : new Set(((data ?? []) as Array<{ user_id: string | null }>).map((row) => row.user_id));
-  if (error) logBackendWarning('recipe_copy_sweep_import_runs_unread', { error });
+  const used = error
+    ? new Set(removedImports)
+    : new Set(((data ?? []) as unknown[]).map((row) => (
+      typeof row === 'string' ? row : (row as { list_recipe_imports_used_since?: string } | null)?.list_recipe_imports_used_since ?? ''
+    )));
+  if (error) logBackendWarning('recipe_copy_sweep_import_uses_unread', { error });
 
   for (const name of removedImports) {
-    if (!active.has(name.split('/')[0]!)) continue;
+    if (!used.has(name)) continue;
     const copyName = recipeImportSourceCopy(name);
     const restored = copyName
       && await copyInto(
@@ -227,41 +250,51 @@ async function removeObjects(client: SupabaseClient, bucketId: string, names: st
   }
 }
 
+async function pruneOlderThan(client: SupabaseClient, table: string, column: string, beforeMs: number, event: string) {
+  const pruned = await client.from(table).delete({ count: 'exact' }).lt(column, new Date(beforeMs).toISOString());
+  if (pruned.error) {
+    logBackendWarning(event, { error: pruned.error });
+    return 0;
+  }
+  return pruned.count ?? 0;
+}
+
 export async function sweepRecipeFileCopies(
   client: SupabaseClient,
   options: { now?: Date; deleteEnabled?: boolean; limit?: number } = {},
 ): Promise<RecipeCopySweepSummary> {
   const nowMs = (options.now ?? new Date()).getTime();
   const deleteEnabled = options.deleteEnabled ?? isRecipeCopySweepDeletionEnabled();
-  const limit = options.limit ?? RECIPE_COPY_SWEEP_BATCH_LIMIT;
+  const limit = Math.max(1, Math.min(options.limit ?? RECIPE_COPY_SWEEP_BATCH_LIMIT, RECIPE_COPY_SWEEP_BATCH_LIMIT));
 
   // A removal recorded by an earlier deleting run is watched whatever this run's mode.
   const restoredCopies = await restoreCopiesNamedAgain(client, nowMs);
 
-  let ledgerPruned = 0;
-  const prune = await client
-    .from(LEDGER_TABLE)
-    .delete({ count: 'exact' })
-    .lt('deleted_at', new Date(nowMs - RECIPE_COPY_SWEEP_RESTORE_WINDOW_MS).toISOString());
-  if (prune.error) {
-    logBackendWarning('recipe_copy_sweep_ledger_prune_failed', { error: prune.error });
-  } else {
-    ledgerPruned = prune.count ?? 0;
-  }
+  const ledgerPruned = await pruneOlderThan(
+    client, LEDGER_TABLE, 'deleted_at', nowMs - RECIPE_COPY_SWEEP_RESTORE_WINDOW_MS, 'recipe_copy_sweep_ledger_prune_failed',
+  );
+  await pruneOlderThan(
+    client, IMPORT_USES_TABLE, 'used_at', nowMs - RECIPE_IMPORT_USE_RETENTION_MS, 'recipe_copy_sweep_import_uses_prune_failed',
+  );
 
-  const readAtMs = Date.now();
   const { data, error } = await client.rpc('list_recipe_file_sweep_candidates', {
     p_created_before: new Date(nowMs - RECIPE_COPY_SWEEP_GRACE_MS).toISOString(),
     p_imports_quiet_since: new Date(nowMs - RECIPE_IMPORT_QUIET_MS).toISOString(),
-    p_limit: Math.max(1, Math.min(limit, RECIPE_COPY_SWEEP_BATCH_LIMIT)),
+    p_limit: limit,
+    p_scan_limit: RECIPE_COPY_SWEEP_SCAN_LIMIT,
   });
   if (error) throw new Error(`Could not read recipe file sweep candidates: ${error.message}`);
   const read = (data ?? {}) as CandidateRead;
+  // The database's own time of the read: a use recorded after it is one the read could not see.
+  const readAtMs = typeof read.readAt === 'string' && Number.isFinite(Date.parse(read.readAt))
+    ? Date.parse(read.readAt)
+    : nowMs;
   const plan = planRecipeFileSweep(read.candidates, { nowMs, limit });
   const examined = count(read.examined);
 
   const summary: RecipeCopySweepSummary = {
     mode: deleteEnabled ? 'delete' : 'report',
+    scanned: count(read.scanned),
     examined,
     kept: examined,
     keptTooRecent: count(read.tooRecent),
@@ -300,6 +333,7 @@ export async function sweepRecipeFileCopies(
       bucket_id: deletion.bucketId,
       object_name: deletion.name,
       deleted_at: new Date(nowMs).toISOString(),
+      checked_at: null,
     })),
     { onConflict: 'bucket_id,object_name' },
   );

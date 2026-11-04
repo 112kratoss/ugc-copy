@@ -81,6 +81,7 @@ function setUp(options: {
   viewer?: { id: string; is_anonymous: boolean } | null;
   copyError?: StorageError | null;
   signError?: { message: string } | null;
+  recordUseError?: boolean;
 } = {}) {
   const stored = createStoredRows({
     generations: [PUBLIC_GENERATION, { ...PUBLIC_GENERATION, id: OTHER_GENERATION }],
@@ -100,6 +101,8 @@ function setUp(options: {
       : options.purchasedRevision
         ? [{ ...options.purchasedRevision, is_latest: false, resource_sections: [] }]
         : []),
+    // The recipe-copy-sweep job's record of the import's use (`recordRecipeImportUse`).
+    record_recipe_import_use: () => (options.recordUseError ? databaseError('57014', 'canceling statement due to statement timeout') : null),
   });
   const copy = vi.fn<(from: string, to: string, options?: { destinationBucket?: string }) => Promise<CopyAnswer>>(
     async (_from, to) => (options.copyError ? { data: null, error: options.copyError } : { data: { path: to }, error: null }),
@@ -321,6 +324,17 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
       outcome: 'imported',
       storagePath: `generation_inputs/${DESTINATION}`,
     });
+  });
+
+  it('records the use of the import before it touches the file, and fails retryably when it cannot', async () => {
+    const recorded = setUp();
+    await expect(importAs(VIEWER, SOURCE, recorded)).resolves.toMatchObject({ outcome: 'imported' });
+    expect(recorded.called).toContain('record_recipe_import_use');
+
+    const unrecorded = setUp({ recordUseError: true });
+    await expect(importAs(VIEWER, SOURCE, unrecorded)).resolves.toEqual({ outcome: 'failed' });
+    expect(unrecorded.copy).not.toHaveBeenCalled();
+    expect(unrecorded.createSignedUrl).not.toHaveBeenCalled();
   });
 
   // Each reference of a start used to read the gate, the recipe and the rows again (2026-11-03 review).
