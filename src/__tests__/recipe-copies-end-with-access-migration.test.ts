@@ -88,7 +88,9 @@ describe('recipe copies end with access migration', () => {
     expect(sql).toContain('public.held_input_recipe_file(kept.user_id, kept.metadata)');
     expect(sql).toMatch(/order by entry\.asset_id, run\.created_at, run\.id\s+on conflict \(asset_id\) do nothing\s+returning 1/);
     expect(sql).toContain('select public.backfill_seedance_prepared_assets();');
-    expect(sql).toContain('grant execute on function public.backfill_seedance_prepared_assets() to service_role;');
+    // Run once, by its owner: no API role can run it again over later, client-written sources.
+    expect(sql).toContain('revoke all on function public.backfill_seedance_prepared_assets() from public, anon, authenticated, service_role;');
+    expect(sql).not.toMatch(/grant execute on function public\.backfill_seedance_prepared_assets/);
   });
 
   // 2026-11-04 review: a policy change on storage.objects holds an ACCESS EXCLUSIVE lock until commit,

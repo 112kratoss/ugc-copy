@@ -260,7 +260,8 @@ comment on table public.seedance_prepared_assets is
 -- The asset ids every run so far recorded (workflow_settings.seedanceAssets),
 -- each under the first account that ran it and classified by the file it ran
 -- in place of: the seller's file itself, a run start's import of a copy, or a
--- kept input of the runner's own marked as a recipe file. Idempotent: a second
+-- kept input of the runner's own marked as a recipe file. Owner only (below).
+-- Idempotent: a second
 -- call adds only what a first one has not. One pass, run below: it reads only
 -- generations, writes only the new table, and takes no storage lock (the
 -- policy swap is the file's last statement), so a long scan blocks nobody's
@@ -323,8 +324,10 @@ as $$
   select count(*) from recorded;
 $$;
 
-revoke all on function public.backfill_seedance_prepared_assets() from public, anon, authenticated;
-grant execute on function public.backfill_seedance_prepared_assets() to service_role;
+-- Callable by no API role, the server included: run again after this release it would record later
+-- runs' client-written sources as 'run' rows that anyone may use. Only its owner (this migration, and
+-- the pgTAP suite) runs it.
+revoke all on function public.backfill_seedance_prepared_assets() from public, anon, authenticated, service_role;
 
 select public.backfill_seedance_prepared_assets();
 

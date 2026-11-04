@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(40);
+select plan(41);
 
 -- Seller, buyer, stranger.
 insert into auth.users(id, email, aud, role, created_at, is_anonymous, raw_app_meta_data, raw_user_meta_data)
@@ -220,6 +220,9 @@ select is(
   'each asset is classified by its file: own, the copy, an import of it, a kept input marked as it'
 );
 select is(public.backfill_seedance_prepared_assets(), 0::bigint, 'a second backfill adds nothing');
+select ok(not has_function_privilege('service_role', 'public.backfill_seedance_prepared_assets()', 'EXECUTE')
+  and not has_function_privilege('authenticated', 'public.backfill_seedance_prepared_assets()', 'EXECUTE'),
+  'no API role can run the backfill again over later runs');
 
 -- A refund deletes the purchase: the copy and the kept input made from it close.
 delete from public.post_resource_bundle_purchases where id = 'ad110050-1000-4000-8000-000000000001';
