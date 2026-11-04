@@ -142,6 +142,29 @@ describe('which Seedance asset ids a run may send', () => {
         .resolves.toEqual({ ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE });
     });
 
+    // 2026-11-04 re-review: paired with a file of the caller's own, an unrecorded id was recorded with no
+    // end date, so a refunded buyer kept a recipe asset prepared before the records for themselves.
+    it('is neither recorded nor run after the cut-off when sent beside a file', async () => {
+      const after = new Date(UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL.getTime() + 1);
+      const stub = setUp({ now: after, held: null });
+
+      await expect(check(stub, ['asset-old'], new Map([['asset-old', 'uploads/buyer-1/mine.png']])))
+        .resolves.toEqual({ ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE });
+      expect(stub.inserts).toEqual([]);
+      expect(stub.findHeldRecipeCopy).not.toHaveBeenCalled();
+    });
+
+    it('refuses an asset a start recorded once the cut-off passes, its file having been the caller’s word', async () => {
+      const after = new Date(UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL.getTime() + 1);
+      const rows = [{ asset_id: 'asset-old', owner_user_id: BUYER, recipe_file: null, recorded_from: 'start' }];
+
+      await expect(check(setUp({ rows }), ['asset-old'])).resolves.toEqual({ ok: true });
+      await expect(check(setUp({ rows, now: after }), ['asset-old']))
+        .resolves.toEqual({ ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE });
+      // The asset route's own record is trusted after it as before.
+      await expect(check(setUp({ rows: [{ ...rows[0]!, recorded_from: 'prepare' }], now: after }), ['asset-old'])).resolves.toEqual({ ok: true });
+    });
+
     // 2026-11-04 review: the file beside an unrecorded id is the caller's word. Recorded as their own,
     // the id would run for anyone they handed it to, a remixer of their run included.
     it('lends an asset a start recorded to its recorder alone, whatever its file', async () => {

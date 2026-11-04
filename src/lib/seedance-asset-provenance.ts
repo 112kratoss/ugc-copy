@@ -26,11 +26,14 @@ import { createServiceClient } from '@/lib/server-helpers';
  *   account that ran it. An id still on no record (prepared and kept in a draft or a workflow, never
  *   run) is recorded by the first start that sends it beside its file, as that file reads for the
  *   caller then. The file is the caller's word, so such a record (`recorded_from: 'start'`) lends the
- *   asset to its recorder alone, whatever it says of the file, and every use of it is still logged
- *   (`seedance_asset_unrecorded`). One sent bare, with no file beside it, is let through and logged
- *   until `UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL`, and refused after: refusing those at once would
- *   break every draft and saved workflow holding an asset prepared before this shipped, for the narrow
- *   case of a recipe file prepared then and never run since (2026-11-04 review).
+ *   asset to its recorder alone, whatever it says of the file (a remixer of the recorder's shared
+ *   inputs is refused it and prepares the file again), and every use of it is still logged
+ *   (`seedance_asset_unrecorded`). One sent bare, with no file beside it, is let through and logged.
+ *   All of it ends at `UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL`: after it an id on no record is
+ *   refused, bare or paired, no start records one, and one a start recorded is refused too; only the
+ *   asset route's records and the migration's backfill of runs are trusted then. Refusing them at once would break every draft and saved
+ *   workflow holding an asset prepared before this shipped, for the narrow case of a recipe file
+ *   prepared then and never run since (2026-11-04 reviews).
  */
 
 /**
@@ -146,13 +149,12 @@ export async function checkSeedanceAssetsUsable(params: {
     let record = records.get(assetId) ?? null;
     if (!record) {
       const source = params.pairedSources?.get(assetId);
-      if (!source) {
-        logBackendWarning('seedance_asset_unrecorded', { assetId, bare: true });
-        if ((params.dependencies?.now ?? (() => new Date()))() > UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL) {
-          return { ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE };
-        }
-        continue;
+      logBackendWarning('seedance_asset_unrecorded', { assetId, bare: !source });
+      // Bare or beside a file the caller names, an id on no record is taken only until the cut-off.
+      if ((params.dependencies?.now ?? (() => new Date()))() > UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL) {
+        return { ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE };
       }
+      if (!source) continue;
       // Prepared before the table: recorded as the file it was sent beside reads for the caller now.
       const held = await recipeFileOfPreparedSource({
         source,
@@ -179,6 +181,10 @@ export async function checkSeedanceAssetsUsable(params: {
       logBackendWarning('seedance_asset_unrecorded', { assetId, recordedAtStart: true });
       if (record.owner_user_id !== params.viewerUserId) {
         return { ok: false, status: 400, message: SEEDANCE_ASSET_NOT_YOURS_MESSAGE };
+      }
+      // Its file was the caller's word: trusted no longer than an unrecorded id is.
+      if ((params.dependencies?.now ?? (() => new Date()))() > UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL) {
+        return { ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE };
       }
     }
     if (record.recipe_file === null) continue;
