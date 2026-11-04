@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(33);
+select plan(40);
 
 -- Seller, buyer, stranger.
 insert into auth.users(id, email, aud, role, created_at, is_anonymous, raw_app_meta_data, raw_user_meta_data)
@@ -165,6 +165,61 @@ update public.post_resource_bundles set resource_items = '[]'::jsonb where id = 
 select ok(public.recipe_file_readable_by('ad110002-1000-4000-8000-000000000002',
   'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/00-reference-image-row-1.png'),
   'the version the buyer bought keeps the copy theirs after an edit');
+
+-- A file only the bought version's supplement lists is the buyer's too.
+insert into public.post_resource_bundle_revision_supplements(revision_id, resource_items)
+select purchase.revision_id,
+  '[{"id":"reference-row-2","type":"reference_image","title":"Reference","storagePath":"ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/01-reference-image-row-2.png"}]'::jsonb
+from public.post_resource_bundle_purchases purchase
+where purchase.id = 'ad110050-1000-4000-8000-000000000001';
+select ok(public.recipe_file_readable_by('ad110002-1000-4000-8000-000000000002',
+  'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/01-reference-image-row-2.png'),
+  'the buyer reads a file only the bought version''s supplement lists');
+select ok(not public.recipe_file_readable_by('ad110003-1000-4000-8000-000000000003',
+  'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/01-reference-image-row-2.png'),
+  'a stranger does not read it');
+
+-- The bundle goes (its seller's account is erased) and the bought version stays: still the buyer's.
+-- Erasure leaves the purchase and its version with no bundle (ON DELETE SET NULL); a sold bundle is
+-- not deleted outside it, so its outcome is set here directly.
+update public.post_resource_bundle_purchases set bundle_id = null where id = 'ad110050-1000-4000-8000-000000000001';
+select is((select bundle_id from public.post_resource_bundle_purchases where id = 'ad110050-1000-4000-8000-000000000001'), null::uuid,
+  'the purchase outlives its bundle');
+select ok(public.recipe_file_readable_by('ad110002-1000-4000-8000-000000000002', 'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/00-reference-image-row-1.png'),
+  'with the bundle gone, the version the buyer bought keeps the copy theirs');
+
+-- ─── The Seedance asset backfill's classification ───────────────────────────
+
+insert into public.generations(id, user_id, model, status, is_public, created_at, workflow_settings)
+values
+  ('ad110012-1000-4000-8000-000000000001', 'ad110002-1000-4000-8000-000000000002', 'seedance-2', 'succeeded', false, '2026-11-01T00:00:00Z',
+   jsonb_build_object('seedanceAssets', jsonb_build_object(
+     'images', jsonb_build_array(
+       jsonb_build_object('assetId', 'asset-own-1', 'sourceUrl', 'uploads/ad110002-1000-4000-8000-000000000002/own.png'),
+       jsonb_build_object('assetId', 'asset-copy-1', 'sourceUrl', 'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/00-reference-image-row-1.png'),
+       jsonb_build_object('assetId', 'asset-import-1', 'sourceUrl',
+         'https://project.supabase.co/storage/v1/object/sign/generation_inputs/ad110002-1000-4000-8000-000000000002/recipe-imports/ad110001-1000-4000-8000-000000000001/ad110010-1000-4000-8000-000000000001/00-reference-image-row-1.png?token=t'),
+       jsonb_build_object('assetId', 'not a handle!', 'sourceUrl', 'uploads/ad110002-1000-4000-8000-000000000002/own.png')),
+     'videos', jsonb_build_array(
+       jsonb_build_object('assetId', 'asset-kept-1', 'sourceUrl', 'generation_inputs/ad110002-1000-4000-8000-000000000002/ad110011-1000-4000-8000-000000000001/00-reference-image.png')),
+     'audios', 'not a list'))),
+  -- A remixer ran the creator's shared asset later: it stays the first runner's.
+  ('ad110013-1000-4000-8000-000000000001', 'ad110003-1000-4000-8000-000000000003', 'seedance-2', 'succeeded', false, '2026-11-02T00:00:00Z',
+   jsonb_build_object('seedanceAssets', jsonb_build_object(
+     'images', jsonb_build_array(jsonb_build_object('assetId', 'asset-own-1', 'sourceUrl', 'uploads/ad110002-1000-4000-8000-000000000002/own.png')))));
+
+select is(public.backfill_seedance_prepared_assets(), 4::bigint, 'the backfill records each well-formed asset id a run recorded, once');
+select is(
+  (select jsonb_object_agg(asset_id, jsonb_build_array(owner_user_id, recipe_file, recorded_from))
+   from public.seedance_prepared_assets where asset_id like 'asset-%-1'),
+  jsonb_build_object(
+    'asset-own-1', jsonb_build_array('ad110002-1000-4000-8000-000000000002', null, 'run'),
+    'asset-copy-1', jsonb_build_array('ad110002-1000-4000-8000-000000000002', 'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/00-reference-image-row-1.png', 'run'),
+    'asset-import-1', jsonb_build_array('ad110002-1000-4000-8000-000000000002', 'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/00-reference-image-row-1.png', 'run'),
+    'asset-kept-1', jsonb_build_array('ad110002-1000-4000-8000-000000000002', 'post_resource_files/ad110001-1000-4000-8000-000000000001/generation-references/ad110010-1000-4000-8000-000000000001/00-reference-image-row-1.png', 'run')),
+  'each asset is classified by its file: own, the copy, an import of it, a kept input marked as it'
+);
+select is(public.backfill_seedance_prepared_assets(), 0::bigint, 'a second backfill adds nothing');
 
 -- A refund deletes the purchase: the copy and the kept input made from it close.
 delete from public.post_resource_bundle_purchases where id = 'ad110050-1000-4000-8000-000000000001';

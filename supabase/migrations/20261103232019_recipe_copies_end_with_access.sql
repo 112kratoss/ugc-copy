@@ -227,15 +227,6 @@ grant execute on function public.recipe_files_readable_by(uuid, text[]) to servi
 -- The read policy runs it as the caller; it answers only of the caller's own folder.
 grant execute on function public.generation_input_object_readable(text) to authenticated, service_role;
 
-drop policy if exists "Users can read own generation inputs" on storage.objects;
-create policy "Users can read own generation inputs"
-  on storage.objects for select to authenticated
-  using (
-    bucket_id = 'generation_inputs'
-    and (storage.foldername(name))[1] = (select auth.uid())::text
-    and public.generation_input_object_readable(name)
-  );
-
 -- ─── Seedance assets: who prepared each, and from what ──────────────────────
 
 create table public.seedance_prepared_assets (
@@ -266,48 +257,90 @@ grant select, insert on table public.seedance_prepared_assets to service_role;
 comment on table public.seedance_prepared_assets is
   'Which account prepared each Seedance asset and from which file. A start refuses an asset prepared from a recipe file the caller cannot use now (src/lib/seedance-asset-provenance.ts).';
 
-insert into public.seedance_prepared_assets (asset_id, owner_user_id, source, recipe_file, recorded_from, created_at)
-select distinct on (entry.asset_id)
-  entry.asset_id,
-  run.user_id,
-  entry.source,
-  coalesce(
-    public.recipe_file_of_source(run.user_id, entry.source),
-    (
-      select public.held_input_recipe_file(kept.user_id, kept.metadata)
-      from public.generation_input_media kept
-      where entry.kept_input is not null
-        and kept.user_id = run.user_id
-        and kept.generation_id = (entry.kept_input[2])::uuid
-        and kept.storage_path = 'generation_inputs/' || entry.kept_input[1] || '/' || entry.kept_input[2] || '/' || entry.kept_input[3]
-      limit 1
-    )
-  ),
-  'run',
-  run.created_at
-from public.generations run
-cross join lateral (
-  select
-    btrim(asset ->> 'assetId') as asset_id,
-    btrim(asset ->> 'sourceUrl') as source,
-    regexp_match(
-      btrim(asset ->> 'sourceUrl'),
-      '^(?:https?://[^/?#]+/storage/v1/object/(?:sign|public|authenticated)/)?generation_inputs/([^/?#]+)/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/([^/?#]+)(?:[?#].*)?$'
-    ) as kept_input
-  from jsonb_array_elements(
-    (case when jsonb_typeof(run.workflow_settings -> 'seedanceAssets' -> 'images') = 'array'
-      then run.workflow_settings -> 'seedanceAssets' -> 'images' else '[]'::jsonb end)
-    || (case when jsonb_typeof(run.workflow_settings -> 'seedanceAssets' -> 'videos') = 'array'
-      then run.workflow_settings -> 'seedanceAssets' -> 'videos' else '[]'::jsonb end)
-    || (case when jsonb_typeof(run.workflow_settings -> 'seedanceAssets' -> 'audios') = 'array'
-      then run.workflow_settings -> 'seedanceAssets' -> 'audios' else '[]'::jsonb end)
-  ) as asset
-  where jsonb_typeof(asset) = 'object'
-) entry
-where run.user_id is not null
-  and jsonb_typeof(run.workflow_settings -> 'seedanceAssets') = 'object'
-  and entry.asset_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$'
-  and coalesce(entry.source, '') <> ''
-  and exists (select 1 from auth.users owner where owner.id = run.user_id)
-order by entry.asset_id, run.created_at, run.id
-on conflict (asset_id) do nothing;
+-- The asset ids every run so far recorded (workflow_settings.seedanceAssets),
+-- each under the first account that ran it and classified by the file it ran
+-- in place of: the seller's file itself, a run start's import of a copy, or a
+-- kept input of the runner's own marked as a recipe file. Idempotent: a second
+-- call adds only what a first one has not. One pass, run below: it reads only
+-- generations, writes only the new table, and takes no storage lock (the
+-- policy swap is the file's last statement), so a long scan blocks nobody's
+-- writes; a run's asset entries are a handful of small JSON objects. The
+-- pgTAP suite calls it again on seeded rows to prove its classification.
+create or replace function public.backfill_seedance_prepared_assets()
+returns bigint
+language sql
+security definer
+set search_path = ''
+as $$
+  with recorded as (
+  insert into public.seedance_prepared_assets (asset_id, owner_user_id, source, recipe_file, recorded_from, created_at)
+  select distinct on (entry.asset_id)
+    entry.asset_id,
+    run.user_id,
+    entry.source,
+    coalesce(
+      public.recipe_file_of_source(run.user_id, entry.source),
+      (
+        select public.held_input_recipe_file(kept.user_id, kept.metadata)
+        from public.generation_input_media kept
+        where entry.kept_input is not null
+          and kept.user_id = run.user_id
+          and kept.generation_id = (entry.kept_input[2])::uuid
+          and kept.storage_path = 'generation_inputs/' || entry.kept_input[1] || '/' || entry.kept_input[2] || '/' || entry.kept_input[3]
+        limit 1
+      )
+    ),
+    'run',
+    run.created_at
+  from public.generations run
+  cross join lateral (
+    select
+      btrim(asset ->> 'assetId') as asset_id,
+      btrim(asset ->> 'sourceUrl') as source,
+      regexp_match(
+        btrim(asset ->> 'sourceUrl'),
+        '^(?:https?://[^/?#]+/storage/v1/object/(?:sign|public|authenticated)/)?generation_inputs/([^/?#]+)/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/([^/?#]+)(?:[?#].*)?$'
+      ) as kept_input
+    from jsonb_array_elements(
+      (case when jsonb_typeof(run.workflow_settings -> 'seedanceAssets' -> 'images') = 'array'
+        then run.workflow_settings -> 'seedanceAssets' -> 'images' else '[]'::jsonb end)
+      || (case when jsonb_typeof(run.workflow_settings -> 'seedanceAssets' -> 'videos') = 'array'
+        then run.workflow_settings -> 'seedanceAssets' -> 'videos' else '[]'::jsonb end)
+      || (case when jsonb_typeof(run.workflow_settings -> 'seedanceAssets' -> 'audios') = 'array'
+        then run.workflow_settings -> 'seedanceAssets' -> 'audios' else '[]'::jsonb end)
+    ) as asset
+    where jsonb_typeof(asset) = 'object'
+  ) entry
+  where run.user_id is not null
+    and jsonb_typeof(run.workflow_settings -> 'seedanceAssets') = 'object'
+    and entry.asset_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$'
+    and coalesce(entry.source, '') <> ''
+    and exists (select 1 from auth.users owner where owner.id = run.user_id)
+  order by entry.asset_id, run.created_at, run.id
+  on conflict (asset_id) do nothing
+    returning 1
+  )
+  select count(*) from recorded;
+$$;
+
+revoke all on function public.backfill_seedance_prepared_assets() from public, anon, authenticated;
+grant execute on function public.backfill_seedance_prepared_assets() to service_role;
+
+select public.backfill_seedance_prepared_assets();
+
+-- ─── The generation_inputs read policy, swapped last ────────────────────────
+
+-- Replacing a policy on storage.objects takes an ACCESS EXCLUSIVE lock on it,
+-- held until this file commits: last, so the backfill above runs without it,
+-- and bounded, so a busy table fails the release rather than queueing every
+-- storage call behind it.
+set local lock_timeout = '5s';
+
+drop policy if exists "Users can read own generation inputs" on storage.objects;
+create policy "Users can read own generation inputs"
+  on storage.objects for select to authenticated
+  using (
+    bucket_id = 'generation_inputs'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+    and public.generation_input_object_readable(name)
+  );

@@ -86,6 +86,20 @@ describe('recipe copies end with access migration', () => {
     expect(sql).toContain("run.workflow_settings -> 'seedanceAssets' -> 'audios'");
     expect(sql).toContain('public.recipe_file_of_source(run.user_id, entry.source)');
     expect(sql).toContain('public.held_input_recipe_file(kept.user_id, kept.metadata)');
-    expect(sql).toMatch(/order by entry\.asset_id, run\.created_at, run\.id\s+on conflict \(asset_id\) do nothing;/);
+    expect(sql).toMatch(/order by entry\.asset_id, run\.created_at, run\.id\s+on conflict \(asset_id\) do nothing\s+returning 1/);
+    expect(sql).toContain('select public.backfill_seedance_prepared_assets();');
+    expect(sql).toContain('grant execute on function public.backfill_seedance_prepared_assets() to service_role;');
+  });
+
+  // 2026-11-04 review: a policy change on storage.objects holds an ACCESS EXCLUSIVE lock until commit,
+  // so it comes after the backfill, last in the file, behind a bounded wait.
+  it('swaps the storage read policy last, after the backfill, behind a lock timeout', () => {
+    const backfill = sql.indexOf('select public.backfill_seedance_prepared_assets();');
+    const timeout = sql.indexOf("set local lock_timeout = '5s';");
+    const drop = sql.indexOf('drop policy if exists "Users can read own generation inputs"');
+    expect(backfill).toBeGreaterThan(0);
+    expect(timeout).toBeGreaterThan(backfill);
+    expect(drop).toBeGreaterThan(timeout);
+    expect(sql.slice(drop)).toMatch(/^drop policy[^;]+;\s*create policy[^;]+;\s*$/);
   });
 });
