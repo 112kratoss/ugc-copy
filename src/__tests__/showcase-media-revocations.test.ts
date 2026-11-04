@@ -598,6 +598,59 @@ describe('processShowcaseMediaRevocations', () => {
     expect(tables.showcase_media_revocations.map((row) => row.id)).toEqual(['rev-stuck']);
   });
 
+  it('drains a backlog past one batch within its time budget', async () => {
+    const paths = Array.from({ length: 120 }, (_, index) => `showcase/${GENERATION_ID}/cover.${index}.jpg`);
+    const { client, bucket, tables } = createClient({
+      revocations: paths.map((path, index) => queued({ id: `rev-${index}`, showcase_asset_path: path })),
+      objects: paths,
+    });
+
+    const summary = await processShowcaseMediaRevocations(client, { now: NOW, removeDerivative: removingFrom(bucket) });
+
+    expect(summary).toMatchObject({ due: 120, removed: 120, rescheduled: 0 });
+    expect(tables.showcase_media_revocations).toEqual([]);
+    expect(bucket.size).toBe(0);
+  });
+
+  it('stops between batches once its time budget is spent', async () => {
+    const paths = Array.from({ length: 120 }, (_, index) => `showcase/${GENERATION_ID}/cover.${index}.jpg`);
+    const { client, bucket, tables } = createClient({
+      revocations: paths.map((path, index) => queued({ id: `rev-${index}`, showcase_asset_path: path })),
+      objects: paths,
+    });
+    let clock = 0;
+
+    const summary = await processShowcaseMediaRevocations(client, {
+      now: NOW,
+      removeDerivative: removingFrom(bucket),
+      timeBudgetMs: 1_000,
+      clock: () => (clock += 600),
+    });
+
+    expect(summary).toMatchObject({ due: 100, removed: 100 });
+    expect(tables.showcase_media_revocations).toHaveLength(20);
+  });
+
+  it('never takes a rescheduled row twice in one run', async () => {
+    const paths = Array.from({ length: 60 }, (_, index) => `showcase/${GENERATION_ID}/cover.${index}.jpg`);
+    const { client, bucket } = createClient({
+      revocations: paths.map((path, index) => queued({ id: `rev-${index}`, showcase_asset_path: path })),
+      objects: paths,
+    });
+    const failing = vi.fn<typeof removeGenerationShowcaseDerivative>(async () => ({
+      removed: false,
+      removedPaths: [],
+      removedMediaRows: 0,
+      error: { message: 'storage unavailable' } as Error,
+    }));
+
+    const summary = await processShowcaseMediaRevocations(client, { now: NOW, removeDerivative: failing });
+
+    expect(summary).toMatchObject({ due: 60, rescheduled: 60 });
+    expect(failing).toHaveBeenCalledTimes(60);
+    expect(bucket.size).toBe(60);
+  });
+
   it('backs off from ten minutes to at most a day', () => {
     expect(showcaseMediaRevocationRetryDelayMs(1)).toBe(10 * 60 * 1000);
     expect(showcaseMediaRevocationRetryDelayMs(4)).toBe(80 * 60 * 1000);

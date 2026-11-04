@@ -3,8 +3,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   isAbandonedIntentReclaimEnabled,
+  RECLAIM_BATCH_SIZE,
   reclaimAbandonedMediaUploads,
+  reclaimMediaUploadsWithinBudget,
   selectReclaimableIntents,
+  type ReclaimSummary,
 } from '@/lib/media-upload-reclaim-service';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
@@ -409,5 +412,106 @@ describe('legacy generation reference guard', () => {
     expect(sweep.removed).toEqual([]);
     expect(sweep.updates).toEqual([{ reclaim_checked_at: expect.any(String) }]);
     expect(summary).toMatchObject({ scanned: 1, reclaimed: 0, rowsDropped: 0, kept: 1 });
+  });
+});
+
+describe('reclaim throughput', () => {
+  function batchSummary(scanned: number, reclaimed = scanned): ReclaimSummary {
+    return {
+      abandonedReclaimEnabled: false,
+      scanned,
+      reclaimed,
+      rowsDropped: 0,
+      kept: scanned - reclaimed,
+      bytesReclaimed: reclaimed * 10,
+      protectedLegacyReferences: 0,
+    };
+  }
+
+  it('runs batch after batch until one comes back short, each skipping what this run has checked', async () => {
+    const batches = [RECLAIM_BATCH_SIZE, RECLAIM_BATCH_SIZE, 120];
+    const reclaimBatch = vi.fn(async () => batchSummary(batches.shift() ?? 0));
+    let clock = Date.parse('2026-08-03T12:00:00.000Z');
+
+    const summary = await reclaimMediaUploadsWithinBudget({} as SupabaseClient, {
+      now: NOW,
+      includeAbandoned: false,
+      clock: () => (clock += 1_000),
+      reclaimBatch,
+    });
+
+    expect(reclaimBatch).toHaveBeenCalledTimes(3);
+    for (const [, options] of reclaimBatch.mock.calls as unknown as Array<[unknown, Record<string, unknown>]>) {
+      expect(options).toMatchObject({ now: NOW, includeAbandoned: false, checkedBefore: '2026-08-03T12:00:01.000Z' });
+    }
+    expect(summary).toMatchObject({
+      batches: 3,
+      scanned: RECLAIM_BATCH_SIZE * 2 + 120,
+      reclaimed: RECLAIM_BATCH_SIZE * 2 + 120,
+      bytesReclaimed: (RECLAIM_BATCH_SIZE * 2 + 120) * 10,
+    });
+  });
+
+  it('stops between batches once its time budget is spent', async () => {
+    const reclaimBatch = vi.fn(async () => batchSummary(RECLAIM_BATCH_SIZE));
+    let clock = 0;
+
+    const summary = await reclaimMediaUploadsWithinBudget({} as SupabaseClient, {
+      now: NOW,
+      timeBudgetMs: 1_500,
+      clock: () => (clock += 1_000),
+      reclaimBatch,
+    });
+
+    expect(reclaimBatch).toHaveBeenCalledTimes(2);
+    expect(summary.batches).toBe(2);
+  });
+
+  it('moves on past a batch it kept whole: the next one reads rows this run has not checked', async () => {
+    const batches = [batchSummary(RECLAIM_BATCH_SIZE, 0), batchSummary(30)];
+    const reclaimBatch = vi.fn(async () => batches.shift() ?? batchSummary(0));
+
+    const summary = await reclaimMediaUploadsWithinBudget({} as SupabaseClient, { now: NOW, reclaimBatch });
+
+    expect(reclaimBatch).toHaveBeenCalledTimes(2);
+    expect(summary).toMatchObject({ scanned: RECLAIM_BATCH_SIZE + 30, reclaimed: 30, kept: RECLAIM_BATCH_SIZE });
+  });
+
+  it.each(['unverifiable_legacy_references', 'storage_remove_failed'] as const)(
+    'stops at a batch halted by %s, and says so',
+    async (halted) => {
+      const reclaimBatch = vi.fn(async () => ({ ...batchSummary(RECLAIM_BATCH_SIZE, 0), halted }));
+
+      const summary = await reclaimMediaUploadsWithinBudget({} as SupabaseClient, { now: NOW, reclaimBatch });
+
+      expect(reclaimBatch).toHaveBeenCalledTimes(1);
+      expect(summary).toMatchObject({ halted });
+    },
+  );
+
+  it('says why a batch halted', async () => {
+    const unproven = await reclaimAbandonedMediaUploads(clientDouble({
+      rows: [{ id: 'intent-1', storage_path: 'user-1/a.png', kind: 'image', declared_bytes: 1, created_at: agedIso(RECLAIM_AFTER_HOURS + 1), consumed_by: 'generation_input' }],
+    }).client, { now: NOW, protectedPaths: null });
+    expect(unproven.halted).toBe('unverifiable_legacy_references');
+
+    const failing = await reclaimAbandonedMediaUploads(clientDouble({
+      rows: [{ id: 'intent-1', storage_path: 'user-1/a.png', kind: 'image', declared_bytes: 1, created_at: agedIso(RECLAIM_AFTER_HOURS + 1), consumed_by: 'generation_input' }],
+      removeError: { message: 'storage unavailable' },
+    }).client, { now: NOW, protectedPaths: new Set() });
+    expect(failing.halted).toBe('storage_remove_failed');
+  });
+
+  it('asks only for rows no batch of this run has checked', async () => {
+    const or = vi.fn();
+    const query: Record<string, unknown> = {};
+    for (const method of ['select', 'is', 'lt', 'order', 'limit', 'not']) query[method] = vi.fn(() => query);
+    query.or = or.mockImplementation(() => query);
+    query.then = (resolve: (value: { data: unknown[]; error: null }) => unknown) => Promise.resolve(resolve({ data: [], error: null }));
+    const scoped = { from: vi.fn(() => ({ select: query.select })) } as unknown as SupabaseClient;
+
+    await selectReclaimableIntents(scoped, { now: NOW, includeAbandoned: false, checkedBefore: '2026-08-03T12:00:01.000Z' });
+
+    expect(or).toHaveBeenCalledWith('reclaim_checked_at.is.null,reclaim_checked_at.lt."2026-08-03T12:00:01.000Z"');
   });
 });

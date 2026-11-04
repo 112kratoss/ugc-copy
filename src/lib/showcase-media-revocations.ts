@@ -26,6 +26,12 @@ import { POST_MEDIA_PATH_COLUMNS, type PostMediaPathColumn } from '@/lib/post-me
  */
 
 export const SHOWCASE_MEDIA_REVOCATION_BATCH_LIMIT = 50;
+/**
+ * A run takes batch after batch until no due row is left or this much time
+ * has passed; a batch started is always finished. Its function's limit is
+ * 300 s, shared with the uploaded-media maintenance that runs after it.
+ */
+export const SHOWCASE_MEDIA_REVOCATION_TIME_BUDGET_MS = 120_000;
 export const SHOWCASE_MEDIA_REVOCATION_RETRY_BASE_MS = 10 * 60 * 1000;
 export const SHOWCASE_MEDIA_REVOCATION_RETRY_MAX_MS = 24 * 60 * 60 * 1000;
 /**
@@ -216,30 +222,66 @@ export async function processShowcaseMediaRevocations(
     now,
     limit = SHOWCASE_MEDIA_REVOCATION_BATCH_LIMIT,
     removeDerivative = removeGenerationShowcaseDerivative,
+    timeBudgetMs = SHOWCASE_MEDIA_REVOCATION_TIME_BUDGET_MS,
+    clock = Date.now,
   }: {
     now: Date;
     limit?: number;
     removeDerivative?: typeof removeGenerationShowcaseDerivative;
+    timeBudgetMs?: number;
+    clock?: () => number;
   },
 ): Promise<ShowcaseMediaRevocationSummary> {
-  const { data, error } = await client
-    .from(REVOCATIONS_TABLE)
-    .select('id, generation_id, post_id, showcase_asset_path, attempt_count')
-    .lte('next_attempt_at', now.toISOString())
-    .order('next_attempt_at', { ascending: true })
-    .limit(limit);
-  if (error) throw error;
-
-  const rows = (data ?? []) as RevocationRow[];
   const summary: ShowcaseMediaRevocationSummary = {
-    due: rows.length,
+    due: 0,
     removed: 0,
     stillServing: 0,
     outsidePrefix: 0,
     rescheduled: 0,
     stuck: 0,
   };
+  const startedAt = clock();
+  // Each row taken is settled (deleted) or rescheduled past `now`, so the next
+  // batch reads rows not read before; the ids are kept to make sure of it.
+  const taken = new Set<string>();
+  for (let batch = 0; batch === 0 || clock() - startedAt < timeBudgetMs; batch += 1) {
+    const { data, error } = await client
+      .from(REVOCATIONS_TABLE)
+      .select('id, generation_id, post_id, showcase_asset_path, attempt_count')
+      .lte('next_attempt_at', now.toISOString())
+      .order('next_attempt_at', { ascending: true })
+      .limit(limit);
+    if (error) throw error;
 
+    const page = (data ?? []) as RevocationRow[];
+    const rows = page.filter((row) => !taken.has(row.id));
+    if (rows.length === 0) break;
+    rows.forEach((row) => taken.add(row.id));
+    summary.due += rows.length;
+    await revokeBatch(client, rows, { now, removeDerivative }, summary);
+    if (page.length < limit) break;
+  }
+
+  const { count, error: stuckError } = await client
+    .from(REVOCATIONS_TABLE)
+    .select('id', { count: 'exact', head: true })
+    .lt('created_at', new Date(now.getTime() - SHOWCASE_MEDIA_REVOCATION_STUCK_AFTER_MS).toISOString());
+  if (stuckError) throw stuckError;
+  summary.stuck = count ?? 0;
+
+  if (summary.stuck > 0) {
+    throw new ShowcaseMediaRevocationsStuckError(summary);
+  }
+
+  return summary;
+}
+
+async function revokeBatch(
+  client: SupabaseClient,
+  rows: RevocationRow[],
+  { now, removeDerivative }: { now: Date; removeDerivative: typeof removeGenerationShowcaseDerivative },
+  summary: ShowcaseMediaRevocationSummary,
+): Promise<void> {
   for (const row of rows) {
     let outcome: RevocationOutcome;
     try {
@@ -267,17 +309,4 @@ export async function processShowcaseMediaRevocations(
     if (rescheduleError) throw rescheduleError;
     summary.rescheduled += 1;
   }
-
-  const { count, error: stuckError } = await client
-    .from(REVOCATIONS_TABLE)
-    .select('id', { count: 'exact', head: true })
-    .lt('created_at', new Date(now.getTime() - SHOWCASE_MEDIA_REVOCATION_STUCK_AFTER_MS).toISOString());
-  if (stuckError) throw stuckError;
-  summary.stuck = count ?? 0;
-
-  if (summary.stuck > 0) {
-    throw new ShowcaseMediaRevocationsStuckError(summary);
-  }
-
-  return summary;
 }

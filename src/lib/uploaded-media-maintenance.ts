@@ -17,11 +17,48 @@ async function removeVerified(client: SupabaseClient, bucket: string, path: stri
   if (exists.data !== false) throw exists.error ?? new Error('Media object still exists after removal');
 }
 
+/** Rows read a page; a run reads page after page until the outbox is empty or its time is spent. */
+export const UPLOADED_MEDIA_MAINTENANCE_PAGE_SIZE = 20;
+/**
+ * Each page is a few Storage calls a row. The job shares its function (300 s)
+ * with the showcase revocations it runs first, so this stays well inside what
+ * they leave; a page started is always finished.
+ */
+export const UPLOADED_MEDIA_MAINTENANCE_TIME_BUDGET_MS = 60_000;
+
 /** Small Storage operations only; encoding remains in dedicated media jobs. */
-export async function processUploadedMediaMaintenance(client: SupabaseClient) {
+export async function processUploadedMediaMaintenance(
+  client: SupabaseClient,
+  {
+    timeBudgetMs = UPLOADED_MEDIA_MAINTENANCE_TIME_BUDGET_MS,
+    clock = Date.now,
+  }: { timeBudgetMs?: number; clock?: () => number } = {},
+) {
   const result = { revokedPublicCopies: 0, removedPrivateObjects: 0, retainedPrivateObjects: 0 };
+  const startedAt = clock();
+  const timeLeft = () => clock() - startedAt < timeBudgetMs;
+  // Every processed row leaves the page it came from (revoked, or its ticket
+  // deleted) and any failure throws, so each page reads rows not read before.
+  for (let page = 0; page === 0 || timeLeft(); page += 1) {
+    const processed = await revokePublicCopies(client, result);
+    if (processed < UPLOADED_MEDIA_MAINTENANCE_PAGE_SIZE) break;
+  }
+  for (let page = 0; page === 0 || timeLeft(); page += 1) {
+    const processed = await removePrivateObjects(client, result);
+    if (processed < UPLOADED_MEDIA_MAINTENANCE_PAGE_SIZE) break;
+  }
+  return result;
+}
+
+type UploadedMediaMaintenanceResult = {
+  revokedPublicCopies: number;
+  removedPrivateObjects: number;
+  retainedPrivateObjects: number;
+};
+
+async function revokePublicCopies(client: SupabaseClient, result: UploadedMediaMaintenanceResult): Promise<number> {
   const copies = await client.from('uploaded_media_private_copies').select('public_path,private_path')
-    .is('revoked_at', null).order('copied_at').limit(20);
+    .is('revoked_at', null).order('copied_at').limit(UPLOADED_MEDIA_MAINTENANCE_PAGE_SIZE);
   if (copies.error) throw copies.error;
   for (const row of copies.data ?? []) {
     const path = parseCanonicalStorageObjectPath(row.public_path);
@@ -35,7 +72,12 @@ export async function processUploadedMediaMaintenance(client: SupabaseClient) {
     if (updated.error) throw updated.error;
     result.revokedPublicCopies += 1;
   }
-  const cleanup = await client.from('post_media_object_cleanup').select('storage_path').order('created_at').limit(20);
+  return (copies.data ?? []).length;
+}
+
+async function removePrivateObjects(client: SupabaseClient, result: UploadedMediaMaintenanceResult): Promise<number> {
+  const cleanup = await client.from('post_media_object_cleanup').select('storage_path').order('created_at')
+    .limit(UPLOADED_MEDIA_MAINTENANCE_PAGE_SIZE);
   if (cleanup.error) throw cleanup.error;
   for (const row of cleanup.data ?? []) {
     const path = parseCanonicalStorageObjectPath(row.storage_path);
@@ -50,5 +92,5 @@ export async function processUploadedMediaMaintenance(client: SupabaseClient) {
     const removed = await client.from('post_media_object_cleanup').delete().eq('storage_path', path);
     if (removed.error) throw removed.error;
   }
-  return result;
+  return (cleanup.data ?? []).length;
 }

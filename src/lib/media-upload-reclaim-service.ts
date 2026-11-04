@@ -16,11 +16,18 @@ import { iterateStorageObjectsV2 } from '@/lib/storage-list-v2';
 const UPLOADS_BUCKET = 'uploads';
 
 /**
- * Bounded like the other retention sweeps: a backlog drains over subsequent
- * daily runs rather than needing one long pass. Storage deletes are batched, so
- * this is a handful of requests even at the cap.
+ * Rows a batch reads. A run takes batch after batch
+ * (`reclaimMediaUploadsWithinBudget`) until one comes back short or the time
+ * budget is spent, so a backlog no longer waits a day per 500. Storage deletes
+ * are batched, so a batch is a handful of requests even when full.
  */
 export const RECLAIM_BATCH_SIZE = 500;
+/**
+ * The batches' share of the job's function (300 s, shared with the repair that
+ * runs first and with every other job due on the same scheduler tick). A batch
+ * started is always finished.
+ */
+export const RECLAIM_TIME_BUDGET_MS = 120_000;
 // UUID filters travel in the URL; keep each write below proxy URI limits.
 const RECLAIM_WRITE_BATCH_SIZE = 100;
 
@@ -72,6 +79,11 @@ export type ReclaimSummary = {
    * a number that stops falling means repair is stuck on something.
    */
   protectedLegacyReferences: number;
+  /**
+   * Set when the batch could not do its work, so a run takes no further batch:
+   * the protected set could not be proven, or Storage refused the removal.
+   */
+  halted?: 'unverifiable_legacy_references' | 'storage_remove_failed';
 };
 
 function toUnclearedIntent(row: IntentRow, objectExists: boolean): UnclearedUploadIntent {
@@ -94,7 +106,17 @@ function toUnclearedIntent(row: IntentRow, objectExists: boolean): UnclearedUplo
  */
 export async function selectReclaimableIntents(
   client: SupabaseClient,
-  options: { now?: Date; includeAbandoned?: boolean; limit?: number } = {},
+  options: {
+    now?: Date;
+    includeAbandoned?: boolean;
+    limit?: number;
+    /**
+     * Leaves out rows checked at or after this instant: a batch marks every
+     * row it reads (`reclaim_checked_at`) before its work, so a run's later
+     * batches pass by what its earlier ones read.
+     */
+    checkedBefore?: string;
+  } = {},
 ): Promise<IntentRow[]> {
   const now = options.now ?? new Date();
   const cutoff = new Date(now.getTime() - RECLAIM_AFTER_HOURS * 60 * 60 * 1000).toISOString();
@@ -111,6 +133,10 @@ export async function selectReclaimableIntents(
 
   if (!includeAbandoned) {
     query = query.not('consumed_by', 'is', null);
+  }
+
+  if (options.checkedBefore) {
+    query = query.or(`reclaim_checked_at.is.null,reclaim_checked_at.lt."${options.checkedBefore}"`);
   }
 
   const { data, error } = await query;
@@ -148,6 +174,7 @@ export async function reclaimAbandonedMediaUploads(
     now?: Date;
     includeAbandoned?: boolean;
     protectedPaths?: Set<string> | null;
+    checkedBefore?: string;
   } = {},
 ): Promise<ReclaimSummary> {
   const now = options.now ?? new Date();
@@ -200,6 +227,7 @@ export async function reclaimAbandonedMediaUploads(
       scanned: rows.length,
     });
     summary.kept = rows.length;
+    summary.halted = 'unverifiable_legacy_references';
     return summary;
   }
 
@@ -271,6 +299,7 @@ export async function reclaimAbandonedMediaUploads(
         count: toReclaim.length,
       });
       summary.bytesReclaimed = 0;
+      summary.halted = 'storage_remove_failed';
     } else {
       // Storage reports per-path outcomes in `data`, not `error`: a batch can
       // partially fail with error null. Clearing every row on that would orphan
@@ -306,6 +335,65 @@ export async function reclaimAbandonedMediaUploads(
   }
 
   return summary;
+}
+
+export type BudgetedReclaimSummary = ReclaimSummary & { batches: number };
+
+/**
+ * Batch after batch of `reclaimAbandonedMediaUploads` until one comes back
+ * short (nothing left that this run has not read), one halts, or the time
+ * budget is spent. Each batch passes by the rows this run's earlier batches
+ * read, so a head of kept rows (protected, failed, claimed elsewhere) cannot
+ * hold the run in place, and nothing is read twice.
+ */
+export async function reclaimMediaUploadsWithinBudget(
+  client: SupabaseClient,
+  {
+    now,
+    includeAbandoned,
+    timeBudgetMs = RECLAIM_TIME_BUDGET_MS,
+    clock = Date.now,
+    reclaimBatch = reclaimAbandonedMediaUploads,
+  }: {
+    now?: Date;
+    includeAbandoned?: boolean;
+    timeBudgetMs?: number;
+    clock?: () => number;
+    reclaimBatch?: typeof reclaimAbandonedMediaUploads;
+  } = {},
+): Promise<BudgetedReclaimSummary> {
+  const startedAt = clock();
+  // Every batch's own mark is taken after this instant.
+  const checkedBefore = new Date(startedAt).toISOString();
+  const total: BudgetedReclaimSummary = {
+    abandonedReclaimEnabled: false,
+    scanned: 0,
+    reclaimed: 0,
+    rowsDropped: 0,
+    kept: 0,
+    bytesReclaimed: 0,
+    protectedLegacyReferences: 0,
+    batches: 0,
+  };
+
+  for (;;) {
+    const batch = await reclaimBatch(client, { now, includeAbandoned, checkedBefore });
+    total.batches += 1;
+    total.abandonedReclaimEnabled = batch.abandonedReclaimEnabled;
+    total.scanned += batch.scanned;
+    total.reclaimed += batch.reclaimed;
+    total.rowsDropped += batch.rowsDropped;
+    total.kept += batch.kept;
+    total.bytesReclaimed += batch.bytesReclaimed;
+    total.protectedLegacyReferences += batch.protectedLegacyReferences;
+    if (batch.halted) {
+      total.halted = batch.halted;
+      break;
+    }
+    if (batch.scanned < RECLAIM_BATCH_SIZE || clock() - startedAt >= timeBudgetMs) break;
+  }
+
+  return total;
 }
 
 async function markCleared(client: SupabaseClient, ids: string[]): Promise<void> {

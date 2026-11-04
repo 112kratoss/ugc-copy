@@ -46,7 +46,7 @@ import { checkKieAccountBalance } from '@/lib/kie-account-balance-alert';
 import { hasRepairableMediaPreviews, repairMediaPreviews } from '@/lib/media-preview-repair';
 import {
   hasReclaimableMediaUploads,
-  reclaimAbandonedMediaUploads,
+  reclaimMediaUploadsWithinBudget,
 } from '@/lib/media-upload-reclaim-service';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import {
@@ -677,7 +677,7 @@ export function runMediaUploadReclaimBackendJob(options: {
         };
       }
 
-      const reclaim = await reclaimAbandonedMediaUploads(client, {
+      const reclaim = await reclaimMediaUploadsWithinBudget(client, {
         now,
         includeAbandoned: reclaimPolicy.effectiveEnabled,
       });
