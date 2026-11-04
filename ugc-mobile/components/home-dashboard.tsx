@@ -97,6 +97,7 @@ import {
   getShowcaseFeedSessionContext,
 } from '@/lib/showcase-feed-query';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
+import { scheduleExploreReadAhead, startExploreReadAhead } from '@/lib/explore-read-ahead';
 import {
   PERSISTED_HOME_FEED_CHIP_ID,
   cancelScheduledPersistHomeFeed,
@@ -504,6 +505,17 @@ export function HomeDashboard() {
     if (isAuthLoading || activeChipId !== PERSISTED_HOME_FEED_CHIP_ID || !feedQuery.isSuccess) return;
     schedulePersistHomeFeed(queryClient, identityUserId);
   }, [activeChipId, feedQuery.dataUpdatedAt, feedQuery.isSuccess, identityUserId, isAuthLoading, queryClient]);
+  // Explore's first page, ranked ahead once this page has landed and the app
+  // is idle, with nothing written until Explore draws it
+  // (`lib/explore-read-ahead.ts`). This runs again as Home refetches or comes
+  // back into view, but the module asks once per identity per launch: these
+  // reruns only matter for an identity that arrived since (a sign-in).
+  useEffect(() => {
+    if (isAuthLoading || !isFocused || !feedQuery.isSuccess || !identityUserId) return;
+    return scheduleExploreReadAhead(() => {
+      startExploreReadAhead({ api, identityUserId, queryClient });
+    });
+  }, [api, feedQuery.dataUpdatedAt, feedQuery.isSuccess, identityUserId, isAuthLoading, isFocused, queryClient]);
   // A save still waiting when home unmounts is dropped. An error boundary that
   // replaces home unmounts it too, and a page that failed to draw must not be
   // the one the next launch restores.

@@ -142,6 +142,58 @@ export type RankedFeedFilters = {
   resourceFilter: ShowcaseResourceFilter;
 };
 
+/**
+ * How long a first page ranked ahead may wait to be shown: the window in which
+ * a first page is already served again from a session ranked moments earlier
+ * (`FEED_SESSION_REUSE_TTL_MS`), so a ranking this old is one the feed already
+ * treats as current.
+ */
+export const PREPARED_FEED_SESSION_TTL_MS = FEED_SESSION_REUSE_TTL_MS;
+
+/**
+ * A first page ranked ahead of being shown (the app's Explore read-ahead), as
+ * everything that persisting it would write: nothing here has touched the
+ * database. No session exists for it and nothing in it is served, so the
+ * served-recently reads of every later ranking are as if it never ran. The
+ * request that shows the page persists it exactly as a fresh first page is
+ * persisted (`servePreparedSession`), and only then are its deliveries served.
+ */
+export type PreparedRankedFeedSession = {
+  format: 1;
+  /** When the ranking began, in ms; it is refused past PREPARED_FEED_SESSION_TTL_MS. */
+  preparedAt: number;
+  viewerUserId: string | null;
+  anonymousKeyHash: string | null;
+  filters: RankedFeedFilters;
+  algorithmId: string;
+  algorithmVersion: string;
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'];
+  visibilityThresholds: FeedVisibilityThresholds;
+  experimentAssignmentId: number | null;
+  experimentId: string | null;
+  experimentVariantId: string | null;
+  randomSeed: number;
+  ranked: RankedShowcaseItem[];
+};
+
+/** Whether a prepared ranking was ranked for this viewer and these filters. */
+export function preparedFeedSessionMatches(
+  prepared: PreparedRankedFeedSession,
+  {
+    anonymousKeyHash,
+    filters,
+    viewerUserId,
+  }: { anonymousKeyHash: string | null; filters: RankedFeedFilters; viewerUserId: string | null },
+) {
+  return prepared.format === 1
+    && prepared.viewerUserId === viewerUserId
+    && prepared.anonymousKeyHash === (viewerUserId ? null : anonymousKeyHash)
+    && prepared.filters.category === filters.category
+    && prepared.filters.toolSlug === filters.toolSlug
+    && prepared.filters.unlockFilter === filters.unlockFilter
+    && prepared.filters.resourceFilter === filters.resourceFilter;
+}
+
 function scoreComponents(
   entry: RankedShowcaseItem,
   candidateRpc: RankedFeedRetrievalConfig['candidateRpc'],
@@ -1222,30 +1274,10 @@ function mergeUniqueFeedItems(
   return Array.from(itemsById.values());
 }
 
-export async function getPersonalizedShowcaseFeedPage({
-  anonymousKeyHash,
-  cursor,
-  fallbackItems,
-  filters,
-  hydratePostIds,
-  limit,
-  offset,
-  serviceClient,
-  viewerUserId,
-  onPhaseTiming,
-}: {
-  anonymousKeyHash: string | null;
-  cursor: string | null;
-  fallbackItems: (target: number) => Promise<ShowcaseFeedItem[]>;
-  filters: RankedFeedFilters;
-  hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
-  limit: number;
-  offset: number;
-  serviceClient: SupabaseClient;
-  viewerUserId: string | null;
-  onPhaseTiming?: (phase: string, durationMs: number) => void;
-}): Promise<ShowcaseFeedPage> {
-  const timed = async <T>(phase: string, work: () => Promise<T>): Promise<T> => {
+type PhaseTimer = <T>(phase: string, work: () => Promise<T>) => Promise<T>;
+
+function createPhaseTimer(onPhaseTiming?: (phase: string, durationMs: number) => void): PhaseTimer {
+  return async <T>(phase: string, work: () => Promise<T>): Promise<T> => {
     const startedAt = performance.now();
     try {
       return await work();
@@ -1253,99 +1285,38 @@ export async function getPersonalizedShowcaseFeedPage({
       onPhaseTiming?.(phase, performance.now() - startedAt);
     }
   };
-  if (cursor) {
-    const persisted = await timed('cursor_load', () => loadPersistedPage({
-      onPhaseTiming,
-      anonymousKeyHash,
-      cursorValue: cursor,
-      hydratePostIds,
-      limit,
-      serviceClient,
-      viewerUserId,
-    }));
-    if (persisted) return persisted;
+}
 
-    // A continuation token is a request for one immutable session. If it is
-    // malformed, expired, or belongs to another viewer, never turn it into a
-    // fresh session with unrelated results.
-    return buildPage({
-      hasMore: false,
-      items: [],
-      limit,
-      nextCursor: null,
-      offset,
-    });
-  }
+type CandidateSources = {
+  fallbackItems: (target: number) => Promise<ShowcaseFeedItem[]>;
+  hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
+};
 
-  // The latest viewer/filter-matching session can be read while the algorithm
-  // and experiment resolve. Never use it until both scope fields match below.
-  const [resolvedAlgorithm, candidateSession] = await Promise.all([
-    timed('algorithm', () => resolveAlgorithmForViewer({
-      anonymousKeyHash,
-      serviceClient,
-      viewerUserId,
-    })),
-    offset === 0
-      ? timed('session_reuse', () => findReusableSession({
-        anonymousKeyHash,
-        filters,
-        serviceClient,
-        viewerUserId,
-      }))
-      : Promise.resolve(null),
-  ]);
-  const {
-    algorithm,
-    experimentAssignmentId,
-    experimentId,
-    experimentVariantId,
-  } = resolvedAlgorithm;
-  if (!algorithm) {
-    const fallback = await fallbackItems(Math.min(
-      SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
-      Math.max(limit, offset + limit),
-    ));
-    return buildPage({
-      algorithmVersion: SHOWCASE_FEED_FALLBACK_ALGORITHM_VERSION,
-      feedSessionId: null,
-      hasMore: false,
-      items: fallback.slice(offset, offset + limit),
-      limit,
-      nextCursor: null,
-      offset,
-    });
-  }
-
-  if (offset === 0) {
-    // A newer session may belong to another algorithm or experiment. Retain
-    // the exact scoped lookup in that case so an older valid session wins.
-    const reusableSession = candidateSession
-      && (candidateSession.algorithm_version_id !== algorithm.id
-        || candidateSession.experiment_assignment_id !== experimentAssignmentId)
-      ? await timed('session_reuse_fallback', () => findReusableSession({
-        scope: { algorithmVersionId: algorithm.id, experimentAssignmentId },
-        anonymousKeyHash,
-        filters,
-        serviceClient,
-        viewerUserId,
-      }))
-      : candidateSession;
-    if (reusableSession) {
-      const reused = await timed('session_page', () => loadPersistedPage({
-        onPhaseTiming,
-        anonymousKeyHash,
-        cursorValue: encodeRankedFeedCursor({ sessionId: reusableSession.id, position: 0 }),
-        hydratePostIds,
-        limit,
-        preloadedAlgorithm: algorithm,
-        preloadedSession: reusableSession,
-        serviceClient,
-        viewerUserId,
-      }));
-      if (reused) return reused;
-    }
-  }
-
+/**
+ * Retrieval, hydration, the visibility stage and the ranking of a new session:
+ * everything a fresh first (or offset) page does before it writes anything.
+ */
+async function rankFreshCandidates({
+  algorithm,
+  anonymousKeyHash,
+  fallbackItems,
+  filters,
+  hydratePostIds,
+  offset,
+  serviceClient,
+  timed,
+  viewerUserId,
+  onPhaseTiming,
+}: CandidateSources & {
+  algorithm: ActiveAlgorithmConfig;
+  anonymousKeyHash: string | null;
+  filters: RankedFeedFilters;
+  offset: number;
+  serviceClient: SupabaseClient;
+  timed: PhaseTimer;
+  viewerUserId: string | null;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
+}): Promise<{ ranked: RankedShowcaseItem[]; randomSeed: number }> {
   const featureRows = await timed('candidate_rpc', () => loadCandidateFeatures({
     algorithm,
     anonymousKeyHash,
@@ -1444,10 +1415,51 @@ export async function getPersonalizedShowcaseFeedPage({
     seed: randomSeed,
   }).slice(0, algorithm.eligibleItemLimit);
   onPhaseTiming?.('ranking', performance.now() - rankingStartedAt);
+  return { ranked, randomSeed };
+}
+
+/**
+ * Persists a new session's ranking with the slice this request returns marked
+ * served, and builds that page. A fresh ranking and a prepared one are served
+ * by this same write.
+ */
+async function persistAndBuildRankedPage({
+  algorithmId,
+  algorithmVersion,
+  anonymousKeyHash,
+  candidateRpc,
+  experimentAssignmentId,
+  experimentId,
+  experimentVariantId,
+  filters,
+  limit,
+  offset,
+  randomSeed,
+  ranked,
+  serviceClient,
+  timed,
+  viewerUserId,
+}: {
+  algorithmId: string;
+  algorithmVersion: string;
+  anonymousKeyHash: string | null;
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'];
+  experimentAssignmentId: number | null;
+  experimentId: string | null;
+  experimentVariantId: string | null;
+  filters: RankedFeedFilters;
+  limit: number;
+  offset: number;
+  randomSeed: number;
+  ranked: RankedShowcaseItem[];
+  serviceClient: SupabaseClient;
+  timed: PhaseTimer;
+  viewerUserId: string | null;
+}): Promise<ShowcaseFeedPage> {
   const persisted = await timed('persistence', () => persistRankedSession({
-    algorithmVersionId: algorithm.id,
+    algorithmVersionId: algorithmId,
     anonymousKeyHash,
-    candidateRpc: algorithm.retrieval.candidateRpc,
+    candidateRpc,
     experimentAssignmentId,
     experimentId,
     experimentVariantId,
@@ -1477,7 +1489,7 @@ export async function getPersonalizedShowcaseFeedPage({
       pageEntries,
       persisted.deliveryIdsByPosition,
       offset,
-      algorithm.algorithmVersion,
+      algorithmVersion,
     )
     : pageEntries.map((entry) => entry.item);
   const nextCursor = hasMore && persisted
@@ -1485,12 +1497,367 @@ export async function getPersonalizedShowcaseFeedPage({
     : null;
 
   return buildPage({
-    algorithmVersion: algorithm.algorithmVersion,
+    algorithmVersion,
     feedSessionId: persisted?.sessionId ?? null,
     hasMore,
     items,
     limit,
     nextCursor,
     offset,
+  });
+}
+
+/**
+ * Ranks a first page for this viewer and filters without writing anything: no
+ * session, no session items, no delivery facts, so nothing is served and no
+ * later ranking reads it as served (`get_ranked_feed_candidates_v4`'s
+ * `served_recently`). The app reads Explore's first page ahead with it once
+ * Home has settled; the request made when Explore draws the page hands the
+ * ranking back to `getPersonalizedShowcaseFeedPage` as `prepared`, and only
+ * that request persists it and marks its first page served.
+ *
+ * Null when there is nothing to prepare: no identity to rank for (a session
+ * could not be persisted for it either), no active algorithm (the unranked
+ * fallback writes nothing to prepare), or an empty ranking.
+ */
+export async function prepareRankedShowcaseFeedSession({
+  anonymousKeyHash,
+  fallbackItems,
+  filters,
+  hydratePostIds,
+  serviceClient,
+  viewerUserId,
+  now = Date.now,
+  onPhaseTiming,
+}: CandidateSources & {
+  anonymousKeyHash: string | null;
+  filters: RankedFeedFilters;
+  serviceClient: SupabaseClient;
+  viewerUserId: string | null;
+  now?: () => number;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
+}): Promise<PreparedRankedFeedSession | null> {
+  if (!viewerUserId && !anonymousKeyHash) return null;
+  const timed = createPhaseTimer(onPhaseTiming);
+  const preparedAt = now();
+  const {
+    algorithm,
+    experimentAssignmentId,
+    experimentId,
+    experimentVariantId,
+  } = await timed('algorithm', () => resolveAlgorithmForViewer({
+    anonymousKeyHash,
+    serviceClient,
+    viewerUserId,
+  }));
+  if (!algorithm) return null;
+
+  const { ranked, randomSeed } = await rankFreshCandidates({
+    algorithm,
+    anonymousKeyHash,
+    fallbackItems,
+    filters,
+    hydratePostIds,
+    offset: 0,
+    serviceClient,
+    timed,
+    viewerUserId,
+    onPhaseTiming,
+  });
+  if (ranked.length === 0) return null;
+
+  return {
+    format: 1,
+    preparedAt,
+    viewerUserId,
+    anonymousKeyHash: viewerUserId ? null : anonymousKeyHash,
+    filters,
+    algorithmId: algorithm.id,
+    algorithmVersion: algorithm.algorithmVersion,
+    candidateRpc: algorithm.retrieval.candidateRpc,
+    visibilityThresholds: algorithm.retrieval.visibilityThresholds,
+    experimentAssignmentId,
+    experimentId,
+    experimentVariantId,
+    randomSeed,
+    ranked,
+  };
+}
+
+/**
+ * Past page one's own places, the entries checked again before a prepared
+ * ranking is served, so a post dropped since the ranking is replaced by one
+ * that has been checked too.
+ */
+const PREPARED_PAGE_LOOKAHEAD = 4;
+
+/**
+ * Serves a prepared ranking's first page: the entries page one draws from are
+ * hydrated again and put through the visibility stage again, as a reused
+ * session's page is (`loadPersistedPage`), for whatever changed since the
+ * ranking (an edit, a take-down, a block, a hide, a report); then the ranking
+ * is persisted and its first page marked served exactly as a fresh one is.
+ *
+ * Null sends the request on to a fresh ranking: a failed relations read (the
+ * visibility stage then clears nothing), or so many drops that page one would
+ * have to reach past the checked entries.
+ */
+async function servePreparedSession({
+  hydratePostIds,
+  limit,
+  prepared,
+  serviceClient,
+  timed,
+  viewerUserId,
+}: {
+  hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
+  limit: number;
+  prepared: PreparedRankedFeedSession;
+  serviceClient: SupabaseClient;
+  timed: PhaseTimer;
+  viewerUserId: string | null;
+}): Promise<ShowcaseFeedPage | null> {
+  const windowSize = Math.min(prepared.ranked.length, limit + PREPARED_PAGE_LOOKAHEAD);
+  const windowEntries = prepared.ranked.slice(0, windowSize);
+  const windowItems = windowEntries.map((entry) => entry.item);
+  const featuresByPostId = new Map(windowEntries.map((entry) => [entry.item.id, entry.features]));
+  // The relations and labels key on the creators, which the ranking already
+  // holds, so they are read beside the hydration rather than after it.
+  const [hydrated, relations, authorLabels] = await timed('prepared_recheck', () => Promise.all([
+    hydratePostIds(windowItems.map((item) => item.id)),
+    loadViewerRelations({
+      followingCreatorIds: followedCreatorIds(
+        windowItems,
+        (postId) => featuresByPostId.get(postId)?.isFollowing === true,
+      ),
+      items: windowItems,
+      serviceClient,
+      viewerUserId,
+    }),
+    loadAuthorLabels({
+      candidateRpc: prepared.candidateRpc,
+      items: windowItems,
+      serviceClient,
+    }),
+  ]));
+  if (!relations || !authorLabels) return null;
+
+  // As on a reused session, the creator rate is not read again: every post
+  // here already passed that rule when it was ranked.
+  const visibleItems = new Map(filterFeedVisibility(
+    hydrated.map((item) => visibilityCandidate(
+      item,
+      featuresByPostId.get(item.id)?.negativeFeedbackRisk ?? null,
+      null,
+      authorLabelsFor(item, authorLabels),
+    )),
+    relations,
+    prepared.visibilityThresholds,
+  ).kept.map((candidate) => [candidate.item.id, candidate.item]));
+  const checkedEntries = windowEntries.flatMap((entry) => {
+    const item = visibleItems.get(entry.item.id);
+    return item ? [{ ...entry, item }] : [];
+  });
+  const uncheckedEntries = prepared.ranked.slice(windowSize);
+  if (checkedEntries.length < limit && uncheckedEntries.length > 0) return null;
+  const ranked = [...checkedEntries, ...uncheckedEntries];
+  if (ranked.length === 0) return null;
+
+  return persistAndBuildRankedPage({
+    algorithmId: prepared.algorithmId,
+    algorithmVersion: prepared.algorithmVersion,
+    anonymousKeyHash: prepared.anonymousKeyHash,
+    candidateRpc: prepared.candidateRpc,
+    experimentAssignmentId: prepared.experimentAssignmentId,
+    experimentId: prepared.experimentId,
+    experimentVariantId: prepared.experimentVariantId,
+    filters: prepared.filters,
+    limit,
+    offset: 0,
+    randomSeed: prepared.randomSeed,
+    ranked,
+    serviceClient,
+    timed,
+    viewerUserId,
+  });
+}
+
+export async function getPersonalizedShowcaseFeedPage({
+  anonymousKeyHash,
+  cursor,
+  fallbackItems,
+  filters,
+  hydratePostIds,
+  limit,
+  offset,
+  prepared = null,
+  serviceClient,
+  viewerUserId,
+  onPhaseTiming,
+}: {
+  anonymousKeyHash: string | null;
+  cursor: string | null;
+  fallbackItems: (target: number) => Promise<ShowcaseFeedItem[]>;
+  filters: RankedFeedFilters;
+  hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
+  limit: number;
+  offset: number;
+  /**
+   * A first page ranked ahead for this viewer and these filters
+   * (`prepareRankedShowcaseFeedSession`), to be persisted and served now in
+   * place of a new ranking. Ignored on any other page, for anyone else, when
+   * a session can be reused, and when the viewer's algorithm or experiment
+   * assignment is no longer the one it was ranked under.
+   */
+  prepared?: PreparedRankedFeedSession | null;
+  serviceClient: SupabaseClient;
+  viewerUserId: string | null;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
+}): Promise<ShowcaseFeedPage> {
+  const timed = createPhaseTimer(onPhaseTiming);
+  if (cursor) {
+    const persisted = await timed('cursor_load', () => loadPersistedPage({
+      onPhaseTiming,
+      anonymousKeyHash,
+      cursorValue: cursor,
+      hydratePostIds,
+      limit,
+      serviceClient,
+      viewerUserId,
+    }));
+    if (persisted) return persisted;
+
+    // A continuation token is a request for one immutable session. If it is
+    // malformed, expired, or belongs to another viewer, never turn it into a
+    // fresh session with unrelated results.
+    return buildPage({
+      hasMore: false,
+      items: [],
+      limit,
+      nextCursor: null,
+      offset,
+    });
+  }
+
+  // The latest viewer/filter-matching session can be read while the algorithm
+  // and experiment resolve. Never use it until both scope fields match below.
+  const [resolvedAlgorithm, candidateSession] = await Promise.all([
+    timed('algorithm', () => resolveAlgorithmForViewer({
+      anonymousKeyHash,
+      serviceClient,
+      viewerUserId,
+    })),
+    offset === 0
+      ? timed('session_reuse', () => findReusableSession({
+        anonymousKeyHash,
+        filters,
+        serviceClient,
+        viewerUserId,
+      }))
+      : Promise.resolve(null),
+  ]);
+  const {
+    algorithm,
+    experimentAssignmentId,
+    experimentId,
+    experimentVariantId,
+  } = resolvedAlgorithm;
+  if (!algorithm) {
+    const fallback = await fallbackItems(Math.min(
+      SHOWCASE_FEED_ELIGIBLE_ITEM_LIMIT,
+      Math.max(limit, offset + limit),
+    ));
+    return buildPage({
+      algorithmVersion: SHOWCASE_FEED_FALLBACK_ALGORITHM_VERSION,
+      feedSessionId: null,
+      hasMore: false,
+      items: fallback.slice(offset, offset + limit),
+      limit,
+      nextCursor: null,
+      offset,
+    });
+  }
+
+  if (offset === 0) {
+    // A newer session may belong to another algorithm or experiment. Retain
+    // the exact scoped lookup in that case so an older valid session wins.
+    const reusableSession = candidateSession
+      && (candidateSession.algorithm_version_id !== algorithm.id
+        || candidateSession.experiment_assignment_id !== experimentAssignmentId)
+      ? await timed('session_reuse_fallback', () => findReusableSession({
+        scope: { algorithmVersionId: algorithm.id, experimentAssignmentId },
+        anonymousKeyHash,
+        filters,
+        serviceClient,
+        viewerUserId,
+      }))
+      : candidateSession;
+    if (reusableSession) {
+      const reused = await timed('session_page', () => loadPersistedPage({
+        onPhaseTiming,
+        anonymousKeyHash,
+        cursorValue: encodeRankedFeedCursor({ sessionId: reusableSession.id, position: 0 }),
+        hydratePostIds,
+        limit,
+        preloadedAlgorithm: algorithm,
+        preloadedSession: reusableSession,
+        serviceClient,
+        viewerUserId,
+      }));
+      if (reused) return reused;
+    }
+
+    // A ranking read ahead stands in for a new one only where a new one would
+    // be made: no session to reuse (one read within the window is already
+    // page one, served; a second would serve it twice, the cold-start twin
+    // #466 removed), and still under the algorithm and experiment arm this
+    // viewer would be ranked with now (an activation, a rollback or a new
+    // assignment since the read-ahead is served on the current one).
+    if (
+      prepared
+      && preparedFeedSessionMatches(prepared, { anonymousKeyHash, filters, viewerUserId })
+      && prepared.algorithmId === algorithm.id
+      && prepared.experimentAssignmentId === experimentAssignmentId
+    ) {
+      const served = await timed('prepared_page', () => servePreparedSession({
+        hydratePostIds,
+        limit,
+        prepared,
+        serviceClient,
+        timed,
+        viewerUserId,
+      }));
+      if (served) return served;
+    }
+  }
+
+  const { ranked, randomSeed } = await rankFreshCandidates({
+    algorithm,
+    anonymousKeyHash,
+    fallbackItems,
+    filters,
+    hydratePostIds,
+    offset,
+    serviceClient,
+    timed,
+    viewerUserId,
+    onPhaseTiming,
+  });
+  return persistAndBuildRankedPage({
+    algorithmId: algorithm.id,
+    algorithmVersion: algorithm.algorithmVersion,
+    anonymousKeyHash,
+    candidateRpc: algorithm.retrieval.candidateRpc,
+    experimentAssignmentId,
+    experimentId,
+    experimentVariantId,
+    filters,
+    limit,
+    offset,
+    randomSeed,
+    ranked,
+    serviceClient,
+    timed,
+    viewerUserId,
   });
 }

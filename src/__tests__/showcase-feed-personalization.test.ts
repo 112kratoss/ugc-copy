@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
+  PREPARED_FEED_SESSION_TTL_MS,
   getPersonalizedShowcaseFeedPage,
   normalizeRetrievalConfig,
+  prepareRankedShowcaseFeedSession,
+  type PreparedRankedFeedSession,
 } from '@/lib/showcase-feed-personalization';
 import {
   FOR_YOU_RULES_V3_DIVERSITY_CONFIG,
@@ -1881,6 +1884,197 @@ describe('for-you-rules v3 wiring', () => {
     );
     expect(failing.items).toEqual([]);
     expect(failing.pageInfo.hasMore).toBe(false);
+  });
+
+  describe("Explore's first page ranked ahead", () => {
+    const FILTERS = { category: 'media' as const, toolSlug: null, unlockFilter: 'all' as const, resourceFilter: 'all' as const };
+    const FEED_TABLES = ['feed_sessions', 'feed_session_items', 'feed_delivery_facts'];
+
+    async function prepare(client: SupabaseClient, viewerUserId: string | null = 'viewer-1') {
+      return prepareRankedShowcaseFeedSession({
+        anonymousKeyHash: null,
+        fallbackItems: async () => [],
+        filters: FILTERS,
+        hydratePostIds: async (ids) => ids.map(item),
+        serviceClient: client,
+        viewerUserId,
+      });
+    }
+
+    function serve(
+      client: SupabaseClient,
+      prepared: PreparedRankedFeedSession | null,
+      {
+        hydratePostIds = async (ids: string[]) => ids.map(item),
+        viewerUserId = 'viewer-1',
+      }: {
+        hydratePostIds?: (ids: string[]) => Promise<ShowcaseFeedItem[]>;
+        viewerUserId?: string | null;
+      } = {},
+    ) {
+      return getPersonalizedShowcaseFeedPage({
+        anonymousKeyHash: null,
+        cursor: null,
+        fallbackItems: async () => [],
+        filters: FILTERS,
+        hydratePostIds,
+        limit: 12,
+        offset: 0,
+        prepared,
+        serviceClient: client,
+        viewerUserId,
+      });
+    }
+
+    const candidates = Array.from({ length: 20 }, (_, index) => v3Candidate(`post-${String(index).padStart(2, '0')}`, {
+      interest_match: 1 - index / 40,
+    }));
+
+    it('ranks without writing anything: no session, no items, no delivery facts', async () => {
+      const { client, persisted, reads, rpc } = v3Client({ candidates });
+
+      const prepared = await prepare(client);
+
+      expect(prepared).toMatchObject({
+        format: 1,
+        viewerUserId: 'viewer-1',
+        anonymousKeyHash: null,
+        filters: FILTERS,
+        algorithmId: 'algorithm-v3',
+        candidateRpc: 'v3',
+      });
+      expect(prepared?.ranked).toHaveLength(20);
+      expect(rpc.mock.calls.map(([name]) => name)).toEqual(['get_ranked_feed_candidates_v3']);
+      expect(persisted).toEqual([]);
+      // Not even a reuse lookup: nothing about a session is read or written.
+      expect(reads.filter((read) => FEED_TABLES.includes(read.table))).toEqual([]);
+    });
+
+    it('prepares nothing for no identity, or for an empty ranking', async () => {
+      expect(await prepare(v3Client({ candidates }).client, null)).toBeNull();
+      expect(await prepare(v3Client({ candidates: [] }).client)).toBeNull();
+    });
+
+    it('serves the prepared ranking when it is shown, persisting it then with only page one served', async () => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+      const { client, persisted, rpc } = v3Client({ candidates });
+
+      const page = await serve(client, prepared);
+
+      // No new retrieval: the ranking served is the one prepared, in its order.
+      expect(rpc.mock.calls.map(([name]) => name)).toEqual(['persist_ranked_feed_session']);
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0].p_items.map((entry) => entry.post_id))
+        .toEqual(prepared?.ranked.map((entry) => entry.item.id));
+      expect(persisted[0]).toMatchObject({
+        p_offset: 0,
+        p_limit: 12,
+        p_session: {
+          viewer_user_id: 'viewer-1',
+          algorithm_version_id: 'algorithm-v3',
+          random_seed: prepared?.randomSeed,
+          served_at: expect.any(String),
+        },
+      });
+      expect(page.items.map((entry) => entry.id))
+        .toEqual(prepared?.ranked.slice(0, 12).map((entry) => entry.item.id));
+      expect(page.items.map((entry) => entry.recommendation?.deliveryId))
+        .toEqual(Array.from({ length: 12 }, (_, position) => String(700 + position)));
+      expect(page.feedSessionId).toBe('session-v3');
+      expect(page.pageInfo).toMatchObject({ hasMore: true, nextCursor: expect.any(String) });
+    });
+
+    it('checks page one again as a reused session does, leaving out a post gone since the ranking', async () => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+      const removed = prepared?.ranked[3].item.id;
+      const hydrated: string[][] = [];
+      const { client, persisted } = v3Client({ candidates });
+
+      const page = await serve(client, prepared, {
+        hydratePostIds: async (ids) => {
+          hydrated.push(ids);
+          return ids.filter((id) => id !== removed).map(item);
+        },
+      });
+
+      // Page one and its lookahead only.
+      expect(hydrated).toEqual([prepared?.ranked.slice(0, 16).map((entry) => entry.item.id)]);
+      expect(persisted[0].p_items.map((entry) => entry.post_id)).not.toContain(removed);
+      expect(page.items.map((entry) => entry.id)).toEqual(
+        prepared?.ranked.map((entry) => entry.item.id).filter((id) => id !== removed).slice(0, 12),
+      );
+    });
+
+    it('ranks afresh when the prepared ranking is for someone else, or its checks cannot be read', async () => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+
+      const otherViewer = v3Client({ candidates });
+      const otherPage = await serve(otherViewer.client, prepared, { viewerUserId: 'viewer-2' });
+      expect(otherViewer.rpc.mock.calls.map(([name]) => name)).toEqual([
+        'get_ranked_feed_candidates_v3',
+        'persist_ranked_feed_session',
+      ]);
+      expect(otherViewer.persisted[0].p_session).toMatchObject({ viewer_user_id: 'viewer-2' });
+      expect(otherPage.items).toHaveLength(12);
+
+      const unreadable = v3Client({ candidates, failingTable: 'feed_user_post_feedback' });
+      await serve(unreadable.client, prepared);
+      expect(unreadable.rpc.mock.calls[0][0]).toBe('get_ranked_feed_candidates_v3');
+    });
+
+    it('reuses a session read within the window rather than serving page one a second time', async () => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+      // Explore was read, then the app started again cold: its lane is empty,
+      // so Home read ahead, but the first session can still be reused.
+      const session = {
+        id: 'session-earlier',
+        viewer_user_id: 'viewer-1',
+        anonymous_key_hash: null,
+        algorithm_version_id: 'algorithm-v3',
+        experiment_assignment_id: null,
+        created_at: new Date().toISOString(),
+        expires_at: '2099-01-01T00:00:00.000Z',
+      };
+      const rows = {
+        feed_session_items: ['earlier-a', 'earlier-b'].map((postId, position) => ({
+          id: 800 + position,
+          session_id: 'session-earlier',
+          post_id: postId,
+          position,
+          candidate_source: 'fresh',
+          final_score: 0.5,
+          score_components: { negative_feedback_risk: 0.01, is_following: false },
+        })),
+      };
+      const { client, persisted, rpc } = v3Client({ candidates, rows, session });
+
+      const page = await serve(client, prepared);
+
+      expect(page.feedSessionId).toBe('session-earlier');
+      expect(page.items.map((entry) => entry.id)).toEqual(['earlier-a', 'earlier-b']);
+      expect(persisted).toEqual([]);
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['the active algorithm changed since (an activation or a rollback)', { algorithmId: 'algorithm-retired' }],
+      ['the viewer is in another experiment arm now', { experimentAssignmentId: 41 }],
+    ])('ranks afresh when %s', async (_case, drift) => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+      const { client, persisted, rpc } = v3Client({ candidates });
+
+      await serve(client, prepared ? { ...prepared, ...drift } : null);
+
+      expect(rpc.mock.calls.map(([name]) => name)).toEqual([
+        'get_ranked_feed_candidates_v3',
+        'persist_ranked_feed_session',
+      ]);
+      expect(persisted[0].p_session).toMatchObject({ algorithm_version_id: 'algorithm-v3' });
+    });
+
+    it('keeps the ranking window the feed already reuses a first page for', () => {
+      expect(PREPARED_FEED_SESSION_TTL_MS).toBe(2 * 60 * 1000);
+    });
   });
 });
 

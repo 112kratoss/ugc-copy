@@ -22,6 +22,8 @@ export interface ShowcaseFeedPageParams extends ShowcaseFeedFilters {
   feedSessionId?: string | null;
   limit?: number;
   offset?: number;
+  /** A first page ranked ahead (`lib/explore-read-ahead.ts`), claimed by the read that shows it. */
+  readAheadToken?: string | null;
 }
 
 export interface ShowcaseFeedPageParam {
@@ -110,6 +112,7 @@ export function getShowcaseFeedPageParams(params: ShowcaseFeedPageParams = {}): 
     if (params.feedSessionId) query.feedSessionId = params.feedSessionId;
   } else {
     query.offset = params.offset ?? 0;
+    if (params.readAheadToken && query.offset === 0) query.readAheadToken = params.readAheadToken;
   }
 
   if (category !== 'all') query.category = category;

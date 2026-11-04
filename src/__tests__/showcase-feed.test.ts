@@ -815,7 +815,19 @@ describe('showcase feed', () => {
     const { SHOWCASE_FEED_CACHE_TAG } = await import('@/lib/showcase-feed-cache');
     const { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } = await import('@/lib/marketplace-resource-list-cache');
 
-    expect(nextCacheState.definitions).toEqual([
+    expect(nextCacheState.definitions).toEqual(expect.arrayContaining([
+      // A slot, not a shared page: one viewer's first page ranked ahead,
+      // claimed once by its random token within two minutes. No feed tag: a
+      // take-down in between is caught by the visibility stage the page goes
+      // through again when it is served (`servePreparedSession`).
+      {
+        keyParts: ['showcase-feed-read-ahead-v1'],
+        options: { revalidate: 120 },
+      },
+    ]));
+    expect(nextCacheState.definitions.filter((definition) => (
+      definition.keyParts[0] !== 'showcase-feed-read-ahead-v1'
+    ))).toEqual([
       {
         // v4: the key gained a `tool` argument when F5b widened caching to
         // tool-filtered first pages. Bumping the version keeps entries written
@@ -1752,6 +1764,129 @@ describe('showcase feed', () => {
         expect(page.items).toHaveLength(offset === 24 ? 5 : 12);
       }
     }
+  });
+
+  // Home's Notes chip waited 1.9-3.4 s for an empty page (device sweep,
+  // 2026-11-03): the ranked pool is retrieved for every category, and each
+  // batch of media posts was hydrated in full before the text filter dropped it.
+  it('hydrates none of the ranked candidates a text or tool lane would drop by their post row', async () => {
+    postsState = [
+      createPostRow({ id: 'image-1', created_at: '2026-03-21T10:00:00.000Z' }),
+      createPostRow({ id: 'image-2', created_at: '2026-03-20T10:00:00.000Z' }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    let hydrated: string[] | null = null;
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      hydrated = (await options.hydratePostIds(['image-1', 'image-2'])).map((item) => item.id);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    await getShowcaseFeedPage({
+      category: 'text',
+      sort: 'for-you',
+      offset: 0,
+      limit: 12,
+      viewerUserId: 'viewer-1',
+      bypassCache: true,
+    });
+
+    expect(hydrated).toEqual([]);
+    expect(tableAccesses).not.toContain('profiles');
+    expect(tableAccesses).not.toContain('post_media');
+    expect(tableAccesses).not.toContain('post_source_tools');
+  });
+
+  it('still hydrates and keeps, in ranked order, the candidates a text or tool lane matches', async () => {
+    postsState = [
+      createPostRow({ id: 'note', created_at: '2026-03-22T10:00:00.000Z', category: 'text', post_format: 'text', output_url: null, body: 'A note.' }),
+      createPostRow({ id: 'mixed', created_at: '2026-03-21T10:00:00.000Z', post_format: 'mixed', body: 'A caption.' }),
+      createPostRow({ id: 'image', created_at: '2026-03-20T10:00:00.000Z' }),
+      createPostRow({ id: 'kling-image', created_at: '2026-03-19T10:00:00.000Z', source_tool: 'Kling', source_tool_slug: 'kling' }),
+      createPostRow({ id: 'kling-legacy', created_at: '2026-03-18T10:00:00.000Z', source_tool: 'Kling', source_tool_slug: null }),
+    ];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    const hydratedByLane: Record<string, string[]> = {};
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      const lane = `${options.filters.category}:${options.filters.toolSlug ?? 'all'}`;
+      hydratedByLane[lane] = (await options.hydratePostIds(['image', 'mixed', 'kling-legacy', 'note', 'kling-image']))
+        .map((item) => item.id);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    await getShowcaseFeedPage({ category: 'text', sort: 'for-you', offset: 0, limit: 12, viewerUserId: 'viewer-1', bypassCache: true });
+    await getShowcaseFeedPage({ category: 'all', sort: 'for-you', offset: 0, limit: 12, viewerUserId: 'viewer-1', tool: 'kling', bypassCache: true });
+
+    expect(hydratedByLane['text:all']).toEqual(['mixed', 'note']);
+    // A post stored before its tool had a slug matches by its tool's name, as its card does.
+    expect(hydratedByLane['all:kling']).toEqual(['kling-legacy', 'kling-image']);
+  });
+
+  it("hands Explore's read-ahead ranking to the read that shows it, once, and to no later page", async () => {
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    const ranking = {
+      format: 1 as const,
+      preparedAt: Date.now(),
+      viewerUserId: 'viewer-1',
+      anonymousKeyHash: null,
+      filters: { category: 'media' as const, toolSlug: null, unlockFilter: 'all' as const, resourceFilter: 'all' as const },
+      algorithmId: 'algorithm-v4',
+      algorithmVersion: 'for-you-rules-v4',
+      candidateRpc: 'v4' as const,
+      visibilityThresholds: { recommendationMaxPostNegativeRisk: 1, recommendationMaxCreatorNegativeRate: 1 },
+      experimentAssignmentId: null,
+      experimentId: null,
+      experimentVariantId: null,
+      randomSeed: 7,
+      ranked: [],
+    };
+    const prepareSpy = vi.spyOn(personalization, 'prepareRankedShowcaseFeedSession').mockResolvedValue(ranking);
+    const handed: unknown[] = [];
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      handed.push(options.prepared ?? null);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } = await import('@/lib/showcase-feed');
+
+    const readAhead = await prepareShowcaseFeedReadAhead({ category: 'media', viewerUserId: 'viewer-1' });
+    expect(prepareSpy).toHaveBeenCalledWith(expect.objectContaining({
+      filters: ranking.filters,
+      viewerUserId: 'viewer-1',
+    }));
+    const read = (offset: number) => getShowcaseFeedPage({
+      category: 'media',
+      sort: 'for-you',
+      offset,
+      limit: 12,
+      viewerUserId: 'viewer-1',
+      bypassCache: true,
+      readAheadToken: readAhead?.token,
+    });
+    await read(12);
+    await read(0);
+    await read(0);
+
+    expect(handed).toEqual([null, ranking, null]);
   });
 
   it('keeps filling For you\'s recent pool by the scan', async () => {

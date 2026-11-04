@@ -1,4 +1,5 @@
 import type { MagicbookletApiClient } from './api-client';
+import { noteShowcaseFeedReadAheadSupport, takeExploreReadAheadToken } from './explore-read-ahead';
 import { FEED_WINDOW_PAGE_LIMIT, getPreviousFeedPageParam } from './feed-page-window';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import {
@@ -71,10 +72,20 @@ export function showcaseFeedLaneQueryOptions(
   return {
     queryKey: createShowcaseFeedQueryKey(filters, identityUserId),
     initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
-    queryFn: ({ pageParam }: { pageParam: ShowcaseFeedPageParam }) => api.getShowcaseFeed(getShowcaseFeedPageParams({
-      ...filters,
-      ...pageParam,
-    })),
+    queryFn: async ({ pageParam }: { pageParam: ShowcaseFeedPageParam }) => {
+      // The read that draws Explore's first page claims the ranking read
+      // ahead for it, which the server persists and marks served only now.
+      const readAheadToken = !pageParam.cursor && !pageParam.offset
+        ? await takeExploreReadAheadToken({ filters, identityUserId })
+        : null;
+      const page = await api.getShowcaseFeed(getShowcaseFeedPageParams({
+        ...filters,
+        ...pageParam,
+        ...(readAheadToken ? { readAheadToken } : {}),
+      }));
+      noteShowcaseFeedReadAheadSupport(filters, page);
+      return page;
+    },
     getNextPageParam: getNextShowcaseFeedPageParam,
     // A chronological lane keeps a window of pages and re-reads the ones it
     // let go by their offset. Ranked sessions are already limited to 60 items

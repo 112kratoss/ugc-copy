@@ -56,7 +56,15 @@ import {
   type ShowcaseUnlockFilter,
 } from '@/lib/showcase';
 import { slugifySourceTool } from '@/lib/source-tools';
-import { getPersonalizedShowcaseFeedPage } from '@/lib/showcase-feed-personalization';
+import {
+  getPersonalizedShowcaseFeedPage,
+  prepareRankedShowcaseFeedSession,
+  type PreparedRankedFeedSession,
+} from '@/lib/showcase-feed-personalization';
+import {
+  storePreparedShowcaseFeedSession,
+  takePreparedShowcaseFeedSession,
+} from '@/lib/showcase-feed-read-ahead';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
@@ -1244,42 +1252,65 @@ const getCachedShowcaseFeedPageBase = unstable_cache(
   { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] }
 );
 
+/**
+ * Whether a ranked candidate's post row could pass the lane's own checks once
+ * hydrated: `itemMatchesCategory` for a Notes lane and the tool check, read
+ * from the same columns the card is built from (`resolveItemCategory`, the
+ * post format, the tool's slug or, for a post stored without one, its name).
+ * Only those two are exact at the row; every other category keeps hydrating.
+ */
+function postRowCanMatchForYouLane(row: PostRow, category: ShowcaseCategory, toolSlug: string | null) {
+  if (toolSlug && (row.source_tool_slug ?? slugifySourceTool(row.source_tool)) !== toolSlug) return false;
+  if (category === 'text') return resolveItemCategory(row.category) === 'text' || row.post_format === 'mixed';
+  return true;
+}
+
 function isMissingIncrementalCacheError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('incrementalCache missing');
 }
 
-async function getShowcaseForYouFeedPage(params: {
+type ShowcaseForYouLaneParams = {
   category: ShowcaseCategory;
-  offset: number;
-  limit: number;
   toolSlug: string | null;
   unlockFilter: ShowcaseUnlockFilter;
   resourceFilter: ShowcaseResourceFilter;
-  viewerUserId: string | null;
-  anonymousKeyHash: string | null;
-  cursor: string | null;
-  adminSupabase?: ReturnType<typeof createServiceClient>;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
-}): Promise<ShowcaseFeedPage> {
-  const adminSupabase = params.adminSupabase ?? createServiceClient();
-  const hydrationCache: ShowcaseFeedHydrationCache = new Map();
+};
 
-  // Ranked and cut first, then its recipe teasers counted once (B3): the
-  // hydrated pool holds what recipes store, which is what its filters read.
-  const page = await getPersonalizedShowcaseFeedPage({
-    anonymousKeyHash: params.anonymousKeyHash,
-    cursor: params.cursor,
+/**
+ * Where a For you lane's candidates come from, for one request: its ranked
+ * pool hydrated and filtered to the lane, and the recent pool that tops it up.
+ * One hydration cache serves both, so a post in each is read once.
+ */
+function createForYouCandidateSources(
+  params: ShowcaseForYouLaneParams,
+  adminSupabase: ReturnType<typeof createServiceClient>,
+) {
+  const hydrationCache: ShowcaseFeedHydrationCache = new Map();
+  return {
     filters: {
       category: params.category,
       toolSlug: params.toolSlug,
       unlockFilter: params.unlockFilter,
       resourceFilter: params.resourceFilter,
     },
-    hydratePostIds: async (postIds) => {
+    hydratePostIds: async (postIds: string[]) => {
       const rows = await fetchPostRowsByIds(postIds, adminSupabase);
       if (rows === null) return [];
-      const items = await resolvePostRowsToFeedItems(rows, adminSupabase, hydrationCache, params.onPhaseTiming);
-      for (const postId of postIds) {
+      // The pool is retrieved for every category, so a Notes page used to
+      // hydrate whole batches of media posts only to drop each one below.
+      // A row its lane cannot keep is left out before the reads; the
+      // filter below still decides every row that is hydrated.
+      const lanePostIds = new Set(postIds);
+      const laneRows = rows.filter((row) => {
+        if (postRowCanMatchForYouLane(row, params.category, params.toolSlug)) return true;
+        lanePostIds.delete(row.id);
+        return false;
+      });
+      const items = await resolvePostRowsToFeedItems(laneRows, adminSupabase, hydrationCache, params.onPhaseTiming);
+      // Read and found unusable (or not public at all), never asked again. A
+      // row the lane skipped is not marked: nothing here hydrated it.
+      for (const postId of lanePostIds) {
         if (!hydrationCache.has(postId)) hydrationCache.set(postId, null);
       }
       return items.filter((item) => (
@@ -1292,7 +1323,7 @@ async function getShowcaseForYouFeedPage(params: {
         )
       ));
     },
-    fallbackItems: async (target) => {
+    fallbackItems: async (target: number) => {
       const fallbackPage = await buildShowcaseFeedPage(
         params.category,
         'recent',
@@ -1305,8 +1336,32 @@ async function getShowcaseForYouFeedPage(params: {
       );
       return fallbackPage.items.filter((item) => !item.isNsfw);
     },
+  };
+}
+
+async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
+  offset: number;
+  limit: number;
+  viewerUserId: string | null;
+  anonymousKeyHash: string | null;
+  cursor: string | null;
+  prepared?: PreparedRankedFeedSession | null;
+  adminSupabase?: ReturnType<typeof createServiceClient>;
+}): Promise<ShowcaseFeedPage> {
+  const adminSupabase = params.adminSupabase ?? createServiceClient();
+  const { filters, hydratePostIds, fallbackItems } = createForYouCandidateSources(params, adminSupabase);
+
+  // Ranked and cut first, then its recipe teasers counted once (B3): the
+  // hydrated pool holds what recipes store, which is what its filters read.
+  const page = await getPersonalizedShowcaseFeedPage({
+    anonymousKeyHash: params.anonymousKeyHash,
+    cursor: params.cursor,
+    filters,
+    hydratePostIds,
+    fallbackItems,
     limit: params.limit,
     offset: params.offset,
+    prepared: params.prepared ?? null,
     serviceClient: adminSupabase,
     viewerUserId: params.viewerUserId,
     onPhaseTiming: params.onPhaseTiming,
@@ -1317,6 +1372,42 @@ async function getShowcaseForYouFeedPage(params: {
   } finally {
     params.onPhaseTiming?.('recipe_reference_counts', performance.now() - startedAt);
   }
+}
+
+/**
+ * Ranks a viewer's For you first page ahead of showing it and holds the
+ * ranking under a token, writing nothing to the feed (the app's Explore
+ * read-ahead; `prepareRankedShowcaseFeedSession`). The read that shows the
+ * page passes the token back as `readAheadToken`. Null when there is nothing
+ * to hold, and the app then reads the page the ordinary way.
+ */
+export async function prepareShowcaseFeedReadAhead(options: {
+  category: ShowcaseCategory;
+  viewerUserId: string | null;
+  anonymousKeyHash?: string | null;
+  tool?: string | null;
+  unlock?: ShowcaseUnlockFilter;
+  resource?: ShowcaseResourceFilter;
+  onPhaseTiming?: (phase: string, durationMs: number) => void;
+}): Promise<{ token: string; expiresInMs: number } | null> {
+  const adminSupabase = createServiceClient();
+  const { filters, hydratePostIds, fallbackItems } = createForYouCandidateSources({
+    category: options.category,
+    toolSlug: slugifySourceTool(options.tool),
+    unlockFilter: options.unlock ?? 'all',
+    resourceFilter: options.resource ?? 'all',
+    onPhaseTiming: options.onPhaseTiming,
+  }, adminSupabase);
+  const prepared = await prepareRankedShowcaseFeedSession({
+    anonymousKeyHash: options.anonymousKeyHash ?? null,
+    fallbackItems,
+    filters,
+    hydratePostIds,
+    serviceClient: adminSupabase,
+    viewerUserId: options.viewerUserId,
+    onPhaseTiming: options.onPhaseTiming,
+  });
+  return prepared ? storePreparedShowcaseFeedSession(prepared) : null;
 }
 
 const getCachedIdentitylessShowcaseForYouBootstrap = unstable_cache(
@@ -1400,6 +1491,18 @@ async function loadShowcaseFeedPageBase(
   }
 }
 
+async function measureReadAheadTake<T>(
+  work: () => Promise<T>,
+  onPhaseTiming?: (phase: string, durationMs: number) => void,
+) {
+  const startedAt = performance.now();
+  try {
+    return await work();
+  } finally {
+    onPhaseTiming?.('read_ahead_take', performance.now() - startedAt);
+  }
+}
+
 export async function getShowcaseFeedPage(options: {
   category: ShowcaseCategory;
   sort: ShowcaseSort;
@@ -1414,6 +1517,12 @@ export async function getShowcaseFeedPage(options: {
   resource?: ShowcaseResourceFilter;
   countryCode?: string | null;
   bypassCache?: boolean;
+  /**
+   * The token of a For you first page ranked ahead for this viewer
+   * (`prepareShowcaseFeedReadAhead`). Its ranking is persisted and served in
+   * place of a new one; an unknown, spent or expired token ranks afresh.
+   */
+  readAheadToken?: string | null;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<ShowcaseFeedPage> {
   const { category, sort, offset, limit } = options;
@@ -1449,6 +1558,12 @@ export async function getShowcaseFeedPage(options: {
         viewerUserId,
         anonymousKeyHash: options.anonymousKeyHash ?? null,
         cursor: options.cursor ?? null,
+        prepared: options.readAheadToken && offset === 0 && !options.cursor
+          ? await measureReadAheadTake(() => takePreparedShowcaseFeedSession(options.readAheadToken as string, {
+            anonymousKeyHash: options.anonymousKeyHash ?? null,
+            viewerUserId,
+          }), options.onPhaseTiming)
+          : null,
         adminSupabase,
         onPhaseTiming: options.onPhaseTiming,
       })

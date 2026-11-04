@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { getShowcaseFeedRouteResponse } from '@/lib/showcase-feed-route-adapter-service';
-import type { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import type { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } from '@/lib/showcase-feed';
 
 function createFeedPage(overrides: Record<string, unknown> = {}) {
   return {
@@ -396,5 +397,160 @@ describe('showcase feed route adapter service', () => {
     expect(response.status).toBe(429);
     // Rejected before the catalog scan, which is the whole point.
     expect(getShowcaseFeedPageMock).not.toHaveBeenCalled();
+  });
+
+  describe("Explore's read-ahead", () => {
+    const TOKEN = '0f8b6c7e-4a1d-4c2b-9e3f-5a6b7c8d9e0f';
+
+    function readAheadDependencies({
+      userId = 'user-1' as string | null,
+      prepared = { token: TOKEN, expiresInMs: 120_000 } as Awaited<ReturnType<typeof prepareShowcaseFeedReadAhead>>,
+    } = {}) {
+      return {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: vi.fn(() => createUserClient(userId)),
+        enforceBackendRateLimit: vi.fn(),
+        getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+        resolveFeedAnonymousIdentity: vi.fn(() => ({
+          anonymousKeyHash: 'anonymous-feed-hash',
+          cookieValueToSet: null,
+          source: 'web-cookie' as const,
+        })),
+        getShowcaseFeedPage: vi.fn(async () => createFeedPage()) as unknown as typeof getShowcaseFeedPage,
+        prepareShowcaseFeedReadAhead: vi.fn(async () => prepared) as unknown as typeof prepareShowcaseFeedReadAhead,
+      };
+    }
+
+    it('ranks a signed-in first page ahead and answers only its token, never an ordinary page', async () => {
+      const dependencies = readAheadDependencies();
+
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you&category=media&limit=12&offset=0&readAhead=1', {
+          headers: { Authorization: 'Bearer user-token' },
+        }),
+        dependencies,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toContain('no-store');
+      await expect(response.json()).resolves.toEqual({ readAhead: { token: TOKEN, expiresInMs: 120_000 } });
+      expect(dependencies.prepareShowcaseFeedReadAhead).toHaveBeenCalledWith({
+        category: 'media',
+        viewerUserId: 'user-1',
+        tool: null,
+        unlock: 'all',
+        resource: 'all',
+      });
+      expect(dependencies.getShowcaseFeedPage).not.toHaveBeenCalled();
+      // Counted against the ranked lane's own budget, like the read it replaces.
+      expect(dependencies.enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        scope: 'showcase-feed:for-you-read',
+        key: 'user-1',
+      }));
+    });
+
+    it('answers null when there is nothing to hold, so the app reads the page when it is shown', async () => {
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you&readAhead=1', {
+          headers: { Authorization: 'Bearer user-token' },
+        }),
+        dependencies: readAheadDependencies({ prepared: null }),
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ readAhead: null });
+    });
+
+    it.each([
+      ['a signed-out reader', 'sort=for-you&readAhead=1', false],
+      ['an unranked lane', 'sort=recent&readAhead=1', true],
+      ['a later page', 'sort=for-you&offset=12&readAhead=1', true],
+      ['a continuation', 'sort=for-you&cursor=abc&readAhead=1', true],
+    ])('refuses a read-ahead for %s without reading or writing a page', async (_case, query, signedIn) => {
+      const dependencies = readAheadDependencies();
+
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed?${query}`, {
+          headers: signedIn ? { Authorization: 'Bearer user-token' } : {},
+        }),
+        dependencies,
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: 'READ_AHEAD_UNSUPPORTED' });
+      expect(dependencies.getShowcaseFeedPage).not.toHaveBeenCalled();
+      expect(dependencies.prepareShowcaseFeedReadAhead).not.toHaveBeenCalled();
+    });
+
+    it('hands a first page its read-ahead token, and no other read one', async () => {
+      const dependencies = readAheadDependencies();
+      const read = (query: string) => getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed?${query}`, {
+          headers: { Authorization: 'Bearer user-token' },
+        }),
+        dependencies,
+      });
+
+      await read(`sort=for-you&category=media&offset=0&readAheadToken=${TOKEN}`);
+      await read(`sort=for-you&offset=12&readAheadToken=${TOKEN}`);
+      await read(`sort=recent&readAheadToken=${TOKEN}`);
+      await read('sort=for-you&readAheadToken=not-a-token');
+
+      const calls = vi.mocked(dependencies.getShowcaseFeedPage).mock.calls.map(([options]) => options);
+      expect(calls[0]).toMatchObject({ sort: 'for-you', offset: 0, readAheadToken: TOKEN });
+      expect(calls.slice(1).map((options) => 'readAheadToken' in options)).toEqual([false, false, false]);
+    });
+
+    it('answers the read-ahead, its refusal, its claim and its support flag as the shared contract pins them', async () => {
+      const endpoint = mobileApiContract.endpoints.prepareShowcaseFeedReadAhead;
+      const contractToken = endpoint.response.readAhead.token;
+      const dependencies = readAheadDependencies({
+        prepared: { token: contractToken, expiresInMs: endpoint.response.readAhead.expiresInMs },
+      });
+      const call = (query: Record<string, string>, signedIn = true) => getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost${endpoint.path}?${new URLSearchParams(query)}`, {
+          headers: signedIn ? { Authorization: 'Bearer user-token' } : {},
+        }),
+        dependencies,
+      });
+
+      const prepared = await call(endpoint.query);
+      expect(prepared.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+      await expect(prepared.json()).resolves.toEqual(endpoint.response);
+
+      const refused = await call(endpoint.query, false);
+      expect(refused.status).toBe(endpoint.errors.unsupported.status);
+      await expect(refused.json()).resolves.toEqual(endpoint.errors.unsupported.response);
+
+      const claimed = await call(endpoint.claim.query);
+      expect(vi.mocked(dependencies.getShowcaseFeedPage).mock.calls.at(-1)?.[0])
+        .toMatchObject({ readAheadToken: contractToken });
+      await expect(claimed.json()).resolves.toMatchObject({
+        [endpoint.supportedWhen.responseField]: endpoint.supportedWhen.value,
+      });
+    });
+
+    it("says on a signed-in reader's For you pages that it holds read-aheads, and nowhere else", async () => {
+      const signedIn = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you', {
+          headers: { Authorization: 'Bearer user-token' },
+        }),
+        dependencies: readAheadDependencies(),
+      });
+      const signedOut = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you'),
+        dependencies: readAheadDependencies(),
+      });
+      const recent = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=recent', {
+          headers: { Authorization: 'Bearer user-token' },
+        }),
+        dependencies: readAheadDependencies(),
+      });
+
+      expect(await signedIn.json()).toMatchObject({ readAheadSupported: true });
+      expect(await signedOut.json()).not.toHaveProperty('readAheadSupported');
+      expect(await recent.json()).not.toHaveProperty('readAheadSupported');
+    });
   });
 });

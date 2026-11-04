@@ -845,6 +845,56 @@
         }
       }
     },
+    "prepareShowcaseFeedReadAhead": {
+      "method": "GET",
+      "query": {
+        "sort": "for-you",
+        "category": "media",
+        "offset": "0",
+        "readAhead": "1"
+      },
+      "path": "/api/showcase/feed",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "readAhead": {
+          "token": "0f8b6c7e-4a1d-4c2b-9e3f-5a6b7c8d9e0f",
+          "expiresInMs": 120000
+        }
+      },
+      "responseVariants": {
+        "nothingToHold": {
+          "readAhead": null
+        }
+      },
+      "supportedWhen": {
+        "endpoint": "getShowcaseFeed",
+        "query": {
+          "sort": "for-you"
+        },
+        "auth": "required",
+        "responseField": "readAheadSupported",
+        "value": true
+      },
+      "claim": {
+        "endpoint": "getShowcaseFeed",
+        "query": {
+          "sort": "for-you",
+          "category": "media",
+          "offset": "0",
+          "readAheadToken": "0f8b6c7e-4a1d-4c2b-9e3f-5a6b7c8d9e0f"
+        }
+      },
+      "errors": {
+        "unsupported": {
+          "status": 400,
+          "response": {
+            "error": "Only a signed-in first page of a ranked lane can be read ahead.",
+            "code": "READ_AHEAD_UNSUPPORTED"
+          }
+        }
+      }
+    },
     "getShowcaseFeedNewest": {
       "method": "GET",
       "query": {

@@ -37,7 +37,8 @@ import {
   parsePositiveInt,
   sanitizeShowcaseFeedPage,
 } from '@/lib/showcase';
-import { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } from '@/lib/showcase-feed';
+import { isShowcaseFeedReadAheadToken } from '@/lib/showcase-feed-read-ahead';
 
 type ShowcaseFeedRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
@@ -46,6 +47,7 @@ type ShowcaseFeedRouteDependencies = {
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   getShowcaseFeedPage?: typeof getShowcaseFeedPage;
+  prepareShowcaseFeedReadAhead?: typeof prepareShowcaseFeedReadAhead;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -58,6 +60,9 @@ function resolveDependencies(dependencies: ShowcaseFeedRouteDependencies | undef
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     resolveFeedAnonymousIdentity: dependencies?.resolveFeedAnonymousIdentity ?? resolveFeedAnonymousIdentity,
     getShowcaseFeedPage: dependencies?.getShowcaseFeedPage ?? getShowcaseFeedPage,
+    // Read when a read-ahead arrives, not here: a request that is not one never needs it.
+    prepareShowcaseFeedReadAhead: dependencies?.prepareShowcaseFeedReadAhead
+      ?? ((options: Parameters<typeof prepareShowcaseFeedReadAhead>[0]) => prepareShowcaseFeedReadAhead(options)),
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
@@ -100,6 +105,18 @@ async function handleShowcaseFeedGET(
       if (!timingEnabled) return;
       phaseTimings.set(phase, (phaseTimings.get(phase) ?? 0) + Math.max(0, durationMs));
     };
+    const withPhaseTimings = (response: NextResponse) => {
+      if (!timingEnabled) return response;
+      const renderedTimings = [...phaseTimings]
+        .map(([phase, durationMs]) => `${phase.replace(/_/g, '-')};dur=${durationMs.toFixed(2)}`)
+        .join(', ');
+      response.headers.set('Server-Timing', renderedTimings);
+      // Vercel preview protection may consume or strip Server-Timing. Keep a
+      // mirror for the authenticated production monitor so the external driver
+      // can diagnose a tail without exposing timings on ordinary public reads.
+      response.headers.set('x-scaling-certification-timing', renderedTimings);
+      return response;
+    };
     if (timingEnabled) {
       // Admission can run in the proxy or in the regional route handler.
       for (const entry of request.headers.get(IDENTITY_PROXY_TIMING_HEADER)?.split(',') ?? []) {
@@ -122,6 +139,27 @@ async function handleShowcaseFeedGET(
     }
     const viewerUserId = actor.viewerUserId;
     const sort = normalizeShowcaseSort(searchParams.get('sort'));
+    const offset = cursor ? 0 : normalizeShowcaseOffset(searchParams.get('offset'), searchParams.get('page'), limit);
+    // Explore's read-ahead (the app, once Home has settled): a signed-in
+    // viewer's ranked first page, ranked now and held without a write, for the
+    // read that shows it to claim with its token. Anything else asking for one
+    // is refused rather than answered with an ordinary page, which would open
+    // a session and mark its posts served for a page nobody is looking at.
+    const readAhead = searchParams.get('readAhead') === '1';
+    if (readAhead && (sort !== 'for-you' || cursor || offset !== 0 || !viewerUserId)) {
+      return NextResponse.json(
+        {
+          error: 'Only a signed-in first page of a ranked lane can be read ahead.',
+          code: 'READ_AHEAD_UNSUPPORTED',
+        },
+        { status: 400, headers: createPrivateNoStoreApiResponseHeaders(request) },
+      );
+    }
+    const readAheadTokenParam = searchParams.get('readAheadToken');
+    const readAheadToken = sort === 'for-you' && !cursor && offset === 0
+      && isShowcaseFeedReadAheadToken(readAheadTokenParam)
+      ? readAheadTokenParam
+      : null;
     const anonymousIdentity = viewerUserId || sort !== 'for-you'
       ? null
       : dependencies.resolveFeedAnonymousIdentity(request);
@@ -157,11 +195,30 @@ async function handleShowcaseFeedGET(
       }
     }
 
+    if (readAhead) {
+      const feedStartedAt = performance.now();
+      const prepared = await dependencies.prepareShowcaseFeedReadAhead({
+        category: normalizeShowcaseCategory(searchParams.get('category')),
+        viewerUserId,
+        tool: tool && tool !== 'all' ? tool : null,
+        unlock: normalizeShowcaseUnlockFilter(searchParams.get('unlock')),
+        resource: normalizeShowcaseResourceFilter(searchParams.get('resource')),
+        ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
+      });
+      recordPhase('feed_total', performance.now() - feedStartedAt);
+      // Null: nothing to hold (no active algorithm, an empty ranking). The app
+      // then reads the page the ordinary way when Explore opens.
+      return withPhaseTimings(NextResponse.json(
+        { readAhead: prepared },
+        { headers: createPrivateNoStoreApiResponseHeaders(request) },
+      ));
+    }
+
     const feedStartedAt = performance.now();
     const feed = await dependencies.getShowcaseFeedPage({
       category: normalizeShowcaseCategory(searchParams.get('category')),
       sort,
-      offset: cursor ? 0 : normalizeShowcaseOffset(searchParams.get('offset'), searchParams.get('page'), limit),
+      offset,
       limit,
       viewerUserId,
       anonymousKeyHash,
@@ -175,28 +232,27 @@ async function handleShowcaseFeedGET(
       // attached after the cache read, so authenticated readers can safely
       // share the same base page instead of rebuilding it per request.
       bypassCache: sort === 'for-you' || Boolean(cursor),
+      ...(readAheadToken ? { readAheadToken } : {}),
       ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
     });
     recordPhase('feed_total', performance.now() - feedStartedAt);
     const cacheControl = getViewerAwareApiCacheControl(hasAuthorizationHeader || sort === 'for-you');
 
     const serializationStartedAt = performance.now();
-    const response = NextResponse.json(sanitizeShowcaseFeedPage(feed), {
+    const response = NextResponse.json({
+      ...sanitizeShowcaseFeedPage(feed),
+      // Tells the app this server holds a read-ahead without writing it, and
+      // so that it may send `readAhead=1`. A server without the mode would
+      // answer that with an ordinary page, served to nobody, so the app asks
+      // only one that has said this (on its own For you pages).
+      ...(sort === 'for-you' && viewerUserId ? { readAheadSupported: true } : {}),
+    }, {
       headers: createApiResponseHeaders(request, cacheControl, {
         vary: ['Authorization', 'x-vercel-ip-country'],
       }),
     });
     recordPhase('serialization', performance.now() - serializationStartedAt);
-    if (timingEnabled) {
-      const renderedTimings = [...phaseTimings]
-        .map(([phase, durationMs]) => `${phase.replace(/_/g, '-')};dur=${durationMs.toFixed(2)}`)
-        .join(', ');
-      response.headers.set('Server-Timing', renderedTimings);
-      // Vercel preview protection may consume or strip Server-Timing. Keep a
-      // mirror for the authenticated production monitor so the external driver
-      // can diagnose a tail without exposing timings on ordinary public reads.
-      response.headers.set('x-scaling-certification-timing', renderedTimings);
-    }
+    withPhaseTimings(response);
     if (anonymousIdentity?.cookieValueToSet) {
       response.cookies.set({
         name: FEED_ANONYMOUS_COOKIE_NAME,

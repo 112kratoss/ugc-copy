@@ -60,6 +60,7 @@ import type {
   ShowcaseFeedNewestResponse,
   HomeShelfResponse,
   ShowcaseFeedEventResponse,
+  ShowcaseFeedReadAheadResponse,
   ShowcaseFeedResponse,
   ShowcasePostResponse,
   PostCommentsResponse,
@@ -1347,6 +1348,14 @@ export function createApiClient({
         ...(options.auth === false ? { cacheTtlMs: CONTENT_CACHE_TTL_MS } : {}),
         ...options,
       }),
+    // Explore's first page ranked ahead and held, with nothing written: only
+    // a server whose For you pages say `readAheadSupported` is asked
+    // (`lib/explore-read-ahead.ts`). One without the mode answers an
+    // ordinary page, hence the union.
+    prepareShowcaseFeedReadAhead: (params: Record<string, QueryValue>) =>
+      request<ShowcaseFeedReadAheadResponse | ShowcaseFeedResponse>(
+        `/api/showcase/feed${buildQuery({ ...params, readAhead: '1' })}`,
+      ),
     searchPublicContent: (params: {
       query: string;
       type?: PublicSearchType;

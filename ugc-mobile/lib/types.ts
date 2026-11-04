@@ -1077,6 +1077,13 @@ export interface ShowcaseFeedResponse {
     nextCursor?: string | null;
     offset?: number;
   };
+  /** On a signed-in reader's For you pages: this server ranks a first page ahead without writing it (`lib/explore-read-ahead.ts`). */
+  readAheadSupported?: boolean;
+}
+
+/** A For you first page ranked ahead and held for the read that shows it; null when there was nothing to hold. */
+export interface ShowcaseFeedReadAheadResponse {
+  readAhead: { token: string; expiresInMs: number } | null;
 }
 
 export type PublicSearchType = 'top' | 'creators' | 'posts' | 'recipes';
