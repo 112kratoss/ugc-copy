@@ -28,9 +28,9 @@ describe.skipIf(!configPath || !connectionString)('retention job durable failure
         const path = new URL(String(input)).pathname;
         // Inject maintenance outcomes at the transport boundary; run rows and
         // lease RPCs still reach real PostgREST. No unrelated audit data is pruned,
-        // and no Auth user is deleted: the idle-guest list answers empty.
-        if (path === '/rest/v1/rpc/list_idle_guest_identities') {
-          calls.push('list_idle_guest_identities');
+        // and no Auth user is deleted: both guest lists answer empty.
+        if (path === '/rest/v1/rpc/list_idle_guest_identities' || path === '/rest/v1/rpc/list_idle_guest_identities_with_content') {
+          calls.push(path.split('/').at(-1)!);
           return new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
         if (path.startsWith('/rest/v1/rpc/prune_')) {

@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { GuestAccountLinkedError } from '@/lib/account-deletion-service';
 import {
   deleteIdleGuestIdentities,
+  EXPIRED_UPLOAD_RESERVATION_RECLAIM_LIMIT,
+  IDLE_CONTENT_GUEST_RETIREMENT_BATCH_LIMIT,
   IDLE_GUEST_RETENTION_BATCH_LIMIT,
+  OPERATIONAL_RETENTION_MAX_BATCHES,
   pruneOperationalBackendData,
+  retireIdleGuestsWithContent,
 } from '@/lib/operational-data-retention';
 
 const reclaimExpiredUploadReservationsMock = vi.hoisted(() => vi.fn(async () => ({
@@ -62,7 +67,7 @@ function createClient(result: {
         if (fn === 'prune_account_merge_tickets') {
           return { data: 0, error: null };
         }
-        if (fn === 'list_idle_guest_identities') {
+        if (fn === 'list_idle_guest_identities' || fn === 'list_idle_guest_identities_with_content') {
           return { data: [], error: null };
         }
         return { data: result.data ?? null, error: result.error ?? null };
@@ -103,13 +108,22 @@ describe('operational data retention', () => {
       completionJobsDeleted: 3,
       providerEventsDeleted: 90,
       providerChecksDeleted: 7,
+      playbackDaysRolledUp: 0,
+      playbackMetricsDeleted: 0,
+      onboardingEventsDeleted: 0,
+      aiUsagePayloadsCleared: 0,
+      unreadNotificationsDeleted: 0,
+      expiredJobLocksDeleted: 0,
       totalDeleted: 4312,
+      pruneBatches: 1,
       batchLimitReached: false,
+      pruneTimeBudgetReached: false,
       shareEventsDeleted: 18,
       profileShareEventsDeleted: 6,
       abandonedFreeUnlockOrdersDeleted: 2,
       accountMergeTicketsDeleted: 0,
       uploadByteReservationsDeleted: 0,
+      supplementaryBatchLimitReached: false,
       expiredUploadReservationsScanned: 0,
       expiredUploadReservationsHandled: 0,
       expiredUploadObjectsDeleted: 0,
@@ -123,6 +137,12 @@ describe('operational data retention', () => {
       idleGuestDeletionFailures: 0,
       idleGuestBatchLimitReached: false,
       idleGuestTimeBudgetReached: false,
+      contentGuestCandidates: 0,
+      contentGuestsRetired: 0,
+      contentGuestsSkipped: 0,
+      contentGuestRetirementFailures: 0,
+      contentGuestBatchLimitReached: false,
+      contentGuestTimeBudgetReached: false,
     });
   });
 
@@ -146,6 +166,7 @@ describe('operational data retention', () => {
       'prune_account_merge_tickets',
       'prune_upload_byte_reservations',
       'list_idle_guest_identities',
+      'list_idle_guest_identities_with_content',
     ]);
     expect(summary.shareEventsDeleted).toBe(40);
     expect(summary.profileShareEventsDeleted).toBe(11);
@@ -252,6 +273,7 @@ describe('idle-guest retention', () => {
     });
     const client = {
       rpc: vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
+        if (fn === 'list_idle_guest_identities_with_content') return { data: [], error: null };
         if (fn !== 'list_idle_guest_identities') {
           return { data: fn === 'prune_operational_backend_data' ? { total_deleted: 0 } : 0, error: null };
         }
@@ -483,5 +505,312 @@ describe('idle-guest retention', () => {
       idleGuestDeletionFailures: 1,
       supplementaryPruneFailures: ['delete_idle_guest_identity'],
     });
+  });
+});
+
+// Usage audit (2026-11-04): each prune deletes one bounded batch per call, so
+// the run calls it again while a batch comes back full, until the backlog is
+// gone or its step's time is up.
+describe('batches until the backlog is gone', () => {
+  type Answer = { data?: unknown; error?: unknown } | (() => never);
+
+  function batchClient(answers: Record<string, Answer[]>) {
+    const calls: RpcCall[] = [];
+    const client = {
+      rpc: vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
+        calls.push({ fn, args });
+        if (fn.startsWith('list_idle_guest_identities')) return { data: [], error: null };
+        const queue = answers[fn];
+        const next = queue && queue.length > 1 ? queue.shift() : queue?.[0];
+        if (typeof next === 'function') return next();
+        return { data: next?.data ?? (fn === 'prune_operational_backend_data' ? { total_deleted: 0 } : 0), error: next?.error ?? null };
+      }),
+    };
+    return { client: client as unknown as SupabaseClient, calls };
+  }
+
+  const full = (extra: Record<string, unknown> = {}) => ({
+    data: { job_runs_deleted: 5000, rate_limits_deleted: 10, total_deleted: 5010, batch_limit_reached: true, ...extra },
+  });
+  const last = { data: { job_runs_deleted: 1200, playback_metrics_deleted: 4, total_deleted: 1204, batch_limit_reached: false } };
+
+  beforeEach(() => {
+    reclaimExpiredUploadReservationsMock.mockClear();
+  });
+
+  it('calls the prune again while a batch is full and sums what every batch did', async () => {
+    const { client, calls } = batchClient({ prune_operational_backend_data: [full(), full({ ai_usage_payloads_cleared: 7 }), last] });
+
+    const summary = await pruneOperationalBackendData(client);
+
+    expect(calls.filter((call) => call.fn === 'prune_operational_backend_data')).toHaveLength(3);
+    expect(summary).toMatchObject({
+      pruneBatches: 3,
+      jobRunsDeleted: 11_200,
+      rateLimitsDeleted: 20,
+      playbackMetricsDeleted: 4,
+      aiUsagePayloadsCleared: 7,
+      totalDeleted: 11_224,
+      batchLimitReached: false,
+      pruneTimeBudgetReached: false,
+    });
+  });
+
+  it('passes every batch the same arguments, so they agree on the sweep time and cap', async () => {
+    const { client, calls } = batchClient({ prune_operational_backend_data: [full(), last] });
+
+    await pruneOperationalBackendData(client, { now: new Date('2026-11-05T00:50:00.000Z'), maxDeletesPerTable: 100 });
+
+    const batches = calls.filter((call) => call.fn === 'prune_operational_backend_data');
+    expect(batches.map((call) => call.args)).toEqual([
+      { p_now: '2026-11-05T00:50:00.000Z', p_max_deletes_per_table: 100 },
+      { p_now: '2026-11-05T00:50:00.000Z', p_max_deletes_per_table: 100 },
+    ]);
+  });
+
+  it('starts no batch past the first minute and says a backlog remains', async () => {
+    let clockMs = 0;
+    const { client, calls } = batchClient({
+      prune_operational_backend_data: [
+        { ...full(), data: { ...full().data } },
+      ],
+    });
+    (client.rpc as ReturnType<typeof vi.fn>).mockImplementation(async (fn: string) => {
+      calls.push({ fn, args: {} });
+      if (fn === 'prune_operational_backend_data') {
+        clockMs += 25_000;
+        return full();
+      }
+      return { data: fn.startsWith('list_idle_guest_identities') ? [] : 0, error: null };
+    });
+
+    const summary = await pruneOperationalBackendData(client, { clock: () => clockMs });
+
+    // Batches at 0, 25 and 50 s; the third ends at 75 s, past the 60 s mark.
+    expect(summary).toMatchObject({ pruneBatches: 3, batchLimitReached: true, pruneTimeBudgetReached: true });
+  });
+
+  it('stops at its batch backstop even when every batch is instant', async () => {
+    const { client } = batchClient({ prune_operational_backend_data: [full()] });
+
+    const summary = await pruneOperationalBackendData(client);
+
+    expect(summary.pruneBatches).toBe(OPERATIONAL_RETENTION_MAX_BATCHES);
+    expect(summary.batchLimitReached).toBe(true);
+  });
+
+  it('keeps what earlier batches did when a later one fails, and runs the rest of the job', async () => {
+    const { client, calls } = batchClient({
+      prune_operational_backend_data: [full(), { error: { message: 'statement timeout' } }],
+    });
+
+    const summary = await pruneOperationalBackendData(client);
+
+    expect(summary).toMatchObject({
+      pruneBatches: 1,
+      jobRunsDeleted: 5000,
+      supplementaryPruneFailures: ['prune_operational_backend_data'],
+    });
+    expect(calls.map((call) => call.fn)).toContain('prune_upload_byte_reservations');
+    expect(calls.map((call) => call.fn)).toContain('list_idle_guest_identities');
+  });
+
+  it('still fails the run when the first batch fails', async () => {
+    const { client } = batchClient({
+      prune_operational_backend_data: [() => { throw new Error('connection refused'); }],
+    });
+
+    await expect(pruneOperationalBackendData(client)).rejects.toThrow('connection refused');
+  });
+
+  it('calls a supplementary prune again while its batch of 5,000 is full', async () => {
+    const { client, calls } = batchClient({
+      prune_post_share_events: [{ data: 5000 }, { data: 5000 }, { data: 12 }],
+      prune_upload_byte_reservations: [{ data: 5000 }, { data: 3 }],
+    });
+
+    const summary = await pruneOperationalBackendData(client);
+
+    expect(calls.filter((call) => call.fn === 'prune_post_share_events')).toHaveLength(3);
+    expect(calls.filter((call) => call.fn === 'prune_profile_share_events')).toHaveLength(1);
+    expect(summary).toMatchObject({
+      shareEventsDeleted: 10_012,
+      uploadByteReservationsDeleted: 5003,
+      supplementaryBatchLimitReached: false,
+    });
+  });
+
+  it('gives the reservation sweep its full action limit and what is left of its step', async () => {
+    let clockMs = 0;
+    const { client } = batchClient({});
+    (client.rpc as ReturnType<typeof vi.fn>).mockImplementation(async (fn: string) => {
+      if (fn === 'prune_operational_backend_data') clockMs += 30_000;
+      return { data: fn.startsWith('list_idle_guest_identities') ? [] : fn === 'prune_operational_backend_data' ? { total_deleted: 0 } : 0, error: null };
+    });
+
+    await pruneOperationalBackendData(client, { clock: () => clockMs });
+
+    expect(EXPIRED_UPLOAD_RESERVATION_RECLAIM_LIMIT).toBe(5000);
+    expect(reclaimExpiredUploadReservationsMock).toHaveBeenCalledWith(client, expect.objectContaining({
+      limit: 5000,
+      // 210 s into the run is its step's end; 30 s went to the main prune.
+      timeBudgetMs: 180_000,
+    }));
+  });
+});
+
+// Usage audit (2026-11-04): a guest that made something and has been unused for
+// 180 days is retired through the account-deletion pipeline. Who qualifies is
+// the database's decision (list_idle_guest_identities_with_content, pinned by
+// guest_content_retirement.test.sql); this is the part that acts on it.
+describe('retiring idle guests with content', () => {
+  function guestId(index: number) {
+    return `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+  }
+
+  function contentGuestClient(options: {
+    listed?: string[];
+    listResult?: { data: unknown; error: unknown };
+    stillIdle?: (userId: string) => boolean;
+  } = {}) {
+    const order: string[] = [];
+    const listCalls: Array<Record<string, unknown>> = [];
+    const client = {
+      rpc: vi.fn(async (fn: string, args: Record<string, unknown> = {}) => {
+        if (fn === 'list_idle_guest_identities') return { data: [], error: null };
+        if (fn !== 'list_idle_guest_identities_with_content') {
+          return { data: fn === 'prune_operational_backend_data' ? { total_deleted: 0 } : 0, error: null };
+        }
+        listCalls.push(args);
+        if (typeof args.p_user_id === 'string') {
+          order.push(`recheck:${args.p_user_id}`);
+          const idle = options.stillIdle?.(args.p_user_id) ?? true;
+          return { data: idle ? [{ user_id: args.p_user_id }] : [], error: null };
+        }
+        order.push('list');
+        if (options.listResult) return options.listResult;
+        return {
+          data: (options.listed ?? []).slice(0, Number(args.p_limit)).map((user_id) => ({ user_id })),
+          error: null,
+        };
+      }),
+      auth: { admin: { deleteUser: vi.fn() } },
+    };
+    return { client: client as unknown as SupabaseClient, order, listCalls };
+  }
+
+  beforeEach(() => {
+    reclaimExpiredUploadReservationsMock.mockClear();
+  });
+
+  it('retires only the guests the database names, asking about each again right before', async () => {
+    const guests = [guestId(1), guestId(2)];
+    const { client, order } = contentGuestClient({ listed: guests });
+    const retire = vi.fn(async (_admin: SupabaseClient, userId: string) => {
+      order.push(`retire:${userId}`);
+      return 'retired' as const;
+    });
+
+    const summary = await pruneOperationalBackendData(client, { retireContentGuest: retire });
+
+    expect(order).toEqual([
+      'list',
+      `recheck:${guests[0]}`, `retire:${guests[0]}`,
+      `recheck:${guests[1]}`, `retire:${guests[1]}`,
+    ]);
+    expect(retire.mock.calls.map(([admin]) => admin)).toEqual([client, client]);
+    expect(summary).toMatchObject({
+      contentGuestCandidates: 2,
+      contentGuestsRetired: 2,
+      contentGuestsSkipped: 0,
+      contentGuestRetirementFailures: 0,
+      contentGuestBatchLimitReached: false,
+      supplementaryPruneFailures: [],
+    });
+  });
+
+  it('asks for one small batch and says a backlog remains', async () => {
+    const backlog = Array.from({ length: 25 }, (_, index) => guestId(index + 1));
+    const { client, listCalls } = contentGuestClient({ listed: backlog });
+    const retire = vi.fn(async () => 'retired' as const);
+
+    const summary = await pruneOperationalBackendData(client, { retireContentGuest: retire });
+
+    expect(IDLE_CONTENT_GUEST_RETIREMENT_BATCH_LIMIT).toBe(10);
+    expect(listCalls[0]).toEqual({ p_limit: 10 });
+    expect(retire).toHaveBeenCalledTimes(10);
+    expect(summary).toMatchObject({ contentGuestCandidates: 10, contentGuestBatchLimitReached: true });
+  });
+
+  it('leaves alone a guest that came back, was linked, or is already gone', async () => {
+    const guests = [guestId(1), guestId(2), guestId(3)];
+    const { client } = contentGuestClient({ listed: guests, stillIdle: (userId) => userId !== guests[0] });
+    const retire = vi.fn(async (_admin: SupabaseClient, userId: string) => {
+      if (userId === guests[1]) throw new GuestAccountLinkedError();
+      return 'already_deleted' as const;
+    });
+
+    const summary = await pruneOperationalBackendData(client, { retireContentGuest: retire });
+
+    expect(retire.mock.calls.map(([, userId]) => userId)).toEqual([guests[1], guests[2]]);
+    expect(summary).toMatchObject({
+      contentGuestsRetired: 0,
+      contentGuestsSkipped: 3,
+      contentGuestRetirementFailures: 0,
+      supplementaryPruneFailures: [],
+    });
+  });
+
+  it('counts each failure, names it once, and stops after three in a row', async () => {
+    const guests = [guestId(1), guestId(2), guestId(3), guestId(4)];
+    const { client } = contentGuestClient({ listed: guests });
+    const retire = vi.fn(async () => {
+      throw new Error('Storage unavailable');
+    });
+
+    const summary = await pruneOperationalBackendData(client, { retireContentGuest: retire });
+
+    expect(retire).toHaveBeenCalledTimes(3);
+    expect(summary).toMatchObject({
+      contentGuestRetirementFailures: 3,
+      supplementaryPruneFailures: ['retire_idle_guest_with_content'],
+    });
+  });
+
+  it('records a failed list and still completes the run', async () => {
+    const { client } = contentGuestClient({ listResult: { data: null, error: { message: 'function does not exist' } } });
+    const retire = vi.fn();
+
+    const summary = await pruneOperationalBackendData(client, { retireContentGuest: retire });
+
+    expect(retire).not.toHaveBeenCalled();
+    expect(summary.supplementaryPruneFailures).toEqual(['list_idle_guest_identities_with_content']);
+  });
+
+  it('reads nothing once the run\'s time is spent', async () => {
+    const { client, listCalls } = contentGuestClient({ listed: [guestId(1)] });
+
+    const summary = await retireIdleGuestsWithContent(client, {
+      clock: () => 270_000,
+      deadlineMs: 270_000,
+      retire: vi.fn(),
+    });
+
+    expect(listCalls).toEqual([]);
+    expect(summary).toMatchObject({ contentGuestCandidates: 0, contentGuestTimeBudgetReached: true });
+  });
+
+  it('passes the sweep time to the database, so the list and every re-check agree', async () => {
+    const { client, listCalls } = contentGuestClient({ listed: [guestId(1)] });
+
+    await retireIdleGuestsWithContent(client, {
+      now: new Date('2026-11-05T00:50:00.000Z'),
+      retire: vi.fn(async () => 'retired' as const),
+    });
+
+    expect(listCalls).toEqual([
+      { p_now: '2026-11-05T00:50:00.000Z', p_limit: 10 },
+      { p_now: '2026-11-05T00:50:00.000Z', p_limit: 1, p_user_id: guestId(1) },
+    ]);
   });
 });
