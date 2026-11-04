@@ -18,6 +18,8 @@ import {
   FEED_FACT_DAILY_RETENTION_DAYS,
   FEED_FACT_RETENTION_DAYS,
   FEED_RETENTION_PRUNE_LIMIT,
+  FEED_RETENTION_PRUNE_MAX_BATCHES,
+  FEED_RETENTION_PRUNE_TIME_BUDGET_MS,
   FEED_SESSION_RETENTION_DAYS,
 } from '@/lib/feed-retention-policy';
 
@@ -37,10 +39,29 @@ type FeedRetentionSummary = {
   post_feedback_deleted?: number;
   creator_feedback_deleted?: number;
   facts_deleted?: number;
+  viewer_daily_deleted?: number;
   fact_retention_days_requested?: number;
   fact_retention_days_applied?: number;
   fact_retention_clamped?: boolean;
+  /** Prune calls this run made; every count above is their sum. */
+  batches?: number;
+  /** The last batch still filled a table's batch: a backlog remains. */
+  batch_limit_reached?: boolean;
+  /** The batches stopped at the run's time budget, not at a short batch. */
+  time_budget_reached?: boolean;
 };
+
+/** The prune's per-table counts, summed across its batches. */
+const FEED_RETENTION_COUNTS = [
+  'events_deleted',
+  'sessions_deleted',
+  'assignments_deleted',
+  'interests_deleted',
+  'post_feedback_deleted',
+  'creator_feedback_deleted',
+  'facts_deleted',
+  'viewer_daily_deleted',
+] as const;
 
 export type FeedDailyRollupSummary = {
   bucketsRefreshed: number;
@@ -126,6 +147,68 @@ function retentionSummary(value: unknown): FeedRetentionSummary {
   return summary as FeedRetentionSummary;
 }
 
+/** Whether a batch filled any table's batch, so another call has work to do. */
+function filledABatch(summary: FeedRetentionSummary) {
+  return FEED_RETENTION_COUNTS.some((key) => (summary[key] ?? 0) >= FEED_RETENTION_PRUNE_LIMIT);
+}
+
+/**
+ * Prunes expired feed telemetry in bounded batches: the prune deletes at most
+ * `FEED_RETENTION_PRUNE_LIMIT` rows per table per call, each call its own
+ * short transaction under the prune's advisory lock, and it is called again
+ * while any table fills its batch, until the backlog is gone or the run's
+ * budget is spent. The first call always runs, as the single call did. A
+ * failed call fails the run, as it always did; the batches before it stand.
+ */
+async function pruneFeedTelemetry(
+  client: SupabaseClient,
+  { asOf, deadlineMs, clock }: { asOf: string; deadlineMs: number; clock: () => number },
+): Promise<FeedRetentionSummary> {
+  let total: FeedRetentionSummary | null = null;
+  let batches = 0;
+  for (;;) {
+    const pruneResult = await client.rpc('prune_feed_personalization_data', {
+      p_as_of: asOf,
+      p_event_retention_days: FEED_EVENT_RETENTION_DAYS,
+      p_session_retention_days: FEED_SESSION_RETENTION_DAYS,
+      p_limit: FEED_RETENTION_PRUNE_LIMIT,
+      p_fact_retention_days: FEED_FACT_RETENTION_DAYS,
+    });
+    if (pruneResult.error) {
+      throw rpcError('prune_feed_personalization_data', pruneResult.error);
+    }
+    const batch = retentionSummary(pruneResult.data);
+
+    // Another run holds the prune's lock and is pruning: this one stops, with
+    // what it did so far (nothing, on a first call: the RPC's own answer).
+    if (batch.skipped) {
+      return total
+        ? { ...total, batches, batch_limit_reached: true, time_budget_reached: false }
+        : batch;
+    }
+
+    batches += 1;
+    if (!total) {
+      total = { ...batch };
+    } else {
+      for (const key of FEED_RETENTION_COUNTS) {
+        const count = batch[key];
+        if (typeof count === 'number') total[key] = (total[key] ?? 0) + count;
+      }
+    }
+
+    if (!filledABatch(batch)) {
+      return { ...total, batches, batch_limit_reached: false, time_budget_reached: false };
+    }
+    if (batches >= FEED_RETENTION_PRUNE_MAX_BATCHES) {
+      return { ...total, batches, batch_limit_reached: true, time_budget_reached: false };
+    }
+    if (clock() >= deadlineMs) {
+      return { ...total, batches, batch_limit_reached: true, time_budget_reached: true };
+    }
+  }
+}
+
 /**
  * Refreshes the bounded feed aggregates before deleting expired source telemetry.
  * The migration RPCs provide their own advisory locks; this service is additionally
@@ -144,8 +227,12 @@ export async function maintainFeedPersonalization(
     now?: Date;
     invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
     refreshAccountLabels?: typeof refreshAccountSafetyLabels;
+    /** Wall clock in ms, for the prune's time budget. */
+    clock?: () => number;
   } = {},
 ): Promise<FeedMaintenanceSummary> {
+  const clock = options.clock ?? Date.now;
+  const runStartedAtMs = clock();
   const now = options.now ?? new Date();
   if (!Number.isFinite(now.getTime())) {
     throw new Error('Feed maintenance time must be a valid date');
@@ -233,18 +320,11 @@ export async function maintainFeedPersonalization(
     deferredFailures.push(errorMessage(error));
   }
 
-  const pruneResult = await client.rpc('prune_feed_personalization_data', {
-    p_as_of: asOf,
-    p_event_retention_days: FEED_EVENT_RETENTION_DAYS,
-    p_session_retention_days: FEED_SESSION_RETENTION_DAYS,
-    p_limit: FEED_RETENTION_PRUNE_LIMIT,
-    p_fact_retention_days: FEED_FACT_RETENTION_DAYS,
+  const retention = await pruneFeedTelemetry(client, {
+    asOf,
+    deadlineMs: runStartedAtMs + FEED_RETENTION_PRUNE_TIME_BUDGET_MS,
+    clock,
   });
-  if (pruneResult.error) {
-    throw rpcError('prune_feed_personalization_data', pruneResult.error);
-  }
-
-  const retention = retentionSummary(pruneResult.data);
   // The clamp is the right runtime behaviour — retaining longer than asked is
   // recoverable — but it must never pass unobserved: a clamped run means the
   // configured policy is not what production is actually retaining.

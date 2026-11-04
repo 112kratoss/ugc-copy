@@ -45,11 +45,26 @@ export const FEED_SESSION_RETENTION_DAYS = 2;
 export const FEED_FACT_RETENTION_DAYS = 30;
 
 /**
- * Rows deleted per sweep run, per table. The sweep is hourly, so this is also
- * the ceiling the insert rate has to stay under for retention to hold — which
- * is what `feed-retention-lag.ts` exists to detect.
+ * Rows deleted per prune call, per table: one transaction's batch. The hourly
+ * sweep calls the prune again while any table fills its batch (usage audit,
+ * 2026-11-04), so this bounds a transaction's locks and WAL, not the hour.
  */
 export const FEED_RETENTION_PRUNE_LIMIT = 5000;
+
+/**
+ * No prune batch starts later than this into the feed-maintenance run. The
+ * run shares the 300 s scheduler invocation, so this leaves two minutes for
+ * the batch in flight and everything after it. Together with the batch size
+ * this is the ceiling the insert rate has to stay under for retention to hold
+ * — which is what `feed-retention-lag.ts` exists to detect.
+ */
+export const FEED_RETENTION_PRUNE_TIME_BUDGET_MS = 180_000;
+
+/**
+ * A backstop on prune calls per run. The time budget is the real bound; this
+ * only stops a pathological loop of instant full batches.
+ */
+export const FEED_RETENTION_PRUNE_MAX_BATCHES = 40;
 
 /**
  * How many trailing days the daily rollup recomputes each run.
