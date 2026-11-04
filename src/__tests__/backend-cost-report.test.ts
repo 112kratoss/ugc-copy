@@ -269,11 +269,20 @@ describe('collectBackendCostReport', () => {
     expect(db.builders.backend_rate_limits[0].select).toHaveBeenCalledWith('scope,request_count,window_start,updated_at');
     expect(db.builders.backend_rate_limits[0].select).not.toHaveBeenCalledWith(expect.stringContaining('subject_key'));
     expect(db.builders['storage.objects'][0].select).toHaveBeenCalledWith('bucket_id,name,metadata,created_at');
+    // Every bucket: public copies, uploaded posts, staging, profiles, recipe
+    // files and templates grow too.
     expect(db.builders['storage.objects'][0].in).toHaveBeenCalledWith('bucket_id', [
       'generated_images',
       'generated_videos',
       'generated_audio',
       'generation_inputs',
+      'uploads',
+      'showcase_media',
+      'post_media',
+      'post_resource_files',
+      'profiles',
+      'template_inputs',
+      'template_assets',
     ]);
   });
 

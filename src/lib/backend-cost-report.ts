@@ -18,6 +18,7 @@ import {
   fetchBackendCostAggregates,
   type BackendCostAggregates,
 } from '@/lib/backend-cost-aggregates';
+import { STORAGE_BUCKET_IDS } from '@/lib/storage-buckets';
 
 export type BackendCostReportStatus = 'ok' | 'warning' | 'degraded';
 
@@ -235,12 +236,9 @@ const BUDGET_POLICY_ENV_KEYS: Record<keyof BackendCostBudgetPolicy, string> = {
   storageGrowthWarningBytes: 'BACKEND_BUDGET_STORAGE_BYTES_WARNING',
   storageGrowthDegradedBytes: 'BACKEND_BUDGET_STORAGE_BYTES_DEGRADED',
 };
-const GENERATED_STORAGE_BUCKETS = [
-  'generated_images',
-  'generated_videos',
-  'generated_audio',
-  'generation_inputs',
-];
+// Every bucket, not only the generated ones: public copies, uploaded posts,
+// staging, profiles, recipe files and templates grow as well.
+const REPORTED_STORAGE_BUCKETS: string[] = [...STORAGE_BUCKET_IDS];
 // A price list (`/api/generation-models/quotes`) is a quote request too, of many runs at once.
 const QUOTE_RATE_LIMIT_SCOPES = new Set(['generation-model:quote', 'generation-model:quote-batch']);
 
@@ -837,13 +835,13 @@ function buildCostIssues({
     issues.push({
       severity: 'degraded',
       code: 'STORAGE_GROWTH_SPIKE',
-      message: `${storageGrowth.recentBytes} generated media byte(s) were created in the report window.`,
+      message: `${storageGrowth.recentBytes} stored media byte(s) were created in the report window.`,
     });
   } else if (storageGrowth.recentBytes >= budgetPolicy.storageGrowthWarningBytes) {
     issues.push({
       severity: 'warning',
       code: 'STORAGE_GROWTH_ELEVATED',
-      message: `${storageGrowth.recentBytes} generated media byte(s) were created in the report window.`,
+      message: `${storageGrowth.recentBytes} stored media byte(s) were created in the report window.`,
     });
   }
 
@@ -941,7 +939,7 @@ async function summarizeFromRawRows(
       .schema('storage')
       .from('objects')
       .select('bucket_id,name,metadata,created_at')
-      .in('bucket_id', GENERATED_STORAGE_BUCKETS)
+      .in('bucket_id', REPORTED_STORAGE_BUCKETS)
       .gte('created_at', since)
       .limit(QUERY_LIMIT + 1),
   ]);
@@ -1014,7 +1012,7 @@ export async function collectBackendCostReport(
   const aggregates = await fetchBackendCostAggregates(
     client,
     since,
-    GENERATED_STORAGE_BUCKETS,
+    REPORTED_STORAGE_BUCKETS,
     SLOW_PROVIDER_DURATION_MS,
   );
   const {
@@ -1093,7 +1091,7 @@ export async function collectBackendCostReport(
     issues.push({
       severity: 'warning',
       code: 'STORAGE_GROWTH_UNAVAILABLE',
-      message: 'Generated storage growth could not be measured because the Supabase storage schema is unavailable through the Data API.',
+      message: 'Storage growth could not be measured because the Supabase storage schema is unavailable through the Data API.',
     });
   }
 
