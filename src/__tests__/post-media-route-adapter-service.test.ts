@@ -7,7 +7,7 @@ const signedOut = async (): Promise<IdentityResult> => ({ ok: false, status: 401
 
 it('lets the viewer\'s own browser keep the redirect to a public post\'s media', async () => {
   const admin = {} as SupabaseClient;
-  const read = vi.fn(async () => ({ signedUrl: 'https://storage.test/signed', browserCacheSeconds: 3000 }));
+  const read = vi.fn(async () => ({ signedUrl: 'https://storage.test/signed', browserCacheSeconds: 780 }));
   const response = await getPostMediaRouteResponse(new Request(`https://app.test/api/media?bucket=post_media&path=${path}`), {
     createServiceClient: () => admin,
     createMediaSupabaseClient: async () => admin,
@@ -17,7 +17,7 @@ it('lets the viewer\'s own browser keep the redirect to a public post\'s media',
   expect(response.status).toBe(302);
   expect(response.headers.get('Location')).toBe('https://storage.test/signed');
   // Never `public` or `s-maxage`: no shared cache keeps it.
-  expect(response.headers.get('Cache-Control')).toBe('private, max-age=3000');
+  expect(response.headers.get('Cache-Control')).toBe('private, max-age=780');
   expect(response.headers.get('Vary')).toBe('Authorization, Cookie');
   expect(read).toHaveBeenCalledWith({ admin, path, viewerUserId: null });
 });
