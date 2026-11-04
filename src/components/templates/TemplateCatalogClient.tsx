@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, LayoutTemplate, Plus, Search, Sparkles } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
@@ -11,6 +11,7 @@ import {
   Surface,
   Text,
 } from '@/components/DesignSystem';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 import { listTemplatePage, listTemplates } from './api';
 import { TemplateCard, TemplatePageShell } from './TemplatePrimitives';
@@ -79,6 +80,11 @@ export default function TemplateCatalogClient({
   const [isLoading, setIsLoading] = useState(!hasInitialPublicTemplates);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  // The server's HTML draws the search field, and a filter typed before the page's script ran
+  // never reached the page: the catalog's arrival wrote the empty filter over it (2026-11-05;
+  // tests/e2e/templates-typed-before-script.spec.ts).
+  const queryRef = useRef<HTMLInputElement>(null);
+  useFieldValueBeforeHydration(queryRef, { drawn: '', onValue: setQuery });
   const [inputFilter, setInputFilter] = useState<InputFilter>('all');
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -198,6 +204,7 @@ export default function TemplateCatalogClient({
           <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" aria-hidden />
           <span className="sr-only">Search templates</span>
           <input
+            ref={queryRef}
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}

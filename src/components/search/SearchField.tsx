@@ -1,4 +1,7 @@
+import { useRef } from 'react';
 import { Search, X } from 'lucide-react';
+
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 export function SearchField({
   autoFocus = false,
@@ -11,11 +14,17 @@ export function SearchField({
   onClear: () => void;
   value: string;
 }) {
+  // The server's HTML draws the field, and a query typed before the page's script ran never
+  // reached the page: nothing was searched for until the next key (2026-11-05;
+  // tests/e2e/search-typed-before-script.spec.ts).
+  const fieldRef = useRef<HTMLInputElement>(null);
+  useFieldValueBeforeHydration(fieldRef, { drawn: value, onValue: onChange });
   return (
     <label className="ui-focus-within-ring flex min-h-14 items-center gap-3 rounded-full border border-white/10 bg-white/[0.055] px-5 shadow-[0_18px_60px_-32px_rgba(0,0,0,0.9)] backdrop-blur-xl">
       <Search className="h-5 w-5 shrink-0 text-zinc-400" aria-hidden="true" />
       <span className="sr-only">Search creators, posts, and recipes</span>
       <input
+        ref={fieldRef}
         autoFocus={autoFocus}
         type="search"
         value={value}

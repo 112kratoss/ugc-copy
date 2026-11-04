@@ -1,11 +1,12 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { LogIn } from 'lucide-react';
 
 import { Surface, Text } from '@/components/DesignSystem';
 import { resolveSafeAdminRedirect } from '@/lib/admin-redirect';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 const INPUT_CLASSES = 'ui-focus-ring w-full rounded-xl border border-[var(--ui-border-default)] '
   + 'bg-[var(--ui-surface-inset)] px-3.5 py-2.5 text-base text-[var(--ui-text-primary)] '
@@ -16,6 +17,14 @@ export function AdminLoginForm() {
   const searchParams = useSearchParams();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  // The page renders its form in the server's HTML, and what an operator types (or the browser
+  // fills in) before the script runs never reached this state: the sign-in sent an empty username
+  // and password (2026-11-05). Called here, inside page.tsx's Suspense, which hydrates the form
+  // in a commit of its own.
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  useFieldValueBeforeHydration(usernameRef, { drawn: '', onValue: setUsername });
+  useFieldValueBeforeHydration(passwordRef, { drawn: '', onValue: setPassword });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,6 +72,7 @@ export function AdminLoginForm() {
             <Text as="span" variant="label">Username</Text>
           </label>
           <input
+            ref={usernameRef}
             id="admin-username"
             name="username"
             type="text"
@@ -79,6 +89,7 @@ export function AdminLoginForm() {
             <Text as="span" variant="label">Password</Text>
           </label>
           <input
+            ref={passwordRef}
             id="admin-password"
             name="password"
             type="password"
