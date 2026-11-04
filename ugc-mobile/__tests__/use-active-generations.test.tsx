@@ -16,7 +16,7 @@ const authState = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
-import { activeGenerationsQueryKey, useActiveGenerationCount } from '../lib/use-active-generations';
+import { ACTIVE_GENERATIONS_POLL_MS, activeGenerationsQueryKey, useActiveGenerationCount } from '../lib/use-active-generations';
 
 const KEY = activeGenerationsQueryKey('user-1');
 
@@ -67,10 +67,30 @@ describe('the in-flight count', () => {
     authState.api.listGenerations.mockReset();
   });
 
-  // The count polls every 10 s while above zero; nothing of one case may poll into the next.
+  // The count polls every 30 s while above zero; nothing of one case may poll into the next.
   afterEach(() => {
     renderer.act(() => { for (const tree of mounted.splice(0)) tree.unmount(); });
     client.clear();
+  });
+
+  // Every 10 s beside the creator's own reads cost a four-minute run two dozen
+  // list reads. A run's end reaches the ring at once from the creator that
+  // watched it and from its push (both invalidate), so the poll is a fallback.
+  // (React Query runs no interval without a window, so the schedule is read off
+  // the observer rather than timed.)
+  it('reads the count every 30 s while a run works, and not at all once none does', async () => {
+    answers(answer('processing'));
+    const seen: number[] = [];
+    await mount(() => <QueryClientProvider client={client}><CountProbe seen={seen} /></QueryClientProvider>);
+    expect(seen.at(-1)).toBe(1);
+
+    const query = client.getQueryCache().find({ queryKey: KEY })!;
+    const interval = query.observers[0].options.refetchInterval as (current: typeof query) => number | false;
+    expect(ACTIVE_GENERATIONS_POLL_MS).toBe(30_000);
+    expect(interval(query)).toBe(30_000);
+
+    client.setQueryData(KEY, 0);
+    expect(interval(query)).toBe(false);
   });
 
   it('reads the balance again when the last run in flight settles, since a failure returned its credits', async () => {

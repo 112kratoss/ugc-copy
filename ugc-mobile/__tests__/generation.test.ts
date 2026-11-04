@@ -1,13 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  GENERATION_POLL_MAX_DELAY_MS,
   generationStillProcessingMessage,
   getGenerationOutput,
   getGenerationOutputs,
+  getGenerationPollBackoffMs,
   getPollDelayMs,
   isGenerationFinished,
   pollGenerationStatus,
 } from '../lib/generation';
+import {
+  announceGenerationSettledPush,
+  isGenerationSettledPush,
+  subscribeToGenerationSettledPush,
+} from '../lib/generation-settled-push';
 
 describe('generation polling helpers', () => {
   afterEach(() => {
@@ -108,5 +115,88 @@ describe('generation polling helpers', () => {
     await settled;
     expect(generationStillProcessingMessage(true)).not.toContain('Check Alerts');
     expect(generationStillProcessingMessage(false)).toContain('Check Alerts');
+  });
+
+  // Every read of a run still working costs the server two lookups, three lock
+  // writes and up to one provider call; runs take one to four minutes.
+  describe('the creator\'s reads of a run it watches', () => {
+    /** When each read was made, in seconds from the first, for a run that never ends. */
+    async function readTimes(options: Parameters<typeof pollGenerationStatus>[1], untilMs: number, status: Record<string, unknown> = { status: 'processing' }) {
+      vi.useFakeTimers();
+      const start = Date.now();
+      const times: number[] = [];
+      const getStatus = vi.fn(async () => {
+        times.push((Date.now() - start) / 1000);
+        return status as { status: string };
+      });
+      const polling = pollGenerationStatus(getStatus, { random: () => 0, timeoutMs: untilMs, ...options }).catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(untilMs);
+      // The wait under way at the deadline ends, and the poll gives up without another read.
+      await vi.advanceTimersByTimeAsync(GENERATION_POLL_MAX_DELAY_MS + 1_000);
+      await polling;
+      return times;
+    }
+
+    it('waits 8 s, then half as long again each time, to 30 s at most', async () => {
+      expect([0, 1, 2, 3, 4, 5, 9].map(getGenerationPollBackoffMs)).toEqual([8_000, 12_000, 18_000, 27_000, 30_000, 30_000, 30_000]);
+      expect(GENERATION_POLL_MAX_DELAY_MS).toBe(30_000);
+
+      // A four-minute run is read 11 times where a fixed 15 s read it 17.
+      const times = await readTimes({}, 246_000);
+      expect(times).toEqual([0, 8, 20, 38, 65, 95, 125, 155, 185, 215, 245]);
+      expect((await readTimes({ intervalMs: 15_000 }, 246_000)).length).toBe(17);
+    });
+
+    it('never reads sooner than the server asks, nor sooner than the backoff because the server asks for less', async () => {
+      // Throttled: the server reads the provider once per 15 s at most.
+      expect(await readTimes({}, 31_000, { status: 'processing', retryAfterMs: 15_000 })).toEqual([0, 15, 30]);
+      // Another read holds the run's lock: 2 s, which the backoff outlasts.
+      expect(await readTimes({}, 21_000, { status: 'processing', retryAfterMs: 2_000 })).toEqual([0, 8, 20]);
+    });
+
+    it('reads at once when a completion push arrives, and goes on waiting when the run is still working', async () => {
+      vi.useFakeTimers();
+      const statuses = [{ status: 'processing' }, { status: 'processing' }, { status: 'succeeded', outputs: ['done.png'] }];
+      const getStatus = vi.fn(async () => statuses.shift()!);
+      const polling = pollGenerationStatus(getStatus, { random: () => 0, wake: subscribeToGenerationSettledPush });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(getStatus).toHaveBeenCalledTimes(1);
+      // Another run's push: this one is read, still works, and the next wait starts.
+      announceGenerationSettledPush();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getStatus).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(getStatus).toHaveBeenCalledTimes(2);
+      announceGenerationSettledPush();
+      await expect(polling).resolves.toEqual({ status: 'succeeded', outputs: ['done.png'] });
+      expect(getStatus).toHaveBeenCalledTimes(3);
+      // The finished poll listens no longer.
+      announceGenerationSettledPush();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getStatus).toHaveBeenCalledTimes(3);
+    });
+
+    it('stops listening when it is cancelled', async () => {
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const getStatus = vi.fn(async () => ({ status: 'processing' }));
+      const polling = pollGenerationStatus(getStatus, { random: () => 0, wake: subscribeToGenerationSettledPush, signal: controller.signal });
+      const cancelled = expect(polling).rejects.toThrow('Generation status check cancelled.');
+      await vi.advanceTimersByTimeAsync(1_000);
+      controller.abort();
+      await cancelled;
+      announceGenerationSettledPush();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it('knows a completion push by its type', () => {
+      expect(isGenerationSettledPush('generation_succeeded')).toBe(true);
+      expect(isGenerationSettledPush('generation_failed')).toBe(true);
+      expect(isGenerationSettledPush('new_follower')).toBe(false);
+      expect(isGenerationSettledPush(null)).toBe(false);
+    });
   });
 });

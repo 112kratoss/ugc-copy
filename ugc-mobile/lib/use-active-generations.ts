@@ -7,6 +7,17 @@ import { isGenerationInFlight } from '@/lib/generation';
 export { activeGenerationsQueryKey, invalidateActiveGenerations } from '@/lib/active-generations';
 
 /**
+ * How often the count is read while a run works. It was every 10 s, beside the
+ * creator's own status reads: a four-minute run cost two dozen list reads. A
+ * run's end now reaches the ring at once by the two ways it is usually learnt,
+ * the creator that watched it (`invalidateActiveGenerations` when its poll
+ * ends) and the run's completion push (the root layout), so the interval is the
+ * fallback for a run neither reached: a guest's, which gets no push, that no
+ * creator watched, or one whose push never came.
+ */
+export const ACTIVE_GENERATIONS_POLL_MS = 30_000;
+
+/**
  * How many of the viewer's runs are still working. Split from the tab bar the
  * same way the Alerts badge is: reaching `useAuth` drags expo-constants and the
  * native chain in behind it, and the focused component tests have no business
@@ -30,7 +41,7 @@ export function useActiveGenerationCount(): number {
     enabled: Boolean(identityUserId),
     queryFn: async ({ client, queryKey }) => {
       // The status projection: a count needs no signed media or linked posts, and this
-      // runs every 10 s beside the creator's own poll.
+      // runs every 30 s beside the creator's own poll.
       const response = await api.listGenerations(false, { limit: 20, detail: 'status' });
       const count = (response?.generations ?? []).filter((generation) => isGenerationInFlight(generation?.status)).length;
       // The cache still holds the previous answer until this one returns.
@@ -40,7 +51,7 @@ export function useActiveGenerationCount(): number {
       return count;
     },
     staleTime: 1000 * 15,
-    refetchInterval: (query) => ((query.state.data ?? 0) > 0 ? 1000 * 10 : false),
+    refetchInterval: (query) => ((query.state.data ?? 0) > 0 ? ACTIVE_GENERATIONS_POLL_MS : false),
   });
 
   return query.data ?? 0;

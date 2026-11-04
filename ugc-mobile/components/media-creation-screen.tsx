@@ -73,6 +73,7 @@ import { useReducedMotion } from '@/lib/motion';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { getGenerationOutput, getGenerationOutputs, pollGenerationStatus } from '@/lib/generation';
+import { subscribeToGenerationSettledPush } from '@/lib/generation-settled-push';
 import {
   applyCatalogModelDefaults,
   applyVerifiedInputDurations,
@@ -2801,7 +2802,8 @@ function IdentityCreationScreen({
       : tool === 'video'
         ? api.getVideoGeneration(predictionId)
         : api.getMotionGeneration(predictionId),
-    { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive, isGuest },
+    // A completion push reads the run at once instead of at the end of a wait.
+    { onTick: setStatus, signal: controller.signal, waitUntilReady: waitUntilAppActive, wake: subscribeToGenerationSettledPush, isGuest },
   );
 
   // Cleared only for the run it names: a start from another creator screen keeps its own.
@@ -2816,6 +2818,9 @@ function IdentityCreationScreen({
     setLastPredictionId(null);
     // Over either way, so there is nothing left for a creator opened again to resume.
     if (identityUserId) void forgetActiveRun(identityUserId, predictionId);
+    // The create control's ring reads the count every 30 s while a run works:
+    // this run's end is known now.
+    invalidateActiveGenerations(queryClient, identityUserId);
     if (finalStatus.status === 'failed') {
       setMessage(finalStatus.error?.trim() || 'Generation failed. Your inputs are still here, so you can adjust them and retry.');
       // A failed run's settlement returns what its start held; the balance on screen predates it.

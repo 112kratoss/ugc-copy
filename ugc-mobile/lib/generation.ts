@@ -34,21 +34,49 @@ export function getGenerationOutputs(status: GenerationStatusResponse): string[]
   return status.output ? [status.output] : [];
 }
 
+/**
+ * The waits between two status reads of a run a creator watches: 8 s after the
+ * first read, half as long again after each one, and 30 s at most. Runs take
+ * one to four minutes (`src/lib/generation-timing.ts`), and each read of one
+ * still running costs the server two lookups, three lock writes and up to one
+ * provider call. A fixed 15 s read a two-minute run 9 times and a four-minute
+ * one 17; this reads them 7 and 11 times. A finished run is met sooner than the
+ * wait says when its push arrives (`wake`), and a wait the server asks for is
+ * never cut short.
+ */
+export const GENERATION_POLL_FIRST_DELAY_MS = 8_000;
+export const GENERATION_POLL_MAX_DELAY_MS = 30_000;
+const GENERATION_POLL_GROWTH = 1.5;
+
+/** The wait after the status read numbered `readIndex` (0 for the first). */
+export function getGenerationPollBackoffMs(readIndex: number) {
+  return Math.min(
+    GENERATION_POLL_MAX_DELAY_MS,
+    Math.round(GENERATION_POLL_FIRST_DELAY_MS * GENERATION_POLL_GROWTH ** Math.max(0, readIndex)),
+  );
+}
+
 export async function pollGenerationStatus(
   getStatus: () => Promise<GenerationStatusResponse>,
   options: {
+    /** A fixed wait between reads instead of the backoff, which a server hint then replaces. */
     intervalMs?: number;
     timeoutMs?: number;
     onTick?: (status: GenerationStatusResponse) => void;
     signal?: AbortSignal;
     random?: () => number;
     waitUntilReady?: (signal?: AbortSignal) => Promise<void>;
+    /**
+     * Something that can end a wait early: a run's completion push. The read
+     * it brings forward says whether this run is the one that ended.
+     */
+    wake?: (onWake: () => void) => () => void;
     isGuest?: boolean;
   } = {}
 ) {
-  const intervalMs = options.intervalMs ?? 15_000;
   const timeoutMs = options.timeoutMs ?? 1000 * 60 * 12;
   const startedAt = Date.now();
+  let readIndex = 0;
 
   while (Date.now() - startedAt < timeoutMs) {
     throwIfAborted(options.signal);
@@ -59,10 +87,19 @@ export async function pollGenerationStatus(
     if (isGenerationFinished(status.status)) {
       return status;
     }
-    await waitForNextPoll(
-      getPollDelayMs(status.retryAfterMs, intervalMs, options.random ?? Math.random),
-      options.signal,
-    );
+    const random = options.random ?? Math.random;
+    const delayMs = options.intervalMs !== undefined
+      ? getPollDelayMs(status.retryAfterMs, options.intervalMs, random)
+      : getPollDelayMs(
+        Math.max(
+          typeof status.retryAfterMs === 'number' && Number.isFinite(status.retryAfterMs) ? status.retryAfterMs : 0,
+          getGenerationPollBackoffMs(readIndex),
+        ),
+        GENERATION_POLL_MAX_DELAY_MS,
+        random,
+      );
+    readIndex += 1;
+    await waitForNextPoll(delayMs, options.signal, options.wake);
   }
 
   throw new Error(generationStillProcessingMessage(options.isGuest === true));
@@ -101,7 +138,11 @@ function throwIfAborted(signal?: AbortSignal) {
   throw error;
 }
 
-function waitForNextPoll(intervalMs: number, signal?: AbortSignal) {
+function waitForNextPoll(
+  intervalMs: number,
+  signal?: AbortSignal,
+  wake?: (onWake: () => void) => () => void,
+) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
       const error = new Error('Generation status check cancelled.');
@@ -110,16 +151,22 @@ function waitForNextPoll(intervalMs: number, signal?: AbortSignal) {
       return;
     }
 
-    const timer = setTimeout(() => {
+    let stopWaking: () => void = () => undefined;
+    const finish = () => {
+      clearTimeout(timer);
       signal?.removeEventListener('abort', handleAbort);
+      stopWaking();
       resolve();
-    }, intervalMs);
+    };
+    const timer = setTimeout(finish, intervalMs);
     const handleAbort = () => {
       clearTimeout(timer);
+      stopWaking();
       const error = new Error('Generation status check cancelled.');
       error.name = 'AbortError';
       reject(error);
     };
     signal?.addEventListener('abort', handleAbort, { once: true });
+    if (wake) stopWaking = wake(finish);
   });
 }
