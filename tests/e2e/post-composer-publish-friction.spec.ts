@@ -90,7 +90,7 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     const madeWith = page.getByRole('button', { name: /^made with/i });
     await madeWith.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath('made-with.png') });
-    await expect(madeWith).toContainText('magicbooklet · Nano Banana 2.0');
+    await expect(madeWith).toContainText('Magic Booklet · Nano Banana 2.0');
   });
 
   test('a creation with no title starts from one its prompt suggests, which follows the recipe', async ({ page }, testInfo) => {
