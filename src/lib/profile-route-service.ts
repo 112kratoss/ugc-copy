@@ -26,7 +26,10 @@ import { parseOwnerPostSalesSummary } from '@/lib/owner-post-sales-summary';
 import { parseOwnerProfileCounts } from '@/lib/owner-profile-counts';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { deriveNormalizedProfileImage } from '@/lib/profile-image-normalization';
-import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
+import {
+  getCanonicalStoredMediaLocation,
+  getUserOwnedStoredMediaLocation,
+} from '@/lib/storage-ownership';
 import {
   abortNullableUploadByteConsumption,
   completeUploadByteConsumptions,
@@ -123,6 +126,85 @@ async function releaseSupersededProfileUploads(
       });
     }
   }));
+}
+
+const PROFILE_MEDIA_BUCKET = 'profiles';
+
+type StoredProfileMedia = { avatar_url: string | null; cover_url: string | null };
+
+/**
+ * The photos the profile showed before a save that sends one. Null when they
+ * could not be read: nothing is then removed, and the earlier photo stays as
+ * every replaced photo did before.
+ */
+async function readStoredProfileMedia(
+  client: ProfileRouteClient,
+  userId: string,
+): Promise<StoredProfileMedia | null> {
+  try {
+    const { data, error } = await client
+      .from('profiles')
+      .select('avatar_url, cover_url')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    const row = (data ?? {}) as Partial<StoredProfileMedia>;
+    return { avatar_url: row.avatar_url ?? null, cover_url: row.cover_url ?? null };
+  } catch (error) {
+    logBackendWarning('failed_to_read_profile_media_before_save', { error });
+    return null;
+  }
+}
+
+/**
+ * Removes the photo a saved profile no longer shows: an avatar or cover the
+ * save replaced or cleared. Only an object in this account's own folder of the
+ * profiles bucket, and only when no profile names it once the save has landed
+ * (the same file can be the avatar and the cover, and a guest linked to the
+ * account keeps its own row); the read is made after the save, right before
+ * the removal. A photo outside the folder (a sign-in provider's picture, a
+ * linked guest's) is left alone. Never fails the save: a failed read or
+ * removal is logged and leaves the file, as before.
+ */
+async function removeReplacedProfileMedia(
+  client: ProfileRouteClient,
+  userId: string,
+  previous: StoredProfileMedia,
+  saved: Partial<StoredProfileMedia>,
+): Promise<void> {
+  const savedValues = new Set([saved.avatar_url, saved.cover_url].filter(Boolean));
+  const replaced = new Map<string, string>();
+  for (const value of [previous.avatar_url, previous.cover_url]) {
+    if (!value || savedValues.has(value)) continue;
+    const location = getUserOwnedStoredMediaLocation(value, userId, { allowedBuckets: [PROFILE_MEDIA_BUCKET] });
+    if (location) replaced.set(location.filePath, location.filePath);
+  }
+  if (replaced.size === 0) return;
+
+  try {
+    const folder = `*/${PROFILE_MEDIA_BUCKET}/${userId}/*`;
+    const { data, error } = await client
+      .from('profiles')
+      .select('id, avatar_url, cover_url')
+      .or(`avatar_url.like.${folder},cover_url.like.${folder}`);
+    if (error) throw error;
+    for (const row of (data ?? []) as Array<Partial<StoredProfileMedia>>) {
+      for (const value of [row.avatar_url, row.cover_url]) {
+        const location = value
+          ? getCanonicalStoredMediaLocation(value, { allowedBuckets: [PROFILE_MEDIA_BUCKET] })
+          : null;
+        if (location) replaced.delete(location.filePath);
+      }
+    }
+    if (replaced.size === 0) return;
+
+    const { error: removeError } = await client.storage
+      .from(PROFILE_MEDIA_BUCKET)
+      .remove([...replaced.keys()]);
+    if (removeError) throw removeError;
+  } catch (error) {
+    logBackendWarning('failed_to_remove_replaced_profile_media', { error, paths: [...replaced.keys()] });
+  }
 }
 
 function mapRateLimitError(error: BackendRateLimitError): ProfileRouteResult {
@@ -323,6 +405,12 @@ export async function updateProfileForRoute({
     return { ok: false, status: 500, error: 'Failed to verify profile media.' };
   }
 
+  // A save that sends a photo may replace one: what the profile showed is read
+  // first, so the replaced file can go once the new one is saved.
+  const previousMedia = data.avatarUrl !== undefined || data.coverUrl !== undefined
+    ? await readStoredProfileMedia(resolvedClient, userId)
+    : null;
+
   const toStoredMediaUrl = (value: ProfileFieldUpdate): ProfileFieldUpdate => {
     if (typeof value !== 'string') return value;
     const location = getUserOwnedStoredMediaLocation(value, userId);
@@ -397,6 +485,9 @@ export async function updateProfileForRoute({
   const [completed] = await Promise.all([
     completeUploadByteConsumptions(resolvedClient, preservedClaims),
     releaseSupersededProfileUploads(resolvedClient, supersededClaims),
+    previousMedia
+      ? removeReplacedProfileMedia(resolvedClient, userId, previousMedia, updatedProfile as Partial<StoredProfileMedia>)
+      : null,
   ]);
   if (!completed.ok) {
     return { ok: false, status: 500, error: completed.error };

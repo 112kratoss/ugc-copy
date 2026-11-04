@@ -48,9 +48,12 @@ function createClient({
   countsError = null as { message: string } | null,
   sales = SALES as unknown,
   salesError = null as { message: string } | null,
+  referenceReadError = null as { message: string } | null,
 } = {}) {
   const rows = [...profiles];
   const selectedColumns: string[] = [];
+  /** The `or` filters a read of the profiles naming a folder sent. */
+  const referenceReads: string[] = [];
   const rpc = vi.fn(async (name: string) => {
     if (name === 'owner_profile_counts') return { data: countsError ? null : counts, error: countsError };
     if (name === 'get_owner_post_sales_summary') return { data: salesError ? null : sales, error: salesError };
@@ -74,10 +77,32 @@ function createClient({
 
     const filters: Record<string, unknown> = {};
     let excludedId: string | null = null;
+    let orFilter: string | null = null;
     const query = {
       select(columns?: string) {
         if (columns) selectedColumns.push(columns);
         return query;
+      },
+      or(filter: string) {
+        orFilter = filter;
+        referenceReads.push(filter);
+        return query;
+      },
+      // A list read: the profiles whose photo columns match the `or` filter's
+      // `like` patterns, as PostgREST applies them (`*` for any run).
+      then(resolve: (value: { data: unknown; error: unknown }) => unknown) {
+        if (referenceReadError) return Promise.resolve({ data: null, error: referenceReadError }).then(resolve);
+        const patterns = (orFilter ?? '').split(',').map((clause) => ({
+          column: clause.split('.')[0],
+          pattern: clause.slice(clause.indexOf('.like.') + '.like.'.length),
+        }));
+        const matches = rows.filter((profile) => patterns.some(({ column, pattern }) => {
+          const value = (profile as Record<string, unknown>)[column];
+          if (typeof value !== 'string') return false;
+          const regex = new RegExp(`^${pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+          return regex.test(value);
+        }));
+        return Promise.resolve({ data: matches.map((profile) => ({ ...profile })), error: null }).then(resolve);
       },
       eq(column: string, value: unknown) {
         filters[column] = value;
@@ -137,6 +162,7 @@ function createClient({
     client: { rpc, from } as unknown as ProfileRouteClient,
     rpc,
     from,
+    referenceReads,
     rows,
     selectedColumns,
     upserts,
@@ -193,10 +219,15 @@ async function solidPng(width: number, height: number) {
 function createMediaClient({
   uploads,
   uploadError = null as { message: string } | null,
+  removeError = null as { message: string } | null,
+  storedObjects = [] as string[],
   ...options
 }: Parameters<typeof createClient>[0] & {
   uploads: Array<ReturnType<typeof finalizedProfileUpload>>;
   uploadError?: { message: string } | null;
+  removeError?: { message: string } | null;
+  /** Objects already in the bucket, as earlier saves left them. */
+  storedObjects?: string[];
 }) {
   const base = createClient(options);
   const reservations = uploads.map((upload) => ({ ...upload.reservation }));
@@ -206,6 +237,9 @@ function createMediaClient({
     id: upload.reservation.actual_storage_id as string,
     version: upload.reservation.actual_storage_version as string,
   }]));
+  for (const path of storedObjects) {
+    objects.set(path, { body: Buffer.from('earlier photo'), contentType: 'image/webp', id: `object-${path}`, version: 'version-0' });
+  }
 
   const reservationQuery = () => {
     const filters: Array<[string, unknown]> = [];
@@ -315,6 +349,7 @@ function createMediaClient({
       return { data: { path }, error: null };
     }),
     remove: vi.fn(async (paths: string[]) => {
+      if (removeError) return { data: null, error: removeError };
       for (const path of paths) objects.delete(path);
       return { data: paths.map((name) => ({ name })), error: null };
     }),
@@ -889,6 +924,199 @@ describe('profile route service', () => {
     expect(client.upserts[1].avatar_url).toBe(copyUrl);
     expect(client.storageApi.download).not.toHaveBeenCalled();
     expect(client.storageApi.upload).not.toHaveBeenCalled();
+    // The photo it shows is the photo it showed: nothing was replaced.
+    expect(client.storageApi.remove).not.toHaveBeenCalled();
+  });
+
+  describe('the photo a save replaces', () => {
+    const earlierAvatarPath = `${user.id}/avatar-44444444-4444-4444-8444-444444444444-old.normalized.0123456789abcdef.webp`;
+    const earlierCoverPath = `${user.id}/cover-55555555-5555-4555-8555-555555555555-old.png`;
+
+    function profileShowing(avatarPath: string | null, coverPath: string | null = null): ProfileRow {
+      return {
+        ...storedProfile(),
+        avatar_url: avatarPath === null ? null : avatarPath.startsWith('https://') ? avatarPath : PUBLIC_PROFILES + avatarPath,
+        cover_url: coverPath === null ? null : PUBLIC_PROFILES + coverPath,
+      };
+    }
+
+    it('goes once the profile shows the new one', async () => {
+      const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+      const client = createMediaClient({
+        profiles: [profileShowing(earlierAvatarPath, earlierCoverPath)],
+        uploads: [avatar],
+        storedObjects: [earlierAvatarPath, earlierCoverPath],
+      });
+
+      const result = await updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: avatar.url },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(client.storageApi.remove.mock.calls).toEqual([[[earlierAvatarPath]]]);
+      expect(client.objects.has(earlierAvatarPath)).toBe(false);
+      // The cover the save did not touch stays.
+      expect(client.objects.has(earlierCoverPath)).toBe(true);
+      // Asked of every profile naming a file in the account's folder, after the save.
+      expect(client.referenceReads).toEqual([
+        `avatar_url.like.*/profiles/${user.id}/*,cover_url.like.*/profiles/${user.id}/*`,
+      ]);
+    });
+
+    it('goes when the save clears the photo', async () => {
+      const client = createMediaClient({
+        profiles: [profileShowing(earlierAvatarPath)],
+        uploads: [],
+        storedObjects: [earlierAvatarPath],
+      });
+
+      await expect(updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: null },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      })).resolves.toMatchObject({ ok: true });
+
+      expect(client.storageApi.remove.mock.calls).toEqual([[[earlierAvatarPath]]]);
+    });
+
+    it('stays while the profile still shows it as its cover', async () => {
+      const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+      const client = createMediaClient({
+        profiles: [profileShowing(earlierAvatarPath, earlierAvatarPath)],
+        uploads: [avatar],
+        storedObjects: [earlierAvatarPath],
+      });
+
+      await updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: avatar.url },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      });
+
+      expect(client.storageApi.remove).not.toHaveBeenCalled();
+    });
+
+    it('stays while another profile names it', async () => {
+      const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+      const client = createMediaClient({
+        profiles: [
+          profileShowing(earlierAvatarPath),
+          { ...emptyProfileRow('66666666-6666-4666-8666-666666666666'), avatar_url: PUBLIC_PROFILES + earlierAvatarPath },
+        ],
+        uploads: [avatar],
+        storedObjects: [earlierAvatarPath],
+      });
+
+      await updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: avatar.url },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      });
+
+      expect(client.storageApi.remove).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another account\'s folder', `66666666-6666-4666-8666-666666666666/avatar-old.webp`],
+      ['a sign-in provider\'s picture', 'https://lh3.googleusercontent.com/a/photo=s96-c'],
+    ])('stays when it is in %s', async (_label, earlier) => {
+      const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+      const client = createMediaClient({
+        profiles: [profileShowing(earlier)],
+        uploads: [avatar],
+        storedObjects: earlier.startsWith('https://') ? [] : [earlier],
+      });
+
+      await updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: avatar.url },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      });
+
+      expect(client.storageApi.remove).not.toHaveBeenCalled();
+    });
+
+    it('stays when the profiles naming it cannot be read', async () => {
+      const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+      const client = createMediaClient({
+        profiles: [profileShowing(earlierAvatarPath)],
+        uploads: [avatar],
+        storedObjects: [earlierAvatarPath],
+        referenceReadError: { message: 'database unavailable' },
+      });
+
+      await expect(updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: avatar.url },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      })).resolves.toMatchObject({ ok: true });
+
+      expect(client.storageApi.remove).not.toHaveBeenCalled();
+    });
+
+    it('stays when the save is refused', async () => {
+      const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+      const client = createMediaClient({
+        profiles: [profileShowing(earlierAvatarPath)],
+        uploads: [avatar],
+        storedObjects: [earlierAvatarPath],
+        upsertError: { code: '23505', message: 'duplicate key' },
+        upsertStatus: 409,
+      });
+
+      await updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: avatar.url },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      });
+
+      expect(client.storageApi.remove).not.toHaveBeenCalled();
+      expect(client.objects.has(earlierAvatarPath)).toBe(true);
+    });
+
+    it('a failed removal still answers the saved profile', async () => {
+      const avatar = finalizedProfileUpload('avatar', AVATAR_UPLOAD_ID, await solidPng(1024, 1024));
+      const client = createMediaClient({
+        profiles: [profileShowing(earlierAvatarPath)],
+        uploads: [avatar],
+        storedObjects: [earlierAvatarPath],
+        removeError: { message: 'storage unavailable' },
+      });
+
+      await expect(updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', avatarUrl: avatar.url },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      })).resolves.toMatchObject({ ok: true });
+    });
+
+    it('reads nothing more for a save that sends no photo', async () => {
+      const client = createMediaClient({
+        profiles: [profileShowing(earlierAvatarPath)],
+        uploads: [],
+        storedObjects: [earlierAvatarPath],
+      });
+
+      await updateProfileForRoute({
+        userId: user.id,
+        body: { username: 'luna', bio: 'New bio' },
+        client: client.client,
+        invalidateFeedCache: vi.fn(),
+      });
+
+      expect(client.referenceReads).toEqual([]);
+      expect(client.storageApi.remove).not.toHaveBeenCalled();
+    });
   });
 
   it('a save the database refuses after the copy releases the upload and leaves the copy alone', async () => {
