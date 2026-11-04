@@ -54,7 +54,6 @@ export function WorkspaceSideMenuGestureLayer({
   // Drawn by the tab bar under the tabs layout, which outlives this tab
   // (lib/side-menu-host.ts); drawn here anywhere else.
   const sideMenu = useWorkspaceSideMenuState();
-  const menuVisible = sideMenu.visible;
   const openMenu = sideMenu.open;
   const touchStartRef = useRef<WorkspaceSideMenuTouchPoint | null>(null);
 
@@ -65,7 +64,7 @@ export function WorkspaceSideMenuGestureLayer({
     touchStartRef.current = startsAbovePersistentChrome && shouldTrackWorkspaceSideMenuTouchStart({
       edgeWidth,
       enabled,
-      menuVisible,
+      menuVisible: sideMenu.isOpen(),
       start,
       topOffset,
     })
@@ -79,7 +78,7 @@ export function WorkspaceSideMenuGestureLayer({
     const touch = event.nativeEvent.changedTouches[0];
     const end = touch ? { x: touch.pageX, y: touch.pageY } : null;
 
-    if (shouldOpenWorkspaceSideMenu({ edgeWidth, enabled, menuVisible, start, end })) {
+    if (shouldOpenWorkspaceSideMenu({ edgeWidth, enabled, menuVisible: sideMenu.isOpen(), start, end })) {
       openMenu();
     }
   };
@@ -103,7 +102,7 @@ export function WorkspaceSideMenuGestureLayer({
         </View>
       ) : null}
       {sideMenu.hosted ? null : (
-        <WorkspaceSideMenu visible={menuVisible} onClose={sideMenu.close} />
+        <WorkspaceSideMenu visible={sideMenu.ownMenuVisible} onClose={sideMenu.close} />
       )}
     </WorkspaceSideMenuContext.Provider>
   );

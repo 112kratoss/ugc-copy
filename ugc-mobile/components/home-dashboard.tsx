@@ -1250,7 +1250,7 @@ export function HomeDashboard() {
       />
 
       {sideMenu.hosted ? null : (
-        <WorkspaceSideMenu visible={sideMenu.visible} onClose={sideMenu.close} />
+        <WorkspaceSideMenu visible={sideMenu.ownMenuVisible} onClose={sideMenu.close} />
       )}
     </View>
     </MediaZoomSurface>

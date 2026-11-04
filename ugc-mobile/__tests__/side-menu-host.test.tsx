@@ -70,8 +70,10 @@ describe('createSideMenuStore', () => {
 });
 
 /** A tab screen that offers the menu, as Home and Explore do. */
+let screenRenders = 0;
 function ScreenFixture({ onState }: { onState: (state: WorkspaceSideMenuState) => void }) {
   const state = useWorkspaceSideMenuState();
+  screenRenders += 1;
   onState(state);
   return React.createElement('tab-screen', null);
 }
@@ -92,6 +94,26 @@ function renderTabs(store: SideMenuStore, { withScreen }: { withScreen: boolean 
 }
 
 describe('the side menu drawn by the tab bar', () => {
+  it('opens and closes without rendering the screen that offers it', () => {
+    // Home is the app's heaviest render. Subscribed to the menu, it was
+    // rendered again, at sync priority, by every open and by the close that
+    // lands while ☰ → Settings is being built.
+    const store = createSideMenuStore();
+    const tabs = renderTabs(store, { withScreen: true });
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(tabs.element);
+    });
+    const rendersBefore = screenRenders;
+
+    renderer.act(() => tabs.screen()?.open());
+    expect(drawer(tree)[0].props.visible).toBe(true);
+    renderer.act(() => (drawer(tree)[0].props.onClose as () => void)());
+    expect(drawer(tree)[0].props.visible).toBe(false);
+
+    expect(screenRenders).toBe(rendersBefore);
+  });
+
   it('outlives the tab screen it was opened from', () => {
     // Profile and Credits switch tabs, and react-native-screens takes the tab
     // that is left off the window at once on Android. Drawn inside Home's
@@ -111,7 +133,8 @@ describe('the side menu drawn by the tab bar', () => {
 
     renderer.act(() => tabs.screen()?.open());
     expect(drawer(tree)[0].props.visible).toBe(true);
-    expect(tabs.screen()?.visible).toBe(true);
+    expect(tabs.screen()?.isOpen()).toBe(true);
+    expect(tabs.screen()?.ownMenuVisible).toBe(false);
 
     // The tab switch: the screen is gone, the menu is not.
     renderer.act(() => tree.update(renderTabs(store, { withScreen: false }).element));
@@ -158,9 +181,11 @@ describe('the side menu drawn by the tab bar', () => {
     expect(drawer(tree)).toHaveLength(0);
     expect(screenState!.hosted).toBe(false);
     renderer.act(() => screenState!.open());
-    expect(screenState!.visible).toBe(true);
+    expect(screenState!.ownMenuVisible).toBe(true);
+    expect(screenState!.isOpen()).toBe(true);
     renderer.act(() => screenState!.close());
-    expect(screenState!.visible).toBe(false);
+    expect(screenState!.ownMenuVisible).toBe(false);
+    expect(screenState!.isOpen()).toBe(false);
   });
 });
 

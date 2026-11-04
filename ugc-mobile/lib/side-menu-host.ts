@@ -69,24 +69,29 @@ export function useSideMenuHostOpen(store: SideMenuStore | null): boolean {
 export interface WorkspaceSideMenuState {
   /** True when the tab bar draws the menu, and the screen must not draw one of its own. */
   hosted: boolean;
-  visible: boolean;
+  /** Whether the screen's own menu is up: always false while the tab bar draws it. */
+  ownMenuVisible: boolean;
+  /** Whether the menu is up, wherever it is drawn: read at the moment, as a touch handler does. */
+  isOpen: () => boolean;
   open: () => void;
   close: () => void;
 }
 
 /**
- * The menu's state for a screen that offers it. Under the tabs layout it is
- * the tab bar's, and the screen draws no menu; anywhere else the screen keeps
- * its own state and draws the menu itself, as before.
+ * The menu's controls for a screen that offers it. Under the tabs layout they
+ * are the tab bar's store, and the screen draws no menu and does not subscribe:
+ * opening and closing it must not render Home, whose render is the app's
+ * heaviest and used to land in the middle of ☰ → Settings. Anywhere else the
+ * screen keeps its own state and draws the menu itself, as before.
  */
 export function useWorkspaceSideMenuState(): WorkspaceSideMenuState {
   const store = useSideMenuHost();
-  const hostOpen = useSideMenuHostOpen(store);
   const [localOpen, setLocalOpen] = useState(false);
   const openLocal = useCallback(() => setLocalOpen(true), []);
   const closeLocal = useCallback(() => setLocalOpen(false), []);
+  const isLocalOpen = useCallback(() => localOpen, [localOpen]);
   if (store) {
-    return { hosted: true, visible: hostOpen, open: store.open, close: store.close };
+    return { hosted: true, ownMenuVisible: false, isOpen: store.isOpen, open: store.open, close: store.close };
   }
-  return { hosted: false, visible: localOpen, open: openLocal, close: closeLocal };
+  return { hosted: false, ownMenuVisible: localOpen, isOpen: isLocalOpen, open: openLocal, close: closeLocal };
 }
