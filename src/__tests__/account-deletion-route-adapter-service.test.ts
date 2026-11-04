@@ -274,7 +274,9 @@ describe('account deletion route', () => {
     ]);
     expect(deletion.client.auth.admin.signOut).toHaveBeenCalledWith('token', 'global');
     expect(deferred.runAfterResponse).toHaveBeenCalledOnce();
-    expect(invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    // The cached pages showing the account drop it as soon as it is locked, not
+    // after the storage sweep: the creator page answers not-found from here.
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
 
     await deferred.runAll();
 
@@ -292,7 +294,8 @@ describe('account deletion route', () => {
       paths: ['showcase/80000000-0000-4000-8000-000000000008/output.webp'],
     });
     expect(deletion.calls).toContain('list:template_assets:2b2f4bb5-6ea8-4c44-a394-14cc777dcf52');
-    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
+    // Again once the sweep has removed the account's posts and files.
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(2);
   });
 
   it('records the seller wallet behind the answer before the Auth delete cascades it away', async () => {
@@ -366,7 +369,9 @@ describe('account deletion route', () => {
     });
     expect(deletion.client.auth.admin.deleteUser).not.toHaveBeenCalled();
     expect(logError).toHaveBeenCalledWith('Account deletion failed:', expect.any(Error));
-    expect(invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    // Only the invalidation made when the account was locked: the scheduler's
+    // resumed sweep invalidates once it finishes (`backend-job-executions.ts`).
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
   });
 
   it('hands the sweep to the scheduler when the work cannot be deferred', async () => {
@@ -1163,7 +1168,8 @@ describe('account deletion route', () => {
       'auth_deleting',
       'completed',
     ]);
-    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
+    // Once as the account was locked, once after the sweep.
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(2);
   });
 
   it('rate limits repeated permanent deletion attempts before changing account data', async () => {
@@ -1265,7 +1271,8 @@ describe('guest self-deletion', () => {
     expect(deletion.calls).toContain(`list:generation_inputs:${GUEST_ID}`);
     expect(deletion.client.auth.admin.deleteUser).toHaveBeenCalledTimes(1);
     expect(deletion.client.auth.admin.deleteUser).toHaveBeenCalledWith(GUEST_ID);
-    expect(invalidateShowcaseFeedCache).toHaveBeenCalledOnce();
+    // Once as the guest was locked, once after the sweep.
+    expect(invalidateShowcaseFeedCache).toHaveBeenCalledTimes(2);
   });
 
   it('never asks a guest for Apple, even when a code arrives with the request', async () => {

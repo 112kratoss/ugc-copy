@@ -380,6 +380,13 @@ export async function deleteAccountRouteResponse({
     );
   }
 
+  // The identity is `deleting` from here, and every read of it says so (the
+  // creator page answers not-found, `loadCreatorProfileRow`). The cached pages
+  // that show the account (its creator page, its posts, the marketplace) drop it
+  // now, not after the storage sweep below, which can take minutes and be
+  // retried by the scheduler; they are invalidated again once it finishes.
+  resolved.invalidateShowcaseFeedCache();
+
   // The account can no longer be used and every session is gone, so nobody
   // waits on the storage sweep: a slow one outlasted the app's request timeout
   // and was reported as "not deleted" while it went on.
