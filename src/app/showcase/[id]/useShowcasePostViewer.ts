@@ -10,6 +10,7 @@ import {
 } from '@/components/useSupabaseAuthCookieHint';
 import type { PostRemixCapability, PostRemixTarget } from '@/lib/post-resource-bundles';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
+import { useOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { isPostResourceWebCashEligible } from '@/lib/post-resource-commerce';
 import {
   SHARE_SOURCE_QUERY_PARAM,
@@ -37,7 +38,9 @@ import type { BundleRefreshPayload } from './PostResourceBundlePanel';
  *   app's by-id read does;
  * - the query the page was opened with: its way back (`from`, `returnTo`), the
  *   ranked card that opened it (`delivery`) and the share that brought a
- *   visitor (`s`), recorded as a visit by `POST /api/showcase/share`.
+ *   visitor (`s`), recorded as a visit by `POST /api/showcase/share`;
+ * - for the owner, the visibility they have just saved from this page, which
+ *   the cache may not have caught up with yet (`owner-page-edits.ts`).
  *
  * Nothing it learns is ever written back into the page the server caches.
  */
@@ -55,6 +58,8 @@ export interface ShowcasePostViewer {
   /** The signed-in viewer, once the session check found one. */
   viewerUserId: string | null;
   viewerIsOwner: boolean;
+  /** The page's visibility, or for its owner the one they last saved here. */
+  visibility: 'public' | 'unlisted';
   /** The recipe as this viewer may read it: the page's (a visitor's) until their own read lands. */
   bundle: PostResourceBundleDetail | null;
   /**
@@ -148,6 +153,7 @@ export function useShowcasePostViewer({
   // is being checked, so a signed-in viewer is never first read as a visitor.
   const viewerKey = viewerUserId ?? (!hydrated || (hasAuthCookie && isLoading) ? null : VISITOR);
   const viewerIsOwner = Boolean(viewerUserId && creatorId && viewerUserId === creatorId);
+  const effectiveVisibility = useOwnerPostVisibility(postId, viewerIsOwner) ?? visibility;
 
   // `null` until `ShowcaseSearchParamsReporter` has read the address.
   const [search, setSearch] = useState<string | null>(null);
@@ -228,7 +234,7 @@ export function useShowcasePostViewer({
     shareVisitSent.current = true;
     const visitParams = new URLSearchParams(search);
     const sourceSurface = visitParams.get(SHARE_SOURCE_QUERY_PARAM);
-    if (visibility !== 'public' || !sourceSurface || visitParams.get('from')) return;
+    if (effectiveVisibility !== 'public' || !sourceSurface || visitParams.get('from')) return;
     void fetch('/api/showcase/share', {
       method: 'POST',
       keepalive: true,
@@ -238,7 +244,7 @@ export function useShowcasePostViewer({
       },
       body: JSON.stringify({ postId, eventType: 'share_visit', sourceSurface }),
     }).catch(() => undefined);
-  }, [accessToken, postId, search, viewerKey, visibility]);
+  }, [accessToken, effectiveVisibility, postId, search, viewerKey]);
 
   const applyBundleAccess = useCallback((access: ShowcasePostBundleAccess) => {
     if (viewerKey === null) return;
@@ -268,6 +274,7 @@ export function useShowcasePostViewer({
   return {
     viewerUserId,
     viewerIsOwner,
+    visibility: effectiveVisibility,
     bundle,
     bundlePanelKey: `${viewerKey ?? 'unknown'}:${ownBundle?.panelStart ?? 'page'}`,
     lockedViewer,

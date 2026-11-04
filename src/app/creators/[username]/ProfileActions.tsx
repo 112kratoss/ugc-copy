@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion } from 'framer-motion';
 
 import { supabase } from '@/lib/supabase';
+import { rememberOwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile, ProfileApiResponse } from '@/lib/profile';
 import { toEditableCreatorProfile } from '@/lib/profile';
 import CreatorProfileCard from '@/app/creations/CreatorProfileCard';
@@ -489,6 +490,10 @@ export function ProfileActions({ profile, blockedByViewer = false }: ProfileActi
                     isEmbedded={true}
                     onProfileSaved={(nextProfile) => {
                       closeEditor();
+                      // The cached page is invalidated only after the save's
+                      // answer was sent, so the refresh below can still get the
+                      // old one: the header shows the answer meanwhile.
+                      rememberOwnerCreatorProfile(nextProfile);
 
                       startTransition(() => {
                         if (nextProfile.username !== profile.username) {

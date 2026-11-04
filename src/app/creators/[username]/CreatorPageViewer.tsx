@@ -20,6 +20,7 @@ import {
   useSupabaseAuthCookieHint,
 } from '@/components/useSupabaseAuthCookieHint';
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import { useOwnerCreatorProfile, type OwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile } from '@/lib/profile';
 import { SHARE_SOURCE_QUERY_PARAM } from '@/lib/share';
 
@@ -39,7 +40,9 @@ import { ProfileActions } from './ProfileActions';
  *   the viewer is not there for them (the not-found page), and a viewer who
  *   blocked the creator sees whom they blocked, with Unblock where the posts
  *   would be and no Follow or Share;
- * - the visit a shared link brought (`?s=`), recorded by `POST /api/profile/share`.
+ * - the visit a shared link brought (`?s=`), recorded by `POST /api/profile/share`;
+ * - for the creator on their own page, the profile they have just saved, which
+ *   the cache may not have caught up with yet (`useCreatorPageProfile`).
  *
  * Follow, Edit profile, saves and the reel already read the viewer in the
  * browser (`ProfileActions`, `CreatorContentTabs`).
@@ -49,12 +52,15 @@ type CreatorBlock = 'none' | 'viewer-blocked-creator' | 'creator-blocked-viewer'
 
 interface CreatorPageViewerState {
   block: CreatorBlock;
+  /** The signed-in viewer is the creator. */
+  viewerIsOwner: boolean;
   /** The viewer unblocked the creator from this page. */
   markUnblocked: () => void;
 }
 
 const CreatorPageViewerContext = createContext<CreatorPageViewerState>({
   block: 'none',
+  viewerIsOwner: false,
   markUnblocked: () => undefined,
 });
 
@@ -147,7 +153,8 @@ export function CreatorPageViewer({
   }, [viewerUserId]);
 
   const block = blockRead && blockRead.viewerUserId === viewerUserId ? blockRead.block : 'none';
-  const value = useMemo(() => ({ block, markUnblocked }), [block, markUnblocked]);
+  const viewerIsOwner = viewerUserId === creatorId;
+  const value = useMemo(() => ({ block, viewerIsOwner, markUnblocked }), [block, markUnblocked, viewerIsOwner]);
 
   if (block === 'creator-blocked-viewer') {
     // The answer an unknown handle gets, its title included.
@@ -167,6 +174,16 @@ export function CreatorPageViewer({
       {children}
     </CreatorPageViewerContext.Provider>
   );
+}
+
+/**
+ * The profile the page shows: the page's read, or for the creator the one they
+ * last saved in this tab. A save invalidates the cached page only after its
+ * answer was sent, so the refresh it starts can still be served the old one.
+ */
+export function useCreatorPageProfile(pageProfile: OwnerCreatorProfile): OwnerCreatorProfile {
+  const { viewerIsOwner } = useContext(CreatorPageViewerContext);
+  return useOwnerCreatorProfile(pageProfile.id, viewerIsOwner) ?? pageProfile;
 }
 
 /** Follow, Share and the menu, or only the menu for a viewer who blocked the creator. */

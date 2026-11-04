@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
+import { clearOwnerPageEditsForTests, rememberOwnerCreatorProfile } from '@/lib/owner-page-edits';
 import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
 
 const mocks = vi.hoisted(() => ({
@@ -161,6 +162,7 @@ describe('creator page', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    clearOwnerPageEditsForTests();
   });
 
   describe('one cached render for everyone', () => {
@@ -321,6 +323,50 @@ describe('creator page', () => {
       expect(screen.getByRole('link', { name: 'Instagram' })).toHaveAttribute('href', 'https://instagram.com/luna.art');
       expect(screen.getByRole('link', { name: 'TikTok' })).toHaveAttribute('href', 'https://tiktok.com/@dance_crew');
       expect(screen.queryByRole('link', { name: 'X' })).not.toBeInTheDocument();
+    });
+
+    // A profile save invalidates the page only after its answer was sent, so
+    // the refresh it starts, and the router's copy of the page, can be the
+    // page as it was: the creator sees what the save answered with.
+    it('shows the creator the profile they just saved while the cached page still has the old one', async () => {
+      signIn('creator-1');
+      const view = await renderPage();
+      expect(screen.getByRole('heading', { level: 1, name: 'Creator Name' })).toBeInTheDocument();
+
+      act(() => rememberOwnerCreatorProfile({
+        id: 'creator-1',
+        username: 'creator-name',
+        displayName: 'New Name',
+        bio: 'New bio',
+        avatarUrl: '',
+        coverUrl: '',
+        websiteUrl: '',
+        twitterHandle: '',
+        instagramHandle: 'new.art',
+        tiktokHandle: '',
+        location: 'Pune',
+        credits: 120,
+      }));
+      view.rerender(await openPage());
+
+      expect(screen.getByRole('heading', { level: 1, name: 'New Name' })).toBeInTheDocument();
+      expect(screen.getByText('New bio')).toBeInTheDocument();
+      expect(screen.getByText('Pune')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Instagram' })).toHaveAttribute('href', 'https://instagram.com/new.art');
+      expect(screen.queryByText('Creator bio')).not.toBeInTheDocument();
+      // The totals are still the server's.
+      expect(screen.getByText('1,234')).toBeInTheDocument();
+
+      // Anyone else, in the same tab, gets the page as it was cached.
+      cleanup();
+      signIn('viewer-1');
+      await renderPage();
+      expect(screen.getByRole('heading', { level: 1, name: 'Creator Name' })).toBeInTheDocument();
+      cleanup();
+      mocks.clientAuth.current = { session: null, user: null };
+      await renderPage();
+      expect(screen.getByRole('heading', { level: 1, name: 'Creator Name' })).toBeInTheDocument();
+      expect(screen.getByText('Creator bio')).toBeInTheDocument();
     });
 
     it('drops a pill whose stored value is no handle at all', async () => {

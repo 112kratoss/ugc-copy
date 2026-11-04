@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as pageModule from '@/app/showcase/[id]/page';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { coverNsfwContent } from '@/lib/nsfw-content';
+import { clearOwnerPageEditsForTests, rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
 import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
 
 const { default: ShowcaseDetailPage, generateMetadata } = pageModule;
@@ -229,6 +230,7 @@ describe('Showcase detail page', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    clearOwnerPageEditsForTests();
   });
 
   it('renders a public post and records a share visit attributed to its origin surface', async () => {
@@ -1807,6 +1809,41 @@ describe('Showcase detail page', () => {
       expect(screen.getByTestId('recipe-jump-link')).toHaveTextContent('Unlocked');
       expect(screen.queryByText(/^Unlock recipe for/)).not.toBeInTheDocument();
       expect(routerMock.refresh).not.toHaveBeenCalled();
+    });
+
+    // Owner tools invalidate the page only after their answer was sent, so the
+    // refresh they start, and the router's copy of the page, can be the page
+    // as it was: the owner sees the visibility the server answered with.
+    it('shows the owner the visibility they just saved while the cached page still has the old one', async () => {
+      const detail = await getPublicPostDetailMock('post-1');
+      getPublicPostDetailMock.mockResolvedValue({ ...detail, visibility: 'unlisted' });
+      const openPost = () => ShowcaseDetailPage({ params: Promise.resolve({ id: 'post-1' }) });
+      signInAs('user-1');
+      const view = render(await openPost());
+      expect(screen.getByText('Unlisted')).toBeInTheDocument();
+      expect(screen.queryByTestId('canonical-post-comments')).not.toBeInTheDocument();
+
+      act(() => rememberOwnerPostVisibility('post-1', 'public'));
+      view.rerender(await openPost());
+
+      expect(screen.queryByText('Unlisted')).not.toBeInTheDocument();
+      expect(screen.getByTestId('canonical-post-comments')).toBeInTheDocument();
+      expect(showcaseDetailActionsPropsMock).toHaveBeenLastCalledWith(expect.objectContaining({ visibility: 'public' }));
+
+      // Opened again in the same tab, from the router's copy: still as saved.
+      view.unmount();
+      render(await openPost());
+      expect(screen.queryByText('Unlisted')).not.toBeInTheDocument();
+
+      // Anyone else, in the same tab, gets the page as it was cached.
+      cleanup();
+      signInAs('user-2');
+      render(await openPost());
+      expect(screen.getByText('Unlisted')).toBeInTheDocument();
+      cleanup();
+      clientAuth.current = { session: null, user: null };
+      render(await openPost());
+      expect(screen.getByText('Unlisted')).toBeInTheDocument();
     });
 
     it('reads no recipe for a post under its NSFW cover: it comes with the reveal', async () => {

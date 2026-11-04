@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProfileActions } from '@/app/creators/[username]/ProfileActions';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { clearOwnerPageEditsForTests, useOwnerCreatorProfile } from '@/lib/owner-page-edits';
 import type { EditableCreatorProfile } from '@/lib/profile';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 import {
@@ -132,6 +133,7 @@ describe('ProfileActions', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    clearOwnerPageEditsForTests();
   });
 
   it('toggles follow state for a logged-in non-owner', async () => {
@@ -757,8 +759,17 @@ describe('ProfileActions', () => {
 
     it('closes after a save without asking, and draws the page again', async () => {
       const confirm = vi.spyOn(window, 'confirm');
+      // What the page's header reads as the profile (`useCreatorPageProfile`).
+      function HeaderBio() {
+        return <span data-testid="header-bio">{useOwnerCreatorProfile(profile.id, true)?.bio ?? 'as cached'}</span>;
+      }
       answerProfileRead();
-      render(<ProfileActions profile={profile} />);
+      render(
+        <>
+          <ProfileActions profile={profile} />
+          <HeaderBio />
+        </>
+      );
 
       const dialog = await openEditor();
       fireEvent.change(await within(dialog).findByRole('textbox', { name: 'Bio' }), { target: { value: 'Saved bio' } });
@@ -767,6 +778,10 @@ describe('ProfileActions', () => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
       expect(confirm).not.toHaveBeenCalled();
       await waitFor(() => expect(routerMock.refresh).toHaveBeenCalledTimes(1));
+      // The page is cached for everyone and invalidated only after the save's
+      // answer was sent, so that refresh can be served it as it was: the
+      // header shows what the save answered with.
+      expect(screen.getByTestId('header-bio')).toHaveTextContent('Saved bio');
     });
 
     // A hidden <Activity> (and Fast Refresh) runs every cleanup, the key

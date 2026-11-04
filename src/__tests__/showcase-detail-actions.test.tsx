@@ -34,6 +34,12 @@ vi.mock('@/lib/post-lifecycle-client', async (importOriginal) => ({
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
 import ShowcaseDetailActions from '@/app/showcase/[id]/ShowcaseDetailActions';
+import { clearOwnerPageEditsForTests, useOwnerPostVisibility } from '@/lib/owner-page-edits';
+
+/** What the rest of the owner's page reads as the post's visibility (`useShowcasePostViewer`). */
+function OwnerPageVisibility() {
+  return <span data-testid="owner-page-visibility">{useOwnerPostVisibility('post-1', true) ?? 'as cached'}</span>;
+}
 
 function renderOwnerTools(overrides: Partial<React.ComponentProps<typeof ShowcaseDetailActions>> = {}) {
   return render(
@@ -49,6 +55,7 @@ function renderOwnerTools(overrides: Partial<React.ComponentProps<typeof Showcas
         bundle={{ accessMode: 'paid', status: 'published', salesCount: 0 }}
         {...overrides}
       />
+      <OwnerPageVisibility />
       <FeedbackViewport />
     </>,
   );
@@ -65,6 +72,7 @@ describe('ShowcaseDetailActions owner tools', () => {
 
   afterEach(() => {
     resetFeedbackState();
+    clearOwnerPageEditsForTests();
   });
 
   // A post is public or private since 2026-10-17 (decision 12). A page drawn
@@ -98,6 +106,10 @@ describe('ShowcaseDetailActions owner tools', () => {
     expect(routerMocks.push).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Visibility of Sunset study: Public' })).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Post is public.');
+    // The page is cached for everyone and invalidated only after the answer was
+    // sent, so that refresh can be served it as it was: the rest of the owner's
+    // page takes the visibility the server answered with.
+    expect(screen.getByTestId('owner-page-visibility')).toHaveTextContent('public');
   });
 
   it('leaves the public page for the editor once a post is private', async () => {
@@ -118,6 +130,7 @@ describe('ShowcaseDetailActions owner tools', () => {
       expect(routerMocks.push).toHaveBeenCalledWith('/post/post-1/edit');
     });
     expect(routerMocks.refresh).not.toHaveBeenCalled();
+    expect(screen.getByTestId('owner-page-visibility')).toHaveTextContent('as cached');
   });
 
   it('changes visibility in one click when no recipe is listed', async () => {

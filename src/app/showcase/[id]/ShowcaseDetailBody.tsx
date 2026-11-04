@@ -124,7 +124,8 @@ export default function ShowcaseDetailBody({
       remixTarget: detail.remixTarget,
     },
   });
-  const { bundle, lockedViewer, viewerIsOwner, deliveryId, returnContext } = viewer;
+  // For the owner, the visibility they just saved here: the cached page may not have caught up.
+  const { bundle, lockedViewer, viewerIsOwner, deliveryId, returnContext, visibility } = viewer;
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
   const postTypeLabel = getPostTypeLabel({
@@ -225,7 +226,7 @@ export default function ShowcaseDetailBody({
       {resourceBundlePanel}
     </div>
   ) : null;
-  const commentsBlock = detail.visibility === 'public' ? (
+  const commentsBlock = visibility === 'public' ? (
     <div
       id="comments"
       data-testid="canonical-post-comments"
@@ -251,7 +252,7 @@ export default function ShowcaseDetailBody({
       commentCount={detail.commentCount}
       remixCount={detail.remixCount}
       shareVisitCount={detail.shareVisitCount}
-      showComments={detail.visibility === 'public'}
+      showComments={visibility === 'public'}
       recipeRemix={remixOffer.recipeRemix}
     />
   );
@@ -311,7 +312,7 @@ export default function ShowcaseDetailBody({
                       <span>{`Made with ${madeWithLabel}`}</span>
                     </>
                   ) : null}
-                  {detail.visibility === 'unlisted' ? (
+                  {visibility === 'unlisted' ? (
                     <>
                       <span aria-hidden="true">·</span>
                       <span>Unlisted</span>
@@ -448,7 +449,7 @@ export default function ShowcaseDetailBody({
                   generationId={detail.generationId}
                   title={displayTitle}
                   creatorUsername={detail.creator.username}
-                  visibility={detail.visibility}
+                  visibility={visibility}
                   viewerIsOwner={viewerIsOwner}
                   hasResourceBundle={Boolean(bundle)}
                   bundle={bundle

@@ -1,29 +1,13 @@
 import type { Metadata } from 'next';
-import type { ReactNode } from 'react';
 import { cache } from 'react';
-import Image from 'next/image';
 import { notFound } from 'next/navigation';
-import {
-  Globe2,
-  Heart,
-  Images,
-  Instagram,
-  LockKeyhole,
-  MapPin,
-  Music2,
-  Repeat2,
-  Twitter,
-} from 'lucide-react';
+import { Heart, Images, LockKeyhole, Repeat2 } from 'lucide-react';
 
 import {
   getCreatorProfilePageData,
   type CreatorProfilePageData,
 } from '@/lib/creator-profile';
-import {
-  buildCreatorProfilePath,
-  normalizeSocialProfileHandle,
-  type SocialProfileField,
-} from '@/lib/profile';
+import { buildCreatorProfilePath } from '@/lib/profile';
 import { JsonLd } from '@/components/JsonLd';
 import { OptionalAuth } from '@/components/RouteAuthBoundary';
 import { cachePublicPageRead } from '@/lib/public-page-cache';
@@ -33,7 +17,8 @@ import {
   createMetadata,
 } from '@/lib/seo';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
-import { CreatorPageViewer, CreatorPosts, CreatorProfileActions } from './CreatorPageViewer';
+import { CreatorPageViewer, CreatorPosts } from './CreatorPageViewer';
+import { CreatorProfileHeader } from './CreatorProfileHeader';
 
 type CreatorPageProps = {
   params: Promise<{ username: string }>;
@@ -43,8 +28,9 @@ type CreatorPageProps = {
  * One render of each creator page for everyone, kept until an event changes
  * it (ISR). The page reads the creator as a signed-out visitor in no country
  * would, and never the session, a cookie, a header or the query: a block with
- * the viewer and a share visit are read in the browser (`CreatorPageViewer`),
- * and Follow, Edit profile and saves already were. A profile edit, a publish,
+ * the viewer, a share visit and the creator's own just-saved profile are read
+ * in the browser (`CreatorPageViewer`, `CreatorProfileHeader`), and Follow,
+ * Edit profile and saves already were. A profile edit, a publish,
  * an archive, a delete and a moderation decision invalidate the feed's tag,
  * which the read below carries into this page's cache entry. Kept equal to
  * PUBLIC_PAGE_REVALIDATE_SECONDS (five minutes: that file says why).
@@ -91,23 +77,6 @@ const MIN_PUBLIC_POSTS_FOR_INDEXING = 1;
  * contents of the page.
  */
 const MIN_BIO_LENGTH_FOR_DESCRIPTION = 40;
-
-/**
- * Social pills, each opening the platform it names. A row saved before the
- * server checked handles can hold any text, a link to another site included,
- * so a pill is drawn only for a value that reads as that platform's handle (a
- * pasted link on its own host counts), and the handle is encoded into the path.
- */
-const SOCIAL_LINKS: ReadonlyArray<{
-  field: SocialProfileField;
-  label: string;
-  icon: ReactNode;
-  buildHref: (encodedHandle: string) => string;
-}> = [
-  { field: 'instagramHandle', label: 'Instagram', icon: <Instagram className="h-4 w-4" />, buildHref: (handle) => `https://instagram.com/${handle}` },
-  { field: 'tiktokHandle', label: 'TikTok', icon: <Music2 className="h-4 w-4" />, buildHref: (handle) => `https://tiktok.com/@${handle}` },
-  { field: 'twitterHandle', label: 'X', icon: <Twitter className="h-4 w-4" />, buildHref: (handle) => `https://x.com/${handle}` },
-];
 
 function buildCreatorDescription(
   displayName: string,
@@ -168,21 +137,6 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
     { label: 'Remixes', value: data.stats.totalRemixes, icon: Repeat2 },
     { label: 'Recipes', value: data.stats.unlocks, icon: LockKeyhole },
   ];
-  const profileForActions = {
-    id: data.profile.id,
-    username: data.profile.username,
-    displayName: data.profile.displayName,
-    bio: data.profile.bio ?? '',
-    avatarUrl: data.profile.avatarUrl ?? '',
-    coverUrl: data.profile.coverUrl ?? '',
-    websiteUrl: data.profile.websiteUrl ?? '',
-    twitterHandle: data.profile.twitterHandle ?? '',
-    instagramHandle: data.profile.instagramHandle ?? '',
-    tiktokHandle: data.profile.tiktokHandle ?? '',
-    location: data.profile.location ?? '',
-    credits: null,
-  };
-
   return (
     <OptionalAuth>
       <CreatorPageViewer creatorId={data.profile.id} username={data.profile.username}>
@@ -211,83 +165,9 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
             />
           ) : null}
           <div className="studio-shell max-w-[1560px]">
-            <section className="overflow-hidden rounded-3xl border border-white/8 bg-[#111215] shadow-[0_24px_80px_-60px_rgba(255,122,89,0.32)]">
-              <div className="relative h-40 overflow-hidden bg-[#0b0c10] sm:h-52 lg:h-60">
-                {data.profile.coverUrl ? (
-                  // Full-bleed banner: served at viewport width rather than at
-                  // whatever the creator uploaded, which was previously the raw
-                  // source at full resolution on every profile view.
-                  <Image
-                    src={data.profile.coverUrl}
-                    alt={`${data.profile.displayName} cover`}
-                    fill
-                    sizes="(min-width: 1560px) 1560px, 100vw"
-                    className="object-cover"
-                  />
-                ) : (
-                  <div className="h-full w-full bg-[linear-gradient(120deg,rgba(255,122,89,0.15),rgba(17,18,21,0.92)_44%,rgba(242,185,94,0.08))]" />
-                )}
-                <div className="absolute inset-0 bg-gradient-to-t from-[#111215] via-transparent to-black/10" />
-              </div>
-
-              <div className="relative px-4 pb-5 sm:px-7 sm:pb-7 lg:px-9">
-                <div className="-mt-12 flex flex-col gap-5 lg:-mt-14 lg:flex-row lg:items-end lg:justify-between">
-                  <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end">
-                    {data.profile.avatarUrl ? (
-                      // Renders at 96-112px, so there is no reason to ship the
-                      // uploaded original here.
-                      <Image
-                        src={data.profile.avatarUrl}
-                        alt={`${data.profile.displayName} avatar`}
-                        width={112}
-                        height={112}
-                        sizes="(min-width: 640px) 112px, 96px"
-                        className="h-24 w-24 shrink-0 rounded-full border-4 border-[#111215] bg-zinc-900 object-cover shadow-xl sm:h-28 sm:w-28"
-                      />
-                    ) : (
-                      <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-full border-4 border-[#111215] bg-zinc-800 text-3xl font-black text-white shadow-xl sm:h-28 sm:w-28">
-                        {data.profile.displayName[0]?.toUpperCase() ?? 'C'}
-                      </div>
-                    )}
-
-                    <div className="min-w-0 max-w-3xl pb-1">
-                      <h1 className="truncate text-3xl font-black tracking-normal text-white sm:text-4xl">
-                        {data.profile.displayName}
-                      </h1>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm">
-                        <span className="font-bold text-sky-300">@{data.profile.username}</span>
-                        {data.profile.location ? (
-                          <span className="inline-flex items-center gap-1.5 text-zinc-400">
-                            <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
-                            {data.profile.location}
-                          </span>
-                        ) : null}
-                      </div>
-                      {data.profile.bio ? (
-                        <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-300">{data.profile.bio}</p>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="pb-1 lg:shrink-0">
-                    {/* Follow and Share, or for a viewer who blocked the creator the menu alone. */}
-                    <CreatorProfileActions profile={profileForActions} />
-                  </div>
-                </div>
-
-                <div className="mt-5 flex flex-wrap gap-2">
-                  {data.profile.websiteUrl ? (
-                    <SocialLink href={data.profile.websiteUrl} label="Website" icon={<Globe2 className="h-4 w-4" />} />
-                  ) : null}
-                  {SOCIAL_LINKS.map(({ field, label, icon, buildHref }) => {
-                    const storedValue = data.profile[field];
-                    const handle = storedValue ? normalizeSocialProfileHandle(field, storedValue) : null;
-                    return handle ? (
-                      <SocialLink key={field} href={buildHref(encodeURIComponent(handle))} label={label} icon={icon} />
-                    ) : null;
-                  })}
-                </div>
-
+            <CreatorProfileHeader
+              profile={data.profile}
+              stats={(
                 <div className="mt-5 grid grid-cols-4 divide-x divide-white/8 border-t border-white/8 pt-5">
                   {stats.map(({ label, value, icon: Icon }) => (
                     <div key={label} className="flex min-w-0 flex-col items-center gap-1 px-1 text-center sm:flex-row sm:justify-center sm:gap-2.5">
@@ -299,8 +179,8 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
                     </div>
                   ))}
                 </div>
-              </div>
-            </section>
+              )}
+            />
 
             {/* The posts, or for a viewer who blocked the creator Unblock in their place. */}
             <CreatorPosts initialData={data} profilePath={profilePath} />
@@ -308,19 +188,5 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
         </main>
       </CreatorPageViewer>
     </OptionalAuth>
-  );
-}
-
-function SocialLink({ href, icon, label }: { href: string; icon: ReactNode; label: string }) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="ui-focus-ring inline-flex min-h-10 items-center gap-2 rounded-full border border-white/8 bg-white/[0.04] px-3.5 text-xs font-bold text-zinc-300 transition hover:border-white/18 hover:bg-white/[0.07] hover:text-white"
-    >
-      {icon}
-      {label}
-    </a>
   );
 }

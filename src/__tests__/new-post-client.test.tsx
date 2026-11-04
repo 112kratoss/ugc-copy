@@ -4177,6 +4177,58 @@ describe('NewPostClient', () => {
       expect(leaveWouldPrompt()).toBe(false);
     });
 
+    // The post page is cached for everyone, and an edit invalidates it only
+    // after its answer was sent; the router keeps a static page it has fetched
+    // for five minutes. The saved panel's links load the post in full, so the
+    // owner never meets their post as it was before the edit.
+    it('opens the edited post with a full load, never through the router', async () => {
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-guarded',
+          visibility: 'public',
+          showcasePath: '/showcase/post-guarded',
+          ownerPath: '/post/post-guarded/edit',
+          resourceBundlePath: '/showcase/post-guarded#recipe',
+          resourceBundleStatus: null,
+        }),
+      });
+      const linkRouter = {
+        push: vi.fn(),
+        replace: vi.fn(),
+        prefetch: vi.fn(async () => undefined),
+      };
+      render(
+        <RouterContext.Provider value={linkRouter as unknown as NextRouter}>
+          <NewPostClient initialPost={createSavedPost()} />
+        </RouterContext.Provider>
+      );
+      fireEvent.change(screen.getByRole('textbox', { name: /^story/i }), {
+        target: { value: 'An edited caption.' },
+      });
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+      const viewPost = await screen.findByRole('link', { name: 'View post' });
+      expect(viewPost).toHaveAttribute('href', '/showcase/post-guarded');
+
+      // A click the router does not take is the browser's own load (held here:
+      // jsdom loads no pages).
+      const clicksLeftToTheBrowser: boolean[] = [];
+      const holdLoad = (event: MouseEvent) => {
+        clicksLeftToTheBrowser.push(!event.defaultPrevented);
+        event.preventDefault();
+      };
+      document.addEventListener('click', holdLoad);
+      try {
+        fireEvent.click(viewPost);
+      } finally {
+        document.removeEventListener('click', holdLoad);
+      }
+      expect(clicksLeftToTheBrowser).toEqual([true]);
+      expect(linkRouter.push).not.toHaveBeenCalled();
+      expect(mockPush).not.toHaveBeenCalled();
+    });
+
     it('asks before the Back link leaves unsaved changes, and only then', async () => {
       const linkRouter = {
         push: vi.fn(),
