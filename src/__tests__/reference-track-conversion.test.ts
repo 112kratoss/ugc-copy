@@ -155,17 +155,29 @@ describe('convertReferenceTrack', () => {
     await expect(conversion).rejects.toMatchObject({ tooLong: false, message: expect.stringMatching(/^ffmpeg exited with code/) });
   });
 
-  it('refuses a memo with a damaged header as unreadable, though ffmpeg says it could not allocate memory', async () => {
-    // A chunk-offset table claiming 2^31 entries: ffmpeg refuses the allocation on any machine.
-    const damaged = new Uint8Array(fixtures.memo);
-    const stco = Buffer.from(damaged).indexOf('stco');
-    expect(stco).toBeGreaterThan(0);
-    new DataView(damaged.buffer).setUint32(stco + 8, 0x7fffffff);
-    const { supabase } = storageMock({ [UPLOADED_OBJECT]: damaged });
+  it('reads "Cannot allocate memory" as the track’s fault, and a full disk as the machine’s', async () => {
+    // A damaged header (a chunk table claiming 2^31 entries) makes ffmpeg 6.0 say this, while the
+    // Linux build CI and Vercel run reads past it: a stand-in encoder says it on every machine.
+    const say = async (name: string, message: string) => {
+      const encoder = path.join(directory, name);
+      await writeFile(encoder, `#!/bin/sh\necho '${message}' >&2\nexit 1\n`, { mode: 0o755 });
+      return encoder;
+    };
+    const previous = process.env.FFMPEG_PATH;
+    try {
+      process.env.FFMPEG_PATH = await say('ffmpeg-enomem', '[mov,mp4,m4a] stco: Cannot allocate memory');
+      const damaged = convertReferenceTrack({ supabase: storageMock({ [UPLOADED_OBJECT]: fixtures.memo }).supabase, userId: 'user-1', link: UPLOADED });
+      await expect(damaged).rejects.toBeInstanceOf(ReferenceTrackUnreadableError);
+      await expect(damaged).rejects.toThrow(/Cannot allocate memory/);
 
-    const conversion = convertReferenceTrack({ supabase, userId: 'user-1', link: UPLOADED });
-    await expect(conversion).rejects.toBeInstanceOf(ReferenceTrackUnreadableError);
-    await expect(conversion).rejects.toThrow(/Cannot allocate memory/);
+      process.env.FFMPEG_PATH = await say('ffmpeg-enospc', 'Error writing trailer: No space left on device');
+      const full = convertReferenceTrack({ supabase: storageMock({ [UPLOADED_OBJECT]: fixtures.memo }).supabase, userId: 'user-1', link: UPLOADED });
+      await expect(full).rejects.toThrow(/could not convert the track \(exit 1\)/);
+      await expect(full).rejects.not.toBeInstanceOf(ReferenceTrackUnreadableError);
+    } finally {
+      if (previous === undefined) delete process.env.FFMPEG_PATH;
+      else process.env.FFMPEG_PATH = previous;
+    }
   });
 
   it('opens nothing a playlist named .m4a points at', async () => {
@@ -174,7 +186,9 @@ describe('convertReferenceTrack', () => {
 
     const conversion = convertReferenceTrack({ supabase, userId: 'user-1', link: UPLOADED });
     await expect(conversion).rejects.toBeInstanceOf(ReferenceTrackUnreadableError);
-    await expect(conversion).rejects.toThrow(/Format not on whitelist/);
+    // ffmpeg 6.0 (macOS) stops at the format whitelist; the Linux build CI and Vercel run refuses
+    // an HLS playlist without an .m3u8 name before that.
+    await expect(conversion).rejects.toThrow(/Format not on whitelist|Not detecting m3u8\/hls with non standard extension/);
   });
 
   it('refuses a track whose WAV copy would pass Kie’s 10 MB file limit as too long, rather than cutting it', async () => {
