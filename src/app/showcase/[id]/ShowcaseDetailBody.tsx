@@ -1,10 +1,12 @@
+'use client';
+
 import NsfwPostReveal from '@/components/NsfwPostReveal';
 import Link from 'next/link';
+import { Suspense } from 'react';
 import { BookText, ShoppingBag } from 'lucide-react';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import {
-  formatRelativeTime,
   getPostFeedTitle,
   getPostModelDisplayName,
   type PostPreviewKind,
@@ -15,10 +17,10 @@ import {
   getPostResourceKindLabel,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
-import { getPublicPostMetaDescription, type PublicPostDetail } from '@/lib/public-posts';
-import type { ShowcaseReturnContext } from '@/lib/share';
+import type { PublicPostDetail } from '@/lib/public-posts';
 
 import PostGenerationSetupLine from './PostGenerationSetupLine';
+import PostRelativeTime from './PostRelativeTime';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
 import { buildRecipePanelProps, getRecipeRemixOffer } from './recipe-panel-props';
 import ReportPostButton from './ReportPostButton';
@@ -26,10 +28,17 @@ import ShowcaseDetailActions from './ShowcaseDetailActions';
 import ShowcaseDetailBackLink from './ShowcaseDetailBackLink';
 import { ShowcaseDetailCommentCountProvider, ShowcaseDetailComments } from './ShowcaseDetailCommentCount';
 import ShowcaseDetailEngagementRow from './ShowcaseDetailEngagementRow';
+import ShowcasePostUnavailable from './ShowcasePostUnavailable';
+import { ShowcaseSearchParamsReporter, useShowcasePostViewer } from './useShowcasePostViewer';
 
 /**
  * The post detail page body: full-bleed background, ambient glow, the return
  * link, and a viewport-fixed unlock CTA around the shared document layout.
+ *
+ * A client component since the page is cached for everyone (2026-11-04): the
+ * server draws it for a signed-out visitor, and `useShowcasePostViewer` turns
+ * it into this viewer's page in the browser (their recipe, Owner tools, their
+ * Remix, a block, the way back the address names).
  */
 
 function formatResourceKinds(kinds: PostResourceKind[]): string {
@@ -38,14 +47,6 @@ function formatResourceKinds(kinds: PostResourceKind[]): string {
   }
 
   return kinds.map((kind) => getPostResourceKindLabel(kind)).join(' + ');
-}
-
-function formatPostDate(value: string): string {
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(value));
 }
 
 function normalizeComparableText(value: string): string {
@@ -96,26 +97,37 @@ function getPostTypeLabel({
 
 export default function ShowcaseDetailBody({
   detail,
-  viewerUserId,
-  returnContext,
-  deliveryId = null,
+  shareDescription,
+  renderedAt,
 }: {
+  /** The post as a signed-out visitor reads it: the page's cached read. */
   detail: PublicPostDetail;
-  viewerUserId: string | null;
-  returnContext?: ShowcaseReturnContext;
-  /** The delivery of the ranked card that opened the page, for the report and the thread. */
-  deliveryId?: string | null;
+  /** `getPublicPostMetaDescription(detail)`, which only the server can import. */
+  shareDescription: string;
+  /** When the server drew the page, for the post's age in the cached HTML. */
+  renderedAt: number;
 }) {
   // The server never reveals, so an NSFW post arrives as its cover: the
   // creator, counts and visibility are real, the content is a placeholder. The
   // gate takes the place of the content only; the byline, the rail (Report,
   // Block, Owner tools) and the engagement row stay, as the app keeps them.
   const isNsfwCovered = Boolean(detail.isNsfw && !detail.nsfwRevealed);
-  const bundle = detail.resourceBundle;
+  const viewer = useShowcasePostViewer({
+    postId: detail.id,
+    creatorId: detail.creator.id,
+    visibility: detail.visibility,
+    isNsfwCovered,
+    pageBundle: detail.resourceBundle,
+    pageRemix: {
+      canRemix: detail.canRemix,
+      remixCapability: detail.remixCapability,
+      remixTarget: detail.remixTarget,
+    },
+  });
+  // For the owner, the visibility they just saved here: the cached page may not have caught up.
+  const { bundle, lockedViewer, viewerIsOwner, deliveryId, returnContext, visibility } = viewer;
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
-  const lockedViewer = Boolean(bundle && !bundle.viewerCanAccess && !bundle.viewerIsOwner);
-  const viewerIsOwner = Boolean(viewerUserId && viewerUserId === detail.creator.id);
   const postTypeLabel = getPostTypeLabel({
     category: detail.category,
     creationMode: detail.creationMode,
@@ -182,19 +194,21 @@ export default function ShowcaseDetailBody({
   // A creation post's recipe brings its Remix (S1): locked behind the recipe
   // for a viewer without it, and named in the panel either way (B-F3).
   const remixOffer = getRecipeRemixOffer({
-    canRemix: detail.canRemix,
-    remixCapability: detail.remixCapability,
-    remixTarget: detail.remixTarget,
+    ...viewer.remix,
     bundle,
   });
   const resourceBundlePanel = bundle ? (
     <PostResourceBundlePanel
+      // Starts again from the viewer's own read of the recipe when it lands;
+      // the panel's own unlock moves the rest of the page with it instead.
+      key={viewer.bundlePanelKey}
       {...buildRecipePanelProps(bundle, {
         postId: detail.id,
         mediaItems: detailMediaItems,
         displayTitle,
         remixIncluded: remixOffer.remixIncluded,
       })}
+      onAccessChange={viewer.applyBundleAccess}
     />
   ) : null;
   /*
@@ -212,7 +226,7 @@ export default function ShowcaseDetailBody({
       {resourceBundlePanel}
     </div>
   ) : null;
-  const commentsBlock = detail.visibility === 'public' ? (
+  const commentsBlock = visibility === 'public' ? (
     <div
       id="comments"
       data-testid="canonical-post-comments"
@@ -232,19 +246,27 @@ export default function ShowcaseDetailBody({
       generationId={detail.generationId}
       creatorId={detail.creator.id}
       title={displayTitle}
-      shareDescription={getPublicPostMetaDescription(detail)}
-      canRemix={detail.canRemix}
+      shareDescription={shareDescription}
+      canRemix={viewer.remix.canRemix}
       saveCount={detail.saveCount}
       commentCount={detail.commentCount}
       remixCount={detail.remixCount}
       shareVisitCount={detail.shareVisitCount}
-      showComments={detail.visibility === 'public'}
+      showComments={visibility === 'public'}
       recipeRemix={remixOffer.recipeRemix}
     />
   );
 
+  if (viewer.blocked) {
+    return <ShowcasePostUnavailable />;
+  }
+
   return (
     <div className={`min-h-screen overflow-x-clip bg-[#050506] py-6 text-white${lockedViewer ? ' canonical-post-cta-room' : ''}`}>
+      {/* The page's query, read once it is live: the cached render has none. */}
+      <Suspense fallback={null}>
+        <ShowcaseSearchParamsReporter onSearch={viewer.reportSearch} />
+      </Suspense>
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute left-[8%] top-[-18%] h-[34rem] w-[34rem] rounded-full bg-blue-600/10 blur-[150px] mix-blend-screen" />
         <div className="absolute bottom-[-18%] right-[-8%] h-[34rem] w-[34rem] rounded-full bg-emerald-500/10 blur-[150px] mix-blend-screen" />
@@ -252,11 +274,9 @@ export default function ShowcaseDetailBody({
       </div>
 
       <div className="canonical-post-shell studio-shell-wide relative z-10 pt-4 sm:pt-6">
-        {returnContext ? (
-          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-            <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
-          </div>
-        ) : null}
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <ShowcaseDetailBackLink href={returnContext.href} label={returnContext.label} />
+        </div>
 
         <div className="canonical-post-layout">
           {/*
@@ -285,14 +305,14 @@ export default function ShowcaseDetailBody({
                     </div>
                   )}
                   <span aria-hidden="true">·</span>
-                  <span title={formatPostDate(detail.createdAt)}>{formatRelativeTime(detail.createdAt)}</span>
+                  <PostRelativeTime createdAt={detail.createdAt} renderedAt={renderedAt} />
                   {madeWithLabel ? (
                     <>
                       <span aria-hidden="true">·</span>
                       <span>{`Made with ${madeWithLabel}`}</span>
                     </>
                   ) : null}
-                  {detail.visibility === 'unlisted' ? (
+                  {visibility === 'unlisted' ? (
                     <>
                       <span aria-hidden="true">·</span>
                       <span>Unlisted</span>
@@ -429,9 +449,9 @@ export default function ShowcaseDetailBody({
                   generationId={detail.generationId}
                   title={displayTitle}
                   creatorUsername={detail.creator.username}
-                  visibility={detail.visibility}
+                  visibility={visibility}
                   viewerIsOwner={viewerIsOwner}
-                  hasResourceBundle={Boolean(detail.resourceBundle)}
+                  hasResourceBundle={Boolean(bundle)}
                   bundle={bundle
                     ? {
                         accessMode: bundle.accessMode,
@@ -461,9 +481,10 @@ export default function ShowcaseDetailBody({
               {viewerIsOwner ? null : (
                 <ReportPostButton
                   postId={detail.id}
-                  bundleId={detail.resourceBundle?.id ?? null}
+                  bundleId={bundle?.id ?? null}
                   creator={detail.creator}
                   deliveryId={deliveryId}
+                  onCreatorBlocked={viewer.markCreatorBlocked}
                 />
               )}
             </div>

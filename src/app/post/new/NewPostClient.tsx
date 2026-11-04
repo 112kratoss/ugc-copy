@@ -5,7 +5,7 @@ import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
@@ -644,6 +644,33 @@ function formatGeneratedCategory(value: string | null | undefined): PostMediaCat
 function getVisibilityStatusLabel(v: PostVisibility): string {
   if (v === 'public') return 'Visible in Explore';
   return 'Saved privately in Studio';
+}
+
+/**
+ * A link to the post a save has just changed. After an edit it loads the page
+ * in full instead of through the router: the post page is cached for everyone
+ * and its tag is invalidated only after the save's answer was sent, and the
+ * router keeps a static page it has fetched before (the visit that opened this
+ * editor, or a prefetch of this very link) for five minutes, so a client
+ * navigation could show the owner the post as it was before their edit. A new
+ * post has no cached page to go stale.
+ */
+function SavedPostLink({
+  href,
+  fullLoad,
+  className,
+  children,
+}: {
+  href: string;
+  fullLoad: boolean;
+  className: string;
+  children: ReactNode;
+}) {
+  return fullLoad ? (
+    <a href={href} className={className}>{children}</a>
+  ) : (
+    <Link href={href} className={className}>{children}</Link>
+  );
 }
 
 /**
@@ -4231,20 +4258,22 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                   {primaryPostPath || (createdPostHasResources && createdPost.resourceBundlePath) ? (
                     <div className="mt-4 flex flex-wrap gap-3">
                       {primaryPostPath ? (
-                        <Link
+                        <SavedPostLink
                           href={primaryPostPath}
+                          fullLoad={isEditMode}
                           className="rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
                         >
                           {primaryPostLabel}
-                        </Link>
+                        </SavedPostLink>
                       ) : null}
                       {createdPostHasResources && createdPost.resourceBundlePath ? (
-                        <Link
+                        <SavedPostLink
                           href={createdPost.resourceBundlePath}
+                          fullLoad={isEditMode}
                           className="rounded-full border border-emerald-300/30 bg-emerald-400/15 px-4 py-2.5 text-sm font-semibold text-emerald-50 transition hover:border-emerald-200/40 hover:bg-emerald-400/20"
                         >
                           Open recipe section
-                        </Link>
+                        </SavedPostLink>
                       ) : null}
                     </div>
                   ) : null}

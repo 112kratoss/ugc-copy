@@ -45,7 +45,7 @@
     "dev": "next dev --webpack",
     "dev:turbo": "next dev",
     "build": "next build",
-    "build:verify": "node scripts/build/check-ffmpeg-build-artifact.mjs && node scripts/build/check-staging-lock-build-artifact.mjs && node scripts/build/check-inline-css-copies.mjs",
+    "build:verify": "node scripts/build/check-ffmpeg-build-artifact.mjs && node scripts/build/check-staging-lock-build-artifact.mjs && node scripts/build/check-inline-css-copies.mjs && node scripts/build/check-isr-pages.mjs",
     "perf:load": "node scripts/perf/performance-load-test.mjs",
     "perf:load:smoke": "node scripts/perf/performance-load-test.mjs --smoke",
     "perf:load:self-test": "node scripts/perf/performance-load-test.mjs --self-test",

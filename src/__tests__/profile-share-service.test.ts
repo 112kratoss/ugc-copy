@@ -183,3 +183,64 @@ describe('shareCreatorProfileForRoute', () => {
     expect(dependencies.isUserRelationshipBlocked).not.toHaveBeenCalled();
   });
 });
+
+// The creator page is one cached render for everyone (2026-11-04), so the
+// browser sends the visit a shared link brought, as the post page sends its own
+// to /api/showcase/share.
+describe('a visit from a shared profile link', () => {
+  it.each([
+    ['creator-profile', 'creator-profile'],
+    ['profile', 'profile'],
+    // Any other marker is still a shared link, filed as the page it landed on.
+    ['whatsapp', 'creator-profile'],
+  ])('reads ?s=%s as a visit filed under %s, with no channel', (marker, surface) => {
+    expect(parseProfileSharePayloadForRoute({ username: 'nova', eventType: 'share_visit', sourceSurface: marker })).toEqual({
+      ok: true,
+      payload: { eventType: 'share_visit', username: 'nova', sourceSurface: surface },
+    });
+  });
+
+  it.each([
+    [{ username: 'nova', eventType: 'share_visit' }, 'Invalid share source surface'],
+    [{ username: 'nova', eventType: 'share_view', sourceSurface: 'profile' }, 'Invalid share event type'],
+  ])('refuses a visit with no marker or an unknown event', (body, expectedError) => {
+    expect(parseProfileSharePayloadForRoute(body)).toEqual({ ok: false, status: 400, body: { error: expectedError } });
+  });
+
+  it('records the visit with no channel and no actor, as the page did, and tells no one', async () => {
+    const dependencies = createDependencies();
+
+    const result = await shareCreatorProfileForRoute({
+      actorUserId: null,
+      eventType: 'share_visit',
+      username: 'nova',
+      sourceSurface: 'creator-profile',
+      dependencies,
+      serviceClient,
+    });
+
+    expect(result).toEqual({ ok: true, body: { success: true } });
+    expect(dependencies.recordProfileShareEvent).toHaveBeenCalledWith({
+      profileUserId: 'creator-1',
+      eventType: 'share_visit',
+      sourceSurface: 'creator-profile',
+    }, serviceClient);
+  });
+
+  it('records no visit across a block, either way', async () => {
+    const dependencies = createDependencies();
+    dependencies.isUserRelationshipBlocked.mockResolvedValue(true);
+
+    const result = await shareCreatorProfileForRoute({
+      actorUserId: 'viewer-1',
+      eventType: 'share_visit',
+      username: 'nova',
+      sourceSurface: 'creator-profile',
+      dependencies,
+      serviceClient,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(dependencies.recordProfileShareEvent).not.toHaveBeenCalled();
+  });
+});

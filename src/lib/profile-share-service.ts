@@ -13,11 +13,24 @@ import {
   isProfileShareSourceSurface,
 } from '@/lib/share';
 
-export type ProfileSharePayload = {
-  username: string;
-  sourceSurface: ProfileShareSourceSurface;
-  channel: GenerationShareChannel;
-};
+/**
+ * A share made from the product (`share_click`, through a channel), or an
+ * arrival from a shared link (`share_visit`). The creator page sends the visit
+ * from the browser since it is cached for everyone (2026-11-04): it recorded
+ * the visit itself while it was drawn per request.
+ */
+export type ProfileSharePayload =
+  | {
+      eventType?: 'share_click';
+      username: string;
+      sourceSurface: ProfileShareSourceSurface;
+      channel: GenerationShareChannel;
+    }
+  | {
+      eventType: 'share_visit';
+      username: string;
+      sourceSurface: ProfileShareSourceSurface;
+    };
 
 export type ProfileShareServiceDependencies = {
   findShareableProfileByUsername: typeof findShareableProfileByUsername;
@@ -89,16 +102,55 @@ async function isProfileInteractionUnavailable({
   }
 }
 
+/**
+ * A visit's marker as the page read it: any value still marks an arrival from
+ * a share, filed as the creator page it landed on, as the post's visits file an
+ * unknown marker as its own page.
+ */
+function getProfileShareVisitSourceSurface(value: unknown): ProfileShareSourceSurface | null {
+  if (typeof value !== 'string' || !value) {
+    return null;
+  }
+
+  return isProfileShareSourceSurface(value) ? value : 'creator-profile';
+}
+
 export function parseProfileSharePayloadForRoute(body: {
   username?: unknown;
   sourceSurface?: unknown;
   channel?: unknown;
+  eventType?: unknown;
 }): ProfileSharePayloadResult {
   if (!body.username || typeof body.username !== 'string') {
     return {
       ok: false,
       status: 400,
       body: { error: 'Missing creator username' },
+    };
+  }
+
+  if (body.eventType != null && body.eventType !== 'share_click' && body.eventType !== 'share_visit') {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: 'Invalid share event type' },
+    };
+  }
+
+  if (body.eventType === 'share_visit') {
+    const sourceSurface = getProfileShareVisitSourceSurface(body.sourceSurface);
+    if (!sourceSurface) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'Invalid share source surface' },
+      };
+    }
+
+    // No channel: a visit did not go out through one.
+    return {
+      ok: true,
+      payload: { eventType: 'share_visit', username: body.username, sourceSurface },
     };
   }
 
@@ -134,16 +186,15 @@ export function parseProfileSharePayloadForRoute(body: {
 
 export async function shareCreatorProfileForRoute({
   actorUserId,
-  channel,
   dependencies,
   serviceClient,
-  sourceSurface,
-  username,
+  ...payload
 }: ProfileSharePayload & {
   actorUserId: string | null;
   dependencies?: Partial<ProfileShareServiceDependencies>;
   serviceClient: SupabaseClient;
 }): Promise<ProfileShareServiceResult> {
+  const { username, sourceSurface } = payload;
   const resolvedDependencies = resolveDependencies(dependencies);
   const profile = await resolvedDependencies.findShareableProfileByUsername(
     username,
@@ -171,11 +222,27 @@ export async function shareCreatorProfileForRoute({
     };
   }
 
+  if (payload.eventType === 'share_visit') {
+    // As the creator page recorded a visit while it was drawn per request: no
+    // channel and no actor. The actor is checked above all the same, so a
+    // visit across a block either way is not recorded.
+    await resolvedDependencies.recordProfileShareEvent({
+      profileUserId: profile.id,
+      eventType: 'share_visit',
+      sourceSurface,
+    }, serviceClient);
+
+    return {
+      ok: true,
+      body: { success: true },
+    };
+  }
+
   await resolvedDependencies.recordProfileShareEvent({
     profileUserId: profile.id,
     eventType: 'share_click',
     sourceSurface,
-    channel,
+    channel: payload.channel,
     actorUserId,
   }, serviceClient);
 

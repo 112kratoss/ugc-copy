@@ -36,7 +36,7 @@ function bundleDetail() {
 }
 
 describe('post resource bundle route adapter service', () => {
-  it('loads bundle details with optional viewer and country context and private headers', async () => {
+  it("loads a signed-in viewer's bundle with their country, and never lets it be stored", async () => {
     const getPostResourceBundleForRoute = vi.fn(async () => ({
       ok: true as const,
       body: {
@@ -48,6 +48,7 @@ describe('post resource bundle route adapter service', () => {
     const response = await getPostResourceBundleRouteResponse({
       request: new Request('http://localhost/api/posts/post-1/resource-bundle', {
         headers: {
+          Authorization: 'Bearer viewer-token',
           'x-request-id': 'resource-bundle-detail-1',
           'x-vercel-ip-country': 'IN',
         },
@@ -82,7 +83,11 @@ describe('post resource bundle route adapter service', () => {
 
     const response = await getPostResourceBundleRouteResponse({
       request: new Request('http://localhost/api/posts/post-1/resource-bundle', {
-        headers: { 'x-request-id': 'resource-bundle-blocked-1', 'x-vercel-ip-country': 'IN' },
+        headers: {
+          Authorization: 'Bearer viewer-token',
+          'x-request-id': 'resource-bundle-blocked-1',
+          'x-vercel-ip-country': 'IN',
+        },
       }),
       context: createContext(),
       dependencies: {
@@ -106,7 +111,9 @@ describe('post resource bundle route adapter service', () => {
     const isMarketplaceCreatorBlockedForViewer = vi.fn(async () => false);
 
     const signedIn = await getPostResourceBundleRouteResponse({
-      request: new Request('http://localhost/api/posts/post-1/resource-bundle'),
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle', {
+        headers: { Authorization: 'Bearer viewer-token' },
+      }),
       context: createContext(),
       dependencies: {
         createUserClient: () => createUserClient('viewer-1'),
@@ -148,9 +155,70 @@ describe('post resource bundle route adapter service', () => {
     });
 
     expect(response.status).toBe(404);
+    // A recipe missing now may be listed in a minute: only a found one is kept.
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(getPostResourceBundleForRoute).toHaveBeenCalledWith(expect.objectContaining({
       viewerUserId: null,
     }));
+  });
+
+  // The post page asks this for every visitor who opens a cash-priced recipe,
+  // to price it in their currency. A visitor's answer is everyone's in their
+  // country, so the edge keeps one per country, as it does the listing's.
+  it("lets the edge keep a visitor's answer per country, read without asking who they are", async () => {
+    const createUserClientForTest = vi.fn(() => createUserClient('viewer-1'));
+    const getPostResourceBundleForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { success: true, bundle: { id: 'bundle-1', accessMode: 'paid' } },
+    }));
+
+    const response = await getPostResourceBundleRouteResponse({
+      request: new Request('http://localhost/api/posts/post-1/resource-bundle', {
+        headers: { 'x-request-id': 'resource-bundle-visitor-1', 'x-vercel-ip-country': 'IN' },
+      }),
+      context: createContext(),
+      dependencies: {
+        createUserClient: createUserClientForTest,
+        getPostResourceBundleForRoute,
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe('public, s-maxage=60, stale-while-revalidate=300');
+    expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+    expect(response.headers.get('x-request-id')).toBe('resource-bundle-visitor-1');
+    // No bearer, no viewer: a cookie or anything else in the request is never read.
+    expect(createUserClientForTest).not.toHaveBeenCalled();
+    expect(getPostResourceBundleForRoute).toHaveBeenCalledWith({
+      postId: 'post-1',
+      viewerUserId: null,
+      countryCode: 'IN',
+      getDetailByPostId: expect.any(Function),
+    });
+  });
+
+  it("never lets an answer read with a bearer be stored, whoever it turned out to be", async () => {
+    const getPostResourceBundleForRoute = vi.fn(async () => ({
+      ok: true as const,
+      body: { success: true, bundle: { id: 'bundle-1', accessMode: 'paid' } },
+    }));
+
+    for (const userId of ['buyer-1', null]) {
+      const response = await getPostResourceBundleRouteResponse({
+        request: new Request('http://localhost/api/posts/post-1/resource-bundle', {
+          headers: { Authorization: 'Bearer some-token', 'x-vercel-ip-country': 'IN' },
+        }),
+        context: createContext(),
+        dependencies: {
+          createUserClient: () => createUserClient(userId),
+          getPostResourceBundleForRoute,
+        },
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+      expect(response.headers.get('Vary')).toBe('Authorization, x-vercel-ip-country');
+    }
   });
 
   it('maps rate-limit service results with standard headers', async () => {
@@ -204,7 +272,7 @@ describe('post resource bundle route adapter service', () => {
 
     const getResponse = await handlers.GET(
       new Request('http://localhost/api/posts/post-1/resource-bundle', {
-        headers: { 'x-request-id': 'resource-bundle-factory-get-1' },
+        headers: { Authorization: 'Bearer owner-token', 'x-request-id': 'resource-bundle-factory-get-1' },
       }),
       createContext(),
     );

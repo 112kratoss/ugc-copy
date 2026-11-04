@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowRight,
@@ -33,6 +33,10 @@ import type { MarketplaceResourceListItem } from '@/lib/post-resource-bundles-se
 import { MARKETPLACE_COMPACT_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { MARKETPLACE_SEARCH_MIN_LENGTH } from '@/lib/marketplace-search-policy';
 
+import { MarketplaceListingFailed, MarketplaceListingSkeleton } from './MarketplaceListingStates';
+import { isPlainLinkClick } from './marketplace-address';
+import type { MarketplaceListingStatus } from './useMarketplaceListing';
+
 interface MarketplacePageInfo {
   hasMore: boolean;
   nextOffset: number | null;
@@ -60,6 +64,18 @@ interface MarketplaceBrowserProps {
    */
   shortQuery?: string;
   sourceToolOptions: SourceToolFilterOption[];
+  /**
+   * Where the listing for the address stands (`useMarketplaceListing`): the
+   * page is cached for everyone, so a filter or a search is read in the
+   * browser, and the list says so while it is.
+   */
+  listingStatus?: MarketplaceListingStatus;
+  /**
+   * Moves the page to another listing in place. Without it, a filter or a
+   * search navigates with the router.
+   */
+  onNavigate?: (href: string) => void;
+  onRetry?: () => void;
 }
 
 const SORT_LINKS: Array<{ label: string; value: MarketplaceResourceSort }> = [
@@ -83,6 +99,9 @@ export default function MarketplaceBrowser({
   initialFilters,
   shortQuery = '',
   sourceToolOptions,
+  listingStatus = 'ready',
+  onNavigate,
+  onRetry,
 }: MarketplaceBrowserProps) {
   const router = useRouter();
   const { session } = useAuth();
@@ -123,9 +142,20 @@ export default function MarketplaceBrowser({
   const hasActiveFilters = activeFilterLabels.length > 0 || initialFilters.sort !== 'recent';
   const marketplaceReturnPath = buildMarketplacePath(initialFilters);
 
+  const navigateTo = (href: string) => {
+    if (onNavigate) onNavigate(href);
+    else router.push(href);
+  };
+  // A plain click on an address of this page moves the listing in place.
+  const navigateOnPlainClick = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+    if (!onNavigate || !isPlainLinkClick(event)) return;
+    event.preventDefault();
+    onNavigate(href);
+  };
+
   const onSearchSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    router.push(buildMarketplacePath({
+    navigateTo(buildMarketplacePath({
       ...initialFilters,
       q: searchInput,
     }));
@@ -252,6 +282,8 @@ export default function MarketplaceBrowser({
             {hasActiveFilters ? (
               <Link
                 href="/marketplace"
+                prefetch={false}
+                onClick={navigateOnPlainClick('/marketplace')}
                 className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:bg-white/[0.08]"
               >
                 <X className="h-4 w-4" />
@@ -270,6 +302,7 @@ export default function MarketplaceBrowser({
                 { label: 'Free', href: buildMarketplacePath({ ...initialFilters, access: 'free' }), active: initialFilters.access === 'free' },
                 { label: 'Paid', href: buildMarketplacePath({ ...initialFilters, access: 'paid' }), active: initialFilters.access === 'paid' },
               ]}
+              onNavigate={onNavigate ? navigateOnPlainClick : undefined}
             />
             <FilterGroup
               label="Kind"
@@ -278,8 +311,10 @@ export default function MarketplaceBrowser({
                 href: buildMarketplacePath({ ...initialFilters, resource: item.value }),
                 active: initialFilters.resource === item.value,
               }))}
+              onNavigate={onNavigate ? navigateOnPlainClick : undefined}
             />
             <MarketplaceToolFilter
+              onNavigate={onNavigate}
               options={[
                 { label: 'All tools', href: buildMarketplacePath({ ...initialFilters, tool: '' }), active: !initialFilters.tool },
                 ...sourceToolOptions.map((sourceTool) => ({
@@ -295,6 +330,8 @@ export default function MarketplaceBrowser({
               <Link
                 key={link.value}
                 href={buildMarketplacePath({ ...initialFilters, sort: link.value })}
+                prefetch={onNavigate ? false : undefined}
+                onClick={navigateOnPlainClick(buildMarketplacePath({ ...initialFilters, sort: link.value }))}
                 className={`rounded-full px-4 py-2 text-sm transition ${
                   initialFilters.sort === link.value
                     ? 'border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary-soft)] font-semibold text-[var(--ui-text-primary)]'
@@ -315,7 +352,12 @@ export default function MarketplaceBrowser({
           body="Keep typing, or clear the search to see every recipe."
           actionLabel="Clear search"
           actionHref={marketplaceReturnPath}
+          onActionClick={navigateOnPlainClick(marketplaceReturnPath)}
         />
+      ) : listingStatus === 'loading' ? (
+        <MarketplaceListingSkeleton />
+      ) : listingStatus === 'failed' ? (
+        <MarketplaceListingFailed onRetry={() => onRetry?.()} />
       ) : items.length === 0 && !pageInfo.hasMore ? (
         // A page emptied by the viewer's blocks still has a next page to load,
         // so only a list with nothing left says there is nothing.
@@ -326,6 +368,7 @@ export default function MarketplaceBrowser({
             body="Try another search, or clear the filters to see every recipe."
             actionLabel="Clear filters"
             actionHref="/marketplace"
+            onActionClick={navigateOnPlainClick('/marketplace')}
           />
         ) : (
           <ResultsMessage
@@ -385,12 +428,14 @@ function ResultsMessage({
   body,
   actionLabel,
   actionHref,
+  onActionClick,
 }: {
   icon: ReactNode;
   title: string;
   body: string;
   actionLabel: string;
   actionHref: string;
+  onActionClick?: (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   return (
     <div className="mt-10 rounded-3xl border border-white/8 bg-zinc-950/70 p-8 text-center shadow-[0_24px_70px_rgba(0,0,0,0.35)] backdrop-blur-sm">
@@ -400,6 +445,7 @@ function ResultsMessage({
       <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
         <Link
           href={actionHref}
+          onClick={onActionClick}
           className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-zinc-200"
         >
           {actionLabel}
@@ -412,9 +458,12 @@ function ResultsMessage({
 function FilterGroup({
   label,
   links,
+  onNavigate,
 }: {
   label: string;
   links: Array<{ label: string; href: string; active: boolean }>;
+  /** Takes a plain click on a link and moves the listing in place. */
+  onNavigate?: (href: string) => (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   return (
     <div>
@@ -426,6 +475,8 @@ function FilterGroup({
           <Link
             key={link.label}
             href={link.href}
+            prefetch={onNavigate ? false : undefined}
+            onClick={onNavigate?.(link.href)}
             // Selected controls speak the shell's language (coral), not a
             // content accent. Emerald here meant "Workflow" to anyone reading
             // the design system, on a chip that has nothing to do with

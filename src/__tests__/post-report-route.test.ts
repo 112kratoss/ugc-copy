@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const showcaseCacheMocks = vi.hoisted(() => ({
+  // The feeds' tag alone: a report hides the post from its reporter's feed.
   invalidate: vi.fn(),
+  // The feeds' and the cached public pages': a report hides nothing there.
+  invalidateWithPages: vi.fn(),
 }));
 
 vi.mock('@/lib/showcase-feed-cache', () => ({
-  invalidateShowcaseFeedCache: showcaseCacheMocks.invalidate,
+  invalidateShowcaseFeedCacheOnly: showcaseCacheMocks.invalidate,
+  invalidateShowcaseFeedCache: showcaseCacheMocks.invalidateWithPages,
 }));
 
 // Stands in for Next's after(): it runs the task on the spot, so a test sees
@@ -129,6 +133,7 @@ describe('/api/posts/[postId]/report route', () => {
     createServiceClientFactory.mockClear();
     createServiceClientFactory.mockImplementation(() => createServiceClientMock());
     showcaseCacheMocks.invalidate.mockClear();
+    showcaseCacheMocks.invalidateWithPages.mockClear();
     afterMock.mockClear();
     rpcMock.mockReset();
     rpcMock.mockResolvedValue({
@@ -241,6 +246,9 @@ describe('/api/posts/[postId]/report route', () => {
       p_reason: 'reported',
     });
     expect(showcaseCacheMocks.invalidate).toHaveBeenCalledOnce();
+    // A report is a moderation queue signal, not a take-down
+    // (20260726071722): no cached public page is drawn again for it.
+    expect(showcaseCacheMocks.invalidateWithPages).not.toHaveBeenCalled();
     // The report's feed event is written behind the answer.
     expect(afterMock).toHaveBeenCalledOnce();
   });

@@ -43,6 +43,13 @@ interface ReportPostButtonProps {
    * reporter's interests.
    */
   deliveryId?: string | null;
+  /**
+   * The viewer blocked the creator from here. The post page hides the post
+   * itself, since it reads blocks in the browser: its server render is the one
+   * cached for everyone and would show the post again. Without it, the page is
+   * drawn again from the server.
+   */
+  onCreatorBlocked?: () => void;
 }
 
 export default function ReportPostButton({
@@ -50,6 +57,7 @@ export default function ReportPostButton({
   bundleId = null,
   creator = null,
   deliveryId = null,
+  onCreatorBlocked,
 }: ReportPostButtonProps) {
   const router = useRouter();
   // The live session, as the engagement row reads it. The token the page was
@@ -151,9 +159,13 @@ export default function ReportPostButton({
     });
     setIsCreatorActionPending(false);
     toastSafetyOutcome(outcome);
-    // The page checks blocks on the server, so drawing it again answers
-    // not-found, as the app's post page does across a block.
-    if (outcome.status === 'done') router.refresh();
+    if (outcome.status !== 'done') return;
+    // The post goes, as the app's post page answers not-found across a block.
+    if (onCreatorBlocked) {
+      onCreatorBlocked();
+      return;
+    }
+    router.refresh();
   };
 
   // Rows in the rail card, not a card of their own — the rail is one surface

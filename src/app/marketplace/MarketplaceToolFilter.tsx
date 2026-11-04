@@ -4,6 +4,8 @@ import { Check, ChevronDown, Search } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
+import { isPlainLinkClick } from './marketplace-address';
+
 export interface ToolFilterOption {
   label: string;
   href: string;
@@ -32,7 +34,18 @@ const getServerHydratedSnapshot = () => false;
  * Access (3 options) and Kind (6) stay as pills: at that count showing the
  * options outright beats hiding them behind a click.
  */
-export default function MarketplaceToolFilter({ options }: { options: ToolFilterOption[] }) {
+export default function MarketplaceToolFilter({
+  options,
+  onNavigate,
+}: {
+  options: ToolFilterOption[];
+  /**
+   * Takes a plain click on a tool and moves the page to its listing in place
+   * (`useMarketplaceListing`); the link keeps its address for a page without
+   * script, a new tab, or a click before the page is live.
+   */
+  onNavigate?: (href: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   // The marketplace bootstrap is a demand shell that stays unhydrated until the
@@ -139,7 +152,12 @@ export default function MarketplaceToolFilter({ options }: { options: ToolFilter
                   key={option.label}
                   href={option.href}
                   prefetch={false}
-                  onClick={close}
+                  onClick={(event) => {
+                    close();
+                    if (!onNavigate || !isPlainLinkClick(event)) return;
+                    event.preventDefault();
+                    onNavigate(option.href);
+                  }}
                   className={`ui-focus-ring items-center justify-between gap-2 rounded-xl px-3 py-2 text-sm transition ${
                     hidden ? 'hidden' : 'flex'
                   } ${

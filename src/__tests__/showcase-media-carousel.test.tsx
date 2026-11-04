@@ -419,6 +419,62 @@ describe('ShowcaseMediaCarousel', () => {
     }
   });
 
+  it.each(['detail', 'reel'] as const)(
+    'shows an image in the %s frame at its display rendition, and the source once that fails',
+    (mode) => {
+      const { container } = render(
+        <ShowcaseMediaCarousel
+          title="Campaign still"
+          mode={mode}
+          mediaItems={[{
+            id: 'image-1',
+            url: 'https://example.com/original.jpg',
+            displayUrl: 'https://example.com/original.display.0123456789abcdef.webp',
+            previewUrl: 'https://example.com/original.preview.0123456789abcdef.webp',
+            mediaKind: 'image',
+            contentType: 'image/jpeg',
+            originalName: 'original.jpg',
+            width: 3024,
+            height: 4032,
+            durationSeconds: null,
+            sortOrder: 0,
+          }]}
+        />
+      );
+
+      const image = container.querySelector('img[alt="Campaign still"]');
+      expect(image).toHaveAttribute('src', 'https://example.com/original.display.0123456789abcdef.webp');
+
+      fireEvent.error(image!);
+
+      expect(container.querySelector('img[alt="Campaign still"]'))
+        .toHaveAttribute('src', 'https://example.com/original.jpg');
+    },
+  );
+
+  it('shows an image with no display rendition at its source in the detail frame', () => {
+    const { container } = render(
+      <ShowcaseMediaCarousel
+        title="Campaign still"
+        mode="detail"
+        mediaItems={[{
+          id: 'image-1',
+          url: 'https://example.com/original.jpg',
+          displayUrl: null,
+          mediaKind: 'image',
+          contentType: 'image/jpeg',
+          originalName: 'original.jpg',
+          width: 1080,
+          height: 1350,
+          durationSeconds: null,
+          sortOrder: 0,
+        }]}
+      />
+    );
+
+    expect(container.querySelector('img[alt="Campaign still"]')).toHaveAttribute('src', 'https://example.com/original.jpg');
+  });
+
   it('reports an already-ready reel video without waiting for a loadedmetadata event', async () => {
     vi.spyOn(HTMLMediaElement.prototype, 'readyState', 'get').mockReturnValue(4);
     const onMediaReady = vi.fn();

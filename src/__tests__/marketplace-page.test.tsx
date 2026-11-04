@@ -1,25 +1,37 @@
-import { act, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import MarketplacePage, { revalidate } from '@/app/marketplace/page';
+import MarketplacePage, { metadata, revalidate } from '@/app/marketplace/page';
+import { PUBLIC_PAGE_REVALIDATE_SECONDS } from '@/lib/public-page-cache';
 
 const getMarketplaceResourceListMock = vi.fn();
-const headersMock = vi.fn();
-const getServerAuthStateMock = vi.fn();
-const filterMarketplaceItemsForViewerMock = vi.fn();
+// The page is one cached render for everyone (ISR): a read of the request's
+// headers, its cookies or the server's session would make it render per
+// request again, and could put one viewer's list in front of everyone.
+const requestTimeRead = vi.hoisted(() => vi.fn((what: string) => {
+  throw new Error(`The marketplace read ${what}: it must stay one cached render for everyone`);
+}));
 const sourceToolCatalog = vi.hoisted(() => [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
   { slug: 'runway', label: 'Runway', models: [], supportedMediaKinds: ['image', 'video'] },
 ]);
+// The address the page is open at, as the browser's router reads it.
+const address = vi.hoisted(() => ({ search: '' }));
+const authState = vi.hoisted(() => ({
+  session: null as { access_token: string } | null,
+  user: null as { id: string } | null,
+}));
 
 vi.mock('next/headers', () => ({
-  headers: () => headersMock(),
+  headers: () => requestTimeRead('the request headers'),
+  cookies: () => requestTimeRead('the request cookies'),
 }));
 
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => routerMock,
+  useSearchParams: () => new URLSearchParams(address.search),
 }));
 
 vi.mock('@/lib/post-resource-bundles-server', () => ({
@@ -31,57 +43,164 @@ vi.mock('@/lib/source-tools-server', () => ({
 }));
 
 vi.mock('@/lib/supabase-server', () => ({
-  getServerAuthState: () => getServerAuthStateMock(),
+  getServerAuthState: () => requestTimeRead("the viewer's session"),
 }));
 
-vi.mock('@/lib/marketplace-viewer-filter', () => ({
-  filterMarketplaceItemsForViewer: (...args: unknown[]) => filterMarketplaceItemsForViewerMock(...args),
+vi.mock('@/components/AuthProvider', () => ({
+  // `OptionalAuth`: the page resolves the session in the browser.
+  AuthProvider: ({ children }: { children: React.ReactNode }) => children,
+  useAuth: () => ({ session: authState.session, user: authState.user }),
 }));
 
-function requestHeaders(country: string | null) {
-  return { get: vi.fn((name: string) => (name === 'x-vercel-ip-country' ? country : null)) };
+/** The list API as the browser meets it: one answer for every listing, unless a test gives one. */
+function answerListing(answer: (url: URL, init?: RequestInit) => { status?: number; body: unknown }) {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'https://magicbooklet.test');
+    if (url.pathname === '/api/marketplace/resources') {
+      const { status = 200, body } = answer(url, init);
+      return { ok: status < 400, status, json: async () => body } as Response;
+    }
+    // `/api/me/unlocked-recipes` and anything else: nothing to report.
+    return { ok: true, status: 200, json: async () => ({ bundleIds: [] }) } as Response;
+  }));
+}
+
+function listingReads() {
+  return vi.mocked(fetch).mock.calls
+    .filter(([input]) => String(input).startsWith('/api/marketplace/resources'))
+    .map(([input, init]) => ({
+      query: Object.fromEntries(new URL(String(input), 'https://magicbooklet.test').searchParams),
+      authorization: (init?.headers as Record<string, string> | undefined)?.Authorization ?? null,
+    }));
+}
+
+async function openPage() {
+  await act(async () => {
+    render(await MarketplacePage());
+  });
 }
 
 describe('MarketplacePage', () => {
   beforeEach(() => {
-    headersMock.mockReset();
     getMarketplaceResourceListMock.mockReset();
-    getServerAuthStateMock.mockReset();
-    getServerAuthStateMock.mockResolvedValue({ session: null, credits: null });
-    filterMarketplaceItemsForViewerMock.mockReset();
-    filterMarketplaceItemsForViewerMock.mockImplementation(async (items: unknown[]) => items);
+    getMarketplaceResourceListMock.mockResolvedValue({ items: [] });
+    requestTimeRead.mockClear();
+    routerMock.push.mockReset();
+    address.search = '';
+    authState.session = null;
+    authState.user = null;
+    // By default the browser's read fails, and the plain address keeps the page's list.
+    answerListing(() => ({ status: 503, body: { error: 'Not answered here' } }));
   });
 
-  // The first page was quoted in USD for everyone while "Load more" and the
-  // post a card opens were quoted in the visitor's currency.
-  it("quotes the first page in the visitor's country, as every later page is", async () => {
-    headersMock.mockResolvedValue(requestHeaders('IN'));
-    getMarketplaceResourceListMock.mockResolvedValue({
-      items: [],
-    });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
-    await act(async () => {
-      render(MarketplacePage({
-        searchParams: Promise.resolve({}),
-      }));
-    });
+  it('is cached for everyone: the plain storefront, read in no country, and never the request', async () => {
+    await openPage();
 
-    expect(revalidate).toBe(60);
-    expect(getMarketplaceResourceListMock).toHaveBeenCalledWith(expect.objectContaining({
-      countryCode: 'IN',
+    expect(revalidate).toBe(PUBLIC_PAGE_REVALIDATE_SECONDS);
+    expect(requestTimeRead).not.toHaveBeenCalled();
+    expect(getMarketplaceResourceListMock).toHaveBeenCalledTimes(1);
+    const [options] = getMarketplaceResourceListMock.mock.calls[0];
+    expect(options).toEqual({
+      filter: 'all',
+      resource: 'all',
+      tool: null,
+      q: null,
+      sort: 'recent',
       limit: 4,
       offset: 0,
-    }));
+    });
     expect(screen.getByRole('heading', {
       name: /buy the reusable parts behind community posts/i,
     })).toBeInTheDocument();
   });
 
-  // The storefront was the one list that kept showing a creator the viewer
-  // blocked, or who blocked them; each card then opened a 404.
-  it("takes a signed-in viewer's blocked creators off the first page, and no one's for a visitor", async () => {
-    headersMock.mockResolvedValue(requestHeaders(null));
+  // CI builds against a placeholder database, where the prerender's read fails.
+  it('goes out with no first page from a build that cannot read one, and the browser reads it', async () => {
+    vi.stubEnv('NEXT_PHASE', 'phase-production-build');
+    getMarketplaceResourceListMock.mockRejectedValue(new Error('getaddrinfo ENOTFOUND example.supabase.co'));
+    let answer!: (body: unknown) => void;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+      String(input).startsWith('/api/marketplace/resources')
+        ? new Promise<Response>((resolve) => {
+            answer = (body) => resolve({ ok: true, status: 200, json: async () => body } as Response);
+          })
+        : Promise.resolve({ ok: true, status: 200, json: async () => ({ bundleIds: [] }) } as Response)
+    )));
+
+    try {
+      await openPage();
+
+      // Loading, never a cached "No recipes yet".
+      expect(screen.getByLabelText('Loading marketplace recipes')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
+      await act(async () => {
+        answer({
+          items: [createMarketplaceResourceItem({ title: 'Read in the browser', post: null })],
+          pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 },
+        });
+      });
+      expect(await screen.findByText('Read in the browser')).toBeInTheDocument();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('fails the render outside a build, so the cache keeps its last good page', async () => {
+    getMarketplaceResourceListMock.mockRejectedValue(new Error('connection reset'));
+
+    await expect(MarketplacePage()).rejects.toThrow('connection reset');
+  });
+
+  it('names /marketplace as the canonical of every address, a filtered one included', () => {
+    expect(metadata.alternates?.canonical).toBe('/marketplace');
+    expect(metadata.title).toBe('Recipe Marketplace');
+    expect(metadata.robots).toBeUndefined();
+  });
+
+  // The first page was quoted in USD for everyone while "Load more" and the
+  // post a card opens were quoted in the visitor's currency. The cached page is
+  // quoted in no country; the browser reads the same page in the visitor's.
+  it("quotes the first page in the visitor's currency once the browser has read it, with no session", async () => {
     getMarketplaceResourceListMock.mockResolvedValue({
+      items: [createMarketplaceResourceItem({
+        title: 'Paid recipe',
+        accessMode: 'paid',
+        priceUsdCents: 900,
+        priceQuote: { currency: 'USD', amountSubunits: 900, formatted: '$9.00', note: null },
+      })],
+      pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 },
+    });
+    answerListing(() => ({
+      body: {
+        items: [createMarketplaceResourceItem({
+          title: 'Paid recipe',
+          accessMode: 'paid',
+          priceUsdCents: 900,
+          priceQuote: { currency: 'INR', amountSubunits: 75000, formatted: '₹750.00', note: null },
+        })],
+        pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 },
+      },
+    }));
+
+    await openPage();
+
+    expect(await screen.findByRole('link', { name: /Unlock for ₹750\.00 · 900 credits/ })).toBeInTheDocument();
+    expect(listingReads()).toEqual([{
+      query: { sort: 'recent', offset: '0', limit: '4' },
+      authorization: null,
+    }]);
+  });
+
+  // The storefront was the one list that kept showing a creator the viewer
+  // blocked, or who blocked them; each card then opened a 404. The cached page
+  // is everyone's, so the browser asks the list API, which filters for the
+  // session it is sent.
+  it("takes a signed-in viewer's blocked creators off the first page, and no one's for a visitor", async () => {
+    const page = {
       items: [
         createMarketplaceResourceItem({ id: 'bundle-kept', title: 'Kept recipe', post: null }),
         createMarketplaceResourceItem({
@@ -93,73 +212,169 @@ describe('MarketplacePage', () => {
         }),
       ],
       pageInfo: { hasMore: true, nextOffset: 3, offset: 0, limit: 3 },
-    });
-    filterMarketplaceItemsForViewerMock.mockImplementation(async (
-      items: Array<{ seller: { id: string } }>,
-      viewerUserId: string | null,
-    ) => (viewerUserId ? items.filter((item) => item.seller.id !== 'creator-blocked') : items));
-    getServerAuthStateMock.mockResolvedValue({ session: { user: { id: 'viewer-1' } }, credits: 10 });
+    };
+    getMarketplaceResourceListMock.mockResolvedValue(page);
+    answerListing((_url, init) => ({
+      body: (init?.headers as Record<string, string> | undefined)?.Authorization
+        ? { ...page, items: page.items.filter((item) => item.id !== 'bundle-blocked') }
+        : page,
+    }));
+    authState.session = { access_token: 'viewer-token' };
+    authState.user = { id: 'viewer-1' };
 
-    let unmount!: () => void;
-    await act(async () => {
-      ({ unmount } = render(MarketplacePage({
-        searchParams: Promise.resolve({}),
-      })));
-    });
+    await openPage();
 
-    expect(filterMarketplaceItemsForViewerMock).toHaveBeenCalledWith(
-      [expect.objectContaining({ id: 'bundle-kept' }), expect.objectContaining({ id: 'bundle-blocked' })],
-      'viewer-1',
-    );
-    expect(await screen.findByText('Kept recipe')).toBeInTheDocument();
-    expect(screen.queryByText('Blocked recipe')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Blocked recipe')).not.toBeInTheDocument());
+    expect(screen.getByText('Kept recipe')).toBeInTheDocument();
+    expect(listingReads()).toEqual([{
+      query: { sort: 'recent', offset: '0', limit: '4' },
+      authorization: 'Bearer viewer-token',
+    }]);
     // The next page still starts where the unfiltered one ended.
     expect(screen.getByRole('button', { name: /load more recipes/i })).toBeInTheDocument();
-    unmount();
+  });
 
-    getServerAuthStateMock.mockResolvedValue({ session: null, credits: null });
+  // Supabase renews a session's token about hourly. The listing is the same
+  // viewer's either way: a renewal must not read page one again and put it
+  // back in place of what "Load more" added.
+  it("keeps a signed-in viewer's listing, Load more's included, when their token is renewed", async () => {
+    const firstPage = {
+      items: [createMarketplaceResourceItem({ id: 'bundle-1', title: 'First recipe', post: null })],
+      pageInfo: { hasMore: true, nextOffset: 1, offset: 0, limit: 1 },
+    };
+    const secondPage = {
+      items: [createMarketplaceResourceItem({ id: 'bundle-2', postId: 'post-2', title: 'Second recipe', post: null })],
+      pageInfo: { hasMore: false, nextOffset: null, offset: 1, limit: 1 },
+    };
+    getMarketplaceResourceListMock.mockResolvedValue(firstPage);
+    answerListing((url) => ({ body: url.searchParams.get('offset') === '1' ? secondPage : firstPage }));
+    authState.session = { access_token: 'viewer-token' };
+    authState.user = { id: 'viewer-1' };
+    const firstPageReads = () => listingReads().filter(({ query }) => query.offset === '0');
+
+    let view!: ReturnType<typeof render>;
     await act(async () => {
-      render(MarketplacePage({
-        searchParams: Promise.resolve({}),
-      }));
+      view = render(await MarketplacePage());
+    });
+    await waitFor(() => expect(firstPageReads()).toHaveLength(1));
+    // The first press opens the buyer tools; theirs reads the next page.
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    await waitFor(() => expect(screen.queryByText('Opening buyer tools…')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /load more recipes/i }));
+    expect(await screen.findByText('Second recipe')).toBeInTheDocument();
+
+    authState.session = { access_token: 'renewed-token' };
+    await act(async () => {
+      view.rerender(await MarketplacePage());
     });
 
-    expect(filterMarketplaceItemsForViewerMock).toHaveBeenLastCalledWith(expect.any(Array), null);
-    expect(await screen.findByText('Blocked recipe')).toBeInTheDocument();
+    expect(screen.getByText('First recipe')).toBeInTheDocument();
+    expect(screen.getByText('Second recipe')).toBeInTheDocument();
+    expect(firstPageReads()).toEqual([{
+      query: { sort: 'recent', offset: '0', limit: '4' },
+      authorization: 'Bearer viewer-token',
+    }]);
+
+    // Another account in the same tab is another listing, read with its own session.
+    authState.session = { access_token: 'other-token' };
+    authState.user = { id: 'viewer-2' };
+    await act(async () => {
+      view.rerender(await MarketplacePage());
+    });
+    await waitFor(() => expect(firstPageReads()).toHaveLength(2));
+    expect(firstPageReads()[1].authorization).toBe('Bearer other-token');
+  });
+
+  it("draws a filtered address's own listing, never the cached one while it loads", async () => {
+    getMarketplaceResourceListMock.mockResolvedValue({
+      items: [createMarketplaceResourceItem({ title: 'Newest free recipe', post: null })],
+      pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 },
+    });
+    let answer!: (body: unknown) => void;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+      String(input).startsWith('/api/marketplace/resources')
+        ? new Promise<Response>((resolve) => {
+            answer = (body) => resolve({ ok: true, status: 200, json: async () => body } as Response);
+          })
+        : Promise.resolve({ ok: true, status: 200, json: async () => ({ bundleIds: [] }) } as Response)
+    )));
+    address.search = '?access=paid&sort=top-sales';
+
+    await openPage();
+
+    expect(screen.getByLabelText('Loading marketplace recipes')).toBeInTheDocument();
+    expect(screen.queryByText('Newest free recipe')).not.toBeInTheDocument();
+    expect(listingReads()).toEqual([{
+      query: { access: 'paid', sort: 'top-sales', offset: '0', limit: '4' },
+      authorization: null,
+    }]);
+    expect(screen.getByRole('link', { name: 'Paid' })).toHaveAttribute('aria-current', 'page');
+
+    await act(async () => {
+      answer({
+        items: [createMarketplaceResourceItem({ title: 'Best-selling paid recipe', accessMode: 'paid', priceUsdCents: 900, post: null })],
+        pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 },
+      });
+    });
+
+    expect(await screen.findByText('Best-selling paid recipe')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Loading marketplace recipes')).not.toBeInTheDocument();
+  });
+
+  it('says a filtered listing could not load, and reads it again on Try again', async () => {
+    answerListing(() => ({ status: 503, body: { error: 'Failed to load marketplace unlocks.' } }));
+    address.search = '?access=free';
+
+    await openPage();
+
+    expect(await screen.findByRole('heading', { name: 'Recipes could not load' })).toBeInTheDocument();
+    answerListing(() => ({
+      body: {
+        items: [createMarketplaceResourceItem({ title: 'Free recipe after retry', post: null })],
+        pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 },
+      },
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('Free recipe after retry')).toBeInTheDocument();
+  });
+
+  it('moves to another listing in place on a plain click, and leaves other clicks to the link', async () => {
+    const pushState = vi.spyOn(window.history, 'pushState').mockImplementation(() => undefined);
+    await openPage();
+
+    const free = screen.getByRole('link', { name: 'Free' });
+    expect(free).toHaveAttribute('href', '/marketplace?access=free&sort=recent');
+    fireEvent.click(free);
+    expect(pushState).toHaveBeenCalledWith(null, '', '/marketplace?access=free&sort=recent');
+
+    pushState.mockClear();
+    fireEvent.click(free, { metaKey: true });
+    expect(pushState).not.toHaveBeenCalled();
+    pushState.mockRestore();
   });
 
   // A one- or two-character query was dropped without a word: every recipe
   // was listed and the search box emptied.
   it('answers a query under three characters with the hint, keeps it in the box, and lists nothing', async () => {
-    headersMock.mockResolvedValue(requestHeaders(null));
+    address.search = '?q=ai&access=paid';
 
-    await act(async () => {
-      render(MarketplacePage({
-        searchParams: Promise.resolve({ q: 'ai', access: 'paid' }),
-      }));
-    });
+    await openPage();
 
     expect(await screen.findByRole('heading', { name: 'Type at least 3 characters' })).toBeInTheDocument();
     expect(screen.getByRole('searchbox', { name: /search marketplace recipes/i })).toHaveValue('ai');
     // Clearing the search keeps the other filters.
     expect(screen.getByRole('link', { name: 'Clear search' })).toHaveAttribute('href', '/marketplace?access=paid&sort=recent');
-    expect(getMarketplaceResourceListMock).not.toHaveBeenCalled();
+    expect(listingReads()).toEqual([]);
     expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
   });
 
   it('builds a valid recent sort link and keeps both empty-state entry points visible', async () => {
-    headersMock.mockResolvedValue({
-      get: vi.fn(() => null),
-    });
     getMarketplaceResourceListMock.mockResolvedValue({
       items: [],
     });
 
-    await act(async () => {
-      render(MarketplacePage({
-        searchParams: Promise.resolve({}),
-      }));
-    });
+    await openPage();
 
     expect(await screen.findByRole('link', { name: /^recent$/i })).toHaveAttribute('href', '/marketplace?sort=recent');
     expect(screen.getAllByRole('link', { name: /share a post/i })[0]).toHaveAttribute(
@@ -170,9 +385,6 @@ describe('MarketplacePage', () => {
   });
 
   it('renders text-only unlocks with note-style previews', async () => {
-    headersMock.mockResolvedValue({
-      get: vi.fn(() => null),
-    });
     getMarketplaceResourceListMock.mockResolvedValue({
       items: [
         {
@@ -237,11 +449,7 @@ describe('MarketplacePage', () => {
       ],
     });
 
-    await act(async () => {
-      render(MarketplacePage({
-        searchParams: Promise.resolve({}),
-      }));
-    });
+    await openPage();
 
     // A text post is labelled "Text", as on the post page (it read "Tip / note").
     expect(await screen.findByText('Text')).toBeInTheDocument();
@@ -252,9 +460,6 @@ describe('MarketplacePage', () => {
   });
 
   it('renders lazy images without attaching video bytes before interaction', async () => {
-    headersMock.mockResolvedValue({
-      get: vi.fn(() => null),
-    });
     getMarketplaceResourceListMock.mockResolvedValue({
       items: [
         createMarketplaceResourceItem({
@@ -299,9 +504,7 @@ describe('MarketplacePage', () => {
 
     let container!: HTMLElement;
     await act(async () => {
-      ({ container } = render(MarketplacePage({
-        searchParams: Promise.resolve({}),
-      })));
+      ({ container } = render(await MarketplacePage()));
     });
 
     const image = await screen.findByRole('img', { name: 'Image post' });

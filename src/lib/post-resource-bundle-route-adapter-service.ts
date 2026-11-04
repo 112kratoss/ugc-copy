@@ -3,7 +3,11 @@ import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
 import { NextResponse } from 'next/server';
 
-import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import {
+  API_CACHE_CONTROL,
+  applyApiResponseHeaders,
+  getViewerAwareApiCacheControl,
+} from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import { isMarketplaceCreatorBlockedForViewer } from '@/lib/marketplace-viewer-filter';
 import {
@@ -44,17 +48,29 @@ function toJsonResponse(result: PostResourceBundleRouteResult) {
   return NextResponse.json(result.body, { status: result.ok ? 200 : result.status });
 }
 
-async function handleResourceBundleGET(
+/** Only a bearer names a viewer here: `createUserClient` reads no cookie. */
+async function getViewerUserId(
   request: Request,
-  context: PostResourceBundleRouteContext,
+  hasAuthorizationHeader: boolean,
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
-  const { postId } = await context.params;
+  if (!hasAuthorizationHeader) return null;
+
   const supabase = dependencies.createUserClient(request);
   const {
     data: { user },
   } = await getVerifiedAuthUserResult(supabase);
-  const viewerUserId = user?.id ?? null;
+  return user?.id ?? null;
+}
+
+async function handleResourceBundleGET(
+  request: Request,
+  context: PostResourceBundleRouteContext,
+  dependencies: ReturnType<typeof resolveDependencies>,
+  hasAuthorizationHeader: boolean,
+) {
+  const { postId } = await context.params;
+  const viewerUserId = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
 
   return toJsonResponse(await dependencies.getPostResourceBundleForRoute({
     postId,
@@ -73,6 +89,14 @@ async function handleResourceBundleGET(
   }));
 }
 
+/**
+ * A visitor's answer (no bearer) is the recipe as any signed-out visitor in
+ * their country reads it, so the edge keeps one copy per country for a minute,
+ * as it does the marketplace listing's: the post page asks it for every
+ * visitor who opens a cash-priced recipe, to price it in their currency. Every
+ * answer read with a bearer is that viewer's (bought, owned, across a block),
+ * and is never stored anywhere; nor is a refusal or an error.
+ */
 export async function getPostResourceBundleRouteResponse({
   context,
   dependencies,
@@ -82,9 +106,18 @@ export async function getPostResourceBundleRouteResponse({
   dependencies?: PostResourceBundleRouteAdapterDependencies;
   request: Request;
 }) {
-  return applyPrivateNoStoreApiResponseHeaders(
-    await handleResourceBundleGET(request, context, resolveDependencies(dependencies)),
+  const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
+  const response = await handleResourceBundleGET(
     request,
+    context,
+    resolveDependencies(dependencies),
+    hasAuthorizationHeader,
+  );
+  return applyApiResponseHeaders(
+    response,
+    request,
+    response.status === 200 ? getViewerAwareApiCacheControl(hasAuthorizationHeader) : API_CACHE_CONTROL.privateNoStore,
+    { vary: ['Authorization', 'x-vercel-ip-country'] },
   );
 }
 

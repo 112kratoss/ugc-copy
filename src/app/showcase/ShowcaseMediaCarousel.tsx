@@ -574,12 +574,14 @@ export default function ShowcaseMediaCarousel({
           ) : (
             // Detail and reel used to render the source through a raw <img>,
             // shipping the uploaded original at full resolution whatever the
-            // frame measured. This is the same optimizer the feed already uses;
-            // it keeps the source as the input rather than the 720px preview,
-            // so the served image is resized but not downgraded.
+            // frame measured, and then ran it through the optimizer. The 1440px
+            // display rendition is the frame's own size (the app's slide since it
+            // existed): it is read straight from storage, and the source stays
+            // the fallback when there is none or it fails to load.
             <OptimizedPreviewImage
               key={activeLoadKey}
-              previewSrc={renderedActiveItem.url}
+              previewSrc={renderedActiveItem.displayUrl || renderedActiveItem.url}
+              fallbackSrc={renderedActiveItem.url}
               alt={title}
               sizes={sizes ?? '(min-width: 1280px) 60vw, 100vw'}
               loading={isDetail ? 'eager' : 'lazy'}

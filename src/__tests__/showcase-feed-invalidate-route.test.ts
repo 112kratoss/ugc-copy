@@ -5,6 +5,7 @@ import { revalidateTag } from 'next/cache';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SHOWCASE_FEED_INVALIDATE_PATH } from '../../scripts/ops/moderation-ops';
+import { PUBLIC_PAGE_CACHE_TAG } from '@/lib/public-page-cache';
 import { routeIdentityPolicy } from '@/lib/route-identity-policy';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import {
@@ -39,15 +40,20 @@ describe('/api/cron/showcase-feed-invalidate', () => {
     vi.unstubAllEnvs();
   });
 
-  it('refreshes the feed tag for a caller with the cron secret', async () => {
+  it('refreshes the feed and the cached public pages for a caller with the cron secret', async () => {
     const response = await callRoute('Bearer secret-123');
 
     expect(response.status).toBe(200);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(response.headers.get('x-request-id')).toBe('feed-invalidate-1');
-    await expect(response.json()).resolves.toEqual({ success: true, invalidated: [SHOWCASE_FEED_CACHE_TAG] });
-    // What every publish, edit and take-down in the app calls.
-    expect(revalidateTag).toHaveBeenCalledExactlyOnceWith(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      invalidated: [SHOWCASE_FEED_CACHE_TAG, PUBLIC_PAGE_CACHE_TAG],
+    });
+    // What every publish, edit and take-down in the app calls: the feed's tag and the pages' tag.
+    expect(revalidateTag).toHaveBeenCalledTimes(2);
+    expect(revalidateTag).toHaveBeenCalledWith(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
+    expect(revalidateTag).toHaveBeenCalledWith(PUBLIC_PAGE_CACHE_TAG, { expire: 0 });
   });
 
   it.each([
@@ -71,7 +77,8 @@ describe('/api/cron/showcase-feed-invalidate', () => {
     vi.stubEnv('CRON_SECRET', '');
     vi.stubEnv('CRON_SECRET_PREVIOUS', '');
     expect((await callRoute('Bearer ')).status).toBe(401);
-    expect(revalidateTag).toHaveBeenCalledTimes(1);
+    // One authorised refresh (two tags), and nothing for the refused call.
+    expect(revalidateTag).toHaveBeenCalledTimes(2);
   });
 
   it('answers 500 when the refresh itself fails', async () => {

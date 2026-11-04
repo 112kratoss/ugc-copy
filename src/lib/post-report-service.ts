@@ -9,7 +9,7 @@ import {
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { invalidateShowcaseFeedCacheOnly } from '@/lib/showcase-feed-cache';
 import {
   parseFeedDeliveryIdField,
   scheduleAuthoritativeFeedEvent,
@@ -88,7 +88,9 @@ export async function submitPostReportForRoute({
   reporterUserId,
   readBody,
   createAdminSupabase,
-  invalidateFeedCache = invalidateShowcaseFeedCache,
+  // The feeds only: a report hides the post from its reporter's feed and
+  // nowhere else until a moderator decides, so no cached public page changes.
+  invalidateFeedCache = invalidateShowcaseFeedCacheOnly,
   runAfterResponse,
   scheduleFeedEvent = scheduleAuthoritativeFeedEvent,
 }: {
@@ -96,7 +98,7 @@ export async function submitPostReportForRoute({
   reporterUserId: string;
   readBody: () => Promise<unknown>;
   createAdminSupabase: () => SupabaseClient;
-  invalidateFeedCache?: typeof invalidateShowcaseFeedCache;
+  invalidateFeedCache?: typeof invalidateShowcaseFeedCacheOnly;
   /**
    * The route passes one so the report's feed event is written behind the
    * answer; without it the event is written, bounded by its timeout, first.

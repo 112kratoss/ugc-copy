@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { MouseEvent, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   FileText,
@@ -85,16 +85,44 @@ function itemDisplayText(item: ShowcaseFeedItem) {
   return item.body?.trim() || item.prompt?.trim() || item.title || 'Creator note';
 }
 
-export function CreatorContentTabs({
-  initialData,
-  profilePath,
-}: {
+type CreatorContentTabsProps = {
   initialData: CreatorProfilePageData;
   profilePath: string;
-}) {
+};
+
+/** What the page reads of its address: `?post=` and `?media=`, for the reel. */
+type CreatorAddressParams = Pick<URLSearchParams, 'get'>;
+
+const NO_ADDRESS_PARAMS: CreatorAddressParams = new URLSearchParams();
+
+/**
+ * The creator page is cached for everyone, and its render never sees the
+ * address (`useSearchParams` makes the prerender skip what reads it). So the
+ * cached HTML draws Posts as an address with no query would, the Suspense
+ * fallback below, and the browser draws them again with the address once the
+ * page is live, where a `?post=` link opens its reel. Anything that renders the
+ * page per request (a dev server) draws the second one at once.
+ */
+export function CreatorContentTabs(props: CreatorContentTabsProps) {
+  return (
+    <Suspense fallback={<CreatorContentTabsView {...props} addressParams={NO_ADDRESS_PARAMS} />}>
+      <CreatorContentTabsAtAddress {...props} />
+    </Suspense>
+  );
+}
+
+function CreatorContentTabsAtAddress(props: CreatorContentTabsProps) {
+  const searchParams = useSearchParams();
+  return <CreatorContentTabsView {...props} addressParams={searchParams ?? NO_ADDRESS_PARAMS} />;
+}
+
+function CreatorContentTabsView({
+  initialData,
+  profilePath,
+  addressParams: searchParams,
+}: CreatorContentTabsProps & { addressParams: CreatorAddressParams }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const { session, user } = useAuth();
   // The server draws Posts. A `#creator-unlocks` or `#creator-tools` link
   // picks its tab once the page is live (below), so hydration meets the

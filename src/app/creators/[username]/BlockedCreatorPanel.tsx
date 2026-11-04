@@ -8,12 +8,22 @@ import { useAuth } from '@/components/AuthProvider';
 import { toastSafetyOutcome, unblockCreatorAfterConfirmation } from '@/lib/feed-safety-actions';
 
 /**
- * Stands where a creator's posts would be when the viewer has blocked them (the
- * server render decides). The viewer is looking at whom they blocked, so the
- * block can be undone here as well as from the blocked list; the page is then
- * drawn again from the server, posts and Follow included.
+ * Stands where a creator's posts would be when the viewer has blocked them. The
+ * viewer is looking at whom they blocked, so the block can be undone here as
+ * well as from the blocked list. The creator page reads the block in the
+ * browser (its server render is the one cached for everyone) and passes
+ * `onUnblocked`, which brings the posts and Follow back; without it the page is
+ * drawn again from the server.
  */
-export function BlockedCreatorPanel({ creatorId, username }: { creatorId: string; username: string }) {
+export function BlockedCreatorPanel({
+  creatorId,
+  username,
+  onUnblocked,
+}: {
+  creatorId: string;
+  username: string;
+  onUnblocked?: () => void;
+}) {
   const router = useRouter();
   const { session } = useAuth();
   const [isUnblocking, setIsUnblocking] = useState(false);
@@ -36,8 +46,13 @@ export function BlockedCreatorPanel({ creatorId, username }: { creatorId: string
     });
     toastSafetyOutcome(outcome);
     setIsUnblocking(false);
+    if (outcome.status !== 'done') return;
+    if (onUnblocked) {
+      onUnblocked();
+      return;
+    }
     // The button stays busy until the unblocked page replaces this panel.
-    if (outcome.status === 'done') startRefresh(() => router.refresh());
+    startRefresh(() => router.refresh());
   };
 
   return (

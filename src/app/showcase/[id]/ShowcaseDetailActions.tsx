@@ -13,6 +13,7 @@ import {
   type PostLifecyclePatch,
   type PostLifecycleTarget,
 } from '@/components/usePostLifecycle';
+import { rememberOwnerPostVisibility } from '@/lib/owner-page-edits';
 import type { PostVisibility } from '@/lib/post-lifecycle-client';
 import { getCurrentInternalPath } from '@/lib/share';
 
@@ -59,12 +60,16 @@ export default function ShowcaseDetailActions({
   }, []);
 
   const handleLifecycleSettled = useCallback((event: PostLifecycleEvent) => {
-    // A private post has no public page to stay on; the others re-render
-    // here with the server's view of the new state.
+    // A private post has no public page to stay on; the others stay here.
     if (event.type === 'visibility') {
       if (event.visibility === 'private') {
         router.push(event.ownerPath ?? `/post/${postId}/edit`);
       } else {
+        // The page is cached for everyone and its tag is invalidated only
+        // after the change's answer was sent, so a refresh now can still get
+        // the old page: the owner's view takes the answer's visibility, and
+        // the refresh drops whatever else the router kept.
+        if (event.visibility) rememberOwnerPostVisibility(postId, event.visibility);
         router.refresh();
       }
       return;

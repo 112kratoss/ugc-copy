@@ -1,12 +1,10 @@
 import type { Metadata } from 'next';
-import { headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
-import { after } from 'next/server';
+import { cache } from 'react';
 
 import { JsonLd } from '@/components/JsonLd';
-import { logBackendError } from '@/lib/backend-logger';
-import { isUserRelationshipBlocked } from '@/lib/moderation-service';
-import { recordPostShareEvent } from '@/lib/post-share-events';
+import { OptionalAuth } from '@/components/RouteAuthBoundary';
+import { cachePublicPageRead } from '@/lib/public-page-cache';
 import {
   getPostReferenceForShowcaseId,
   getPublicPostDetail,
@@ -24,33 +22,76 @@ import {
   composeShowcaseTitle,
   isShowcaseDetailIndexable,
 } from '@/lib/showcase-seo';
-import {
-  SHARE_SOURCE_QUERY_PARAM,
-  SHOWCASE_DELIVERY_QUERY_PARAM,
-  buildShowcaseDetailPath,
-  getShowcaseReturnContext,
-  isGenerationShareSourceSurface,
-  type GenerationShareSourceSurface,
-} from '@/lib/share';
-import { createServiceClient } from '@/lib/server-helpers';
-import { getServerAuthState } from '@/lib/supabase-server';
+import { buildShowcaseDetailPath } from '@/lib/share';
 import ShowcaseDetailBody from './ShowcaseDetailBody';
 
 type ShowcaseDetailPageProps = {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-function shouldTrackShareVisit(headerStore: Headers): boolean {
-  const purpose = headerStore.get('purpose');
-  const prefetchHeader = headerStore.get('next-router-prefetch');
+/**
+ * One render of each post for everyone, kept until an event changes it (ISR).
+ * The page reads the post as a signed-out visitor in no country would, and
+ * never the session, a cookie, a header or the query: everything that depends
+ * on who is looking (their recipe, Owner tools, a block, the way back, a share
+ * visit) is read in the browser by `useShowcasePostViewer`. A private,
+ * archived or moderation-hidden post is not in the read at all
+ * (`getPublicPostDetail`), so it answers not-found for everyone, its owner
+ * included, as it did before.
+ *
+ * Every publish, edit, visibility change, archive, delete, console moderation
+ * decision, profile change and account deletion invalidates the public pages'
+ * tag (`PUBLIC_PAGE_CACHE_TAG`), which the read below carries into this page's
+ * cache entry; a block or a report does not, as the page draws neither.
+ * `revalidate` is the backstop for what moves without one: counts, and a
+ * take-down made with the moderation CLI (PUBLIC_PAGE_REVALIDATE_SECONDS says
+ * why five minutes; kept equal to it).
+ */
+export const revalidate = 300;
 
-  return purpose !== 'prefetch' && prefetchHeader === null;
+/** No post is drawn at build time; each is drawn on its first visit, then cached. */
+export async function generateStaticParams(): Promise<Array<{ id: string }>> {
+  return [];
 }
 
-function getParam(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
+type ShowcasePostPageRead =
+  /** `readAt`: when the post was read, which the cached HTML's "3h" counts from. */
+  | { kind: 'post'; detail: PublicPostDetail; readAt: number }
+  | { kind: 'redirect'; postId: string }
+  | { kind: 'missing' };
+
+/**
+ * A post id is the common case, so its row is read first and only a miss
+ * looks for a legacy generation id to redirect: an ordinary open reads the
+ * post once, not once to resolve the id and again to show it.
+ */
+async function readShowcasePostPage(id: string): Promise<ShowcasePostPageRead> {
+  const detail = await getPublicPostDetail(id);
+  if (detail) {
+    return { kind: 'post', detail, readAt: Date.now() };
+  }
+
+  const reference = await getPostReferenceForShowcaseId(id);
+  return reference && reference.id !== id
+    ? { kind: 'redirect', postId: reference.id }
+    : { kind: 'missing' };
 }
+
+const readCachedShowcasePostPage = cachePublicPageRead(readShowcasePostPage, ['showcase-post-page-v1']);
+
+/** A post id, and a legacy generation id, are both UUIDs. */
+const SHOWCASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * One read per render, shared by the metadata and the page. Anything but a
+ * UUID is no post: it answers not-found before any read, so an address made
+ * up by a crawler costs no database read or data-cache entry (Next still keeps
+ * the not-found page for that address), and the database never sees text
+ * where it expects a UUID.
+ */
+const loadShowcasePostPage = cache((id: string): Promise<ShowcasePostPageRead> => (
+  SHOWCASE_ID_PATTERN.test(id) ? readCachedShowcasePostPage(id) : Promise.resolve({ kind: 'missing' })
+));
 
 /**
  * The card a shared link renders in a chat app.
@@ -71,19 +112,36 @@ function resolveShowcaseOgImage(detail: PublicPostDetail): MetadataImage | undef
     ? { width: cover.width, height: cover.height }
     : {};
 
-  if (detail.mediaKind === 'image' && detail.mediaUrl) {
-    return { url: detail.mediaUrl, ...dimensions };
+  const image = detail.mediaKind === 'image' ? durableMediaUrl(detail.mediaUrl) : undefined;
+  if (image) {
+    return { url: image, ...dimensions };
   }
 
-  if (cover?.previewUrl && cover.previewStatus === 'ready') {
-    return { url: cover.previewUrl, ...dimensions };
+  const poster = cover?.previewStatus === 'ready' ? durableMediaUrl(cover.previewUrl) : undefined;
+  if (poster) {
+    return { url: poster, ...dimensions };
   }
 
   // Legacy posts predating post_media carry no poster at all, and a freshly
   // published video's poster is still rendering. Both fall back to the site
-  // card rather than to a signed generation URL, which expires in an hour and
-  // would leave crawlers caching a dead image.
+  // card, as a legacy image kept only in its creator's folder does: its only
+  // address is a signed one, which would leave crawlers caching a dead image.
   return undefined;
+}
+
+/**
+ * An address that still works when a crawler or a search engine comes back to
+ * it: never a signed Storage link, which runs out within hours (a legacy
+ * post's cover kept only in its creator's folder has no other). Public
+ * showcase addresses and the media proxy's are kept.
+ */
+function durableMediaUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url, 'https://magicbooklet.com').pathname.includes('/storage/v1/object/sign/') ? undefined : url;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -109,11 +167,11 @@ function buildShowcaseMediaSchema(detail: PublicPostDetail) {
     ? buildVideoObjectSchema({
       ...shared,
       thumbnailUrl: ogImage?.url,
-      contentUrl: detail.mediaUrl ?? undefined,
+      contentUrl: durableMediaUrl(detail.mediaUrl),
     })
     : buildImageObjectSchema({
       ...shared,
-      contentUrl: detail.mediaUrl ?? undefined,
+      contentUrl: durableMediaUrl(detail.mediaUrl),
     });
 
   return [
@@ -126,68 +184,27 @@ function buildShowcaseMediaSchema(detail: PublicPostDetail) {
   ];
 }
 
-/**
- * A share visit means someone arrived from a link that left the product. Shared
- * URLs carry `?s=<surface>`; in-app links never do, so the marker is the test —
- * and it names the surface the share came from, which the landing page has no
- * other way to know.
- */
-function getShareVisitSurface(
-  value: string | undefined
-): GenerationShareSourceSurface | null {
-  if (!value) {
-    return null;
-  }
-
-  return isGenerationShareSourceSurface(value) ? value : 'detail-page';
-}
-
-/**
- * A block either way hides the post, as the app's by-id read hides it
- * (`attachViewerStateToFeed`) and as blocking promises ("You will stop seeing
- * their posts"). It fails closed like that read: a relationship that could not
- * be checked is treated as a block, never as clear.
- */
-async function isBlockedBetween(viewerUserId: string | null, creatorId: string | null): Promise<boolean> {
-  if (!viewerUserId || !creatorId || creatorId === viewerUserId) {
-    return false;
-  }
-
-  try {
-    return await isUserRelationshipBlocked({
-      adminSupabase: createServiceClient(),
-      firstUserId: viewerUserId,
-      secondUserId: creatorId,
-    });
-  } catch (error) {
-    logBackendError('failed_to_verify_block_state_for_post_page', { error });
-    return true;
-  }
-}
-
 export async function generateMetadata({ params }: ShowcaseDetailPageProps): Promise<Metadata> {
   const { id } = await params;
-  // As the page reads it: the post's own row first, the legacy reference only
-  // when no post has this id. The metadata never draws the recipe's teaser.
-  const detail = await getPublicPostDetail(id, { countLockedRecipeReferences: false });
+  const page = await loadShowcasePostPage(id);
 
-  if (!detail) {
-    const reference = await getPostReferenceForShowcaseId(id);
-    if (reference && reference.id !== id) {
-      return {
-        title: 'Creation Redirect',
-        robots: {
-          index: false,
-          follow: true,
-        },
-      };
-    }
+  if (page.kind === 'redirect') {
+    return {
+      title: 'Creation Redirect',
+      robots: {
+        index: false,
+        follow: true,
+      },
+    };
+  }
 
+  if (page.kind === 'missing') {
     return {
       title: 'Creation Not Found',
     };
   }
 
+  const { detail } = page;
   return createMetadata({
     title: composeShowcaseTitle(detail),
     description: getPublicPostMetaDescription(detail),
@@ -204,83 +221,35 @@ export async function generateMetadata({ params }: ShowcaseDetailPageProps): Pro
  * The one and only post surface — a direct visit, a refresh, a shared link, or
  * a click from the feed all land here. Opening a post used to be intercepted
  * into an overlay; that slot is gone, so every route in the app now arrives at
- * this page and gets the share-visit tracking, the legacy-id redirect, and
- * `notFound()` alike.
+ * this page and gets the legacy-id redirect and `notFound()` alike, and, in
+ * the browser, the share-visit tracking and the way back its link names.
  */
-export default async function ShowcaseDetailPage({ params, searchParams }: ShowcaseDetailPageProps) {
+export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageProps) {
   const { id } = await params;
-  const resolvedSearchParams = searchParams ? await searchParams : {};
-  const returnFrom = getParam(resolvedSearchParams.from);
-  const returnTo = getParam(resolvedSearchParams.returnTo);
-  const returnContext = getShowcaseReturnContext({
-    from: returnFrom,
-    returnTo,
-  });
-  // The delivery of the ranked card that opened this page, when one did: a
-  // report or a comment filed here is credited to that card. It is not checked
-  // here: the server keeps it only when it is a delivery of this post to this
-  // viewer, so an id in a pasted link credits no one.
-  const deliveryId = getParam(resolvedSearchParams[SHOWCASE_DELIVERY_QUERY_PARAM])?.trim() || null;
+  const page = await loadShowcasePostPage(id);
 
-  // Independent of each other, so pay for one round trip rather than two.
-  const [auth, headerStore] = await Promise.all([getServerAuthState(), headers()]);
-  const viewerUserId = auth.session?.user?.id ?? null;
-  // A post id is the common case, so its row is read first and only a miss
-  // looks for a legacy generation id to redirect: an ordinary open reads the
-  // post once, not once to resolve the id and again to show it.
-  const detail = await getPublicPostDetail(id, {
-    viewerUserId,
-    countryCode: headerStore.get('x-vercel-ip-country'),
-  });
+  if (page.kind === 'redirect') {
+    // To the post's own address. The cached redirect cannot carry the query
+    // of the link that reached it (the page never reads one), so a legacy id
+    // opened from a ranked card lands without its way back or delivery.
+    redirect(buildShowcaseDetailPath(page.postId));
+  }
 
-  if (!detail) {
-    const reference = await getPostReferenceForShowcaseId(id);
-    if (reference && reference.id !== id) {
-      redirect(buildShowcaseDetailPath(reference.id, {
-        from: returnContext.source,
-        returnTo: returnContext.href,
-        deliveryId,
-      }));
-    }
-
+  if (page.kind === 'missing') {
     notFound();
   }
 
-  if (await isBlockedBetween(viewerUserId, detail.creator.id)) {
-    notFound();
-  }
-
-  // Deferred with `after` so an analytics write never sits between the click and
-  // the post appearing — nothing in this render depends on its result, and the
-  // recorder swallows its own failures.
-  const shareVisitSurface = getShareVisitSurface(
-    getParam(resolvedSearchParams[SHARE_SOURCE_QUERY_PARAM])
-  );
-
-  if (
-    detail.visibility === 'public'
-    && shareVisitSurface
-    && !returnFrom
-    && shouldTrackShareVisit(headerStore)
-  ) {
-    after(recordPostShareEvent({
-      postId: detail.id,
-      eventType: 'share_visit',
-      sourceSurface: shareVisitSurface,
-    }));
-  }
-
+  const { detail, readAt } = page;
   return (
-    <>
+    <OptionalAuth>
       {isShowcaseDetailIndexable(detail) ? (
         <JsonLd data={buildShowcaseMediaSchema(detail)} />
       ) : null}
       <ShowcaseDetailBody
         detail={detail}
-        viewerUserId={viewerUserId}
-        returnContext={returnContext}
-        deliveryId={deliveryId}
+        shareDescription={getPublicPostMetaDescription(detail)}
+        renderedAt={readAt}
       />
-    </>
+    </OptionalAuth>
   );
 }
