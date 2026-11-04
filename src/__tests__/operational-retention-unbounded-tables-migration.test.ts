@@ -79,8 +79,12 @@ describe('the operational retention migration for the unbounded tables', () => {
     }
   });
 
-  it('takes the playback phases\' day from the database\'s clock when a caller\'s is ahead', () => {
+  it('runs every phase on the database\'s clock when a caller\'s is ahead', () => {
+    expect(fn).toContain('v_now timestamptz := least(coalesce(p_now, now()), now());');
     expect(fn).toContain("v_today timestamptz := date_trunc('day', least(coalesce(p_now, now()), now()), 'UTC');");
+    // No phase reads the caller's clock directly.
+    const body = fn.slice(fn.indexOf('BEGIN'));
+    expect(body).not.toMatch(/\bp_now\b/);
   });
 
   it('rolls a finished playback day up before any of its raw rows may be deleted', () => {

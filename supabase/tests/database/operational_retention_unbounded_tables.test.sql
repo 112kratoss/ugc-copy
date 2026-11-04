@@ -274,6 +274,14 @@ select is(
   2,
   'and today''s raw rows are all still there'
 );
+-- Two days ahead is past the one-day window of a lock still held (until a
+-- minute from now) and of one that expired an hour ago: the database's clock
+-- keeps both, as it keeps the lock re-acquired above.
+select is(
+  (select array_agg(name order by name) from public.backend_job_locks where name like 'retention-fixture:%'),
+  array['retention-fixture:held', 'retention-fixture:just-expired', 'retention-fixture:long-expired'],
+  'no lock is deleted by a caller''s clock ahead of the database''s, least of all one still held'
+);
 
 -- ─── A finished day is rolled up once ────────────────────────────────────────
 

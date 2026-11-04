@@ -31,7 +31,9 @@
 -- them. Each phase is a bounded batch that skips rows a live writer holds, like
 -- the phases before it; the job calls the function again while a batch comes
 -- back full (src/lib/operational-data-retention.ts), so the cap bounds a
--- transaction, not a day.
+-- transaction, not a day. Every phase, the old ones included, now runs on the
+-- caller's clock but never a later one than the database's, as the idle-guest
+-- lists do: a caller's clock running ahead cannot make anything expire sooner.
 --
 -- The signature gains five trailing parameters with defaults, so the old
 -- eight-parameter function is dropped first: keeping both would make every
@@ -214,11 +216,13 @@ DECLARE
   v_ai_usage_payloads_cleared integer := 0;
   v_unread_notifications_deleted integer := 0;
   v_expired_job_locks_deleted integer := 0;
-  v_now timestamptz := coalesce(p_now, now());
+  -- The sweep's clock: the caller's, never later than the database's own. A
+  -- caller's clock ahead of it cannot make any row expire sooner: not delete a
+  -- lock still held, nor roll up a day still taking rows, nor prune a day early.
+  -- An earlier one (a backfill, a test's 1901) is taken as given.
+  v_now timestamptz := least(coalesce(p_now, now()), now());
   v_max_deletes integer := greatest(1, coalesce(p_max_deletes_per_table, 5000));
-  -- The UTC day the playback phases treat as unfinished, never later than the
-  -- database's own: a caller's clock ahead of it cannot roll up a day that is
-  -- still taking rows, nor prune a day sooner.
+  -- The UTC day the playback phases treat as unfinished.
   v_today timestamptz := date_trunc('day', least(coalesce(p_now, now()), now()), 'UTC');
 BEGIN
   IF p_job_run_retention_days < 1
