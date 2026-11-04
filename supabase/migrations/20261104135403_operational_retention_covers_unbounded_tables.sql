@@ -216,7 +216,10 @@ DECLARE
   v_expired_job_locks_deleted integer := 0;
   v_now timestamptz := coalesce(p_now, now());
   v_max_deletes integer := greatest(1, coalesce(p_max_deletes_per_table, 5000));
-  v_today timestamptz := date_trunc('day', coalesce(p_now, now()), 'UTC');
+  -- The UTC day the playback phases treat as unfinished, never later than the
+  -- database's own: a caller's clock ahead of it cannot roll up a day that is
+  -- still taking rows, nor prune a day sooner.
+  v_today timestamptz := date_trunc('day', least(coalesce(p_now, now()), now()), 'UTC');
 BEGIN
   IF p_job_run_retention_days < 1
      OR p_skipped_job_run_retention_days < 1

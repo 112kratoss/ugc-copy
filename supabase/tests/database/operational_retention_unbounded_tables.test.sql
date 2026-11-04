@@ -254,6 +254,27 @@ select is(
   'the summary names every new phase'
 );
 
+-- ─── A caller's clock ahead of the database's ────────────────────────────────
+
+-- Asked as of tomorrow, the sweep still treats today as unfinished: today's
+-- raw rows are neither rolled up nor pruned.
+select lives_ok(
+  $$ select public.prune_operational_backend_data(p_now => now() + interval '2 days') $$,
+  'a sweep asked as of the day after tomorrow runs'
+);
+select is(
+  (select count(*)::integer from public.playback_metrics_daily_rollup
+   where day = date_trunc('day', now(), 'UTC')),
+  0,
+  'today is not rolled up while it still takes rows, whatever the caller''s clock says'
+);
+select is(
+  (select count(*)::integer from public.playback_metrics
+   where received_at >= date_trunc('day', now(), 'UTC') and session_id like 'fixture-today-%'),
+  2,
+  'and today''s raw rows are all still there'
+);
+
 -- ─── A finished day is rolled up once ────────────────────────────────────────
 
 -- A row that somehow lands in a day already rolled up does not reopen it: its

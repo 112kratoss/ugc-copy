@@ -79,6 +79,10 @@ describe('the operational retention migration for the unbounded tables', () => {
     }
   });
 
+  it('takes the playback phases\' day from the database\'s clock when a caller\'s is ahead', () => {
+    expect(fn).toContain("v_today timestamptz := date_trunc('day', least(coalesce(p_now, now()), now()), 'UTC');");
+  });
+
   it('rolls a finished playback day up before any of its raw rows may be deleted', () => {
     const rollup = fn.indexOf('INSERT INTO public.playback_metrics_daily_rollup');
     const prune = fn.indexOf('DELETE FROM public.playback_metrics AS metrics');
