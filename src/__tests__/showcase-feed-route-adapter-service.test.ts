@@ -151,8 +151,9 @@ describe('showcase feed route adapter service', () => {
       resetAt: new Date().toISOString(),
     }));
     const response = await getShowcaseFeedRouteResponse({
+      // A browser's first fetch from our pages: no feed cookie yet.
       request: new Request('http://localhost/api/showcase/feed', {
-        headers: { 'x-request-id': 'feed-adapter-smart-1' },
+        headers: { 'x-request-id': 'feed-adapter-smart-1', 'sec-fetch-site': 'same-origin' },
       }),
       dependencies: {
         createServiceClient: vi.fn(() => ({}) as SupabaseClient),
@@ -187,6 +188,100 @@ describe('showcase feed route adapter service', () => {
       sort: 'for-you',
       viewerUserId: null,
     }));
+  });
+
+  // Usage audit (2026-11-04): a caller with no cookie and no installation id
+  // that is not a browser on our pages got a fresh id per request, and with it
+  // a ranked session and facts nobody came back to.
+  describe('a caller with no identity at all', () => {
+    function identitylessDependencies(getShowcaseFeedPageMock: ReturnType<typeof vi.fn>, cookieValueToSet: string | null) {
+      return {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        enforceBackendRateLimit: vi.fn(async () => ({
+          allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: new Date().toISOString(),
+        })),
+        getFeedNetworkKeyHash: vi.fn(() => 'anonymous-network-hash'),
+        resolveFeedAnonymousIdentity: vi.fn(() => ({
+          anonymousKeyHash: 'anonymous-feed-hash',
+          cookieValueToSet,
+          source: 'web-cookie' as const,
+        })),
+        getShowcaseFeedPage: getShowcaseFeedPageMock as unknown as typeof getShowcaseFeedPage,
+      };
+    }
+
+    it('is served the shared cached first page, with no identity to rank or persist for', async () => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?limit=12'),
+        dependencies: identitylessDependencies(getShowcaseFeedPageMock, `fid_${'b'.repeat(64)}`),
+      });
+
+      expect(response.status).toBe(200);
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+        sort: 'for-you',
+        offset: 0,
+        viewerUserId: null,
+        anonymousKeyHash: null,
+        cursor: null,
+        bypassCache: false,
+      }));
+      // The cookie is still offered: a client that keeps it is an
+      // anonymous-cookie viewer, ranked and logged, from its next request.
+      expect(response.headers.get('set-cookie')).toContain(`__Host-magicbooklet-feed-id=fid_${'b'.repeat(64)}`);
+      expect(response.headers.get('Cache-Control')).toBe('private, no-store');
+    });
+
+    it.each(['cross-site', 'none'])('treats a %s fetch as a caller with no identity', async (site) => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed', { headers: { 'sec-fetch-site': site } }),
+        dependencies: identitylessDependencies(getShowcaseFeedPageMock, `fid_${'c'.repeat(64)}`),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({ anonymousKeyHash: null, bypassCache: false }));
+    });
+
+    it.each(['same-origin', 'same-site'])('keeps a browser\'s first %s fetch on the ranked, logged path', async (site) => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed', { headers: { 'sec-fetch-site': site } }),
+        dependencies: identitylessDependencies(getShowcaseFeedPageMock, `fid_${'d'.repeat(64)}`),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+        anonymousKeyHash: 'anonymous-feed-hash',
+        bypassCache: true,
+      }));
+    });
+
+    it('keeps an anonymous-cookie viewer on the ranked path whatever it sends', async () => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed'),
+        dependencies: identitylessDependencies(getShowcaseFeedPageMock, null),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+        anonymousKeyHash: 'anonymous-feed-hash',
+        bypassCache: true,
+      }));
+      expect(response.headers.get('set-cookie')).toBeNull();
+    });
+
+    it('continues nobody\'s session: a cursor it sends finds no session of a null identity', async () => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?cursor=eyJzIjoiYSIsInAiOjEyfQ'),
+        dependencies: identitylessDependencies(getShowcaseFeedPageMock, `fid_${'e'.repeat(64)}`),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+        anonymousKeyHash: null,
+        cursor: 'eyJzIjoiYSIsInAiOjEyfQ',
+        bypassCache: true,
+      }));
+    });
   });
 
   it.each(['video', 'media'])('passes the %s filter with viewer auth and disables shared caching', async (category) => {

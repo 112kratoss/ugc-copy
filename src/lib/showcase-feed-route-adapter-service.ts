@@ -25,6 +25,7 @@ import {
   FEED_ANONYMOUS_COOKIE_MAX_AGE_SECONDS,
   FEED_ANONYMOUS_COOKIE_NAME,
   getFeedNetworkKeyHash,
+  isSameSiteBrowserFetch,
   resolveFeedAnonymousIdentity,
 } from '@/lib/showcase-feed-identity';
 import {
@@ -163,7 +164,19 @@ async function handleShowcaseFeedGET(
     const anonymousIdentity = viewerUserId || sort !== 'for-you'
       ? null
       : dependencies.resolveFeedAnonymousIdentity(request);
-    const anonymousKeyHash = anonymousIdentity?.anonymousKeyHash ?? null;
+    // A caller with no identity at all (no feed cookie and no installation id)
+    // that is not a browser fetching from our own pages: a script, crawler or
+    // unfurler. It would get a fresh id on every request, and with each one a
+    // ranked session and delivery facts nobody comes back to (usage audit,
+    // 2026-11-04). It gets the shared first page instead, ranked once for every
+    // identity-less reader and cached, and nothing is persisted for it. The
+    // cookie is still offered, so a client that keeps it is an anonymous-cookie
+    // viewer from its next request on. A browser's own first fetch keeps the
+    // ranked, logged path: it is a person's first page, and the training data
+    // and its Load more cursor both start there.
+    const identityless = Boolean(anonymousIdentity?.cookieValueToSet)
+      && !isSameSiteBrowserFetch(request);
+    const anonymousKeyHash = identityless ? null : anonymousIdentity?.anonymousKeyHash ?? null;
 
     // Every sort is limited, not just for-you. The others were left open on the
     // reasoning that they are cheap cached reads, but `top-sales` scans every
@@ -230,8 +243,9 @@ async function handleShowcaseFeedGET(
       countryCode: request.headers.get('x-vercel-ip-country'),
       // The cached feed contains viewer-neutral data. Saved/purchased state is
       // attached after the cache read, so authenticated readers can safely
-      // share the same base page instead of rebuilding it per request.
-      bypassCache: sort === 'for-you' || Boolean(cursor),
+      // share the same base page instead of rebuilding it per request. An
+      // identity-less For you first page is the cached bootstrap.
+      bypassCache: (sort === 'for-you' && !identityless) || Boolean(cursor),
       ...(readAheadToken ? { readAheadToken } : {}),
       ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
     });

@@ -103,3 +103,18 @@ export function resolveFeedAnonymousIdentity(request: Request): FeedAnonymousIde
 export function getFeedAnonymousKeyHash(request: Request) {
   return resolveFeedAnonymousIdentity(request).anonymousKeyHash;
 }
+
+/**
+ * Whether a request is a browser's fetch from a page of this site. Browsers
+ * stamp `Sec-Fetch-Site` on every fetch they make; a script, crawler or link
+ * unfurler calling the API directly sends none (or `cross-site`/`none`).
+ *
+ * The feed reads it to tell a browser's very first request, which arrives
+ * before its feed cookie exists and is a person's first page, from a caller
+ * that will never send a cookie at all. It is not a security boundary: a
+ * caller that forges it gets exactly what a first-time visitor gets.
+ */
+export function isSameSiteBrowserFetch(request: Request) {
+  const site = request.headers.get('sec-fetch-site');
+  return site === 'same-origin' || site === 'same-site';
+}
