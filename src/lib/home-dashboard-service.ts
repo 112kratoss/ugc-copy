@@ -63,16 +63,7 @@ export async function loadHomeWhatsNewModels(): Promise<HomeWhatsNewModel[]> {
   }
 }
 
-/**
- * `viewerUserId` is null for the signed-out home, which is also the
- * `unstable_cache`-eligible path inside `getShowcaseFeedPage` — so the static
- * `/` render shares one cached feed across all anonymous visitors.
- */
-export async function loadHomeFeed({
-  viewerUserId,
-  chip,
-  countryCode = null,
-}: {
+type HomeFeedRequest = {
   viewerUserId: string | null;
   chip: FeedChip;
   /**
@@ -81,19 +72,35 @@ export async function loadHomeFeed({
    * static and shared, so it stays null there.
    */
   countryCode?: string | null;
-}): Promise<ShowcaseFeedPage | null> {
+};
+
+/**
+ * Page one of a home feed lane. Throws when the feed cannot be read: the
+ * signed-out home's cached read (`anonymous-home-data.ts`) must not keep a
+ * failure for its whole window.
+ */
+export function readHomeFeed({
+  viewerUserId,
+  chip,
+  countryCode = null,
+}: HomeFeedRequest): Promise<ShowcaseFeedPage> {
+  return getShowcaseFeedPage({
+    category: chip.category,
+    sort: chip.sort,
+    unlock: chip.unlock,
+    resource: 'all',
+    offset: 0,
+    limit: FEED_PAGE_SIZE,
+    viewerUserId,
+    tool: null,
+    countryCode,
+  });
+}
+
+/** Page one of the signed-in home's lane, or null when it cannot be read. */
+export async function loadHomeFeed(request: HomeFeedRequest): Promise<ShowcaseFeedPage | null> {
   try {
-    return await getShowcaseFeedPage({
-      category: chip.category,
-      sort: chip.sort,
-      unlock: chip.unlock,
-      resource: 'all',
-      offset: 0,
-      limit: FEED_PAGE_SIZE,
-      viewerUserId,
-      tool: null,
-      countryCode,
-    });
+    return await readHomeFeed(request);
   } catch (error) {
     logBackendError('home_dashboard_feed_load_failed', { error });
     return null;

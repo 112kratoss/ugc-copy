@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { HomeShelfItem } from '@/lib/home-shelf';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
+import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 
 const getServerAuthStateMock = vi.fn();
 const headersMock = vi.fn();
@@ -15,6 +16,44 @@ const loadPublishedGenerationModelCatalogMock = vi.fn();
 const feedClientPropsMock = vi.fn();
 const getInlineShowcasePriorityPosterMock = vi.fn();
 const loadHomeShelfMock = vi.fn();
+
+/**
+ * What one render reported to Next's cache, under Next's rule for a
+ * prerendered page (`unstable_cache` in next/dist/server/web/spec-extension):
+ * the page is rebuilt at the shortest `revalidate` that a cached read made by
+ * the render itself reports, and carries those reads' tags, while a cached read
+ * made inside another one reports nothing.
+ */
+const renderCache = vi.hoisted(() => ({
+  shortestRevalidate: Number.POSITIVE_INFINITY,
+  tags: new Set<string>(),
+}));
+
+vi.mock('next/cache', async () => {
+  const { AsyncLocalStorage } = await import('node:async_hooks');
+  const insideCachedRead = new AsyncLocalStorage<boolean>();
+  return {
+    revalidateTag: vi.fn(),
+    unstable_cache: <Args extends unknown[], Result>(
+      read: (...args: Args) => Promise<Result>,
+      _keyParts?: string[],
+      options: { revalidate?: number | false; tags?: string[] } = {},
+    ) => (...args: Args): Promise<Result> => {
+      if (!insideCachedRead.getStore()) {
+        if (typeof options.revalidate === 'number') {
+          renderCache.shortestRevalidate = Math.min(renderCache.shortestRevalidate, options.revalidate);
+        }
+        for (const tag of options.tags ?? []) renderCache.tags.add(tag);
+      }
+      return insideCachedRead.run(true, () => read(...args));
+    },
+  };
+});
+
+/** How long the page just rendered would be kept: its own export or a shorter read's. */
+function renderedWindow(pageRevalidate: number) {
+  return Math.min(pageRevalidate, renderCache.shortestRevalidate);
+}
 
 vi.mock('@/lib/supabase-server', () => ({
   getServerAuthState: () => getServerAuthStateMock(),
@@ -41,7 +80,11 @@ vi.mock('@/lib/server-helpers', () => ({
 
 vi.mock('@/lib/home-shelf-server', () => ({
   homeShelfHasEnoughPins: () => true,
-  loadHomeShelf: (identity?: unknown) => loadHomeShelfMock(identity),
+  loadHomeShelfForApi: (identity?: unknown) => loadHomeShelfMock(identity),
+  withoutPost: ({ post, ...creation }: Record<string, unknown>) => {
+    void post;
+    return creation;
+  },
 }));
 
 vi.mock('@/lib/showcase-priority-poster', () => ({
@@ -147,6 +190,8 @@ describe('Anonymous home cacheability', () => {
     getInlineShowcasePriorityPosterMock.mockResolvedValue(null);
     loadHomeShelfMock.mockReset();
     loadHomeShelfMock.mockResolvedValue(SHELF);
+    renderCache.shortestRevalidate = Number.POSITIVE_INFINITY;
+    renderCache.tags.clear();
     getServerAuthStateMock.mockImplementation(() => {
       throw new Error('Anonymous home must not read server auth — / must stay statically prerenderable');
     });
@@ -182,8 +227,66 @@ describe('Anonymous home cacheability', () => {
     expect(getServerAuthStateMock).not.toHaveBeenCalled();
     expect(headersMock).not.toHaveBeenCalled();
     expect(cookiesMock).not.toHaveBeenCalled();
-    expect(pageModule.revalidate).toBe(60);
     expect(pageModule.metadata).toBeDefined();
+  });
+
+  it('is rebuilt at most once an hour, though the feed and shelf caches it reads keep a minute and five', async () => {
+    const { unstable_cache } = await import('next/cache');
+    const { ANONYMOUS_HOME_REVALIDATE_SECONDS } = await import('@/lib/anonymous-home-data');
+    // Stand-ins for the feed's own 60-second cache and the shelf's 5-minute
+    // one, which serve the API and the app as well. At 60 seconds Sentry's
+    // once-a-minute uptime check rebuilt this page about 8,200 times a week.
+    const feedsOwnCache = unstable_cache(
+      async () => ({
+        items: [buildFeedItem('a')],
+        availableTools: [],
+        pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 },
+      }),
+      ['feed'],
+      { revalidate: 60, tags: [SHOWCASE_FEED_CACHE_TAG] },
+    );
+    getShowcaseFeedPageMock.mockImplementation(() => feedsOwnCache());
+    const shelfsOwnCache = unstable_cache(async () => SHELF, ['shelf'], {
+      revalidate: 300,
+      tags: [SHOWCASE_FEED_CACHE_TAG],
+    });
+    loadHomeShelfMock.mockImplementation(() => shelfsOwnCache());
+    const pageModule = await import('@/app/page');
+
+    const html = await renderPageToHtml(<pageModule.default />);
+
+    expect(html).toContain('feed-client');
+    expect(html).toContain('Make this');
+    // Next needs the literal in the page; the reads are cached for as long.
+    expect(pageModule.revalidate).toBe(3600);
+    expect(pageModule.revalidate).toBe(ANONYMOUS_HOME_REVALIDATE_SECONDS);
+    expect(renderedWindow(pageModule.revalidate)).toBe(3600);
+    // The feed's tag is on the page, so a publish, an edit, a delete or a
+    // take-down rebuilds it at its next visit rather than within the hour.
+    expect([...renderCache.tags]).toEqual([SHOWCASE_FEED_CACHE_TAG]);
+  });
+
+  it('is rebuilt a minute later when it had to go without its feed', async () => {
+    getShowcaseFeedPageMock.mockRejectedValue(new Error('feed offline'));
+    const pageModule = await import('@/app/page');
+
+    await renderPageToHtml(<pageModule.default />);
+
+    expect(feedClientPropsMock).toHaveBeenCalledWith(expect.objectContaining({ initialFeed: null }));
+    expect(renderedWindow(pageModule.revalidate)).toBe(60);
+  });
+
+  it('is rebuilt a minute later when it had to go without its shelf', async () => {
+    loadHomeShelfMock.mockRejectedValue(new Error('shelf offline'));
+    const pageModule = await import('@/app/page');
+
+    const html = await renderPageToHtml(<pageModule.default />);
+    const container = document.createElement('div');
+    container.innerHTML = html;
+
+    expect(container.querySelector('.home-shelf')).toBeNull();
+    expect(html).toContain('feed-client');
+    expect(renderedWindow(pageModule.revalidate)).toBe(60);
   });
 
   it('loads the identityless (cache-eligible) feed lane', async () => {
@@ -306,8 +409,8 @@ describe('Anonymous home cacheability', () => {
     container.innerHTML = html;
 
     // Part of the prerender, so the cards are in the first HTML; the signed-out
-    // page asks for no viewer, which keeps it shared and cacheable.
-    expect(loadHomeShelfMock).toHaveBeenCalledWith(undefined);
+    // page asks as a signed-out visitor, which keeps it shared and cacheable.
+    expect(loadHomeShelfMock).toHaveBeenCalledWith({ viewerUserId: null, isAnonymous: false });
     // One shelf, no placeholder beside it: a fallback on this boundary would be
     // written into the prerendered HTML next to the resolved shelf.
     expect(container.querySelectorAll('.home-shelf')).toHaveLength(1);
