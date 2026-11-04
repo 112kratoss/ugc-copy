@@ -2633,6 +2633,17 @@
       "headers": {
         "Vary": "Authorization, Cookie",
         "Location": "https://project.supabase.co/storage/v1/object/sign/post_media/private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg?token=short-lived"
+      },
+      "responseVariants": {
+        "publicPost": {
+          "cacheControl": "private, max-age=3000",
+          "status": 302,
+          "response": null,
+          "headers": {
+            "Vary": "Authorization, Cookie",
+            "Location": "https://project.supabase.co/storage/v1/object/sign/post_media/private-posts/b9100000-0000-4000-8000-000000000001/photo.jpg?token=one-hour"
+          }
+        }
       }
     },
     "recordReferralVisit": {

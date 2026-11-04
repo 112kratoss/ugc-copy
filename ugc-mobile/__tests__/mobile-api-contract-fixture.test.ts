@@ -1087,10 +1087,15 @@ describe('mobile shared API v1 contract fixture', () => {
   });
 });
 
- it('keeps uploaded-media redirects optional-auth and uncacheable', () => {
-  expect(mobileApiContract.endpoints.readPostMedia).toMatchObject({
+ it('keeps uploaded-media redirects optional-auth, and lets only a public post\'s be kept, by the device alone', () => {
+  const media = mobileApiContract.endpoints.readPostMedia;
+  expect(media).toMatchObject({
     path: '/api/media', auth: 'optional', status: 302, cacheControl: 'private, no-store',
   });
+  // Media anyone may read right now: the player's own cache may keep the
+  // redirect for a while, a shared cache never.
+  expect(media.responseVariants.publicPost).toMatchObject({ status: 302, headers: { Vary: media.headers.Vary } });
+  expect(media.responseVariants.publicPost.cacheControl).toMatch(/^private, max-age=\d+$/);
 });
 
 it.each(['getImageGeneration', 'getVideoGeneration', 'getMotionGeneration'] as const)(

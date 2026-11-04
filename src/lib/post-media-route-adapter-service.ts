@@ -6,7 +6,8 @@ import { createMediaSupabaseClient } from '@/lib/media-route-shared';
 import { parsePrivatePostMediaPath, readPostMedia } from '@/lib/post-media-read-service';
 import { createServiceClient } from '@/lib/server-helpers';
 
-const headers = { 'Cache-Control': 'private, no-store', Vary: 'Authorization, Cookie' };
+const vary = 'Authorization, Cookie';
+const headers = { 'Cache-Control': 'private, no-store', Vary: vary };
 
 type Dependencies = {
   createMediaSupabaseClient: typeof createMediaSupabaseClient;
@@ -28,11 +29,21 @@ export async function getPostMediaRouteResponse(request: Request, overrides: Par
     if (!identity.ok && (identity.status !== 401 || request.headers.has('authorization'))) {
       return NextResponse.json({ error: identity.error }, { status: identity.status, headers });
     }
-    const signedUrl = await dependencies.readPostMedia({
+    const read = await dependencies.readPostMedia({
       admin, path, viewerUserId: identity.ok ? identity.identity.userId : null,
     });
-    if (!signedUrl) return NextResponse.json({ error: 'Media not found' }, { status: 404, headers });
-    return new NextResponse(null, { status: 302, headers: { ...headers, Location: signedUrl } });
+    if (!read) return NextResponse.json({ error: 'Media not found' }, { status: 404, headers });
+    // Media anyone may read right now may be kept by this viewer's own browser
+    // (never a shared cache) for as long as its signature stays usable; every
+    // other read is authorized again at its next request.
+    return new NextResponse(null, {
+      status: 302,
+      headers: {
+        'Cache-Control': read.browserCacheSeconds > 0 ? `private, max-age=${read.browserCacheSeconds}` : 'private, no-store',
+        Vary: vary,
+        Location: read.signedUrl,
+      },
+    });
   } catch (error) {
     logBackendRouteError('Error serving post media:', error);
     return NextResponse.json({ error: 'Unable to load media' }, { status: 500, headers });
