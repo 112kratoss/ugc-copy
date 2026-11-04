@@ -403,10 +403,10 @@ describe('maintainFeedPersonalization prune batches', () => {
   it('starts no batch after three minutes of the run and says a backlog remains', async () => {
     let clockMs = 0;
     const db = batchedClient([full]);
-    const prune = db.rpc.getMockImplementation()!;
-    db.rpc.mockImplementation(async (name: string, ...rest: unknown[]) => {
+    const answer = db.rpc.getMockImplementation()!;
+    db.rpc.mockImplementation(async (name: string) => {
       if (name === 'prune_feed_personalization_data') clockMs += 70_000;
-      return prune(name, ...rest);
+      return answer(name);
     });
 
     const summary = await maintainFeedPersonalization(db.client as never, {
