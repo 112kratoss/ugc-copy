@@ -215,8 +215,8 @@ export function launchShowcaseRemix({
     if (!open) throw new Error('This remix did not start.');
     return api.getRemixSourceBundle(generationId, { postId });
   });
-  // Sent whether or not the creator takes it (a session saved before is resumed instead),
-  // so a failure nobody reads is handled here.
+  // Sent whether or not the creator takes it (the answer can close it before it opens), so
+  // a failure nobody reads is handled here.
   const tapRead = read();
   tapRead.catch(() => undefined);
   let tapReadTaken = false;

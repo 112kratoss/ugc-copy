@@ -1169,6 +1169,11 @@ function IdentityCreationScreen({
   const [remixLaunch] = useState(() => findRemixLaunch(remixLaunchId, remixSource));
   const remixAnswer = useSyncExternalStore(remixLaunch?.subscribe ?? subscribeToNoRemixLaunch, () => remixLaunch?.answer ?? null);
   const remixStartHeld = Boolean(remixLaunch) && remixAnswer?.kind !== 'confirmed';
+  // A Remix tap opens the post as its creator made it, as the web's creators do (owner,
+  // 2026-11-04): a session an earlier visit saved, with an input or the prompt taken out, is
+  // dropped rather than resumed, so no other way into the remix finds it either. The first load
+  // only: when the effects run again over the open creator, the session saved is its own.
+  const remixTapStartsAfresh = useRef(Boolean(remixLaunch));
   const remixScope = remixDraftScope(identityUserId, remixSource);
   // Every saved draft is kept under an identity, a registered account or a
   // guest session. With no identity yet there is no one to keep it for, so
@@ -1291,17 +1296,23 @@ function IdentityCreationScreen({
     // replaced on every token refresh, and reloading then would pull the drafts
     // out from under someone typing.
     const signedInAt = session?.user?.last_sign_in_at ?? null;
-    // A remix can resume its own session. A prompt-only entry resumes the saved drafts too and
-    // replaces only its own tool's prompt: it used to skip the load, and its first save then
-    // wrote the defaults over every tool's saved draft.
+    // A remix can resume its own session, unless a Remix tap opened it (`remixTapStartsAfresh`).
+    // A prompt-only entry resumes the saved drafts too and replaces only its own tool's prompt:
+    // it used to skip the load, and its first save then wrote the defaults over every tool's
+    // saved draft.
     const seedsPrompt = Boolean(initialPrompt) && !remixScope;
     const seed = <T extends CreationDraft>(draft: T): T => (
       seedsPrompt && draft.tool === initialTool ? { ...draft, prompt: initialPrompt ?? '' } : draft
     );
+    const startsAfresh = remixTapStartsAfresh.current;
+    remixTapStartsAfresh.current = false;
     const load = !identityUserId
       ? Promise.resolve(null)
       : remixScope
-        ? loadPersistedCreationDrafts(remixScope)
+        ? startsAfresh
+          // Left behind if it cannot be removed: the restore still goes ahead, and the first save replaces it.
+          ? clearPersistedCreationDrafts(remixScope).then(() => null, () => null)
+          : loadPersistedCreationDrafts(remixScope)
         : loadOrdinaryCreationDrafts({ identityUserId, signedInAt });
     void load.then((persisted) => {
       if (!active) return;
@@ -2822,8 +2833,9 @@ function IdentityCreationScreen({
     if (isGuest) void ensureGuestMergeTicket().catch(() => undefined);
     // Profile → Creations read in the last minute would otherwise go on without the new creation.
     void invalidateProfileCreations(queryClient, identityUserId).catch(() => undefined);
-    // A remix link reopens its session until a run in it succeeds. The ordinary drafts stay
-    // saved, as on the web, so what is on screen is still what is stored.
+    // A remix link opened any way but a Remix tap reopens its session until a run in it
+    // succeeds. The ordinary drafts stay saved, as on the web, so what is on screen is still
+    // what is stored.
     if (remixScope) void clearPersistedCreationDrafts(remixScope).catch(() => undefined);
     if (guided) void trackOnboardingEvent(api, 'first_generation_succeeded', { goal: tool, step: 'creator' });
   };
