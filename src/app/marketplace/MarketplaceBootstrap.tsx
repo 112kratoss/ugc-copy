@@ -32,8 +32,12 @@ import {
 } from './useMarketplaceListing';
 
 export interface MarketplaceBootstrapProps {
-  /** The first page the server drew for `initialFilters`: the plain address, for the cached page. */
-  initialPage: MarketplaceListingPage;
+  /**
+   * The first page the server drew for `initialFilters`: the plain address, for
+   * the cached page. `null` when the server could not read it (a build with no
+   * database), and the browser reads it.
+   */
+  initialPage: MarketplaceListingPage | null;
   /** The address the server drew; the address bar's is read once the page is live. */
   initialFilters?: MarketplaceFilters;
   shortQuery?: string;

@@ -118,6 +118,43 @@ describe('MarketplacePage', () => {
     })).toBeInTheDocument();
   });
 
+  // CI builds against a placeholder database, where the prerender's read fails.
+  it('goes out with no first page from a build that cannot read one, and the browser reads it', async () => {
+    vi.stubEnv('NEXT_PHASE', 'phase-production-build');
+    getMarketplaceResourceListMock.mockRejectedValue(new Error('getaddrinfo ENOTFOUND example.supabase.co'));
+    let answer!: (body: unknown) => void;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => (
+      String(input).startsWith('/api/marketplace/resources')
+        ? new Promise<Response>((resolve) => {
+            answer = (body) => resolve({ ok: true, status: 200, json: async () => body } as Response);
+          })
+        : Promise.resolve({ ok: true, status: 200, json: async () => ({ bundleIds: [] }) } as Response)
+    )));
+
+    try {
+      await openPage();
+
+      // Loading, never a cached "No recipes yet".
+      expect(screen.getByLabelText('Loading marketplace recipes')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'No recipes yet' })).not.toBeInTheDocument();
+      await act(async () => {
+        answer({
+          items: [createMarketplaceResourceItem({ title: 'Read in the browser', post: null })],
+          pageInfo: { hasMore: false, nextOffset: null, offset: 0, limit: 4 },
+        });
+      });
+      expect(await screen.findByText('Read in the browser')).toBeInTheDocument();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('fails the render outside a build, so the cache keeps its last good page', async () => {
+    getMarketplaceResourceListMock.mockRejectedValue(new Error('connection reset'));
+
+    await expect(MarketplacePage()).rejects.toThrow('connection reset');
+  });
+
   it('names /marketplace as the canonical of every address, a filtered one included', () => {
     expect(metadata.alternates?.canonical).toBe('/marketplace');
     expect(metadata.title).toBe('Recipe Marketplace');

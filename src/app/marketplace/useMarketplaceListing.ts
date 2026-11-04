@@ -72,7 +72,8 @@ export function useMarketplaceListing({
   serverFilters = DEFAULT_MARKETPLACE_FILTERS,
   serverShortQuery = '',
 }: {
-  serverPage: MarketplaceListingPage;
+  /** `null`: the server could not read it, and the browser reads it as any other. */
+  serverPage: MarketplaceListingPage | null;
   /** The address the server drew: the plain one, for the cached page. */
   serverFilters?: MarketplaceFilters;
   serverShortQuery?: string;

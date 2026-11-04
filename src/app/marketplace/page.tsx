@@ -1,17 +1,19 @@
 import type { Metadata } from 'next';
+import { PHASE_PRODUCTION_BUILD } from 'next/constants';
 import Link from 'next/link';
 import { ShoppingBag } from 'lucide-react';
 
 import MarketplaceBootstrap from '@/app/marketplace/MarketplaceBootstrap';
 import { DEFAULT_MARKETPLACE_FILTERS } from '@/app/marketplace/marketplace-address';
 import { OptionalAuth } from '@/components/RouteAuthBoundary';
+import { logBackendWarning } from '@/lib/backend-logger';
 import { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } from '@/lib/marketplace-resource-list-cache';
 import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-cache-policy';
 import { getMarketplaceResourceList } from '@/lib/post-resource-bundles-server';
 import { cachePublicPageRead } from '@/lib/public-page-cache';
 import { createMetadata } from '@/lib/seo';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
-import { toSourceToolFilterOptions } from '@/lib/source-tools';
+import { FALLBACK_SOURCE_TOOLS, toSourceToolFilterOptions } from '@/lib/source-tools';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 
 /**
@@ -93,8 +95,31 @@ const readCachedMarketplacePage = cachePublicPageRead(
   [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
 );
 
+/**
+ * The page is prerendered by `next build`, and CI builds against a placeholder
+ * Supabase host, where the read fails and would fail the build. Only there is
+ * that tolerated: the page goes out with no first page (`null`), which the
+ * browser reads for itself, never a cached "No recipes yet". Production builds
+ * reach the database. At request time the failure is rethrown, so ISR keeps
+ * serving the last good page (as `listPublicModelsForPrerender` does).
+ */
+async function loadMarketplacePage() {
+  try {
+    return await readCachedMarketplacePage();
+  } catch (error) {
+    if (process.env.NEXT_PHASE !== PHASE_PRODUCTION_BUILD) {
+      throw error;
+    }
+    logBackendWarning('marketplace_prerendered_without_listing', { error });
+    return {
+      initialPage: null,
+      sourceToolOptions: toSourceToolFilterOptions(FALLBACK_SOURCE_TOOLS),
+    };
+  }
+}
+
 export default async function MarketplacePage() {
-  const { initialPage, sourceToolOptions } = await readCachedMarketplacePage();
+  const { initialPage, sourceToolOptions } = await loadMarketplacePage();
 
   return (
     <OptionalAuth>
