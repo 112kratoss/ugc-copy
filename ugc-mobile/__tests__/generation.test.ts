@@ -123,10 +123,14 @@ describe('generation polling helpers', () => {
   // Every read of a run still working costs the server two lookups, three lock
   // writes and up to one provider call; runs take one to four minutes.
   describe('the creator\'s reads of a run it watches', () => {
+    /** When the last `readTimes` started, for an option that reads the clock. */
+    let startedAtForCap = 0;
+
     /** When each read was made, in seconds from the first, for a run that never ends. */
     async function readTimes(options: Parameters<typeof pollGenerationStatus>[1], untilMs: number, status: Record<string, unknown> = { status: 'processing' }) {
       vi.useFakeTimers();
       const start = Date.now();
+      startedAtForCap = start;
       const times: number[] = [];
       const getStatus = vi.fn(async () => {
         times.push((Date.now() - start) / 1000);
@@ -259,14 +263,30 @@ describe('generation polling helpers', () => {
       const registered = { status: 'registered', expoPushToken: 'ExponentPushToken[1]' } as const;
       const on = { pushEnabled: true, generationEnabled: true };
       expect(generationPollMaxDelayMs({ isGuest: false, devicePush: registered, preferences: on })).toBe(GENERATION_POLL_MAX_DELAY_MS);
-      // Not yet read on this launch: the account's default is on.
-      expect(generationPollMaxDelayMs({ isGuest: false, devicePush: registered, preferences: undefined })).toBe(GENERATION_POLL_MAX_DELAY_MS);
+      // Not read on this launch: run alerts may be off on the account (turned
+      // off on the web or another phone), so no push is counted on (review follow-up 3).
+      expect(generationPollMaxDelayMs({ isGuest: false, devicePush: registered, preferences: undefined })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
+      expect(generationPollMaxDelayMs({ isGuest: false, devicePush: registered, preferences: null })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
+      expect(generationPollMaxDelayMs({ isGuest: false, devicePush: registered, preferences: {} })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
 
       expect(generationPollMaxDelayMs({ isGuest: true, devicePush: registered, preferences: on })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
       expect(generationPollMaxDelayMs({ isGuest: false, devicePush: { status: 'denied' }, preferences: on })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
       expect(generationPollMaxDelayMs({ isGuest: false, devicePush: undefined, preferences: on })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
       expect(generationPollMaxDelayMs({ isGuest: false, devicePush: registered, preferences: { ...on, pushEnabled: false } })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
       expect(generationPollMaxDelayMs({ isGuest: false, devicePush: registered, preferences: { ...on, generationEnabled: false } })).toBe(GENERATION_POLL_UNWOKEN_MAX_DELAY_MS);
+    });
+
+    it('reads its longest wait again before each wait, so preferences read meanwhile count', async () => {
+      let cap = GENERATION_POLL_UNWOKEN_MAX_DELAY_MS;
+      // 8, 12, 15 (the cap unknown), then 27 and 30 once run alerts are known to be on.
+      const times = await readTimes({
+        maxDelayMs: () => {
+          const current = cap;
+          if (Date.now() >= 20_000 + startedAtForCap) cap = GENERATION_POLL_MAX_DELAY_MS;
+          return current;
+        },
+      }, 96_000);
+      expect(times).toEqual([0, 8, 20, 35, 62, 92]);
     });
 
     it('knows a completion push by its type', () => {

@@ -69,8 +69,10 @@ export function getGenerationPollBackoffMs(readIndex: number, maxDelayMs = GENER
  * The longest wait for a run this phone watches: 30 s where its completion
  * push can wake the poll, which takes a registered account (`isGuest` false), a
  * push registration on this phone (`devicePush`, the check `lib/auth.tsx` runs)
- * and notifications on for runs (`preferences`, Alerts' read; the account's
- * default, on, until it is read). 15 s anywhere else.
+ * and notifications known to be on for runs (`preferences`, the account's
+ * notification settings as read on this launch). 15 s anywhere else, settings
+ * not yet read included: run alerts may have been turned off on the web or on
+ * another phone.
  */
 export function generationPollMaxDelayMs({
   isGuest,
@@ -83,8 +85,8 @@ export function generationPollMaxDelayMs({
 }) {
   const pushReachesThisPhone = !isGuest
     && devicePush?.status === 'registered'
-    && preferences?.pushEnabled !== false
-    && preferences?.generationEnabled !== false;
+    && preferences?.pushEnabled === true
+    && preferences?.generationEnabled === true;
   return pushReachesThisPhone ? GENERATION_POLL_MAX_DELAY_MS : GENERATION_POLL_UNWOKEN_MAX_DELAY_MS;
 }
 
@@ -96,9 +98,10 @@ export async function pollGenerationStatus(
     /**
      * The longest backoff wait: `GENERATION_POLL_MAX_DELAY_MS` where a completion
      * push can wake the poll, and `GENERATION_POLL_UNWOKEN_MAX_DELAY_MS` (the
-     * default) anywhere else.
+     * default) anywhere else. A function is asked again before every wait, so
+     * what is learnt during a run (the notification settings read) counts.
      */
-    maxDelayMs?: number;
+    maxDelayMs?: number | (() => number);
     timeoutMs?: number;
     onTick?: (status: GenerationStatusResponse) => void;
     signal?: AbortSignal;
@@ -116,7 +119,9 @@ export async function pollGenerationStatus(
   } = {}
 ) {
   const timeoutMs = options.timeoutMs ?? 1000 * 60 * 12;
-  const maxDelayMs = options.maxDelayMs ?? GENERATION_POLL_UNWOKEN_MAX_DELAY_MS;
+  const readMaxDelayMs = () => (
+    typeof options.maxDelayMs === 'function' ? options.maxDelayMs() : options.maxDelayMs
+  ) ?? GENERATION_POLL_UNWOKEN_MAX_DELAY_MS;
   const startedAt = Date.now();
   let readIndex = 0;
   const wakes: PollWakes = { woken: false, onWake: null };
@@ -141,6 +146,7 @@ export async function pollGenerationStatus(
       const serverWaitMs = typeof status.retryAfterMs === 'number' && Number.isFinite(status.retryAfterMs)
         ? Math.min(GENERATION_POLL_MAX_DELAY_MS, Math.max(0, status.retryAfterMs))
         : 0;
+      const maxDelayMs = readMaxDelayMs();
       const delayMs = options.intervalMs !== undefined
         ? getPollDelayMs(status.retryAfterMs, options.intervalMs, random)
         : getPollDelayMs(

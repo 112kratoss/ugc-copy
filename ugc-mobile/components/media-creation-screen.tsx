@@ -2829,18 +2829,34 @@ function IdentityCreationScreen({
       // at once instead of at the end of a wait; waits reach 30 s only where
       // that push can come to this phone.
       wake: wakeOnGenerationSettledOrAppActive(subscribeToAppActive),
-      maxDelayMs: generationPollMaxDelayMs({
-        isGuest,
-        devicePush: identityUserId ? queryClient.getQueryData<{ status: string }>(devicePushQueryKey(identityUserId)) : null,
-        preferences: identityUserId
-          ? queryClient.getQueryData<{ preferences?: { pushEnabled?: boolean; generationEnabled?: boolean } }>(
-            ['mobile-notification-preferences', identityUserId],
-          )?.preferences
-          : null,
-      }),
+      maxDelayMs: generationPollCap(),
       isGuest,
     },
   );
+
+  /**
+   * The poll's longest wait, asked again before each wait (`generationPollMaxDelayMs`):
+   * from this phone's push registration and the account's notification settings
+   * as this launch has read them. Settings not read yet count as off; the first
+   * wait of a run on a phone with a push registration reads them, once a poll
+   * (the same read and key as Alerts'), so the waits after can know.
+   */
+  const generationPollCap = () => {
+    let askedForPreferences = false;
+    return () => {
+      const userId = isGuest ? null : identityUserId;
+      const devicePush = userId ? queryClient.getQueryData<{ status: string }>(devicePushQueryKey(userId)) : null;
+      const preferencesKey = ['mobile-notification-preferences', userId] as const;
+      const preferences = userId
+        ? queryClient.getQueryData<{ preferences?: { pushEnabled?: boolean; generationEnabled?: boolean } }>(preferencesKey)?.preferences
+        : null;
+      if (userId && devicePush?.status === 'registered' && preferences === undefined && !askedForPreferences) {
+        askedForPreferences = true;
+        void queryClient.prefetchQuery({ queryKey: preferencesKey, queryFn: api.getMobileNotificationPreferences, staleTime: 60_000 });
+      }
+      return generationPollMaxDelayMs({ isGuest, devicePush, preferences });
+    };
+  };
 
   // Cleared only for the run it names: a start from another creator screen keeps its own.
   const forgetActiveRun = async (identity: string, predictionId: string) => {
