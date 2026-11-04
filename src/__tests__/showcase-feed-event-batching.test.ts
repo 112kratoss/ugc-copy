@@ -5,7 +5,7 @@ import {
   resetShowcaseFeedEventQueueForTests,
   sendShowcaseFeedEvent,
 } from '@/app/showcase/ShowcaseFeedInteraction';
-import { FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
+import { FEED_EVENT_OUTBOX_ADOPT_AFTER_MS, FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
 
 function signedInToken(sub: string) {
@@ -197,7 +197,7 @@ describe('showcase feed event batching', () => {
         ],
       }));
 
-      now.mockReturnValue(start + 61_000);
+      now.mockReturnValue(start + FEED_EVENT_OUTBOX_ADOPT_AFTER_MS);
       await send();
       await flushShowcaseFeedEvents();
 

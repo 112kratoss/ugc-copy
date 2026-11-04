@@ -17,11 +17,12 @@ export const FEED_EVENT_OUTBOX_STORAGE_KEY = 'magicbooklet.feedEvents.outbox.v1'
 export const FEED_EVENT_OUTBOX_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 export const FEED_EVENT_OUTBOX_MAX_ENTRIES = 200;
 /**
- * A live page sends its own events within the batching window and hears the
- * answer seconds later, so only entries older than this are another page's to
- * send: one that died, or one whose send failed and let them go.
+ * A live page sends its own events within a minute (the batch's longest wait)
+ * and hears the answer seconds later, so only entries older than this are
+ * another page's to send: one that died, or one whose send failed and let them
+ * go.
  */
-export const FEED_EVENT_OUTBOX_ADOPT_AFTER_MS = 60_000;
+export const FEED_EVENT_OUTBOX_ADOPT_AFTER_MS = 3 * 60_000;
 
 export type FeedEventOutboxEntry = {
   /** The event's `clientEventId`. */
