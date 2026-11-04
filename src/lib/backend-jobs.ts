@@ -10,6 +10,7 @@ export type BackendJobName =
   | 'media-upload-reclaim'
   | 'mobile-push-receipts'
   | 'operational-data-retention'
+  | 'recipe-copy-sweep'
   | 'referral-reward-reconciliation'
   | 'showcase-media-revocations'
   | 'workflow-run-steps';
@@ -66,7 +67,8 @@ export type BackendJobDefinition = {
  * runs inside the shared `/api/cron/backend-jobs` tick (144 logical runs a
  * day) and adds nothing here. Its provider-refusal checks run behind a
  * generation request's response, not on a cron, and are latched to one per
- * ten minutes (`kie-account-balance-refusal.ts`).
+ * ten minutes (`kie-account-balance-refusal.ts`). `recipe-copy-sweep` is the
+ * same: four logical runs a day inside the shared tick, no cron entry.
  */
 export const BACKEND_JOB_DAILY_INVOCATION_BUDGET = 456;
 
@@ -332,6 +334,21 @@ export const BACKEND_JOB_REGISTRY = [
     maxDurationSeconds: 300,
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_prunable_operational_data',
+    maxMissedRunsBeforeDegraded: 2,
+  }),
+  defineBackendJob({
+    // Removes the copies "Include creation references" made and the run
+    // starts' imports of them that nothing names any more
+    // (recipe-copy-sweep.ts). Every six hours on the shared scheduler: the
+    // grace period is a week and a run is bounded to 200 files, so a backlog
+    // drains over later runs; the frequency is for putting back, within six
+    // hours, a removed copy that a save racing the removal named again.
+    name: 'recipe-copy-sweep',
+    route: '/api/cron/recipe-copy-sweep',
+    schedule: '50 */6 * * *',
+    maxDurationSeconds: 300,
+    lockTtlSeconds: 14 * 60,
+    noWorkSkipReason: 'no_recipe_file_sweep_work',
     maxMissedRunsBeforeDegraded: 2,
   }),
   defineBackendJob({

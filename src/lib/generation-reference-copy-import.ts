@@ -6,6 +6,7 @@ import { isRecipeFileInput, recipeFileCopyOf } from '@/lib/generation-input-orig
 import { isAlreadyExistsStorageError, type SharedInputMediaImportResult } from '@/lib/generation-input-media-import';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeReferenceCopies } from '@/lib/post-resource-bundles-server';
+import { recordRecipeImportUse } from '@/lib/recipe-import-use';
 import {
   type GenerationReferenceCopyParts,
   isRecipeImportSource,
@@ -213,6 +214,8 @@ export async function importGenerationReferenceCopy(params: {
   // (`recipeImportPath`): a retry or a second remix reuses the one copy, the run keeps working
   // whatever the seller edits, and a later use of the import is checked against the unlock again.
   const destinationFilePath = recipeImportPath(params.viewerUserId, copy);
+  // Recorded before the file is touched, so the recipe-copy-sweep job never removes one in use.
+  if (!(await recordRecipeImportUse(adminSupabase, params.viewerUserId, destinationFilePath))) return { outcome: 'failed' };
   const copyResult = await adminSupabase.storage
     .from(RECIPE_FILES_BUCKET)
     .copy(location.filePath, destinationFilePath, { destinationBucket: GENERATION_INPUTS_BUCKET });

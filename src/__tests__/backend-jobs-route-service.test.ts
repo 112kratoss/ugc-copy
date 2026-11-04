@@ -188,6 +188,37 @@ describe('runBackendJobsSchedulerForRoute', () => {
     });
   });
 
+  it('dispatches the recipe copy sweep like every other logical job', async () => {
+    const runRecipeCopySweepBackendJob = vi.fn(async () => succeededResult('recipe-copy-sweep'));
+
+    const result = await runBackendJobsSchedulerForRoute({
+      request: new Request('http://localhost/api/cron/backend-jobs', {
+        headers: { 'x-vercel-id': 'bom1::scheduler-44' },
+      }),
+      dependencies: {
+        now: () => Date.parse('2026-11-04T06:50:00.000Z'),
+        createServiceClient,
+        getDueBackendJobs: () => [backendJob('recipe-copy-sweep')],
+        runRecipeCopySweepBackendJob,
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        success: true,
+        dueJobs: ['recipe-copy-sweep'],
+        results: [expect.objectContaining({ job: 'recipe-copy-sweep', status: 'succeeded' })],
+      },
+    });
+    expect(runRecipeCopySweepBackendJob).toHaveBeenCalledWith({
+      requestId: 'bom1::scheduler-44:recipe-copy-sweep',
+      startedAtMs: Date.parse('2026-11-04T06:50:00.000Z'),
+      serviceClient,
+      triggerRoute: '/api/cron/backend-jobs',
+    });
+  });
+
   it('skips without creating a Supabase client when no logical job is due', async () => {
     const result = await runBackendJobsSchedulerForRoute({
       request: new Request('http://localhost/api/cron/backend-jobs'),

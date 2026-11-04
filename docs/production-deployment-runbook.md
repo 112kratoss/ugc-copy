@@ -87,6 +87,10 @@ Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus o
 `MEDIA_UPLOAD_RECLAIM_ABANDONED` is an optional, deliberately-off gate on the
 `media-upload-reclaim` job — see "Staged Upload Reclaim" below before setting it.
 
+`RECIPE_COPY_SWEEP_DELETE` is an optional, deliberately-off gate on the
+`recipe-copy-sweep` job: unset, the job only reports what it would remove — see
+"Recipe Copy Sweep" below before setting it to `true`.
+
 Vercel environment values are captured when a deployment is built. Adding,
 changing, or removing a Production environment value does not alter the running
 deployment: complete a verified configuration-only redeployment after every
@@ -684,9 +688,17 @@ A generation-backed post's public derivative lives in the public `showcase_media
 
 A queued copy still present a day after it was queued fails the job's run, which surfaces as `JOB_LATEST_RUN_FAILED` for `showcase-media-revocations`. Read the row's `last_error` with the service role before intervening; setting `next_attempt_at` to now makes the next hourly run pick the row up again.
 
+## Recipe Copy Sweep
+
+"Include creation references" copies a creation's saved inputs into its publisher's recipe files (`post_resource_files/<publisher>/generation-references/<generation>/<file>`), and a run start imports a bought recipe's copy into the buyer's inputs (`generation_inputs/<buyer>/recipe-imports/<seller>/<generation>/<file>`). The `recipe-copy-sweep` job (`src/lib/recipe-copy-sweep.ts`, every six hours at :50 on the shared scheduler) removes those nothing names any more: a copy left by a save refused or failing after the copy, the copies of a recipe or post deleted since, and an import whose run kept no input row.
+
+`list_recipe_file_sweep_candidates` (migration `20261103232038_recipe_copy_sweep.sql`) reads 2,000 objects of each bucket a run, in name order on from where the last run stopped (`recipe_file_sweep_cursors`), and starts over at the end. Of those, it keeps every file younger than seven days (the database refuses under one), and every file something names in any form (bare, bucket-prefixed or in a link), read through keys taken from the path: the recipes of the publisher, buyer and seller in it and those on the creation's posts, every revision of them (sold or not, retired or not), their supplements, escrow mappings and purchase snapshots, those people's legacy marketplace rows, kept `generation_input_media` rows (those people's, the creation's, and anyone's that recorded the copy or ran from it, through two small partial indexes), and those people's generations and workflow canvases. It also keeps an import a run start used in the last six hours: each start records its use in `recipe_import_uses` before it copies or signs the file, and a start whose record fails answers "try again" instead. At most 200 files go per run. Since every revision is kept, a copy an edit took out of a recipe stays as long as the recipe does.
+
+Unset `RECIPE_COPY_SWEEP_DELETE` (the default), a run removes nothing and logs `recipe_copy_sweep_report` with the counts (`scanned`, `examined`, `keptTooRecent`, `keptNamed`, `keptImportInUse`, `wouldDelete`, `batchLimitReached`) and up to five sample paths. With `RECIPE_COPY_SWEEP_DELETE=true` (then a configuration-only redeployment), a run records each file in `recipe_file_sweep_deletions` before removing it and logs `recipe_copy_sweep_completed` with `deletedCopies`, `deletedImports`, `alreadyGone`, `failed` and `kept`. Each run first looks at up to 200 of the past two weeks' removals (a run that cannot read them logs `recipe_copy_sweep_restore_read_failed` and removes nothing), least recently looked at first, and copies back any that something names again, from its saved input or, where that is gone, a buyer's surviving import of it found by index (`recipe_copy_sweep_copy_restored`); a run also puts back at once an import it removed that a run start used after its read. A save copies again any copy its composer sent that the stored recipe does not hold, with "Include creation references" on or off. `recipe_copy_sweep_restore_unavailable` means something names a removed copy with nothing left to copy it back from: read the path it logs. Unsetting the variable (and redeploying) stops removal; restores keep running.
+
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `kie-account-balance`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `kie-account-balance`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `recipe-copy-sweep`, `referral-reward-reconciliation`, `showcase-media-revocations`, and `workflow-run-steps`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

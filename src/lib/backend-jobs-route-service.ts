@@ -15,6 +15,7 @@ import {
   runMediaUploadReclaimBackendJob,
   runMobilePushReceiptsBackendJob,
   runOperationalDataRetentionBackendJob,
+  runRecipeCopySweepBackendJob,
   runReferralRewardReconciliationBackendJob,
   runShowcaseMediaRevocationsBackendJob,
   runWorkflowRunStepsBackendJob,
@@ -43,6 +44,7 @@ type BackendJobsRouteDependencies = {
   runMediaUploadReclaimBackendJob?: typeof runMediaUploadReclaimBackendJob;
   runMobilePushReceiptsBackendJob?: typeof runMobilePushReceiptsBackendJob;
   runOperationalDataRetentionBackendJob?: typeof runOperationalDataRetentionBackendJob;
+  runRecipeCopySweepBackendJob?: typeof runRecipeCopySweepBackendJob;
   runReferralRewardReconciliationBackendJob?: typeof runReferralRewardReconciliationBackendJob;
   runShowcaseMediaRevocationsBackendJob?: typeof runShowcaseMediaRevocationsBackendJob;
   runWorkflowRunStepsBackendJob?: typeof runWorkflowRunStepsBackendJob;
@@ -97,6 +99,8 @@ function resolveDependencies(dependencies: BackendJobsRouteDependencies | undefi
       ?? runMobilePushReceiptsBackendJob,
     runOperationalDataRetentionBackendJob: dependencies?.runOperationalDataRetentionBackendJob
       ?? runOperationalDataRetentionBackendJob,
+    runRecipeCopySweepBackendJob: dependencies?.runRecipeCopySweepBackendJob
+      ?? runRecipeCopySweepBackendJob,
     runReferralRewardReconciliationBackendJob:
       dependencies?.runReferralRewardReconciliationBackendJob
       ?? runReferralRewardReconciliationBackendJob,
@@ -146,6 +150,8 @@ async function runDueBackendJob(
       return options.dependencies.runMobilePushReceiptsBackendJob(runOptions);
     case 'operational-data-retention':
       return options.dependencies.runOperationalDataRetentionBackendJob(runOptions);
+    case 'recipe-copy-sweep':
+      return options.dependencies.runRecipeCopySweepBackendJob(runOptions);
     case 'referral-reward-reconciliation':
       return options.dependencies.runReferralRewardReconciliationBackendJob(runOptions);
     case 'showcase-media-revocations':
