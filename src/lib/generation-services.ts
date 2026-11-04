@@ -132,7 +132,8 @@ import { isAllowlistedRemoteMediaUrl, type RemoteMediaKind } from '@/lib/remote-
 import { stageAllowlistedRemoteMedia } from '@/lib/staged-remote-media';
 import { loadGenerationModelOperationalConfig } from '@/lib/generation-model-catalog-store';
 import {
-  KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS,
+  MOTION_IMAGE_ORIENTATION_MAX_DURATION_SECONDS,
+  motionImageOrientationRefusal,
   resolveProviderModelId,
   WAN_3_REFERENCE_MAX_DURATION_SECONDS,
   WAN_REFERENCE_MAX_DURATION_SECONDS,
@@ -3875,18 +3876,12 @@ export async function startMotionGeneration(params: {
   if (!selectedModel) {
     throw new Error(`Unsupported motion model: ${model}`);
   }
-  // kling-2.6/motion-control caps image-oriented output at 10 s ("max 10s video") where
-  // video orientation reaches 30; the quote rule catches catalog clients and this
+  // Kling 2.6 and 3.0 motion control cap image-oriented output at 10 s ("max 10s video")
+  // where video orientation reaches 30; the quote rule catches catalog clients and this
   // catches the rest before a hold is placed.
-  if (
-    model === 'kling-2.6'
-    && characterOrientation === 'image'
-    && duration > KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS
-  ) {
-    throw new GenerationServiceError(
-      `Kling 2.6 keeps image orientation to ${KLING_26_IMAGE_ORIENTATION_MAX_DURATION_SECONDS} seconds; use video orientation for longer clips.`,
-      400
-    );
+  const imageOrientationMax = MOTION_IMAGE_ORIENTATION_MAX_DURATION_SECONDS[model];
+  if (characterOrientation === 'image' && imageOrientationMax !== undefined && duration > imageOrientationMax) {
+    throw new GenerationServiceError(motionImageOrientationRefusal(model), 400);
   }
   // Kie's motion control takes a performance of 3 to 30 seconds. A caller that measured
   // the clip says how long it runs; the rest give the whole seconds it is priced at,

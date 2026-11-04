@@ -3755,9 +3755,12 @@ describe('generation services', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('keeps Kling 2.6 image-oriented motion to the ten seconds Kie allows', async () => {
-    // kling-2.6/motion-control: `character_orientation: image` is "(max 10s video)";
-    // video orientation reaches 30. Kling 3.0 motion carries no such limit.
+  it.each([
+    ['kling-2.6', 'Kling 2.6'],
+    ['kling-3.0', 'Kling 3.0'],
+  ] as const)('keeps %s image-oriented motion to the ten seconds Kie allows', async (model, name) => {
+    // kling-2.6/motion-control and kling-3.0/motion-control: `character_orientation: image` is
+    // "(max 10s video)"; video orientation reaches 30.
     const { startMotionGeneration } = await import('@/lib/generation-services');
     const { supabase, rpcCalls } = createSupabaseMock();
     await expect(startMotionGeneration({
@@ -3765,13 +3768,16 @@ describe('generation services', () => {
       creditSupabase: supabase,
       userId: 'user-1',
       prompt: 'Match the reference motion.',
-      model: 'kling-2.6',
+      model,
       referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
       characterImageUrl: 'https://cdn.example.com/character.png',
-      duration: 20,
+      duration: 11,
       characterOrientation: 'image',
       mode: '720p',
-    })).rejects.toThrow('Kling 2.6 keeps image orientation to 10 seconds');
+    })).rejects.toMatchObject({
+      status: 400,
+      message: `${name} keeps image orientation to 10 seconds; use video orientation for longer clips.`,
+    });
     expect(rpcCalls).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });

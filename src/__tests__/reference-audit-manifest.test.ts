@@ -292,8 +292,9 @@ describe('reference-audit release', () => {
       expect(fieldErrorsFor(motion('image', 20)).duration).toMatch(/10 seconds/);
       expect(() => quoteGenerationModel(motion('image', 10))).not.toThrow();
       expect(() => quoteGenerationModel(motion('video', 20))).not.toThrow();
-      // Kling 3.0 motion states no orientation limit.
-      expect(() => quoteGenerationModel({ ...motion('image', 20), modelId: 'kling-3.0' })).not.toThrow();
+      // This release left Kling 3.0 motion out (its spec names no cap); release
+      // kling-3-image-orientation-20261105 gives it the same ten seconds
+      // (kling-3-image-orientation-manifest.test.ts).
     });
   });
 });

@@ -34,6 +34,7 @@ import {
 import productionMotion from '../../contracts/production-motion-descriptors-v1.json';
 import { validateCatalogManifest } from '../../scripts/ops/generation-model-catalog';
 
+import { operationBeforeKling3ImageOrientation } from './fixtures/kling-3-image-orientation-2026-11-05';
 import productionKling3 from './fixtures/production-kling-3-motion-entry-2026-11-01.json';
 
 /**
@@ -85,7 +86,10 @@ const base = read('2026-10-31-slot-min-durations.json');
 const ID = 'kling-3.0';
 
 const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 2 });
-const operation = buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === ID)!;
+/** The code build as this release shipped it, before kling-3-image-orientation-20261105's cap. */
+const operation = operationBeforeKling3ImageOrientation(
+  buildCodeGenerationModelOperations().find((candidate) => candidate.modelId === ID)!,
+);
 const released = manifest.entries.find((entry) => entry.modelId === ID)!;
 /** Production's row until this release, read from the active release (the fixture says when). */
 const previous = productionKling3.entry as unknown as ManifestEntry;
@@ -183,7 +187,8 @@ describe('kling-3-motion-inputs release', () => {
     }
     expect([previous.pricingStrategy, previous.validationStrategy]).toEqual(['motion-v1', 'motion-v1']);
     expect([released.pricingStrategy, released.validationStrategy]).toEqual(['per-second', 'descriptor-rules-v1']);
-    // No rule either way: the legacy entry carried none, and the code build has none for Kling 3.0.
+    // No rule either way: the legacy entry carried none, and the code build had none for Kling 3.0
+    // until release kling-3-image-orientation-20261105.
     expect(previous.validationConfig).toEqual({});
     expect(released.validationConfig).toEqual({ normalizedDefaults: {}, rules: [] });
 

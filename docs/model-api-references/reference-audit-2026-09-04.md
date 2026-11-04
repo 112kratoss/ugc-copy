@@ -213,6 +213,10 @@ video). 'video': consistent with the orientation of the characters in the video 
 video)." Shipped: image orientation refuses more than 10 s. Kling 3.0 motion-control
 states no such limit.
 
+**2026-11-01 re-read:** Kling 3.0's market page states the same 10 s cap (its spec is silent), and
+release `kling-3-image-orientation-20261105` holds it there too; see
+`kling-3.0/kling-3.0/kling-3.0-motion-control.md`.
+
 ## `grok-imagine-image-2` — reference variant now exists
 
 `docs.kie.ai/market/grok-imagine-image-2-0/image-to-image.md` documents model
