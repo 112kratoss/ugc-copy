@@ -61,6 +61,8 @@ A creation's post serves a copy filed under the creation (`showcase/<generation>
 
 Public Showcase uploads use a five-minute browser and image-cache TTL. Storage deletion invalidates the origin object, and the shorter TTL bounds any already-cached client copy. A returned `externalMediaRevocationRequired: true` means the post also references a provider-hosted URL that this command cannot delete; complete that provider action and record it in the incident system before closing the case.
 
+An uploaded post keeps its media in the private `post_media` bucket (`private-posts/<post>/`), and `/api/media` checks the post again at every request. While the post is public, a link that route hands out lasts up to 15 minutes, and the viewer's browser may keep the redirect for up to 13. Hiding the post (`hide`, or `/admin` → Content), or its owner archiving it, making it private, marking it NSFW or deleting the account, stops every new view at once but does not revoke a link already handed out: it keeps working for up to 15 minutes. When the media must stop at once, use `take_down`: it deletes the objects, which ends every link.
+
 Dismiss a report only after confirming the content does not violate policy:
 
 ```sh
