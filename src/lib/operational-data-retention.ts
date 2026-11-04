@@ -82,6 +82,14 @@ export const IDLE_CONTENT_GUEST_RETIREMENT_BATCH_LIMIT = 10;
 /** The most of a run the retirements may take. */
 export const IDLE_CONTENT_GUEST_RETIREMENT_TIME_BUDGET_MS = 60_000;
 
+/**
+ * No retirement starts later than this into the run. Each one runs a storage
+ * sweep of the guest's buckets whose length is the guest's to decide, so the
+ * last one to start keeps a minute of the 300 s invocation for itself, where
+ * an idle guest's single Auth delete may start until 270 s.
+ */
+export const IDLE_CONTENT_GUEST_RETIREMENT_LAST_START_MS = 240_000;
+
 /** Consecutive failed deletions after which the run stops asking Auth. */
 const IDLE_GUEST_MAX_CONSECUTIVE_FAILURES = 3;
 
@@ -609,7 +617,10 @@ export async function pruneOperationalBackendData(
   const contentGuests = await retireIdleGuestsWithContent(client, {
     now: options.now,
     limit: options.contentGuestRetirementLimit ?? IDLE_CONTENT_GUEST_RETIREMENT_BATCH_LIMIT,
-    deadlineMs: Math.min(clock() + IDLE_CONTENT_GUEST_RETIREMENT_TIME_BUDGET_MS, runDeadlineMs),
+    deadlineMs: Math.min(
+      clock() + IDLE_CONTENT_GUEST_RETIREMENT_TIME_BUDGET_MS,
+      runStartedAtMs + IDLE_CONTENT_GUEST_RETIREMENT_LAST_START_MS,
+    ),
     clock,
     ...(options.retireContentGuest ? { retire: options.retireContentGuest } : {}),
     onFailure: onGuestFailure,

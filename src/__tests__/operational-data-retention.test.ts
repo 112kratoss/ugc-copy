@@ -6,6 +6,7 @@ import {
   deleteIdleGuestIdentities,
   EXPIRED_UPLOAD_RESERVATION_RECLAIM_LIMIT,
   IDLE_CONTENT_GUEST_RETIREMENT_BATCH_LIMIT,
+  IDLE_CONTENT_GUEST_RETIREMENT_LAST_START_MS,
   IDLE_GUEST_RETENTION_BATCH_LIMIT,
   OPERATIONAL_RETENTION_MAX_BATCHES,
   pruneOperationalBackendData,
@@ -785,6 +786,31 @@ describe('retiring idle guests with content', () => {
 
     expect(retire).not.toHaveBeenCalled();
     expect(summary.supplementaryPruneFailures).toEqual(['list_idle_guest_identities_with_content']);
+  });
+
+  it('starts no retirement after 240 s of the run, leaving the one in flight its minute', async () => {
+    let clockMs = 0;
+    reclaimExpiredUploadReservationsMock.mockImplementationOnce(async () => {
+      // The reservation sweep used its whole step: the guests begin at 225 s.
+      clockMs += 225_000;
+      return {
+        scanned: 0, handled: 0, objectsDeleted: 0, absentObjectsReleased: 0, failed: 0,
+        bytesDeleted: 0, scanLimitReached: false, timeBudgetReached: true, oldestCandidateExpiresAt: null,
+      };
+    });
+    const guests = [guestId(1), guestId(2), guestId(3)];
+    const { client } = contentGuestClient({ listed: guests });
+    const retire = vi.fn(async () => {
+      clockMs += 10_000;
+      return 'retired' as const;
+    });
+
+    const summary = await pruneOperationalBackendData(client, { clock: () => clockMs, retireContentGuest: retire });
+
+    expect(IDLE_CONTENT_GUEST_RETIREMENT_LAST_START_MS).toBe(240_000);
+    // Started at 225 s and 235 s; the third would start at 245 s.
+    expect(retire).toHaveBeenCalledTimes(2);
+    expect(summary).toMatchObject({ contentGuestsRetired: 2, contentGuestTimeBudgetReached: true });
   });
 
   it('reads nothing once the run\'s time is spent', async () => {
