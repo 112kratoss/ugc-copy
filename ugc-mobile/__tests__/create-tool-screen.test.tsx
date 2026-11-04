@@ -169,6 +169,8 @@ describe('create tool route', () => {
         generationId: 'gen-1',
         postId: 'post-1',
       },
+      // Each navigation here is an opening of its own, which starts the remix from its source.
+      remixOpening: 'create-1',
     });
   });
 
