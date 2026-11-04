@@ -159,6 +159,7 @@ import {
   type GenericGenerationAdapterOperation,
 } from '@/lib/generation-model-adapters';
 import { summarizeMediaToolError } from '@/lib/media-tool-error';
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL } from '@/lib/showcase-media-cache';
 import {
   isGenerationGoneSettlementError,
   recordGenerationDisplayRendition,
@@ -1699,6 +1700,10 @@ export async function persistGeneratedOutput(
       const { error: uploadError } = await supabase.storage
         .from(bucket)
         .upload(fileName, createReadStream(stagedMedia.filePath), {
+          // The public copy's header, as its preview and display carry: a
+          // publish then copies the original inside Storage, which keeps it
+          // (generation-post-media), instead of reading it back to upload it.
+          cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
           contentType: stagedMedia.contentType || undefined,
           upsert: true,
         });
@@ -1812,6 +1817,8 @@ export async function persistGeneratedOutputList(
         const { error: uploadError } = await supabase.storage
           .from(bucket)
           .upload(fileName, createReadStream(stagedMedia.filePath), {
+            // As a run of one output writes it: see there.
+            cacheControl: SHOWCASE_PUBLIC_MEDIA_CACHE_CONTROL,
             contentType: stagedMedia.contentType || undefined,
             upsert: true,
           });

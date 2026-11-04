@@ -59,7 +59,7 @@ function createClient({
   readError?: { message: string } | null;
 }) {
   const calls = {
-    uploads: [] as Array<{ bucket: string; path: string }>,
+    uploads: [] as Array<{ bucket: string; path: string; options?: Record<string, unknown> }>,
     removals: [] as Array<{ bucket: string; paths: string[] }>,
     updates: [] as Array<{ patch: Record<string, unknown>; filters: Record<string, unknown>; columns: string | null }>,
     reads: [] as Array<{ filters: Record<string, unknown>; columns: string }>,
@@ -69,8 +69,8 @@ function createClient({
   const client = {
     storage: {
       from: (bucket: string) => ({
-        upload: async (path: string) => {
-          calls.uploads.push({ bucket, path });
+        upload: async (path: string, _body: unknown, options?: Record<string, unknown>) => {
+          calls.uploads.push({ bucket, path, options });
           return { data: { path }, error: null };
         },
         remove: async (paths: string[]) => {
@@ -200,6 +200,20 @@ describe('what a finished run uploads and records', () => {
       expect(calls.removals).toEqual([]);
     });
 
+    // A publish then copies it inside Storage, which keeps the source's header
+    // (generation-post-media copyStoredShowcaseSource).
+    it('writes the original with the public copy\'s cache header', async () => {
+      const { client, calls } = createClient({ row: settledRow() });
+
+      await persistGeneratedOutput(client, client, generation, 'https://tempfile.example.com/p1.png');
+
+      expect(calls.uploads).toEqual([{
+        bucket: 'generated_images',
+        path: 'user-1/generated_p1.png',
+        options: expect.objectContaining({ cacheControl: '86400', contentType: 'image/png', upsert: true }),
+      }]);
+    });
+
     it('removes the display when the row has moved to another output since', async () => {
       const { client, calls } = createClient({
         row: settledRow({ output_url: 'generated_images/user-1/repaired.png', preview_url: 'generated_images/user-1/repaired.preview.aaaa.webp' }),
@@ -325,6 +339,7 @@ describe('what a finished run uploads and records', () => {
         patch: { display_url: 'generated_images/user-1/generated_p1_0.display.5555666677778888.webp' },
       })]);
       expect(calls.removals).toEqual([]);
+      expect(calls.uploads.map(({ options }) => options?.cacheControl)).toEqual(['86400', '86400']);
     });
   });
 });
