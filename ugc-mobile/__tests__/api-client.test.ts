@@ -1522,6 +1522,11 @@ describe('mobile api client caching', () => {
     expect(url).toBe('https://magicbooklet.test/api/source-tools');
     expect(init.method ?? 'GET').toBe('GET');
     expect(response.tools[0].models[0].label).toBe('Gen-4');
+    // A public catalog: no session token (no identity check, and the edge may
+    // keep it), and the five minutes the server allows it kept here.
+    expect(new Headers(init.headers).get('Authorization')).toBeNull();
+    await api.listSourceTools();
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
   it('loads and caches the public generation model catalog', async () => {

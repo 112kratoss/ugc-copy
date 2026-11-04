@@ -44,6 +44,8 @@ import {
 import type { findPublicPostReferenceByIdOrGenerationId } from '@/lib/posts-server';
 import { getShowcasePostResolveRouteResponse } from '@/lib/showcase-post-resolve-route-adapter-service';
 import { postSaverNoticeRouteResponse } from '@/lib/saver-notice-route-adapter-service';
+import type { SourceToolOption } from '@/lib/source-tools';
+import { getSourceToolsRouteResponse } from '@/lib/source-tools-route-adapter-service';
 import { postShowcaseSaveRouteResponse } from '@/lib/showcase-save-route-adapter-service';
 import type { ShowcaseSaveResponseBody } from '@/lib/showcase-save-service';
 import {
@@ -793,6 +795,26 @@ describe('shared mobile API v1 contract fixture', () => {
     const missing = await resolve('nothing-1');
     expect(missing.status).toBe(endpoint.errors.notFound.status);
     await expect(missing.json()).resolves.toEqual(endpoint.errors.notFound.response);
+    // The app asks without its token: every caller gets this same answer.
+    expect(endpoint.auth).toBe('none');
+    expect(mobileApiOperationsV1.operations.resolveShowcasePost.auth).toBe('none');
+  });
+
+  // The Made With picker's catalog is the same for everyone: the app asks for
+  // it without its token, so no identity check runs and the edge may keep it.
+  it('answers the source-tools catalog with the cache policy the fixture pins, for no one in particular', async () => {
+    const endpoint = mobileApiContract.endpoints.listSourceTools;
+    const listSourceToolsCatalog = vi.fn(async () => endpoint.response.tools as SourceToolOption[]);
+    const response = await getSourceToolsRouteResponse({
+      request: new Request(`http://localhost${endpoint.path}`),
+      dependencies: { listSourceToolsCatalog },
+    });
+
+    expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(response.json()).resolves.toEqual(endpoint.response);
+    expect(listSourceToolsCatalog).toHaveBeenCalledWith();
+    expect(endpoint.auth).toBe('none');
+    expect(mobileApiOperationsV1.operations.listSourceTools.auth).toBe('none');
   });
 
   // A bundle's files signed in one call: the request and the answer the app

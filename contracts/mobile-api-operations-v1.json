@@ -214,7 +214,7 @@
     "resolveShowcasePost": {
       "method": "GET",
       "path": "/api/showcase/posts/:postId/resolve",
-      "auth": "optional"
+      "auth": "none"
     },
     "listPostComments": {
       "method": "GET",
@@ -334,7 +334,7 @@
     "listSourceTools": {
       "method": "GET",
       "path": "/api/source-tools",
-      "auth": "required"
+      "auth": "none"
     },
     "listGenerationModels": {
       "method": "GET",

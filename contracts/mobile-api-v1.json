@@ -1240,7 +1240,7 @@
     "resolveShowcasePost": {
       "method": "GET",
       "path": "/api/showcase/posts/:postId/resolve",
-      "auth": "optional",
+      "auth": "none",
       "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
       "pathParams": {
         "postId": "generation-1"
@@ -1543,8 +1543,8 @@
     "listSourceTools": {
       "method": "GET",
       "path": "/api/source-tools",
-      "auth": "required",
-      "cacheControl": "private, no-store",
+      "auth": "none",
+      "cacheControl": "public, max-age=300, s-maxage=300, stale-while-revalidate=3600",
       "response": {
         "tools": [
           {

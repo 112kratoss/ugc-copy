@@ -690,6 +690,33 @@ describe('mobile shared API v1 contract fixture', () => {
     expect(matchesPathTemplate(operation.path, asked[0].path), `${key} asked for ${asked[0].path}`).toBe(true);
   });
 
+  // `none` is a request sent without the session token: no identity check runs
+  // for it at the server, and a public answer may be kept at the edge. A
+  // `required` one always carries the token; `optional` is the caller's to choose.
+  it.each([
+    ...successCases.map(({ key, call }) => ({ key: (legacyOperationAliases[key] ?? key) as RegisteredOperationKey, call })),
+    ...extendedOperationCases,
+  ])('sends the session token for $key as the operations contract says', async ({ key, call }) => {
+    const { auth } = mobileApiOperationsV1.operations[key];
+    const sent: Array<string | null> = [];
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push(new Headers(init?.headers).get('Authorization'));
+      return jsonResponse({});
+    });
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      getInstallationId: async () => 'installation-1',
+      clientInfo: { appVersion: '1.0.0', apiVersion: 1, catalogSchemaVersion: 2 },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+
+    await call(api).catch(() => undefined);
+    expect(sent.length).toBeGreaterThan(0);
+    if (auth === 'none') expect(sent).toEqual(sent.map(() => null));
+    if (auth === 'required') expect(sent).toEqual(sent.map(() => 'Bearer token-1'));
+  });
+
   it.each(successCases)('consumes the $key response example through the mobile API client', async ({ key, call }) => {
     const api = clientForEndpoint(key);
     // The wire carries private playback as a relative authenticated-route URL;
