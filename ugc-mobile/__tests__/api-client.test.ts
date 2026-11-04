@@ -325,9 +325,10 @@ describe('mobile api client caching', () => {
     });
     const caller = new AbortController();
 
-    const quote = api.quoteGenerationModel({} as never, caller.signal).catch((error: unknown) => error);
+    // A search carries the session token, so it waits for one.
+    const search = api.searchPublicContent({ query: 'paper boats' }, caller.signal).catch((error: unknown) => error);
     caller.abort();
-    const error = await quote;
+    const error = await search;
 
     expect(error).toMatchObject({ name: 'ApiError', status: 0, details: { sent: false } });
     expect((error as ApiError).details).not.toHaveProperty('timedOut');
@@ -1597,16 +1598,17 @@ describe('mobile api client caching', () => {
     expect(init.cache).toBe('no-store');
   });
 
-  it('requests an authenticated authoritative generation quote', async () => {
+  it('requests the authoritative generation quote without the session token, which it never waits for', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       modelId: 'nano-banana-2',
       catalogRevision: '0123456789abcdef',
       normalizedSettings: { aspectRatio: '1:1', resolution: '1K' },
       costCredits: 8,
     }));
+    const getAccessToken = vi.fn(() => new Promise<string>(() => undefined));
     const api = createApiClient({
       baseUrl: 'https://magicbooklet.test',
-      getAccessToken: async () => 'token-1',
+      getAccessToken,
       fetcher: fetcher as unknown as typeof fetch,
     });
 
@@ -1621,7 +1623,9 @@ describe('mobile api client caching', () => {
     const [url, init] = fetcher.mock.calls[0] as unknown as [RequestInfo | URL, RequestInit];
     expect(url).toBe('https://magicbooklet.test/api/generation-models/quote');
     expect(init.method).toBe('POST');
-    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    // The server prices the run alone: a token would only cost an identity check.
+    expect((init.headers as Headers).get('Authorization')).toBeNull();
+    expect(getAccessToken).not.toHaveBeenCalled();
   });
 
   it('sends idempotency keys on generation starts', async () => {

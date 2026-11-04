@@ -56,6 +56,34 @@ describe('generation model quote route adapter service', () => {
     });
   });
 
+  // The app asks for prices without its session token (`none` in the mobile
+  // operations contract): a price must not depend on who asks.
+  it('prices a request with a session token exactly as one without', async () => {
+    const rateLimitClient = { kind: 'rate-limit-client' } as unknown as SupabaseClient;
+    const createGenerationModelQuote = vi.fn(async (): Promise<GenerationModelQuoteServiceResult> => ({
+      ok: true,
+      quote: { modelId: 'nano-banana-2', catalogRevision: 'rev-1', normalizedSettings: {}, costCredits: 8 },
+    }));
+    const body = { kind: 'image', modelId: 'nano-banana-2', settings: {}, inputCounts: { images: 0, videos: 0, audios: 0 }, catalogRevision: 'rev-1' };
+    const ask = (headers: Record<string, string>) => postGenerationModelQuoteRouteResponse({
+      request: new Request('http://localhost/api/generation-models/quote', {
+        method: 'POST',
+        headers: { 'x-real-ip': '198.51.100.24', 'x-magicbooklet-client': 'mobile', ...headers },
+        body: JSON.stringify(body),
+      }),
+      dependencies: { createGenerationModelQuote, createServiceClient: () => rateLimitClient },
+    });
+
+    const withToken = await ask({ authorization: 'Bearer member-token' });
+    const withoutToken = await ask({});
+
+    await expect(withToken.json()).resolves.toEqual(await withoutToken.json());
+    expect(createGenerationModelQuote.mock.calls[0]).toEqual(createGenerationModelQuote.mock.calls[1]);
+    expect(createGenerationModelQuote).toHaveBeenCalledWith({
+      body, platform: 'mobile', rateLimitClient, rateLimitKey: '198.51.100.24',
+    });
+  });
+
   it('maps structured quote failures with retry headers without leaking request secrets', async () => {
     const createGenerationModelQuote = vi.fn(async (): Promise<GenerationModelQuoteServiceResult> => ({
       ok: false,

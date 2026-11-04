@@ -1649,12 +1649,16 @@ export function createApiClient({
         notModified: false,
       };
     },
+    // Priced from the run and the published catalog alone (the server reads no
+    // identity, and limits by network), so it goes without the session token:
+    // no identity check runs for each change of a setting, and a price never
+    // waits on a token refresh.
     quoteGenerationModel: (body: GenerationModelQuoteRequest, signal?: AbortSignal) =>
       request<GenerationModelQuote>('/api/generation-models/quote', {
         method: 'POST',
         body: JSON.stringify(body),
         signal,
-      }),
+      }, { auth: false }),
     ...(catalogSchemaVersion >= 2
       ? {
           startGeneration: (body: CatalogGenerationRequest, idempotencyKey?: string) =>

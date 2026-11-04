@@ -349,7 +349,7 @@
     "quoteGenerationModel": {
       "method": "POST",
       "path": "/api/generation-models/quote",
-      "auth": "required"
+      "auth": "none"
     },
     "uploadPostResourceFile": {
       "method": "POST",

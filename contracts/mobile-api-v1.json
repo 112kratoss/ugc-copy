@@ -1752,7 +1752,7 @@
     "quoteGenerationModel": {
       "method": "POST",
       "path": "/api/generation-models/quote",
-      "auth": "required",
+      "auth": "none",
       "cacheControl": "private, no-store",
       "response": {
         "modelId": "nano-banana",
