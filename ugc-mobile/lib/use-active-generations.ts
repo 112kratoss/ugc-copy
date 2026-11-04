@@ -17,6 +17,9 @@ export { activeGenerationsQueryKey, invalidateActiveGenerations } from '@/lib/ac
  */
 export const ACTIVE_GENERATIONS_POLL_MS = 30_000;
 
+/** How long a count of zero stands before a return to the app reads it again. */
+export const ACTIVE_GENERATIONS_IDLE_STALE_MS = 5 * 60_000;
+
 /**
  * How many of the viewer's runs are still working. Split from the tab bar the
  * same way the Alerts badge is: reaching `useAuth` drags expo-constants and the
@@ -50,7 +53,11 @@ export function useActiveGenerationCount(): number {
       }
       return count;
     },
-    staleTime: 1000 * 15,
+    // Read again at a return to the app: soon while a run was working, since
+    // one that settled meanwhile returned its credits if it failed, and after
+    // five minutes otherwise, for a run started elsewhere (the web, another
+    // phone). A start on this phone invalidates it at once.
+    staleTime: (query) => ((query.state.data ?? 0) > 0 ? 1000 * 15 : ACTIVE_GENERATIONS_IDLE_STALE_MS),
     refetchInterval: (query) => ((query.state.data ?? 0) > 0 ? ACTIVE_GENERATIONS_POLL_MS : false),
   });
 

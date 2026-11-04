@@ -16,7 +16,12 @@ const authState = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 
-import { ACTIVE_GENERATIONS_POLL_MS, activeGenerationsQueryKey, useActiveGenerationCount } from '../lib/use-active-generations';
+import {
+  ACTIVE_GENERATIONS_IDLE_STALE_MS,
+  ACTIVE_GENERATIONS_POLL_MS,
+  activeGenerationsQueryKey,
+  useActiveGenerationCount,
+} from '../lib/use-active-generations';
 
 const KEY = activeGenerationsQueryKey('user-1');
 
@@ -91,6 +96,29 @@ describe('the in-flight count', () => {
 
     client.setQueryData(KEY, 0);
     expect(interval(query)).toBe(false);
+  });
+
+  // Every return to the app after 15 s read the list, though nothing ran.
+  it('reads a count of zero again at a return to the app only after five minutes, and one above zero after 15 s', async () => {
+    answers(answer('succeeded'), answer('processing'), answer('processing'));
+    await mount(() => <QueryClientProvider client={client}><CountProbe seen={[]} /></QueryClientProvider>);
+    const returnAfter = async (ms: number) => {
+      const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + ms);
+      try {
+        await renderer.act(async () => { client.getQueryCache().onFocus(); });
+        await flush();
+      } finally {
+        later.mockRestore();
+      }
+    };
+
+    await returnAfter(4 * 60_000);
+    expect(authState.api.listGenerations).toHaveBeenCalledTimes(1);
+    await returnAfter(ACTIVE_GENERATIONS_IDLE_STALE_MS);
+    expect(authState.api.listGenerations).toHaveBeenCalledTimes(2);
+    // A run is working now: 15 s is enough.
+    await returnAfter(ACTIVE_GENERATIONS_IDLE_STALE_MS + 16_000);
+    expect(authState.api.listGenerations).toHaveBeenCalledTimes(3);
   });
 
   it('reads the balance again when the last run in flight settles, since a failure returned its credits', async () => {

@@ -130,6 +130,14 @@ export default function StudioScreen() {
   const horizontalPadding = isCompact ? 16 : 18;
   const queryKey = alertsListQueryKey(user?.id);
   const preferencesQueryKey = ['mobile-notification-preferences', user?.id] as const;
+  // Whether this tab is the one on screen, as the focus effect below records
+  // it. A tab once visited stays mounted, and its queries read again at every
+  // return to the app after their stale time, whichever tab was in front: the
+  // list (every page held) and the preferences, each return, for a screen
+  // nobody was looking at. Coming to this tab reads a stale list (below), and
+  // the tab bar's badge keeps the count meanwhile.
+  const tabInFrontRef = useRef(false);
+  const readAgainOnReturnToApp = useCallback(() => tabInFrontRef.current, []);
 
   // The unread count covers every alert, and unread ones are never pruned, so
   // the list pages on past its newest 50: "72 unread" over a list of 50 left
@@ -141,6 +149,7 @@ export default function StudioScreen() {
     queryFn: ({ pageParam }) => api.listMobileNotifications({ limit: ALERTS_PAGE_SIZE, before: pageParam?.before ?? null, beforeId: pageParam?.beforeId ?? null }),
     getNextPageParam: olderAlertsCursor,
     staleTime: ALERTS_STALE_MS,
+    refetchOnWindowFocus: readAgainOnReturnToApp,
   });
 
   const markReadMutation = useMutation({
@@ -158,6 +167,7 @@ export default function StudioScreen() {
     enabled: Boolean(user),
     queryFn: api.getMobileNotificationPreferences,
     staleTime: 1000 * 60,
+    refetchOnWindowFocus: readAgainOnReturnToApp,
   });
 
   const updatePreferenceMutation = useMutation({
@@ -200,6 +210,7 @@ export default function StudioScreen() {
   const userId = user?.id;
   useFocusEffect(useCallback(() => {
     setAlertsScreenFocused(true);
+    tabInFrontRef.current = true;
     const listKey = alertsListQueryKey(userId);
     const listState = queryClient.getQueryState(listKey);
     if (
@@ -210,7 +221,10 @@ export default function StudioScreen() {
     ) {
       void queryClient.refetchQueries({ queryKey: listKey, exact: true, type: 'active' });
     }
-    return () => setAlertsScreenFocused(false);
+    return () => {
+      setAlertsScreenFocused(false);
+      tabInFrontRef.current = false;
+    };
   }, [queryClient, userId]));
 
   const notifications = flattenAlertPages(notificationsQuery.data);
