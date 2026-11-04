@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { expectOk } from '@/__tests__/fixtures/route-result';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -246,6 +246,208 @@ describe('deleteWorkflowCanvasForRoute', () => {
       status: 500,
       body: { error: 'Failed to delete workflow canvas.' },
     });
+  });
+});
+
+describe('the uploads a deleted canvas named', () => {
+  const UPLOAD = 'generated_images/user-1/workflow-input-11111111-1111-4111-8111-111111111111-cat.png';
+  const SECOND_UPLOAD = 'generated_videos/user-1/workflow-input-22222222-2222-4222-8222-222222222222-walk.mp4';
+  const SHOWN_OUTPUT = 'generated_images/user-1/generated_p9.png';
+
+  function canvasNaming(paths: string[]): CanvasRow {
+    const graph = createStarterGraph();
+    return {
+      id: 'canvas-1',
+      user_id: 'user-1',
+      title: 'Workflow to delete',
+      graph: {
+        ...graph,
+        nodes: [
+          ...graph.nodes,
+          ...paths.map((storagePath, index) => {
+            const node = createWorkflowNode(storagePath.includes('generated_videos') ? 'video-input' : 'image-input', { x: index * 100, y: 400 });
+            return { ...node, data: { ...node.data, storagePath } } as typeof node;
+          }),
+        ],
+      },
+      created_at: '2026-06-22T10:00:00.000Z',
+      updated_at: '2026-06-22T10:00:00.000Z',
+      revision: 2,
+    };
+  }
+
+  /** The service client the cleanup reads and removes with, answering from fixed rows. */
+  function createCleanupClient({
+    otherCanvases = [] as Array<{ id: string; graph: unknown }>,
+    runSteps = [] as Array<{ generation_id: string | null }>,
+    generations = [] as Array<{ id: string; status: string; workflow_settings: unknown }>,
+    inputMedia = [] as Array<{ generation_id: string; metadata: Record<string, unknown> | null }>,
+    legacy = [] as Array<{ id: string; user_id: string; workflow_settings: unknown }>,
+    failingTable = null as string | null,
+    legacyError = null as { message: string } | null,
+  } = {}) {
+    const removals: Array<{ bucket: string; paths: string[] }> = [];
+    const reads: string[] = [];
+    const rowsFor: Record<string, unknown[]> = {
+      workflow_canvas_runs: [{ id: 'run-1' }],
+      workflow_canvas_run_steps: runSteps,
+      workflow_canvases: otherCanvases,
+      generations,
+      generation_input_media: inputMedia,
+    };
+    const client = {
+      from(table: string) {
+        reads.push(table);
+        const query = {
+          select: () => query,
+          eq: () => query,
+          in: () => query,
+          then(resolve: (value: { data: unknown; error: unknown }) => unknown) {
+            if (failingTable === table) return Promise.resolve({ data: null, error: { message: `${table} unavailable` } }).then(resolve);
+            return Promise.resolve({ data: rowsFor[table] ?? [], error: null }).then(resolve);
+          },
+        };
+        return query;
+      },
+      rpc: vi.fn(async () => (legacyError ? { data: null, error: legacyError } : { data: legacy, error: null })),
+      storage: {
+        from: (bucket: string) => ({
+          remove: async (paths: string[]) => {
+            removals.push({ bucket, paths });
+            return { data: [], error: null };
+          },
+        }),
+      },
+    };
+    return { client: client as unknown as SupabaseClient, removals, reads };
+  }
+
+  async function deleteCanvas(canvas: CanvasRow, cleanup: ReturnType<typeof createCleanupClient>, options: { failDelete?: boolean } = {}) {
+    const supabase = createSupabaseMock(canvas);
+    if (options.failDelete) supabase.failDelete({ message: 'database unavailable' });
+    return deleteWorkflowCanvasForRoute({
+      canvasId: 'canvas-1',
+      supabase: supabase.client,
+      userId: 'user-1',
+      createCleanupClient: () => cleanup.client,
+    });
+  }
+
+  it('go when nothing else names them, and a creation the canvas showed stays', async () => {
+    const cleanup = createCleanupClient();
+
+    const result = await deleteCanvas(canvasNaming([UPLOAD, SECOND_UPLOAD, SHOWN_OUTPUT]), cleanup);
+
+    expect(result).toEqual({ ok: true, body: { success: true } });
+    expect(cleanup.removals).toEqual([
+      { bucket: 'generated_images', paths: ['user-1/workflow-input-11111111-1111-4111-8111-111111111111-cat.png'] },
+      { bucket: 'generated_videos', paths: ['user-1/workflow-input-22222222-2222-4222-8222-222222222222-walk.mp4'] },
+    ]);
+  });
+
+  it('stay while another canvas of the account names them', async () => {
+    const cleanup = createCleanupClient({ otherCanvases: [{ id: 'canvas-2', graph: canvasNaming([UPLOAD]).graph }] });
+
+    await deleteCanvas(canvasNaming([UPLOAD, SECOND_UPLOAD]), cleanup);
+
+    expect(cleanup.removals).toEqual([
+      { bucket: 'generated_videos', paths: ['user-1/workflow-input-22222222-2222-4222-8222-222222222222-walk.mp4'] },
+    ]);
+  });
+
+  it('stay while a finished creation of its runs reads one it holds no copy of', async () => {
+    const cleanup = createCleanupClient({
+      runSteps: [{ generation_id: 'gen-1' }, { generation_id: null }],
+      generations: [{ id: 'gen-1', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
+      inputMedia: [],
+    });
+
+    await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+    expect(cleanup.removals).toEqual([]);
+  });
+
+  it('go once each finished creation that read them keeps its own copy', async () => {
+    const cleanup = createCleanupClient({
+      runSteps: [{ generation_id: 'gen-1' }],
+      generations: [{ id: 'gen-1', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
+      inputMedia: [{ generation_id: 'gen-1', metadata: { sourceStoragePath: UPLOAD } }],
+    });
+
+    await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+    expect(cleanup.removals).toEqual([
+      { bucket: 'generated_images', paths: ['user-1/workflow-input-11111111-1111-4111-8111-111111111111-cat.png'] },
+    ]);
+  });
+
+  it('stay while a creation that reads them is still rendering', async () => {
+    const cleanup = createCleanupClient({
+      runSteps: [{ generation_id: 'gen-1' }],
+      generations: [{ id: 'gen-1', status: 'processing', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
+      inputMedia: [{ generation_id: 'gen-1', metadata: { sourceStoragePath: UPLOAD } }],
+    });
+
+    await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+    expect(cleanup.removals).toEqual([]);
+  });
+
+  it('stay while a creation with no kept inputs names them', async () => {
+    const cleanup = createCleanupClient({
+      legacy: [{ id: 'gen-old', user_id: 'user-1', workflow_settings: { imageUrls: [UPLOAD] } }],
+    });
+
+    await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+    expect(cleanup.removals).toEqual([]);
+  });
+
+  it.each([
+    'workflow_canvas_runs',
+    'workflow_canvas_run_steps',
+    'workflow_canvases',
+    'generations',
+    'generation_input_media',
+  ])('stay when %s cannot be read', async (failingTable) => {
+    const cleanup = createCleanupClient({
+      failingTable,
+      runSteps: [{ generation_id: 'gen-1' }],
+      generations: [{ id: 'gen-1', status: 'succeeded', workflow_settings: { references: [{ storagePath: UPLOAD }] } }],
+      inputMedia: [{ generation_id: 'gen-1', metadata: { sourceStoragePath: UPLOAD } }],
+    });
+
+    const result = await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+
+    expect(result).toEqual({ ok: true, body: { success: true } });
+    expect(cleanup.removals).toEqual([]);
+  });
+
+  it('stay when the scan of creations with no kept inputs fails or may be cut short', async () => {
+    for (const cleanup of [
+      createCleanupClient({ legacyError: { message: 'rpc unavailable' } }),
+      createCleanupClient({ legacy: Array.from({ length: 1000 }, (_, index) => ({ id: `gen-${index}`, user_id: 'user-2', workflow_settings: {} })) }),
+    ]) {
+      await deleteCanvas(canvasNaming([UPLOAD]), cleanup);
+      expect(cleanup.removals).toEqual([]);
+    }
+  });
+
+  it('stay when the canvas is not deleted', async () => {
+    const cleanup = createCleanupClient();
+
+    await expect(deleteCanvas(canvasNaming([UPLOAD]), cleanup, { failDelete: true }))
+      .resolves.toMatchObject({ ok: false, status: 500 });
+    expect(cleanup.removals).toEqual([]);
+  });
+
+  it('reads nothing more for a canvas that names no upload', async () => {
+    const cleanup = createCleanupClient();
+
+    await deleteCanvas(canvasNaming([SHOWN_OUTPUT]), cleanup);
+
+    expect(cleanup.reads).toEqual([]);
+    expect(cleanup.removals).toEqual([]);
   });
 });
 

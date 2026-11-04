@@ -197,6 +197,7 @@ export async function deleteWorkflowCanvasRouteResponse({
       canvasId,
       supabase: auth.auth.supabase,
       userId: auth.auth.userId,
+      createCleanupClient: resolvedDependencies.createServiceClient,
     })),
     request,
   );
