@@ -30,6 +30,8 @@ function createServiceClientMock() {
 
       throw new Error(`Unexpected rpc: ${fn}`);
     }),
+    // The asset's record of who prepared it and from what (owner, 2026-11-04).
+    from: vi.fn(() => ({ insert: vi.fn(async () => ({ data: null, error: null })) })),
   };
 }
 

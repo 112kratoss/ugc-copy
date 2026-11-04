@@ -102,6 +102,24 @@ export function recipeFileCopyOf(input: GenerationInputOriginSource, ownerIds: R
     ?? sourcePaths(input).reduce<string | null>((found, path) => found ?? recipeCopyOfSource(path, ownerIds), null);
 }
 
+/**
+ * The recipe file a held input stands for, as `post_resource_files/<seller>/<path>`, for a read of it
+ * (`recipe_file_readable_by`): the copy it was imported from (`recipeFileCopyOf`), or else the seller's
+ * file its sources name, a recipe's own upload included. `''` for an input marked as a recipe file whose
+ * file is on no record, which only the server reads; null for one of the holder's own.
+ */
+export function heldRecipeFileOf(input: GenerationInputOriginSource, holderIds: ReadonlySet<string>): string | null {
+  if (!isRecipeFileInput(input, holderIds)) return null;
+  const copy = recipeFileCopyOf(input, holderIds);
+  if (copy) return copy;
+  for (const path of sourcePaths(input)) {
+    if (!isRecipeFileSource(path, holderIds) || isRecipeImportSource(path)) continue;
+    const location = getCanonicalStoredMediaLocation(path!);
+    if (location?.bucket === RECIPE_FILES_BUCKET) return `${RECIPE_FILES_BUCKET}/${location.filePath}`;
+  }
+  return '';
+}
+
 export function generationInputOrigin(
   input: GenerationInputOriginSource,
   context: GenerationInputOriginContext,

@@ -24,6 +24,12 @@ import {
   startUnifiedGenerationForRoute,
 } from '@/lib/unified-generation-start-service';
 
+// Whether each Seedance asset id a run sends may run for its caller (owner, 2026-11-04), allowed here:
+// asked in seedance-asset-provenance.test.ts and generation-services.test.ts.
+vi.mock('@/lib/seedance-asset-provenance', () => ({
+  checkSeedanceAssetsUsable: async () => ({ ok: true }),
+}));
+
 describe('unified generation start service', () => {
   it('requires the client catalog revision and keeps model IDs open-ended', () => {
     expect(() => parseUnifiedGenerationRequest({

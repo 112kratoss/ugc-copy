@@ -42,6 +42,8 @@ const PUBLIC_GENERATION = {
   share_input_media_for_remix: false,
   template_run_id: null,
   template_run_step_id: null,
+  archived_at: null,
+  moderation_removed_at: null,
 };
 /** The creation's post as the feed shows it: public, live and visible. */
 const EXPOSED_POST = {
@@ -156,6 +158,21 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
     expect(stub.copy).toHaveBeenCalledTimes(1);
     expect(stub.copy).toHaveBeenCalledWith(COPY, DESTINATION, { destinationBucket: 'generation_inputs' });
     expect(stub.createSignedUrl).toHaveBeenCalledWith(DESTINATION, 3600);
+  });
+
+  // Owner, 2026-11-04: a creation its creator archived or an operator removed lends its copies to no
+  // start, read at every start: un-archiving it restores them. The generation's own two marks decide,
+  // whatever the post says.
+  it.each([
+    ['archived by its creator', { archived_at: '2026-11-04T00:00:00.000Z' }],
+    ['removed by an operator', { moderation_removed_at: '2026-11-04T00:00:00.000Z' }],
+  ])('imports no copy of a creation %s, and copies nothing', async (_, marks) => {
+    const offView = setUp({ tables: { generations: [{ ...PUBLIC_GENERATION, ...marks }] } });
+
+    await expect(importAs(VIEWER, SOURCE, offView)).resolves.toEqual({ outcome: 'not-eligible' });
+    expect(offView.copy).not.toHaveBeenCalled();
+    await expect(importAs(VIEWER, SOURCE, setUp({ tables: { generations: [{ ...PUBLIC_GENERATION, archived_at: null }] } })))
+      .resolves.toMatchObject({ outcome: 'imported' });
   });
 
   // A seller who edits a sold recipe takes back nothing its buyers paid for.
@@ -398,15 +415,16 @@ describe('reusing a recipe file the caller already holds', () => {
     await expect(reuse(KEPT, unknownCopy)).resolves.toEqual({ outcome: 'not-eligible' });
   });
 
-  // 2026-11-04 re-review: a failed read of a kept input's row answered `failed`, so a creator's own re-run
-  // of their own upload failed with a refusal about shared media. Unread, the path decides, as it does
-  // where an input is kept (`findRecipeFileCandidates`): only a start's import is a recipe file by its
-  // path, and a kept input in the caller's own folder is theirs to read whatever its row says.
-  it('leaves a kept input whose row cannot be read to the start, as its path says it is the caller’s own', async () => {
+  // 2026-11-04 review: since 20261103232019 storage refuses a buyer a kept recipe file they no longer
+  // hold, so a kept input whose row cannot be read is no longer theirs by its path. Left to the start,
+  // it was signed with the service role, and a Seedance asset made of it recorded as their own file for
+  // good. It fails retryably instead; any other own file whose row read fails is left to the start.
+  it('fails a run’s kept input whose row cannot be read retryably, never taking it for the caller’s own', async () => {
     const unreadable = setUp({ tables: { generation_input_media: databaseError('57014', 'canceling statement due to statement timeout') } });
 
-    await expect(reuse(KEPT, unreadable)).resolves.toBeNull();
+    await expect(reuse(KEPT, unreadable)).resolves.toEqual({ outcome: 'failed' });
     expect(unreadable.copy).not.toHaveBeenCalled();
+    await expect(reuse(`generation_inputs/${VIEWER}/uploads/face.png`, unreadable)).resolves.toBeNull();
     // A start's import is a recipe file by its path all the same: checked as its copy, whose own read
     // of the creation's rows fails retryably here, never left to the start as the caller's own.
     await expect(reuse(`generation_inputs/${DESTINATION}`, unreadable)).resolves.toEqual({ outcome: 'failed' });

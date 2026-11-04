@@ -292,6 +292,12 @@ function createSupabaseMock(
   };
 }
 
+// Whether each Seedance asset id a run sends may run for its caller (owner, 2026-11-04), allowed here:
+// asked in seedance-asset-provenance.test.ts and generation-services.test.ts.
+vi.mock('@/lib/seedance-asset-provenance', () => ({
+  checkSeedanceAssetsUsable: async () => ({ ok: true }),
+}));
+
 vi.mock('next/server', async () => {
   const actual = await vi.importActual<typeof import('next/server')>('next/server');
 

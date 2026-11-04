@@ -8,6 +8,7 @@ import {
   recipeFileCopyOf,
 } from '@/lib/generation-input-origin';
 import { RECIPE_IMPORT_FOLDER } from '@/lib/recipe-file-paths';
+import { withholdUnreadableRecipeFileInputs } from '@/lib/recipe-copy-access';
 import {
   isValidElementHandle,
   normalizeSubmittedElementDescriptors,
@@ -780,7 +781,7 @@ export async function loadGenerationInputMediaMap(params: {
       ? await signPreparedGenerationInputMedia(params.supabase, preparedRows)
       : new Map<string, string>();
 
-    for (const prepared of preparedRows) {
+    const items = preparedRows.map((prepared) => {
       const { row, location, trustedStoragePath } = prepared;
       let url: string | null = null;
 
@@ -800,9 +801,18 @@ export async function loadGenerationInputMediaMap(params: {
       if (params.recipeCopyableFor) {
         item.recipeCopyable = isRecipeCopyableInputRow(row, params.recipeCopyableFor);
       }
-      const nextItems = inputMap.get(row.generation_id) ?? [];
+      return item;
+    });
+    // A kept input made from a recipe file is linked only while its holder may still read that file
+    // (owner, 2026-11-04): a refund, a retracted purchase, or the copy's creation removed or archived.
+    const withheld = params.urlMode === 'none'
+      ? items
+      : await withholdUnreadableRecipeFileInputsByHolder(params.supabase, preparedRows.map(({ row }) => row.user_id), items);
+
+    for (const item of withheld) {
+      const nextItems = inputMap.get(item.generationId) ?? [];
       nextItems.push(item);
-      inputMap.set(row.generation_id, nextItems);
+      inputMap.set(item.generationId, nextItems);
     }
   } catch (error) {
     logBackendError('failed_to_load_generation_input_media', { error: error });
@@ -810,6 +820,29 @@ export async function loadGenerationInputMediaMap(params: {
   }
 
   return inputMap;
+}
+
+/** `withholdUnreadableRecipeFileInputs` for items of several holders, each the holder at its place. */
+async function withholdUnreadableRecipeFileInputsByHolder(
+  supabase: SupabaseClient,
+  holders: readonly string[],
+  items: GenerationInputMediaItem[],
+): Promise<GenerationInputMediaItem[]> {
+  const byHolder = new Map<string, number[]>();
+  items.forEach((_item, index) => {
+    const holder = holders[index];
+    if (holder) byHolder.set(holder, [...(byHolder.get(holder) ?? []), index]);
+  });
+  const result = [...items];
+  await Promise.all([...byHolder].map(async ([holderUserId, indexes]) => {
+    const checked = await withholdUnreadableRecipeFileInputs({
+      adminSupabase: supabase,
+      holderUserId,
+      items: indexes.map((index) => items[index]!),
+    });
+    checked.forEach((item, position) => { result[indexes[position]!] = item; });
+  }));
+  return result;
 }
 
 async function resolveLegacyStorageUrl(
@@ -1185,7 +1218,11 @@ export async function buildLegacyGenerationInputMedia(params: {
   });
   if (referenceVideo) items.push(referenceVideo);
 
-  return items;
+  // An older run's settings can name a run start's import of a recipe copy: linked, as a kept input
+  // made from one is, only while its holder may still read the copy.
+  return urlMode === 'signed' && params.ownerUserId
+    ? withholdUnreadableRecipeFileInputs({ adminSupabase: params.supabase, holderUserId: params.ownerUserId, items })
+    : items;
 }
 
 /**

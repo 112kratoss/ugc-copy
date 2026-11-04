@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
+import { withholdCopiesOfCreationsOffView } from '@/lib/recipe-copy-access';
 import { createServiceClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 import {
@@ -461,31 +462,39 @@ function isReadablePublishedBundleRow(row: Record<string, unknown>): boolean {
     typeof row.price_usd_cents === 'number';
 }
 
-function buildMarketplaceAssetSummaryMap(
-  bundleRows: Array<Record<string, unknown>>
-): Map<string, ShowcaseAssetSummary> {
+async function buildMarketplaceAssetSummaryMap(
+  bundleRows: Array<Record<string, unknown>>,
+  adminSupabase: SupabaseClient,
+): Promise<Map<string, ShowcaseAssetSummary>> {
+  const readable = bundleRows.filter(isReadablePublishedBundleRow).map((row) => {
+    const legacyResources: Partial<PostResourceBundleResources> = {
+      promptText: typeof row.prompt_text === 'string' ? row.prompt_text : null,
+      notesMarkdown: typeof row.notes_markdown === 'string' ? row.notes_markdown : null,
+      workflowShareUrl: typeof row.workflow_share_url === 'string' ? row.workflow_share_url : null,
+      workflowSnapshot: row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
+      attachments: normalizePostResourceAttachments(row.attachments),
+      allowRemix: Boolean(row.allow_remix),
+      sections: normalizePostResourceSections((row as { resource_sections?: unknown }).resource_sections),
+    };
+    const normalizedResources = {
+      ...legacyResources,
+      items: normalizePostResourceItems((row as { resource_items?: unknown }).resource_items, legacyResources),
+    };
+    return { row, normalizedResources };
+  });
+  // The feed, the reel, saved posts and the home shelf sell a recipe by these counts: none of them
+  // counts the copies of a creation now removed or archived (owner, 2026-11-04), which no buyer gets.
+  // One read of those creations for the whole page.
+  await withholdCopiesOfCreationsOffView(adminSupabase, readable.map(({ normalizedResources }) => normalizedResources));
+
   return new Map(
-    bundleRows
-      .filter(isReadablePublishedBundleRow)
-      .map((row) => {
+    readable
+      .map(({ row, normalizedResources }) => {
+        const resourceItems = normalizedResources.items ?? [];
         const salesCount = typeof row.sales_count === 'number' ? row.sales_count : 0;
         // Absent from the missing-RPC fallback's select, which serves only a
         // database that predates both the RPC and this column.
         const freeUnlockCount = typeof row.free_unlock_count === 'number' ? row.free_unlock_count : 0;
-        const legacyResources: Partial<PostResourceBundleResources> = {
-          promptText: typeof row.prompt_text === 'string' ? row.prompt_text : null,
-          notesMarkdown: typeof row.notes_markdown === 'string' ? row.notes_markdown : null,
-          workflowShareUrl: typeof row.workflow_share_url === 'string' ? row.workflow_share_url : null,
-          workflowSnapshot: row.workflow_snapshot as PostResourceBundleResources['workflowSnapshot'],
-          attachments: normalizePostResourceAttachments(row.attachments),
-          allowRemix: Boolean(row.allow_remix),
-          sections: normalizePostResourceSections((row as { resource_sections?: unknown }).resource_sections),
-        };
-        const resourceItems = normalizePostResourceItems((row as { resource_items?: unknown }).resource_items, legacyResources);
-        const normalizedResources = {
-          ...legacyResources,
-          items: resourceItems,
-        };
         // Public surfaces serve this summary, so its preview is the teaser from
         // the start (counts, kinds, generic names): a read that forgot to
         // sanitize has none of the creator's titles, cards, files or sizes.
@@ -516,8 +525,11 @@ function buildMarketplaceAssetSummaryMap(
 }
 
 /** The summaries of the published recipes among `rows`, and the published ones it could not read. */
-function hydrateBundleSummaryRows(rows: Array<Record<string, unknown>>): MarketplaceAssetSummaryHydration {
-  const assetMap = buildMarketplaceAssetSummaryMap(rows);
+async function hydrateBundleSummaryRows(
+  rows: Array<Record<string, unknown>>,
+  adminSupabase: SupabaseClient,
+): Promise<MarketplaceAssetSummaryHydration> {
+  const assetMap = await buildMarketplaceAssetSummaryMap(rows, adminSupabase);
   const unreadRecipePostIds = new Set(
     rows
       .filter((row) => row.status === 'published' && typeof row.post_id === 'string' && !assetMap.has(row.post_id))
@@ -530,9 +542,10 @@ function hydrateBundleSummaryRows(rows: Array<Record<string, unknown>>): Marketp
 }
 
 /** The summaries call's rows, or null when they cannot be trusted. */
-function hydratePublicBundleSummaryRows(
-  rows: Array<Record<string, unknown>>
-): MarketplaceAssetSummaryHydration | null {
+async function hydratePublicBundleSummaryRows(
+  rows: Array<Record<string, unknown>>,
+  adminSupabase: SupabaseClient,
+): Promise<MarketplaceAssetSummaryHydration | null> {
   for (const row of rows) {
     if (typeof row.post_id !== 'string') {
       logBackendError('public_bundle_summary_rpc_returned_a_row_without_a_post_id');
@@ -547,7 +560,7 @@ function hydratePublicBundleSummaryRows(
     }
   }
 
-  return hydrateBundleSummaryRows(rows);
+  return hydrateBundleSummaryRows(rows, adminSupabase);
 }
 
 /**
@@ -624,7 +637,7 @@ async function getMarketplaceAssetSummaryHydrationFallback(
     return { assetMap: new Map(), unreadRecipePostIds: new Set(publishedPostIds) };
   }
 
-  return hydrateBundleSummaryRows((bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>);
+  return hydrateBundleSummaryRows((bundleResult.data ?? []) as unknown as Array<Record<string, unknown>>, adminSupabase);
 }
 
 async function getLegacyMarketplaceAssetSummaryHydration(
@@ -700,7 +713,7 @@ export async function getMarketplaceAssetSummaryHydration(
         logBackendError('public_bundle_summary_rpc_returned_an_invalid_response');
         return lockPublishedRecipes(postIds, adminSupabase);
       }
-      return hydratePublicBundleSummaryRows(data as Array<Record<string, unknown>>)
+      return (await hydratePublicBundleSummaryRows(data as Array<Record<string, unknown>>, adminSupabase))
         ?? lockPublishedRecipes(postIds, adminSupabase);
     }
     if (!isMissingPublicBundleSummaryRpcError(error)) {

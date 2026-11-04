@@ -17,6 +17,8 @@ import {
   PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
 import { reuseRecipeFile as defaultReuseRecipeFile } from '@/lib/generation-reference-copy-import';
+import { recipeCopyOfSource } from '@/lib/recipe-file-paths';
+import { recordPreparedSeedanceAsset } from '@/lib/seedance-asset-provenance';
 import { resolveOwnedStoredMediaUrl as defaultResolveStoredMediaUrl } from '@/lib/server-helpers';
 import { getUserOwnedStoredMediaLocation } from '@/lib/storage-ownership';
 
@@ -199,6 +201,7 @@ export async function createSeedanceAssetForRoute({
   fetcher = fetch,
   resolveStoredMediaUrl = defaultResolveStoredMediaUrl,
   reuseRecipeFile = defaultReuseRecipeFile,
+  recordPreparedAsset = recordPreparedSeedanceAsset,
   userId,
 }: {
   adminSupabase: SupabaseClient;
@@ -207,6 +210,7 @@ export async function createSeedanceAssetForRoute({
   fetcher?: typeof fetch;
   resolveStoredMediaUrl?: ResolveStoredMediaUrl;
   reuseRecipeFile?: (params: { source: string; viewerUserId: string }) => ReturnType<typeof defaultReuseRecipeFile>;
+  recordPreparedAsset?: typeof recordPreparedSeedanceAsset;
   userId: string;
 }): Promise<SeedanceAssetRouteResult> {
   const normalizedAssetType = normalizeAssetType(body.assetType);
@@ -276,11 +280,29 @@ export async function createSeedanceAssetForRoute({
     const data = await parseResponse(response);
     const payload = extractAssetPayloadValue(data) ?? data;
     const rawStatus = extractRawStatus(payload) ?? 'processing';
+    const assetId = extractAssetId(payload);
+
+    // Which file the asset runs, and whose (owner, 2026-11-04): a start refuses an asset prepared from
+    // a recipe file its caller can no longer use (`checkSeedanceAssetsUsable`). An id not recorded is
+    // never handed out, since a start could not tell what it runs.
+    if (assetId) {
+      const recorded = await recordPreparedAsset({
+        adminSupabase,
+        assetId,
+        ownerUserId: userId,
+        source: normalizedUrl,
+        recipeFile: recipeFile ? recipeCopyOfSource(recipeFile.storagePath, new Set([userId])) ?? '' : null,
+        recordedFrom: 'prepare',
+      });
+      if (!recorded) {
+        return { ok: false, status: 500, body: { error: 'Failed to create Seedance asset' } };
+      }
+    }
 
     return {
       ok: true,
       body: createProviderPayload({
-        assetId: extractAssetId(payload),
+        assetId,
         assetType: normalizedAssetType,
         payload,
         rawStatus,

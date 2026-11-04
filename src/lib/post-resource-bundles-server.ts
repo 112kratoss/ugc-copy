@@ -33,6 +33,7 @@ import {
 import { getCreatorDisplayName } from '@/lib/profile';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
+import { loadWithheldCopyCreations, withholdCopiesOfCreationsOffView } from '@/lib/recipe-copy-access';
 import {
   createServiceClient,
 } from '@/lib/server-helpers';
@@ -1980,6 +1981,11 @@ export async function loadGenerationRecipeReferenceCopies(params: {
     generationId: params.generationId,
     inputRowIds: params.inputRowIds,
   });
+  // None of a creation its operator removed or its creator archived (owner, 2026-11-04), read now, so
+  // un-archiving restores them: not to a remix, and not to a run start's import.
+  if (filePaths.size > 0 && (await loadWithheldCopyCreations(adminSupabase, filePaths.values())).size > 0) {
+    return new Map();
+  }
 
   return new Map(await Promise.all([...filePaths].map(async ([rowId, filePath]) => {
     const storagePath = `${RECIPE_FILES_BUCKET}/${filePath}`;
@@ -2447,6 +2453,11 @@ async function hydrateRecipes(
     rows = rows.filter((row) => !nsfwIds.has(row.post_id));
   }
   const storedResourcesByBundleId = new Map(rows.map((row) => [row.id, normalizeResources(row)]));
+  // Anyone but the seller is neither served nor sold the copies of a creation now removed or archived
+  // (owner, 2026-11-04): the teaser's counts and kinds leave them out, as the unlock does.
+  if (scope !== 'owner') {
+    await withholdCopiesOfCreationsOffView(createServiceClient(), [...storedResourcesByBundleId.values()]);
+  }
   const [profilesMap, postMap, contentUpdatedAtMap, creationReferenceCounts] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
     loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews, throwOnPostReadError),
@@ -3575,6 +3586,13 @@ export async function getPostResourceBundleDetailByPostId(
     } catch (error) {
       logBackendError(creationInputsFailure, { error: error });
     }
+  }
+  // A buyer is not served the copies of a creation now off public view (owner, 2026-11-04): an
+  // operator's removal or its creator's archive withholds them from the recipe as it stands and from
+  // the version they bought, and so from every file route that signs from those. Un-archiving serves
+  // them again. The seller's editor keeps them: they are the seller's files.
+  if (viewerCanAccess && !viewerIsOwner) {
+    await withholdCopiesOfCreationsOffView(adminSupabase, [normalizedResources, purchasedRevision?.resources]);
   }
   const lockedPreview = referenceCounts
     ? addPostResourceItemCountsToLockedPreview(hydrated.lockedPreview, referenceCounts)

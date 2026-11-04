@@ -705,6 +705,111 @@ describe('generation input media loading', () => {
 
 // A video run can send clips and tracks as plain URLs. Only prepared assets
 // were kept, so a remix of such a run restored its images and lost the clip.
+// Owner, 2026-11-04: a buyer's access ends with their unlock. A kept input made from a recipe's file
+// sits in the buyer's own folder, so it was signed for them for good, a refund or an archive since
+// notwithstanding. It is linked only while `recipe_files_readable_by` says they may read that file.
+describe('a kept input made from a recipe file the holder may no longer read', () => {
+  const SELLER = '11111111-1111-4111-8111-111111111111';
+  const CREATION = '22222222-2222-4222-8222-222222222222';
+  const COPY = `post_resource_files/${SELLER}/generation-references/${CREATION}/00-reference-image-row-1.png`;
+  const row = (id: string, storagePath: string, metadata: Record<string, unknown> | null) => ({
+    id,
+    generation_id: 'gen-1',
+    user_id: 'buyer-1',
+    media_type: 'image',
+    role: 'reference_image',
+    label: id,
+    storage_path: storagePath,
+    source_generation_id: null,
+    sort_order: id === 'from-recipe' ? 0 : 1,
+    metadata,
+  });
+  const rows = [
+    row('from-recipe', 'generation_inputs/buyer-1/gen-1/00-reference-image.png', { sourceKind: 'recipe-file', recipeFile: COPY }),
+    row('own', 'generation_inputs/buyer-1/gen-1/01-reference-image.png', { sourceStoragePath: 'uploads/buyer-1/own.png' }),
+  ];
+  const client = (readable: string[] | { error: { message: string } }) => {
+    const rpc = vi.fn(async () => (Array.isArray(readable) ? { data: readable, error: null } : { data: null, error: readable.error }));
+    return {
+      rpc,
+      supabase: {
+        from: vi.fn(() => ({
+          select: vi.fn(() => ({
+            in: vi.fn(() => ({ order: vi.fn(async () => ({ data: rows, error: null })) })),
+          })),
+        })),
+        rpc,
+        storage: {
+          from: vi.fn((bucket: string) => ({
+            createSignedUrls: vi.fn(async (paths: string[]) => ({
+              data: paths.map((path) => ({ error: null, path, signedUrl: `https://signed.example.com/${bucket}/${path}` })),
+              error: null,
+            })),
+          })),
+        },
+      },
+    };
+  };
+  const urls = async (supabase: unknown) => {
+    const { loadGenerationInputMediaMap } = await import('@/lib/generation-input-media');
+    const result = await loadGenerationInputMediaMap({ supabase: supabase as never, generationIds: ['gen-1'], urlMode: 'signed' });
+    return Object.fromEntries((result.get('gen-1') ?? []).map((item) => [item.id, item.url]));
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('links it while the holder may read the recipe file, asking for the holder', async () => {
+    const { supabase, rpc } = client([COPY]);
+    expect(await urls(supabase)).toEqual({
+      'from-recipe': 'https://signed.example.com/generation_inputs/buyer-1/gen-1/00-reference-image.png',
+      own: 'https://signed.example.com/generation_inputs/buyer-1/gen-1/01-reference-image.png',
+    });
+    expect(rpc).toHaveBeenCalledWith('recipe_files_readable_by', { p_viewer_user_id: 'buyer-1', p_paths: [COPY] });
+  });
+
+  it('withholds it after a refund or an archive, and keeps the holder’s own input linked', async () => {
+    const { supabase } = client([]);
+    expect(await urls(supabase)).toEqual({
+      'from-recipe': null,
+      own: 'https://signed.example.com/generation_inputs/buyer-1/gen-1/01-reference-image.png',
+    });
+  });
+
+  it('withholds it when the read fails, never taking a failure for leave', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { supabase } = client({ error: { message: 'statement timeout' } });
+    expect(await urls(supabase)).toEqual({
+      'from-recipe': null,
+      own: 'https://signed.example.com/generation_inputs/buyer-1/gen-1/01-reference-image.png',
+    });
+  });
+
+  it('withholds an older run’s link to a run start’s import of a copy the holder no longer has', async () => {
+    const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const IMPORT = `generation_inputs/buyer-1/recipe-imports/${SELLER}/${CREATION}/00-reference-image-row-1.png`;
+    const rpc = vi.fn(async () => ({ data: [], error: null }));
+    const supabase = {
+      rpc,
+      storage: {
+        from: vi.fn(() => ({
+          createSignedUrl: vi.fn(async (path: string) => ({ data: { signedUrl: `https://signed.example.com/${path}` }, error: null })),
+        })),
+      },
+    };
+    const items = await buildLegacyGenerationInputMedia({
+      supabase: supabase as never,
+      generationId: 'gen-1',
+      ownerUserId: 'buyer-1',
+      category: 'image',
+      workflowSettings: { startFrame: { kind: 'image', storagePath: IMPORT } },
+    });
+    expect(items.map((item) => [item.role, item.url])).toEqual([['start_frame', null]]);
+    expect(rpc).toHaveBeenCalledWith('recipe_files_readable_by', { p_viewer_user_id: 'buyer-1', p_paths: [COPY] });
+  });
+});
+
 describe('reference clips and tracks sent as plain URLs', () => {
   it('keeps each one under the name and staged file the caller gave it', async () => {
     const { collectReferenceMediaCandidates } = await import('@/lib/generation-input-media');
