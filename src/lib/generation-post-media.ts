@@ -223,9 +223,14 @@ export async function createGenerationShowcaseDerivative({
 
   if (uploadError && !isExistingStorageObjectError(uploadError)) {
     if (upsert) {
-      // The copy this call made is named by nothing: it goes with the failure.
-      await adminSupabase.storage.from(postMediaStorageBucket(showcaseAssetPath)).remove([showcaseAssetPath])
-        .catch(() => undefined);
+      // The copy this call made keeps a header or type the upload would not
+      // set, and this publish records nothing. Another publish of the same
+      // creation may have recorded its name meanwhile (the name is the source
+      // URL's), so it goes to the revocation queue rather than an inline
+      // remove: the job keeps it if something names it, and removes it if
+      // not. A private-posts copy has no such queue and stays to the orphan
+      // listing; it is private either way.
+      await queueUnrecordedShowcaseMedia(adminSupabase, [showcaseAssetPath]);
     }
     throw new Error(`Failed to upload showcase derivative: ${uploadError.message}`);
   }

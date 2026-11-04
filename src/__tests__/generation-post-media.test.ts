@@ -704,6 +704,7 @@ describe('createGenerationShowcaseDerivative', () => {
     copiedCacheControl,
     copyError = null,
     existing = false,
+    uploadError = null,
   }: {
     sourceCacheControl?: string;
     sourceContentType?: string;
@@ -711,8 +712,10 @@ describe('createGenerationShowcaseDerivative', () => {
     copiedCacheControl?: string;
     copyError?: { message: string; statusCode?: string } | null;
     existing?: boolean;
+    uploadError?: { message: string } | null;
   } = {}) {
     const calls: string[] = [];
+    const queued: unknown[] = [];
     const objects = new Map<string, { cacheControl: string; contentType: string }>();
     if (existing) objects.set('showcase_media/showcase/gen-1/generated_p1.KEY.png', { cacheControl: 'max-age=86400', contentType: 'image/png' });
     const client = {
@@ -752,6 +755,7 @@ describe('createGenerationShowcaseDerivative', () => {
             }),
             upload: async (path: string, _body: unknown, options: { cacheControl: string; contentType: string; upsert: boolean }) => {
               calls.push(`upload ${bucket}/${path} upsert=${options.upsert}`);
+              if (uploadError) return { data: null, error: uploadError };
               objects.set(`${bucket}/${path}`, { cacheControl: `max-age=${options.cacheControl}`, contentType: options.contentType });
               return { data: { path }, error: null };
             },
@@ -763,7 +767,15 @@ describe('createGenerationShowcaseDerivative', () => {
         },
       },
     };
-    return { client: client as never, calls, objects };
+    const withRpc = {
+      ...client,
+      rpc: async (name: string, args: unknown) => {
+        calls.push(`rpc ${name}`);
+        queued.push(args);
+        return { data: 1, error: null };
+      },
+    };
+    return { client: withRpc as never, calls, objects, queued };
   }
 
   async function publish(storage: ReturnType<typeof createStorage>, outputUrl = OUTPUT) {
@@ -832,6 +844,18 @@ describe('createGenerationShowcaseDerivative', () => {
       adminSupabase: storage.client, category: 'image', generationId: 'gen-1', ownerUserId: 'user-1', outputUrl: OUTPUT,
     })).resolves.toBe(first);
     expect(storage.calls.filter((call) => call.startsWith('download') || call.startsWith('upload'))).toEqual([]);
+  });
+
+  // Another publish of the same creation may have recorded the copy's name in
+  // the meantime: the revocation job keeps it if so, and removes it if not.
+  it('hands a copy it made and could not write over to the revocation queue, removing nothing itself', async () => {
+    const storage = createStorage({ copiedCacheControl: 'no-cache', uploadError: { message: 'storage unavailable' } });
+
+    await expect(publish(storage)).rejects.toThrow('Failed to upload showcase derivative');
+
+    expect(storage.calls.some((call) => call.startsWith('remove'))).toBe(false);
+    expect(storage.calls).toContain('rpc queue_unrecorded_showcase_media');
+    expect(JSON.stringify(storage.queued)).toMatch(/showcase\/gen-1\/generated_p1\.[0-9a-f]{12}\.png/);
   });
 
   it('reads and writes the bytes when the copy is refused', async () => {
