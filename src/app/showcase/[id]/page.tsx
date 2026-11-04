@@ -111,19 +111,36 @@ function resolveShowcaseOgImage(detail: PublicPostDetail): MetadataImage | undef
     ? { width: cover.width, height: cover.height }
     : {};
 
-  if (detail.mediaKind === 'image' && detail.mediaUrl) {
-    return { url: detail.mediaUrl, ...dimensions };
+  const image = detail.mediaKind === 'image' ? durableMediaUrl(detail.mediaUrl) : undefined;
+  if (image) {
+    return { url: image, ...dimensions };
   }
 
-  if (cover?.previewUrl && cover.previewStatus === 'ready') {
-    return { url: cover.previewUrl, ...dimensions };
+  const poster = cover?.previewStatus === 'ready' ? durableMediaUrl(cover.previewUrl) : undefined;
+  if (poster) {
+    return { url: poster, ...dimensions };
   }
 
   // Legacy posts predating post_media carry no poster at all, and a freshly
   // published video's poster is still rendering. Both fall back to the site
-  // card rather than to a signed generation URL, which expires in an hour and
-  // would leave crawlers caching a dead image.
+  // card, as a legacy image kept only in its creator's folder does: its only
+  // address is a signed one, which would leave crawlers caching a dead image.
   return undefined;
+}
+
+/**
+ * An address that still works when a crawler or a search engine comes back to
+ * it: never a signed Storage link, which runs out within hours (a legacy
+ * post's cover kept only in its creator's folder has no other). Public
+ * showcase addresses and the media proxy's are kept.
+ */
+function durableMediaUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return new URL(url, 'https://magicbooklet.com').pathname.includes('/storage/v1/object/sign/') ? undefined : url;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -149,11 +166,11 @@ function buildShowcaseMediaSchema(detail: PublicPostDetail) {
     ? buildVideoObjectSchema({
       ...shared,
       thumbnailUrl: ogImage?.url,
-      contentUrl: detail.mediaUrl ?? undefined,
+      contentUrl: durableMediaUrl(detail.mediaUrl),
     })
     : buildImageObjectSchema({
       ...shared,
-      contentUrl: detail.mediaUrl ?? undefined,
+      contentUrl: durableMediaUrl(detail.mediaUrl),
     });
 
   return [

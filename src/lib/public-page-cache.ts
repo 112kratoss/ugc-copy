@@ -2,6 +2,8 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import { withCachedPageMediaSignatures } from '@/lib/media-signature-scope';
+
 /**
  * How long a cached public page (`/showcase/[id]`, `/creators/[username]`,
  * `/marketplace`) may go without an event refreshing it. Every publish, edit,
@@ -55,6 +57,10 @@ function isMissingIncrementalCacheError(error: unknown): boolean {
  * everyone who opens the page. Nothing here may depend on a session, a cookie,
  * a header or the query string.
  *
+ * A link the read signs lasts longer than any cached copy of the page can be
+ * served (`withCachedPageMediaSignatures`), so a page is never shown with
+ * media whose link has run out.
+ *
  * Outside a Next request (vitest, scripts) there is no incremental cache, and
  * the read runs uncached, as `getMarketplaceResourceList` does in that case.
  */
@@ -68,7 +74,7 @@ export function cachePublicPageRead<Args extends string[], Result>(
     tags: [PUBLIC_PAGE_CACHE_TAG, ...extraTags],
   });
 
-  return async (...args: Args) => {
+  return (...args: Args) => withCachedPageMediaSignatures(async () => {
     try {
       return await cachedRead(...args);
     } catch (error) {
@@ -77,5 +83,5 @@ export function cachePublicPageRead<Args extends string[], Result>(
       }
       throw error;
     }
-  };
+  });
 }

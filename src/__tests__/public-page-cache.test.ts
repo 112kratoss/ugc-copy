@@ -22,6 +22,7 @@ vi.mock('next/cache', () => ({
 vi.mock('@/lib/supabase', () => ({ supabase: {} }));
 
 import { MARKETPLACE_RESOURCE_LIST_CACHE_TAG } from '@/lib/marketplace-resource-list-cache';
+import { CACHED_PAGE_MEDIA_SIGNATURE_SECONDS, mediaSignatureSeconds } from '@/lib/media-signature-scope';
 import {
   PUBLIC_PAGE_CACHE_TAG,
   PUBLIC_PAGE_REVALIDATE_SECONDS,
@@ -46,6 +47,16 @@ describe('the cached public pages', () => {
       keyParts: ['some-page-v1'],
       options: { revalidate: PUBLIC_PAGE_REVALIDATE_SECONDS, tags: [PUBLIC_PAGE_CACHE_TAG, 'some-tag'] },
     }]);
+  });
+
+  it('sign their media for longer than any cached copy of them is served', async () => {
+    const read = cachePublicPageRead(async () => {
+      await Promise.resolve();
+      return mediaSignatureSeconds(3600);
+    }, ['signing-page-v1']);
+
+    await expect(read()).resolves.toBe(CACHED_PAGE_MEDIA_SIGNATURE_SECONDS);
+    expect(mediaSignatureSeconds(3600)).toBe(3600);
   });
 
   // `invalidateShowcaseFeedCacheOnly` (a block, a report) expires the feed's

@@ -20,6 +20,7 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 import { logBackendError } from '@/lib/backend-logger';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { mediaSignatureSeconds } from '@/lib/media-signature-scope';
 import { buildMediaProxyUrl, isMediaBucket } from '@/lib/media-urls';
 import {
     getCanonicalStoredMediaLocation,
@@ -143,7 +144,8 @@ export async function resolveStoredMediaUrl(
 
 /**
  * Resolves media referenced by a user-owned database row without allowing the
- * service role to sign another user's object path.
+ * service role to sign another user's object path. The link lasts an hour, or
+ * longer when it is signed for a cached public page (`media-signature-scope.ts`).
  */
 export async function resolveOwnedStoredMediaUrl(
     adminSupabase: SupabaseClient,
@@ -155,7 +157,7 @@ export async function resolveOwnedStoredMediaUrl(
         try {
             const { data, error } = await adminSupabase.storage
                 .from(location.bucket)
-                .createSignedUrl(location.filePath, 3600);
+                .createSignedUrl(location.filePath, mediaSignatureSeconds(3600));
             if (!error && data?.signedUrl) return data.signedUrl;
             if (isMediaBucket(location.bucket)) {
                 return buildMediaProxyUrl(location.bucket, location.filePath);

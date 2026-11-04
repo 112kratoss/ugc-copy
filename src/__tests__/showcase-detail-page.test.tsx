@@ -1002,6 +1002,41 @@ describe('Showcase detail page', () => {
     expect(images[0]).toMatchObject({ url: '/opengraph-image.png' });
   });
 
+  // A legacy image kept only in its creator's folder has no address but a
+  // signed one, which runs out within hours: crawlers keep a share image and
+  // search engines a content URL long after that.
+  it('never shares a signed link: a legacy image with no other address gets the site card', async () => {
+    const signedUrl = 'https://project.supabase.co/storage/v1/object/sign/generated_images/user-1/output.png?token=abc.def.ghi';
+    const detail = await getPublicPostDetailMock(POST_ID) as Record<string, unknown>;
+    getPublicPostDetailMock.mockResolvedValue({
+      ...detail,
+      mediaKind: 'image',
+      mediaUrl: signedUrl,
+      mediaItems: [{
+        id: `${POST_ID}:cover`,
+        url: signedUrl,
+        mediaKind: 'image',
+        previewUrl: null,
+        previewStatus: 'pending',
+        width: null,
+        height: null,
+        sortOrder: 0,
+      }],
+    });
+
+    const metadata = await generateMetadata({ params: Promise.resolve({ id: POST_ID }) });
+    const images = Array.isArray(metadata.openGraph?.images)
+      ? metadata.openGraph?.images
+      : [metadata.openGraph?.images];
+    expect(images[0]).toMatchObject({ url: '/opengraph-image.png' });
+    expect(JSON.stringify(metadata)).not.toContain('/object/sign/');
+
+    const { container } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+    const structuredData = container.querySelector('script[type="application/ld+json"]')?.textContent ?? '';
+    expect(structuredData).toContain(`/showcase/${POST_ID}`);
+    expect(structuredData).not.toContain('/object/sign/');
+  });
+
   it('generates canonical metadata for the public detail page', async () => {
     const metadata = await generateMetadata({
       params: Promise.resolve({ id: POST_ID }),
