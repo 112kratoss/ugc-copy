@@ -79,8 +79,18 @@ async function readShowcasePostPage(id: string): Promise<ShowcasePostPageRead> {
 
 const readCachedShowcasePostPage = cachePublicPageRead(readShowcasePostPage, ['showcase-post-page-v1']);
 
-/** One read per render, shared by the metadata and the page. */
-const loadShowcasePostPage = cache((id: string) => readCachedShowcasePostPage(id));
+/** A post id, and a legacy generation id, are both UUIDs. */
+const SHOWCASE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * One read per render, shared by the metadata and the page. Anything but a
+ * UUID is no post: it answers not-found before any read, so an address made
+ * up by a crawler costs no database read and leaves no cache entry, and the
+ * database never sees text where it expects a UUID.
+ */
+const loadShowcasePostPage = cache((id: string): Promise<ShowcasePostPageRead> => (
+  SHOWCASE_ID_PATTERN.test(id) ? readCachedShowcasePostPage(id) : Promise.resolve({ kind: 'missing' })
+));
 
 /**
  * The card a shared link renders in a chat app.
