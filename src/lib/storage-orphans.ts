@@ -6,8 +6,9 @@
  * appears anywhere in a row of a content table (every table that can hold a
  * path or a link, read whole), plain, bucket-prefixed or URL-encoded. A derived
  * file (`.preview.`, `.display.`, `.normalized.`, `.feed.<hash>.mp4`,
- * `.teaser.<hash>.mp4`, `<user>/playback/<creation>/`) counts as named when its
- * base is. Left out of the listing, whatever the rows say:
+ * `.teaser.<hash>.mp4`, `<user>/playback/<creation>/`, a run's
+ * `<user>/<creation>/provider-tracks/` in generation_inputs) counts as named
+ * when its base is. Left out of the listing, whatever the rows say:
  * - objects younger than seven days;
  * - objects upload bookkeeping still tracks (a live `media_upload_intents` or
  *   `upload_byte_reservations` row): their sweeps own them;
@@ -34,6 +35,7 @@ import { join } from 'node:path';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { PROVIDER_TRACKS_FOLDER } from '@/lib/generation-provider-tracks';
 import { RECLAIM_AFTER_HOURS } from '@/lib/media-upload-reclaim';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
 import { recipeFileKind } from '@/lib/recipe-copy-sweep-policy';
@@ -290,6 +292,11 @@ export class NameCorpus {
   private readonly chunks: string[] = [];
   private text: string | null = null;
   rows = 0;
+  /**
+   * The ids of the `generations` rows read: a creation that exists. Its id alone in some row
+   * is no such sign, as a deleted paid run's spend audit keeps it for good.
+   */
+  readonly generationIds = new Set<string>();
   /** When the read finished: what the confirm step's minute is counted from. */
   readAt: number;
 
@@ -297,8 +304,9 @@ export class NameCorpus {
     this.readAt = readAt;
   }
 
-  addRow(row: Row): void {
+  addRow(row: Row, table?: string): void {
     this.rows += 1;
+    if (table === 'generations' && typeof row.id === 'string') this.generationIds.add(row.id);
     const strings: string[] = [];
     collectStrings(row, strings);
     for (const value of strings) {
@@ -330,7 +338,10 @@ function nameForms(bucket: string, path: string): string[] {
 }
 
 const DERIVED_FILE = /^(.*)\.(?:preview|display|normalized)\.[0-9a-f]+\.webp$|^(.*)\.(?:feed|teaser)\.[0-9a-f]+\.mp4$/;
-const PLAYBACK_FILE = /^[^/]+\/playback\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/[^/]+$/;
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const PLAYBACK_FILE = new RegExp(`^[^/]+/playback/(${UUID})/[^/]+$`);
+// The copies of a run's tracks converted for its provider, which go with the run (generation-provider-tracks).
+const PROVIDER_TRACK_FILE = new RegExp(`^[^/]+/(${UUID})/${PROVIDER_TRACKS_FOLDER}/[^/]+$`);
 
 /** Whether a row names the object, or the base a derived file was made from. */
 export function isObjectNamed(corpus: NameCorpus, bucket: string, path: string): boolean {
@@ -340,6 +351,8 @@ export function isObjectNamed(corpus: NameCorpus, bucket: string, path: string):
   // Any file of the stem (the original under any extension, a sibling
   // derivative) named anywhere keeps it: a derivative goes with its base.
   if (stem && corpus.containsAny(nameForms(bucket, `${stem}.`))) return true;
+  const providerTrack = bucket === 'generation_inputs' ? PROVIDER_TRACK_FILE.exec(path) : null;
+  if (providerTrack) return corpus.generationIds.has(providerTrack[1]);
   const playback = PLAYBACK_FILE.exec(path);
   return Boolean(playback && corpus.containsAny([playback[1]]));
 }
@@ -358,7 +371,7 @@ async function readTable(
       const { data, error } = await query;
       if (error) throw new Error(`Could not read ${table}: ${error.message ?? 'unknown error'}`);
       const rows = (data ?? []) as Row[];
-      for (const row of rows) corpus.addRow(row);
+      for (const row of rows) corpus.addRow(row, table);
       if (rows.length < PAGE_SIZE) return;
       after = rows[rows.length - 1]?.[column] ?? null;
       if (after === null) throw new Error(`Could not page ${table} by ${column}.`);
@@ -371,7 +384,7 @@ async function readTable(
     const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
     if (error) throw new Error(`Could not read ${table}: ${error.message ?? 'unknown error'}`);
     const rows = (data ?? []) as Row[];
-    for (const row of rows) corpus.addRow(row);
+    for (const row of rows) corpus.addRow(row, table);
     if (rows.length < PAGE_SIZE) return;
   }
 }

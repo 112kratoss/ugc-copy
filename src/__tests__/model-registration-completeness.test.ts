@@ -47,7 +47,9 @@ describe('model registration completeness', () => {
     // adapter; startVideoGeneration has no such seam yet (no video model needs
     // it — multi-variant payloads are not yet expressible). If this fails you
     // are adding the first declarative video model: build the video dispatch
-    // seam first, mirroring the image one in generation-services.ts.
+    // seam first, mirroring the image one in generation-services.ts, and have
+    // it convert the tracks Kie refuses before the hold as startVideoGeneration
+    // does (convertRefusedProviderTracks), or such a run fails after Generate.
     const videoOperations = buildCodeGenerationModelOperations().filter((op) => op.kind === 'video');
     for (const operation of videoOperations) {
       expect(operation.adapterKey, operation.modelId).toBe('video-v1');

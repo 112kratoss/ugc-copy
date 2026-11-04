@@ -8,6 +8,7 @@ import {
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { BackendLogRecord } from '@/lib/backend-logger';
 import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
+import type { VideoModelId } from '@/lib/models';
 import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 
 // Foreign references stay rejected by default; individual tests opt into an
@@ -40,6 +41,24 @@ const seedanceProvenanceMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/lib/seedance-asset-provenance', () => seedanceProvenanceMocks);
+
+// A track's conversion and its copy are reference-track-conversion.test.ts's, run with ffmpeg.
+// Here the conversion answers the track's name as bytes, and the copy a link in the run's folder,
+// unless a test refuses them.
+const storedTrackLink = (generationId: string, index: number) =>
+  `https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/${generationId}/provider-tracks/${String(index).padStart(2, '0')}.wav?token=s`;
+const trackConversionMocks = vi.hoisted(() => ({
+  ReferenceTrackUnreadableError: class ReferenceTrackUnreadableError extends Error {
+    constructor(message: string, readonly tooLong = false) {
+      super(message);
+    }
+  },
+  convertReferenceTrack: vi.fn(),
+  storeConvertedReferenceTrack: vi.fn(),
+  removeConvertedReferenceTracks: vi.fn(),
+}));
+
+vi.mock('@/lib/reference-track-conversion', () => trackConversionMocks);
 
 // The generations rows every mock held in the current test.
 const mockedGenerationRows: GenerationRow[][] = [];
@@ -6711,6 +6730,255 @@ describe('generation services', () => {
     // Nothing was held and nothing sent.
     expect(refused.generations).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // Kie judges a track by its link's extension before it fetches anything, and lists only
+  // "wav, mp3" for every model but Seedance 2.5, which adds "aac, ogg": a wan/3-0-video
+  // createTask refused an .m4a link outright (zero-cost probe, 2026-11-02). Such a run used
+  // to fail after Generate, its credits held and then refunded.
+  describe('a track the model’s provider refuses', () => {
+    const VOICE_MEMO = 'https://cdn.example.com/voice-memo.m4a';
+    const VOICE_MEMO_TRACK = { kind: 'audio' as const, label: 'Voice Memo', storagePath: 'uploads/user-1/voice-memo.m4a', sourceGenerationId: null };
+
+    const storedTrackPath = (generationId: string, index: number) => `user-1/${generationId}/provider-tracks/${String(index).padStart(2, '0')}.wav`;
+
+    beforeEach(() => {
+      const { convertReferenceTrack, storeConvertedReferenceTrack, removeConvertedReferenceTracks } = trackConversionMocks;
+      convertReferenceTrack.mockReset();
+      convertReferenceTrack.mockImplementation(async ({ link }: { link: string }) => Buffer.from(`wav of ${link}`));
+      storeConvertedReferenceTrack.mockReset();
+      storeConvertedReferenceTrack.mockImplementation(async ({ generationId, index, onStored }: {
+        generationId: string; index: number; onStored: (filePath: string) => void;
+      }) => {
+        onStored(storedTrackPath(generationId, index));
+        return storedTrackLink(generationId, index);
+      });
+      removeConvertedReferenceTracks.mockReset();
+    });
+
+    function recordKieBodies() {
+      const bodies: Array<{ model: string; input: Record<string, unknown> }> = [];
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        return { ok: true, json: async () => ({ code: 200, data: { taskId: `task-track-${bodies.length}` } }) } as Response;
+      });
+      return bodies;
+    }
+
+    async function startWithTracks(
+      model: VideoModelId,
+      tracks: string[],
+      extra: Partial<Parameters<typeof import('@/lib/generation-services')['startVideoGeneration']>[0]> = {},
+    ) {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      const { VIDEO_MODELS } = await import('@/lib/models');
+      const mock = createSupabaseMock();
+      const start = startVideoGeneration({
+        supabase: mock.supabase,
+        creditSupabase: mock.supabase,
+        userId: 'user-1',
+        prompt: 'Lip-sync the presenter to the voice track.',
+        model,
+        duration: 5,
+        aspectRatio: '16:9',
+        resolution: VIDEO_MODELS[model].resolutions[0],
+        referenceMode: 'elements',
+        referenceAudioUrls: tracks,
+        ...extra,
+      });
+      return { start, ...mock };
+    }
+
+    // Every model that takes a track, by the field its provider reads them from.
+    const TRACK_FIELDS: Array<[VideoModelId, 'reference_audio_urls' | 'reference_voice']> = [
+      ['seedance-2', 'reference_audio_urls'],
+      ['seedance-2-fast', 'reference_audio_urls'],
+      ['seedance-2-mini', 'reference_audio_urls'],
+      ['seedance-2-5', 'reference_audio_urls'],
+      ['minimax-h3', 'reference_audio_urls'],
+      ['wan-2.7', 'reference_voice'],
+      ['wan-3.0', 'reference_audio_urls'],
+      ['wan-3.0-prime', 'reference_audio_urls'],
+    ];
+
+    it.each(TRACK_FIELDS)('converts an iPhone .m4a for %s before the hold, stores the copy once held, and sends Kie it in %s', async (model, field) => {
+      const bodies = recordKieBodies();
+      const { start, supabase, rpcCalls, generations, inputMediaRows } = await startWithTracks(model, [VOICE_MEMO], {
+        referenceAudios: [VOICE_MEMO_TRACK],
+      });
+      const result = await start;
+
+      const { convertReferenceTrack, storeConvertedReferenceTrack } = trackConversionMocks;
+      expect(convertReferenceTrack.mock.calls).toEqual([[expect.objectContaining({ userId: 'user-1', link: VOICE_MEMO })]]);
+      expect(storeConvertedReferenceTrack.mock.calls).toEqual([[expect.objectContaining({
+        userId: 'user-1', generationId: result.generationId, index: 0, wav: Buffer.from(`wav of ${VOICE_MEMO}`),
+      })]]);
+      // Converted before the hold, so a track that cannot be is refused at no cost; stored after
+      // it, so a start refused there keeps nothing; and Kie is asked last.
+      const hold = rpcCalls.findIndex((call) => call.fn === 'start_generation');
+      expect(hold).toBeGreaterThanOrEqual(0);
+      const holdOrder = vi.mocked(supabase.rpc).mock.invocationCallOrder[hold];
+      expect(convertReferenceTrack.mock.invocationCallOrder[0]).toBeLessThan(holdOrder);
+      expect(storeConvertedReferenceTrack.mock.invocationCallOrder[0]).toBeGreaterThan(holdOrder);
+      expect(storeConvertedReferenceTrack.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(fetch).mock.invocationCallOrder[0]);
+
+      const copy = storedTrackLink(result.generationId!, 0);
+      expect(bodies[0].input[field]).toEqual(field === 'reference_voice' ? copy : [copy]);
+      // The run keeps the creator's own track: its recipe and its kept input are the .m4a.
+      expect(generations[0].workflow_settings?.referenceAudioUrls).toEqual([VOICE_MEMO]);
+      expect(inputMediaRows.find((row) => row.role === 'reference_audio')).toMatchObject({
+        label: 'Voice Memo',
+        metadata: expect.objectContaining({ sourceStoragePath: 'uploads/user-1/voice-memo.m4a', sourceUrl: VOICE_MEMO }),
+      });
+    });
+
+    it('sends a WAV or MP3 track as it is, converting nothing', async () => {
+      const bodies = recordKieBodies();
+      const tracks = ['https://cdn.example.com/take-1.wav', 'https://cdn.example.com/beat.mp3'];
+      const { start } = await startWithTracks('wan-3.0', tracks);
+      await start;
+
+      expect(trackConversionMocks.convertReferenceTrack).not.toHaveBeenCalled();
+      expect(trackConversionMocks.storeConvertedReferenceTrack).not.toHaveBeenCalled();
+      expect(bodies[0].input.reference_audio_urls).toEqual(tracks);
+    });
+
+    it('sends Seedance 2.5 its AAC and OGG tracks as they are, and converts the .m4a and a track sent twice once', async () => {
+      const bodies = recordKieBodies();
+      const aac = 'https://cdn.example.com/beat.aac';
+      const ogg = 'https://cdn.example.com/rain.ogg';
+      const { start } = await startWithTracks('seedance-2-5', [aac, VOICE_MEMO, ogg, VOICE_MEMO]);
+      const result = await start;
+
+      expect(trackConversionMocks.convertReferenceTrack.mock.calls.map(([call]) => call.link)).toEqual([VOICE_MEMO]);
+      expect(trackConversionMocks.storeConvertedReferenceTrack).toHaveBeenCalledTimes(1);
+      const copy = storedTrackLink(result.generationId!, 0);
+      expect(bodies[0].input.reference_audio_urls).toEqual([aac, copy, ogg, copy]);
+    });
+
+    it('sends a prepared Seedance track by its asset id, without converting its file', async () => {
+      const bodies = recordKieBodies();
+      const { start } = await startWithTracks('seedance-2', [VOICE_MEMO], {
+        referenceAudios: [VOICE_MEMO_TRACK],
+        seedanceAssets: {
+          images: [],
+          videos: [],
+          audios: [{ assetId: 'asset-voice-1', assetType: 'Audio', status: 'active', sourceUrl: VOICE_MEMO, error: null, lastCheckedAt: null }],
+        },
+      });
+      await start;
+
+      expect(trackConversionMocks.convertReferenceTrack).not.toHaveBeenCalled();
+      expect(bodies[0].input.reference_audio_urls).toEqual(['asset-voice-1']);
+    });
+
+    it('refuses the start before any hold when a track cannot be converted, in words a canvas step says too', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-services');
+      const { getProviderInputRefusal, PROVIDER_INPUT_REFUSED } = await import('@/lib/generation-public-failure');
+      const { convertReferenceTrack, ReferenceTrackUnreadableError } = trackConversionMocks;
+      convertReferenceTrack.mockRejectedValue(new ReferenceTrackUnreadableError('Invalid data found when processing input'));
+
+      const named = await startWithTracks('wan-3.0', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
+      const words = 'We could not convert Voice Memo for Wan 3.0. Add it again as an MP3 or WAV file. No credits were used.';
+      await expect(named.start).rejects.toMatchObject({ name: GenerationServiceError.name, status: 400, failureCode: PROVIDER_INPUT_REFUSED, message: words });
+      // A canvas step says a provider_input_refused refusal as it is (workflow-runner's
+      // getRunStepStartFailure), not the public copy for an unreadable picture.
+      expect(getProviderInputRefusal(await named.start.catch((error: unknown) => error))).toBe(words);
+      expect(named.rpcCalls).toEqual([]);
+      expect(named.generations).toEqual([]);
+
+      // A workflow step or a template run says nothing of its tracks but their links.
+      const unnamed = await startWithTracks('seedance-2-mini', [VOICE_MEMO]);
+      await expect(unnamed.start).rejects.toMatchObject({
+        status: 400,
+        failureCode: PROVIDER_INPUT_REFUSED,
+        message: 'We could not convert one of your audio tracks for Seedance 2 Mini. Add it again as an MP3 or WAV file. No credits were used.',
+      });
+      expect(unnamed.rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(trackConversionMocks.storeConvertedReferenceTrack).not.toHaveBeenCalled();
+    });
+
+    it('tells the creator a track is too long rather than to add it again in another format', async () => {
+      const { PROVIDER_INPUT_REFUSED } = await import('@/lib/generation-public-failure');
+      const { convertReferenceTrack, ReferenceTrackUnreadableError } = trackConversionMocks;
+      convertReferenceTrack.mockRejectedValue(new ReferenceTrackUnreadableError('The track is longer than any model takes.', true));
+
+      const { start, rpcCalls } = await startWithTracks('wan-2.7', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
+      await expect(start).rejects.toMatchObject({
+        status: 400,
+        failureCode: PROVIDER_INPUT_REFUSED,
+        message: 'Voice Memo is too long for Wan 2.7. Use a shorter track. No credits were used.',
+      });
+      expect(rpcCalls).toEqual([]);
+    });
+
+    it('answers a conversion that failed for another reason as worth retrying, still before any hold', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-services');
+      const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      trackConversionMocks.convertReferenceTrack.mockRejectedValue(new Error('The track could not be read from storage: timeout'));
+
+      const { start, rpcCalls } = await startWithTracks('minimax-h3', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
+      // A definitive code: both creators read an uncoded 5xx as a run that may have started.
+      await expect(start).rejects.toMatchObject({
+        name: GenerationServiceError.name,
+        status: 503,
+        failureCode: 'provider_unavailable',
+        message: 'We could not prepare your audio track for MiniMax H3. Try again in a moment. No credits were used.',
+      });
+      expect(rpcCalls).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(logError.mock.calls.flat().map(String).join('\n')).toContain('reference_track_conversion_failed');
+    });
+
+    it('returns the hold when a copy cannot be stored, asks Kie nothing, and removes the copies already stored', async () => {
+      const { GenerationServiceError } = await import('@/lib/generation-services');
+      const { getPublicGenerationStartFailure, getRefundedStartGenerationId } = await import('@/lib/generation-public-failure');
+      const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { storeConvertedReferenceTrack, removeConvertedReferenceTracks } = trackConversionMocks;
+      const storeOne = storeConvertedReferenceTrack.getMockImplementation()!;
+      storeConvertedReferenceTrack
+        .mockImplementationOnce(storeOne)
+        .mockRejectedValueOnce(new Error('The converted track could not be stored: storage is down'));
+
+      const { start, rpcCalls, generations } = await startWithTracks('wan-3.0', [VOICE_MEMO, 'https://cdn.example.com/beat.webm']);
+      const error = await start.catch((thrown: unknown) => thrown);
+
+      expect(rpcCalls.map((call) => call.fn)).toEqual(['start_generation', 'settle_generation_start_failed']);
+      expect(generations[0]).toMatchObject({ status: 'failed', refunded: true });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(logError.mock.calls.flat().map(String).join('\n')).toContain('reference_track_copy_not_stored');
+      // After the hold the settlement words the refusal: the route says no credits were used only
+      // once the hold is back (it marks the error), so this is no GenerationServiceError with words.
+      expect(error).not.toBeInstanceOf(GenerationServiceError);
+      expect(getRefundedStartGenerationId(error)).toBe(generations[0].id);
+      expect(getPublicGenerationStartFailure(error).code).toBe('provider_unavailable');
+      expect(removeConvertedReferenceTracks.mock.calls).toEqual([[expect.objectContaining({
+        filePaths: [storedTrackPath(generations[0].id, 0)],
+      })]]);
+    });
+
+    it('removes the copies when Kie refuses the run, and keeps them while Kie may have taken it', async () => {
+      const { removeConvertedReferenceTracks } = trackConversionMocks;
+      vi.mocked(fetch).mockImplementation(async () => ({
+        ok: true,
+        json: async () => ({ code: 422, msg: 'File type not supported' }),
+      }) as Response);
+      const refused = await startWithTracks('wan-3.0', [VOICE_MEMO]);
+      await expect(refused.start).rejects.toThrow();
+      expect(refused.generations[0]).toMatchObject({ status: 'failed', refunded: true });
+      expect(removeConvertedReferenceTracks.mock.calls).toEqual([[expect.objectContaining({
+        filePaths: [storedTrackPath(refused.generations[0].id, 0)],
+      })]]);
+
+      removeConvertedReferenceTracks.mockClear();
+      // A connection that dropped after the request went out: the run is held as possibly taken.
+      vi.mocked(fetch).mockImplementation(async () => { throw new TypeError('fetch failed'); });
+      const unknown = await startWithTracks('wan-3.0', [VOICE_MEMO]);
+      await expect(unknown.start).rejects.toThrow();
+      expect(unknown.generations[0].refunded).not.toBe(true);
+      expect(removeConvertedReferenceTracks).not.toHaveBeenCalled();
+    });
   });
 
   // The catalog adapter kept the compiled prompt as the run's prompt, so a remix of a

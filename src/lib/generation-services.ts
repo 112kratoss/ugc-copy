@@ -80,6 +80,7 @@ import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
+  getRefundedStartGenerationId,
   markGenerationStartInProgress,
   markGenerationStartRefusal,
   markHeldProviderSubmission,
@@ -149,6 +150,7 @@ import {
   providerPromptViolation,
   referenceMediaLengthViolation,
   referenceMediaRole,
+  referenceTrackNeedsConversion,
   type ProviderPromptRun,
   type ReferenceMediaLength,
 } from '@/lib/provider-input-limits';
@@ -933,6 +935,142 @@ function assertProviderPromptAccepted(modelId: string, run: ProviderPromptRun): 
 function assertReferenceMediaLongEnough(modelId: string, media: readonly ReferenceMediaLength[]): void {
   const violation = referenceMediaLengthViolation(modelId, media);
   if (violation) throw new GenerationServiceError(violation, 400, PROVIDER_INPUT_REFUSED);
+}
+
+/** Where a track travels in a built Kie request: a place in `reference_audio_urls`, or Wan 2.7's one `reference_voice`. */
+type ProviderTrackPlace = { field: 'reference_audio_urls'; index: number } | { field: 'reference_voice' };
+
+/** A run's track converted for its provider, with each place the track takes in the request. */
+type ConvertedProviderTrack = { wav: Buffer; places: ProviderTrackPlace[] };
+
+/** The tracks of a built Kie request that go as links, with the place each takes and which of the run's tracks it is. */
+function providerTrackLinks(input: Record<string, unknown>): Array<{ link: string; place: ProviderTrackPlace; track: number }> {
+  const links: Array<{ link: string; place: ProviderTrackPlace; track: number }> = (
+    Array.isArray(input.reference_audio_urls) ? input.reference_audio_urls : []
+  ).flatMap((link, index) => (
+    typeof link === 'string' ? [{ link, place: { field: 'reference_audio_urls' as const, index }, track: index }] : []
+  ));
+  if (typeof input.reference_voice === 'string') {
+    links.push({ link: input.reference_voice, place: { field: 'reference_voice' }, track: 0 });
+  }
+  return links;
+}
+
+function referenceTrackNotPreparedError(modelName: string): GenerationServiceError {
+  return new GenerationServiceError(
+    `We could not prepare your audio track for ${modelName}. Try again in a moment. No credits were used.`,
+    503,
+    'provider_unavailable',
+  );
+}
+
+/**
+ * Converts each track of a built Kie request that is in a format the model's provider refuses
+ * (provider-input-limits) to a WAV: after every check the start makes and before the hold, since
+ * Kie refused such a track only after the hold and the run failed after Generate. A prepared
+ * Seedance asset goes by its id, which is no link. A track that cannot be converted refuses the
+ * start in words that name it, which the creators and a canvas step say as they are; a failure
+ * that is not the track's is worth retrying. The copies are stored once the run is held
+ * (`storeProviderTrackCopies`), so a start refused at the hold keeps nothing.
+ */
+async function convertRefusedProviderTracks(params: {
+  supabase: SupabaseClient;
+  userId: string;
+  model: VideoModelId;
+  modelName: string;
+  input: Record<string, unknown>;
+  /** What the creator calls each of the run's tracks, in order. */
+  labels: ReadonlyArray<string | null | undefined>;
+}): Promise<ConvertedProviderTrack[]> {
+  const refused = providerTrackLinks(params.input).filter(({ link }) => referenceTrackNeedsConversion(params.model, link));
+  if (refused.length === 0) return [];
+
+  // Loaded only by a run that converts a track: it reaches ffmpeg, and sharp beside it.
+  const { convertReferenceTrack, ReferenceTrackUnreadableError } = await import('@/lib/reference-track-conversion');
+  const copies = new Map<string, ConvertedProviderTrack>();
+  // One at a time, as the media sweeps run ffmpeg (media-preview-repair): concurrent encoders
+  // contend for the function's one or two cores.
+  for (const { link, place, track } of refused) {
+    const converted = copies.get(link);
+    if (converted) {
+      converted.places.push(place);
+      continue;
+    }
+    try {
+      copies.set(link, { wav: await convertReferenceTrack({ supabase: params.supabase, userId: params.userId, link }), places: [place] });
+    } catch (error) {
+      if (!(error instanceof ReferenceTrackUnreadableError)) {
+        logBackendError('reference_track_conversion_failed', { modelId: params.model, error });
+        throw referenceTrackNotPreparedError(params.modelName);
+      }
+      logBackendWarning('reference_track_unreadable', { modelId: params.model, error });
+      const label = params.labels[track]?.trim();
+      throw new GenerationServiceError(
+        error.tooLong
+          ? `${label || 'One of your audio tracks'} is too long for ${params.modelName}. Use a shorter track. No credits were used.`
+          : `We could not convert ${label || 'one of your audio tracks'} for ${params.modelName}. Add it again as an MP3 or WAV file. No credits were used.`,
+        400,
+        PROVIDER_INPUT_REFUSED,
+      );
+    }
+  }
+  return [...copies.values()];
+}
+
+/**
+ * A held run's converted track that could not be stored. Not a GenerationServiceError, whose words
+ * reach the creator as they are: after the hold, the start's settlement decides what they are told,
+ * and they hear that no credits were used only once it has returned the hold. Its status reads as a
+ * provider outage, worth retrying (getPublicGenerationStartFailure). Never a network error, which
+ * the settlement would take for a request Kie may have received.
+ */
+class ProviderTrackCopyError extends Error {
+  readonly status = 503;
+
+  constructor(cause: unknown) {
+    super(`A converted track could not be stored for the provider: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = 'ProviderTrackCopyError';
+  }
+}
+
+/**
+ * Stores a held run's converted tracks in its folder and points the request at them, telling
+ * `stored` each file's path. A failure here comes after the hold, so the start returns it.
+ */
+async function storeProviderTrackCopies(params: {
+  supabase: SupabaseClient;
+  userId: string;
+  generationId: string;
+  model: VideoModelId;
+  input: Record<string, unknown>;
+  copies: ConvertedProviderTrack[];
+  stored: string[];
+}): Promise<void> {
+  if (params.copies.length === 0) return;
+  const { storeConvertedReferenceTrack } = await import('@/lib/reference-track-conversion');
+  // A new list: the request's may be the very array the run keeps its creator's tracks from.
+  const audioUrls = Array.isArray(params.input.reference_audio_urls) ? [...params.input.reference_audio_urls] : null;
+  for (const [index, copy] of params.copies.entries()) {
+    let link: string;
+    try {
+      link = await storeConvertedReferenceTrack({
+        supabase: params.supabase,
+        userId: params.userId,
+        generationId: params.generationId,
+        index,
+        wav: copy.wav,
+        onStored: (filePath) => params.stored.push(filePath),
+      });
+    } catch (error) {
+      logBackendError('reference_track_copy_not_stored', { modelId: params.model, generationId: params.generationId, error });
+      throw new ProviderTrackCopyError(error);
+    }
+    for (const place of copy.places) {
+      if (place.field === 'reference_voice') params.input.reference_voice = link;
+      else if (audioUrls) audioUrls[place.index] = link;
+    }
+  }
+  if (audioUrls) params.input.reference_audio_urls = audioUrls;
 }
 
 export function trimPrompt(prompt: string, errorMessage: string): string {
@@ -3066,6 +3204,8 @@ export async function startVideoGeneration(params: {
 
   let generationId: string | null = null;
   let predictionId: string | null = null;
+  // The copies of its tracks the held run stored for the provider, by path.
+  const storedTrackCopies: string[] = [];
   try {
     // Every video model, Veo 3.1 included since its move, starts on the jobs API.
     const endpoint = 'https://api.kie.ai/api/v1/jobs/createTask';
@@ -3553,6 +3693,18 @@ export async function startVideoGeneration(params: {
       );
     }
 
+    // A track in a format the provider refuses is converted now, every check passed and nothing
+    // held yet; its copy is stored once the run is. The recipe and the kept inputs stay the
+    // creator's own tracks.
+    const providerInput = isRecord(body.input) ? body.input : {};
+    const trackCopies = await convertRefusedProviderTracks({
+      supabase: creditSupabase,
+      userId,
+      model,
+      modelName: selectedModel.displayName,
+      input: providerInput,
+      labels: (referenceAudios ?? []).map((descriptor) => descriptor?.label),
+    });
     // Kie fetches the pictures only after the hold; one over its documented limit is logged.
     await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: model, request: body, templateAssetScope: templateAssetScope(templateContext) });
     const reservation = await startGenerationRecord(creditSupabase, {
@@ -3660,6 +3812,15 @@ export async function startVideoGeneration(params: {
       await recordVeoJobsProviderApi(creditSupabase, generationId);
     }
 
+    await storeProviderTrackCopies({
+      supabase: creditSupabase,
+      userId,
+      generationId,
+      model,
+      input: providerInput,
+      copies: trackCopies,
+      stored: storedTrackCopies,
+    });
     predictionId = await createKieTask(body, endpoint, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
@@ -3810,6 +3971,12 @@ export async function startVideoGeneration(params: {
           userId,
           cost,
         });
+      }
+      // Refunded, the run reached no provider, so the copies it stored for one go too. A
+      // submission held as possibly received keeps them: Kie may yet fetch them.
+      if (storedTrackCopies.length > 0 && getRefundedStartGenerationId(error) === generationId) {
+        const { removeConvertedReferenceTracks } = await import('@/lib/reference-track-conversion');
+        await removeConvertedReferenceTracks({ supabase: creditSupabase, filePaths: storedTrackCopies });
       }
     }
     throw error;

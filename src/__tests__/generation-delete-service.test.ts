@@ -65,6 +65,7 @@ function createAdminSupabaseMock({
   postsAfterDeleteError = null,
   storageRemoveErrors = {},
   storageRemoveThrows = {},
+  storageFolders = {},
 }: {
   generation?: GenerationRow | null;
   inputMediaRows?: Array<{ user_id: string; storage_path: string | null }>;
@@ -85,11 +86,14 @@ function createAdminSupabaseMock({
   storageRemoveErrors?: Record<string, { message: string }>;
   /** Throws from a bucket's remove. */
   storageRemoveThrows?: Record<string, Error>;
+  /** What a storage listing answers, by `bucket/folder`: entries with no id are folders. */
+  storageFolders?: Record<string, Array<{ id: string | null; name: string }>>;
 } = {}) {
   const deletes: string[] = [];
   const ownerFilters: Array<{ operation: 'delete' | 'select'; table: string; values: unknown[] }> = [];
   const selects: string[] = [];
   const storageRemovals: Array<{ bucket: string; paths: string[] }> = [];
+  const storageListings: string[] = [];
   const postReads: Array<Record<string, unknown>> = [];
   const queuedShowcasePaths: string[][] = [];
   const privateCleanupTickets: Array<Record<string, unknown>> = [];
@@ -129,6 +133,7 @@ function createAdminSupabaseMock({
     queuedShowcasePaths,
     rpc,
     selects,
+    storageListings,
     storageRemovals,
     client: {
       rpc,
@@ -249,6 +254,10 @@ function createAdminSupabaseMock({
       storage: {
         from(bucket: string) {
           return {
+            async list(folder: string) {
+              storageListings.push(`${bucket}/${folder}`);
+              return { data: storageFolders[`${bucket}/${folder}`] ?? [], error: null };
+            },
             async remove(paths: string[]) {
               storageRemovals.push({ bucket, paths });
               if (storageRemoveThrows[bucket]) throw storageRemoveThrows[bucket];
@@ -766,5 +775,34 @@ describe('generation delete service', () => {
         expect.objectContaining({ bucket: 'showcase_media', paths: ['showcase/gen-1/generated_p1_0.abc123.png'] }),
       );
     });
+  });
+
+  it.each([false, true])('removes the copies of its tracks converted for the provider, which no input row names (linked: %s)', async (linked) => {
+    const admin = createAdminSupabaseMock({
+      linkedPosts: linked ? [{ id: 'post-1' }] : [],
+      storageFolders: {
+        'generation_inputs/user-1/gen-1/provider-tracks': [
+          { id: 'object-1', name: '00.wav' },
+          { id: 'object-2', name: '01.wav' },
+          { id: null, name: 'nested-folder' },
+        ],
+      },
+    });
+    createAdminSupabase.mockReturnValueOnce(admin.client);
+    const { deleteOwnerGenerationForRoute } = await import('@/lib/generation-delete-service');
+
+    await expect(deleteOwnerGenerationForRoute({
+      createAdminSupabase,
+      createUserSupabase,
+      generationId: 'gen-1',
+      invalidateFeedCache: vi.fn(),
+      request: new Request('http://localhost/api/generations/gen-1'),
+    })).resolves.toMatchObject({ ok: true });
+
+    // The deleted row's own folder, whatever a linked post keeps: a post never reads these.
+    expect(admin.storageListings).toEqual(['generation_inputs/user-1/gen-1/provider-tracks']);
+    const removed = admin.storageRemovals.filter((removal) => removal.bucket === 'generation_inputs').flatMap((removal) => removal.paths);
+    expect(removed).toEqual(expect.arrayContaining(['user-1/gen-1/provider-tracks/00.wav', 'user-1/gen-1/provider-tracks/01.wav']));
+    expect(removed.filter((filePath) => filePath.includes('provider-tracks'))).toHaveLength(2);
   });
 });

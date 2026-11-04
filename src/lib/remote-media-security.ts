@@ -20,9 +20,13 @@ export const MAX_REMOTE_MEDIA_BYTES: Record<RemoteMediaKind, number> = {
 const MAX_REDIRECTS = 3;
 
 export class RemoteMediaSecurityError extends Error {
-  constructor(message: string) {
+  /** The host's answer, when the refusal is one: a 5xx or a 429 may pass on a later try. */
+  readonly status: number | null;
+
+  constructor(message: string, options: { status?: number } = {}) {
     super(message);
     this.name = 'RemoteMediaSecurityError';
+    this.status = options.status ?? null;
   }
 }
 
@@ -440,7 +444,7 @@ export async function openAllowlistedRemoteMedia({
     }
 
     if (!response.ok) {
-      throw new RemoteMediaSecurityError(`Remote media request failed with status ${response.status}.`);
+      throw new RemoteMediaSecurityError(`Remote media request failed with status ${response.status}.`, { status: response.status });
     }
     const contentType = validateContentType(response, kind);
     const { body, contentLength } = await openBoundedBody(
