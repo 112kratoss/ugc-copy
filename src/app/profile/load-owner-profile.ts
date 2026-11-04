@@ -54,6 +54,8 @@ function buildStarterProfile({
     tiktokHandle: '',
     location: '',
     credits,
+    // No row, so no avatar is stored: a save sends the provider's picture.
+    authProviderAvatarUrl: avatarUrl,
   };
 }
 
@@ -98,11 +100,15 @@ export async function loadOwnerProfile(
           user.id
         ) as ProfileApiResponse;
 
-        return toEditableCreatorProfile({
-          ...persistedProfile,
-          displayName: persistedProfile.displayName || authDisplayName || null,
-          avatarUrl: persistedProfile.avatarUrl || authAvatarUrl,
-        });
+        return {
+          ...toEditableCreatorProfile({
+            ...persistedProfile,
+            displayName: persistedProfile.displayName || authDisplayName || null,
+            avatarUrl: persistedProfile.avatarUrl || authAvatarUrl,
+          }),
+          // Shown because no avatar is stored: a save sends it (buildProfileSaveBody).
+          authProviderAvatarUrl: persistedProfile.avatarUrl ? null : authAvatarUrl,
+        };
       })()
     : shouldUseStarterProfile
       ? buildStarterProfile({

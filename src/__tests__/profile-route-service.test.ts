@@ -1080,6 +1080,48 @@ describe('profile route service', () => {
       });
     });
 
+    // The sign-in provider's picture is a plain URL save: outside the
+    // account's folder, so nothing is finalized and nothing is removed.
+    describe('a sign-in provider\'s picture', () => {
+      const google = 'https://lh3.googleusercontent.com/a/ACg8ocL-photo=s96-c';
+
+      it('is saved as given while no photo is stored, reading no upload and removing nothing', async () => {
+        const client = createMediaClient({ profiles: [profileShowing(null)], uploads: [] });
+
+        const result = await updateProfileForRoute({
+          userId: user.id,
+          body: { username: 'luna', avatarUrl: google },
+          client: client.client,
+          invalidateFeedCache: vi.fn(),
+        });
+
+        expect(result).toMatchObject({ ok: true, response: { avatarUrl: google } });
+        expect(client.upserts[0]).toMatchObject({ avatar_url: google });
+        expect(client.rpc).not.toHaveBeenCalledWith('claim_upload_byte_reservation_consumption', expect.anything());
+        expect(client.storageApi.info).not.toHaveBeenCalled();
+        expect(client.storageApi.download).not.toHaveBeenCalled();
+        expect(client.storageApi.remove).not.toHaveBeenCalled();
+      });
+
+      it('never removes the photo it takes the place of', async () => {
+        const client = createMediaClient({
+          profiles: [profileShowing(earlierAvatarPath)],
+          uploads: [],
+          storedObjects: [earlierAvatarPath],
+        });
+
+        await expect(updateProfileForRoute({
+          userId: user.id,
+          body: { username: 'luna', avatarUrl: google },
+          client: client.client,
+          invalidateFeedCache: vi.fn(),
+        })).resolves.toMatchObject({ ok: true });
+
+        expect(client.storageApi.remove).not.toHaveBeenCalled();
+        expect(client.objects.has(earlierAvatarPath)).toBe(true);
+      });
+    });
+
     // The phone sets a new photo while the web saves its bio from a form that
     // shows the old one: whichever lands first, the new photo is what stays.
     describe('two devices saving at once', () => {
