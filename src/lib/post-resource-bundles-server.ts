@@ -2453,6 +2453,11 @@ async function hydrateRecipes(
     rows = rows.filter((row) => !nsfwIds.has(row.post_id));
   }
   const storedResourcesByBundleId = new Map(rows.map((row) => [row.id, normalizeResources(row)]));
+  // Anyone but the seller is neither served nor sold the copies of a creation now removed or archived
+  // (owner, 2026-11-04): the teaser's counts and kinds leave them out, as the unlock does.
+  if (scope !== 'owner') {
+    await withholdCopiesOfCreationsOffView(createServiceClient(), [...storedResourcesByBundleId.values()]);
+  }
   const [profilesMap, postMap, contentUpdatedAtMap, creationReferenceCounts] = await Promise.all([
     loadProfileMap(rows.map((row) => row.owner_user_id)),
     loadLinkedPostMap(rows.map((row) => row.post_id), postScope, includeMediaPreviews, throwOnPostReadError),

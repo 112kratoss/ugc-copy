@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   SEEDANCE_ASSET_NOT_YOURS_MESSAGE,
+  SEEDANCE_ASSET_UNRECORDED_MESSAGE,
+  UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL,
   checkSeedanceAssetsUsable,
 } from '@/lib/seedance-asset-provenance';
 
@@ -12,13 +14,14 @@ import {
 const BUYER = 'buyer-1';
 const COPY = 'post_resource_files/seller-1/generation-references/gen-1/00-reference-image-row-1.png';
 
-type Row = { asset_id: string; owner_user_id: string; recipe_file: string | null };
+type Row = { asset_id: string; owner_user_id: string; recipe_file: string | null; recorded_from?: string };
 
 function setUp(options: {
   rows?: Row[];
   readError?: { message: string };
   reuse?: 'entitled' | 'not-eligible' | 'failed';
-  held?: { outcome: 'copy'; copySource: string } | { outcome: 'not-eligible' } | null;
+  held?: { outcome: 'copy'; copySource: string } | { outcome: 'not-eligible' } | { outcome: 'failed' } | null;
+  now?: Date;
 } = {}) {
   const inserts: Array<Record<string, unknown>> = [];
   const client = {
@@ -26,7 +29,10 @@ function setUp(options: {
       select: () => ({
         in: async (_column: string, ids: string[]) => (options.readError
           ? { data: null, error: options.readError }
-          : { data: (options.rows ?? []).filter((row) => ids.includes(row.asset_id)), error: null }),
+          : {
+            data: (options.rows ?? []).filter((row) => ids.includes(row.asset_id)).map((row) => ({ recorded_from: 'prepare', ...row })),
+            error: null,
+          }),
       }),
       insert: async (row: Record<string, unknown>) => {
         inserts.push(row);
@@ -44,6 +50,7 @@ function setUp(options: {
       createServiceClient: (() => client) as never,
       checkRecipeCopyReuse: checkRecipeCopyReuse as never,
       findHeldRecipeCopy: findHeldRecipeCopy as never,
+      now: () => options.now ?? new Date('2026-11-04T00:00:00.000Z'),
     },
   };
 }
@@ -119,10 +126,38 @@ describe('which Seedance asset ids a run may send', () => {
       expect(stub.inserts).toEqual([expect.objectContaining({ asset_id: 'asset-old', recipe_file: null })]);
     });
 
-    it('is let through when sent bare, with no file to say what it runs', async () => {
+    it('is let through when sent bare, with no file to say what it runs, until the cut-off', async () => {
       const stub = setUp();
 
       await expect(check(stub, ['asset-bare'])).resolves.toEqual({ ok: true });
+      expect(stub.inserts).toEqual([]);
+    });
+
+    it('is refused when sent bare after the cut-off', async () => {
+      const after = new Date(UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL.getTime() + 1);
+      expect(UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL.toISOString()).toBe('2026-12-04T00:00:00.000Z');
+
+      await expect(check(setUp({ now: UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL }), ['asset-bare'])).resolves.toEqual({ ok: true });
+      await expect(check(setUp({ now: after }), ['asset-bare']))
+        .resolves.toEqual({ ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE });
+    });
+
+    // 2026-11-04 review: the file beside an unrecorded id is the caller's word. Recorded as their own,
+    // the id would run for anyone they handed it to, a remixer of their run included.
+    it('lends an asset a start recorded to its recorder alone, whatever its file', async () => {
+      const rows = [{ asset_id: 'asset-old', owner_user_id: BUYER, recipe_file: null, recorded_from: 'start' }];
+
+      await expect(check(setUp({ rows }), ['asset-old'])).resolves.toEqual({ ok: true });
+      await expect(check(setUp({ rows }), ['asset-old'], undefined, 'remixer-1'))
+        .resolves.toEqual({ ok: false, status: 400, message: SEEDANCE_ASSET_NOT_YOURS_MESSAGE });
+    });
+
+    // 2026-11-04 review: a kept input whose row cannot be read was recorded as the caller's own file.
+    it('records nothing and fails retryably when the file beside it cannot be read', async () => {
+      const stub = setUp({ held: { outcome: 'failed' } });
+
+      await expect(check(stub, ['asset-old'], new Map([['asset-old', 'generation_inputs/buyer-1/gen-9/00-reference-image.png']])))
+        .resolves.toMatchObject({ ok: false, status: 500 });
       expect(stub.inserts).toEqual([]);
     });
   });

@@ -1314,6 +1314,21 @@ describe('post resource bundle server access', () => {
       expect(await copiesFor('viewer-1')).toEqual([]);
     });
 
+    // 2026-11-04 review: the teaser counted them, so a new buyer could pay for references they would not get.
+    it('leaves them out of the teaser a would-be buyer is sold on', async () => {
+      viewerHasPurchased = false;
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+      const teaser = async () => (await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'stranger-1', countLockedReferences: false }))?.lockedPreview;
+
+      const live = await teaser();
+      expect(live?.itemCounts.reference_image).toBe(1);
+      expect(live?.resourceKinds).toContain('files');
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), archived_at: '2026-11-04T00:00:00.000Z' };
+      const archived = await teaser();
+      expect(archived?.itemCounts.reference_image ?? 0).toBe(0);
+      expect(archived?.resourceKinds).not.toContain('files');
+    });
+
     it('keeps them in the seller’s own editor', async () => {
       generationRow = { ...(generationRow as NonNullable<typeof generationRow>), archived_at: '2026-11-04T00:00:00.000Z' };
       expect(await copiesFor('owner-1')).toEqual([COPY]);

@@ -415,15 +415,16 @@ describe('reusing a recipe file the caller already holds', () => {
     await expect(reuse(KEPT, unknownCopy)).resolves.toEqual({ outcome: 'not-eligible' });
   });
 
-  // 2026-11-04 re-review: a failed read of a kept input's row answered `failed`, so a creator's own re-run
-  // of their own upload failed with a refusal about shared media. Unread, the path decides, as it does
-  // where an input is kept (`findRecipeFileCandidates`): only a start's import is a recipe file by its
-  // path, and a kept input in the caller's own folder is theirs to read whatever its row says.
-  it('leaves a kept input whose row cannot be read to the start, as its path says it is the caller’s own', async () => {
+  // 2026-11-04 review: since 20261103232019 storage refuses a buyer a kept recipe file they no longer
+  // hold, so a kept input whose row cannot be read is no longer theirs by its path. Left to the start,
+  // it was signed with the service role, and a Seedance asset made of it recorded as their own file for
+  // good. It fails retryably instead; any other own file whose row read fails is left to the start.
+  it('fails a run’s kept input whose row cannot be read retryably, never taking it for the caller’s own', async () => {
     const unreadable = setUp({ tables: { generation_input_media: databaseError('57014', 'canceling statement due to statement timeout') } });
 
-    await expect(reuse(KEPT, unreadable)).resolves.toBeNull();
+    await expect(reuse(KEPT, unreadable)).resolves.toEqual({ outcome: 'failed' });
     expect(unreadable.copy).not.toHaveBeenCalled();
+    await expect(reuse(`generation_inputs/${VIEWER}/uploads/face.png`, unreadable)).resolves.toBeNull();
     // A start's import is a recipe file by its path all the same: checked as its copy, whose own read
     // of the creation's rows fails retryably here, never left to the start as the caller's own.
     await expect(reuse(`generation_inputs/${DESTINATION}`, unreadable)).resolves.toEqual({ outcome: 'failed' });

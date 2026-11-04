@@ -9,8 +9,12 @@ const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 const LIST_PAGE_SIZE = 100;
 
 /**
- * Deletes a buyer's run-start imports of a recipe's copies once a refund (or a dispute) has deleted
+ * Deletes a buyer's run-start imports of a recipe's copies once a Razorpay refund or dispute has deleted
  * their purchase of it (owner, 2026-11-04): `generation_inputs/<buyer>/recipe-imports/<seller>/<creation>/`.
+ * Only that path calls it (`razorpay-webhook-service.ts`). A store refund (RevenueCat,
+ * `reconcile_mobile_purchase_adjustment`) and a moderation retraction (`moderation_retracted_at`) end
+ * the purchase without it: their imports stay in storage, inert, since no JWT reads a `recipe-imports/`
+ * object and every server use re-checks the unlock (`reuseRecipeFile`).
  * An import is a cache a start can make again while the unlock holds, so nothing of the buyer's is
  * lost; their runs keep their own kept inputs, which are withheld at read time instead
  * (`recipe_file_readable_by`, `withholdUnreadableRecipeFileInputs`) so a restored purchase opens them

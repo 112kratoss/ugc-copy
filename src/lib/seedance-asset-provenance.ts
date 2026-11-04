@@ -25,11 +25,23 @@ import { createServiceClient } from '@/lib/server-helpers';
  * - prepared before the table existed: the migration recorded every id a run had used, under the first
  *   account that ran it. An id still on no record (prepared and kept in a draft or a workflow, never
  *   run) is recorded by the first start that sends it beside its file, as that file reads for the
- *   caller then, and judged as such; one sent bare, with no file beside it, is let through and logged
- *   (`seedance_asset_unrecorded`). Refusing those would break every draft and saved workflow holding
- *   an asset prepared before this shipped, for the narrow case of a recipe file prepared then and
- *   never run since; the log measures how many remain before that is tightened.
+ *   caller then. The file is the caller's word, so such a record (`recorded_from: 'start'`) lends the
+ *   asset to its recorder alone, whatever it says of the file, and every use of it is still logged
+ *   (`seedance_asset_unrecorded`). One sent bare, with no file beside it, is let through and logged
+ *   until `UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL`, and refused after: refusing those at once would
+ *   break every draft and saved workflow holding an asset prepared before this shipped, for the narrow
+ *   case of a recipe file prepared then and never run since (2026-11-04 review).
  */
+
+/**
+ * The last moment a start lets through a Seedance asset id the server has no record of, sent bare.
+ * A month after the records began (20261103232019): long enough for a draft or a workflow holding one
+ * to be run, and so recorded, or prepared again. After it, such an id is refused.
+ */
+export const UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL = new Date('2026-12-04T00:00:00.000Z');
+
+export const SEEDANCE_ASSET_UNRECORDED_MESSAGE =
+  'A prepared file in this run needs preparing again. Remove it, add it again and try again.';
 
 export type SeedanceAssetRecordSource = 'prepare' | 'start';
 
@@ -37,6 +49,7 @@ type PreparedAssetRow = {
   asset_id: string;
   owner_user_id: string;
   recipe_file: string | null;
+  recorded_from: string;
 };
 
 export type SeedanceAssetUse =
@@ -51,6 +64,7 @@ export interface SeedanceAssetProvenanceDependencies {
   createServiceClient?: typeof createServiceClient;
   checkRecipeCopyReuse?: typeof checkRecipeCopyReuse;
   findHeldRecipeCopy?: typeof findHeldRecipeCopy;
+  now?: () => Date;
 }
 
 function isUniqueViolation(error: unknown): boolean {
@@ -85,21 +99,22 @@ export async function recordPreparedSeedanceAsset(params: {
 }
 
 /**
- * The recipe file a source the caller holds stands for, as the asset route and a start record it:
- * the copy (`findHeldRecipeCopy`), `''` for a recipe file whose copy is on no record, null for one of
- * the caller's own.
+ * The recipe file a source the caller holds stands for, as a start records it: the copy
+ * (`findHeldRecipeCopy`), `''` for a recipe file whose copy is on no record, null for one of the
+ * caller's own. `failed` when a run's kept input cannot be read: never recorded as their own.
  */
 export async function recipeFileOfPreparedSource(params: {
   source: string;
   viewerUserId: string;
   dependencies?: SeedanceAssetProvenanceDependencies;
-}): Promise<string | null> {
+}): Promise<{ recipeFile: string | null } | 'failed'> {
   const held = await (params.dependencies?.findHeldRecipeCopy ?? findHeldRecipeCopy)({
     source: params.source,
     viewerUserId: params.viewerUserId,
   });
-  if (!held) return null;
-  return held.outcome === 'copy' ? held.copySource : '';
+  if (!held) return { recipeFile: null };
+  if (held.outcome === 'failed') return 'failed';
+  return { recipeFile: held.outcome === 'copy' ? held.copySource : '' };
 }
 
 /**
@@ -119,7 +134,7 @@ export async function checkSeedanceAssetsUsable(params: {
 
   const { data, error } = await adminSupabase
     .from('seedance_prepared_assets')
-    .select('asset_id, owner_user_id, recipe_file')
+    .select('asset_id, owner_user_id, recipe_file, recorded_from')
     .in('asset_id', assetIds);
   if (error) {
     logBackendError('seedance_asset_records_read_failed', { error });
@@ -132,26 +147,40 @@ export async function checkSeedanceAssetsUsable(params: {
     if (!record) {
       const source = params.pairedSources?.get(assetId);
       if (!source) {
-        logBackendWarning('seedance_asset_unrecorded', { assetId });
+        logBackendWarning('seedance_asset_unrecorded', { assetId, bare: true });
+        if ((params.dependencies?.now ?? (() => new Date()))() > UNRECORDED_SEEDANCE_ASSETS_ACCEPTED_UNTIL) {
+          return { ok: false, status: 400, message: SEEDANCE_ASSET_UNRECORDED_MESSAGE };
+        }
         continue;
       }
       // Prepared before the table: recorded as the file it was sent beside reads for the caller now.
-      const recipeFile = await recipeFileOfPreparedSource({
+      const held = await recipeFileOfPreparedSource({
         source,
         viewerUserId: params.viewerUserId,
         dependencies: params.dependencies,
       });
+      if (held === 'failed') {
+        return { ok: false, status: 500, message: SEEDANCE_ASSET_CHECK_FAILED_MESSAGE };
+      }
       await recordPreparedSeedanceAsset({
         adminSupabase,
         assetId,
         ownerUserId: params.viewerUserId,
         source,
-        recipeFile,
+        recipeFile: held.recipeFile,
         recordedFrom: 'start',
       });
-      record = { asset_id: assetId, owner_user_id: params.viewerUserId, recipe_file: recipeFile };
+      record = { asset_id: assetId, owner_user_id: params.viewerUserId, recipe_file: held.recipeFile, recorded_from: 'start' };
     }
 
+    // A start's record rests on the file its caller paired the id with: it lends the asset to that
+    // caller alone, and stays measured.
+    if (record.recorded_from === 'start') {
+      logBackendWarning('seedance_asset_unrecorded', { assetId, recordedAtStart: true });
+      if (record.owner_user_id !== params.viewerUserId) {
+        return { ok: false, status: 400, message: SEEDANCE_ASSET_NOT_YOURS_MESSAGE };
+      }
+    }
     if (record.recipe_file === null) continue;
     if (record.owner_user_id !== params.viewerUserId || record.recipe_file === '') {
       return { ok: false, status: 400, message: SEEDANCE_ASSET_NOT_YOURS_MESSAGE };

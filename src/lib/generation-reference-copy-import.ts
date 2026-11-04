@@ -247,10 +247,9 @@ const IMPORT_FOLDERS = new Set(['remix-imports', RECIPE_IMPORT_FOLDER]);
  * block since the remix ended nothing (2026-11-03 re-review). Null for anything else, which a start
  * resolves as it always has; an import of another creator's shared input is the shared import's.
  *
- * Answers as the import does. A kept input whose row cannot be read is left to the start, as its path
- * decides (2026-11-04 re-review), the way an input is marked as it is kept (`findRecipeFileCandidates`):
- * only a start's import is a recipe file by its path, and a file in the caller's own folder is one they
- * can read anyway. Answered `failed`, a creator's own re-run of their own upload failed with it.
+ * Answers as the import does. A run's kept input whose row cannot be read answers `failed`, retryably
+ * (`findHeldRecipeCopy`): it may be a recipe file the caller no longer holds, which storage refuses
+ * them since 20261103232019. Any other own file whose row read fails is left to the start.
  */
 export async function reuseRecipeFile(params: {
   source: string;
@@ -260,7 +259,7 @@ export async function reuseRecipeFile(params: {
 }): Promise<SharedInputMediaImportResult | null> {
   const held = await findHeldRecipeCopy(params);
   if (held === null) return null;
-  if (held.outcome === 'not-eligible') return held;
+  if (held.outcome !== 'copy') return held;
   return importGenerationReferenceCopy({
     source: held.copySource,
     viewerUserId: params.viewerUserId,
@@ -273,13 +272,16 @@ export async function reuseRecipeFile(params: {
  * The recipe copy a source the caller holds stands for, as `reuseRecipeFile` reads it: the seller's
  * copy itself, a run start's import of one, or a kept input of the caller's own marked as a recipe
  * file. `not-eligible` for a recipe file whose copy is on no record, or an import naming none; null
- * for anything else, the caller's own files and a kept row that cannot be read included.
+ * for anything else, the caller's own files included. A run's kept input whose row cannot be read is
+ * `failed` (retryable), never the caller's own: since 20261103232019 storage itself refuses them a
+ * kept recipe file they no longer hold, so taken for theirs, it was signed with the service role and
+ * a Seedance asset made of it recorded as their own file for good (2026-11-04 review).
  */
 export async function findHeldRecipeCopy(params: {
   source: string;
   viewerUserId: string;
   dependencies?: GenerationReferenceCopyImportDependencies;
-}): Promise<{ outcome: 'copy'; copySource: string } | { outcome: 'not-eligible' } | null> {
+}): Promise<{ outcome: 'copy'; copySource: string } | { outcome: 'not-eligible' } | { outcome: 'failed' } | null> {
   const own = new Set([params.viewerUserId]);
   const copySource = recipeCopyOfSource(params.source, own);
   if (copySource) return { outcome: 'copy', copySource };
@@ -296,7 +298,8 @@ export async function findHeldRecipeCopy(params: {
     .limit(1);
   if (error) {
     logBackendError('failed_to_read_kept_input_for_recipe_file_reuse', { error });
-    return null;
+    // A run's kept input (`<caller>/<run>/<file>`) could be a recipe file; any other own file is not.
+    return UUID_PATTERN.test(kept.filePath.split('/')[1] ?? '') ? { outcome: 'failed' } : null;
   }
   const row = ((data ?? []) as Array<{ metadata: Record<string, unknown> | null }>)[0];
   if (!row || !isRecipeFileInput({ metadata: row.metadata }, own)) return null;

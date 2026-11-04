@@ -117,18 +117,21 @@ export async function withholdUnreadableRecipeFileInputs<T extends HeldInput>(pa
 }
 
 /**
- * A recipe's items as someone other than its seller reads them, without the copies of a creation now
- * off public view: the post's recipe for a buyer, the version they bought, and every file route that
- * signs from those. In place, on each of the resources given. A read that fails withholds every copy
- * among them, never another item. The seller's own editor is not read through here: the copies are
- * their files, and a save that dropped them would lose them for an un-archive.
+ * A recipe as someone other than its seller reads it, without the copies of a creation now off public
+ * view: its items and its attachments, both of which the file routes sign (the post's recipe for a
+ * buyer, the version they bought). In place, on each of the resources given. A read that fails
+ * withholds every copy among them, never another file. The seller's own editor is not read through
+ * here: the copies are their files, and a save that dropped them would lose them for an un-archive.
  */
 export async function withholdCopiesOfCreationsOffView(
   adminSupabase: SupabaseClient,
-  resourcesList: ReadonlyArray<{ items?: Array<{ storagePath?: string | null }> } | null | undefined>,
+  resourcesList: ReadonlyArray<{
+    items?: Array<{ storagePath?: string | null }>;
+    attachments?: Array<{ storagePath?: string | null }>;
+  } | null | undefined>,
 ): Promise<void> {
   const resources = resourcesList.filter((value): value is NonNullable<typeof value> => Boolean(value));
-  const paths = resources.flatMap((value) => (value.items ?? []).map((item) => item.storagePath ?? null));
+  const paths = resources.flatMap((value) => [...(value.items ?? []), ...(value.attachments ?? [])].map((entry) => entry.storagePath ?? null));
   if (!paths.some((path) => recipeCopyCreationId(path))) return;
   let withheld: ReadonlySet<string> | null = null;
   try {
@@ -136,9 +139,11 @@ export async function withholdCopiesOfCreationsOffView(
   } catch (error) {
     logBackendError('recipe_copy_creation_state_read_failed', { error });
   }
+  const kept = (entry: { storagePath?: string | null }) => (
+    withheld ? !isWithheldCopy(entry.storagePath, withheld) : !recipeCopyCreationId(entry.storagePath)
+  );
   for (const value of resources) {
-    value.items = (value.items ?? []).filter((item) => (
-      withheld ? !isWithheldCopy(item.storagePath, withheld) : !recipeCopyCreationId(item.storagePath)
-    ));
+    if (value.items) value.items = value.items.filter(kept);
+    if (value.attachments) value.attachments = value.attachments.filter(kept);
   }
 }

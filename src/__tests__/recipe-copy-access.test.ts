@@ -107,6 +107,16 @@ describe('the copies of a creation now off public view', () => {
     expect(bought.items).toEqual([]);
   });
 
+  // 2026-11-04 review: both file routes sign a recipe's attachments as well as its items.
+  it('takes them out of a recipe’s attachments too', async () => {
+    const { supabase } = client([{ id: CREATION, archived_at: '2026-11-04T00:00:00.000Z', moderation_removed_at: null }]);
+    const legacy = { items: [], attachments: [{ storagePath: COPY_PATH }, { storagePath: `${SELLER}/notes/guide.png` }] };
+
+    await withholdCopiesOfCreationsOffView(supabase, [legacy]);
+
+    expect(legacy.attachments).toEqual([{ storagePath: `${SELLER}/notes/guide.png` }]);
+  });
+
   it('withholds every copy when the creations cannot be read, and reads nothing for a recipe without copies', async () => {
     const failing = client(new Error('statement timeout'));
     const current = { items: [{ storagePath: COPY_PATH }, { storagePath: `${SELLER}/notes/guide.png` }] };
