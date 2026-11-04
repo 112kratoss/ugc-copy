@@ -16,7 +16,6 @@ import {
   buildProfilePageSchema,
   createMetadata,
 } from '@/lib/seo';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { CreatorPageViewer, CreatorPosts } from './CreatorPageViewer';
 import { CreatorProfileHeader } from './CreatorProfileHeader';
 
@@ -30,9 +29,10 @@ type CreatorPageProps = {
  * would, and never the session, a cookie, a header or the query: a block with
  * the viewer, a share visit and the creator's own just-saved profile are read
  * in the browser (`CreatorPageViewer`, `CreatorProfileHeader`), and Follow,
- * Edit profile and saves already were. A profile edit, a publish,
- * an archive, a delete and a moderation decision invalidate the feed's tag,
- * which the read below carries into this page's cache entry. Kept equal to
+ * Edit profile and saves already were. A profile edit, a publish, an archive,
+ * a delete, an account deletion and a moderation decision invalidate the
+ * public pages' tag (`PUBLIC_PAGE_CACHE_TAG`), which the read below carries
+ * into this page's cache entry; a block or a report does not. Kept equal to
  * PUBLIC_PAGE_REVALIDATE_SECONDS (five minutes: that file says why).
  */
 export const revalidate = 300;
@@ -52,11 +52,7 @@ async function readCreatorPage(username: string): Promise<CreatorProfilePageData
   return getCreatorProfilePageData(username, { limit: 24, offset: 0 });
 }
 
-const readCachedCreatorPage = cachePublicPageRead(
-  readCreatorPage,
-  ['creator-page-v1'],
-  [SHOWCASE_FEED_CACHE_TAG],
-);
+const readCachedCreatorPage = cachePublicPageRead(readCreatorPage, ['creator-page-v1']);
 
 /** One read per render, shared by the metadata and the page. */
 const loadCreatorPage = cache((username: string) => readCachedCreatorPage(username));

@@ -12,7 +12,6 @@ import { MARKETPLACE_INITIAL_PAGE_SIZE } from '@/lib/marketplace-resource-list-c
 import { getMarketplaceResourceList } from '@/lib/post-resource-bundles-server';
 import { cachePublicPageRead } from '@/lib/public-page-cache';
 import { createMetadata } from '@/lib/seo';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { FALLBACK_SOURCE_TOOLS, toSourceToolFilterOptions } from '@/lib/source-tools';
 import { listSourceToolsCatalog } from '@/lib/source-tools-server';
 
@@ -52,12 +51,13 @@ export const revalidate = 300;
 
 /**
  * The plain storefront's first page and the tool filters' options, cached
- * with the page under both tags the listing answers to: the marketplace's
- * (sales, free unlocks, recipe changes) and the feed's (a take-down from the
- * console invalidates only that one; `getCachedMarketplaceResourceListBase`
- * says why it is load-bearing). The listing's own minute-long cache sits
- * inside this read and is passed over there, so the page keeps its own
- * backstop rather than the minute.
+ * with the page under the marketplace's tag (sales, free unlocks, recipe
+ * changes) and the public pages' (`PUBLIC_PAGE_CACHE_TAG`: a publish, an edit,
+ * a take-down from the console, which invalidates that one with the feed's;
+ * `getCachedMarketplaceResourceListBase` says why the listing needs it). A
+ * block or a report leaves it: blocks are read in the browser. The listing's
+ * own minute-long cache sits inside this read and is passed over there, so
+ * the page keeps its own backstop rather than the minute.
  */
 async function readMarketplacePage() {
   const [firstPage, sourceToolOptions] = await Promise.all([
@@ -92,7 +92,7 @@ async function readMarketplacePage() {
 const readCachedMarketplacePage = cachePublicPageRead(
   readMarketplacePage,
   ['marketplace-page-v1'],
-  [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, SHOWCASE_FEED_CACHE_TAG],
+  [MARKETPLACE_RESOURCE_LIST_CACHE_TAG],
 );
 
 /**

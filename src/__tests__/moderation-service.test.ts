@@ -1,6 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
+const feedCacheMocks = vi.hoisted(() => ({
+  feedOnly: vi.fn(),
+  feedAndPages: vi.fn(),
+}));
+
+vi.mock('@/lib/showcase-feed-cache', () => ({
+  invalidateShowcaseFeedCacheOnly: feedCacheMocks.feedOnly,
+  invalidateShowcaseFeedCache: feedCacheMocks.feedAndPages,
+}));
+
 import {
   loadBlockedCreatorIds,
   setUserBlockForRoute,
@@ -423,6 +433,25 @@ describe('moderation service', () => {
     expect(client.rpc).toHaveBeenCalledTimes(1);
     expect(client.rpc).toHaveBeenCalledWith('check_backend_rate_limit', expect.anything());
     expect(invalidateFeedCache).toHaveBeenCalledOnce();
+  });
+
+  // The cached public pages are drawn for no one and apply a block in the
+  // browser, so a block re-renders none of them: only the feeds' tag goes.
+  it('refreshes the feeds for a block, and leaves the cached public pages', async () => {
+    feedCacheMocks.feedOnly.mockClear();
+    feedCacheMocks.feedAndPages.mockClear();
+    const client = createClient();
+
+    const result = await setUserBlockForRoute({
+      actorUserId: REPORTER_ID,
+      adminSupabase: client.client,
+      blockedUserId: CREATOR_ID,
+      shouldBlock: true,
+    });
+
+    expect(result).toEqual({ ok: true, body: { success: true, blocked: true } });
+    expect(feedCacheMocks.feedOnly).toHaveBeenCalledOnce();
+    expect(feedCacheMocks.feedAndPages).not.toHaveBeenCalled();
   });
 
   it('loads blocks in both relationship directions for content filtering', async () => {

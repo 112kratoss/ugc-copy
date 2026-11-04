@@ -18,7 +18,6 @@ import {
   createMetadata,
   type MetadataImage,
 } from '@/lib/seo';
-import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import {
   composeShowcaseTitle,
   isShowcaseDetailIndexable,
@@ -41,10 +40,12 @@ type ShowcaseDetailPageProps = {
  * included, as it did before.
  *
  * Every publish, edit, visibility change, archive, delete, console moderation
- * decision and profile change invalidates the feed's tag, which the read below
- * carries into this page's cache entry. `revalidate` is the backstop for what
- * moves without one: counts, and a take-down made with the moderation CLI
- * (PUBLIC_PAGE_REVALIDATE_SECONDS says why five minutes; kept equal to it).
+ * decision, profile change and account deletion invalidates the public pages'
+ * tag (`PUBLIC_PAGE_CACHE_TAG`), which the read below carries into this page's
+ * cache entry; a block or a report does not, as the page draws neither.
+ * `revalidate` is the backstop for what moves without one: counts, and a
+ * take-down made with the moderation CLI (PUBLIC_PAGE_REVALIDATE_SECONDS says
+ * why five minutes; kept equal to it).
  */
 export const revalidate = 300;
 
@@ -76,11 +77,7 @@ async function readShowcasePostPage(id: string): Promise<ShowcasePostPageRead> {
     : { kind: 'missing' };
 }
 
-const readCachedShowcasePostPage = cachePublicPageRead(
-  readShowcasePostPage,
-  ['showcase-post-page-v1'],
-  [SHOWCASE_FEED_CACHE_TAG],
-);
+const readCachedShowcasePostPage = cachePublicPageRead(readShowcasePostPage, ['showcase-post-page-v1']);
 
 /** One read per render, shared by the metadata and the page. */
 const loadShowcasePostPage = cache((id: string) => readCachedShowcasePostPage(id));
