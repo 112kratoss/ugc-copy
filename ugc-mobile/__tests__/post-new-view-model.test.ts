@@ -1992,6 +1992,8 @@ describe('post new view model', () => {
         body: '',
         visibility: 'private',
         resourceBundle: { accessMode: 'none' },
+        // A creation's post sends its own "Allow remixes" with every save (owner, 2026-11-05).
+        allowRemixes: true,
       });
       expect(buildUpdatePostPayload(false, draft)).toHaveProperty('resourceBundle', { accessMode: 'none' });
     });

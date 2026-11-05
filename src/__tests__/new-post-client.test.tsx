@@ -1409,7 +1409,10 @@ describe('NewPostClient', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
 
     expect(screen.getByText('Remix comes with this recipe: people who unlock it can remix your post.')).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /remix/i })).not.toBeInTheDocument();
+    // No "Allow direct remix" for the recipe's hand-over (S1); the post's own "Allow remixes" (owner,
+    // 2026-11-05) starts from the post.
+    expect(screen.getAllByRole('checkbox', { name: /remix/i }).map((box) => box.getAttribute('aria-label') ?? box.closest('label')?.textContent ?? '')).toHaveLength(1);
+    expect(screen.getByRole('checkbox', { name: /allow remixes/i })).toBeChecked();
     // No stored preview: the suggestion reads the items.
     expect(screen.getByLabelText(/recipe preview, required/i)).toHaveValue('Includes the prompt and reference media.');
 
@@ -1424,6 +1427,7 @@ describe('NewPostClient', () => {
       previewText: 'Includes the prompt and reference media.',
       resources: { allowRemix: true },
     });
+    expect(payload.allowRemixes).toBe(true);
   });
 
   it('keeps the server-provided draft when the generations fetch fails', async () => {
@@ -2964,8 +2968,9 @@ describe('NewPostClient', () => {
     });
     expect(screen.getByText(/the saved prompt and remix access are ready.*its settings show on the post for everyone/i)).toBeInTheDocument();
     // The saved generation seeds items rather than loose fields. Remix comes
-    // with the recipe (S1): there is no switch, and a new recipe sends false.
-    expect(screen.queryByRole('checkbox', { name: /remix/i })).not.toBeInTheDocument();
+    // with the recipe (S1): no switch for its hand-over, and a new recipe sends false. The post's own
+    // "Allow remixes" is on (owner, 2026-11-05).
+    expect(screen.getByRole('checkbox', { name: /allow remixes/i })).toBeChecked();
     expect(screen.getByText('Remix comes with this recipe: people who unlock it can remix your post.')).toBeInTheDocument();
     // The prompt alone: the settings are no item of the recipe (owner, 2026-11-03).
     expect(screen.queryByText('Guide or notes')).not.toBeInTheDocument();
@@ -2995,7 +3000,8 @@ describe('NewPostClient', () => {
       visibility: 'public',
       resourceBundle: {
         accessMode: 'paid',
-        priceUsdCents: 900,
+        // Owner, 2026-11-05: a paid recipe starts at 10 credits.
+        priceUsdCents: 10,
         resources: { allowRemix: false },
       },
     });
@@ -3044,16 +3050,18 @@ describe('NewPostClient', () => {
     render(<NewPostClient />);
 
     expect(await screen.findByText(
-      'This creation saved no prompt, so its recipe starts empty: include its references below, or add an item. Its settings show on the post for everyone. Set the price, then publish.',
+      'This creation saved no prompt, so its recipe holds its references, listed below. Its settings show on the post for everyone. Set the price, then publish.',
     )).toBeInTheDocument();
     expect(screen.queryByText(/saved prompt and remix access are ready/i)).not.toBeInTheDocument();
     expect(screen.queryByText('Exact generation prompt')).not.toBeInTheDocument();
     // "From this creation" names no prompt for a creation that saved none, and offers its references.
     expect(screen.queryByRole('checkbox', { name: /include exact prompt/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Exact prompt included.')).not.toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /include creation references/i })).not.toBeChecked();
+    // Its references go in by default (owner, 2026-11-05).
+    expect(screen.getByRole('checkbox', { name: /include creation references/i })).toBeChecked();
 
-    // An empty recipe is still refused at Publish.
+    // Without them the recipe is empty, and still refused at Publish.
+    fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
     fillRequiredTitle();
     fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
     expect((await screen.findAllByText('Add at least one item to the recipe.')).length).toBeGreaterThan(0);
@@ -5436,8 +5444,10 @@ describe('NewPostClient', () => {
       expect(titleInput).toHaveValue('Image recipe');
       expect(screen.getByText('Suggested. A paid recipe keeps your prompt off the post.')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
       expect(titleInput).toHaveValue('Product still lit like a window display');
+      // A creation's new post has no No recipe (owner, 2026-11-05).
+      expect(screen.queryByRole('radio', { name: /no recipe/i })).not.toBeInTheDocument();
     });
 
     it('keeps a title the creator typed when a recipe is turned on', async () => {
@@ -5549,8 +5559,10 @@ describe('NewPostClient', () => {
       expect(within(inputs).getByRole('img', { name: 'Product' }))
         .toHaveAttribute('src', 'https://proxy.example.com/generation_inputs/user-1/product.png');
       const includeInputs = screen.getByRole('checkbox', { name: /include creation references/i });
-      expect(includeInputs).not.toBeChecked();
-      fireEvent.click(includeInputs);
+      // In by default, the creator's own uploads included, each removable (owner, 2026-11-05).
+      expect(includeInputs).toBeChecked();
+      expect(screen.getByText('Anyone who gets this recipe gets these files.')).toBeInTheDocument();
+      expect(within(inputs).getByRole('button', { name: 'Remove Product from the recipe' })).toBeInTheDocument();
       fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
         target: { value: 'The exact prompt and the product reference behind this still.' },
       });
@@ -5660,6 +5672,9 @@ describe('NewPostClient', () => {
         expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
       });
       fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+      // In by default (owner, 2026-11-05), and out again with the box.
+      expect(screen.getByText('Creation references · 1 file')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
       expect(screen.queryByText('Creation references · 1 file')).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole('checkbox', { name: /include creation references/i }));
       expect(screen.getByText('Creation references · 1 file')).toBeInTheDocument();
@@ -5679,7 +5694,7 @@ describe('NewPostClient', () => {
         includeGenerationReferences: true,
         resourceBundle: {
           accessMode: 'paid',
-          priceUsdCents: 900,
+          priceUsdCents: 10,
           previewText: 'The prompt and product reference behind this window display still.',
           resources: { allowRemix: false },
         },
@@ -5694,10 +5709,10 @@ describe('NewPostClient', () => {
     });
 
     // An empty recipe would only stop Publish ("Add at least one item."), so a
-    // creation with no prompt starts where an upload does, with nothing unsaved.
-    it('starts a creation with no prompt on No recipe', async () => {
+    // creation with nothing to share starts where an upload does, with nothing unsaved.
+    it('starts a creation with no prompt and no saved input on No recipe', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
-      enqueueCreation({ prompt: '' });
+      enqueueCreation({ prompt: '', input_media: [] });
 
       render(<NewPostClient />);
       await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still'));
@@ -5921,14 +5936,14 @@ describe('NewPostClient', () => {
     // Retry) and took a Free recipe the creator chose back to No recipe.
     it('keeps the recipe mode a creator chose when the creation is read again', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
-      enqueueCreation({ prompt: '' });
+      enqueueCreation({ prompt: '', input_media: [] });
 
       const view = render(<NewPostClient />);
       await waitFor(() => expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked());
       fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
       expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
 
-      enqueueCreation({ prompt: '' });
+      enqueueCreation({ prompt: '', input_media: [] });
       authSessionState.accessToken = 'refreshed-token';
       view.rerender(<NewPostClient />);
       await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
@@ -6145,57 +6160,44 @@ describe('NewPostClient', () => {
         const titleInput = await titleField();
         expect(screen.queryByText(RECIPE_TITLE_TOO_SHORT_HINT)).not.toBeInTheDocument();
 
-        fireEvent.change(titleInput, { target: { value: 'Cat' } });
+        // Owner, 2026-11-05: 3 characters, no longer 6.
+        fireEvent.change(titleInput, { target: { value: 'Ox' } });
         expect(screen.getByText(RECIPE_TITLE_TOO_SHORT_HINT)).toBeInTheDocument();
         expect(titleInput).toHaveAccessibleDescription(RECIPE_TITLE_TOO_SHORT_HINT);
 
-        fireEvent.click(screen.getByRole('radio', { name: /no recipe/i }));
-        expect(screen.queryByText(RECIPE_TITLE_TOO_SHORT_HINT)).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
         expect(screen.getByText(RECIPE_TITLE_TOO_SHORT_HINT)).toBeInTheDocument();
-        fireEvent.change(titleInput, { target: { value: 'Cat at dusk' } });
+        fireEvent.change(titleInput, { target: { value: 'Cat' } });
         expect(screen.queryByText(RECIPE_TITLE_TOO_SHORT_HINT)).not.toBeInTheDocument();
       });
 
-      it('refuses Publish in plain words, and posts without the recipe in one press', async () => {
+      // A creation's new post always carries its recipe (owner, 2026-11-05): the title is the way on.
+      it('refuses Publish in plain words, with no way on without the recipe', async () => {
         await openCreation();
-        enqueueResponse({ ok: true, json: async () => PUBLISHED });
         render(<NewPostClient />);
-        fireEvent.change(await titleField(), { target: { value: 'Cat' } });
+        fireEvent.change(await titleField(), { target: { value: 'Ox' } });
         fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
         const alert = await refusalAlert();
         expect(alert).not.toHaveTextContent(/improve this recipe/i);
         expect(publishCalls()).toHaveLength(0);
-
-        fireEvent.click(within(alert).getByRole('button', { name: 'Post without recipe' }));
-        await waitFor(() => expect(publishCalls()).toHaveLength(1));
-        expect(publishBody(0)).toMatchObject({
-          generationId: 'gen-recipe-1',
-          title: 'Cat',
-          visibility: 'public',
-          resourceBundle: { accessMode: 'none' },
-        });
-        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        expect(within(alert).queryByRole('button', { name: 'Post without recipe' })).not.toBeInTheDocument();
       });
 
-      it('answers the server’s refusal of the title the same way', async () => {
+      it('answers the server’s refusal of the title by the title alone', async () => {
         const refusal = mobileApiContract.endpoints.publishGeneration.errors.recipeTitleTooShort;
         await openCreation();
         enqueueResponse({ ok: false, status: refusal.status, json: async () => refusal.response });
-        enqueueResponse({ ok: true, json: async () => PUBLISHED });
         render(<NewPostClient />);
         await titleField();
         fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
 
         const alert = await refusalAlert();
         expect(publishBody(0).resourceBundle).toMatchObject({ accessMode: 'free' });
+        expect(publishBody(0)).toMatchObject({ allowRemixes: true });
         // Said by the title, with Made With left folded.
         expect(screen.getByRole('button', { name: /^made with/i })).toHaveAttribute('aria-expanded', 'false');
-
-        fireEvent.click(within(alert).getByRole('button', { name: 'Post without recipe' }));
-        await waitFor(() => expect(publishCalls()).toHaveLength(2));
-        expect(publishBody(1).resourceBundle).toEqual({ accessMode: 'none' });
+        expect(within(alert).queryByRole('button', { name: 'Post without recipe' })).not.toBeInTheDocument();
       });
 
       // An edit that takes off the recipe the post has deletes it, or retires it
@@ -6212,7 +6214,7 @@ describe('NewPostClient', () => {
             <FeedbackViewport />
           </>
         );
-        fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value: 'Cat' } });
+        fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), { target: { value: 'Ox' } });
         expect(screen.getByText(RECIPE_TITLE_TOO_SHORT_HINT)).toBeInTheDocument();
         fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
@@ -6234,7 +6236,7 @@ describe('NewPostClient', () => {
         // Asked once: the save it sends does not ask again.
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
         const payload = JSON.parse(String((putCalls()[0][1] as { body: string }).body));
-        expect(payload).toMatchObject({ title: 'Cat', resourceBundle: { accessMode: 'none' } });
+        expect(payload).toMatchObject({ title: 'Ox', resourceBundle: { accessMode: 'none' } });
       });
 
       // #677's re-reviews: the one-tap waited for the recipe's mode to change,
@@ -6275,7 +6277,7 @@ describe('NewPostClient', () => {
 
         fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
         await waitFor(() => expect(publishCalls()).toHaveLength(1));
-        for (const name of [/free recipe/i, /paid recipe/i, /no recipe/i]) {
+        for (const name of [/free recipe/i, /paid recipe/i]) {
           expect(screen.getByRole('radio', { name })).toBeDisabled();
         }
         await act(async () => finishPublish(PUBLISHED));
@@ -6292,9 +6294,11 @@ describe('NewPostClient', () => {
     expect(recipe.getByRole('radio', { name: /paid recipe/i })).toHaveAccessibleName(/set a credit price/i);
     fireEvent.click(recipe.getByRole('radio', { name: /paid recipe/i }));
     const price = recipe.getByRole('spinbutton', { name: 'Price in credits' });
-    expect(price).toHaveValue(900);
-    expect(recipe.getByText('Buyers pay $9.00 · You earn ~$7.65 (85%) · Payouts from $100')).toBeInTheDocument();
-    expect(recipe.getByText('Before buying, people see your recipe preview and item titles — never what’s inside.')).toBeInTheDocument();
+    // Owner, 2026-11-05: a paid recipe starts at 10 credits.
+    expect(price).toHaveValue(10);
+    expect(recipe.getByText('Buyers pay $0.10 · You earn ~$0.09 (85%) · Payouts from $100')).toBeInTheDocument();
+    expect(recipe.getByText('Anyone who unlocks it can remix it and sell their version at their own price.')).toBeInTheDocument();
+    expect(recipe.getByText(/^Before buying, people see your recipe preview and item titles — never what’s inside\./)).toBeInTheDocument();
     fireEvent.change(price, { target: { value: '50' } });
     expect(recipe.getByText('Buyers pay $0.50 · You earn ~$0.43 (85%) · Payouts from $100')).toBeInTheDocument();
     expect(recipe.getByText(/under 100 credits, buyers unlock with credits/i)).toBeInTheDocument();

@@ -1509,7 +1509,7 @@
         "recipeTitleTooShort": {
           "status": 400,
           "response": {
-            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "error": "A recipe needs a title of at least 3 characters. Make the title longer.",
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }
@@ -1550,7 +1550,7 @@
         "recipeTitleTooShort": {
           "status": 400,
           "response": {
-            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "error": "A recipe needs a title of at least 3 characters. Make the title longer.",
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }
@@ -2197,7 +2197,7 @@
         "recipeTitleTooShort": {
           "status": 400,
           "response": {
-            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "error": "A recipe needs a title of at least 3 characters. Make the title longer.",
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }

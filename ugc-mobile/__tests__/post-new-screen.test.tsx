@@ -520,7 +520,8 @@ describe('mobile external post composer', () => {
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     const text = collectText(tree.root);
     expect(text).toContain('Review & publish');
-    expect(text).toContain('Step 2 of 2 · recipe optional');
+    // A creation's new post always carries its recipe (owner, 2026-11-05).
+    expect(text).toContain('Step 2 of 2 · recipe');
     expect(text).toContain('Ready to publish');
     expect(text).toContain('Recipe');
     expect(text).toContain('Free recipe');
@@ -529,7 +530,8 @@ describe('mobile external post composer', () => {
     expect(text).toContain('Set a credit price');
     // A creation's post starts on a free recipe with its exact prompt (owner, 2026-11-03).
     expect(findPressableByText(tree.root, 'Free recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
-    expect(findPressableByText(tree.root, 'No recipe').props.accessibilityState).toEqual({ checked: false, selected: false });
+    expect(text).not.toContain('No recipe');
+    expect(text).not.toContain('Optional');
     expect(text).toContain('Exact generation prompt');
     expect(text).toContain('Publish public');
     expect(text).not.toContain('What is this creation about?');
@@ -552,7 +554,7 @@ describe('mobile external post composer', () => {
     expect(collectText(tree.root)).toContain('Free recipe');
     renderer.act(() => findPressableByText(tree.root, 'Paid recipe').props.onPress());
     expect(words()).not.toMatch(/resources/i);
-    expect(collectText(tree.root)).toContain('Paid recipe · 900 credits');
+    expect(collectText(tree.root)).toContain('Paid recipe · 10 credits');
   });
 
   it('uses header back to return to details and preserve state', async () => {
@@ -566,7 +568,8 @@ describe('mobile external post composer', () => {
   it('opens directly on resources when focus=resources is requested', async () => {
     paramsState.params = { generationId: 'gen-1', focus: 'resources' };
     const tree = await renderScreen();
-    expect(collectText(tree.root)).toContain('Step 2 of 2 · recipe optional');
+    // A creation's post always carries its recipe (owner, 2026-11-05): not "optional".
+    expect(collectText(tree.root)).toContain('Step 2 of 2 · recipe');
   });
 
   // The list's summary leaves a creation's saved inputs out, so a composer
@@ -652,10 +655,11 @@ describe('mobile external post composer', () => {
     renderer.act(() => findTextInputByPlaceholder(tree.root, 'This content is revealed only after unlock').props.onChangeText('Exact reusable prompt'));
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save item').props.onPress());
     const text = collectText(tree.root);
-    // Next to the creation's own exact prompt, which its recipe starts with.
-    expect(text).toContain('2 items');
+    // Next to the creation's own exact prompt, which its recipe starts with, and its references,
+    // which it takes by default (owner, 2026-11-05).
+    expect(text).toContain('2 items and creation references');
     expect(text).toContain('Prompt or script');
-    expect(findTextInputByPlaceholder(tree.root, 'Tell people what they will receive').props.value).toBe('Includes 2 prompts.');
+    expect(findTextInputByPlaceholder(tree.root, 'Tell people what they will receive').props.value).toBe('Includes 2 prompts and reference media.');
   });
 
   it('shows resource-link validation in the editor before Save', async () => {
@@ -731,7 +735,7 @@ describe('mobile external post composer', () => {
     expect(collectText(tree.root)).toContain('project.zip');
 
     renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Save item').props.onPress());
-    expect(collectText(tree.root)).toContain('2 items');
+    expect(collectText(tree.root)).toContain('2 items and creation references');
   });
 
   it('keeps resource upload progress and recovery inside the editor sheet', async () => {
@@ -872,9 +876,9 @@ describe('mobile external post composer', () => {
       buttons.find((button) => button.text === 'Discard')?.onPress?.();
       await Promise.resolve();
     });
-    // Only the creation's exact prompt, which the recipe started with.
-    expect(collectText(tree.root)).toContain('1 item');
-    expect(collectText(tree.root)).not.toContain('2 items');
+    // Only the creation's exact prompt, which the recipe started with, and its references.
+    expect(collectText(tree.root)).toContain('1 item and creation references');
+    expect(collectText(tree.root)).not.toContain('2 items and creation references');
   });
 
   describe('the resource sheet', () => {
@@ -995,7 +999,7 @@ describe('mobile external post composer', () => {
       // Saved: the composer has the card and has dropped the editor's copy
       // and its step. The panel is still on its way out with its fields, or
       // it would fall to the height of its title under its own exit.
-      expect(collectText(tree.root)).toContain('2 items');
+      expect(collectText(tree.root)).toContain('2 items and creation references');
       expect(collectText(tree.root)).toContain('Contents stay protected until unlock.');
       expect(contentField(tree).props.value).toBe('Exact reusable prompt');
       expect(findPressableByAccessibilityLabel(tree.root, 'Save item')).toBeTruthy();
@@ -1230,7 +1234,7 @@ describe('mobile external post composer', () => {
     const tree = await renderScreen();
     renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
     renderer.act(() => findPressableByText(tree.root, 'Paid recipe').props.onPress());
-    const price = findTextInputByPlaceholder(tree.root, '900');
+    const price = findTextInputByPlaceholder(tree.root, '10');
     renderer.act(() => price.props.onChangeText('50'));
     const text = collectText(tree.root);
     expect(text).toContain('Buyers pay 50 credits · You earn ~$0.43 (85%) · Payouts from $100');
@@ -2813,7 +2817,8 @@ describe('mobile external post composer', () => {
       expect(text).toContain('Exact generation prompt');
       expect(text).toContain('From this creation · 27 characters');
       expect(text.some((line) => line.startsWith('Exact prompt included.'))).toBe(true);
-      expect(findTextInputByAccessibilityLabel(tree.root, 'Recipe preview, required').props.value).toBe('Includes the prompt.');
+      // Its references go with it by default (owner, 2026-11-05).
+      expect(findTextInputByAccessibilityLabel(tree.root, 'Recipe preview, required').props.value).toBe('Includes the prompt and reference media.');
       // No switch for it, and its item can be neither removed nor rewritten.
       expect(toggle(tree, 'Include exact prompt')).toBeUndefined();
       expect(pressables(tree, 'Remove Exact generation prompt')).toHaveLength(0);
@@ -2821,7 +2826,10 @@ describe('mobile external post composer', () => {
 
       expect(text).toContain('1 saved input');
       expect(tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessibilityLabel === 'Reference image')).toHaveLength(1);
-      expect(toggle(tree, 'Include creation references').props.value).toBe(false);
+      // In by default, the creator's own uploads included, each removable (owner, 2026-11-05).
+      expect(toggle(tree, 'Include creation references').props.value).toBe(true);
+      expect(pressables(tree, 'Remove Reference image from the recipe')).toHaveLength(1);
+      expect(text).toContain('Anyone who gets this recipe gets these files.');
       // Where the post starts: nothing for the leave guard to keep.
       expect(gestureEnabled(tree)).toBe(true);
     });
@@ -3267,7 +3275,7 @@ describe('mobile external post composer', () => {
       paramsState.params = { generationId: 'gen-1', focus: 'resources' };
       const tree = await renderScreen();
 
-      expect(collectText(tree.root)).toContain('Step 2 of 2 · recipe optional');
+      expect(collectText(tree.root)).toContain('Step 2 of 2 · recipe');
       const pictureUrls = tree.root
         .findAll((node) => String(node.type) === 'stable-media-image')
         .map((node) => node.props.url);
@@ -3357,38 +3365,46 @@ describe('mobile external post composer', () => {
       ...overrides,
     });
 
-    it('offers Free, Paid and No recipe as one radio group of three equal cards', async () => {
+    // Owner, 2026-11-05: a creation's new post always carries its recipe, so it offers Free and Paid
+    // alone; No recipe stays for a creation with nothing to share (and uploads, text posts, edits).
+    it('offers a creation’s new post Free and Paid as one radio group of equal cards, and no No recipe', async () => {
       const tree = await stepTwo();
 
       expect(radios(tree).map((node) => collectText(node))).toEqual([
         ['Free recipe', 'Reward useful work'],
         ['Paid recipe', 'Set a credit price'],
-        ['No recipe', 'Just the post'],
       ]);
       // A creation's post starts on Free (owner, 2026-11-03).
       expect(radios(tree).map((node) => node.props.accessibilityState)).toEqual([
         { checked: true, selected: true },
-        { checked: false, selected: false },
         { checked: false, selected: false },
       ]);
       expect(new Set(radios(tree).map((node) => (node.props.style as { minHeight?: number }).minHeight)).size).toBe(1);
 
       renderer.act(() => radio(tree, 'Paid recipe').props.onPress());
       expect(radio(tree, 'Paid recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
-      expect(radio(tree, 'No recipe').props.accessibilityState).toEqual({ checked: false, selected: false });
+      expect(radio(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: false, selected: false });
+    });
+
+    it('offers No recipe for a creation with nothing to share', async () => {
+      generationState.item = { ...generationItem, prompt: null, input_media: [] };
+      const tree = await stepTwo();
+      expect(radios(tree).map((node) => collectText(node)[0])).toEqual(['Free recipe', 'Paid recipe', 'No recipe']);
+      expect(radio(tree, 'No recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
     });
 
     it('puts the price right under the choice, in credits, with what it earns and what buyers see', async () => {
       const tree = await stepTwoWith('Paid recipe');
       const price = () => findTextInputByAccessibilityLabel(tree.root, 'Price in credits, required');
-      expect(price().props.placeholder).toBe('900');
-      expect(price().props.value).toBe('900');
+      // Owner, 2026-11-05: a paid recipe starts at 10 credits.
+      expect(price().props.placeholder).toBe('10');
+      expect(price().props.value).toBe('10');
 
       const text = collectText(tree.root);
-      expect(text).toContain('Buyers pay 900 credits · You earn ~$7.65 (85%) · Payouts from $100');
+      expect(text).toContain('Buyers pay 10 credits · You earn ~$0.09 (85%) · Payouts from $100');
       expect(text).toContain('Before buying, people see your recipe preview and item titles — never what\'s inside.');
-      expect(text).toContain('Paid recipe · 900 credits');
-      expect(text.indexOf('Price in credits')).toBeGreaterThan(text.indexOf('Just the post'));
+      expect(text).toContain('Paid recipe · 10 credits');
+      expect(text.indexOf('Price in credits')).toBeGreaterThan(text.indexOf('Set a credit price'));
       expect(text.indexOf('Price in credits')).toBeLessThan(text.indexOf('What people receive'));
 
       renderer.act(() => price().props.onChangeText('50'));
@@ -3401,8 +3417,8 @@ describe('mobile external post composer', () => {
     });
 
     it('asks for one Recipe preview, suggested from the items until the creator writes it', async () => {
-      // A creation with no prompt, whose recipe starts with no items.
-      generationState.item = { ...generationItem, prompt: null };
+      // A creation with no prompt and no saved input, whose recipe starts with no items.
+      generationState.item = { ...generationItem, prompt: null, input_media: [] };
       const tree = await stepTwoWith('Free recipe');
       const text = collectText(tree.root);
       expect(text).toContain('Recipe preview');
@@ -3572,7 +3588,7 @@ describe('mobile external post composer', () => {
     });
 
     it('says Finish the recipe with what is missing, and no list of kinds', async () => {
-      generationState.item = { ...generationItem, prompt: null };
+      generationState.item = { ...generationItem, prompt: null, input_media: [] };
       const tree = await stepTwoWith('Free recipe');
       const text = collectText(tree.root);
       expect(text).toContain('Finish the recipe');
@@ -3684,7 +3700,8 @@ describe('mobile external post composer', () => {
     // "Post without recipe" sends the post with No recipe in one press; an
     // edit that takes off the recipe the post has asks first, as its save does.
     describe('a title shorter than a recipe needs', () => {
-      const SHORT = 'Cat';
+      // Under the 3 characters a recipe's title needs (owner, 2026-11-05: 3, no longer 6).
+      const SHORT = 'Ox';
       const titleInput = (tree: renderer.ReactTestRenderer) => findTextInputByAccessibilityLabel(tree.root, 'Title, required');
       const postWithoutRecipeButtons = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
         String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Post without recipe'
@@ -3721,27 +3738,19 @@ describe('mobile external post composer', () => {
         expect(collectText(tree.root)).not.toContain(RECIPE_TITLE_TOO_SHORT_HINT);
       });
 
-      it('holds Publish, says why in the summary, and posts without the recipe in one press', async () => {
+      // Owner, 2026-11-05: a creation's new post always carries its recipe, so the title is the way on.
+      it('holds Publish and says why in the summary, with no way on without the recipe', async () => {
         generationState.item = { ...generationItem, title: SHORT };
         const tree = await stepTwo();
         const text = collectText(tree.root);
         expect(text).toContain('Needs attention');
         expect(text).toContain(RECIPE_TITLE_TOO_SHORT_HINT);
         expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
-        expect(postWithoutRecipeButtons(tree)).toHaveLength(1);
-
-        await postWithoutRecipe(tree);
-        expect(alertState.alert).not.toHaveBeenCalled();
-        expect(mutationState.mutate).toHaveBeenCalledTimes(1);
-        expect(mutationState.mutate).toHaveBeenCalledWith(sentWithoutRecipe);
-        // The save sends that draft, not the one its mutation was drawn with.
-        const context = mutationState.options?.onMutate?.(mutationState.mutate.mock.calls[0][0] as never) as { submittedDraft?: PostComposerDraft };
-        expect(context.submittedDraft?.resource.accessMode).toBe('none');
-        expect(radio(tree, 'No recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
         expect(postWithoutRecipeButtons(tree)).toHaveLength(0);
+        expect(sentWithoutRecipe).toBeTruthy();
       });
 
-      it('answers the server’s refusal of that rule with the same press', async () => {
+      it('answers the server’s refusal of that rule by the title alone', async () => {
         const refusal = mobileApiContract.endpoints.publishGeneration.errors.recipeTitleTooShort;
         const tree = await stepTwo();
         expect(postWithoutRecipeButtons(tree)).toHaveLength(0);
@@ -3752,10 +3761,7 @@ describe('mobile external post composer', () => {
 
         expect(collectText(tree.root)).toContain('Could not publish');
         expect(collectText(tree.root)).toContain(refusal.response.error);
-        await postWithoutRecipe(tree);
-        expect(mutationState.mutate).toHaveBeenCalledWith(expect.objectContaining({
-          resource: expect.objectContaining({ accessMode: 'none' }),
-        }));
+        expect(postWithoutRecipeButtons(tree)).toHaveLength(0);
       });
 
       it('asks before an edit takes off a recipe people have, and saves without it only when told', async () => {

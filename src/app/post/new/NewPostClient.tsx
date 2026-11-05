@@ -836,8 +836,10 @@ function paidCreationRecipeNotice({
     ? 'Its settings show on the post once a viewer reveals it.'
     : 'Its settings show on the post for everyone.';
   if (!prefill.promptText?.trim()) {
-    const add = offersReferences ? 'include its references below, or add an item' : 'add an item below';
-    return `This creation saved no prompt, so its recipe starts empty: ${add}. ${settings} Set the price, then publish.`;
+    // Its references go in by default (owner, 2026-11-05), each with a remove button.
+    return offersReferences
+      ? `This creation saved no prompt, so its recipe holds its references, listed below. ${settings} Set the price, then publish.`
+      : `This creation saved no prompt, so its recipe starts empty: add an item below. ${settings} Set the price, then publish.`;
   }
   return `The saved prompt and remix access are ready where this creation supports them. ${settings} Set the price first, then publish or edit anything below.`;
 }
@@ -1223,7 +1225,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     && !allCreationInputsInRecipe;
   // A new post of a creation always carries its recipe (owner, 2026-11-05): No recipe is offered
   // for uploads, text posts and template results, and on an edit, which keeps a post as it is.
-  const isNewCreationPost = !isEditMode && Boolean(generationId) && prefilledGeneration?.origin !== 'template';
+  const isNewCreationPost = !isEditMode
+    && Boolean(generationId)
+    && prefilledGeneration?.origin !== 'template'
+    // One with nothing to share, off public view or with neither a prompt nor a saved input, has No recipe.
+    && prefilledGeneration?.sharesRecipe !== false
+    && (Boolean(prefilledGeneration?.prompt.trim()) || creationInputsOfRecipe.length > 0);
   // A remix's recipe keeps its original's terms (owner, 2026-11-05), which the server holds too.
   const recipeLock = prefilledGeneration?.origin === 'template'
     ? null
@@ -2590,7 +2597,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             {error.actionLabel ?? 'Complete profile in a new tab'}
           </Link>
         ) : null}
-        {error.recovery === 'post-without-recipe' ? (
+        {/* A creation's new post has no way on without its recipe (owner, 2026-11-05). */}
+        {error.recovery === 'post-without-recipe' && !isNewCreationPost ? (
           <Button variant="secondary" className="mt-3" onClick={() => void postWithoutRecipe()}>
             Post without recipe
           </Button>
@@ -4321,7 +4329,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                         setAllowRemixes(event.target.checked);
                         resetFeedback();
                       }}
-                      className="mt-0.5 h-4 w-4 rounded border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
+                      className="mt-0.5 h-4 w-4 rounded-ui-sm border-white/10 bg-white/[0.03] text-emerald-400 focus:ring-0 focus:ring-offset-0"
                     />
                     <span>
                       <span className="block text-sm font-semibold text-white">{ALLOW_REMIXES_LABEL}</span>

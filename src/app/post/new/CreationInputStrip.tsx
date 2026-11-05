@@ -36,9 +36,8 @@ export default function CreationInputStrip({
       {inputs.length > 0 ? (
         <ul aria-label="Saved inputs" className="mt-2 flex flex-wrap gap-2">
           {inputs.map((input) => (
-            <li key={input.id} className="relative">
+            <li key={input.id} title={input.label} className="relative">
               <div
-                title={input.label}
                 className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-zinc-400"
               >
                 {input.mediaKind === 'image' && input.url ? (

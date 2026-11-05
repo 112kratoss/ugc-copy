@@ -48,6 +48,9 @@ import {
   needsCreationPromptItem,
   recipeCopyableInputs,
   withoutLockedCreationPrompt,
+  CREATION_RECIPE_STARTING_ACCESS,
+  DEFAULT_PAID_RECIPE_PRICE_CREDITS,
+  remixRecipeLock,
   type GenerationReference,
 } from '@/lib/creation-recipe/creation-recipe';
 
@@ -222,6 +225,14 @@ export interface PostComposerResourceDraft {
  */
 export interface PostComposerCreationPackageDraft {
   attachGenerationReferences: boolean;
+  /**
+   * The saved inputs the creator took out of the recipe with their remove buttons (owner,
+   * 2026-11-05: every one goes in by default, the creator's own uploads included). Absent from a
+   * draft saved before, where none was removed.
+   */
+  removedInputIds?: string[];
+  /** "Allow remixes" (owner, 2026-11-05), on by default; absent from a draft saved before. */
+  allowRemixes?: boolean;
 }
 
 export interface PostComposerDraft {
@@ -576,7 +587,8 @@ const MAX_MEDIA_ITEMS = 5;
 export const MAX_MADE_WITH_ROWS = 5;
 
 /** Default recipe price in credits, the same as the web composer's. */
-const DEFAULT_PRICE_TOKENS = 900;
+// The posting defaults' starting price (owner, 2026-11-05: 10 credits, from 900), as on the web.
+const DEFAULT_PRICE_TOKENS = DEFAULT_PAID_RECIPE_PRICE_CREDITS;
 
 /** The recipe's one public text: its length, and what the composer says under it. */
 export const RECIPE_PREVIEW_MAX_LENGTH = 180;
@@ -991,7 +1003,27 @@ function inferResourceCardType(items: PostResourceItem[]): PostComposerResourceC
 export function getDefaultCreationPackageDraft(): PostComposerCreationPackageDraft {
   return {
     attachGenerationReferences: false,
+    removedInputIds: [],
+    allowRemixes: true,
   };
+}
+
+/** Whether the draft allows remixes: on unless the creator turned it off. */
+export function draftAllowsRemixes(draft: Pick<PostComposerDraft, 'creationPackage'>): boolean {
+  return draft.creationPackage?.allowRemixes !== false;
+}
+
+/** The saved inputs the creator removed from the recipe, by id. */
+export function getRemovedCreationInputIds(draft: Pick<PostComposerDraft, 'creationPackage'>): ReadonlySet<string> {
+  return new Set(draft.creationPackage?.removedInputIds ?? []);
+}
+
+/**
+ * The recipe choice a creation's remix is held to, with why (`remixRecipeLock`): paid for a remix of
+ * a paid recipe, free for one of a free recipe; null for a creation that remixed no one's post.
+ */
+export function getCreationRecipeLock(generation: Pick<GenerationListItem, 'remix_recipe_mode'> | null | undefined) {
+  return remixRecipeLock(generation?.remix_recipe_mode ?? null);
 }
 
 /**
@@ -1052,16 +1084,46 @@ export function withCreationRecipeDefaults(
   draft: PostComposerDraft,
   generation: GenerationListItem,
 ): PostComposerDraft {
-  // A template result, a creation with no prompt and one off public view
-  // (`getCreationRecipePrompt`) start on No recipe.
-  if (
-    !getCreationRecipePrompt(generation)?.trim()
-    || draft.resource.accessMode !== 'none'
-    || draft.resource.cards.length > 0
-  ) {
+  // Owner, 2026-11-05 (remix plan, phase 2): a creation's new post always carries its recipe, free,
+  // with its references in (the creator's own uploads included) and remixes allowed; a remix's keeps
+  // its original's terms, paid at the starting price where that recipe was paid. A template result
+  // and a creation off public view (`getCreationRecipePrompt`, `creationMayShareRecipe`), or one with
+  // neither a prompt nor a saved input, have nothing to share and start on No recipe.
+  if (draft.resource.accessMode !== 'none' || draft.resource.cards.length > 0 || !creationCarriesRecipe(generation)) {
     return draft;
   }
-  return applyCreationPromptResource(draft, generation);
+  const prompt = getCreationRecipePrompt(generation)?.trim() ?? '';
+  const references = hasGenerationReferences(generation);
+  const accessMode = getCreationRecipeLock(generation)?.accessMode ?? CREATION_RECIPE_STARTING_ACCESS;
+  // Read as the creation's post it becomes, so the preview suggested counts its references too.
+  const asCreation: PostComposerDraft = { ...draft, mode: 'creation', selectedGenerationId: generation.id };
+  const withReferences: PostComposerDraft = {
+    ...asCreation,
+    creationPackage: {
+      ...getCreationPackageDraft(draft),
+      attachGenerationReferences: references,
+      removedInputIds: [],
+      allowRemixes: getCreationPackageDraft(draft).allowRemixes !== false,
+    },
+    resource: {
+      ...draft.resource,
+      accessMode,
+      ...(accessMode === 'paid' ? { priceTokens: String(DEFAULT_PRICE_TOKENS), priceUsd: String(DEFAULT_PRICE_TOKENS / 100) } : {}),
+    },
+  };
+  return prompt
+    ? applyCreationPromptResource(withReferences, generation)
+    : followSuggestedRecipePreview(asCreation, withReferences, generation);
+}
+
+/**
+ * Whether a creation's post can carry a recipe (owner, 2026-11-05: one always does): a creation on
+ * public view with a prompt or a saved input to share, no template's result. A post of any other has
+ * No recipe to offer, and starts on it.
+ */
+export function creationCarriesRecipe(generation: GenerationListItem | null | undefined): boolean {
+  if (!generation || isTemplateGeneration(generation) || !creationMayShareRecipe(generation)) return false;
+  return Boolean(getCreationRecipePrompt(generation)?.trim()) || hasGenerationReferences(generation);
 }
 
 /**
@@ -1123,8 +1185,10 @@ function createCreationPromptCard(prompt: string): PostComposerResourceCardDraft
 export function getCreationInputsInRecipe(
   cards: readonly PostComposerResourceCardDraft[] | null | undefined,
   generation: GenerationListItem | null | undefined,
+  /** The inputs the creator removed (`getRemovedCreationInputIds`): offered no more. */
+  removedInputIds: ReadonlySet<string> = new Set(),
 ): { offered: GenerationReference[]; included: number; allIncluded: boolean } {
-  const offered = recipeCopyableInputs(generation?.input_media);
+  const offered = recipeCopyableInputs(generation?.input_media).filter((input) => !removedInputIds.has(input.id));
   const storagePaths = (cards ?? []).flatMap((card) => card.attachments.map((attachment) => attachment.storagePath));
   const included = countCreationInputsInRecipe(offered, storagePaths, generation?.id);
   return { offered, included, allIncluded: offered.length > 0 && included === offered.length };
@@ -1296,7 +1360,31 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
     sourceToolSlug: trimOrUndefined(primarySourceTool?.toolSlug) ?? trimOrUndefined(draft.sourceToolSlug),
     ...(sourceTools.length > 0 ? { sourceTools } : {}),
     ...(includeGenerationReferences ? { includeGenerationReferences: true } : {}),
+    ...buildCreationRecipeChoicesPatch(item, draft, includeGenerationReferences, templateResult),
     resourceBundle: resourceBundle ?? { accessMode: 'none' },
+  };
+}
+
+/**
+ * What a creation's publish or save sends of the creator's own choices (remix plan, phase 2): the
+ * inputs they removed, none of which the server copies, and "Allow remixes", which the server also
+ * reads as a composer that offers no post of a creation without its recipe. A template result has no
+ * Remix and sends neither.
+ */
+function buildCreationRecipeChoicesPatch(
+  item: GenerationListItem | null | undefined,
+  draft: PostComposerDraft,
+  includeGenerationReferences: boolean,
+  templateResult: boolean,
+): { allowRemixes?: boolean; leaveOutGenerationReferenceIds?: string[] } {
+  if (templateResult) return {};
+  const removed = getRemovedCreationInputIds(draft);
+  const leftOut = includeGenerationReferences
+    ? recipeCopyableInputs(item?.input_media).filter((input) => removed.has(input.id)).map((input) => input.id)
+    : [];
+  return {
+    allowRemixes: draftAllowsRemixes(draft),
+    ...(leftOut.length > 0 ? { leaveOutGenerationReferenceIds: leftOut } : {}),
   };
 }
 
@@ -1334,6 +1422,9 @@ export function buildUpdatePostPayload(
       ?? (includeGenerationReferences ? buildCreationReferencesOnlyBundleInput(draft.resource) : null)
       ?? { accessMode: 'none' as const },
     ...(includeGenerationReferences ? { includeGenerationReferences: true } : {}),
+    ...(isGenerationBacked
+      ? buildCreationRecipeChoicesPatch(generation, draft, includeGenerationReferences, isTemplateGeneration(generation))
+      : {}),
   };
   const descriptionPatch = buildDescriptionPatch(draft);
 
@@ -2174,7 +2265,7 @@ export function shouldIncludeGenerationReferences(
   draft: PostComposerDraft
 ) {
   if (draft.mode !== 'creation' || !getCreationPackageDraft(draft).attachGenerationReferences) return false;
-  const { offered, included } = getCreationInputsInRecipe(draft.resource.cards, item);
+  const { offered, included } = getCreationInputsInRecipe(draft.resource.cards, item, getRemovedCreationInputIds(draft));
   return offered.length > included;
 }
 
