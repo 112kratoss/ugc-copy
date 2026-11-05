@@ -1,9 +1,11 @@
 import { ArchiveRestore, FileText, Globe, ImageOff, Images, LockKeyhole, MessageCircle, Repeat2, Wand2 } from 'lucide-react-native';
+import { router } from 'expo-router';
 import { memo } from 'react';
 import { Text, View } from 'react-native';
 
 import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { RemixCreditLine } from '@/components/remix-credit-line';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import { hexWithAlpha } from '@/lib/eased-fade';
@@ -96,6 +98,13 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       statusChip={card.state ? <ProfileStateChip label={card.state.label} tone={card.state.tone} /> : null}
       timeLabel={card.timeLabel}
       title={card.title}
+      creditLine={(
+        <RemixCreditLine
+          remixCredit={item.details?.remixCredit}
+          onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
+          onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}
+        />
+      )}
       body={card.bodyText ? (
         <PostTextBlock
           text={card.bodyText}

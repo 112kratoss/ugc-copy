@@ -13,6 +13,8 @@ type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string
 
 const { shell } = vi.hoisted(() => ({ shell: { props: null as Record<string, unknown> | null } }));
 
+// A remix's credit line opens its post or creator through the router (`RemixCreditLine`).
+vi.mock('expo-router', () => ({ router: { push: vi.fn() } }));
 vi.mock('react-native', () => {
   const animatedValue = () => ({
     interpolate: () => 0,

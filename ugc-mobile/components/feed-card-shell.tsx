@@ -38,6 +38,7 @@ import { verticalHitSlop } from '@/lib/hit-target';
 export function FeedCardShell({
   actions,
   body,
+  creditLine,
   categoryLabel,
   modelLabel,
   creatorAvatar,
@@ -60,6 +61,11 @@ export function FeedCardShell({
 }: {
   actions: ReactNode;
   body?: ReactNode;
+  /**
+   * A remix's credit (`RemixCreditLine`), under the title: a target of its own,
+   * so never inside the card's open button, where VoiceOver would not reach it.
+   */
+  creditLine?: ReactNode;
   categoryLabel: string;
   /**
    * The model the post was made with, drawn after the category ("Video ·
@@ -147,6 +153,8 @@ export function FeedCardShell({
       }}
     >
       {headline}
+      {/* Inside the media card's heading, which is no accessibility element of its own. */}
+      {media ? creditLine : null}
       {media ? null : body}
     </View>
   );
@@ -247,6 +255,11 @@ export function FeedCardShell({
       >
         {media ?? heading}
       </Pressable>
+
+      {/* A written post's heading is the card's open button, so its credit follows it. */}
+      {!media && creditLine ? (
+        <View style={{ paddingBottom: appTheme.spacing.compact }}>{creditLine}</View>
+      ) : null}
 
       {media && body ? (
         <Pressable

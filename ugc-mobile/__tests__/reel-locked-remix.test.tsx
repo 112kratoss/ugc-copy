@@ -9,6 +9,8 @@ import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
 
+// A remix's credit line opens its post or creator through the router (`RemixCreditLine`).
+vi.mock('expo-router', () => ({ router: { push: vi.fn() } }));
 vi.mock('react-native', () => {
   const animatedValue = () => ({
     interpolate: () => 0,

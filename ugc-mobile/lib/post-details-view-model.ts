@@ -35,6 +35,25 @@ export function commentCountLabel(count: number): string {
 }
 
 /**
+ * A post's remix count as the way to its remixes (owner, 2026-11-05: A's remix
+ * count opens a list of the remixes): "3 remixes", for a post on the feed with
+ * any. Null where there is no list to open (an owner's draft, a creation, no
+ * remixes yet), and the count stays in the line.
+ */
+export function postRemixesLink(
+  item: Pick<ImmersivePreviewItem, 'sourceType' | 'showcasePostId' | 'details'>,
+): { postId: string; label: string; href: string } | null {
+  const remixCount = Math.max(0, item.details?.remixCount ?? 0);
+  if (item.sourceType !== 'showcase' || !item.showcasePostId || remixCount === 0) return null;
+  return {
+    postId: item.showcasePostId,
+    label: countLabel(remixCount, 'remix', 'remixes'),
+    // The count goes along, so the list can say when some remixes were never posted.
+    href: `/post/remixes/${encodeURIComponent(item.showcasePostId)}?remixCount=${remixCount}`,
+  };
+}
+
+/**
  * Posts made inside the app record the app as their tool. "Made with
  * Magicbooklet", read inside Magicbooklet, says nothing — only an outside
  * tool is worth naming.
@@ -45,12 +64,13 @@ function isOwnTool(label: string) {
 
 /**
  * `commentsOnButton`: the page draws a Comments button, which carries the count ("3"), so the
- * line leaves it out rather than say it twice.
+ * line leaves it out rather than say it twice. `remixesOnLink`: the page draws the remix count
+ * as the link to the post's remixes (`postRemixesLink`), so the line leaves that out too.
  */
 export function buildPostDetailsMeta(
   item: ImmersivePreviewItem,
   now = new Date(),
-  { commentsOnButton = false }: { commentsOnButton?: boolean } = {},
+  { commentsOnButton = false, remixesOnLink = false }: { commentsOnButton?: boolean; remixesOnLink?: boolean } = {},
 ): PostDetailsMeta {
   const details = item.details;
   const parts: string[] = [];
@@ -62,7 +82,7 @@ export function buildPostDetailsMeta(
   if (saveCount > 0) parts.push(countLabel(saveCount, 'save', 'saves'));
 
   const remixCount = Math.max(0, details?.remixCount ?? 0);
-  if (remixCount > 0) parts.push(countLabel(remixCount, 'remix', 'remixes'));
+  if (remixCount > 0 && !remixesOnLink) parts.push(countLabel(remixCount, 'remix', 'remixes'));
 
   const commentCount = Math.max(0, item.commentCount ?? 0);
   if (commentCount > 0 && !commentsOnButton) parts.push(commentCountLabel(commentCount));

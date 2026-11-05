@@ -8,6 +8,7 @@ import { SkeletonBone } from '@/components/skeleton';
 import { AppText, SecondaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { ONE_TIME_POST_READ } from '@/lib/one-time-post-read';
+import { remixingNotice } from '@/lib/remix-credit/remix-credit';
 import { showcasePostRemixSourceContext } from '@/lib/remix-start';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { appTheme } from '@/lib/theme';
@@ -69,6 +70,12 @@ export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; 
     enabled: reads,
     ...ONE_TIME_POST_READ,
   });
+  // The viewer's own profile as the cache holds it, never fetched from here: it says whose post is theirs.
+  const viewerProfile = useQuery({
+    queryKey: ['profile', user?.id],
+    queryFn: () => api.getProfile(),
+    enabled: false,
+  });
 
   // Only this row's own first read: a disabled query still reports the entry another screen is
   // reading, and one that failed and is read again leaves the plain row in place.
@@ -93,6 +100,12 @@ export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; 
   const title = row?.title?.trim();
   const creatorLabel = row?.creatorLabel?.trim();
   const thumbnailUrl = row?.thumbnailUrl?.trim();
+  // Whose post it is and that they hear of the remix (owner, 2026-11-05), by their handle: never
+  // for the viewer's own post, which tells no one. Their own handle is the profile Home keeps
+  // warm; nothing is read for it here.
+  const handle = creatorLabel?.startsWith('@') ? creatorLabel.slice(1) : null;
+  const ownHandle = viewerProfile.data?.username?.trim().toLowerCase();
+  const naming = handle && ownHandle !== handle.toLowerCase() ? remixingNotice({ username: handle, title }) : null;
   return (
     <View accessibilityLabel="Remix source post" style={ROW_STYLE}>
       {thumbnailUrl && thumbnailUrl !== failedPoster ? (
@@ -104,8 +117,12 @@ export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; 
         />
       ) : null}
       <View style={{ flex: 1, gap: 2 }}>
-        <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{title || 'Source creation'}</Text>
-        <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{creatorLabel ? `By ${creatorLabel}` : 'Make your own version'}</Text>
+        <Text numberOfLines={naming ? 2 : 1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>
+          {naming?.label ?? (title || 'Source creation')}
+        </Text>
+        <Text numberOfLines={naming ? 2 : 1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
+          {naming?.line ?? (creatorLabel ? `By ${creatorLabel}` : 'Make your own version')}
+        </Text>
       </View>
       {original ? <OriginalAsReference action={original} /> : null}
     </View>
