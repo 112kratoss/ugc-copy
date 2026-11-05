@@ -54,4 +54,9 @@ export const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   'wan-3.0-prime': 'Wan 3.0 Prime',
   'grok-imagine-video-1.5': 'Grok Imagine Video 1.5',
   'pixverse-v6': 'PixVerse V6',
+  'nano-banana-2.1': 'Nano Banana 2.1',
+  'flux-3-klein': 'FLUX.3 Klein',
+  'pixverse-v6-max': 'PixVerse V6 Max',
+  'kling-4.0': 'Kling 4.0',
+  'vidu-q4': 'Vidu Q4',
 };

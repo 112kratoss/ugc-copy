@@ -308,6 +308,9 @@ function offeredControl(
 const FRAME_SHAPED_VIDEO_MODELS = new Set([
   'kling-3.0-turbo', 'kling-o3', 'minimax-h3', 'wan-2.7', 'wan-3.0', 'wan-3.0-prime', 'pixverse-v6', 'happyhorse-1.1',
   'grok-imagine-video', 'grok-imagine-video-1.5',
+  // kling-4.0/keyframe-to-video, pixverse-v6-max/image-to-video and vidu-q4/image-to-video take
+  // the shape of their first frame (docs/model-api-references/*, 2026-11-05).
+  'kling-4.0', 'pixverse-v6-max', 'vidu-q4',
 ]);
 
 /**
