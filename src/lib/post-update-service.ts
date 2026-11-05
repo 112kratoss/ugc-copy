@@ -30,9 +30,11 @@ import {
   copyPlannedGenerationReferences,
   GENERATION_REFERENCES_NOT_COPIED_ERROR,
   getMarketplaceQualityErrorForPostBundle,
+  LEFT_OUT_GENERATION_REFERENCES_ERROR,
   planGenerationReferenceCopies,
   prepareCreationRecipeBundle,
   readAddedRecipeItems,
+  readLeftOutGenerationReferenceIds,
   updatePostWithResourceBundleAtomically,
   type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
@@ -258,16 +260,6 @@ export type PostUpdateRequestBody = {
   /** The post's "Allow remixes" (owner, 2026-11-05): written only when sent. */
   allowRemixes?: unknown;
 };
-
-/** How many removed inputs a save may name: more than a creation keeps. */
-const MAX_LEFT_OUT_GENERATION_REFERENCES = 64;
-
-function readLeftOutGenerationReferenceIds(value: unknown): Set<string> | null {
-  if (value === undefined || value === null) return new Set();
-  if (!Array.isArray(value) || value.length > MAX_LEFT_OUT_GENERATION_REFERENCES) return null;
-  const ids = value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id.length <= 64);
-  return ids.length === value.length ? new Set(ids) : null;
-}
 
 /** What a post's creation gives its recipe: its exact prompt, and whether it may share its saved inputs. */
 type CreationRecipeSource = {
@@ -1490,8 +1482,14 @@ export async function updateOwnerPostForRoute({
     }
     const leftOutReferenceIds = readLeftOutGenerationReferenceIds(body.leaveOutGenerationReferenceIds);
     if (!leftOutReferenceIds) {
-      return { ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } };
+      return { ok: false, status: 400, body: { error: LEFT_OUT_GENERATION_REFERENCES_ERROR } };
     }
+    // An edit never turns the hand-over back on (the review of phase 2, finding 2): a creation's
+    // recipe stored without it lost it to a removed input (below) or to the old own-uploads rule,
+    // while an editor open since before that save, a second tab or an installed app sends the
+    // switch it read when it opened. Raised again, every input of the creation, the removed ones
+    // too, would go to each buyer's unlock and into every remix they make.
+    const storedWithoutHandOver = Boolean(post.generation_id && existingBundle && existingBundle.allow_remix !== true);
     // A copy of one of the creation's inputs that the stored recipe holds and this save leaves out
     // (the review of phase 2): the creator removed that file, as an older composer does too by
     // deleting its item, and the live hand-over would put it back for every remix.
@@ -1506,7 +1504,8 @@ export async function updateOwnerPostForRoute({
     })();
     // A recipe the creator took inputs out of hands none of the creation's inputs to a remix (the
     // hand-over gives every input, the removed ones too): a remix restores its copies instead.
-    const submittedResourceBundle = (leftOutReferenceIds.size > 0 || dropsStoredInputCopy) && parsedResourceBundle?.resources?.allowRemix
+    const submittedResourceBundle = (storedWithoutHandOver || leftOutReferenceIds.size > 0 || dropsStoredInputCopy)
+      && parsedResourceBundle?.resources?.allowRemix
       ? { ...parsedResourceBundle, resources: { ...parsedResourceBundle.resources, allowRemix: false } }
       : parsedResourceBundle;
     // A creation's recipe, as the publish makes it (#677's review): its exact

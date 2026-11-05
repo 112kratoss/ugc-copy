@@ -4,11 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
 import {
+  buildMoreOptionsHref,
   CreatorPostedNext,
   CreatorPublishPanel,
   describeCreationRecipe,
   describePublishSummary,
-  ownUploadsWords,
   useCreationPublishDetails,
   useRemixOriginal,
   type CreatorPublishPanelProps,
@@ -19,6 +19,7 @@ import { readGenerationPaywallPrefill, type CreationPublishDetails } from '@/lib
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
 import { onCreditTopUpOpen } from '@/lib/credit-top-up';
 import {
+  CREATION_INPUTS_ALL_REMOVED,
   CREATION_RECIPE_FILES_LINE,
   PAID_RECIPE_RESALE_LINE,
   REMIX_RECIPE_MUST_BE_PAID,
@@ -55,10 +56,12 @@ const ORIGINAL: RemixOriginal = {
   title: 'Kung fu cats',
   creator: { id: 'creator-fluffy', username: 'fluffy', name: 'Fluffy', avatar: null },
 };
-/** Not a remix of a post: nothing to credit, and the recipe may start shared. */
-const NO_REMIX: RemixOriginalRead = { original: null, recipeStartsShared: true };
-/** A remix of someone else's post whose recipe is free. */
-const FREE_REMIX: RemixOriginalRead = { original: ORIGINAL, recipeStartsShared: true };
+/** Not a remix of a post: nothing to credit, and no recipe of the creator's own to start from. */
+const NO_REMIX: RemixOriginalRead = { original: null, ownRecipe: null };
+/** A remix of someone else's post whose recipe is free: its terms are the run's. */
+const FREE_REMIX: RemixOriginalRead = { original: ORIGINAL, ownRecipe: null };
+/** A remix of the creator's own post, whose recipe sells for 120 credits (owner, 2026-11-06). */
+const OWN_PAID_REMIX: RemixOriginalRead = { original: null, ownRecipe: { accessMode: 'paid', priceCredits: 120 } };
 const input = (id: string, label: string): GenerationReference => ({
   id, url: `https://cdn.example.test/${id}.png`, storagePath: null, mediaKind: 'image', label, caption: 'Reference image',
 });
@@ -71,10 +74,21 @@ const WITH_FILES: CreationPublishDetails = {
     allowRemix: true,
     referenceCount: 3,
     referenceKindCounts: { image: 3 },
-    ownReferenceCount: 2,
-    ownReferenceKindCounts: { image: 2 },
   },
   inputs: [input('input-1', 'Dojo'), input('input-2', 'My face'), input('input-3', 'My cat')],
+};
+/** A motion run: no prompt, the creator's face and a clip, both taken by the recipe. */
+const MOTION: CreationPublishDetails = {
+  ...DETAILS,
+  paywallPrefill: {
+    resourceKinds: ['remix', 'files'],
+    promptText: null,
+    allowRemix: true,
+    referenceCount: 2,
+    referenceKindCounts: { image: 1, video: 1 },
+  },
+  creation: { prompt: '', model: 'kling-2.6', category: 'video' },
+  inputs: [input('input-1', 'Character'), input('input-2', 'Clip')],
 };
 const FIRST_POST_PROFILE = { id: 'user-1', username: 'creator-a1b2c3d4', displayName: null, avatarUrl: null };
 const READY_PROFILE = { id: 'user-1', username: 'athul-s', displayName: 'Athul S', avatarUrl: null };
@@ -384,23 +398,72 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
   // uploads once added, and the switch says so rather than promising a prompt (#675's review).
   it('describes a prompt-less creation’s recipe by what it holds', () => {
     installFetch();
-    const motion: CreationPublishDetails = {
-      ...DETAILS,
-      paywallPrefill: {
-        resourceKinds: ['remix', 'files'],
-        promptText: null,
-        allowRemix: true,
-        referenceCount: 2,
-        referenceKindCounts: { image: 1, video: 1 },
-        ownReferenceCount: 0,
-        ownReferenceKindCounts: {},
-      },
-      creation: { prompt: '', model: 'kling-2.6', category: 'video' },
-      inputs: [input('input-1', 'Character'), input('input-2', 'Clip')],
-    };
-    renderPanel({ details: motion });
+    renderPanel({ details: MOTION });
     expect(within(form()).getByText('2 files, free, so others can remix it.')).toBeInTheDocument();
     expect(within(form()).queryByText(/the exact prompt/i)).not.toBeInTheDocument();
+  });
+
+  // #711's review: with every file of a prompt-less creation removed, the recipe held nothing and
+  // was refused, so the run could not be posted at all. It posts the media alone now, sends no
+  // switch (no form offers No recipe with one), and the files can come back.
+  it('posts a prompt-less creation with every file removed as the media alone, and puts them back on asking', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({ details: MOTION });
+    fireEvent.click(within(form()).getByRole('button', { name: 'Remove Character from the recipe' }));
+    fireEvent.click(within(form()).getByRole('button', { name: 'Remove Clip from the recipe' }));
+
+    expect(within(form()).queryByRole('heading', { name: 'Free recipe' })).not.toBeInTheDocument();
+    expect(within(form()).queryByRole('switch', { name: 'Allow remixes' })).not.toBeInTheDocument();
+    expect(within(form()).getByText(CREATION_INPUTS_ALL_REMOVED, { exact: false })).toBeInTheDocument();
+    // The way back stays, and brings the recipe back with it.
+    fireEvent.click(within(form()).getByRole('button', { name: 'Put the 2 removed files back' }));
+    expect(within(form()).getByRole('heading', { name: 'Free recipe' })).toBeInTheDocument();
+    expect(within(form()).getByText('2 files, free, so others can remix it.')).toBeInTheDocument();
+
+    fireEvent.click(within(form()).getByRole('button', { name: 'Remove Character from the recipe' }));
+    fireEvent.click(within(form()).getByRole('button', { name: 'Remove Clip from the recipe' }));
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    const body = publishBody(fetchMock);
+    expect(body).toMatchObject({ resourceBundle: { accessMode: 'none' } });
+    expect(body).not.toHaveProperty('allowRemixes');
+    expect(body).not.toHaveProperty('includeGenerationReferences');
+    expect(body).not.toHaveProperty('leaveOutGenerationReferenceIds');
+    expect(onPublished).toHaveBeenCalledWith(expect.objectContaining({ recipeAccess: 'none', allowRemixes: true }));
+  });
+
+  // #711's review: the panel decided it had a recipe from the prefill's kinds, which name references
+  // a remix keeps in its original's folder and the server never copies. With no prompt and no file
+  // it can copy, the server answered "Add content for at least one unlock item" and nothing posted.
+  it('posts the media alone where the prefill names only references the recipe cannot copy', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({ details: { ...MOTION, inputs: [] } });
+    expect(within(form()).queryByRole('heading', { name: 'Free recipe' })).not.toBeInTheDocument();
+    expect(within(form()).getByText('Publish the media now; you can add a recipe from the post later.')).toBeInTheDocument();
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'none' } });
+    expect(publishBody(fetchMock)).not.toHaveProperty('allowRemixes');
+    expect(publishBody(fetchMock)).not.toHaveProperty('includeGenerationReferences');
+  });
+
+  // A remix of a paid recipe has no media alone to fall back to: its public post holds a paid
+  // recipe or is refused, so an empty one is refused here, with the way on.
+  it('refuses an empty recipe on a remix of a paid recipe, which cannot go without one', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({ details: { ...MOTION, remixRecipeMode: 'paid' } });
+    fireEvent.click(within(form()).getByRole('button', { name: 'Remove Character from the recipe' }));
+    fireEvent.click(within(form()).getByRole('button', { name: 'Remove Clip from the recipe' }));
+    expect(within(form()).getByRole('heading', { name: 'Paid recipe' })).toBeInTheDocument();
+
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+    expect(await within(form()).findByRole('alert')).toHaveTextContent('This recipe holds nothing now. Put a file back to share it.');
+    expect(publishBody(fetchMock)).toBeNull();
+    expect(onPublished).not.toHaveBeenCalled();
+
+    fireEvent.click(within(form()).getByRole('button', { name: 'Put the 2 removed files back' }));
+    expect(within(form()).queryByRole('alert')).not.toBeInTheDocument();
   });
 
   // Owner, 2026-11-05: no "without recipe" for a creation; one with nothing to share posts alone.
@@ -522,14 +585,26 @@ describe('CreatorPublishPanel: the recipe’s files and remixes', () => {
 describe('CreatorPublishPanel: a remix’s recipe terms', () => {
   it('posts a remix of a paid recipe paid, at the starting price, and says why and what buyers may do', async () => {
     const fetchMock = installFetch();
-    const { onPublished } = renderPanel({ remix: { original: ORIGINAL, recipeStartsShared: false }, details: { ...DETAILS, remixRecipeMode: 'paid' } });
+    const { onPublished } = renderPanel({ remix: FREE_REMIX, details: { ...DETAILS, remixRecipeMode: 'paid' } });
     expect(within(form()).getByRole('heading', { name: 'Paid recipe' })).toBeInTheDocument();
     expect(within(form()).getByText(REMIX_RECIPE_MUST_BE_PAID)).toBeInTheDocument();
     expect(within(form()).getByText(`${PAID_RECIPE_RESALE_LINE} Another price is in More options.`)).toBeInTheDocument();
+    // Its terms are no choice of the creator's.
+    expect(within(form()).queryByRole('switch', { name: 'Sell this recipe' })).not.toBeInTheDocument();
 
     fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
     await waitFor(() => expect(onPublished).toHaveBeenCalled());
     expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'paid', priceUsdCents: 10 } });
+    expect(onPublished).toHaveBeenCalledWith(expect.objectContaining({ recipeAccess: 'paid', allowRemixes: true }));
+  });
+
+  // #711's review: the line promised buyers they could remix and resell a post that allows no remix.
+  it('promises no resale of a remix once remixes are off', () => {
+    installFetch();
+    renderPanel({ details: { ...DETAILS, remixRecipeMode: 'paid' } });
+    fireEvent.click(within(form()).getByRole('switch', { name: 'Allow remixes' }));
+    expect(within(form()).queryByText(new RegExp(PAID_RECIPE_RESALE_LINE.slice(0, 30)))).not.toBeInTheDocument();
+    expect(within(form()).getByText('Another price is in More options.')).toBeInTheDocument();
   });
 
   it('keeps a remix of a free recipe free, and says why', () => {
@@ -541,11 +616,101 @@ describe('CreatorPublishPanel: a remix’s recipe terms', () => {
 
   it('waits with Publish while the original is read', () => {
     installFetch();
-    const view = renderPanel({ remix: { original: null, recipeStartsShared: undefined } });
+    const view = renderPanel({ remix: { original: null, ownRecipe: undefined } });
     expect(within(form()).getByRole('button', { name: 'Publish to the feed' })).toBeDisabled();
 
     view.rerenderPanel({ remix: FREE_REMIX });
     expect(within(form()).getByRole('button', { name: 'Publish to the feed' })).toBeEnabled();
+  });
+});
+
+// Owner, 2026-11-06 ("Start Paid, can switch"): a remix of the creator's own post whose recipe is
+// paid starts Paid at that recipe's price, and the creator may still make it free: their own
+// prompt, so no lock and no reason.
+describe('CreatorPublishPanel: a remix of the creator’s own paid post', () => {
+  it('starts paid at the original’s price, unlocked, and sends it so', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({ details: { ...DETAILS, title: '' }, remix: OWN_PAID_REMIX });
+    expect(within(form()).getByRole('heading', { name: 'Paid recipe' })).toBeInTheDocument();
+    expect(within(form()).getByText('The exact prompt, for 120 credits, so others can remix it.')).toBeInTheDocument();
+    expect(within(form()).queryByText(REMIX_RECIPE_MUST_BE_PAID)).not.toBeInTheDocument();
+    expect(within(form()).getByRole('switch', { name: 'Sell this recipe' })).toHaveAttribute('aria-checked', 'true');
+    // A paid recipe keeps the prompt out of the title (owner, 2026-10-29).
+    expect(within(form()).getByRole('textbox', { name: 'Title' })).not.toHaveValue('Harbour at dusk, lanterns on the water');
+
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'paid', priceUsdCents: 120 } });
+  });
+
+  it('shares it free once the creator turns selling off', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({ remix: OWN_PAID_REMIX });
+    fireEvent.click(within(form()).getByRole('switch', { name: 'Sell this recipe' }));
+    expect(within(form()).getByRole('heading', { name: 'Free recipe' })).toBeInTheDocument();
+    expect(within(form()).getByRole('switch', { name: 'Sell this recipe' })).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'free', priceUsdCents: 0 } });
+  });
+
+  // The creation's details say it where the server sends `own_source_post_bundle`: they win over the
+  // original's public read, which a private original or a remix from Studio never gets.
+  it('takes the start from the creation’s details where they say', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({
+      details: { ...DETAILS, ownSourceRecipe: { accessMode: 'paid', priceCredits: 250 } },
+      remix: NO_REMIX,
+    });
+    expect(within(form()).getByRole('heading', { name: 'Paid recipe' })).toBeInTheDocument();
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'paid', priceUsdCents: 250 } });
+  });
+
+  it('starts free where the creation’s details say there is no such recipe, whatever the original’s read', () => {
+    installFetch();
+    renderPanel({ details: { ...DETAILS, ownSourceRecipe: null }, remix: OWN_PAID_REMIX });
+    expect(within(form()).getByRole('heading', { name: 'Free recipe' })).toBeInTheDocument();
+    expect(within(form()).queryByRole('switch', { name: 'Sell this recipe' })).not.toBeInTheDocument();
+  });
+
+  // A remix of someone else's paid recipe keeps its locked terms, whatever its original's read says.
+  it('keeps someone else’s terms locked', () => {
+    installFetch();
+    renderPanel({ details: { ...DETAILS, remixRecipeMode: 'free' }, remix: OWN_PAID_REMIX });
+    expect(within(form()).getByRole('heading', { name: 'Free recipe' })).toBeInTheDocument();
+    expect(within(form()).getByText(REMIX_RECIPE_STAYS_FREE)).toBeInTheDocument();
+    expect(within(form()).queryByRole('switch', { name: 'Sell this recipe' })).not.toBeInTheDocument();
+  });
+});
+
+// #711's review: "More options" carried only the creation, so the composer put back the files taken
+// out here and turned remixes on again.
+describe('CreatorPublishPanel: More options', () => {
+  it('carries the files taken out, remixes off and the recipe’s price into the composer', () => {
+    installFetch();
+    renderPanel({ details: WITH_FILES, remix: OWN_PAID_REMIX });
+    fireEvent.click(within(form()).getByRole('button', { name: 'Remove My face from the recipe' }));
+    fireEvent.click(within(form()).getByRole('switch', { name: 'Allow remixes' }));
+
+    const href = within(form()).getByRole('link', { name: /More options/ }).getAttribute('href') ?? '';
+    const params = new URL(href, 'https://magicbooklet.test').searchParams;
+    expect(new URL(href, 'https://magicbooklet.test').pathname).toBe('/post/new');
+    expect(params.get('generationId')).toBe('gen-1');
+    expect(params.getAll('leaveOut')).toEqual(['input-2']);
+    expect(params.get('allowRemixes')).toBe('0');
+    expect(params.get('resourceMode')).toBe('paid');
+    expect(params.get('price')).toBe('120');
+  });
+
+  it('carries the creation alone until the form knows its recipe', () => {
+    expect(buildMoreOptionsHref('gen-1', null)).toBe('/post/new?generationId=gen-1');
+    expect(buildMoreOptionsHref('gen-1', { removedInputIds: [], allowRemixes: true, recipeAccess: 'free', paidPriceCredits: 10 }))
+      .toBe('/post/new?generationId=gen-1&resourceMode=free');
+    expect(buildMoreOptionsHref('gen-1', { removedInputIds: ['a', 'b'], allowRemixes: true, recipeAccess: 'none', paidPriceCredits: 10 }))
+      .toBe('/post/new?generationId=gen-1&leaveOut=a&leaveOut=b');
   });
 });
 
@@ -554,48 +719,56 @@ describe('useRemixOriginal', () => {
     return json({ item: { id: 'post-cats', title: 'Kung fu cats', creator: { id: 'creator-fluffy', username: 'fluffy', name: 'Fluffy', avatar: null }, ...item } });
   }
 
-  it('lets a creation that is no remix of a post start shared, reading nothing', () => {
+  it('reads nothing for a creation that is no remix of a post', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const { result } = renderHook(() => useRemixOriginal(null, 'token-1', 'user-1'));
-    expect(result.current).toEqual({ original: null, recipeStartsShared: true });
+    expect(result.current).toEqual({ original: null, ownRecipe: null });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('credits someone else’s free original and lets the recipe start shared', async () => {
+  // Someone else's recipe sets nothing here: its terms are the run's (`remixRecipeMode`).
+  it('credits someone else’s original, free or paid, and takes no recipe of it', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => postAnswer({ asset: { accessMode: 'free' } })));
-    const { result } = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
-    expect(result.current.recipeStartsShared).toBeUndefined();
-    await waitFor(() => expect(result.current).toEqual({ original: ORIGINAL, recipeStartsShared: true }));
+    const free = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
+    expect(free.result.current.ownRecipe).toBeUndefined();
+    await waitFor(() => expect(free.result.current).toEqual({ original: ORIGINAL, ownRecipe: null }));
+
+    vi.stubGlobal('fetch', vi.fn(async () => postAnswer({ asset: { accessMode: 'paid', priceUsdCents: 300 } })));
+    const paid = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
+    await waitFor(() => expect(paid.result.current).toEqual({ original: ORIGINAL, ownRecipe: null }));
   });
 
-  it('starts off for a recipe someone sells, one’s own included', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => postAnswer({ asset: { accessMode: 'paid' } })));
-    const bought = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
-    await waitFor(() => expect(bought.result.current).toEqual({ original: ORIGINAL, recipeStartsShared: false }));
-
+  // Owner, 2026-11-06: the creator's own original's recipe, with its price, sets where theirs starts.
+  it('takes the recipe of the creator’s own original, with its price', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => postAnswer({ asset: { accessMode: 'paid', priceUsdCents: 120 } })));
     const own = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'creator-fluffy'));
-    await waitFor(() => expect(own.result.current).toEqual({ original: null, recipeStartsShared: false }));
+    await waitFor(() => expect(own.result.current).toEqual({ original: null, ownRecipe: { accessMode: 'paid', priceCredits: 120 } }));
+
+    vi.stubGlobal('fetch', vi.fn(async () => postAnswer({ asset: null })));
+    const bare = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'creator-fluffy'));
+    await waitFor(() => expect(bare.result.current).toEqual({ original: null, ownRecipe: null }));
   });
 
-  it('starts off where the original cannot be read', async () => {
+  // A recipe the creator sells must not go out free because its original could not be read.
+  it('counts an original that cannot be read as paid at the starting price', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'Not found' }, 404)));
     const { result } = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
-    await waitFor(() => expect(result.current).toEqual({ original: null, recipeStartsShared: false }));
+    await waitFor(() => expect(result.current).toEqual({ original: null, ownRecipe: { accessMode: 'paid', priceCredits: 10 } }));
   });
 
   // Publish waits for this read: one that never answers must not hold it for good.
-  it('starts off where the original does not answer in time', async () => {
+  it('counts an original that does not answer in time as unread', async () => {
     vi.useFakeTimers();
     try {
       vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
       })));
       const { result } = renderHook(() => useRemixOriginal('post-cats', 'token-1', 'user-1'));
-      expect(result.current.recipeStartsShared).toBeUndefined();
+      expect(result.current.ownRecipe).toBeUndefined();
 
       await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
-      expect(result.current).toEqual({ original: null, recipeStartsShared: false });
+      expect(result.current).toEqual({ original: null, ownRecipe: { accessMode: 'paid', priceCredits: 10 } });
     } finally {
       vi.useRealTimers();
     }
@@ -625,6 +798,25 @@ describe('useCreationPublishDetails', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Owner, 2026-11-06: the recipe of the creator's own post the creation came from, in
+  // `linked_post_bundle`'s shape; a server that does not send the key says nothing either way.
+  it('reads the recipe of the creator’s own source post where the answer has it', async () => {
+    const answer = (bundle: Record<string, unknown>) => json({ generations: [{ ...generationsAnswer.generations[0], ...bundle }] });
+    vi.stubGlobal('fetch', vi.fn(async () => answer({ own_source_post_bundle: { accessMode: 'paid', status: 'published', priceUsdCents: 120 } })));
+    const paid = renderHook(() => useCreationPublishDetails('gen-1', 'token-1'));
+    await waitFor(() => expect(paid.result.current?.ownSourceRecipe).toEqual({ accessMode: 'paid', priceCredits: 120 }));
+
+    vi.stubGlobal('fetch', vi.fn(async () => answer({ own_source_post_bundle: null })));
+    const none = renderHook(() => useCreationPublishDetails('gen-1', 'token-1'));
+    await waitFor(() => expect(none.result.current).toBeTruthy());
+    expect(none.result.current?.ownSourceRecipe).toBeNull();
+
+    vi.stubGlobal('fetch', vi.fn(async () => answer({})));
+    const older = renderHook(() => useCreationPublishDetails('gen-1', 'token-1'));
+    await waitFor(() => expect(older.result.current).toBeTruthy());
+    expect(older.result.current).not.toHaveProperty('ownSourceRecipe');
   });
 });
 
@@ -704,7 +896,15 @@ describe('CreatorPublishPanel: Posted', () => {
     installFetch();
     renderPanel({
       remix: FREE_REMIX,
-      published: { title: 'Harbour at dusk', visibility: 'public', postId: 'post-new', showcasePath: '/showcase/gen-1', resourceBundleStatus: 'published' },
+      published: {
+        title: 'Harbour at dusk',
+        visibility: 'public',
+        postId: 'post-new',
+        showcasePath: '/showcase/gen-1',
+        resourceBundleStatus: 'published',
+        recipeAccess: 'free',
+        allowRemixes: true,
+      },
       next: <span>6 credits left</span>,
     });
     expect(screen.queryByRole('form', { name: 'Post it to the feed' })).toBeNull();
@@ -715,6 +915,37 @@ describe('CreatorPublishPanel: Posted', () => {
     expect(screen.getByRole('button', { name: 'Share the link' })).toBeInTheDocument();
     expect(screen.getByText('6 credits left')).toBeInTheDocument();
     expect(screen.queryByTestId('creator-publish-bar')).toBeNull();
+  });
+
+  // #711's review: Posted said every recipe was free, the paid remix the panel posts paid included,
+  // and promised an alert of a remix with remixes off.
+  it('says a paid recipe is paid, and promises no remix with remixes off', () => {
+    installFetch();
+    const published = {
+      title: 'Harbour at dusk',
+      visibility: 'public' as const,
+      postId: 'post-new',
+      showcasePath: '/showcase/gen-1',
+      resourceBundleStatus: 'published' as const,
+      recipeAccess: 'paid' as const,
+      allowRemixes: true,
+    };
+    const view = renderPanel({ remix: FREE_REMIX, published });
+    expect(screen.getByText(/@fluffy was told when your remix finished\. Your recipe is paid: whoever buys it can remix yours too\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Your recipe is free/)).not.toBeInTheDocument();
+
+    view.rerenderPanel({ published: { ...published, allowRemixes: false } });
+    expect(screen.getByText(/“Harbour at dusk” is live on your profile and in Explore\./)).toBeInTheDocument();
+    expect(screen.queryByText(/alert when someone remixes/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/can remix yours/)).not.toBeInTheDocument();
+  });
+
+  it('hears from the publish what went out, so Posted can say it', async () => {
+    installFetch();
+    const { onPublished } = renderPanel({ details: WITH_FILES });
+    fireEvent.click(within(form()).getByRole('switch', { name: 'Allow remixes' }));
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+    await waitFor(() => expect(onPublished).toHaveBeenCalledWith(expect.objectContaining({ recipeAccess: 'free', allowRemixes: false })));
   });
 });
 
@@ -753,13 +984,6 @@ describe('CreatorPostedNext', () => {
 });
 
 describe('the recipe’s words', () => {
-  it('names the creator’s own uploads by what they are', () => {
-    expect(ownUploadsWords(2, { image: 2 })).toBe('2 photos');
-    expect(ownUploadsWords(1, { video: 1 })).toBe('1 clip');
-    expect(ownUploadsWords(3, { image: 2, video: 1 })).toBe('3 files');
-    expect(ownUploadsWords(1, null)).toBe('1 file');
-  });
-
   it('says what the recipe holds, at what price, and whether others may remix it', () => {
     expect(describeCreationRecipe({ accessMode: 'free', priceCredits: 10, fileCount: 0, allowRemixes: true }))
       .toBe('The exact prompt, free, so others can remix it.');

@@ -6,6 +6,7 @@ import { Check, CircleMinus, Lock, Sparkles, type LucideIcon } from 'lucide-reac
 
 import { getAccentClasses, type UiAccent } from '@/components/DesignSystem';
 import type { PostResourceBundleAccessMode } from '@/lib/post-resource-bundles';
+import { remixRecipeAllows } from '../../../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 // The app's choice, as its composer offers it (ugc-mobile/app/post/new.tsx):
 // Free and Paid first, each with what it is for, so a creator sees that a
@@ -40,8 +41,10 @@ export default function RecipeAccessCards({
   /** The modes offered, in the cards' order; all three when left out (a creation's new post has no No recipe). */
   choices?: readonly PostResourceBundleAccessMode[];
   /**
-   * A remix's recipe keeps its original's terms (owner, 2026-11-05): the other of Free and Paid
-   * takes nothing, and `lockReason` says why under the cards. No recipe stays as `choices` offer it.
+   * A remix's recipe keeps its original's terms (owner, 2026-11-05): each choice those terms do not
+   * allow takes nothing (`remixRecipeAllows`), and `lockReason` says why under the cards. A remix of
+   * a paid recipe allows neither Free nor No recipe, which the server refuses on a public post; one
+   * of a free recipe allows both (#711's review).
    */
   lockedTo?: 'free' | 'paid' | null;
   lockReason?: string | null;
@@ -64,7 +67,7 @@ export default function RecipeAccessCards({
           const checked = choice.value === value;
           const accent = getAccentClasses(choice.accent);
           const Icon = choice.icon;
-          const cardDisabled = disabled || Boolean(lockedTo && choice.value !== 'none' && choice.value !== lockedTo);
+          const cardDisabled = disabled || Boolean(lockedTo && !remixRecipeAllows(lockedTo, choice.value));
           return (
             <label
               key={choice.value}

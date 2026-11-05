@@ -16,11 +16,13 @@ import {
   copyPlannedGenerationReferences,
   GENERATION_REFERENCES_NOT_COPIED_ERROR,
   getMarketplaceQualityErrorForPostBundle,
+  LEFT_OUT_GENERATION_REFERENCES_ERROR,
   loadGenerationInputOrigins,
   planGenerationReferenceCopies,
   prepareCreationRecipeBundle,
   publishGenerationPostWithResourceBundleAtomically,
   readAddedRecipeItems,
+  readLeftOutGenerationReferenceIds,
   type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
 import { creationMaySharePostInputs } from '@/lib/generation-input-media';
@@ -165,17 +167,6 @@ export type ShowcasePublishRequestBody = {
   allowRemixes?: boolean;
   resourceBundle?: PostResourceBundleInput | null;
 };
-
-/** How many removed inputs a request may name: more than a creation keeps. */
-const MAX_LEFT_OUT_GENERATION_REFERENCES = 64;
-
-/** The removed inputs a request names, or null where it names none or names them wrongly. */
-function readLeftOutGenerationReferenceIds(value: unknown): { ok: true; ids: Set<string> } | { ok: false } {
-  if (value === undefined || value === null) return { ok: true, ids: new Set() };
-  if (!Array.isArray(value) || value.length > MAX_LEFT_OUT_GENERATION_REFERENCES) return { ok: false };
-  const ids = value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id.length <= 64);
-  return ids.length === value.length ? { ok: true, ids: new Set(ids) } : { ok: false };
-}
 
 export type ShowcasePublishServiceDependencies = {
   ensureDurableGenerationMedia: typeof ensureDurableGenerationMedia;
@@ -687,15 +678,15 @@ export async function publishGenerationToShowcaseForRoute({
   if (requestBody.allowRemixes !== undefined && typeof requestBody.allowRemixes !== 'boolean') {
     return { ok: false, status: 400, body: { error: 'allowRemixes must be a boolean.' } };
   }
-  const leftOutReferences = readLeftOutGenerationReferenceIds(requestBody.leaveOutGenerationReferenceIds);
-  if (!leftOutReferences.ok) {
-    return { ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } };
+  const leftOutReferenceIds = readLeftOutGenerationReferenceIds(requestBody.leaveOutGenerationReferenceIds);
+  if (!leftOutReferenceIds) {
+    return { ok: false, status: 400, body: { error: LEFT_OUT_GENERATION_REFERENCES_ERROR } };
   }
   let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;
   // A recipe the creator took inputs out of hands none of the creation's inputs to a remix: the
   // hand-over (`allowRemix`) gives every input, the removed ones too. A remix restores the copies
   // the recipe holds instead.
-  if (leftOutReferences.ids.size > 0 && effectiveResourceBundle?.resources?.allowRemix) {
+  if (leftOutReferenceIds.size > 0 && effectiveResourceBundle?.resources?.allowRemix) {
     effectiveResourceBundle = {
       ...effectiveResourceBundle,
       resources: { ...effectiveResourceBundle.resources, allowRemix: false },
@@ -755,7 +746,7 @@ export async function publishGenerationToShowcaseForRoute({
         ...(inputOrigins
           ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin !== 'own' ? [rowId] : []))) }
           : {}),
-        ...(leftOutReferences.ids.size > 0 ? { exceptRowIds: leftOutReferences.ids } : {}),
+        ...(leftOutReferenceIds.size > 0 ? { exceptRowIds: leftOutReferenceIds } : {}),
         mediaKeys: ['media-1'],
         dependencies: {
           planGenerationReferenceCopies: resolvedDependencies.planGenerationReferenceCopies,

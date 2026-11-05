@@ -249,6 +249,38 @@ describe('resolveRemixAccess', () => {
     expect(unverifiable).toEqual({ allowed: false, reason: 'not_found' });
   });
 
+  // Owner, 2026-11-06: "blocking means no more post of A can be visible or can be purchased to B, but
+  // already bought posts won't be affected". A run's reuse of the files a buyer holds asks no block;
+  // a new remix still does.
+  it('lets a buyer the creator blocked reuse what they hold without asking about the block, and refuses them a new remix', async () => {
+    const { client } = createClient({
+      tables: {
+        post_resource_bundles: [REMIX_RECIPE],
+        post_resource_bundle_purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
+      },
+    });
+    const isUserRelationshipBlocked = vi.fn(async () => true);
+
+    const reuse = await resolveRemixAccess({
+      adminSupabase: client,
+      viewerUserId: 'buyer-1',
+      generation: GENERATION,
+      purpose: 'reuse',
+      dependencies: { isUserRelationshipBlocked },
+    });
+    expect(reuse).toMatchObject({ allowed: true, basis: 'unlocked', recipeEntitled: true });
+    expect(isUserRelationshipBlocked).not.toHaveBeenCalled();
+
+    const remix = await resolveRemixAccess({
+      adminSupabase: client,
+      viewerUserId: 'buyer-1',
+      generation: GENERATION,
+      dependencies: { isUserRelationshipBlocked },
+    });
+    expect(remix).toEqual({ allowed: false, reason: 'not_found' });
+    expect(isUserRelationshipBlocked).toHaveBeenCalledTimes(1);
+  });
+
   // Publish files a creation made as a guest under the account the guest was
   // linked to, while the generation keeps the guest's id, so every such post
   // is the account's and its generation the guest's.
@@ -445,6 +477,55 @@ describe('resolveRemixAccess', () => {
 
       expect(viewer).toEqual({ allowed: false, reason: 'not_found' });
       expect(owner).toMatchObject({ allowed: true, basis: 'owner' });
+    });
+
+    // The review of phase 2, finding 1: the switch sat in the gate the run start's imports ask too, so a
+    // buyer's own runs lost the files they bought. A run's reuse of what they hold is no new remix.
+    it('lets a buyer reuse what they hold, and still refuses them a new remix', async () => {
+      const { client } = createClient({
+        tables: {
+          posts: [CLOSED_POST],
+          post_resource_bundles: [REMIX_RECIPE],
+          post_resource_bundle_purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
+        },
+      });
+      const ask = (purpose?: 'remix' | 'reuse') => resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'buyer-1',
+        generation: GENERATION,
+        requestedPostId: 'post-1',
+        ...(purpose ? { purpose } : {}),
+        dependencies: notBlocked(),
+      });
+
+      await expect(ask('reuse')).resolves.toEqual({
+        allowed: true,
+        basis: 'unlocked',
+        post: CLOSED_POST,
+        includeSharedInputMedia: true,
+        recipeEntitled: true,
+        recipe: { id: 'bundle-1', ownerUserId: 'creator-1', published: true, viewerHasPurchased: true },
+      });
+      // A new remix, which every remix entry point asks for by default.
+      await expect(ask()).resolves.toEqual({ allowed: false, reason: 'not_found' });
+      await expect(ask('remix')).resolves.toEqual({ allowed: false, reason: 'not_found' });
+    });
+
+    it('asks a reuse everything else a remix is asked', async () => {
+      const reuse = (posts: Row[], viewerUserId = 'buyer-1') => {
+        const { client } = createClient({
+          tables: {
+            posts,
+            post_resource_bundles: [REMIX_RECIPE],
+            post_resource_bundle_purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
+          },
+        });
+        return resolveRemixAccess({ adminSupabase: client, viewerUserId, generation: GENERATION, purpose: 'reuse', dependencies: notBlocked() });
+      };
+
+      await expect(reuse([CLOSED_POST], 'viewer-1')).resolves.toEqual({ allowed: false, reason: 'unlock_required' });
+      await expect(reuse([{ ...CLOSED_POST, archived_at: '2026-11-06T00:00:00.000Z' }])).resolves.toEqual({ allowed: false, reason: 'not_found' });
+      await expect(reuse([{ ...CLOSED_POST, review_status: 'hidden' }])).resolves.toEqual({ allowed: false, reason: 'not_found' });
     });
 
     it('reads the switch with the post, and leaves a post that never set it open', async () => {

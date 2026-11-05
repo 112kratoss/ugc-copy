@@ -45,9 +45,12 @@ describe('posting defaults: allow remixes migration', () => {
       expect(body, name).toContain(
         `if ${payload} ? 'remixes_allowed' and jsonb_typeof(${payload}->'remixes_allowed') <> 'boolean' then raise exception 'Invalid remix switch'; end if;`,
       );
+      // Only when it differs (the review of phase 2): a save that sends the switch back, as every
+      // composer's save does, runs no update of the post for it.
       expect(body, name).toContain(
-        `if ${payload} ? 'remixes_allowed' then update public.posts set remixes_allowed = (${payload}->>'remixes_allowed')::boolean ${where}; end if;`,
+        `if ${payload} ? 'remixes_allowed' then update public.posts set remixes_allowed = (${payload}->>'remixes_allowed')::boolean ${where} and remixes_allowed is distinct from (${payload}->>'remixes_allowed')::boolean; end if;`,
       );
+      expect(body.match(/update public\.posts set remixes_allowed/g), name).toHaveLength(1);
       // The save's own body is the one 20261026150925 runs, unchanged.
       expect(body, name).toContain(`public.${name}_before_nsfw(`);
     }
@@ -60,28 +63,29 @@ describe('posting defaults: allow remixes migration', () => {
     expect(sql).toMatch(/grant execute on function public\.update_post_with_resource_bundle\(uuid, uuid, jsonb, boolean, jsonb\)\s+to service_role;/);
   });
 
-  // The review of phase 2: the marketplace's Remix filter and search text follow the post's switch.
+  // The review of phase 2: the marketplace's Remix filter and search text follow the post's switch,
+  // whichever of the three makes the Remix (the stored switch, the creation, a Remix link or access
+  // item: finding 13 found the last one unmasked).
   it('counts no Remix in the marketplace for a post with remixes off, its refreshes otherwise as 20261101072014 left them', () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), 'supabase/migrations/20261101072014_marketplace_list_public_read_rules.sql'),
       'utf8',
     ).replace(/--.*$/gm, '');
-    const readsSwitch = (indent: string) => [
-      `public.post_resource_bundle_kinds(`,
-      `${indent}bundles.resource_items,`,
-      `${indent}bundles.allow_remix AND coalesce(posts.remixes_allowed, true),`,
-      `${indent}bundles.status,`,
-      `${indent}CASE WHEN coalesce(posts.remixes_allowed, true) THEN posts.generation_id END`,
-    ].join('\n');
-    for (const [name, indent, before] of [
-      ['refresh_marketplace_bundle_search_documents', '        ', 'public.post_resource_bundle_kinds(\n        bundles.resource_items, bundles.allow_remix, bundles.status, posts.generation_id'],
-      ['refresh_marketplace_bundle_listings', '    ', 'public.post_resource_bundle_kinds(\n    bundles.resource_items, bundles.allow_remix, bundles.status, posts.generation_id'],
-    ] as const) {
+    const kindsCall = 'public.post_resource_bundle_kinds(';
+    const wrapOpen = `array_remove(${kindsCall}`;
+    const wrapClose = "), CASE WHEN coalesce(posts.remixes_allowed, true) THEN NULL ELSE 'remix' END)";
+    for (const name of ['refresh_marketplace_bundle_search_documents', 'refresh_marketplace_bundle_listings']) {
       const body = functionBody(name);
-      expect(body, name).toContain(readsSwitch(indent));
+      // One call of the kinds, wrapped once: its own arguments are 20261101072014's.
+      expect(body.split(kindsCall).length - 1, name).toBe(1);
+      expect(body.split(wrapOpen).length - 1, name).toBe(1);
+      expect(body.split(wrapClose).length - 1, name).toBe(1);
+      expect(body, name).toContain(`${wrapOpen}\n`);
+      expect(body, name).toMatch(/bundles\.resource_items, bundles\.allow_remix, bundles\.status, posts\.generation_id\n\s*\), CASE WHEN/);
       const original = source.match(new RegExp(`CREATE OR REPLACE FUNCTION public\\.${name}\\([\\s\\S]*?\\$function\\$;`))?.[0];
       expect(original, name).toBeDefined();
-      expect(body.replace(readsSwitch(indent), before), name).toBe(original);
+      // Unwrapped, the body is the one 20261101072014 left, character for character.
+      expect(body.replace(wrapOpen, kindsCall).replace(wrapClose, ')'), name).toBe(original);
       expect(sql, name).toContain(`REVOKE ALL ON FUNCTION public.${name}(uuid[])\n  FROM PUBLIC, anon, authenticated;`);
       expect(sql, name).toContain(`GRANT EXECUTE ON FUNCTION public.${name}(uuid[])\n  TO service_role;`);
     }
@@ -98,11 +102,13 @@ describe('posting defaults: allow remixes migration', () => {
     expect(serverSource).toMatch(
       /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+remixesAllowed: post\?\.remixesAllowed,\s+\}\)/,
     );
+    // And drops a Remix its items make (a Remix link or access), as the SQL's wrapper does.
+    expect(serverSource).toContain('const item = post?.remixesAllowed === false ? withoutRecipeRemix(counted) : counted;');
     for (const storedAllowRemix of [true, false, null]) {
       for (const generationId of ['generation-1', null]) {
         for (const remixesAllowed of [true, false, undefined]) {
-          // As the SQL calls post_resource_bundle_kinds: the stored switch and the creation, each only
-          // while the post allows remixes.
+          // As the SQL reads post_resource_bundle_kinds: Remix from the stored switch or the creation,
+          // left out while the post's switch is off.
           const open = remixesAllowed !== false;
           const sqlRule = (storedAllowRemix === true && open) || (generationId !== null && open);
           expect(resolveRecipeAllowRemix({ storedAllowRemix, status: 'published', generationId, remixesAllowed }), JSON.stringify({ storedAllowRemix, generationId, remixesAllowed }))

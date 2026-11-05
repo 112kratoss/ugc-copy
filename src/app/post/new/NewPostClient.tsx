@@ -128,13 +128,22 @@ import {
   withoutLockedCreationPrompt,
   ALLOW_REMIXES_DETAIL,
   ALLOW_REMIXES_LABEL,
+  CREATION_INPUTS_ALL_REMOVED,
   CREATION_RECIPE_FILES_LINE,
   DEFAULT_PAID_RECIPE_PRICE_CREDITS,
+  creationInputsLeftOutOfRecipe,
+  creationRecipeHasItems,
+  creationRecipeStart,
   isRemixRecipeMode,
   PAID_RECIPE_RESALE_LINE,
+  readOwnSourceRecipe,
+  remixRecipeAllows,
   remixRecipeLock,
+  remixRecipeRequired,
+  withoutCreationInputCopy,
   type CreationInputLike,
   type GenerationReference,
+  type OwnSourceRecipe,
   type RemixRecipeMode,
 } from '../../../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import ComposerMediaLightbox, { getComposerMediaLabel } from './ComposerMediaLightbox';
@@ -538,6 +547,11 @@ interface GenerationDraft {
   /** The terms its run carries as a remix (`remix_recipe_mode`), which lock its recipe. */
   remixRecipeMode: RemixRecipeMode | null;
   /**
+   * The recipe on the creator's own post it came from (`own_source_post_bundle`): a paid one
+   * starts a new post's recipe Paid at its price, which the creator may change (owner, 2026-11-06).
+   */
+  ownSourceRecipe: OwnSourceRecipe | null;
+  /**
    * Edit mode seeds a draft from the server-rendered post before the
    * generations fetch resolves. The paywall prefill must only conclude
    * "nothing to apply" from a fetched draft — the seed never carries one.
@@ -797,6 +811,8 @@ async function uploadResourceFile(
 const DEFAULT_PRICE_TOKENS = DEFAULT_PAID_RECIPE_PRICE_CREDITS;
 /** A creation's new post: Free or Paid, never No recipe (owner, 2026-11-05). */
 const CREATION_POST_RECIPE_CHOICES: readonly PostResourceBundleAccessMode[] = ['free', 'paid'];
+/** No saved input left in the recipe: every one was removed. */
+const NO_CREATION_INPUTS: readonly GenerationReference[] = [];
 
 /**
  * Prices are credit counts, and `price_usd_cents` stores the count directly --
@@ -809,6 +825,20 @@ function getInitialPriceTokens(bundle: PostResourceBundleInput | null | undefine
 
   const tokens = typeof bundle.priceUsdCents === 'number' ? bundle.priceUsdCents : 0;
   return tokens > 0 ? String(Math.round(tokens)) : String(DEFAULT_PRICE_TOKENS);
+}
+
+/** A `price` a link asks a new post's paid recipe to start at, where it is one a recipe can go out at. */
+function readRequestedPriceTokens(value: string | null): string | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  const tokens = Number.parseInt(value, 10);
+  return tokens >= POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS && tokens % POST_RESOURCE_PRICE_INCREMENT_USD_CENTS === 0
+    ? String(tokens)
+    : null;
+}
+
+/** The saved inputs taken out of the recipe, as the unsaved-work check compares them. */
+function serializeRemovedInputIds(ids: Iterable<string>): string {
+  return [...ids].sort().join('\n');
 }
 
 function getInitialProofMode(initialPost: EditablePostDraft | null | undefined): ProofMode {
@@ -887,6 +917,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // anywhere else that sends it: the post's recipe section with no mode
   // chosen and nothing focused, not "Manage recipe"'s Paid and price.
   const isRecipeAddIntent = isEditMode && searchParams.get('recipe') === 'add';
+  // What the after-run panel's "More options" carries over (#711's review): the
+  // saved inputs taken out of the recipe, "Allow remixes" off, and the price a
+  // paid recipe goes out at. Where a new post starts; an edit reads none.
+  const requestedLeftOutInputIds = isEditMode ? [] : searchParams.getAll('leaveOut');
+  const requestedLeftOutKey = serializeRemovedInputIds(requestedLeftOutInputIds);
+  const requestedRemixesOff = !isEditMode && searchParams.get('allowRemixes') === '0';
+  const requestedPriceTokens = isEditMode ? null : readRequestedPriceTokens(searchParams.get('price'));
   const initialBundle = initialPost?.resourceBundle ?? { accessMode: 'none' as const };
   const initialCategory =
     initialPost?.category && initialPost.category !== 'text'
@@ -1056,7 +1093,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const [resourcePreviewText, setResourcePreviewText] = useState(() => (
     initialBundle.summary?.trim() || initialBundle.previewText?.trim() || resourcePreviewSuggestion
   ).slice(0, RECIPE_PREVIEW_MAX_LENGTH));
-  const [resourcePriceTokens, setResourcePriceTokens] = useState(() => getInitialPriceTokens(initialBundle));
+  const [resourcePriceTokens, setResourcePriceTokens] = useState(() => requestedPriceTokens ?? getInitialPriceTokens(initialBundle));
   const [editingResourceCard, setEditingResourceCard] = useState<PostComposerResourceCardDraft | null>(null);
   const [isChoosingResourceType, setIsChoosingResourceType] = useState(false);
   const [didApplyGenerationPaywallPrefill, setDidApplyGenerationPaywallPrefill] = useState(false);
@@ -1069,10 +1106,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // again once they are in it.
   const [includeGenerationReferences, setIncludeGenerationReferences] = useState(false);
   // The saved inputs the creator took out of the recipe with their remove buttons (owner,
-  // 2026-11-05: every one goes in by default, the creator's own uploads included).
-  const [removedCreationInputIds, setRemovedCreationInputIds] = useState<ReadonlySet<string>>(() => new Set());
-  // "Allow remixes" (owner, 2026-11-05), on by default; an edit starts from the post's own.
-  const [allowRemixes, setAllowRemixes] = useState(() => initialPost?.remixesAllowed !== false);
+  // 2026-11-05: every one goes in by default, the creator's own uploads included): on a new post
+  // those the after-run panel took out, on an edit those the stored recipe holds no copy of, once
+  // the creation is read (#711's review).
+  const [removedCreationInputIds, setRemovedCreationInputIds] = useState<ReadonlySet<string>>(() => new Set(requestedLeftOutInputIds));
+  // "Allow remixes" (owner, 2026-11-05), on by default; an edit starts from the post's own, and a
+  // new post from the panel's.
+  const [allowRemixes, setAllowRemixes] = useState(() => (initialPost ? initialPost.remixesAllowed !== false : !requestedRemixesOff));
   // Saved inputs the last save asked for and could not copy, said under the
   // box until the next save (#677's review).
   const [referencesNotCopied, setReferencesNotCopied] = useState(0);
@@ -1097,6 +1137,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           inputMedia: [],
           sharesRecipe: true,
           remixRecipeMode: initialPost.remixRecipeMode ?? null,
+          ownSourceRecipe: null,
           source: 'seed',
         }
       : null
@@ -1236,18 +1277,30 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const includesCreationReferences = includeGenerationReferences
     && offeredCreationInputs.length > 0
     && !allCreationInputsInRecipe;
+  // A remix's recipe keeps its original's terms (owner, 2026-11-05), which the server holds too.
+  const remixRecipeMode = prefilledGeneration?.origin === 'template'
+    ? null
+    : initialPost?.remixRecipeMode ?? prefilledGeneration?.remixRecipeMode ?? null;
+  const recipeLock = remixRecipeLock(remixRecipeMode);
   // A new post of a creation always carries its recipe (owner, 2026-11-05): No recipe is offered
   // for uploads, text posts and template results, and on an edit, which keeps a post as it is.
   const isNewCreationPost = !isEditMode
     && Boolean(generationId)
     && prefilledGeneration?.origin !== 'template'
-    // One with nothing to share, off public view or with neither a prompt nor a saved input, has No recipe.
-    && prefilledGeneration?.sharesRecipe !== false
-    && (Boolean(prefilledGeneration?.prompt.trim()) || creationInputsOfRecipe.length > 0);
-  // A remix's recipe keeps its original's terms (owner, 2026-11-05), which the server holds too.
-  const recipeLock = prefilledGeneration?.origin === 'template'
-    ? null
-    : remixRecipeLock(initialPost?.remixRecipeMode ?? prefilledGeneration?.remixRecipeMode ?? null);
+    // A remix of a paid recipe goes with a paid one of its own, whatever it holds. Any other with
+    // nothing to share, off public view or with neither a prompt nor a saved input still in it
+    // (#711's review), has No recipe.
+    && (remixRecipeRequired(remixRecipeMode) || (
+      prefilledGeneration?.sharesRecipe !== false
+      && creationRecipeHasItems(prefilledGeneration?.prompt, creationInputsOfRecipe, removedCreationInputIds)
+    ));
+  // Where a new post's recipe starts, and goes back to (owner, 2026-11-05 and 2026-11-06): its
+  // remix's terms, else Paid at the price of the creator's own post it came from where that recipe
+  // is paid, else Free.
+  const recipeStart = creationRecipeStart(remixRecipeMode, prefilledGeneration?.ownSourceRecipe ?? null);
+  // "Post without recipe" goes only where the lock allows no recipe: a remix of a paid recipe's
+  // public post is refused one (#711's review).
+  const offersPostWithoutRecipe = !isNewCreationPost && remixRecipeAllows(recipeLock?.accessMode, 'none');
   // A generation-backed post's own "Allow remixes"; a template result has no Remix. A new post sends
   // it only while its creation's recipe is required: the server reads the switch as a composer
   // that offers no No recipe, so a form still offering one (its creation not read yet, or nothing
@@ -1398,6 +1451,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // A creation post's recipe includes its Remix (S1); a template result has
   // no recipe at all.
   const recipeIncludesRemix = Boolean(generationId) && prefilledGeneration?.origin !== 'template';
+  // With the post's "Allow remixes" off, a recipe promises no Remix, and a paid one no resale of a
+  // remix (#711's review).
+  const remixesSwitchedOff = offersAllowRemixes && !allowRemixes;
+  const recipeOffersRemix = recipeIncludesRemix && !remixesSwitchedOff;
   const hasResourceContent = readyResourceCards.length > 0;
   // The exact prompt's item is fixed, neither edited nor removed, where its
   // title and its text both say so: a rewritten one, or the creator's own card
@@ -1690,6 +1747,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             moderation_removed_at: typeof generation.moderation_removed_at === 'string' ? generation.moderation_removed_at : null,
           }),
           remixRecipeMode: isRemixRecipeMode(generation.remix_recipe_mode) ? generation.remix_recipe_mode : null,
+          ownSourceRecipe: readOwnSourceRecipe(generation) ?? null,
           source: 'fetched',
         };
 
@@ -1710,18 +1768,45 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         startingModeDecidedForRef.current = nextGeneration.id;
         // Owner, 2026-11-05 (remix plan, phase 2): a creation's post always carries its recipe, with
         // its references in, the creator's own uploads included; one with neither a prompt nor a saved
-        // input has nothing to share. A remix's recipe keeps its original's terms, whatever a link
-        // asked for: paid stays paid, free stays free.
-        const startingLock = isTemplateResult ? null : remixRecipeLock(nextGeneration.remixRecipeMode);
+        // input still in it has nothing to share. A remix's recipe keeps its original's terms, whatever
+        // a link asked for: paid stays paid, free stays free. A creation from the creator's own paid
+        // post starts paid at that post's price, unless a link chose the mode (owner, 2026-11-06).
+        const remixMode = isTemplateResult ? null : nextGeneration.remixRecipeMode;
+        const startingLock = remixRecipeLock(remixMode);
+        const start = creationRecipeStart(remixMode, nextGeneration.ownSourceRecipe);
+        // The saved inputs out of the recipe where the post starts (#711's review): on a new post those
+        // the after-run panel took out (`leaveOut`, already in the state), on an edit those the stored
+        // recipe holds no copy of, so a file removed before is not offered back unasked.
+        const startsRemoved = isEditMode
+          ? creationInputsLeftOutOfRecipe(
+            creationInputs,
+            initialResourceCards.flatMap((card) => card.attachments.map((attachment) => attachment.storagePath)),
+            nextGeneration.id,
+            resourceAllowRemix,
+          )
+          : (requestedLeftOutKey ? requestedLeftOutKey.split('\n') : []);
+        const carriesRecipe = !isTemplateResult && (remixRecipeRequired(remixMode) || (
+          nextGeneration.sharesRecipe && creationRecipeHasItems(nextGeneration.prompt, creationInputs, new Set(startsRemoved))
+        ));
         const startsOnNoRecipe = decidesStartingMode
           && !isEditMode
-          && (isTemplateResult || (!startingLock && !requestedResourceMode && (
-            (!nextGeneration.prompt.trim() && creationInputs.length === 0) || !nextGeneration.sharesRecipe
-          )));
+          && (isTemplateResult || (!requestedResourceMode && !carriesRecipe));
         const toStartingMode = (mode: PostResourceBundleAccessMode): PostResourceBundleAccessMode => (
           isTemplateResult || mode === 'free' ? 'none' : mode
         );
         const startsLocked = decidesStartingMode && !isEditMode && !startsOnNoRecipe && Boolean(startingLock);
+        const startsPaid = decidesStartingMode
+          && !isEditMode
+          && !startsOnNoRecipe
+          && !startsLocked
+          && !requestedResourceMode
+          && start.accessMode === 'paid';
+        const startMode: PostResourceBundleAccessMode | null = startsLocked && startingLock
+          ? startingLock.accessMode
+          : startsPaid ? 'paid' : null;
+        // The price a paid start goes out at: its own post's, unless a link set one.
+        const startPrice = startMode === 'paid' && !requestedPriceTokens ? String(start.priceCredits) : null;
+        const removesAtStart = decidesStartingMode && isEditMode && startsRemoved.length > 0;
         const startsWithReferences = decidesStartingMode
           && !isEditMode
           && !isTemplateResult
@@ -1729,8 +1814,14 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           && creationInputs.length > 0;
         if (startsOnNoRecipe) {
           setResourceAccessMode(toStartingMode);
-        } else if (startsLocked && startingLock) {
-          setResourceAccessMode(startingLock.accessMode);
+        } else if (startMode) {
+          setResourceAccessMode(startMode);
+        }
+        if (startPrice) {
+          setResourcePriceTokens(startPrice);
+        }
+        if (removesAtStart) {
+          setRemovedCreationInputIds(new Set(startsRemoved));
         }
         if (startsWithReferences) {
           setIncludeGenerationReferences(true);
@@ -1750,10 +1841,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
               creationMode: nextGeneration.creationMode,
             },
             // A paid recipe keeps the prompt out of the title; a free one does not (owner, 2026-10-29).
-            // A locked remix's mode is set above, not yet in the ref.
-            recipeKeepsPromptPrivate(isTemplateResult
-              ? 'none'
-              : startsLocked && startingLock ? startingLock.accessMode : resourceAccessModeRef.current),
+            // A starting mode set above is not yet in the ref.
+            recipeKeepsPromptPrivate(isTemplateResult ? 'none' : startMode ?? resourceAccessModeRef.current),
           )?.title ?? '';
         setTitle((current) => current || prefillTitle);
         // A new post's Made with is the creation's row from here on (it is
@@ -1764,9 +1853,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           ...saved,
           title: saved.title || prefillTitle,
           ...(creationRow ? { madeWith: snapshotMadeWith([creationRow]) } : {}),
-          // Where the post starts, as the recipe mode and the references above.
+          // Where the post starts, as the recipe mode, its price, the inputs out of it and the
+          // references above.
           ...(startsOnNoRecipe ? { resourceAccessMode: toStartingMode(saved.resourceAccessMode) } : {}),
-          ...(startsLocked && startingLock ? { resourceAccessMode: startingLock.accessMode } : {}),
+          ...(startMode ? { resourceAccessMode: startMode } : {}),
+          ...(startPrice ? { resourcePriceTokens: startPrice } : {}),
+          ...(removesAtStart ? { removedCreationInputIds: serializeRemovedInputIds(startsRemoved) } : {}),
           ...(startsWithReferences ? { includeGenerationReferences: true } : {}),
         }));
       } catch (loadError) {
@@ -1789,7 +1881,17 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     return () => {
       cancelled = true;
     };
-  }, [generationId, generationLoadAttempt, isEditMode, requestedResourceMode, session?.access_token]);
+  }, [
+    generationId,
+    generationLoadAttempt,
+    initialResourceCards,
+    isEditMode,
+    requestedLeftOutKey,
+    requestedPriceTokens,
+    requestedResourceMode,
+    resourceAllowRemix,
+    session?.access_token,
+  ]);
 
   // Its own effect: the router object is not a stable dependency for the
   // load above (a changing identity would refetch the generation forever).
@@ -2623,8 +2725,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             {error.actionLabel ?? 'Complete profile in a new tab'}
           </Link>
         ) : null}
-        {/* A creation's new post has no way on without its recipe (owner, 2026-11-05). */}
-        {error.recovery === 'post-without-recipe' && !isNewCreationPost ? (
+        {/* A creation's new post has no way on without its recipe (owner, 2026-11-05), nor has a
+            remix of a paid recipe (#711's review). */}
+        {error.recovery === 'post-without-recipe' && offersPostWithoutRecipe ? (
           <Button variant="secondary" className="mt-3" onClick={() => void postWithoutRecipe()}>
             Post without recipe
           </Button>
@@ -2683,6 +2786,38 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // Publish asks for an item instead, as the app does.
   const removeResourceCard = (id: string) => {
     setResourceCards((current) => current.filter((card) => card.id !== id));
+    resetFeedback();
+  };
+
+  // Takes a saved input out of the recipe (owner, 2026-11-05). The copy an earlier save made of it
+  // goes with it, or everyone who gets the recipe keeps the file; and a new post of a creation left
+  // with nothing to share falls back to No recipe, which sends no "Allow remixes" (#711's review).
+  const removeCreationInput = (inputId: string) => {
+    const nextRemoved = new Set(removedCreationInputIds).add(inputId);
+    const nextCards = withoutCreationInputCopy(resourceCards, generationId, inputId);
+    setRemovedCreationInputIds(nextRemoved);
+    if (nextCards !== resourceCards) {
+      setResourceCards(nextCards);
+    }
+    const fallsBackToNoRecipe = !isEditMode
+      && resourceAccessMode !== 'none'
+      && !remixRecipeRequired(remixRecipeMode)
+      && !creationRecipeHasItems(prefilledGeneration?.prompt, creationInputsOfRecipe, nextRemoved)
+      && !nextCards.some((card) => resourceCardHasContent(card));
+    if (fallsBackToNoRecipe) {
+      changeResourceAccessMode('none');
+    }
+    resetFeedback();
+  };
+
+  // Puts every removed input back, for the next publish or save to copy in (an edit's box starts
+  // off, so it goes on); a new post that fell back to No recipe takes its recipe back.
+  const restoreCreationInputs = () => {
+    setRemovedCreationInputIds(new Set());
+    setIncludeGenerationReferences(true);
+    if (!isEditMode && resourceAccessMode === 'none' && prefilledGeneration?.sharesRecipe !== false) {
+      changeResourceAccessMode(recipeStart.accessMode);
+    }
     resetFeedback();
   };
 
@@ -2787,11 +2922,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // A title shorter than a recipe needs is refused by the title, plainly, with
   // the way on (owner, 2026-11-03).
   const refuseShortRecipeTitle = () => {
-    // A creation's new post has no way on without its recipe (owner, 2026-11-05): the title it is.
+    // A creation's new post has no way on without its recipe (owner, 2026-11-05), nor has a remix
+    // of a paid recipe: the title it is.
     setError({
       section: 'post',
       message: RECIPE_TITLE_TOO_SHORT_REFUSAL,
-      ...(isNewCreationPost ? {} : { recovery: 'post-without-recipe' as const }),
+      ...(offersPostWithoutRecipe ? { recovery: 'post-without-recipe' as const } : {}),
     });
     focusComposerSection('post');
   };
@@ -4241,8 +4377,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                         <p id={recipeMoneyLineId} className="text-xs font-medium leading-5 text-emerald-200">
                           {recipeMoneyLine}
                         </p>
-                        {/* The seller's consent to what buyers may do (the plan's assumption 12). */}
-                        <p className="text-xs leading-5 text-zinc-300">{PAID_RECIPE_RESALE_LINE}</p>
+                        {/* The seller's consent to what buyers may do (the plan's assumption 12), unless
+                            the post allows no remix (#711's review). */}
+                        {remixesSwitchedOff ? null : <p className="text-xs leading-5 text-zinc-300">{PAID_RECIPE_RESALE_LINE}</p>}
 
                         <div className="rounded-2xl border border-white/8 bg-white/[0.025] px-4 py-3 text-xs leading-5 text-zinc-400">
                           Before buying, people see your recipe preview and item titles — never what’s inside.
@@ -4277,30 +4414,26 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                           <div className="space-y-3">
                             <CreationInputStrip
                               inputs={offeredCreationInputs}
-                              // Each file the recipe would take has a remove button (owner, 2026-11-05).
-                              onRemove={includeGenerationReferences && !allCreationInputsInRecipe
-                                ? (inputId) => {
-                                  setRemovedCreationInputIds((current) => new Set(current).add(inputId));
-                                  resetFeedback();
-                                }
-                                : undefined}
+                              // Each file the recipe takes, or would, has a remove button (owner,
+                              // 2026-11-05); one already in it takes its copy out too (#711's review).
+                              onRemove={includeGenerationReferences || creationInputsInRecipe > 0 ? removeCreationInput : undefined}
                               removedCount={removedCreationInputs.length}
-                              onRestoreRemoved={() => {
-                                setRemovedCreationInputIds(new Set());
-                                resetFeedback();
-                              }}
+                              onRestoreRemoved={restoreCreationInputs}
                               filesLine={includesCreationReferences ? CREATION_RECIPE_FILES_LINE : null}
+                              // A removal made while a save is on its way would not be in it (#711's review).
+                              disabled={isSubmitting}
                             />
                             {allCreationInputsInRecipe ? (
                               <p className="text-xs leading-5 text-zinc-400">
                                 <span className="font-semibold text-white">{CREATION_INPUTS_INCLUDED}</span>{' '}
                                 {CREATION_INPUTS_INCLUDED_DETAIL}
                               </p>
-                            ) : (
+                            ) : offeredCreationInputs.length === 0 ? null : (
                               <label className="flex cursor-pointer items-start gap-3 select-none">
                                 <input
                                   type="checkbox"
                                   checked={includeGenerationReferences}
+                                  disabled={isSubmitting}
                                   onChange={(event) => {
                                     setIncludeGenerationReferences(event.target.checked);
                                     resetFeedback();
@@ -4332,7 +4465,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                       previewError={resourcePreviewError}
                       creationReferenceCount={includesCreationReferences ? offeredCreationInputs.length - creationInputsInRecipe : 0}
                       lockedCardIds={lockedResourceCardIds}
-                      includesRemix={recipeIncludesRemix && (!offersAllowRemixes || allowRemixes)}
+                      includesRemix={recipeOffersRemix}
                       buyerCount={recipeBuyerCount}
                       onAddCard={openResourceTypePicker}
                       onEditCard={editResourceCard}
@@ -4341,6 +4474,18 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                         setResourcePreviewText(nextPreviewText);
                         resetFeedback();
                       }}
+                    />
+                  </div>
+                ) : !isEditMode && canOfferCreationResources && removedCreationInputs.length > 0 ? (
+                  // Every saved input out of a creation with no prompt: the post fell back to No
+                  // recipe, and the files can come back with it (#711's review).
+                  <div className="mt-5 rounded-2xl border border-white/8 bg-black/25 p-4">
+                    <CreationInputStrip
+                      inputs={NO_CREATION_INPUTS}
+                      emptyLine={CREATION_INPUTS_ALL_REMOVED}
+                      removedCount={removedCreationInputs.length}
+                      onRestoreRemoved={restoreCreationInputs}
+                      disabled={isSubmitting}
                     />
                   </div>
                 ) : null}

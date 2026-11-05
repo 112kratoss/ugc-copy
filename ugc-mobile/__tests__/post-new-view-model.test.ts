@@ -29,8 +29,13 @@ import {
   withCreationRecipeDefaults,
   creationCarriesRecipe,
   draftAllowsRemixes,
+  getCreationInputsOutOfStoredRecipe,
   getCreationRecipeLock,
+  getCreationRecipeStart,
   getRemovedCreationInputIds,
+  withCreationInputRemoved,
+  withRemovedCreationInputsPutBack,
+  withRestoredCreationChoices,
   TITLE_MAX_LENGTH,
   getPostComposerPackageStatus,
   getPostComposerPriceTokens,
@@ -653,6 +658,8 @@ describe('post new view model', () => {
       ],
       ...overrides,
     });
+    /** The creation with the recipe of the creator's own post it came from, as a newer server sends it. */
+    const withOwnSource = (item: GenerationListItem, bundle: unknown) => ({ ...item, own_source_post_bundle: bundle }) as GenerationListItem;
     const copyCard = (inputId: string) => createPostComposerResourceCard('reference_media', {
       attachments: [{
         id: `reference-${inputId}`,
@@ -801,6 +808,130 @@ describe('post new view model', () => {
       expect(buildPublishGenerationPostPayload(bare, { ...none, selectedGenerationId: bare.id })).not.toHaveProperty('allowRemixes');
       // An edit always sends it.
       expect(buildUpdatePostPayload(true, none, bare)).toHaveProperty('allowRemixes', false);
+    });
+
+    // #711's review: a creation "carried a recipe" by the inputs it had before any were removed, so
+    // one with no prompt and every input removed could not be posted.
+    it('carries a recipe by the inputs still in it, and a remix of a paid recipe always', () => {
+      const promptless = creation({ prompt: null });
+      expect(creationCarriesRecipe(promptless, new Set(['input-1']))).toBe(true);
+      expect(creationCarriesRecipe(promptless, new Set(['input-1', 'input-2']))).toBe(false);
+      // A prompt carries one whatever is removed.
+      expect(creationCarriesRecipe(creation(), new Set(['input-1', 'input-2']))).toBe(true);
+      // A remix of a paid recipe has no media alone to fall back to; one of a free recipe has.
+      expect(creationCarriesRecipe({ ...promptless, remix_recipe_mode: 'paid' }, new Set(['input-1', 'input-2']))).toBe(true);
+      expect(creationCarriesRecipe({ ...promptless, remix_recipe_mode: 'free' }, new Set(['input-1', 'input-2']))).toBe(false);
+
+      // So its publish sends no switch once every input is out, the recipe having fallen to none.
+      const allOut = recipeDraft([], {
+        creationPackage: { attachGenerationReferences: true, removedInputIds: ['input-1', 'input-2'], allowRemixes: true },
+        resource: { ...recipeDraft([]).resource, accessMode: 'none' },
+      });
+      const payload = buildPublishGenerationPostPayload(promptless, allOut);
+      expect(payload).toMatchObject({ resourceBundle: { accessMode: 'none' } });
+      expect(payload).not.toHaveProperty('allowRemixes');
+      expect(payload).not.toHaveProperty('leaveOutGenerationReferenceIds');
+    });
+
+    // Finding 4 and 5 of #711's review: the copy an earlier save made goes with its input, and a new
+    // post of a creation left with nothing to share falls back to No recipe.
+    it('takes a removed input’s copy out of the cards, and falls back to No recipe with nothing left', () => {
+      const withCopy = recipeDraft([copyCard('input-1')], {
+        creationPackage: { attachGenerationReferences: true, removedInputIds: [], allowRemixes: true },
+      });
+      const removed = withCreationInputRemoved(withCopy, creation(), 'input-1', { isEdit: true });
+      expect([...getRemovedCreationInputIds(removed)]).toEqual(['input-1']);
+      expect(removed.resource.cards).toEqual([]);
+      // An edit keeps the post's mode: it says what a save takes off before it does.
+      expect(removed.resource.accessMode).toBe('free');
+      // The same input twice changes nothing.
+      expect(withCreationInputRemoved(removed, creation(), 'input-1', { isEdit: true })).toBe(removed);
+
+      const promptless = creation({ prompt: null });
+      const fresh = recipeDraft([], { creationPackage: { attachGenerationReferences: true, removedInputIds: [], allowRemixes: true } });
+      const oneLeft = withCreationInputRemoved(fresh, promptless, 'input-1', { isEdit: false });
+      expect(oneLeft.resource.accessMode).toBe('free');
+      const noneLeft = withCreationInputRemoved(oneLeft, promptless, 'input-2', { isEdit: false });
+      expect(noneLeft.resource.accessMode).toBe('none');
+      // An item of the creator's own keeps the recipe; so does a remix of a paid recipe's terms.
+      const guide = createPostComposerResourceCard('guide', { title: 'Lighting', textContent: 'Key light at 45 degrees.' });
+      expect(withCreationInputRemoved({ ...oneLeft, resource: { ...oneLeft.resource, cards: [guide] } }, promptless, 'input-2', { isEdit: false })
+        .resource.accessMode).toBe('free');
+      expect(withCreationInputRemoved(oneLeft, { ...promptless, remix_recipe_mode: 'paid' }, 'input-2', { isEdit: false })
+        .resource.accessMode).toBe('free');
+
+      // Put back, the inputs go in, and the recipe comes back with them.
+      const back = withRemovedCreationInputsPutBack(noneLeft, promptless, { isEdit: false });
+      expect(back.resource.accessMode).toBe('free');
+      expect(back.creationPackage).toMatchObject({ removedInputIds: [], attachGenerationReferences: true });
+      // An edit's switch starts off, and goes on with them.
+      const editBack = withRemovedCreationInputsPutBack(
+        { ...removed, creationPackage: { ...removed.creationPackage, attachGenerationReferences: false } },
+        creation(),
+        { isEdit: true },
+      );
+      expect(editBack.creationPackage).toMatchObject({ removedInputIds: [], attachGenerationReferences: true });
+      expect(editBack.resource.accessMode).toBe('free');
+    });
+
+    // Finding 7 of #711's review: an edit started with nothing removed and offered a removed file again.
+    it('opens an edit with the inputs its recipe holds no copy of taken out, unless it hands them over', () => {
+      const stored = { cards: [copyCard('input-1')], allowRemix: false };
+      expect(getCreationInputsOutOfStoredRecipe(creation(), stored)).toEqual(['input-2']);
+      expect(getCreationInputsOutOfStoredRecipe(creation(), { cards: [], allowRemix: false })).toEqual(['input-1', 'input-2']);
+      // A recipe from before phase 2 hands every input over as it is: none is out of it.
+      expect(getCreationInputsOutOfStoredRecipe(creation(), { cards: [], allowRemix: true })).toEqual([]);
+      expect(getCreationInputsOutOfStoredRecipe(null, stored)).toEqual([]);
+    });
+
+    // Owner, 2026-11-06 ("Start Paid, can switch"): the creator's own paid post sets where the
+    // recipe starts, at its price, with no lock; someone else's terms stay locked.
+    it('starts a creation from the creator’s own paid post on Paid at its price, unlocked', () => {
+      const opened = { ...getDefaultPostComposerDraft(), mode: 'creation' as const, proofMode: 'media' as const, selectedGenerationId: 'gen-1' };
+      const ownPaid = withOwnSource(creation(), { accessMode: 'paid', status: 'published', priceUsdCents: 120 });
+      expect(getCreationRecipeStart(ownPaid)).toEqual({ accessMode: 'paid', priceCredits: 120, locked: false });
+      expect(getCreationRecipeLock(ownPaid)).toBeNull();
+      const draft = withCreationRecipeDefaults(opened, ownPaid);
+      expect(draft.resource.accessMode).toBe('paid');
+      expect(getPostComposerPriceTokens(draft.resource)).toBe(120);
+
+      // A price no recipe can go out at starts at the starting one; a free own post starts free.
+      expect(getCreationRecipeStart(withOwnSource(creation(), { accessMode: 'paid', priceUsdCents: 15 })))
+        .toEqual({ accessMode: 'paid', priceCredits: 10, locked: false });
+      expect(getCreationRecipeStart(withOwnSource(creation(), { accessMode: 'free', priceUsdCents: 0 })))
+        .toEqual({ accessMode: 'free', priceCredits: 10, locked: false });
+      expect(getCreationRecipeStart(creation())).toEqual({ accessMode: 'free', priceCredits: 10, locked: false });
+      // Someone else's terms win, and stay locked.
+      expect(getCreationRecipeStart({ ...ownPaid, remix_recipe_mode: 'free' })).toMatchObject({ accessMode: 'free', locked: true });
+    });
+
+    // Finding 14 of #711's review: a draft an older build kept lacks the phase-2 choices.
+    it('fills an older draft’s missing choices from where the composer starts, and moves a new post off No recipe', () => {
+      const starting = recipeDraft([], { creationPackage: { attachGenerationReferences: false, removedInputIds: ['input-2'], allowRemixes: false } });
+      const kept = recipeDraft([], { creationPackage: { attachGenerationReferences: true } });
+      const edit = withRestoredCreationChoices(kept, starting, creation(), { isEdit: true });
+      expect(edit.creationPackage).toEqual({ attachGenerationReferences: true, removedInputIds: ['input-2'], allowRemixes: false });
+      // What the kept draft says stays its own.
+      const keptOff = recipeDraft([], { creationPackage: { attachGenerationReferences: false, allowRemixes: true } });
+      expect(withRestoredCreationChoices(keptOff, starting, creation(), { isEdit: true }).creationPackage.allowRemixes).toBe(true);
+
+      const onNone = {
+        ...getDefaultPostComposerDraft(),
+        mode: 'creation' as const,
+        proofMode: 'media' as const,
+        selectedGenerationId: 'gen-1',
+        creationPackage: { attachGenerationReferences: false },
+      } as PostComposerDraft;
+      const startingNew = withCreationRecipeDefaults({ ...getDefaultPostComposerDraft(), mode: 'creation', proofMode: 'media', selectedGenerationId: 'gen-1' }, creation());
+      const moved = withRestoredCreationChoices(onNone, startingNew, creation(), { isEdit: false });
+      expect(moved.resource.accessMode).toBe('free');
+      expect(moved.resource.cards.map((card) => card.id)).toEqual(['creation-prompt']);
+      // A paid remix's draft moves to its terms; one with nothing to share stays on No recipe.
+      expect(withRestoredCreationChoices(onNone, startingNew, creation({ remix_recipe_mode: 'paid' }), { isEdit: false }).resource.accessMode).toBe('paid');
+      const bare = creation({ prompt: null, input_media: [] });
+      expect(withRestoredCreationChoices(onNone, startingNew, bare, { isEdit: false }).resource.accessMode).toBe('none');
+      // An edit's mode is the creator's.
+      expect(withRestoredCreationChoices(onNone, startingNew, creation(), { isEdit: true }).resource.accessMode).toBe('none');
     });
 
     it('sends neither switch for a template’s result, which has no Remix', () => {

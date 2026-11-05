@@ -599,9 +599,12 @@ export async function addCreationReferenceCountsToFeedItems(
   items: ShowcaseFeedItem[],
   adminSupabase: ReturnType<typeof createServiceClient>,
 ): Promise<ShowcaseFeedItem[]> {
-  // Only a creation recipe whose creator may share the inputs can gain any.
+  // Only a creation recipe can gain any, and the read asks only of one whose
+  // creator shares the inputs (the stored switch). Not the summary's
+  // `allowRemix`, which a post whose "Allow remixes" is off reports false while
+  // its unlock still hands those inputs over.
   const postIds = items.flatMap((item) => (
-    item.generationId && item.asset?.allowRemix && item.asset.lockedPreview ? [item.id] : []
+    item.generationId && item.asset?.lockedPreview ? [item.id] : []
   ));
   if (postIds.length === 0) {
     return items;
@@ -745,8 +748,12 @@ export async function resolvePostRowsToFeedItems(
   const postIds = rowsToHydrate.map((row) => row.id);
   // What recipes store: what an unlock adds from a creation's inputs is
   // counted on the page a caller serves (addCreationReferenceCountsToFeedItems).
+  // A post whose creator turned "Allow remixes" off sells no Remix with its
+  // recipe (the review of phase 2): its card's chips, its reel line and the
+  // Remix filter leave it out, as the marketplace does.
+  const remixesClosedPostIds = new Set(rowsToHydrate.flatMap((row) => (row.remixes_allowed === false ? [row.id] : [])));
   const assetHydrationPromise = timed('hydrate_bundles', () =>
-    getMarketplaceAssetSummaryHydration(postIds, adminSupabase));
+    getMarketplaceAssetSummaryHydration(postIds, adminSupabase, { remixesClosedPostIds }));
   // Every read still starts together. Only the preview signing inside
   // `loadGenerationInfo` waits on the media rows, because only it needs to
   // know which covers already have a poster of their own — this function runs

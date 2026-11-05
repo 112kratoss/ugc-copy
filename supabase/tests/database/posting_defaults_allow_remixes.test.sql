@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path=public,extensions;
-select plan(22);
+select plan(26);
 
 insert into auth.users(id,email,aud,role,created_at,is_anonymous,raw_app_meta_data,raw_user_meta_data)
 values ('ab300001-1000-4000-8000-000000000001','remix-switch-owner@example.invalid','authenticated','authenticated',now(),false,'{}','{}');
@@ -127,6 +127,53 @@ select ok(
   pg_temp.lists_under_remix('ab300004-1000-4000-8000-000000000021', null)
     and pg_temp.lists_under_remix('ab300004-1000-4000-8000-000000000021', 'remix'),
   'switched back on, the filter and the search list it under Remix again'
+);
+
+-- A Remix link among a recipe's items makes a Remix of its own, without the stored switch or a
+-- creation (the review of phase 2, finding 13): it is left out while the post's switch is off too.
+insert into public.posts (
+  id, user_id, generation_id, visibility, category, source_kind, post_format, review_status,
+  title, body, showcase_asset_path, source_tool, source_tool_slug, created_at, updated_at
+) values
+  ('ab300002-1000-4000-8000-000000000013', 'ab300001-1000-4000-8000-000000000001', null,
+   'public', 'image', 'magicbooklet', 'media', 'visible',
+   'Harbor fog post', 'Public caption for the harbor in the dawn fog.', 'showcase/ab3-three.png',
+   'Nano Banana', 'nano-banana', now(), now());
+insert into public.post_resource_bundles (
+  id, post_id, owner_user_id, access_mode, status, title, summary, preview_text,
+  prompt_text, notes_markdown, workflow_share_url, workflow_snapshot, attachments, allow_remix,
+  resource_items, resource_sections, price_usd_cents, sales_count, earnings_usd_cents, created_at, updated_at
+) values
+  ('ab300004-1000-4000-8000-000000000023', 'ab300002-1000-4000-8000-000000000013', 'ab300001-1000-4000-8000-000000000001',
+   'free', 'published', 'Harbor fog recipe', 'Harbor fog at dawn, boats asleep',
+   'A preview long enough to pass the marketplace quality gate.', null, null, null, null, '[]'::jsonb, false,
+   jsonb_build_array(
+     jsonb_build_object('id', 'item-1', 'type', 'prompt', 'title', 'Harbor text',
+                        'textContent', 'A harbor in the dawn fog, the boats asleep'),
+     jsonb_build_object('id', 'item-2', 'type', 'remix_link', 'title', 'Remix link',
+                        'externalUrl', 'https://example.com/harbor')
+   ),
+   '[]'::jsonb, 0, 0, 0, now(), now());
+
+select ok(
+  pg_temp.lists_under_remix('ab300004-1000-4000-8000-000000000023', null)
+    and pg_temp.lists_under_remix('ab300004-1000-4000-8000-000000000023', 'remix'),
+  'fixture: a recipe with a Remix link is listed under Remix while its post allows remixes'
+);
+update public.posts set remixes_allowed = false where id = 'ab300002-1000-4000-8000-000000000013';
+select ok(
+  not pg_temp.lists_under_remix('ab300004-1000-4000-8000-000000000023', null)
+    and not pg_temp.lists_under_remix('ab300004-1000-4000-8000-000000000023', 'remix'),
+  'its Remix link makes no Remix once the post''s switch is off: neither the filter nor a search lists it'
+);
+select ok(
+  (select listable from public.marketplace_bundle_listings where bundle_id = 'ab300004-1000-4000-8000-000000000023'),
+  'and the recipe, its link and all, stays listed'
+);
+update public.posts set remixes_allowed = true where id = 'ab300002-1000-4000-8000-000000000013';
+select ok(
+  pg_temp.lists_under_remix('ab300004-1000-4000-8000-000000000023', null),
+  'switched back on, its Remix link lists it under Remix again'
 );
 
 select * from finish();

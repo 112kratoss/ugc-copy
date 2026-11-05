@@ -360,6 +360,12 @@ export interface GenerationListItem {
    * creation that remixed no one's post.
    */
   remix_recipe_mode?: 'free' | 'paid' | null;
+  /**
+   * The recipe of the creator's own post this run remixed, where it has one (owner, 2026-11-06: a
+   * remix of your own paid post starts Paid at its price, and may switch); null otherwise. Read by
+   * `readOwnSourceRecipe`; absent from the summary list.
+   */
+  own_source_post_bundle?: { accessMode: 'none' | 'free' | 'paid'; status: string; priceUsdCents: number | null } | null;
   linked_post_id?: string | null;
   linked_post_title?: string | null;
   linked_post_visibility?: string | null;

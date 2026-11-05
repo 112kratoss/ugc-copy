@@ -18,6 +18,8 @@ const FAILURE = Symbol('database error');
 const COLUMN_DEFAULTS: Record<string, Row> = {
   // 20261105152921: the post's own "Allow remixes", on for every post.
   posts: { remixes_allowed: true },
+  // A run's source creation: null for a run that remixed or re-ran nothing.
+  generations: { source_generation_id: null },
 };
 
 /**

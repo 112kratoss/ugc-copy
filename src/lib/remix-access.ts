@@ -95,6 +95,20 @@ export type RemixAccessDependencies = {
   isUserRelationshipBlocked: typeof isUserRelationshipBlocked;
 };
 
+/**
+ * What the gate is asked for. `remix` (the default): a new remix of the creation, which the remix
+ * entry points ask (`/api/remix-source`, `POST /api/showcase/remix`, a start's remix credit in
+ * `source-generation.ts`). `reuse`: a run's use of a file the viewer already holds through the
+ * creation's post (a recipe's copy they bought, the creator's shared input, the result a remix
+ * handed them), which the run start's imports and the Seedance prepare ask. A reuse is no new
+ * remix, so neither the post's "Allow remixes" (owner, 2026-11-05: off stops new remixes only, and
+ * the files a buyer got stay usable in their own runs) nor a block (owner, 2026-11-06: a block ends
+ * what the other person can see or buy, not what they bought) refuses it. Everything else is asked
+ * as for a remix: the post still showing the creation, no recipe locked to the viewer, no template's
+ * result.
+ */
+export type RemixAccessPurpose = 'remix' | 'reuse';
+
 const REMIX_POST_SELECT =
   'id, user_id, generation_id, category, post_format, source_kind, visibility, archived_at, review_status, remixes_allowed';
 
@@ -177,6 +191,9 @@ async function hasPurchasedBundle(
  *   claimed by the Remix tap itself, on the clients. The creation's inputs are
  *   another matter: they go to someone who unlocked it (`recipeEntitled`) only
  *   where the creator's stored switch offered them, as before.
+ * - Its creator's "Allow remixes" off (`posts.remixes_allowed`, owner
+ *   2026-11-05) closes new remixes of the post to everyone but its creator.
+ *   A `reuse` (`RemixAccessPurpose`) asks neither that switch nor the block.
  *
  * It does not ask whether the viewer is a guest, whom Remix serves only its own
  * creations: every caller refuses a guest anyone else's itself, before asking
@@ -193,6 +210,7 @@ export async function resolveRemixAccess({
   viewerUserId,
   generation,
   requestedPostId = null,
+  purpose = 'remix',
   dependencies,
 }: {
   adminSupabase: SupabaseClient;
@@ -200,6 +218,8 @@ export async function resolveRemixAccess({
   generation: RemixAccessGeneration;
   /** The post the caller came from. It must be the generation's own post. */
   requestedPostId?: string | null;
+  /** A new remix (the default), or a run's reuse of a file the viewer holds (`RemixAccessPurpose`). */
+  purpose?: RemixAccessPurpose;
   dependencies?: Partial<RemixAccessDependencies>;
 }): Promise<RemixAccessDecision> {
   const resolved: RemixAccessDependencies = {
@@ -257,18 +277,22 @@ export async function resolveRemixAccess({
     return NOT_FOUND;
   }
 
-  let blocked = true;
-  try {
-    blocked = await resolved.isUserRelationshipBlocked({
-      adminSupabase,
-      firstUserId: viewerUserId,
-      secondUserId: creatorUserId,
-    });
-  } catch (error) {
-    logBackendError('failed_to_verify_block_state_before_remix_access', { error });
-  }
-  if (blocked) {
-    return NOT_FOUND;
+  // A block ends new remixes, and a reuse of what the viewer already holds is none (owner,
+  // 2026-11-06), so a reuse does not ask.
+  if (purpose === 'remix') {
+    let blocked = true;
+    try {
+      blocked = await resolved.isUserRelationshipBlocked({
+        adminSupabase,
+        firstUserId: viewerUserId,
+        secondUserId: creatorUserId,
+      });
+    } catch (error) {
+      logBackendError('failed_to_verify_block_state_before_remix_access', { error });
+    }
+    if (blocked) {
+      return NOT_FOUND;
+    }
   }
 
   const postBundle = await loadPostBundle(adminSupabase, post.id);
@@ -298,13 +322,14 @@ export async function resolveRemixAccess({
 
   // Its creator's "Allow remixes" (owner, 2026-11-05) closes new remixes of this post to everyone
   // but its creator, who restores their own as the owner above; its recipe can still be claimed or
-  // bought. A remix of a remix keeps its own post's switch.
+  // bought, and what a buyer got stays usable in their own runs: a reuse is not asked it. A remix of
+  // a remix keeps its own post's switch.
   const { capability } = resolvePostRemixCapability({
     generationId: post.generation_id,
     postFormat: post.post_format,
     category: post.category,
     sourceKind: post.source_kind,
-    remixesAllowed: post.remixes_allowed,
+    remixesAllowed: purpose === 'remix' ? post.remixes_allowed : null,
     resourceBundle: bundle
       ? { viewerCanAccess: viewerHasPurchased, allowRemix: true, items: [] }
       : null,

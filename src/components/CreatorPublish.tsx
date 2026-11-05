@@ -22,9 +22,13 @@ import { openCreditTopUp } from '@/lib/credit-top-up';
 import {
   ALLOW_REMIXES_DETAIL,
   ALLOW_REMIXES_LABEL,
+  CREATION_INPUTS_ALL_REMOVED,
   CREATION_RECIPE_FILES_LINE,
+  DEFAULT_PAID_RECIPE_PRICE_CREDITS,
+  describePutRemovedInputsBack,
   PAID_RECIPE_RESALE_LINE,
   type GenerationReference,
+  type OwnSourceRecipe,
 } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /**
@@ -92,24 +96,29 @@ export type RemixOriginalRead = {
   /** Someone else's post the remix was made from, credited in the form; null for one's own, or unread. */
   original: RemixOriginal | null;
   /**
-   * Whether a fresh recipe may start shared: true where the creation is no remix of a post, or
-   * its original's recipe is not one someone sells. False for a paid one, the creator's own
-   * included (owner, 2026-10-29: a bought recipe starts off), and where the original could not
-   * be read, so a recipe someone sells never goes out free by default. Undefined while it is read.
+   * The recipe of the creator's own post the creation remixed (owner, 2026-11-06, "Start Paid,
+   * can switch"): a paid one starts the new post's recipe Paid at its price, which the creator may
+   * make Free. Null where the creation is no remix of a post, where the original is someone else's
+   * (whose terms the run carries, `remixRecipeMode`) or where it has no recipe. An original that
+   * could not be read counts as paid at the starting price, so a recipe the creator sells never
+   * goes out free by default. Undefined while it is read.
    */
-  recipeStartsShared: boolean | undefined;
+  ownRecipe: OwnSourceRecipe | null | undefined;
 };
 
-const NOT_A_REMIX: RemixOriginalRead = { original: null, recipeStartsShared: true };
+const NOT_A_REMIX: RemixOriginalRead = { original: null, ownRecipe: null };
 
-/** How long the original's read may take before it counts as unread (the recipe then starts off). */
+/** What an original that could not be read counts as: a recipe the creator sells starts paid. */
+const UNREAD_ORIGINAL_RECIPE: OwnSourceRecipe = { accessMode: 'paid', priceCredits: DEFAULT_PAID_RECIPE_PRICE_CREDITS };
+
+/** How long the original's read may take before it counts as unread (the recipe then starts paid). */
 const REMIX_ORIGINAL_TIMEOUT_MS = 5_000;
 
-type RemixOriginalPost = RemixOriginal & { recipe: 'free' | 'paid' | null };
+type RemixOriginalPost = RemixOriginal & { recipe: 'free' | 'paid' | null; priceCredits: number };
 
 /** The original as `/api/showcase/posts/[postId]` answers it, or null where it does not say who made it. */
 function readRemixOriginalPost(payload: unknown): RemixOriginalPost | null {
-  const item = (payload as { item?: { id?: unknown; title?: unknown; creator?: Record<string, unknown> | null; asset?: { accessMode?: unknown } | null } } | null)?.item;
+  const item = (payload as { item?: { id?: unknown; title?: unknown; creator?: Record<string, unknown> | null; asset?: { accessMode?: unknown; priceUsdCents?: unknown } | null } } | null)?.item;
   const creator = item?.creator;
   if (!item || typeof item.id !== 'string' || !creator || typeof creator.id !== 'string' || typeof creator.username !== 'string' || !creator.username) {
     return null;
@@ -124,14 +133,18 @@ function readRemixOriginalPost(payload: unknown): RemixOriginalPost | null {
       avatar: typeof creator.avatar === 'string' && creator.avatar ? creator.avatar : null,
     },
     recipe: item.asset?.accessMode === 'paid' ? 'paid' : item.asset?.accessMode === 'free' ? 'free' : null,
+    // A count of credits, as `price_usd_cents` stores it.
+    priceCredits: typeof item.asset?.priceUsdCents === 'number' && Number.isFinite(item.asset.priceUsdCents)
+      ? Math.round(item.asset.priceUsdCents)
+      : 0,
   };
 }
 
 /**
  * The original of a remix opened from a post (`?remixPost=`), read from its public page
  * (`/api/showcase/posts/[postId]`) as soon as the page opens, so a finished run never waits
- * for it. Its credit and Follow are for someone else's post; whether the recipe may start
- * shared is asked of every original, one's own included.
+ * for it. Its credit and Follow are for someone else's post; the recipe of one's own sets where
+ * the new post's recipe starts.
  */
 export function useRemixOriginal(
   remixPostId: string | null | undefined,
@@ -170,14 +183,14 @@ export function useRemixOriginal(
   if (!remixPostId) return NOT_A_REMIX;
   if (read?.postId !== remixPostId) {
     // Without a session nothing is read, and a publish could not go either.
-    return { original: null, recipeStartsShared: accessToken ? undefined : false };
+    return { original: null, ownRecipe: accessToken ? undefined : UNREAD_ORIGINAL_RECIPE };
   }
   const post = read.post;
+  if (!post) return { original: null, ownRecipe: UNREAD_ORIGINAL_RECIPE };
+  const own = post.creator.id === viewerUserId;
   return {
-    original: post && post.creator.id !== viewerUserId
-      ? { postId: post.postId, title: post.title, creator: post.creator }
-      : null,
-    recipeStartsShared: post !== null && post.recipe !== 'paid',
+    original: own ? null : { postId: post.postId, title: post.title, creator: post.creator },
+    ownRecipe: own && post.recipe ? { accessMode: post.recipe, priceCredits: post.priceCredits } : null,
   };
 }
 
@@ -252,13 +265,16 @@ type CreatorFollow = ReturnType<typeof useCreatorFollow>;
 function CreatorRemixCredit({
   original,
   follow,
-  recipeShared = false,
+  remixableRecipe = null,
 }: {
   original: RemixOriginal;
   /** One per panel, so the form's answer is the one Posted draws (`useCreatorFollow`). */
   follow: CreatorFollow;
-  /** On Posted: the recipe went out free, so remixes of this one go on. */
-  recipeShared?: boolean;
+  /**
+   * On Posted: the recipe this one went out with, free or paid, while remixes of it are allowed,
+   * so remixes of this one go on; null for none, or remixes off (#711's review).
+   */
+  remixableRecipe?: 'free' | 'paid' | null;
 }) {
   const handle = `@${original.creator.username}`;
   const profileHref = buildCreatorProfilePath(original.creator.username);
@@ -272,7 +288,11 @@ function CreatorRemixCredit({
         </p>
         <p>
           {handle} was told when your remix finished.
-          {recipeShared ? ' Your recipe is free, so others can remix yours too.' : ''}
+          {remixableRecipe === 'free'
+            ? ' Your recipe is free, so others can remix yours too.'
+            : remixableRecipe === 'paid'
+              ? ' Your recipe is paid: whoever buys it can remix yours too.'
+              : ''}
         </p>
         {follow.error ? <p role="alert" className="text-[var(--ui-accent-danger)]">{follow.error}</p> : null}
       </div>
@@ -394,6 +414,9 @@ export function CreatorDownloadButton({ href, fileName, label, newTab = false, i
 
 const FIELD_CLASS =
   'w-full rounded-ui-lg border border-[var(--ui-border-strong)] bg-[var(--ui-surface-inset)] px-4 py-3 text-sm text-[var(--ui-text-primary)] transition-colors placeholder:text-[var(--ui-text-faint)] focus:border-[var(--ui-focus)] focus:outline-none';
+
+/** No file in the recipe: every one was removed from a creation with no prompt. */
+const NO_RECIPE_FILES: readonly GenerationReference[] = [];
 
 /**
  * A switch drawn as the artboard's, with its name and what it does beside it: unlike the
@@ -528,17 +551,6 @@ export function describePublishSummary({ name, title, recipeShared }: { name: st
 }
 
 /**
- * The creator's own uploads in words, by what they are: "2 photos", "1 clip", "3 files" for a
- * mix. Counted from the prefill (`ownReferenceKindCounts`), else all as files.
- */
-export function ownUploadsWords(count: number, kinds: Partial<Record<'image' | 'video' | 'audio', number>> | null | undefined): string {
-  const images = kinds?.image ?? 0;
-  const videos = kinds?.video ?? 0;
-  const noun = images === count ? 'photo' : videos === count ? 'clip' : 'file';
-  return `${count} ${noun}${count === 1 ? '' : 's'}`;
-}
-
-/**
  * What a creation's recipe holds, under its heading (the artboard Result; owner, 2026-11-05: a
  * creation's post always carries its recipe, free unless the run remixed a paid one): the exact
  * prompt where the creation saved one (a motion run saves none, and is never told it shares one),
@@ -566,12 +578,15 @@ export function describeCreationRecipe({ accessMode, priceCredits, hasPrompt = t
 
 /**
  * The files a creation's recipe takes (owner, 2026-11-05: the creator's own uploads included), each
- * as a thumbnail with a remove button, and the line that says where they go.
+ * as a thumbnail with a remove button, and the line that says where they go. With every one removed
+ * from a creation with no prompt, the post goes without a recipe (`allRemoved`), and the way to put
+ * them back stays (#711's review).
  */
-function CreatorRecipeFiles({ inputs, removedCount, disabled, onRemove, onRestoreAll }: {
+function CreatorRecipeFiles({ inputs, removedCount, disabled, allRemoved = false, onRemove, onRestoreAll }: {
   inputs: readonly GenerationReference[];
   removedCount: number;
   disabled: boolean;
+  allRemoved?: boolean;
   onRemove: (inputId: string) => void;
   onRestoreAll: () => void;
 }) {
@@ -614,12 +629,12 @@ function CreatorRecipeFiles({ inputs, removedCount, disabled, onRemove, onRestor
         </ul>
       ) : null}
       <p className="text-xs leading-5 text-[var(--ui-text-muted)]">
-        {inputs.length > 0 ? CREATION_RECIPE_FILES_LINE : 'No files go with this recipe.'}
+        {inputs.length > 0 ? CREATION_RECIPE_FILES_LINE : allRemoved ? CREATION_INPUTS_ALL_REMOVED : 'No files go with this recipe.'}
         {removedCount > 0 ? (
           <>
             {' '}
             <button type="button" disabled={disabled} onClick={onRestoreAll} className={CREATOR_NOTE_LINK_CLASS}>
-              {removedCount === 1 ? 'Put the removed file back' : `Put the ${removedCount} removed files back`}
+              {describePutRemovedInputsBack(removedCount)}
             </button>
           </>
         ) : null}
@@ -633,8 +648,9 @@ function CreatorRecipeFiles({ inputs, removedCount, disabled, onRemove, onRestor
 
 /**
  * After a post (the artboard Posted): that it is live and where, that its creator hears when
- * someone remixes it (the `post_remixed` alert), the way to it and to share it, and what the
- * balance leaves for the next.
+ * someone remixes it (the `post_remixed` alert) while remixes are allowed, the way to it and to
+ * share it, and what the balance leaves for the next. It says the recipe as it went out, free or
+ * paid, from what the publish sent (#711's review).
  */
 function CreatorPosted({
   published,
@@ -643,7 +659,6 @@ function CreatorPosted({
   accessToken,
   original,
   follow,
-  recipeShared,
   next,
 }: {
   published: PublishedCreation;
@@ -652,13 +667,18 @@ function CreatorPosted({
   accessToken: string | null | undefined;
   original: RemixOriginal | null;
   follow: CreatorFollow;
-  recipeShared: boolean;
   next?: ReactNode;
 }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   // A private post has no public page: its owner's page of it, as the composer leads there.
   const postPath = published.showcasePath || published.ownerPath || buildShowcaseDetailPath(generationId);
   const isPublic = published.visibility !== 'private';
+  const remixesAllowed = published.allowRemixes !== false;
+  // The recipe others can remix this one from: one that went out live, while remixes are allowed.
+  const remixableRecipe = remixesAllowed && published.resourceBundleStatus === 'published'
+    && (published.recipeAccess === 'free' || published.recipeAccess === 'paid')
+    ? published.recipeAccess
+    : null;
 
   // The form it replaces had the focus (its Publish): it moves to what happened.
   useEffect(() => {
@@ -676,11 +696,14 @@ function CreatorPosted({
         </h3>
         <p className="mt-1 text-sm leading-6 text-[var(--ui-text-muted)] [overflow-wrap:anywhere]">
           {isPublic
-            ? <>{published.title ? `“${published.title}”` : 'Your post'} is live on your profile and in Explore. You’ll get an alert when someone remixes yours.</>
+            ? <>
+                {published.title ? `“${published.title}”` : 'Your post'} is live on your profile and in Explore.
+                {remixesAllowed ? ' You’ll get an alert when someone remixes yours.' : ''}
+              </>
             : 'Only you can see it, on your profile.'}
         </p>
       </div>
-      {original && isPublic ? <CreatorRemixCredit original={original} follow={follow} recipeShared={recipeShared} /> : null}
+      {original && isPublic ? <CreatorRemixCredit original={original} follow={follow} remixableRecipe={remixableRecipe} /> : null}
       <Link href={postPath} className="ui-button ui-button-primary ui-focus-ring w-full">
         View your post
       </Link>
@@ -751,6 +774,27 @@ function bottomNavSpacePx(inside: Element): number {
   return Math.round(height);
 }
 
+/**
+ * "More options": the full composer on the same creation, carrying what the creator chose in the
+ * form (#711's review): the saved inputs they took out (`leaveOut`, one each), "Allow remixes" off
+ * (`allowRemixes=0`), and the recipe as it stands, free or paid at its price (`resourceMode`,
+ * `price`). The page reads them as where a new post starts. Before the form knows its recipe
+ * (`draft` null), the creation alone: the composer works the rest out itself.
+ */
+export function buildMoreOptionsHref(
+  generationId: string,
+  draft: Pick<PublishCreationDraft, 'removedInputIds' | 'allowRemixes' | 'recipeAccess' | 'paidPriceCredits'> | null,
+): string {
+  const params = new URLSearchParams({ generationId });
+  if (draft) {
+    draft.removedInputIds.forEach((inputId) => params.append('leaveOut', inputId));
+    if (!draft.allowRemixes) params.set('allowRemixes', '0');
+    if (draft.recipeAccess !== 'none') params.set('resourceMode', draft.recipeAccess);
+    if (draft.recipeAccess === 'paid') params.set('price', String(draft.paidPriceCredits));
+  }
+  return `/post/new?${params}`;
+}
+
 /** Where the shell's bottom navigation goes away (`--app-shell-bottom-nav-space` turns 0). */
 const BOTTOM_NAV_GONE_QUERY = '(min-width: 768px)';
 
@@ -774,7 +818,7 @@ export interface CreatorPublishPanelProps {
   viewerUserId: string | null | undefined;
   /** `undefined` while they are being read (`useCreationPublishDetails`). */
   details: CreationPublishDetails | null | undefined;
-  /** The remix's original, credited, and whether the recipe may start shared (`useRemixOriginal`). */
+  /** The remix's original, credited, and the recipe of the creator's own (`useRemixOriginal`). */
   remix: RemixOriginalRead;
   sourceSurface: GenerationShareSourceSurface;
   /** What the creator's page keeps of a publish: Posted comes from it. */
@@ -807,6 +851,9 @@ export function CreatorPublishPanel({
 }: CreatorPublishPanelProps) {
   const detailsRead = details !== undefined;
   const original = remix.original;
+  // The recipe of the creator's own post the creation came from: the creation's details say, where
+  // the server sends it, and the remix's original read otherwise (owner, 2026-11-06).
+  const ownSourceRecipe = details?.ownSourceRecipe !== undefined ? details.ownSourceRecipe : remix.ownRecipe;
   const draft = usePublishCreation({
     active: !published,
     generationId,
@@ -817,6 +864,8 @@ export function CreatorPublishPanel({
     inputs: details?.inputs,
     // A remix keeps its original recipe's terms: paid stays paid, free stays free (owner, 2026-11-05).
     remixRecipeMode: details?.remixRecipeMode ?? null,
+    // A creation from the creator's own paid post starts paid, and may be made free (owner, 2026-11-06).
+    ownSourceRecipe: ownSourceRecipe ?? null,
     remixOfTitle: original?.title ?? null,
     onPublished,
   });
@@ -833,9 +882,10 @@ export function CreatorPublishPanel({
   const id = useId();
   const headingId = `${id}-heading`;
   const recipeShared = draft.recipeAccess !== 'none';
-  // The recipe and title are known before the first press, so Publish waits for them, and for
-  // the original's answer, without which a recipe someone sells could start shared.
-  const waiting = !detailsRead || remix.recipeStartsShared === undefined;
+  // The recipe and title are known before the first press, so Publish waits for them, and for the
+  // original's answer where it says where the recipe starts: without it, a recipe the creator
+  // sells could start free.
+  const waiting = !detailsRead || (details !== null && ownSourceRecipe === undefined);
   const isPublishing = draft.isPublishing;
 
   useEffect(() => {
@@ -878,7 +928,6 @@ export function CreatorPublishPanel({
         accessToken={accessToken}
         original={original}
         follow={follow}
-        recipeShared={published.resourceBundleStatus === 'published'}
         next={next}
       />
     );
@@ -971,17 +1020,32 @@ export function CreatorPublishPanel({
               ) : null}
               {draft.recipeAccess === 'paid' ? (
                 <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
-                  {PAID_RECIPE_RESALE_LINE} Another price is in More options.
+                  {/* What buyers may do, only while they may remix it (#711's review). */}
+                  {draft.allowRemixes ? `${PAID_RECIPE_RESALE_LINE} ` : ''}Another price is in More options.
                 </p>
               ) : null}
             </div>
             <CreatorRecipeFiles
               inputs={draft.includedInputs}
-              removedCount={draft.inputs.length - draft.includedInputs.length}
+              removedCount={draft.removedInputIds.length}
               disabled={isPublishing}
               onRemove={(inputId) => draft.setInputIncluded(inputId, false)}
-              onRestoreAll={() => draft.inputs.forEach((input) => draft.setInputIncluded(input.id, true))}
+              onRestoreAll={draft.restoreRemovedInputs}
             />
+            {/* A recipe that starts paid from the creator's own post's is theirs to share free
+                (owner, 2026-11-06, "Start Paid, can switch"): no lock, no reason. */}
+            {draft.offersPaidChoice ? (
+              <CreatorFormSwitch
+                id={`${id}-sell`}
+                label="Sell this recipe"
+                description={ownSourceRecipe === UNREAD_ORIGINAL_RECIPE
+                  ? 'Your original could not be checked, so this one starts paid. Turn it off to share it free.'
+                  : 'Your own post’s recipe is paid, so this one starts paid too. Turn it off to share it free.'}
+                checked={draft.recipeAccess === 'paid'}
+                disabled={isPublishing}
+                onChange={draft.setRecipePaid}
+              />
+            ) : null}
             <CreatorFormSwitch
               id={`${id}-remixes`}
               label={ALLOW_REMIXES_LABEL}
@@ -991,6 +1055,17 @@ export function CreatorPublishPanel({
               onChange={draft.setAllowRemixes}
             />
           </section>
+        ) : draft.removedInputIds.length > 0 ? (
+          // Every file removed from a creation with no prompt: the media goes alone, and the files can
+          // come back (#711's review).
+          <CreatorRecipeFiles
+            inputs={NO_RECIPE_FILES}
+            removedCount={draft.removedInputIds.length}
+            disabled={isPublishing}
+            allRemoved
+            onRemove={() => undefined}
+            onRestoreAll={draft.restoreRemovedInputs}
+          />
         ) : detailsRead ? (
           <p className="text-xs leading-5 text-[var(--ui-text-muted)]">Publish the media now; you can add a recipe from the post later.</p>
         ) : null}
@@ -1031,9 +1106,10 @@ export function CreatorPublishPanel({
           </button>
         </div>
         {/* The full composer for the same creation (decision 18, 2026-10-17): a caption, a paid
-            recipe, a private post. It reads the creation from its address. */}
+            recipe, a private post. It reads the creation from its address, and what was chosen
+            here from the rest of it (#711's review). */}
         <Link
-          href={`/post/new?${new URLSearchParams({ generationId })}`}
+          href={buildMoreOptionsHref(generationId, waiting ? null : draft)}
           aria-disabled={isPublishing || undefined}
           onClick={(event) => {
             // Leaving while a publish is in flight would post the creation twice.

@@ -18,12 +18,15 @@ const state: {
   sourceSelects: string[];
   // The posts each read of the creation inputs asked about.
   sourceReadPostIds: unknown[][];
+  // The posts' own "Allow remixes", left off the rows unless a test sets it.
+  remixesAllowed: boolean | undefined;
 } = {
   storedSwitch: true,
   generationIsPublic: true,
   sourceReadError: null,
   sourceSelects: [],
   sourceReadPostIds: [],
+  remixesAllowed: undefined,
 };
 
 const storedItems = [{ id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'The prompt behind it.' }];
@@ -178,6 +181,7 @@ vi.mock('@/lib/server-helpers', () => ({
 
 function postRow(id: string) {
   return {
+    ...(state.remixesAllowed === undefined ? {} : { remixes_allowed: state.remixesAllowed }),
     id,
     output_url: null,
     showcase_asset_path: null,
@@ -216,6 +220,21 @@ describe('a feed card for a recipe whose creator shares the creation’s inputs'
     state.sourceReadError = null;
     state.sourceSelects = [];
     state.sourceReadPostIds = [];
+    state.remixesAllowed = undefined;
+  });
+
+  // The review of phase 2: a post whose creator turned "Allow remixes" off sells no Remix with its
+  // recipe, while its unlock still hands over the inputs the stored switch shares, so its card
+  // counts them as before.
+  it('still counts what the unlock adds on a post whose creator turned remixes off, with no Remix', async () => {
+    state.remixesAllowed = false;
+
+    const [item] = await loadFeedItems();
+
+    expect(item.asset).toMatchObject({ allowRemix: false, resourceKinds: ['prompt', 'files'] });
+    expect(item.asset?.itemCounts).toEqual({ prompt: 1, reference_image: 3, reference_video: 1 });
+    expect(item.asset?.lockedPreview).toMatchObject({ resourceKinds: ['prompt', 'files'], hasRemix: false });
+    expect(item).toMatchObject({ canRemix: false, remixCapability: 'none' });
   });
 
   it('counts what the unlock adds, as the post page does', async () => {

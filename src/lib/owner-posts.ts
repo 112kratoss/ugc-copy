@@ -11,6 +11,7 @@ import {
   normalizePostResourceAttachments,
   normalizePostResourceItems,
   normalizePostResourceSections,
+  withoutRemixKind,
   type PostResourceBundleInput,
   type PostResourceBundleResources,
   type PostResourceBundleStatus,
@@ -82,7 +83,7 @@ type OwnerPostRow = PostMediaRow & {
   comment_count: number;
   created_at: string;
   updated_at: string;
-  /** The post's own "Allow remixes" (owner, 2026-11-05); read for the editor only. */
+  /** The post's own "Allow remixes" (owner, 2026-11-05): the editor's switch, and no Remix in its listing while off. */
   remixes_allowed?: boolean | null;
   /** Its creation's remix terms, kept on the post (20261105123244); read for the editor only. */
   remix_recipe_mode?: string | null;
@@ -273,7 +274,8 @@ async function fetchOwnerPostRows(
   let query = adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at'
+      // `remixes_allowed`: its listing names and is graded with no Remix while the switch is off.
+      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at, remixes_allowed'
         + listingsEmbed
     )
     .eq('user_id', userId)
@@ -704,9 +706,16 @@ async function toOwnerPostListItem(
   // Nor do they know the creation's inputs a recipe whose creator shares them
   // hands over with the unlock (B3), counted as the owner's own unlock reads them.
   const unlockedCounts = unlockedItemCounts.get(row.id);
-  const resourceKinds = bundleRow && unlockedCounts
+  const countedResourceKinds = bundleRow && unlockedCounts
     ? addPostResourceItemCountKinds(recipeResourceKinds, unlockedCounts)
     : recipeResourceKinds;
+  // A post whose creator turned "Allow remixes" off sells no Remix with its
+  // recipe (the review of phase 2), whatever its stored switch, the summary's
+  // kinds or a Remix link among its items say: Studio and Your Sales name and
+  // grade the listing as the marketplace lists it (20261105152921).
+  const resourceKinds = row.remixes_allowed === false
+    ? withoutRemixKind(countedResourceKinds)
+    : countedResourceKinds;
   const title =
     row.title?.trim() ||
     deriveTitleFromBody(row.body) ||

@@ -6012,8 +6012,10 @@ describe('NewPostClient', () => {
     });
 
     // The inputs used to be offered on a new post only, so a recipe added
-    // later could never carry them (owner, 2026-11-03).
-    it('offers the creation’s inputs in an edit, and has the save copy them when asked', async () => {
+    // later could never carry them (owner, 2026-11-03). Since #711's review an
+    // edit opens with those its recipe holds no copy of taken out, so a file
+    // removed before is not offered back unasked; put back, the save copies them.
+    it('opens an edit with the inputs its recipe holds no copy of taken out, and copies them once put back', async () => {
       enqueueCreation();
       enqueueResponse({
         ok: true,
@@ -6025,18 +6027,45 @@ describe('NewPostClient', () => {
         resourceBundle: { accessMode: 'free', previewText: 'The prompt behind this still.', resources: { items: [] } },
       }} />);
 
-      const includeInputs = await screen.findByRole('checkbox', { name: /include creation references/i });
+      const putBack = await screen.findByRole('button', { name: 'Put the removed file back' });
+      expect(screen.getByText('No saved inputs go with this recipe.')).toBeInTheDocument();
+      expect(screen.queryByRole('list', { name: 'Saved inputs' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /include creation references/i })).not.toBeInTheDocument();
+      // Where the edit starts: nothing unsaved.
+      const unload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(unload);
+      expect(unload.defaultPrevented).toBe(false);
+
+      fireEvent.click(putBack);
       expect(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('img', { name: 'Product' })).toBeInTheDocument();
-      fireEvent.click(includeInputs);
+      expect(screen.getByRole('checkbox', { name: /include creation references/i })).toBeChecked();
       fillRequiredTitle();
       fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
 
       await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-recipe-1', expect.objectContaining({ method: 'PUT' })));
       const updateCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/posts/post-gen-recipe-1');
-      expect(JSON.parse(String((updateCall?.[1] as { body: string }).body))).toMatchObject({
-        includeGenerationReferences: true,
-        resourceBundle: { accessMode: 'free' },
-      });
+      const payload = JSON.parse(String((updateCall?.[1] as { body: string }).body));
+      expect(payload).toMatchObject({ includeGenerationReferences: true, resourceBundle: { accessMode: 'free' } });
+      expect(payload).not.toHaveProperty('leaveOutGenerationReferenceIds');
+    });
+
+    // A recipe stored before phase 2 that hands the inputs over as they are holds every one of them
+    // that way: it opens with none taken out, and its first save takes none out unasked.
+    it('opens a recipe that hands the inputs over with none taken out', async () => {
+      enqueueCreation();
+      render(<NewPostClient initialPost={{
+        ...createGenerationRecipePost(),
+        generationId: 'gen-recipe-1',
+        resourceBundle: {
+          accessMode: 'free',
+          previewText: 'The prompt behind this still.',
+          resources: { promptText: null, notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix: true, items: [] },
+        } as EditablePostDraft['resourceBundle'],
+      }} />);
+
+      expect(await screen.findByRole('checkbox', { name: /include creation references/i })).not.toBeChecked();
+      expect(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('img', { name: 'Product' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /removed file/ })).not.toBeInTheDocument();
     });
 
     it('says the inputs are in when the recipe already holds their copies', async () => {
@@ -6256,7 +6285,9 @@ describe('NewPostClient', () => {
         resourceBundle: { accessMode: 'free', previewText: 'The prompt and the product references.', resources: { items: [] } },
       }} />);
 
-      fireEvent.click(await screen.findByRole('checkbox', { name: /include creation references/i }));
+      // Neither is in the recipe, so both open taken out; put back, the save asks for both.
+      fireEvent.click(await screen.findByRole('button', { name: 'Put the 2 removed files back' }));
+      expect(screen.getByRole('checkbox', { name: /include creation references/i })).toBeChecked();
       fillRequiredTitle();
       fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
       await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-recipe-1', expect.objectContaining({ method: 'PUT' })));
@@ -6271,6 +6302,196 @@ describe('NewPostClient', () => {
       const unload = new Event('beforeunload', { cancelable: true });
       window.dispatchEvent(unload);
       expect(unload.defaultPrevented).toBe(false);
+    });
+
+    // The review of #711 (phase 2).
+    describe('the files taken out, the switch and where a recipe starts', () => {
+      const PRODUCT = {
+        id: 'input-1', mediaType: 'image', role: 'reference', label: 'Product',
+        url: 'https://proxy.example.com/generation_inputs/user-1/product.png', storagePath: 'generation_inputs/user-1/product.png',
+        sortOrder: 0, metadata: {}, recipeCopyable: true,
+      };
+      const BACKDROP = {
+        id: 'input-2', mediaType: 'image', role: 'reference', label: 'Backdrop',
+        url: 'https://proxy.example.com/generation_inputs/user-1/backdrop.png', storagePath: 'generation_inputs/user-1/backdrop.png',
+        sortOrder: 1, metadata: {}, recipeCopyable: true,
+      };
+      const PUBLISHED = {
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-711',
+          showcasePath: '/showcase/post-711',
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      };
+      const sentBody = (path: string) => {
+        const call = fetchMock.mock.calls.find(([url]) => String(url) === path);
+        return JSON.parse(String((call?.[1] as RequestInit).body)) as Record<string, unknown>;
+      };
+      const opensClean = () => {
+        const unload = new Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(unload);
+        return !unload.defaultPrevented;
+      };
+      /** The copy of Product an earlier save made, as its own item of the recipe. */
+      const productCopy = {
+        id: 'reference-input-1',
+        scope: { kind: 'all' },
+        type: 'reference_image',
+        role: 'style_reference',
+        sectionId: null,
+        title: 'Product',
+        description: null,
+        textContent: null,
+        externalUrl: null,
+        storagePath: 'user-1/generation-references/gen-recipe-1/00-reference-input-1.png',
+        contentType: 'image/png',
+        sizeBytes: 68,
+        workflowSnapshot: null,
+        sortOrder: 0,
+        isPrimary: true,
+        remixUse: 'none',
+      };
+
+      // Finding 4: the strip hid a removed input while the copy an earlier save made of it stayed
+      // in the recipe, so buyers kept getting the file.
+      it('takes the copy of a removed input out of the recipe with it', async () => {
+        enqueueCreation({ input_media: [PRODUCT, BACKDROP] });
+        enqueueResponse({ ok: true, json: async () => ({ success: true, postId: 'post-gen-recipe-1', visibility: 'public' }) });
+        render(<NewPostClient initialPost={{
+          ...createGenerationRecipePost(),
+          generationId: 'gen-recipe-1',
+          resourceBundle: {
+            accessMode: 'free',
+            previewText: 'The product reference behind this still.',
+            resources: { items: [productCopy] },
+          } as EditablePostDraft['resourceBundle'],
+        }} />);
+
+        // Backdrop has no copy, so it opens taken out; put back, the box goes on.
+        fireEvent.click(await screen.findByRole('button', { name: 'Put the removed file back' }));
+        expect(screen.getByRole('button', { name: 'Edit Product' })).toBeInTheDocument();
+        fireEvent.click(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('button', { name: 'Remove Product from the recipe' }));
+        expect(screen.queryByRole('button', { name: 'Edit Product' })).not.toBeInTheDocument();
+
+        fillRequiredTitle();
+        fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/posts/post-gen-recipe-1', expect.objectContaining({ method: 'PUT' })));
+        const payload = sentBody('/api/posts/post-gen-recipe-1');
+        expect(payload).toMatchObject({ includeGenerationReferences: true, leaveOutGenerationReferenceIds: ['input-1'] });
+        expect(JSON.stringify(payload.resourceBundle)).not.toContain(productCopy.storagePath);
+      });
+
+      // Finding 5: a creation with no prompt and every input removed could not be posted at all.
+      it('falls back to No recipe once every input of a prompt-less creation is out, and takes the recipe back with them', async () => {
+        searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+        enqueueCreation({ prompt: '', input_media: [PRODUCT] });
+        enqueueResponse(PUBLISHED);
+        render(<NewPostClient />);
+        await waitFor(() => expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked());
+        expect(screen.queryByRole('radio', { name: /no recipe/i })).not.toBeInTheDocument();
+
+        fireEvent.click(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('button', { name: 'Remove Product from the recipe' }));
+        expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+        expect(screen.queryByRole('checkbox', { name: /allow remixes/i })).not.toBeInTheDocument();
+        expect(screen.getByText('Every saved input is out of the recipe, so this post goes out without one.')).toBeInTheDocument();
+
+        // The way back stays, and brings the recipe back with it.
+        fireEvent.click(screen.getByRole('button', { name: 'Put the removed file back' }));
+        expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+        expect(screen.queryByRole('radio', { name: /no recipe/i })).not.toBeInTheDocument();
+
+        fireEvent.click(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('button', { name: 'Remove Product from the recipe' }));
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+        await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/showcase/publish')).toBe(true));
+        const payload = sentBody('/api/showcase/publish');
+        expect(payload).toMatchObject({ generationId: 'gen-recipe-1', resourceBundle: { accessMode: 'none' } });
+        expect(payload).not.toHaveProperty('allowRemixes');
+        expect(payload).not.toHaveProperty('leaveOutGenerationReferenceIds');
+        expect(payload).not.toHaveProperty('includeGenerationReferences');
+      });
+
+      // Finding 7: "More options" carried only the creation, so this page put the files taken out in
+      // the panel back and turned remixes on again.
+      it('starts from what the after-run panel carried over, as where the post starts', async () => {
+        searchParamsState.value = new URLSearchParams([
+          ['generationId', 'gen-recipe-1'], ['leaveOut', 'input-2'], ['allowRemixes', '0'], ['resourceMode', 'paid'], ['price', '120'],
+        ]);
+        enqueueCreation({ input_media: [PRODUCT, BACKDROP] });
+        render(<NewPostClient />);
+        await waitFor(() => expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still'));
+        await waitFor(() => expect(screen.getByRole('list', { name: 'Saved inputs' })).toBeInTheDocument());
+
+        const inputs = screen.getByRole('list', { name: 'Saved inputs' });
+        expect(within(inputs).getByRole('img', { name: 'Product' })).toBeInTheDocument();
+        expect(within(inputs).queryByRole('img', { name: 'Backdrop' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Put the removed file back' })).toBeInTheDocument();
+        expect(screen.getByRole('checkbox', { name: /allow remixes/i })).not.toBeChecked();
+        expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked();
+        expect(screen.getByRole('spinbutton', { name: /price in credits/i })).toHaveValue(120);
+        // With remixes off, no resale of a remix is promised (finding 12).
+        expect(screen.queryByText(/Anyone who unlocks it can remix it/)).not.toBeInTheDocument();
+        expect(opensClean()).toBe(true);
+      });
+
+      // Finding 8: a removal made while the publish was on its way was drawn and never sent.
+      it('holds the strip and the box still while a publish is on its way', async () => {
+        searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+        enqueueCreation({ input_media: [PRODUCT, BACKDROP] });
+        let answerPublish: (value: unknown) => void = () => undefined;
+        enqueueResponse({ ok: true, json: () => new Promise((resolve) => { answerPublish = resolve; }) });
+        render(<NewPostClient />);
+        await waitFor(() => expect(screen.getByRole('list', { name: 'Saved inputs' })).toBeInTheDocument());
+        fireEvent.click(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('button', { name: 'Remove Backdrop from the recipe' }));
+        fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
+          target: { value: 'The exact prompt and the product reference behind this still.' },
+        });
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+        await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/showcase/publish')).toBe(true));
+        expect(within(screen.getByRole('list', { name: 'Saved inputs' })).getByRole('button', { name: 'Remove Product from the recipe' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Put the removed file back' })).toBeDisabled();
+        expect(screen.getByRole('checkbox', { name: /include creation references/i })).toBeDisabled();
+        expect(sentBody('/api/showcase/publish')).toMatchObject({ leaveOutGenerationReferenceIds: ['input-2'] });
+        await act(async () => answerPublish({ success: true, postId: 'post-711', showcasePath: '/showcase/post-711', visibility: 'public' }));
+      });
+
+      // Owner, 2026-11-06 ("Start Paid, can switch"): a creation from the creator's own paid post
+      // starts Paid at that post's price, with Free still the creator's to choose.
+      it('starts a creation from the creator’s own paid post on Paid at its price, unlocked', async () => {
+        searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+        enqueueCreation({ own_source_post_bundle: { accessMode: 'paid', status: 'published', priceUsdCents: 120 } });
+        render(<NewPostClient />);
+        await waitFor(() => expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked());
+        expect(screen.getByRole('spinbutton', { name: /price in credits/i })).toHaveValue(120);
+        expect(screen.getByRole('radio', { name: /free recipe/i })).toBeEnabled();
+        expect(screen.queryByText(REMIX_RECIPE_MUST_BE_PAID)).not.toBeInTheDocument();
+        expect(opensClean()).toBe(true);
+
+        fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+        expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+      });
+
+      // Cut by the review's cap: the lock left No recipe selectable on an edit, which the server refuses
+      // on a public post of a paid remix.
+      it('takes neither Free nor No recipe on an edit of a remix of a paid recipe', async () => {
+        enqueueCreation({ input_media: [], remix_recipe_mode: 'paid' });
+        render(<NewPostClient initialPost={{
+          ...createGenerationRecipePost(),
+          generationId: 'gen-recipe-1',
+          remixRecipeMode: 'paid',
+          resourceBundle: { accessMode: 'paid', priceUsdCents: 50, previewText: 'The prompt behind this still.', resources: { items: [] } },
+        }} />);
+        await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/generations'))).toBe(true));
+
+        expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked();
+        expect(screen.getByRole('radio', { name: /free recipe/i })).toBeDisabled();
+        expect(screen.getByRole('radio', { name: /no recipe/i })).toBeDisabled();
+        expect(screen.getByText(REMIX_RECIPE_MUST_BE_PAID)).toBeInTheDocument();
+      });
     });
 
     // Owner, 2026-11-03: the title minimum stays, said plainly by the title

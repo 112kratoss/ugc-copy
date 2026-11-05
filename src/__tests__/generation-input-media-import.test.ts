@@ -229,6 +229,19 @@ describe('importSharedGenerationInputMedia', () => {
     expect(stub.from).not.toHaveBeenCalled();
   });
 
+  // The review of phase 2, finding 1: the post's "Allow remixes" off stops new remixes only, so a run
+  // keeps using the inputs a remix handed the viewer.
+  it('imports a freely shared input after its post’s Allow remixes went off', async () => {
+    const stub = createAdminStub({ postRows: [{ ...EXPOSED_POST, remixes_allowed: false }] });
+    const result = await importSharedGenerationInputMedia({
+      source: SOURCE_PATH,
+      viewerUserId: VIEWER,
+      dependencies: createDependencies(stub),
+    });
+
+    expect(result).toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DEST_PATH}` });
+  });
+
   it('is not eligible when the generation no longer shares its inputs', async () => {
     const stub = createAdminStub({
       generationRow: { ...SHARING_GENERATION, share_input_media_for_remix: false },
@@ -254,18 +267,21 @@ describe('importSharedGenerationInputMedia', () => {
     expect(result).toEqual({ outcome: 'not-eligible' });
   });
 
-  // The import's own block check is the only one a bought recipe's input meets,
-  // and the free path hands its answer to the remix gate, so each path pins it.
-  const BLOCK_PATHS: Array<[string, AdminStubOptions, Array<{ storagePath: string }>]> = [
-    ['a freely shared input', {}, []],
+  // The import's own block check guards what the creator shares with everyone, and only that (owner,
+  // 2026-11-06: "blocking means no more post of A can be visible or can be purchased to B, but
+  // already bought posts won't be affected"). A bought recipe's hand-over of the creation's inputs
+  // goes through a block, and through a block check that fails: it never asks one.
+  const BLOCK_PATHS: Array<[string, AdminStubOptions, Array<{ storagePath: string }>, 'not-eligible' | 'imported']> = [
+    ['a freely shared input', {}, [], 'not-eligible'],
     [
       "a bought recipe's input",
       { generationRow: { ...SHARING_GENERATION, share_input_media_for_remix: false } },
       [{ storagePath: SOURCE_PATH }],
+      'imported',
     ],
   ];
 
-  it.each(BLOCK_PATHS)('refuses %s when the viewer and creator block each other', async (_path, stubOptions, recipeItems) => {
+  it.each(BLOCK_PATHS)('answers %s when the viewer and creator block each other: %s', async (_path, stubOptions, recipeItems, outcome) => {
     const stub = createAdminStub(stubOptions);
     const result = await importSharedGenerationInputMedia({
       source: SOURCE_PATH,
@@ -273,25 +289,58 @@ describe('importSharedGenerationInputMedia', () => {
       dependencies: createDependencies(stub, { blocked: true, recipeItems }),
     });
 
-    expect(result).toEqual({ outcome: 'not-eligible' });
-    expect(stub.copy).not.toHaveBeenCalled();
+    expect(result.outcome).toBe(outcome);
+    expect(stub.copy).toHaveBeenCalledTimes(outcome === 'imported' ? 1 : 0);
   });
 
-  it.each(BLOCK_PATHS)('treats a failing block check as blocked for %s', async (_path, stubOptions, recipeItems) => {
+  it.each(BLOCK_PATHS)('answers %s when the block check fails, which counts as a block: %s', async (_path, stubOptions, recipeItems, outcome) => {
     const stub = createAdminStub(stubOptions);
+    const dependencies = createDependencies(stub, {
+      blocked: async () => {
+        throw new Error('moderation outage');
+      },
+      recipeItems,
+    });
     const result = await importSharedGenerationInputMedia({
       source: SOURCE_PATH,
       viewerUserId: VIEWER,
-      dependencies: createDependencies(stub, {
-        blocked: async () => {
-          throw new Error('moderation outage');
-        },
-        recipeItems,
-      }),
+      dependencies,
     });
 
-    expect(result).toEqual({ outcome: 'not-eligible' });
-    expect(stub.copy).not.toHaveBeenCalled();
+    expect(result.outcome).toBe(outcome);
+    expect(stub.copy).toHaveBeenCalledTimes(outcome === 'imported' ? 1 : 0);
+    // Free sharing asks; the bought hand-over never does.
+    expect(dependencies.isUserRelationshipBlocked).toHaveBeenCalledTimes(outcome === 'imported' ? 0 : 1);
+  });
+
+  // The same input, shared freely and handed over by a recipe on its post: what the viewer bought
+  // stays theirs after a block, and what they did not buy ends with it.
+  describe('an input its creator shares freely and a recipe on its post hands over', () => {
+    it('keeps the bought hand-over for a buyer the creator blocked', async () => {
+      const stub = createAdminStub({ postRows: [{ ...EXPOSED_POST, id: 'post-7' }] });
+      const dependencies = createDependencies(stub, { blocked: true, recipeItems: [{ storagePath: SOURCE_PATH }] });
+
+      const result = await importSharedGenerationInputMedia({ source: SOURCE_PATH, viewerUserId: VIEWER, dependencies });
+
+      expect(result).toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DEST_PATH}` });
+      expect(dependencies.loadGenerationRecipeRemixInputMediaByPostId).toHaveBeenCalledWith(expect.objectContaining({
+        postId: 'post-7',
+        viewerUserId: VIEWER,
+      }));
+    });
+
+    it('still refuses a viewer the creator blocked who never bought the recipe', async () => {
+      const stub = createAdminStub({ postRows: [{ ...EXPOSED_POST, id: 'post-7' }] });
+      // The recipe's unlock hands nothing to someone who did not buy it.
+      const dependencies = createDependencies(stub, { blocked: true, recipeItems: [] });
+
+      const result = await importSharedGenerationInputMedia({ source: SOURCE_PATH, viewerUserId: VIEWER, dependencies });
+
+      expect(result).toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+      // The shared path's gate is never asked once the block refuses it.
+      expect(stub.getUserById).not.toHaveBeenCalled();
+    });
   });
 
   // The generation's sharing flags are not the gate on their own: the import
@@ -794,13 +843,23 @@ describe('resolveRemixResultMedia', () => {
     await expect(resolveResult(unlocked)).resolves.toMatchObject({ outcome: 'resolved' });
   });
 
-  it('refuses a viewer the creator blocked, and a template result', async () => {
+  // The review of phase 2, finding 1, and the owner's word on blocks (2026-11-06): a run's use of the
+  // result a remix handed the viewer is a reuse, no new remix, so neither the post's "Allow remixes"
+  // off nor a block since stops it, and no block is asked.
+  it('answers a viewer blocked since, and a post whose Allow remixes went off, without asking about the block', async () => {
     const blocked = resultStub();
-    await expect(resolveResult(blocked, SHOWCASE_RESULT, { blocked: true })).resolves.toEqual({ outcome: 'not-eligible' });
+    const blockedDependencies = createDependencies(blocked, { blocked: true });
+    await expect(resolveRemixResultMedia({ source: SHOWCASE_RESULT, viewerUserId: VIEWER, dependencies: blockedDependencies }))
+      .resolves.toMatchObject({ outcome: 'resolved' });
+    expect(blockedDependencies.isUserRelationshipBlocked).not.toHaveBeenCalled();
 
+    const closed = resultStub({ postRows: [{ ...VIDEO_POST, remixes_allowed: false }] });
+    await expect(resolveResult(closed)).resolves.toMatchObject({ outcome: 'resolved' });
+  });
+
+  it('refuses a template result', async () => {
     const templateResult = resultStub({ generationRow: { ...RESULT_GENERATION, template_run_id: 'run-1' } });
     await expect(resolveResult(templateResult)).resolves.toEqual({ outcome: 'not-eligible' });
-    expect(blocked.getPublicUrl).not.toHaveBeenCalled();
     expect(templateResult.getPublicUrl).not.toHaveBeenCalled();
   });
 

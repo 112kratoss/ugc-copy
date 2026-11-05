@@ -144,7 +144,8 @@ function createQuery(table: string) {
   let rangeBounds: [number, number] | null = null;
 
   // The owner list query: equality and null filters, the inner-joined bundle
-  // a listings-only read embeds, newest first, then the requested range.
+  // a listings-only read embeds, newest first, then the requested range, each
+  // row with the columns the read asked for alone, as PostgREST answers.
   const listPosts = () => {
     const postIdsWithBundles = new Set(bundleRows.value.map((row) => row.post_id));
     const rows = (postRows.value as Array<Record<string, unknown>>)
@@ -153,7 +154,8 @@ function createQuery(table: string) {
       .filter((post) => notNullColumns.every((column) => post[column] != null))
       .filter((post) => !selectedColumns.includes('post_resource_bundles!inner') || postIdsWithBundles.has(post.id))
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || String(b.id).localeCompare(String(a.id)));
-    return rangeBounds ? rows.slice(rangeBounds[0], rangeBounds[1] + 1) : rows;
+    return (rangeBounds ? rows.slice(rangeBounds[0], rangeBounds[1] + 1) : rows)
+      .map((post) => pickColumns(post, selectedColumns));
   };
 
   const query = {
@@ -787,6 +789,73 @@ describe('owner posts', () => {
       expect(post?.resourceBundleInput.resources?.items?.map((item) => item.title)).toEqual(['Prompt']);
       expect(recipeReferenceCounts).not.toHaveBeenCalled();
       expect(bundles.getPostResourceBundleDetailByPostId).toHaveBeenCalledTimes(1);
+    });
+
+    // The review of phase 2, finding 10: Studio and Your Sales named Remix on the listing of a post
+    // whose creator turned "Allow remixes" off, and graded the listing with it: the list read had no
+    // switch, and a stored switch or a Remix link among the items added Remix all the same.
+    it.each([
+      ['the compact summary RPC', true],
+      ['the bundle select fallback', false],
+    ])('names no Remix on the listing of a post whose creator turned remixes off, through %s', async (_label, rpcEnabled) => {
+      compactSummaryRpc.enabled = rpcEnabled;
+      postRows.value = [
+        ...postRows.value,
+        listingPost('closed-creation', '2026-07-05T00:00:00.000Z', { generation_id: 'gen-9', source_kind: 'magicbooklet', remixes_allowed: false }),
+        listingPost('closed-link', '2026-07-06T00:00:00.000Z', { remixes_allowed: false }),
+        listingPost('open-creation', '2026-07-07T00:00:00.000Z', { generation_id: 'gen-10', source_kind: 'magicbooklet' }),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [
+        recipe('closed-creation', { allow_remix: true }),
+        recipe('closed-link', {
+          resource_items: [
+            { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A warm golden hour portrait with soft rim light.' },
+            { id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' },
+          ],
+        }),
+        recipe('open-creation'),
+      ];
+      const { getOwnerPostList } = await import('@/lib/owner-posts');
+
+      const listings = await getOwnerPostList('user-1', { includeArchived: true, visibility: 'all', listingsOnly: true });
+      const kindsOf = (postId: string) => listings.find((post) => post.id === postId)?.bundle?.resourceKinds;
+
+      expect(kindsOf('closed-creation')).toEqual(['prompt']);
+      expect(kindsOf('closed-link')).toEqual(['prompt']);
+      expect(kindsOf('open-creation')).toEqual(['prompt', 'remix']);
+    });
+
+    it('names no Remix on the editor’s own read of such a post, whatever its unlock counts', async () => {
+      postRows.value = [
+        ...postRows.value,
+        listingPost('closed-link', '2026-07-06T00:00:00.000Z', { remixes_allowed: false }),
+      ] as unknown as typeof postRows.value;
+      bundleRows.value = [recipe('closed-link')];
+      const bundles = await import('@/lib/post-resource-bundles-server');
+      vi.mocked(bundles.getPostResourceBundleDetailByPostId).mockClear().mockResolvedValueOnce({
+        accessMode: 'paid',
+        summary: '',
+        previewText: 'Includes the prompt.',
+        priceUsdCents: 900,
+        salesCount: 2,
+        freeUnlockCount: 0,
+        retiredAt: null,
+        allowRemix: false,
+        lockedPreview: { itemCounts: { prompt: 1, remix_link: 1 }, resourceKinds: ['prompt'] },
+        resources: {
+          allowRemix: false,
+          items: [
+            { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A warm golden hour portrait.' },
+            { id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' },
+          ],
+        },
+      } as never);
+      const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+      const post = await getOwnerPostDetail('closed-link', 'user-1');
+
+      expect(post?.bundle?.resourceKinds).toEqual(['prompt']);
+      expect(post?.remixesAllowed).toBe(false);
     });
 
     it('reads no free unlocks through the select fallback, which serves a database older than the column', async () => {

@@ -258,6 +258,7 @@
               }
             ],
             "remix_recipe_mode": null,
+            "own_source_post_bundle": null,
             "linked_post_id": "post-1",
             "linked_post_title": "Launch frame",
             "linked_post_visibility": "public",

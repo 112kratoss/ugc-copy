@@ -12,7 +12,8 @@
 --    composer's remove buttons and the old "own uploads" rule wrote false on
 --    published recipes: honouring it here would close those posts silently.
 -- 2. The two save RPCs (20261026150925) write it when the save sends it, as they
---    write is_nsfw: validated as a boolean, after the save, in its transaction.
+--    write is_nsfw: validated as a boolean, after the save, in its transaction,
+--    and only when it differs, so a save that sends it back runs no update.
 --    Their bodies are otherwise unchanged.
 -- 3. marketplace_resource_bundle_quality_issue (20260723120000) reads the title
 --    minimum as 3, the shared RECIPE_TITLE_MIN_LENGTH
@@ -67,7 +68,7 @@ begin
 
   select * into v_result from public.upsert_post_with_resource_bundle_before_nsfw(p_post, p_bundle, p_has_bundle);
   if p_post ? 'is_nsfw' then update public.posts set is_nsfw = (p_post->>'is_nsfw')::boolean where id = v_result.post_id; end if;
-  if p_post ? 'remixes_allowed' then update public.posts set remixes_allowed = (p_post->>'remixes_allowed')::boolean where id = v_result.post_id; end if;
+  if p_post ? 'remixes_allowed' then update public.posts set remixes_allowed = (p_post->>'remixes_allowed')::boolean where id = v_result.post_id and remixes_allowed is distinct from (p_post->>'remixes_allowed')::boolean; end if;
 
   -- A recipe sent with the save took the post's title in the save itself.
   if p_has_bundle is not true and v_existed then
@@ -110,7 +111,7 @@ begin
 
   select * into v_result from public.update_post_with_resource_bundle_before_nsfw(p_post_id, p_owner_user_id, p_post_patch, p_has_bundle, p_bundle);
   if p_post_patch ? 'is_nsfw' then update public.posts set is_nsfw = (p_post_patch->>'is_nsfw')::boolean where id = p_post_id and user_id = p_owner_user_id; end if;
-  if p_post_patch ? 'remixes_allowed' then update public.posts set remixes_allowed = (p_post_patch->>'remixes_allowed')::boolean where id = p_post_id and user_id = p_owner_user_id; end if;
+  if p_post_patch ? 'remixes_allowed' then update public.posts set remixes_allowed = (p_post_patch->>'remixes_allowed')::boolean where id = p_post_id and user_id = p_owner_user_id and remixes_allowed is distinct from (p_post_patch->>'remixes_allowed')::boolean; end if;
 
   -- A recipe sent with the save took the post's title in the save itself.
   if p_has_bundle is not true then
@@ -253,9 +254,11 @@ GRANT EXECUTE ON FUNCTION public.marketplace_resource_bundle_quality_issue(text,
 
 -- 4. A post whose creator turned "Allow remixes" off sells no Remix with its recipe (the review of
 --    phase 2): the marketplace's Remix filter (`has_remix`) and its search text no longer count
---    one there. The two refreshes are 20261101072014's, but for the call of
---    post_resource_bundle_kinds, which now reads the post's switch; both posts triggers watch it.
---    Every post allows remixes when this runs, so no listing changes until a switch does.
+--    one there, from any of the three that make one (the stored switch, the creation, a Remix link
+--    or access item). The two refreshes are 20261101072014's, but that the kinds they read from
+--    post_resource_bundle_kinds leave Remix out while the post's switch is off; both posts
+--    triggers watch it. Every post allows remixes when this runs, so no listing changes until a
+--    switch does.
 CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_search_documents(
   p_bundle_ids uuid[] DEFAULT NULL
 )
@@ -280,12 +283,9 @@ AS $function$
       nullif(btrim(posts.title), ''),
       nullif(btrim(public.recipe_post_public_body(posts.body, bundles.access_mode)), ''),
       nullif(posts.source_tool, ''),
-      nullif(array_to_string(public.post_resource_bundle_kinds(
-        bundles.resource_items,
-        bundles.allow_remix AND coalesce(posts.remixes_allowed, true),
-        bundles.status,
-        CASE WHEN coalesce(posts.remixes_allowed, true) THEN posts.generation_id END
-      ), ' '), '')
+      nullif(array_to_string(array_remove(public.post_resource_bundle_kinds(
+        bundles.resource_items, bundles.allow_remix, bundles.status, posts.generation_id
+      ), CASE WHEN coalesce(posts.remixes_allowed, true) THEN NULL ELSE 'remix' END), ' '), '')
     ))
   FROM public.post_resource_bundles AS bundles
   LEFT JOIN public.posts AS posts ON posts.id = bundles.post_id
@@ -395,12 +395,9 @@ AS $function$
   FROM public.post_resource_bundles bundles
   LEFT JOIN public.posts posts ON posts.id = bundles.post_id
   LEFT JOIN public.profiles profiles ON profiles.id = bundles.owner_user_id
-  CROSS JOIN LATERAL public.post_resource_bundle_kinds(
-    bundles.resource_items,
-    bundles.allow_remix AND coalesce(posts.remixes_allowed, true),
-    bundles.status,
-    CASE WHEN coalesce(posts.remixes_allowed, true) THEN posts.generation_id END
-  ) AS resource(kinds)
+  CROSS JOIN LATERAL array_remove(public.post_resource_bundle_kinds(
+    bundles.resource_items, bundles.allow_remix, bundles.status, posts.generation_id
+  ), CASE WHEN coalesce(posts.remixes_allowed, true) THEN NULL ELSE 'remix' END) AS resource(kinds)
   WHERE p_bundle_ids IS NULL OR bundles.id = ANY (p_bundle_ids)
   ON CONFLICT (bundle_id) DO UPDATE SET
     listable = excluded.listable,

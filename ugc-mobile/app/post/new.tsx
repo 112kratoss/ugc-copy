@@ -4,7 +4,7 @@ import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { BookOpen, Check, ChevronDown, ChevronRight, CircleMinus, Ellipsis, ExternalLink, FileText, FolderOpen, Globe2, ImageIcon, Images, Lock, Music, Package, Pencil, Play, Plus, Repeat2, ScrollText, Shapes, SlidersHorizontal, Sparkles, Trash2, Upload, Workflow, X } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from 'react';
 import { AccessibilityInfo, ActivityIndicator, findNodeHandle, Keyboard, Modal, PanResponder, Platform, Pressable, ScrollView, Share, Text, TextInput, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -32,11 +32,14 @@ import {
   describeCreationInputsSwitch,
   describeUncopiedCreationInputs,
   needsCreationPromptItem,
+  remixRecipeAllows,
   remixRecipeLock,
   ALLOW_REMIXES_DETAIL,
   ALLOW_REMIXES_LABEL,
+  CREATION_INPUTS_ALL_REMOVED,
   CREATION_RECIPE_FILES_LINE,
   DEFAULT_PAID_RECIPE_PRICE_CREDITS,
+  describePutRemovedInputsBack,
   PAID_RECIPE_RESALE_LINE,
   type GenerationReference,
 } from '@/lib/creation-recipe/creation-recipe';
@@ -142,10 +145,14 @@ import {
   type PostComposerValidationOptions,
   adoptRecipeItemsAdded,
   getCreationInputsInRecipe,
+  getCreationInputsOutOfStoredRecipe,
   getCreationRecipeLock,
   getRemovedCreationInputIds,
   creationCarriesRecipe,
   draftAllowsRemixes,
+  withCreationInputRemoved,
+  withRemovedCreationInputsPutBack,
+  withRestoredCreationChoices,
   hasCreationPromptCard,
   isLockedCreationPromptCard,
   followCreationPromptRule,
@@ -529,21 +536,48 @@ function PostFormatSelector({
   );
 }
 
+/**
+ * A switch that takes nothing while a publish or a save is on its way (#711's review): a change
+ * then would be drawn and not sent. `ToggleRow` has no disabled state of its own, so the row is
+ * dimmed, touches stop at it, and a press that still reaches it changes nothing.
+ */
+function HeldToggleRow({ held, onChange, ...props }: Omit<ComponentProps<typeof ToggleRow>, 'onValueChange'> & {
+  held: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <View pointerEvents={held ? 'none' : 'auto'} style={held ? { opacity: appTheme.opacity.disabled } : undefined}>
+      <ToggleRow
+        {...props}
+        disabled={held}
+        onValueChange={(value) => {
+          if (!held) onChange(value);
+        }}
+      />
+    </View>
+  );
+}
+
 function PostResourcesPage({
   draft,
   selectedGeneration,
   isTemplateBacked,
+  isEditMode,
   buyerCount,
   packageStatus,
   publishValidation,
   onResourceChange,
   onCreationPackageChange,
+  onRemoveCreationInput,
+  onRestoreCreationInputs,
   onAddResource,
   onEditResource,
   onRemoveResource,
   onEditDetails,
   onPostWithoutRecipe,
   postWithoutRecipeDisabled,
+  offersPostWithoutRecipe,
+  submitting,
   isNewCreationPost,
   offersAllowRemixes,
   recipeLock,
@@ -551,6 +585,7 @@ function PostResourcesPage({
   draft: PostComposerDraft;
   selectedGeneration: GenerationListItem | null;
   isTemplateBacked: boolean;
+  isEditMode: boolean;
   /** A creation's new post has no No recipe (owner, 2026-11-05): an edit keeps a post as it is. */
   isNewCreationPost: boolean;
   /** The post's own "Allow remixes" is drawn: as the save sends it (`buildCreationRecipeChoicesPatch`). */
@@ -563,6 +598,10 @@ function PostResourcesPage({
   publishValidation: PostComposerValidationResult;
   onResourceChange: (patch: Partial<PostComposerDraft['resource']>) => void;
   onCreationPackageChange: (patch: Partial<PostComposerDraft['creationPackage']>) => void;
+  /** Takes a saved input out of the recipe, its copy with it (`withCreationInputRemoved`). */
+  onRemoveCreationInput: (inputId: string) => void;
+  /** Puts every removed input back (`withRemovedCreationInputsPutBack`). */
+  onRestoreCreationInputs: () => void;
   onAddResource: () => void;
   onEditResource: (id: string) => void;
   onRemoveResource: (id: string) => void;
@@ -570,6 +609,10 @@ function PostResourcesPage({
   /** Sends the post with No recipe, for a title too short for one (an edit's asks first). */
   onPostWithoutRecipe: () => void;
   postWithoutRecipeDisabled: boolean;
+  /** "Post without recipe" goes: not for a creation's new post, nor a remix of a paid recipe. */
+  offersPostWithoutRecipe: boolean;
+  /** A publish or a save is on its way: the recipe's choices take nothing meanwhile (#711's review). */
+  submitting: boolean;
 }) {
   const theme = useAppTheme();
   const resourceActive = draft.resource.accessMode !== 'none';
@@ -613,7 +656,7 @@ function PostResourcesPage({
       <PostPublishSummary draft={draft} selectedGeneration={selectedGeneration} validation={publishValidation} onEditTitle={onEditDetails} />
       {/* The summary says the title is too short for the recipe, and its title opens step 1 to
           lengthen it; this is the other way on (owner, 2026-11-03). */}
-      {isRecipeTitleTooShortToPublish(draft) && !isNewCreationPost ? (
+      {isRecipeTitleTooShortToPublish(draft) && offersPostWithoutRecipe ? (
         <SecondaryButton
           label="Post without recipe"
           accessibilityHint="Sends this post with No recipe."
@@ -638,6 +681,7 @@ function PostResourcesPage({
         // A remix keeps its original recipe's terms, drawn locked with why.
         lockedTo={recipeLock?.accessMode ?? null}
         lockReason={recipeLock?.reason ?? null}
+        disabled={submitting}
         onChange={(accessMode) => onResourceChange({ accessMode })}
       />
 
@@ -659,8 +703,11 @@ function PostResourcesPage({
             keyboardType="number-pad"
           />
           <AppText variant="caption" color="commerce">{getRecipeMoneyLine(priceTokens)}</AppText>
-          {/* The seller's consent to what buyers may do (the plan's assumption 12). */}
-          <AppText variant="caption" color="textSecondary">{PAID_RECIPE_RESALE_LINE}</AppText>
+          {/* The seller's consent to what buyers may do (the plan's assumption 12), unless the post
+              allows no remix (#711's review). */}
+          {offersAllowRemixes && !draftAllowsRemixes(draft) ? null : (
+            <AppText variant="caption" color="textSecondary">{PAID_RECIPE_RESALE_LINE}</AppText>
+          )}
           <AppText variant="caption" color="muted">
             {'Before buying, people see your recipe preview and item titles — never what\'s inside.'}
           </AppText>
@@ -681,38 +728,56 @@ function PostResourcesPage({
               <CreationInputThumbnails
                 generationId={selectedGeneration.id}
                 inputs={creationInputs.offered}
-                // Each file the recipe would take has a remove button (owner, 2026-11-05).
-                onRemove={draft.creationPackage.attachGenerationReferences && !creationInputs.allIncluded
-                  ? (inputId) => onCreationPackageChange({ removedInputIds: [...removedInputIds, inputId] })
+                // Each file the recipe takes, or would, has a remove button (owner, 2026-11-05); one
+                // already in it takes its copy out too (#711's review).
+                onRemove={draft.creationPackage.attachGenerationReferences || creationInputs.included > 0
+                  ? onRemoveCreationInput
                   : undefined}
                 removedCount={removedInputCount}
-                onRestoreRemoved={() => onCreationPackageChange({ removedInputIds: [] })}
+                onRestoreRemoved={onRestoreCreationInputs}
                 filesLine={includesCreationReferences ? CREATION_RECIPE_FILES_LINE : null}
+                disabled={submitting}
               />
               {creationInputs.offered.length === 0 ? null : creationInputs.allIncluded ? (
                 <AppText variant="caption" color="muted">
                   {`${CREATION_INPUTS_INCLUDED} ${CREATION_INPUTS_INCLUDED_DETAIL}`}
                 </AppText>
               ) : (
-                <ToggleRow
+                <HeldToggleRow
+                  held={submitting}
                   label="Include creation references"
                   body={describeCreationInputsSwitch(creationInputs.included, creationInputs.offered.length)}
                   value={draft.creationPackage.attachGenerationReferences}
-                  onValueChange={(attachGenerationReferences) => onCreationPackageChange({ attachGenerationReferences })}
+                  onChange={(attachGenerationReferences) => onCreationPackageChange({ attachGenerationReferences })}
                   accent="image"
                 />
               )}
             </>
           ) : null}
         </ComposerFieldShell>
+      ) : !resourceActive && !isEditMode && draft.mode === 'creation' && selectedGeneration && removedInputCount > 0 ? (
+        // Every saved input out of a creation with no prompt: the post fell back to No recipe, and
+        // the files can come back with it (#711's review).
+        <ComposerFieldShell>
+          <CompactFieldLabel label="From this creation" />
+          <CreationInputThumbnails
+            generationId={selectedGeneration.id}
+            inputs={[]}
+            emptyLine={CREATION_INPUTS_ALL_REMOVED}
+            removedCount={removedInputCount}
+            onRestoreRemoved={onRestoreCreationInputs}
+            disabled={submitting}
+          />
+        </ComposerFieldShell>
       ) : null}
 
       {offersAllowRemixes ? (
-        <ToggleRow
+        <HeldToggleRow
+          held={submitting}
           label={ALLOW_REMIXES_LABEL}
           body={ALLOW_REMIXES_DETAIL}
           value={draftAllowsRemixes(draft)}
-          onValueChange={(allowRemixes) => onCreationPackageChange({ allowRemixes })}
+          onChange={(allowRemixes) => onCreationPackageChange({ allowRemixes })}
           accent="workflow"
         />
       ) : null}
@@ -833,14 +898,21 @@ function RecipeAccessCards({
   offersNoRecipe = true,
   lockedTo = null,
   lockReason = null,
+  disabled = false,
   onChange,
 }: {
   value: PostComposerDraft['resource']['accessMode'];
   /** No recipe is offered for an upload, a text post and an edit, not a creation's new post. */
   offersNoRecipe?: boolean;
-  /** A remix's recipe keeps its original's terms: the other of Free and Paid takes nothing. */
+  /**
+   * A remix's recipe keeps its original's terms: each choice they do not allow takes nothing
+   * (`remixRecipeAllows`). A remix of a paid recipe allows neither Free nor No recipe, which the
+   * server refuses on a public post (#711's review).
+   */
   lockedTo?: 'free' | 'paid' | null;
   lockReason?: string | null;
+  /** The cards take nothing while a publish or a save is on its way (#711's review). */
+  disabled?: boolean;
   onChange: (accessMode: PostComposerDraft['resource']['accessMode']) => void;
 }) {
   const theme = useAppTheme();
@@ -849,7 +921,7 @@ function RecipeAccessCards({
     <View accessibilityRole="radiogroup" accessibilityLabel="Recipe" style={{ gap: 8 }}>
       {choices.map((choice) => {
         const checked = choice.value === value;
-        const locked = Boolean(lockedTo && choice.value !== 'none' && choice.value !== lockedTo);
+        const unavailable = disabled || Boolean(lockedTo && !remixRecipeAllows(lockedTo, choice.value));
         const color = choice.value === 'free'
           ? theme.colors.workflow
           : choice.value === 'paid'
@@ -860,10 +932,10 @@ function RecipeAccessCards({
             key={choice.value}
             accessibilityRole="radio"
             accessibilityLabel={`${choice.label}, ${choice.body}`}
-            accessibilityState={locked ? { checked, selected: checked, disabled: true } : { checked, selected: checked }}
-            disabled={locked}
+            accessibilityState={unavailable ? { checked, selected: checked, disabled: true } : { checked, selected: checked }}
+            disabled={unavailable}
             onPress={() => {
-              if (checked || locked) return;
+              if (checked || unavailable) return;
               haptic.select();
               onChange(choice.value);
             }}
@@ -880,7 +952,7 @@ function RecipeAccessCards({
               paddingVertical: 10,
               paddingLeft: 12,
               paddingRight: 14,
-              opacity: locked ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+              opacity: unavailable ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
             })}
           >
             <View style={{ width: 36, height: 36, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: hexWithAlpha(color, 0.13) }}>
@@ -1068,6 +1140,8 @@ function CreationInputThumbnails({
   removedCount = 0,
   onRestoreRemoved,
   filesLine = null,
+  emptyLine = 'No saved inputs go with this recipe.',
+  disabled = false,
 }: {
   generationId: string;
   inputs: GenerationReference[];
@@ -1077,13 +1151,20 @@ function CreationInputThumbnails({
   onRestoreRemoved?: () => void;
   /** Under the files while the recipe takes them: "Anyone who gets this recipe gets these files." */
   filesLine?: string | null;
+  /** In place of the count once every input is removed. */
+  emptyLine?: string;
+  /**
+   * The buttons take nothing while a publish or a save is on its way: a removal then would be
+   * drawn but not sent, and the file copied anyway (#711's review).
+   */
+  disabled?: boolean;
 }) {
   const theme = useAppTheme();
   if (inputs.length === 0 && removedCount === 0) return null;
   return (
     <View style={{ gap: 6 }}>
       <AppText variant="caption" color="muted">
-        {inputs.length > 0 ? `${inputs.length} saved ${inputs.length === 1 ? 'input' : 'inputs'}` : 'No saved inputs go with this recipe.'}
+        {inputs.length > 0 ? `${inputs.length} saved ${inputs.length === 1 ? 'input' : 'inputs'}` : emptyLine}
       </AppText>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {inputs.map((input) => (
@@ -1118,31 +1199,45 @@ function CreationInputThumbnails({
             )}
           </View>
           {onRemove ? (
-            // A 44pt press area centred on the thumbnail's corner; the mark inside is smaller.
+            // The whole 44pt press area sits inside the tile, over its top-right corner, with the mark
+            // drawn smaller in that corner: Android delivers no touch past a parent's edge, and hitSlop
+            // reaches no further, so a button hung off the corner answered to about 26pt (#711's review).
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={`Remove ${input.label} from the recipe`}
-              hitSlop={10}
+              accessibilityState={{ disabled }}
+              disabled={disabled}
               onPress={() => {
+                if (disabled) return;
                 haptic.select();
                 onRemove(input.id);
               }}
               style={({ pressed }) => ({
                 position: 'absolute',
-                top: -8,
-                right: -8,
-                width: 24,
-                height: 24,
-                borderRadius: appTheme.radii.pill,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: theme.colors.surface,
-                borderWidth: 1,
-                borderColor: theme.colors.border,
-                opacity: pressed ? appTheme.opacity.pressed : 1,
+                top: 0,
+                right: 0,
+                width: 44,
+                height: 44,
+                alignItems: 'flex-end',
+                justifyContent: 'flex-start',
+                padding: 4,
+                opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
               })}
             >
-              <X size={appTheme.icon.compact} color={theme.colors.text} />
+              <View
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: appTheme.radii.pill,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: theme.colors.surface,
+                  borderWidth: 1,
+                  borderColor: theme.colors.border,
+                }}
+              >
+                <X size={appTheme.icon.compact} color={theme.colors.text} />
+              </View>
             </Pressable>
           ) : null}
           </View>
@@ -1152,13 +1247,20 @@ function CreationInputThumbnails({
       {removedCount > 0 && onRestoreRemoved ? (
         <Pressable
           accessibilityRole="button"
-          onPress={onRestoreRemoved}
+          accessibilityState={{ disabled }}
+          disabled={disabled}
+          onPress={() => {
+            if (!disabled) onRestoreRemoved();
+          }}
           hitSlop={8}
-          style={({ pressed }) => ({ alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+          style={({ pressed }) => ({
+            alignSelf: 'flex-start',
+            minHeight: 44,
+            justifyContent: 'center',
+            opacity: disabled ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+          })}
         >
-          <AppText variant="caption" color="primary">
-            {removedCount === 1 ? 'Put the removed file back' : `Put the ${removedCount} removed files back`}
-          </AppText>
+          <AppText variant="caption" color="primary">{describePutRemovedInputsBack(removedCount)}</AppText>
         </Pressable>
       ) : null}
     </View>
@@ -2499,6 +2601,43 @@ function NewPostComposer() {
       const loadedTitle = post.rawTitle ?? (post.title || '');
 
       initialTitleRef.current = post.rawTitle ?? (post.title || null);
+      // One Recipe preview, starting from the summary listings showed first
+      // (recipe audit S6). A creation's recipe has its exact prompt, as on
+      // the web; where the edit starts from, so it is no unsaved change. A
+      // recipe people have or had opens as sold, and a creation off public
+      // view keeps no locked card (#677's re-reviews).
+      const resource = followCreationPromptRule(resourceBundleInput ? foldRecipeSummaryIntoPreview({
+        accessMode: resourceBundleInput.accessMode || 'none',
+        cardAuthoringMode: 'cards',
+        selectedKinds: deriveResourceSelections(resourceBundleInput),
+        promptText: resourceBundleInput.resources?.promptText || '',
+        notesMarkdown: resourceBundleInput.resources?.notesMarkdown || '',
+        workflowShareUrl: resourceBundleInput.resources?.workflowShareUrl || '',
+        attachmentUrl: resourceBundleInput.resources?.attachments?.[0]?.url || resourceBundleInput.resources?.attachments?.[0]?.storagePath || '',
+        attachmentLabel: resourceBundleInput.resources?.attachments?.[0]?.label || '',
+        attachments: (resourceBundleInput.resources?.attachments ?? []).map((attachment: PostResourceAttachment, index: number) => ({
+          id: `att-existing-${index}`,
+          kind: attachment.kind === 'file' ? 'file' : 'link',
+          label: attachment.label,
+          url: attachment.url ?? '',
+          storagePath: attachment.storagePath ?? '',
+          contentType: attachment.contentType ?? null,
+          sizeBytes: attachment.sizeBytes ?? null,
+          resourceType: attachment.resourceType ?? undefined,
+          role: attachment.role ?? undefined,
+          remixUse: attachment.remixUse ?? undefined,
+        })),
+        organizeSections: Boolean(resourceBundleInput.resources?.sections?.length),
+        sections: [],
+        cards: hydratedResourceCards,
+        allowRemix: hydratePostComposerAllowRemix(resourceBundleInput),
+        summary: resourceBundleInput.summary || '',
+        previewText: resourceBundleInput.previewText || '',
+        // Both from the stored price, else both the default: '9' beside '100'
+        // showed 100 tokens and saved 900 through the legacy-USD rule.
+        priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : String(DEFAULT_PAID_RECIPE_PRICE_CREDITS / 100),
+        priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : String(DEFAULT_PAID_RECIPE_PRICE_CREDITS),
+      }) : getDefaultResourceDraft(), postCreation, creationPromptRule);
       setDraft({
         mode,
         proofMode: mode === 'text' ? 'text' : 'media',
@@ -2541,45 +2680,15 @@ function NewPostComposer() {
         mediaItems: hydratePostComposerMediaItems(post),
         // Off on an edit: the save copies the creation's saved inputs into the
         // recipe only when the creator asks (owner, 2026-11-03). Its "Allow
-        // remixes" is the post's own (owner, 2026-11-05).
-        creationPackage: { ...getDefaultCreationPackageDraft(), allowRemixes: post.remixesAllowed !== false },
-        // One Recipe preview, starting from the summary listings showed first
-        // (recipe audit S6). A creation's recipe has its exact prompt, as on
-        // the web; where the edit starts from, so it is no unsaved change. A
-        // recipe people have or had opens as sold, and a creation off public
-        // view keeps no locked card (#677's re-reviews).
-        resource: followCreationPromptRule(resourceBundleInput ? foldRecipeSummaryIntoPreview({
-          accessMode: resourceBundleInput.accessMode || 'none',
-          cardAuthoringMode: 'cards',
-          selectedKinds: deriveResourceSelections(resourceBundleInput),
-          promptText: resourceBundleInput.resources?.promptText || '',
-          notesMarkdown: resourceBundleInput.resources?.notesMarkdown || '',
-          workflowShareUrl: resourceBundleInput.resources?.workflowShareUrl || '',
-          attachmentUrl: resourceBundleInput.resources?.attachments?.[0]?.url || resourceBundleInput.resources?.attachments?.[0]?.storagePath || '',
-          attachmentLabel: resourceBundleInput.resources?.attachments?.[0]?.label || '',
-          attachments: (resourceBundleInput.resources?.attachments ?? []).map((attachment: PostResourceAttachment, index: number) => ({
-            id: `att-existing-${index}`,
-            kind: attachment.kind === 'file' ? 'file' : 'link',
-            label: attachment.label,
-            url: attachment.url ?? '',
-            storagePath: attachment.storagePath ?? '',
-            contentType: attachment.contentType ?? null,
-            sizeBytes: attachment.sizeBytes ?? null,
-            resourceType: attachment.resourceType ?? undefined,
-            role: attachment.role ?? undefined,
-            remixUse: attachment.remixUse ?? undefined,
-          })),
-          organizeSections: Boolean(resourceBundleInput.resources?.sections?.length),
-          sections: [],
-          cards: hydratedResourceCards,
-          allowRemix: hydratePostComposerAllowRemix(resourceBundleInput),
-          summary: resourceBundleInput.summary || '',
-          previewText: resourceBundleInput.previewText || '',
-          // Both from the stored price, else both the default: '9' beside '100'
-          // showed 100 tokens and saved 900 through the legacy-USD rule.
-          priceUsd: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents / 100) : String(DEFAULT_PAID_RECIPE_PRICE_CREDITS / 100),
-          priceTokens: resourceBundleInput.priceUsdCents ? String(resourceBundleInput.priceUsdCents) : String(DEFAULT_PAID_RECIPE_PRICE_CREDITS),
-        }) : getDefaultResourceDraft(), postCreation, creationPromptRule),
+        // remixes" is the post's own (owner, 2026-11-05), and the inputs its
+        // recipe holds no copy of start out of it, so a file removed before is
+        // not offered back unasked (#711's review).
+        creationPackage: {
+          ...getDefaultCreationPackageDraft(),
+          allowRemixes: post.remixesAllowed !== false,
+          removedInputIds: getCreationInputsOutOfStoredRecipe(postCreation, resource),
+        },
+        resource,
       });
       setHasPrefilledEdit(true);
     }
@@ -2607,7 +2716,10 @@ function NewPostComposer() {
     void loadPersistedPostComposerDraft(draftStorageId!).then(async (persisted) => {
       if (!active) return;
       if (persisted) {
-        const keptDraft: PostComposerDraft = {
+        // The creation choices an older build's draft lacks come from where the composer starts
+        // (an edit's from its post), and a new post's draft on No recipe for a creation that
+        // carries one moves to Free or its remix's terms (#711's review).
+        const keptDraft: PostComposerDraft = withRestoredCreationChoices({
           ...persisted.draft,
           // An older build could save a draft as unlisted, which is private now.
           // Opened from Share, the post is being published, as in the prefill.
@@ -2624,7 +2736,7 @@ function NewPostComposer() {
           ...(generationId && explicitGeneration && !isEditMode
             ? { madeWithRows: [buildCreationMadeWithRow(explicitGeneration.model)] }
             : {}),
-        };
+        }, draft, explicitGeneration, { isEdit: isEditMode });
         // A kept edit names its media by the ids from when it was kept, and a
         // save since then (one that went through and then failed included)
         // re-inserted every row under a new id. Only a post whose saves send
@@ -3999,6 +4111,27 @@ function NewPostComposer() {
     || pendingRetryMedia.length > 0
     || publishMutation.isPending
     || isSavingIdentity;
+  // A publish or a save on its way, the name and handle's first: the recipe's choices take nothing
+  // meanwhile, since a change then would be drawn and not sent (#711's review).
+  const submitting = publishMutation.isPending || isSavingIdentity;
+  // The terms a remix's recipe is held to; a template result has none to keep.
+  const recipeLock = isTemplateBacked
+    ? null
+    : getCreationRecipeLock(selectedGeneration) ?? remixRecipeLock(postQuery.data?.post?.remixRecipeMode ?? null);
+  // A creation's new post carries its recipe while it has something of the creation's to hold, the
+  // inputs the creator removed left out (#711's review): then it has no No recipe.
+  const isNewCreationPost = !isEditMode
+    && draft.mode === 'creation'
+    && creationCarriesRecipe(selectedGeneration, getRemovedCreationInputIds(draft));
+  // "Post without recipe" goes where No recipe is offered and the remix's terms allow it: a remix of
+  // a paid recipe's public post is refused one.
+  const offersPostWithoutRecipe = !isNewCreationPost && remixRecipeAllows(recipeLock?.accessMode, 'none');
+  const removeCreationInput = (inputId: string) => {
+    setDraft((current) => withCreationInputRemoved(current, selectedGeneration, inputId, { isEdit: isEditMode }));
+  };
+  const restoreCreationInputs = () => {
+    setDraft((current) => withRemovedCreationInputsPutBack(current, selectedGeneration, { isEdit: isEditMode }));
+  };
 
   // Pushed over the composer, which stays as it is: the profile editor goes
   // back to it when it saves or closes, and the draft is kept on the device too.
@@ -4019,7 +4152,7 @@ function NewPostComposer() {
       <PostComposerHeader
         step={composerStep}
         isEditMode={isEditMode}
-        recipeOptional={isEditMode || draft.mode !== 'creation' || !creationCarriesRecipe(selectedGeneration)}
+        recipeOptional={!isNewCreationPost}
         topInset={insets.top}
         onClose={() => router.back()}
         onBack={() => {
@@ -4065,8 +4198,9 @@ function NewPostComposer() {
                 onPress={openProfileEditor}
               />
             ) : null}
-            {/* A creation's new post has no way on without its recipe (owner, 2026-11-05): the title it is. */}
-            {message.action === 'post-without-recipe' && (isEditMode || draft.mode !== 'creation' || !creationCarriesRecipe(selectedGeneration)) ? (
+            {/* A creation's new post has no way on without its recipe (owner, 2026-11-05), nor has a
+                remix of a paid recipe: the title it is. */}
+            {message.action === 'post-without-recipe' && offersPostWithoutRecipe ? (
               <SecondaryButton
                 label="Post without recipe"
                 accessibilityHint="Sends this post with No recipe."
@@ -4160,21 +4294,26 @@ function NewPostComposer() {
             draft={draft}
             selectedGeneration={selectedGeneration}
             isTemplateBacked={isTemplateBacked}
+            isEditMode={isEditMode}
             buyerCount={recipeBuyerCount}
             packageStatus={packageStatus}
             publishValidation={stepTwoValidation}
             onResourceChange={updateResource}
             onCreationPackageChange={updateCreationPackage}
+            onRemoveCreationInput={removeCreationInput}
+            onRestoreCreationInputs={restoreCreationInputs}
             onAddResource={() => setResourceSheetMode('type')}
             onEditResource={openResourceCard}
             onRemoveResource={removeResourceCard}
             onEditDetails={() => setComposerStep('details')}
             onPostWithoutRecipe={() => void postWithoutRecipe()}
             postWithoutRecipeDisabled={postWithoutRecipeDisabled}
-            isNewCreationPost={!isEditMode && draft.mode === 'creation' && creationCarriesRecipe(selectedGeneration)}
+            offersPostWithoutRecipe={offersPostWithoutRecipe}
+            submitting={submitting}
+            isNewCreationPost={isNewCreationPost}
             // As the save sends it: a new post only where its creation carries a recipe, an edit always.
-            offersAllowRemixes={!isTemplateBacked && draft.mode === 'creation' && (isEditMode || creationCarriesRecipe(selectedGeneration))}
-            recipeLock={isTemplateBacked ? null : getCreationRecipeLock(selectedGeneration) ?? remixRecipeLock(postQuery.data?.post?.remixRecipeMode ?? null)}
+            offersAllowRemixes={!isTemplateBacked && draft.mode === 'creation' && (isEditMode || isNewCreationPost)}
+            recipeLock={recipeLock}
           />
           </>
         )}

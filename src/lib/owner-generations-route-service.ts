@@ -55,6 +55,8 @@ type GenerationRow = {
   source_unavailable_at?: string | null;
   /** The recipe this run remixed (20261105123244), whose files its recipe passes on. */
   remix_recipe_bundle_id?: string | null;
+  /** The creation this run remixed or re-ran, read for its post's recipe when that post is the caller's own. */
+  source_generation_id?: string | null;
   /** That recipe's terms when the run started: its post's recipe is held to them (free stays free, paid stays paid). */
   remix_recipe_mode?: string | null;
   /** Written by the failure settlement once it has given the held cost back. */
@@ -185,6 +187,8 @@ export function projectGenerationForStudio(
   delete projected.template_run_step_id;
   // Read for the pass-on folder (remix plan, phase 1b), never shown (#708's max review).
   delete projected.remix_recipe_bundle_id;
+  // Read for the recipe of the caller's own post it remixed (`own_source_post_bundle`), never shown.
+  delete projected.source_generation_id;
   delete projected.studio_visible;
   delete projected.user_id;
   delete projected.preview_width;
@@ -497,7 +501,7 @@ async function fetchOwnerGenerations({
   // level, and this one outgrew what the checker can represent (TS2590).
   const columns: string = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at, remix_recipe_bundle_id, remix_recipe_mode`;
+    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at, remix_recipe_bundle_id, remix_recipe_mode, source_generation_id`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -732,7 +736,20 @@ export async function listOwnerGenerationsForRoute({
     : loadRecipePassOnFolders(adminSupabase, generations
       .filter((generation) => ordinaryGenerationIdSet.has(generation.id) && generation.remix_recipe_bundle_id)
       .map((generation) => ({ id: generation.id, remixRecipeBundleId: generation.remix_recipe_bundle_id })));
-  const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
+  // A remix of the caller's own post starts its recipe on that post's terms, Paid at its price where
+  // it sells one, which the creator may still change (owner, 2026-11-06: "Start Paid, can switch"):
+  // the post whose creation the run came from, only where it is the caller's own (any linked identity).
+  const ownSourceIds = summaryOnly
+    ? []
+    : [...new Set(generations.flatMap((generation) => (generation.source_generation_id ? [generation.source_generation_id] : [])))];
+  const ownSourcePostMapPromise = ownSourceIds.length > 0
+    ? loadLinkedPostMap({ supabase: adminSupabase, generationIds: ownSourceIds, ownerUserIds, includeArchived: true })
+    : Promise.resolve(new Map<string, LinkedPostRow>());
+  const ownSourceBundleMapPromise = ownSourcePostMapPromise.then((posts) => loadLinkedPostBundleMap({
+    supabase: adminSupabase,
+    postIds: Array.from(new Set(Array.from(posts.values(), (post) => post.id))),
+  }));
+  const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls, ownSourcePostMap, ownSourceBundleMap] = await Promise.all([
     linkedPostMapPromise,
     linkedPostMapPromise.then((linkedPosts) => loadLinkedPostBundleMap({
       supabase: adminSupabase,
@@ -754,6 +771,8 @@ export async function listOwnerGenerationsForRoute({
       outputUrls: collectOwnerMediaUrlCandidates(generations, summaryOnly),
       ownerUserIds,
     }),
+    ownSourcePostMapPromise,
+    ownSourceBundleMapPromise,
   ]);
 
   // Whose each input is (`generationInputOrigin`): the recipe's prefill counts the creator's
@@ -895,6 +914,13 @@ export async function listOwnerGenerationsForRoute({
       linked_post_visibility: linkedPost?.visibility ?? null,
       linked_post_archived_at: linkedPost?.archived_at ?? null,
       linked_post_bundle: linkedPost ? linkedPostBundleMap.get(linkedPost.id) ?? null : null,
+      // The recipe of the caller's own post this run remixed (`readOwnSourceRecipe`), with the inputs.
+      ...(summaryOnly ? {} : {
+        own_source_post_bundle: (() => {
+          const sourcePost = generation.source_generation_id ? ownSourcePostMap.get(generation.source_generation_id) : undefined;
+          return sourcePost ? ownSourceBundleMap.get(sourcePost.id) ?? null : null;
+        })(),
+      }),
       // A failed card shows what came back and why in place of a cost it did not keep.
       refunded: generation.refunded === true,
       error_message: readFailureReason(generation),

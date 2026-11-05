@@ -4,9 +4,11 @@ import { isPostResourceKind } from '@/lib/post-resource-bundles';
 // Which saved inputs the recipe takes, and a remix's terms, as both composers read them.
 import {
   isRemixRecipeMode,
+  readOwnSourceRecipe,
   recipeCopyableInputs,
   type CreationInputLike,
   type GenerationReference,
+  type OwnSourceRecipe,
   type RemixRecipeMode,
 } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
@@ -24,6 +26,12 @@ export type CreationPublishDetails = {
   inputs: GenerationReference[];
   /** The terms the run carries as a remix (`remix_recipe_mode`); null for none. */
   remixRecipeMode: RemixRecipeMode | null;
+  /**
+   * The recipe on the creator's own post the creation came from (`own_source_post_bundle`,
+   * `readOwnSourceRecipe`): a paid one starts the new post's recipe Paid (owner, 2026-11-06).
+   * Null where there is none; absent where the server did not say.
+   */
+  ownSourceRecipe?: OwnSourceRecipe | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,6 +70,7 @@ function readCreationPublishDetails(generationId: string, payload: unknown): Cre
   const generations = isRecord(payload) && Array.isArray(payload.generations) ? payload.generations : [];
   const generation = generations.find((item): item is Record<string, unknown> => isRecord(item) && item.id === generationId);
   if (!generation) return null;
+  const ownSourceRecipe = readOwnSourceRecipe(generation);
   return {
     title: typeof generation.title === 'string' ? generation.title : '',
     // Read as the composer reads it, which "More options" opens on the same creation.
@@ -71,6 +80,7 @@ function readCreationPublishDetails(generationId: string, payload: unknown): Cre
       ? (generation.input_media as unknown[]).filter((item): item is CreationInputLike => isRecord(item))
       : []),
     remixRecipeMode: isRemixRecipeMode(generation.remix_recipe_mode) ? generation.remix_recipe_mode : null,
+    ...(ownSourceRecipe !== undefined ? { ownSourceRecipe } : {}),
   };
 }
 

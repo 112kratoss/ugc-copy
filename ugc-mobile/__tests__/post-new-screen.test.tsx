@@ -337,7 +337,7 @@ import {
   type PostComposerMediaItem,
 } from '../lib/post-new-view-model';
 import { RECIPE_TITLE_TOO_SHORT_HINT } from '../lib/post-publish-policy/post-publish-policy';
-import { REMIX_RECIPE_MUST_BE_PAID } from '../lib/creation-recipe/creation-recipe';
+import { PAID_RECIPE_RESALE_LINE, REMIX_RECIPE_MUST_BE_PAID } from '../lib/creation-recipe/creation-recipe';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -2913,7 +2913,9 @@ describe('mobile external post composer', () => {
     // The save copies the inputs too now (owner, 2026-11-03), so an edit offers
     // them. A prompt card made on the web under its kind's title holds the
     // exact prompt, but is the creator's card: it stays theirs to edit (#677's review).
-    it('offers the references on an edit, and keeps a prompt card made on the web editable', async () => {
+    // Since #711's review an edit opens with the inputs its recipe holds no copy
+    // of taken out, so a file removed before is not offered back unasked.
+    it('offers the references on an edit once put back, and keeps a prompt card made on the web editable', async () => {
       paramsState.params = { postId: 'post-from-creation' };
       postEditState.post = creationPost({
         accessMode: 'free',
@@ -2930,9 +2932,13 @@ describe('mobile external post composer', () => {
       expect(collectText(tree.root)).toContain('1 item');
       expect(collectText(tree.root).some((line) => line.startsWith('Exact prompt included.'))).toBe(true);
       expect(pressables(tree, 'Remove Prompt or script')).toHaveLength(1);
-      expect(toggle(tree, 'Include creation references').props.value).toBe(false);
+      expect(collectText(tree.root)).toContain('No saved inputs go with this recipe.');
+      expect(toggle(tree, 'Include creation references')).toBeUndefined();
+      // Where the edit starts: nothing unsaved.
+      expect(gestureEnabled(tree)).toBe(true);
 
-      renderer.act(() => toggle(tree, 'Include creation references').props.onValueChange(true));
+      renderer.act(() => findPressableByText(tree.root, 'Put the removed file back').props.onPress());
+      expect(toggle(tree, 'Include creation references').props.value).toBe(true);
       expect(collectText(tree.root)).toContain('1 item and creation references');
       await renderer.act(async () => {
         await mutationState.options?.mutationFn?.('public');
@@ -3177,7 +3183,8 @@ describe('mobile external post composer', () => {
       authState.api.updatePost.mockResolvedValueOnce({ success: true, postId: 'post-from-creation', visibility: 'public' });
       const tree = await renderScreen();
       renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
-      renderer.act(() => toggle(tree, 'Include creation references').props.onValueChange(true));
+      // Not in the recipe, the input opens taken out (#711's review); put back, the save asks for it.
+      renderer.act(() => findPressableByText(tree.root, 'Put the removed file back').props.onPress());
       expect(collectText(tree.root)).toContain('Creation references');
 
       await renderer.act(async () => {
@@ -3230,6 +3237,233 @@ describe('mobile external post composer', () => {
         'Posted',
         '1 saved input could not be copied into the recipe. Include it again and save to try once more.',
       );
+    });
+
+    // The review of #711 (phase 2).
+    describe('the files taken out, the switch and where a recipe starts', () => {
+      const removeButtons = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && /^Remove .* from the recipe$/.test(String(node.props.accessibilityLabel ?? ''))
+      ));
+      const choice = (tree: renderer.ReactTestRenderer, label: string) => tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && node.props.accessibilityRole === 'radio' && collectText(node)[0] === label
+      ))[0];
+      const twoInputs = [
+        { id: 'input-1', url: 'https://cdn.example.com/reference.jpg', kind: 'image', label: 'Product', recipeCopyable: true },
+        { id: 'input-2', url: 'https://cdn.example.com/face.jpg', kind: 'image', label: 'My face', recipeCopyable: true },
+      ];
+      const copyOfInput1 = {
+        id: 'reference-input-1',
+        type: 'reference_media',
+        title: 'Product copy',
+        storagePath: 'user-1/generation-references/gen-1/00-reference-input-1.jpg',
+        contentType: 'image/jpeg',
+        sortOrder: 1,
+      };
+
+      // Finding 4: taking out an input left the copy an earlier save made of it in the recipe.
+      it('takes the copy of a removed input out of the recipe with it', async () => {
+        generationState.item = { ...generationItem, input_media: twoInputs };
+        paramsState.params = { postId: 'post-from-creation' };
+        postEditState.post = creationPost({
+          accessMode: 'free',
+          previewText: 'Includes the prompt and reference media.',
+          resources: {
+            items: [
+              { id: 'web-prompt', type: 'prompt', title: 'Exact generation prompt', textContent: 'Exact glossy product prompt', sortOrder: 0 },
+              copyOfInput1,
+            ],
+          },
+        });
+        authState.api.updatePost.mockResolvedValueOnce({ success: true, postId: 'post-from-creation', visibility: 'public' });
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+        // My face has no copy, so it opens taken out; put back, the switch goes on.
+        renderer.act(() => findPressableByText(tree.root, 'Put the removed file back').props.onPress());
+        expect(collectText(tree.root)).toContain('Product copy');
+        renderer.act(() => findPressableByAccessibilityLabel(tree.root, 'Remove Product from the recipe').props.onPress());
+        expect(collectText(tree.root)).not.toContain('Product copy');
+
+        await renderer.act(async () => {
+          await mutationState.options?.mutationFn?.('public');
+        });
+        const payload = authState.api.updatePost.mock.calls.at(-1)?.[1] as Record<string, unknown>;
+        expect(payload).toMatchObject({ includeGenerationReferences: true, leaveOutGenerationReferenceIds: ['input-1'], allowRemixes: true });
+        expect(JSON.stringify(payload.resourceBundle)).not.toContain(copyOfInput1.storagePath);
+      });
+
+      // Finding 5: a creation with no prompt and every input removed could not be posted at all.
+      it('falls back to No recipe once every input of a prompt-less creation is out, and takes the recipe back with them', async () => {
+        generationState.item = { ...generationItem, prompt: null };
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+        expect(choice(tree, 'No recipe')).toBeUndefined();
+
+        renderer.act(() => removeButtons(tree)[0].props.onPress());
+        expect(choice(tree, 'No recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+        expect(toggle(tree, 'Allow remixes')).toBeUndefined();
+        expect(collectText(tree.root)).toContain('Every saved input is out of the recipe, so this post goes out without one.');
+
+        authState.api.publishGeneration.mockResolvedValueOnce({ success: true, postId: 'post-bare', visibility: 'public' });
+        await renderer.act(async () => {
+          await mutationState.options?.mutationFn?.('public');
+        });
+        const payload = authState.api.publishGeneration.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+        expect(payload).toMatchObject({ resourceBundle: { accessMode: 'none' } });
+        expect(payload).not.toHaveProperty('allowRemixes');
+        expect(payload).not.toHaveProperty('leaveOutGenerationReferenceIds');
+        expect(payload).not.toHaveProperty('includeGenerationReferences');
+
+        // The way back stays, and brings the recipe back with it.
+        renderer.act(() => findPressableByText(tree.root, 'Put the removed file back').props.onPress());
+        expect(choice(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+        expect(choice(tree, 'No recipe')).toBeUndefined();
+        expect(toggle(tree, 'Allow remixes').props.value).toBe(true);
+      });
+
+      // Finding 8: a removal made while the publish was on its way was drawn and never sent.
+      it('holds the files, the switches and the cards still while a publish is on its way', async () => {
+        generationState.item = { ...generationItem, input_media: twoInputs };
+        mutationState.isPending = true;
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+        for (const button of removeButtons(tree)) {
+          expect(button.props.disabled).toBe(true);
+          expect(button.props.accessibilityState).toEqual({ disabled: true });
+        }
+        renderer.act(() => removeButtons(tree)[1].props.onPress());
+        expect(removeButtons(tree)).toHaveLength(2);
+        renderer.act(() => toggle(tree, 'Include creation references').props.onValueChange(false));
+        expect(toggle(tree, 'Include creation references').props.value).toBe(true);
+        renderer.act(() => toggle(tree, 'Allow remixes').props.onValueChange(false));
+        expect(toggle(tree, 'Allow remixes').props.value).toBe(true);
+        expect(choice(tree, 'Paid recipe').props.accessibilityState).toEqual({ checked: false, selected: false, disabled: true });
+      });
+
+      // Cut by the review's cap: the remove button hung off the tile's corner, past its parent's edge,
+      // where Android delivers no touch: its target was about 26pt.
+      it('keeps each remove button’s whole 44pt target inside its tile', async () => {
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+        const button = removeButtons(tree)[0];
+        const style = button.props.style as Record<string, unknown>;
+        // The tile the button sits in: the nearest view that declares a size.
+        let wrapper = button.parent;
+        while (wrapper && !(String(wrapper.type) === 'view' && typeof (wrapper.props.style as { width?: unknown } | undefined)?.width === 'number')) {
+          wrapper = wrapper.parent;
+        }
+        const tile = wrapper!.props.style as { width: number; height: number };
+
+        expect(button.props.hitSlop).toBeUndefined();
+        expect(style).toMatchObject({ position: 'absolute', top: 0, right: 0, width: 44, height: 44 });
+        expect((style.width as number) <= tile.width && (style.height as number) <= tile.height).toBe(true);
+      });
+
+      // Finding 12: the paid recipe told its seller buyers could remix and resell a post that allows no remix.
+      it('promises no resale of a remix once remixes are off', async () => {
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+        renderer.act(() => choice(tree, 'Paid recipe').props.onPress());
+        expect(collectText(tree.root)).toContain(PAID_RECIPE_RESALE_LINE);
+
+        renderer.act(() => toggle(tree, 'Allow remixes').props.onValueChange(false));
+        expect(collectText(tree.root)).not.toContain(PAID_RECIPE_RESALE_LINE);
+      });
+
+      // Owner, 2026-11-06 ("Start Paid, can switch").
+      it('starts a creation from the creator’s own paid post on Paid at its price, unlocked', async () => {
+        generationState.item = { ...generationItem, own_source_post_bundle: { accessMode: 'paid', status: 'published', priceUsdCents: 120 } };
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+        expect(choice(tree, 'Paid recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+        expect(choice(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: false, selected: false });
+        expect(findTextInputByAccessibilityLabel(tree.root, 'Price in credits, required').props.value).toBe('120');
+        expect(collectText(tree.root)).not.toContain(REMIX_RECIPE_MUST_BE_PAID);
+        renderer.act(() => choice(tree, 'Free recipe').props.onPress());
+        expect(choice(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+      });
+
+      // Cut by the review's cap: the lock left No recipe selectable, which the server refuses on a
+      // public post of a paid remix; "Post without recipe" is no way on there either.
+      it('takes neither Free nor No recipe on an edit of a remix of a paid recipe', async () => {
+        generationState.item = { ...generationItem, remix_recipe_mode: 'paid' };
+        paramsState.params = { postId: 'post-from-creation' };
+        postEditState.post = {
+          ...creationPost({ accessMode: 'paid', priceUsdCents: 50, previewText: 'The exact prompt behind this still.', resources: { items: [] } }),
+          title: 'Ox',
+          remixRecipeMode: 'paid',
+        };
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+        expect(choice(tree, 'Paid recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+        expect(choice(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: false, selected: false, disabled: true });
+        expect(choice(tree, 'No recipe').props.accessibilityState).toEqual({ checked: false, selected: false, disabled: true });
+        expect(tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Post without recipe')).toHaveLength(0);
+      });
+
+      // Finding 14: a draft an older build kept has no "Allow remixes", which read as on, and an edit
+      // always sends it; and a new post's draft on No recipe was refused once its card was gone.
+      it('takes an older edit draft’s missing switch from its post, so a save keeps remixes off', async () => {
+        paramsState.params = { postId: 'post-from-creation' };
+        postEditState.post = {
+          ...creationPost({ accessMode: 'free', previewText: 'The exact prompt behind this still.', resources: { items: [] } }),
+          remixesAllowed: false,
+        };
+        storageState.values.set('magicbooklet.post.drafts.v1', JSON.stringify({
+          'user-123:edit:post-from-creation': {
+            draft: {
+              ...getDefaultPostComposerDraft(),
+              mode: 'creation',
+              proofMode: 'media',
+              selectedGenerationId: 'gen-1',
+              title: 'Hero product image, kept',
+              visibility: 'public',
+              resource: { ...getDefaultPostComposerDraft().resource, accessMode: 'free', previewText: 'The exact prompt behind this still.' },
+              // As a build from before phase 2 kept it.
+              creationPackage: { attachGenerationReferences: false },
+            },
+            step: 'resources',
+            updatedAt: new Date().toISOString(),
+          },
+        }));
+        authState.api.updatePost.mockResolvedValueOnce({ success: true, postId: 'post-from-creation', visibility: 'public' });
+        const tree = await renderScreen();
+        expect(collectText(tree.root)).toContain('Draft restored');
+        expect(toggle(tree, 'Allow remixes').props.value).toBe(false);
+
+        await renderer.act(async () => {
+          await mutationState.options?.mutationFn?.('public');
+        });
+        expect(authState.api.updatePost.mock.calls.at(-1)?.[1]).toMatchObject({ allowRemixes: false });
+      });
+
+      it('moves an older new-post draft on No recipe to Free for a creation that carries one', async () => {
+        storageState.values.set('magicbooklet.post.drafts.v1', JSON.stringify({
+          'user-123:generation:gen-1': {
+            draft: {
+              ...getDefaultPostComposerDraft(),
+              mode: 'creation',
+              proofMode: 'media',
+              selectedGenerationId: 'gen-1',
+              title: 'Hero product image, kept',
+              visibility: 'public',
+              creationPackage: { attachGenerationReferences: false },
+            },
+            step: 'resources',
+            updatedAt: new Date().toISOString(),
+          },
+        }));
+        const tree = await renderScreen();
+        expect(collectText(tree.root)).toContain('Draft restored');
+
+        expect(choice(tree, 'No recipe')).toBeUndefined();
+        expect(choice(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+        expect(collectText(tree.root)).toContain('Exact generation prompt');
+        expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(false);
+      });
     });
   });
 
@@ -3813,7 +4047,51 @@ describe('mobile external post composer', () => {
         expect(text).toContain(RECIPE_TITLE_TOO_SHORT_HINT);
         expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
         expect(postWithoutRecipeButtons(tree)).toHaveLength(0);
-        expect(sentWithoutRecipe).toBeTruthy();
+        expect(mutationState.mutate).not.toHaveBeenCalled();
+      });
+
+      // The one press (owner, 2026-11-03), still a new upload's and text post's way on: the recipe
+      // goes to No recipe and the post goes at once, asking nothing (#711's review: the case above
+      // had lost its assertions to an expectation that always held).
+      async function shortTextPostWithFreeRecipe() {
+        paramsState.params = {};
+        const tree = await renderScreen();
+        renderer.act(() => findPressableByText(tree.root, 'Text post').props.onPress());
+        renderer.act(() => titleInput(tree).props.onChangeText(SHORT));
+        renderer.act(() => findTextInputByAccessibilityLabel(tree.root, 'Post text, required').props.onChangeText('A useful text breakdown of the prompt.'));
+        renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+        renderer.act(() => radio(tree, 'Free recipe').props.onPress());
+        return tree;
+      }
+
+      it('sends a new text post at once with No recipe, asking nothing', async () => {
+        const tree = await shortTextPostWithFreeRecipe();
+        expect(findPressableByAccessibilityLabel(tree.root, 'Publish public').props.disabled).toBe(true);
+        expect(postWithoutRecipeButtons(tree)).toHaveLength(1);
+
+        await postWithoutRecipe(tree);
+        expect(alertState.alert).not.toHaveBeenCalled();
+        expect(mutationState.mutate).toHaveBeenCalledTimes(1);
+        expect(mutationState.mutate).toHaveBeenCalledWith(sentWithoutRecipe);
+        // The cards read what was sent.
+        expect(radio(tree, 'No recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+        expect(radio(tree, 'Free recipe').props.accessibilityState).toEqual({ checked: false, selected: false });
+      });
+
+      it('offers it beside the server’s refusal of the title on a text post, and sends the post at once', async () => {
+        const refusal = mobileApiContract.endpoints.publishGeneration.errors.recipeTitleTooShort;
+        const tree = await shortTextPostWithFreeRecipe();
+        renderer.act(() => mutationState.options?.onError?.(
+          new ApiError(refusal.response.error, refusal.status, refusal.response, undefined, refusal.response.code),
+          'public',
+        ));
+        expect(collectText(tree.root)).toContain(refusal.response.error);
+        // Beside the refusal and beside the summary's hint.
+        expect(postWithoutRecipeButtons(tree)).toHaveLength(2);
+
+        await postWithoutRecipe(tree);
+        expect(mutationState.mutate).toHaveBeenCalledTimes(1);
+        expect(mutationState.mutate).toHaveBeenCalledWith(sentWithoutRecipe);
       });
 
       it('answers the server’s refusal of that rule by the title alone', async () => {

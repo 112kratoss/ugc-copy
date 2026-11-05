@@ -855,12 +855,15 @@ export function ToggleRow({
   value,
   onValueChange,
   accent = 'workflow',
+  disabled = false,
 }: {
   label: string;
   body?: string;
   value: boolean;
   onValueChange: (value: boolean) => void;
   accent?: ToolAccent;
+  /** Takes no press and is announced as disabled (a post's switches while it is being sent). */
+  disabled?: boolean;
 }) {
   const theme = useAppTheme();
   const color = accentColor(accent, theme.colors);
@@ -877,10 +880,12 @@ export function ToggleRow({
         accessibilityRole="switch"
         accessibilityLabel={label}
         accessibilityHint={body}
-        accessibilityState={{ checked: value }}
+        accessibilityState={disabled ? { checked: value, disabled: true } : { checked: value }}
+        disabled={disabled}
         onBlur={motion.onBlur}
         onFocus={motion.onFocus}
         onPress={() => {
+          if (disabled) return;
           haptic.select();
           onValueChange(!value);
         }}

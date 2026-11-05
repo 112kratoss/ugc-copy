@@ -1674,6 +1674,54 @@ export function resolveRecipeAllowRemix(input: {
     && input.templateResult !== true;
 }
 
+/**
+ * A recipe's kinds on a post whose creator turned "Allow remixes" off (`posts.remixes_allowed`, owner
+ * 2026-11-05): no Remix, whatever its stored switch, its creation or a Remix link among its items says
+ * (the review of phase 2), as the marketplace's listing and search read it (20261105152921).
+ */
+export function withoutRemixKind(kinds: readonly PostResourceKind[]): PostResourceKind[] {
+  return kinds.filter((kind) => kind !== 'remix');
+}
+
+/** Counts without "remix access", the mark of a Remix that comes with the recipe: no item of the creator's. */
+function withoutRemixAccessCount(counts: PostResourceItemCounts): PostResourceItemCounts {
+  return Object.fromEntries(
+    Object.entries(counts).filter(([type]) => type !== 'remix_access'),
+  ) as PostResourceItemCounts;
+}
+
+/**
+ * A recipe's locked preview on such a post: no Remix in its kinds, its flag or a card's "Remix
+ * included", and no "remix access" among what it counts. A Remix link stays counted: the creator's
+ * link is still in the recipe.
+ */
+export function withoutRemixInLockedPreview(preview: PostResourceBundleLockedPreview): PostResourceBundleLockedPreview {
+  return {
+    ...preview,
+    resourceKinds: withoutRemixKind(preview.resourceKinds),
+    itemCounts: withoutRemixAccessCount(preview.itemCounts),
+    itemPreviews: preview.itemPreviews.filter((item) => item.type !== 'remix_access'),
+    ...(preview.cardPreviews ? { cardPreviews: preview.cardPreviews.map((card) => ({ ...card, hasRemix: false })) } : {}),
+    hasRemix: false,
+  };
+}
+
+/** A recipe's summary on such a post (a feed card's `asset`, a listed recipe): no Remix in any of it. */
+export function withoutRecipeRemix<T extends {
+  allowRemix: boolean;
+  resourceKinds?: PostResourceKind[];
+  itemCounts?: PostResourceItemCounts;
+  lockedPreview?: PostResourceBundleLockedPreview;
+}>(recipe: T): T {
+  return {
+    ...recipe,
+    allowRemix: false,
+    ...(recipe.resourceKinds ? { resourceKinds: withoutRemixKind(recipe.resourceKinds) } : {}),
+    ...(recipe.itemCounts ? { itemCounts: withoutRemixAccessCount(recipe.itemCounts) } : {}),
+    ...(recipe.lockedPreview ? { lockedPreview: withoutRemixInLockedPreview(recipe.lockedPreview) } : {}),
+  };
+}
+
 export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   capability: PostRemixCapability;
   target: PostRemixTarget;

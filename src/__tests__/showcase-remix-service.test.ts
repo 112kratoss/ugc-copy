@@ -687,6 +687,26 @@ describe('remixShowcasePostForRoute access gate', () => {
     expect(result.ok ? result.body.prefill.prompt : null).toBe(PUBLIC_CREATOR_GENERATION.prompt);
   });
 
+  // The post's "Allow remixes" off stops new remixes, for a buyer of its recipe too (owner,
+  // 2026-11-05): this route asks the gate for a remix, never for a run's reuse of what they hold.
+  it('opens no editor on a post whose creator turned remixes off, for the viewer who bought its recipe', async () => {
+    const serviceClient = createServiceClientMock({
+      post: { ...EXPOSED_POST_ROW, remixes_allowed: false },
+      bundle: REMIX_RECIPE_BUNDLE,
+      purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'someone-else' }],
+    });
+
+    const result = await remixShowcasePostForRoute({
+      actorUserId: 'someone-else',
+      referenceId: 'post-1',
+      serviceClient: serviceClient.client,
+      dependencies: createDependencies(),
+    });
+
+    expect(result).toEqual({ ok: false, status: 404, body: { error: 'Linked generation not found' } });
+    expect(JSON.stringify(result)).not.toContain(PUBLIC_CREATOR_GENERATION.prompt);
+  });
+
   it('lets the creator remix their own remix-enabled recipe without buying it', async () => {
     const serviceClient = createServiceClientMock({ bundle: REMIX_RECIPE_BUNDLE });
 

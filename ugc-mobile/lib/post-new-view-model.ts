@@ -48,9 +48,14 @@ import {
   needsCreationPromptItem,
   recipeCopyableInputs,
   withoutLockedCreationPrompt,
-  CREATION_RECIPE_STARTING_ACCESS,
+  creationInputsLeftOutOfRecipe,
+  creationRecipeHasItems,
+  creationRecipeStart,
   DEFAULT_PAID_RECIPE_PRICE_CREDITS,
+  readOwnSourceRecipe,
   remixRecipeLock,
+  remixRecipeRequired,
+  withoutCreationInputCopy,
   type GenerationReference,
 } from '@/lib/creation-recipe/creation-recipe';
 
@@ -1033,6 +1038,29 @@ export function getCreationRecipeLock(generation: Pick<GenerationListItem, 'remi
 }
 
 /**
+ * Where a creation's new post's recipe starts, and at what price (`creationRecipeStart`; owner,
+ * 2026-11-05 and 2026-11-06): its remix's terms; else Paid at the price of the creator's own post it
+ * came from, where that recipe is paid (`own_source_post_bundle`), which the creator may still make
+ * Free; else Free.
+ */
+export function getCreationRecipeStart(generation: GenerationListItem | null | undefined) {
+  return creationRecipeStart(generation?.remix_recipe_mode ?? null, readOwnSourceRecipe(generation) ?? null);
+}
+
+/** The draft's recipe on a mode, a paid one at `priceCredits` (both price fields, as the price input writes them). */
+function withRecipeAccess(
+  resource: PostComposerResourceDraft,
+  accessMode: PostResourceBundleAccessMode,
+  priceCredits: number,
+): PostComposerResourceDraft {
+  return {
+    ...resource,
+    accessMode,
+    ...(accessMode === 'paid' ? { priceTokens: String(priceCredits), priceUsd: String(priceCredits / 100) } : {}),
+  };
+}
+
+/**
  * The exact prompt's item, fixed in a creation's recipe (owner, 2026-11-03):
  * drawn with neither Edit nor Remove. Its title and its text both say so
  * (`isLockedCreationPromptItem`, the rule the web and the server read): one
@@ -1085,10 +1113,11 @@ export function followCreationPromptRule(
  * the remix plan's phase 2 (owner, 2026-11-05) one always carries its recipe,
  * with its saved inputs in (the creator's own uploads included) and remixes
  * allowed, and a remix's keeps its original's terms, paid at the starting
- * price where that recipe was paid. A template result, a creation off public
- * view, and one with neither a prompt nor a saved input have nothing to share
- * (`creationCarriesRecipe`) and keep No recipe; a recipe already chosen is the
- * creator's.
+ * price where that recipe was paid; one from the creator's own paid post
+ * starts paid at that post's price (owner, 2026-11-06, `getCreationRecipeStart`).
+ * A template result, a creation off public view, and one with neither a
+ * prompt nor a saved input have nothing to share (`creationCarriesRecipe`)
+ * and keep No recipe; a recipe already chosen is the creator's.
  */
 export function withCreationRecipeDefaults(
   draft: PostComposerDraft,
@@ -1099,7 +1128,7 @@ export function withCreationRecipeDefaults(
   }
   const prompt = getCreationRecipePrompt(generation)?.trim() ?? '';
   const references = hasGenerationReferences(generation);
-  const accessMode = getCreationRecipeLock(generation)?.accessMode ?? CREATION_RECIPE_STARTING_ACCESS;
+  const start = getCreationRecipeStart(generation);
   // Read as the creation's post it becomes, so the preview suggested counts its references too.
   const asCreation: PostComposerDraft = { ...draft, mode: 'creation', selectedGenerationId: generation.id };
   const withReferences: PostComposerDraft = {
@@ -1110,11 +1139,7 @@ export function withCreationRecipeDefaults(
       removedInputIds: [],
       allowRemixes: getCreationPackageDraft(draft).allowRemixes !== false,
     },
-    resource: {
-      ...draft.resource,
-      accessMode,
-      ...(accessMode === 'paid' ? { priceTokens: String(DEFAULT_PRICE_TOKENS), priceUsd: String(DEFAULT_PRICE_TOKENS / 100) } : {}),
-    },
+    resource: withRecipeAccess(draft.resource, start.accessMode, start.priceCredits),
   };
   return prompt
     ? applyCreationPromptResource(withReferences, generation)
@@ -1123,12 +1148,128 @@ export function withCreationRecipeDefaults(
 
 /**
  * Whether a creation's post can carry a recipe (owner, 2026-11-05: one always does): a creation on
- * public view with a prompt or a saved input to share, no template's result. A post of any other has
- * No recipe to offer, and starts on it.
+ * public view with a prompt or a saved input still in it to share (`removedInputIds`, #711's review),
+ * no template's result; and a remix of a paid recipe, whose post goes with a paid one whatever it
+ * holds. A post of any other has No recipe to offer, and starts on it.
  */
-export function creationCarriesRecipe(generation: GenerationListItem | null | undefined): boolean {
-  if (!generation || isTemplateGeneration(generation) || !creationMayShareRecipe(generation)) return false;
-  return Boolean(getCreationRecipePrompt(generation)?.trim()) || hasGenerationReferences(generation);
+export function creationCarriesRecipe(
+  generation: GenerationListItem | null | undefined,
+  removedInputIds: ReadonlySet<string> = new Set(),
+): boolean {
+  if (!generation || isTemplateGeneration(generation)) return false;
+  if (remixRecipeRequired(generation.remix_recipe_mode)) return true;
+  return creationMayShareRecipe(generation)
+    && creationRecipeHasItems(getCreationRecipePrompt(generation), recipeCopyableInputs(generation.input_media), removedInputIds);
+}
+
+/**
+ * The draft with one saved input taken out of the recipe (owner, 2026-11-05). The copy an earlier
+ * save made of it goes from the cards too, or everyone who gets the recipe keeps the file; and a
+ * new post of a creation left with nothing to share falls back to No recipe, which sends no "Allow
+ * remixes" (#711's review). Its title follows the recipe as any change of mode moves it.
+ */
+export function withCreationInputRemoved(
+  draft: PostComposerDraft,
+  generation: GenerationListItem | null | undefined,
+  inputId: string,
+  options: { isEdit: boolean },
+): PostComposerDraft {
+  const removed = getRemovedCreationInputIds(draft);
+  if (removed.has(inputId)) return draft;
+  const removedInputIds = [...removed, inputId];
+  const cards = withoutCreationInputCopy(draft.resource.cards, generation?.id, inputId);
+  const fallsBackToNoRecipe = !options.isEdit
+    && draft.mode === 'creation'
+    && draft.resource.accessMode !== 'none'
+    && !creationCarriesRecipe(generation, new Set(removedInputIds))
+    && !cards.some((card) => resourceCardHasContent(card));
+  const next: PostComposerDraft = {
+    ...draft,
+    creationPackage: { ...getCreationPackageDraft(draft), removedInputIds },
+    resource: {
+      ...draft.resource,
+      cards,
+      ...(fallsBackToNoRecipe ? { accessMode: 'none' as const } : {}),
+    },
+  };
+  return followSuggestedRecipePreview(draft, followCreationTitleSuggestion(draft, next, generation), generation);
+}
+
+/**
+ * The draft with every removed input put back, for the next publish or save to copy in: an
+ * edit's switch starts off, so it goes on. A new post that fell back to No recipe takes its
+ * recipe back (`getCreationRecipeStart`).
+ */
+export function withRemovedCreationInputsPutBack(
+  draft: PostComposerDraft,
+  generation: GenerationListItem | null | undefined,
+  options: { isEdit: boolean },
+): PostComposerDraft {
+  const takesRecipeBack = !options.isEdit
+    && draft.mode === 'creation'
+    && draft.resource.accessMode === 'none'
+    && creationCarriesRecipe(generation);
+  const start = getCreationRecipeStart(generation);
+  const next: PostComposerDraft = {
+    ...draft,
+    creationPackage: { ...getCreationPackageDraft(draft), removedInputIds: [], attachGenerationReferences: true },
+    resource: takesRecipeBack ? withRecipeAccess(draft.resource, start.accessMode, start.priceCredits) : draft.resource,
+  };
+  return followSuggestedRecipePreview(draft, followCreationTitleSuggestion(draft, next, generation), generation);
+}
+
+/**
+ * The saved inputs an edit opens with taken out of the recipe (#711's review): those its stored
+ * recipe holds no copy of, so a file removed before is not offered back unasked; none where the
+ * recipe still hands the inputs over as they are (`allowRemix`, `creationInputsLeftOutOfRecipe`).
+ */
+export function getCreationInputsOutOfStoredRecipe(
+  generation: GenerationListItem | null | undefined,
+  resource: Pick<PostComposerResourceDraft, 'cards' | 'allowRemix'>,
+): string[] {
+  if (!generation || isTemplateGeneration(generation)) return [];
+  return creationInputsLeftOutOfRecipe(
+    recipeCopyableInputs(generation.input_media),
+    resource.cards.flatMap((card) => card.attachments.map((attachment) => attachment.storagePath)),
+    generation.id,
+    resource.allowRemix,
+  );
+}
+
+/**
+ * A draft kept on the device by an older build, restored over where the composer starts (#711's
+ * review): the creation choices it lacks (the inputs taken out, "Allow remixes") come from the
+ * starting draft, an edit's from its post, so an old draft does not reopen remixes or offer a
+ * removed file back; and a new post's draft on No recipe for a creation that carries one moves to
+ * where a new post starts, Free or its remix's terms, since its composer offers No recipe no more.
+ */
+export function withRestoredCreationChoices(
+  kept: PostComposerDraft,
+  starting: PostComposerDraft,
+  generation: GenerationListItem | null | undefined,
+  options: { isEdit: boolean },
+): PostComposerDraft {
+  const restored: PostComposerDraft = {
+    ...kept,
+    creationPackage: { ...getCreationPackageDraft(starting), ...kept.creationPackage },
+  };
+  if (
+    options.isEdit
+    || !generation
+    || restored.mode !== 'creation'
+    || restored.resource.accessMode !== 'none'
+    || !creationCarriesRecipe(generation, getRemovedCreationInputIds(restored))
+  ) {
+    return restored;
+  }
+  const defaults = withCreationRecipeDefaults(restored, generation);
+  if (defaults !== restored) return followCreationTitleSuggestion(restored, defaults, generation);
+  // Items of the creator's own are kept: only the mode moves.
+  const start = getCreationRecipeStart(generation);
+  return followCreationTitleSuggestion(restored, {
+    ...restored,
+    resource: withRecipeAccess(restored.resource, start.accessMode, start.priceCredits),
+  }, generation);
 }
 
 /**
@@ -1375,9 +1516,10 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
  * inputs they removed, which the server never copies and which turn off the recipe's live
  * hand-over (named whether or not the rest are being copied now, the review of phase 2), and
  * "Allow remixes". The server reads the switch on a publish as a composer that offers no post of
- * a creation without its recipe, so a new post sends it only where its creation carries one
- * (`creationCarriesRecipe`); an edit always sends it. A template result has no Remix and sends
- * neither.
+ * a creation without its recipe, so a new post sends it only where its creation carries one with
+ * the inputs still in it (`creationCarriesRecipe`; one with every input of a prompt-less creation
+ * removed offers No recipe again, #711's review); an edit always sends it. A template result has no
+ * Remix and sends neither.
  */
 function buildCreationRecipeChoicesPatch(
   item: GenerationListItem | null | undefined,
@@ -1390,7 +1532,7 @@ function buildCreationRecipeChoicesPatch(
     ? recipeCopyableInputs(item?.input_media).filter((input) => removed.has(input.id)).map((input) => input.id)
     : [];
   return {
-    ...(options.isEdit || creationCarriesRecipe(item) ? { allowRemixes: draftAllowsRemixes(draft) } : {}),
+    ...(options.isEdit || creationCarriesRecipe(item, removed) ? { allowRemixes: draftAllowsRemixes(draft) } : {}),
     ...(leftOut.length > 0 ? { leaveOutGenerationReferenceIds: leftOut } : {}),
   };
 }
