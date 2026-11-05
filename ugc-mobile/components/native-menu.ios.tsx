@@ -10,7 +10,7 @@ import type { NativeMenuProps, NativeMenuTrigger } from '@/components/native-men
 import { useResolvedColorScheme } from '@/lib/appearance';
 import { compactNativeMenu, hasNativeMenuItems, type NativeMenuAction } from '@/lib/native-menu';
 import { isNativeMenuAvailable } from '@/lib/native-menu-available';
-import { lowerNativeMenuShield, raiseNativeMenuShield } from '@/lib/native-menu-shield';
+import { lowerNativeMenuShield, nativeMenuTriggerTouchProps } from '@/lib/native-menu-shield';
 
 export type { NativeMenuProps, NativeMenuTrigger } from '@/components/native-menu-types';
 
@@ -50,10 +50,6 @@ function SwiftUIMenu({ accessibilityHint, accessibilityLabel, model, style, trig
   const { Button, ControlGroup, Host, Image, Menu, Section, Toggle } = ui;
   const menu = compactNativeMenu(model);
 
-  // The menu's content appears when it opens (and not before): the moment to
-  // raise the shield that keeps the closing tap from reaching the app.
-  const whenOpen = [modifiers.onAppear(raiseNativeMenuShield)];
-
   // Rows are drawn from props only. A subtitle needs a label built from child
   // texts, and SwiftUI filled those in only after the menu had opened (about a
   // second later on the simulator, 2026-09-27), so the rows grew under the
@@ -84,7 +80,9 @@ function SwiftUIMenu({ accessibilityHint, accessibilityLabel, model, style, trig
 
   const slop = trigger.hitSlop ?? 0;
   return (
-    <View style={style}>
+    // The tap on the ••• raises the shield that keeps the tap closing the menu
+    // from reaching the app (`lib/native-menu-shield.ts` says why not onAppear).
+    <View style={style} {...nativeMenuTriggerTouchProps}>
       <Host
         colorScheme={scheme}
         // The button lies where React Native puts it; the screen's safe area is
@@ -117,14 +115,10 @@ function SwiftUIMenu({ accessibilityHint, accessibilityLabel, model, style, trig
           ]}
         >
           {menu.quickActions.length ? (
-            <ControlGroup modifiers={whenOpen}>{menu.quickActions.map(renderAction)}</ControlGroup>
+            <ControlGroup>{menu.quickActions.map(renderAction)}</ControlGroup>
           ) : null}
-          {menu.sections.map((section, index) => (
-            <Section
-              key={section.id}
-              title={section.title}
-              modifiers={index === 0 && !menu.quickActions.length ? whenOpen : undefined}
-            >
+          {menu.sections.map((section) => (
+            <Section key={section.id} title={section.title}>
               {section.items.map((item) => (item.kind === 'submenu' ? (
                 <Menu
                   key={item.id}
