@@ -2,6 +2,8 @@
 
 Status (2026-10-18): all five P3 decisions taken by the owner and written in (see "P3 decisions"). P1 shipped in PR #475 (`AGENTS.md` split into a 21 KB core plus eight path-scoped rules, three hooks and a committed `.claude/settings.json`, a compaction section, symlinked mirrors at the top level). P2 shipped in PR #476 (four repo skills, the design skill split into a core plus references, `npm run test:quiet`). Nothing is left open; the monthly prompt-audit is the standing follow-up.
 
+Status (2026-11-05): `ship-ota` no longer carries `disable-model-invocation: true` (owner, PR #704); its `--publish` waits for the owner's word in chat instead, as the skill says. The mentions of the flag below are the 2026-10-18 decision.
+
 ## Why
 
 The owner asked how Anthropic sets up and uses Claude Code and which of it is worth copying here. Three research passes (official docs and engineering posts; how Anthropic staff and teams work; the current feature set) were read against a measured inventory of this workspace. Every claim links a source in the list at the end; nothing the researchers could not verify from a primary source is used.

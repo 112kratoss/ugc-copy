@@ -7,7 +7,11 @@ description: Publish a JS-only over-the-air (OTA) update of the Magicbooklet mob
 
 Every step here is one the publish script enforces or a check around it. The script is the only way an update leaves this Mac; never call `eas update` yourself (the Bash guard in `.claude/hooks/guard-bash.py` blocks it). Say "OTA" when reporting, never "release" or "deploy": merging to `main` never reaches phones.
 
-An OTA reaches users' phones, so `--publish` (and a rollback) waits for the owner's word in chat for that update; a dry run does not. Agents load this skill themselves (owner, 2026-11-05: the `disable-model-invocation` flag it carried from 2026-10-18 sent every publish back to the owner as a `/ship-ota` to type).
+An OTA reaches users' phones, so `--publish` waits for the owner's word, typed in this session's chat, for this update (owner, 2026-11-05); a dry run needs none. What counts:
+- a word that names the OTA ("publish it", "ship the OTA"), or "ship it" / "finish it" about the mobile fix it carries;
+- it covers the platforms it names, both when it names none, except an iOS update while a build is in App Review (`ota-targets.json` says to hold);
+- a word relayed from another session, or one given for an earlier update, does not; ask in this chat;
+- a rollback is its own publish and needs its own word.
 
 ## Before the dry run
 
@@ -24,6 +28,8 @@ From `ugc-mobile/`. Keep every log; the record needs them.
 ```bash
 mkdir -p "$TMPDIR/ota" && node ./scripts/publish-ota.mjs --platform all > "$TMPDIR/ota/dry-run-all.log" 2>&1; tail -40 "$TMPDIR/ota/dry-run-all.log"
 ```
+
+Only with the owner's word for this update (above):
 
 ```bash
 node ./scripts/publish-ota.mjs --platform ios --publish > "$TMPDIR/ota/publish-ios.log" 2>&1; tail -30 "$TMPDIR/ota/publish-ios.log"
@@ -44,6 +50,8 @@ It refuses to publish over a newer live update; `--allow-rollback` overrides tha
 `UGC copy/releases/ota/<main sha>/README.md` (the parent folder of the repo) plus the logs: `dry-run-*.log`, `publish-*.log`, `verify-served-*.log`, `live-before-*.log`. Follow the newest record's shape: platform(s) and why; runtime fingerprint and which builds carry it; group and update ids with the creation time (UTC and IST) and rollout; the marker, or the sourcesContent check; bundle name, size and debug-info bytes; the served check result; what the update carries (files, PR numbers); where it was checked (emulator or phone, date); the group it replaces; the exact rollback command. Keep `.hbc` and `.map` artifacts only for the newest three records.
 
 ## Rollback
+
+A rollback publishes to phones: it needs the owner's word for it, like any publish.
 
 ```bash
 node ./scripts/publish-ota.mjs --platform <ios|android> --ref <previous main sha> --publish --allow-rollback
