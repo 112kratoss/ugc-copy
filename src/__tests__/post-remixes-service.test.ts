@@ -189,7 +189,7 @@ describe('GET /api/showcase/posts/:postId/remixes', () => {
   });
 
   it('keys a signed-out reader\'s rate limit on their network and caches the page at the edge', async () => {
-    const enforceBackendRateLimit = vi.fn(async () => undefined);
+    const enforceBackendRateLimit = vi.fn(async (..._args: unknown[]) => undefined);
     const listPostRemixes = vi.fn(async () => ({
       ok: true as const,
       body: { success: true as const, items: [], pageInfo: { hasMore: false, nextOffset: null, limit: 24, offset: 0 } },
@@ -201,7 +201,7 @@ describe('GET /api/showcase/posts/:postId/remixes', () => {
       context: { params: Promise.resolve({ postId: POST_ID }) },
       dependencies: {
         createServiceClient: () => ({}) as never,
-        enforceBackendRateLimit,
+        enforceBackendRateLimit: enforceBackendRateLimit as never,
         getFeedNetworkKeyHash: () => 'network-hash',
         listPostRemixes,
       },
@@ -228,7 +228,7 @@ describe('GET /api/showcase/posts/:postId/remixes', () => {
       context: { params: Promise.resolve({ postId: POST_ID }) },
       dependencies: {
         createServiceClient: () => ({}) as never,
-        enforceBackendRateLimit: vi.fn(async () => undefined),
+        enforceBackendRateLimit: vi.fn(async () => undefined) as never,
         getFeedNetworkKeyHash: () => 'network-hash',
         listPostRemixes: vi.fn(async () => ({ ok: false as const, status: 404 as const, body: { error: 'Post not found.' } })),
       },

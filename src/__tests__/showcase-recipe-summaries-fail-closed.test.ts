@@ -69,6 +69,10 @@ function post(id: string, prompt: string, createdAt: string, body: string | null
     visibility: 'public',
     archived_at: null,
     is_nsfw: false,
+    // Whom a remix post credits (20261105150143); none of these is a remix.
+    remix_parent_post_id: null,
+    remix_parent_user_id: null,
+    remix_origin_user_id: null,
   };
 }
 

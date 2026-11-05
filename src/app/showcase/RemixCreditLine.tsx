@@ -49,7 +49,7 @@ export default function RemixCreditLine({
                 key={index}
                 href={`/showcase/${encodeURIComponent(segment.postId)}`}
                 prefetch={false}
-                className="ui-focus-ring rounded font-semibold text-zinc-200 transition hover:text-white"
+                className="ui-focus-ring rounded-lg font-semibold text-zinc-200 transition hover:text-white"
               >
                 {segment.text}
               </Link>
@@ -61,7 +61,7 @@ export default function RemixCreditLine({
                 key={index}
                 href={`/creators/${encodeURIComponent(segment.username)}`}
                 prefetch={false}
-                className="ui-focus-ring rounded font-semibold text-zinc-200 transition hover:text-white"
+                className="ui-focus-ring rounded-lg font-semibold text-zinc-200 transition hover:text-white"
               >
                 {segment.text}
               </Link>

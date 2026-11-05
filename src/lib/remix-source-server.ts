@@ -258,12 +258,16 @@ async function fetchGenerationById(
  */
 async function loadRemixSourcePost(
   adminSupabase: ReturnType<typeof createServiceClient>,
-  post: { id: string; user_id: string | null; title?: string | null },
+  post: { id: string; user_id: string | null },
 ): Promise<RemixSourcePost | null> {
   if (!post.user_id) return null;
-  const creatorUsername = await loadProfileHandle(adminSupabase, post.user_id);
-  if (!creatorUsername) return null;
-  return { id: post.id, title: post.title?.trim() || 'Untitled Creation', creatorUsername };
+  const [titleRead, creatorUsername] = await Promise.all([
+    adminSupabase.from('posts').select('title').eq('id', post.id).maybeSingle(),
+    loadProfileHandle(adminSupabase, post.user_id),
+  ]);
+  if (!creatorUsername || titleRead.error) return null;
+  const title = (titleRead.data as { title?: string | null } | null)?.title?.trim();
+  return { id: post.id, title: title || 'Untitled Creation', creatorUsername };
 }
 
 export async function loadRemixSourceBundle(

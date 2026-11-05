@@ -36,8 +36,6 @@ export type RemixAccessGeneration = {
 export type RemixAccessPost = {
   id: string;
   user_id: string | null;
-  /** What the remix's creator calls the post it is remixing (`RemixSourceBundle.sourcePost`). */
-  title?: string | null;
   generation_id: string | null;
   category: string | null;
   post_format: string | null;
@@ -96,7 +94,7 @@ export type RemixAccessDependencies = {
 };
 
 const REMIX_POST_SELECT =
-  'id, user_id, title, generation_id, category, post_format, source_kind, visibility, archived_at, review_status';
+  'id, user_id, generation_id, category, post_format, source_kind, visibility, archived_at, review_status';
 
 const NOT_FOUND = { allowed: false, reason: 'not_found' } as const;
 const TEMPLATE_RESULT = { allowed: false, reason: 'template_result' } as const;

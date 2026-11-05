@@ -219,7 +219,7 @@ function BootstrapRemixCredit({ credit }: { credit: RemixCredit }) {
                             ? `/showcase/${encodeURIComponent(segment.postId)}`
                             : `/creators/${encodeURIComponent(segment.username)}`}
                         data-showcase-static-link="true"
-                        className="ui-focus-ring rounded font-semibold text-zinc-200 hover:text-white"
+                        className="ui-focus-ring rounded-lg font-semibold text-zinc-200 hover:text-white"
                     >
                         {segment.text}
                     </a>
