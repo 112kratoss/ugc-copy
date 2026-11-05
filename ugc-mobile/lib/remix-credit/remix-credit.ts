@@ -97,6 +97,42 @@ export function withoutBlockedRemixCredit(
   return parent || original ? { parent, original } : null;
 }
 
+/**
+ * A card with its credit naming no one `isBlocked` picks out; the field goes
+ * when no one is left to name. The same card comes back when its credit
+ * doesn't change.
+ */
+export function itemWithoutBlockedRemixCredit<T extends { remixCredit?: RemixCredit | null }>(
+  item: T,
+  isBlocked: (userId: string) => boolean,
+): T {
+  if (!item.remixCredit) return item;
+  const remixCredit = withoutBlockedRemixCredit(item.remixCredit, isBlocked);
+  if (remixCredit === item.remixCredit) return item;
+  if (remixCredit) return { ...item, remixCredit };
+  const uncredited: { remixCredit?: RemixCredit | null } = { ...item };
+  delete uncredited.remixCredit;
+  return uncredited as T;
+}
+
+/**
+ * Cards, each as `itemWithoutBlockedRemixCredit` leaves it. The same array
+ * comes back when no credit changes, so a list kept in state draws nothing
+ * again.
+ */
+export function itemsWithoutBlockedRemixCredits<T extends { remixCredit?: RemixCredit | null }>(
+  items: T[],
+  isBlocked: (userId: string) => boolean,
+): T[] {
+  let changed = false;
+  const next = items.map((item) => {
+    const kept = itemWithoutBlockedRemixCredit(item, isBlocked);
+    if (kept !== item) changed = true;
+    return kept;
+  });
+  return changed ? next : items;
+}
+
 export type RemixCreditSegment =
   | { kind: 'text'; text: string }
   /** The post remixed's title, in quotes: opens the post. */

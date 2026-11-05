@@ -29,17 +29,25 @@ function expectLockTimeoutTransaction(sql: string) {
 describe('remix posts carry their credit', () => {
   const sql = readMigration('20261105150143_remix_posts_carry_their_credit.sql');
   const credit = functionText(sql, 'CREATE OR REPLACE FUNCTION public.remix_credit_for_generation(');
+  const runCredit = functionText(sql, 'CREATE OR REPLACE FUNCTION public.remix_credit_for_run(');
+  const recordRun = functionText(sql, 'CREATE OR REPLACE FUNCTION public.record_generation_remix_credit()');
   const trigger = functionText(sql, 'CREATE OR REPLACE FUNCTION public.copy_generation_remix_credit_to_post()');
 
   it('runs in a transaction of its own that gives up on a lock, and fills nothing', () => {
     expectLockTimeoutTransaction(sql);
-    expect(withoutComments(sql)).not.toMatch(/\bUPDATE public\.posts\b|backfill/i);
+    expect(withoutComments(sql)).not.toMatch(/\bUPDATE public\.(posts|generations)\b|backfill/i);
   });
 
-  it('adds the three ids as plain references that deleting nothing rewrites', () => {
-    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS remix_parent_post_id uuid,/);
-    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS remix_parent_user_id uuid,/);
-    expect(sql).toMatch(/ADD COLUMN IF NOT EXISTS remix_origin_user_id uuid;/);
+  it('adds the three ids to posts, then creations, as plain references that deleting nothing rewrites', () => {
+    for (const table of ['posts', 'generations']) {
+      expect(normalize(sql)).toContain(normalize(`
+        ALTER TABLE public.${table}
+          ADD COLUMN IF NOT EXISTS remix_parent_post_id uuid,
+          ADD COLUMN IF NOT EXISTS remix_parent_user_id uuid,
+          ADD COLUMN IF NOT EXISTS remix_origin_user_id uuid;`));
+    }
+    // posts first, then generations: the edit path's order.
+    expect(sql.indexOf('ALTER TABLE public.posts')).toBeLessThan(sql.indexOf('ALTER TABLE public.generations'));
     expect(withoutComments(sql)).not.toMatch(/REFERENCES/);
   });
 
@@ -50,15 +58,45 @@ describe('remix posts carry their credit', () => {
         WHERE remix_parent_post_id IS NOT NULL;`));
   });
 
-  it('credits the post the ledger names, walking back through the maker\'s own creations only', () => {
+  it('reads what a creation recorded first, then the ledger, walking back through the maker\'s own creations only', () => {
+    const recorded = credit.indexOf('num_nonnulls(v_run.remix_parent_post_id, v_run.remix_parent_user_id, v_run.remix_origin_user_id) > 0');
+    expect(recorded).toBeGreaterThan(0);
+    expect(recorded).toBeLessThan(credit.indexOf('FROM public.completed_post_remixes AS remix'));
     expect(credit).toMatch(/FROM public\.completed_post_remixes AS remix\s+JOIN public\.posts AS p ON p\.id = remix\.post_id/);
-    expect(credit).toMatch(/v_source_user_id NOT IN \(SELECT public\.linked_account_ids\(v_run_user_id\)\)/);
+    expect(credit).toMatch(/v_source_user_id NOT IN \(SELECT public\.linked_account_ids\(v_run\.user_id\)\)/);
     expect(credit).toMatch(/v_steps >= 20/);
-    // The original: the post remixed's own, else its creator; with no post, the chain's first creation's maker.
-    expect(credit).toContain('coalesce(v_parent_origin_user_id, v_parent_user_id)');
+    // The original: the post remixed's own, else its creation's, else its creator; with no post, the chain's first creation's maker.
+    expect(credit).toContain('coalesce(p.remix_origin_user_id, parent_run.remix_origin_user_id, p.user_id)');
     expect(credit).toContain('coalesce(owner.merged_into_user_id, origin.user_id)');
     expect(credit).toMatch(/LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp/);
     expect(sql).toContain('REVOKE ALL ON FUNCTION public.remix_credit_for_generation(uuid) FROM PUBLIC, anon, authenticated;');
+  });
+
+  it('records a run\'s credit when it is made: its own source\'s, else the public post it remixed', () => {
+    const own = runCredit.indexOf('IF v_source.user_id IN (SELECT public.linked_account_ids(p_user_id)) THEN');
+    expect(own).toBeGreaterThan(0);
+    expect(runCredit.slice(own)).toMatch(/RETURN QUERY SELECT \* FROM public\.remix_credit_for_generation\(v_source\.id\);/);
+    expect(normalize(runCredit)).toContain(normalize(`
+      WHERE p.generation_id = v_source.id
+        AND p.user_id = v_source.user_id
+        AND p.visibility = 'public'`));
+    expect(runCredit).toMatch(/LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp/);
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.remix_credit_for_run(uuid, uuid) FROM PUBLIC, anon, authenticated;');
+  });
+
+  it('keeps a creation\'s credit through every update but a new source, its source\'s deletion included', () => {
+    expect(normalize(sql)).toContain(normalize(`
+      CREATE TRIGGER generations_record_remix_credit
+      BEFORE INSERT OR UPDATE OF source_generation_id, remix_parent_post_id, remix_parent_user_id, remix_origin_user_id
+      ON public.generations
+      FOR EACH ROW EXECUTE FUNCTION public.record_generation_remix_credit();`));
+    expect(normalize(recordRun)).toContain(normalize(`
+      IF TG_OP = 'UPDATE'
+        AND (NEW.source_generation_id IS NULL OR NEW.source_generation_id IS NOT DISTINCT FROM OLD.source_generation_id) THEN
+        IF num_nonnulls(OLD.remix_parent_post_id, OLD.remix_parent_user_id, OLD.remix_origin_user_id) > 0 THEN
+          NEW.remix_parent_post_id := OLD.remix_parent_post_id;`));
+    expect(recordRun).toContain('public.remix_credit_for_run(NEW.user_id, NEW.source_generation_id)');
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.record_generation_remix_credit() FROM PUBLIC, anon, authenticated;');
   });
 
   it('writes the credit when a post is made from its creation, and never changes or clears one after', () => {
@@ -87,13 +125,21 @@ describe('the remix credit backfill', () => {
     expect(sql).toContain('SELECT public.backfill_remix_post_credit();');
   });
 
-  it('asks only posts with no credit whose creation has one, oldest first, clear of the deletion freeze', () => {
+  it('fills creations first, oldest first, and writes only those with a credit to take', () => {
+    expect(backfill.indexOf('FROM public.generations AS g')).toBeLessThan(backfill.indexOf('FROM public.posts AS p'));
+    expect(backfill).toMatch(/g\.remix_parent_post_id IS NULL\s+AND g\.remix_parent_user_id IS NULL\s+AND g\.remix_origin_user_id IS NULL/);
+    expect(backfill).toContain('ORDER BY g.created_at, g.id');
+    expect(backfill).toMatch(/IF EXISTS \(SELECT 1 FROM public\.remix_credit_for_generation\(v_run\.id\)\) THEN\s+UPDATE public\.generations\s+SET remix_parent_post_id = NULL\s+WHERE id = v_run\.id;/);
+  });
+
+  it('then asks only posts with no credit whose creation has one, oldest first, clear of the deletion freeze', () => {
     expect(backfill).toMatch(/p\.remix_parent_post_id IS NULL\s+AND p\.remix_parent_user_id IS NULL\s+AND p\.remix_origin_user_id IS NULL/);
     expect(backfill).toContain('EXISTS (SELECT 1 FROM public.remix_credit_for_generation(p.generation_id))');
     expect(backfill).toContain('NOT public.is_account_deletion_requested(p.user_id)');
     expect(backfill).toContain('ORDER BY p.created_at, p.id');
-    // The trigger answers the update for a post with no credit yet.
-    expect(backfill).toMatch(/UPDATE public\.posts\s+SET remix_parent_post_id = NULL\s+WHERE id = v_post\.id;/);
+    // The trigger answers the update for a post with no credit yet; a deletion
+    // begun mid-run skips its post instead of failing the release.
+    expect(backfill).toMatch(/BEGIN\s+UPDATE public\.posts\s+SET remix_parent_post_id = NULL\s+WHERE id = v_post\.id;\s+EXCEPTION WHEN object_not_in_prerequisite_state THEN/);
     expect(sql).toContain('REVOKE ALL ON FUNCTION public.backfill_remix_post_credit() FROM PUBLIC, anon, authenticated;');
   });
 });
@@ -133,5 +179,42 @@ describe('remix alerts are unnamed across blocks and deletion', () => {
     for (const statement of statements) expect(normalize(withoutComments(block))).toContain(statement);
     expect(block).toContain("named.type = 'post_remixed'");
     expect(block).toContain('public.unnamed_remix_alert_words(named.title, named.deep_link, named.object_id)');
+  });
+});
+
+describe('remix alerts follow the remixer\'s handle', () => {
+  const sql = readMigration('20261105165100_remix_alerts_follow_the_remixers_handle.sql');
+  const words = functionText(sql, 'CREATE OR REPLACE FUNCTION public.renamed_remix_alert_words(');
+  const rename = functionText(sql, 'CREATE OR REPLACE FUNCTION public.rename_remix_alerts_of_renamed_remixer()');
+
+  it('runs after the alerts\' own migration, in a transaction of its own that locks profiles only', () => {
+    expectLockTimeoutTransaction(sql);
+    expect('20261105165100' > '20261105150333').toBe(true);
+    expect(withoutComments(sql)).not.toMatch(/LOCK TABLE|DROP TRIGGER/);
+    expect(withoutComments(sql)).not.toMatch(/ON public\.mobile_notifications\b/);
+  });
+
+  it('renames an account\'s remix alerts when its handle changes, from each alert\'s own row', () => {
+    expect(normalize(sql)).toContain(normalize(`
+      CREATE OR REPLACE TRIGGER profiles_rename_remix_alerts
+      AFTER UPDATE OF username ON public.profiles
+      FOR EACH ROW
+      WHEN (OLD.username IS DISTINCT FROM NEW.username)
+      EXECUTE FUNCTION public.rename_remix_alerts_of_renamed_remixer();`));
+    // No self-join: a block unnaming the row at the same moment is read again.
+    expect(rename).not.toMatch(/FROM public\.mobile_notifications AS named/);
+    expect(normalize(rename)).toContain(normalize(`
+      WHERE alert.actor_user_id = NEW.id
+        AND alert.type = 'post_remixed'
+        AND alert.title ~ '^@\\S+ (remixed your post|posted a remix of your post)$';`));
+  });
+
+  it('gives a handle profiles would refuse, or none, the words that name no one', () => {
+    expect(words).toContain("v_handle !~ '^[a-z0-9-]{3,24}$'");
+    expect(words).toContain('public.unnamed_remix_alert_words(p_title, p_deep_link, p_object_id)');
+    const usernameRule = readMigration('20260320120000_creator_profiles_and_remix_lineage.sql');
+    expect(usernameRule).toContain("username ~ '^[a-z0-9-]{3,24}$'");
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.renamed_remix_alert_words(text, text, text, text) FROM PUBLIC, anon, authenticated;');
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.rename_remix_alerts_of_renamed_remixer() FROM PUBLIC, anon, authenticated;');
   });
 });

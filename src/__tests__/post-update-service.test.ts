@@ -560,6 +560,93 @@ describe('updateOwnerPostForRoute', () => {
     });
   });
 
+  // Owner, 2026-11-05: a remix made public by an edit tells the creator of the
+  // post it remixed, as a public publish does. The alert reads the post's own
+  // credit and decides whether there is anyone to tell; the edit says only which
+  // post went public, and only when this edit is what made it public.
+  describe('the alert for a remix made public by an edit', () => {
+    function createDependencies(notifyPostedRemix: NonNullable<PostUpdateDependencies['notifyPostedRemix']>) {
+      return {
+        listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        updatePostWithResourceBundleAtomically: vi.fn(async ({ patch }: { patch: Record<string, unknown> }) => ({
+          postId: 'post-1',
+          visibility: patch.visibility as 'public',
+          bundleId: 'bundle-1',
+          bundleStatus: 'published' as const,
+        })),
+        replacePostSourceTools: vi.fn(async () => undefined),
+        replacePostMediaItems: vi.fn(async () => undefined),
+        createPostMediaPreview: vi.fn(async () => null),
+        notifyPostedRemix,
+      } satisfies PostUpdateDependencies;
+    }
+
+    it('hands it to the route when a private post goes public', async () => {
+      const { client } = createSupabaseMock({ bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' } });
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const tasks: Array<() => Promise<unknown>> = [];
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: 'public', title: 'Draft post' },
+        dependencies: createDependencies(notifyPostedRemix),
+        runAfterResponse: (task) => { tasks.push(task); },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(notifyPostedRemix).not.toHaveBeenCalled();
+      expect(tasks).toHaveLength(1);
+      await tasks[0]();
+      expect(notifyPostedRemix).toHaveBeenCalledWith(client, { postId: 'post-1' });
+    });
+
+    it.each([
+      ['a public post edited and kept public', 'public', 'public'],
+      ['a private post edited and kept private', 'private', 'private'],
+    ] as const)('sends nothing for %s', async (_case, before, after) => {
+      const { client } = createSupabaseMock({
+        post: {
+          id: 'post-1',
+          user_id: 'user-1',
+          generation_id: null,
+          visibility: before,
+          title: 'Draft post',
+          description: null,
+          prompt: null,
+          body: 'A draft post with an unlock package.',
+          category: 'text',
+          post_format: 'text',
+          source_tool: null,
+          source_tool_slug: null,
+          source_kind: 'manual',
+          archived_at: null,
+          showcase_asset_path: null,
+          output_url: null,
+          review_status: 'visible',
+        },
+        bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' },
+      });
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const runAfterResponse = vi.fn();
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: { visibility: after, title: 'Draft post, edited' },
+        dependencies: createDependencies(notifyPostedRemix),
+        runAfterResponse,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runAfterResponse).not.toHaveBeenCalled();
+      expect(notifyPostedRemix).not.toHaveBeenCalled();
+    });
+  });
+
   // The owner read APIs substitute "Untitled post"/"Untitled note" for an empty
   // title, and both composers PATCH the whole hydrated draft back. Without the
   // echo shim the fallback becomes the stored title, which the marketplace

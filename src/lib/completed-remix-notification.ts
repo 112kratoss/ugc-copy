@@ -126,15 +126,30 @@ type PostedRemixRow = {
   id: string;
   user_id: string | null;
   generation_id: string | null;
+  deleted_generation_id: string | null;
   visibility: string | null;
+  review_status: string | null;
+  archived_at: string | null;
+  tombstoned_at: string | null;
   remix_parent_post_id: string | null;
   remix_parent_user_id: string | null;
 };
 
+/** A post anyone can open: public, not archived, taken down or held by moderation. */
+function isOpenToEveryone(post: PostedRemixRow): boolean {
+  return post.visibility === 'public'
+    && !post.archived_at
+    && !post.tombstoned_at
+    && (post.review_status ?? 'visible') === 'visible';
+}
+
 /**
  * A remix posted where everyone can see it tells the creator of the post it
- * remixed, once per creation (its dedupe key: a post taken down and posted
- * again, or made private and public again, is not news twice). Whom to tell is
+ * remixed, once per creation (its dedupe key, which outlives the creation's
+ * deletion: a post taken down and posted again, or made private and public
+ * again, is not news twice). Only a post anyone can open is news: one archived,
+ * taken down or held by moderation would send them to a page that isn't there,
+ * and use up the one alert it may send. Whom to tell is
  * the post's own credit (posts.remix_parent_post_id and remix_parent_user_id,
  * 20261105150143), never anything a request sends. Nobody hears of their own
  * remix, of a remix of a post since deleted, or of one across a block, either
@@ -148,12 +163,12 @@ export async function notifyPostedRemix(adminSupabase: SupabaseClient, params: {
   try {
     const { data, error } = await adminSupabase
       .from('posts')
-      .select('id, user_id, generation_id, visibility, remix_parent_post_id, remix_parent_user_id')
+      .select('id, user_id, generation_id, deleted_generation_id, visibility, review_status, archived_at, tombstoned_at, remix_parent_post_id, remix_parent_user_id')
       .eq('id', params.postId)
       .maybeSingle();
     if (error) throw error;
     const post = data as PostedRemixRow | null;
-    if (!post?.user_id || post.visibility !== 'public' || !post.remix_parent_post_id || !post.remix_parent_user_id) return;
+    if (!post?.user_id || !isOpenToEveryone(post) || !post.remix_parent_post_id || !post.remix_parent_user_id) return;
     const creatorUserId = post.remix_parent_user_id;
     if (await isOwnOrLinkedAccountId(adminSupabase, creatorUserId, post.user_id)) return;
 
@@ -178,7 +193,9 @@ export async function notifyPostedRemix(adminSupabase: SupabaseClient, params: {
       }),
       objectType: 'post',
       objectId: post.remix_parent_post_id,
-      dedupeKey: `posted-remix:${post.generation_id ?? post.id}`,
+      // The creation, also once it is deleted (posts.deleted_generation_id), so
+      // the key a post was first told under is the one it keeps.
+      dedupeKey: `posted-remix:${post.generation_id ?? post.deleted_generation_id ?? post.id}`,
     });
   } catch (error) {
     logBackendError('failed_to_notify_posted_remix', { error });

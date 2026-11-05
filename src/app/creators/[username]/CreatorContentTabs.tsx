@@ -42,6 +42,8 @@ import { displaySourceToolLabel } from '@/lib/source-tools';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import { getShowcaseItemMediaItems, type ShowcaseFeedItem } from '@/lib/showcase';
 import { getAssetAccessLabel } from '@/lib/showcase-asset-labels';
+import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
+import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
 
 function ShowcaseReelLoadingFallback() {
   return (
@@ -401,6 +403,29 @@ function CreatorContentTabsView({
       setIsLoadingMore(false);
     }
   }, [addSavedItemIds, initialData.profile.username, pageInfo.hasMore, pageInfo.nextOffset, session, setItems]);
+
+  // The first page is the server's, the same for everyone (later pages and a
+  // `?post=` read come with the viewer's token and are already without them):
+  // a remix credit names nobody a block stands between and the viewer, either
+  // way. So the people its credits name are asked about once signed in, and a
+  // page with no remix on it asks nothing.
+  const accessToken = user ? session?.access_token ?? null : null;
+  useEffect(() => {
+    if (!accessToken) return;
+    const credited = initialData.items.filter((item) => item.remixCredit);
+    if (credited.length === 0) return;
+    const controller = new AbortController();
+    void fetchShowcaseViewerExclusions({
+      items: credited,
+      accessToken,
+      signal: controller.signal,
+    }).then((exclusions) => {
+      if (!exclusions || controller.signal.aborted || exclusions.blockedCreatorIds.length === 0) return;
+      const blocked = new Set(exclusions.blockedCreatorIds);
+      setItems((current) => itemsWithoutBlockedRemixCredits(current, (id) => blocked.has(id)));
+    });
+    return () => controller.abort();
+  }, [accessToken, initialData.items, setItems]);
 
   useEffect(() => {
     if (typeof IntersectionObserver === 'undefined') {

@@ -207,7 +207,7 @@ function BootstrapRemixCredit({ credit }: { credit: RemixCredit }) {
         <p
             data-testid="remix-credit"
             title={remixCreditLabel(credit)}
-            className="mt-0.5 max-w-full truncate text-[11px] leading-4 text-zinc-400"
+            className="mt-0.5 line-clamp-2 max-w-full text-[11px] leading-4 text-zinc-400"
         >
             {remixCreditSegments(credit).map((segment, index) => (
                 segment.kind === 'text' ? (

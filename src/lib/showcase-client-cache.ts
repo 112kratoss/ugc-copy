@@ -7,7 +7,7 @@ import type {
   ShowcaseSort,
   ShowcaseUnlockFilter,
 } from '@/lib/showcase';
-import { withoutBlockedRemixCredit, type RemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
+import { itemWithoutBlockedRemixCredit, type RemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 
 // v2 added `surface` to the key. The home feed and the showcase grid both cache
 // here and their filter tuples overlap, so without it a home-feed snapshot could
@@ -165,16 +165,9 @@ export function filterFeedItemsForVisit<TItem extends {
     if (creatorId && creatorsBlockedThisVisit.has(creatorId)) return false;
     if (!usesPreferences) return true;
     return !postsHiddenThisVisit.has(item.id) && !(creatorId && creatorsHiddenThisVisit.has(creatorId));
-  }).map((item) => {
+  })
     // A remix credit names nobody blocked this visit, either way.
-    if (!item.remixCredit) return item;
-    const remixCredit = withoutBlockedRemixCredit(item.remixCredit, (id) => creatorsBlockedThisVisit.has(id));
-    if (remixCredit === item.remixCredit) return item;
-    if (remixCredit) return { ...item, remixCredit };
-    const uncredited = { ...item };
-    delete uncredited.remixCredit;
-    return uncredited;
-  });
+    .map((item) => itemWithoutBlockedRemixCredit(item, (id) => creatorsBlockedThisVisit.has(id)));
 }
 
 function getSessionStorage(): Storage | null {

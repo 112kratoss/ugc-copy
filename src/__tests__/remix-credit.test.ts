@@ -19,7 +19,7 @@ import {
   postRemixCreditUserIds,
   remixCreditParentTitle,
 } from '@/lib/post-remix-credit';
-import { attachViewerStateToFeed } from '@/lib/showcase-feed';
+import { attachLocalizedAssetPrices, attachViewerStateToFeed, mergePricedAndViewerFeed } from '@/lib/showcase-feed';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 
 /**
@@ -210,6 +210,13 @@ describe('reading a remix post\'s credit', () => {
   it('never uncovers a post remixed under its NSFW cover, nor names it by its prompt', () => {
     expect(remixCreditParentTitle({ title: 'Something', body: null, post_format: 'media', is_nsfw: true })).toBe('Mature content');
     expect(remixCreditParentTitle({ title: ' ', body: null, post_format: 'media', is_nsfw: false })).toBe('Untitled Creation');
+    // A paid recipe's generated setup text is never a title, as its card never shows it.
+    expect(remixCreditParentTitle({
+      title: null,
+      body: 'Saved generation setup\nModel: Nano Banana 2.0\nPrompt: a coral sunset',
+      post_format: 'text',
+      is_nsfw: false,
+    })).toBe('Untitled Note');
   });
 
   it('leaves the credit out, unknown, when the posts remixed could not be read', async () => {
@@ -303,6 +310,34 @@ describe('a card\'s credit for a signed-in viewer', () => {
   it('keeps it whole for a signed-out reader', async () => {
     const db = database({ user_blocks: [], post_saves: [], post_resource_bundle_purchases: [] });
     expect((await attachViewerStateToFeed(page, null, db.client as never)).items[0].remixCredit).toBe(credit);
+  });
+
+  // The feed runs the pricing pass and the viewer pass side by side over one
+  // page and joins them (`getShowcaseFeedPage`). The priced copy still holds
+  // the whole credit, so the join must not bring back what the viewer pass
+  // took out.
+  it('stays out of the feed page when the passes are joined', async () => {
+    const viewerBlocksAll = database({
+      user_blocks: [
+        { blocker_user_id: 'viewer', blocked_user_id: maya.id },
+        { blocker_user_id: 'viewer', blocked_user_id: cora.id },
+      ],
+      post_saves: [],
+      post_resource_bundle_purchases: [],
+    });
+    const viewerBlocksMaya = database({
+      user_blocks: [{ blocker_user_id: 'viewer', blocked_user_id: maya.id }],
+      post_saves: [],
+      post_resource_bundle_purchases: [],
+    });
+    const priced = await attachLocalizedAssetPrices(page, 'IN');
+
+    const allBlocked = mergePricedAndViewerFeed(priced, await attachViewerStateToFeed(page, 'viewer', viewerBlocksAll.client as never));
+    expect(allBlocked.items.map((item) => item.id)).toEqual(['post-c', 'post-d']);
+    expect(allBlocked.items[0]).not.toHaveProperty('remixCredit');
+
+    const oneBlocked = mergePricedAndViewerFeed(priced, await attachViewerStateToFeed(page, 'viewer', viewerBlocksMaya.client as never));
+    expect(oneBlocked.items[0].remixCredit).toEqual({ parent: null, original: cora });
   });
 });
 

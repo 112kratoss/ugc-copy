@@ -17,7 +17,11 @@ type PostRow = {
   id: string;
   user_id: string | null;
   generation_id: string | null;
+  deleted_generation_id: string | null;
   visibility: string;
+  review_status: string | null;
+  archived_at: string | null;
+  tombstoned_at: string | null;
   remix_parent_post_id: string | null;
   remix_parent_user_id: string | null;
 };
@@ -65,7 +69,11 @@ const remixPost: PostRow = {
   id: 'post-b',
   user_id: 'maya',
   generation_id: 'generation-b',
+  deleted_generation_id: null,
   visibility: 'public',
+  review_status: 'visible',
+  archived_at: null,
+  tombstoned_at: null,
   remix_parent_post_id: 'post-a',
   remix_parent_user_id: 'cora',
 };
@@ -96,13 +104,33 @@ describe('the alert for a remix posted publicly', () => {
     expect(isBlocked).toHaveBeenCalledWith(expect.objectContaining({ firstUserId: 'cora', secondUserId: 'maya' }));
   });
 
-  it('keys on the post when its creation is gone', async () => {
+  // Made private and public again after its creation was deleted, the post is
+  // still the one A was told about.
+  it('keeps the creation\'s key once the creation is deleted', async () => {
+    const { db } = database({
+      posts: { 'post-b': { ...remixPost, generation_id: null, deleted_generation_id: 'generation-b' }, 'post-a': { id: 'post-a' } },
+      handles: { maya: 'maya' },
+    });
+    await notifyPostedRemix(db, { postId: 'post-b' });
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: 'posted-remix:generation-b' }));
+  });
+
+  it('keys on the post when it never had a creation on record', async () => {
     const { db } = database({
       posts: { 'post-b': { ...remixPost, generation_id: null }, 'post-a': { id: 'post-a' } },
       handles: { maya: 'maya' },
     });
     await notifyPostedRemix(db, { postId: 'post-b' });
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: 'posted-remix:post-b' }));
+  });
+
+  it('sends it for a post from before review statuses', async () => {
+    const { db } = database({
+      posts: { 'post-b': { ...remixPost, review_status: null }, 'post-a': { id: 'post-a' } },
+      handles: { maya: 'maya' },
+    });
+    await notifyPostedRemix(db, { postId: 'post-b' });
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('names no one, and opens the post remixed, for a remixer with no handle', async () => {
@@ -116,6 +144,10 @@ describe('the alert for a remix posted publicly', () => {
 
   it.each([
     ['a post that is not public', { ...remixPost, visibility: 'private' }],
+    // Its link would open nothing, and the one alert it may send would be spent.
+    ['an archived post', { ...remixPost, archived_at: '2026-11-05T10:00:00.000Z' }],
+    ['a post taken down', { ...remixPost, tombstoned_at: '2026-11-05T10:00:00.000Z' }],
+    ['a post moderation holds', { ...remixPost, review_status: 'hidden' }],
     ['a post that is no remix', { ...remixPost, remix_parent_post_id: null, remix_parent_user_id: null }],
     ['a remix of one\'s own post', { ...remixPost, remix_parent_user_id: 'maya' }],
   ])('sends nothing for %s', async (_case, post) => {
@@ -191,5 +223,19 @@ describe('remix alert words', () => {
     // And the unnamed words are what it writes back.
     expect(migration).toContain(`'${remixAlertWords('finished', { remixerHandle: null, remixedPostId: 'p' }).title}'`);
     expect(migration).toContain(`'${remixAlertWords('posted', { remixerHandle: null, remixedPostId: 'p' }).title}'`);
+  });
+
+  // 20261105165100 writes a remixer's new handle into these words.
+  it('matches the words the database writes for a new handle', async () => {
+    const { readFileSync } = await import('node:fs');
+    const migration = readFileSync('supabase/migrations/20261105165100_remix_alerts_follow_the_remixers_handle.sql', 'utf8');
+    const finished = remixAlertWords('finished', { remixerHandle: 'ivy-two', remixedPostId: 'post-a' });
+    const posted = remixAlertWords('posted', { remixerHandle: 'ivy-two', remixedPostId: 'post-a', remixPostId: 'post-b' });
+    expect(finished.title).toBe('@ivy-two remixed your post');
+    expect(finished.deepLink).toBe('/creators/ivy-two');
+    expect(posted.title).toBe('@ivy-two posted a remix of your post');
+    expect(migration).toContain("title := '@' || v_handle || ' remixed your post';");
+    expect(migration).toContain("deep_link := '/creators/' || v_handle;");
+    expect(migration).toContain("title := '@' || v_handle || ' posted a remix of your post';");
   });
 });
