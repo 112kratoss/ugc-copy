@@ -1508,6 +1508,13 @@ export async function updateOwnerPostForRoute({
       && parsedResourceBundle?.resources?.allowRemix
       ? { ...parsedResourceBundle, resources: { ...parsedResourceBundle.resources, allowRemix: false } }
       : parsedResourceBundle;
+    // The stored recipe handed every input over live, and this save turns that off (an input removed):
+    // the inputs still in it are copied into the recipe instead, so neither its buyers nor future ones
+    // lose them (the re-review of the max review's fixes).
+    const turnsHandOverOff = Boolean(post.generation_id)
+      && existingBundle?.allow_remix === true
+      && Boolean(parsedResourceBundle?.resources?.allowRemix)
+      && submittedResourceBundle?.resources?.allowRemix === false;
     // A creation's recipe, as the publish makes it (#677's review): its exact
     // prompt where it has no prompt item of its own, and the saved inputs the
     // creator asked for, planned with no byte moved yet. Then the recipe, those
@@ -1525,7 +1532,7 @@ export async function updateOwnerPostForRoute({
       creation: post.generation_id && creationRecipeSource
         ? { id: post.generation_id, prompt: creationRecipeSource.prompt }
         : null,
-      includeReferences: body.includeGenerationReferences === true,
+      includeReferences: body.includeGenerationReferences === true || turnsHandOverOff,
       ...(leftOutReferenceIds.size > 0 ? { exceptRowIds: leftOutReferenceIds } : {}),
       mayShareCreation: creationMaySharePostInputs(creationRecipeSource),
       // A recipe people have or had gains no prompt from here (#677's

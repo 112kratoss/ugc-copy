@@ -436,6 +436,42 @@ async function loadLinkedPostBundleMap(params: {
 }
 
 /**
+ * The recipe of each of the caller's own posts these runs came from, by source creation (owner,
+ * 2026-11-06: a remix of your own paid post starts Paid at its price). Unlike the linked posts', a
+ * read that fails throws, so the page fails for a retry: read as "no paid post", the composers would
+ * start such a remix Free and one press would give the paid prompt away (the re-review of the max
+ * review's fixes).
+ */
+async function loadOwnSourcePostBundles(params: {
+  supabase: OwnerGenerationsRouteClient;
+  sourceGenerationIds: string[];
+  ownerUserIds: string[];
+}): Promise<Map<string, LinkedPostBundle | null>> {
+  const bundles = new Map<string, LinkedPostBundle | null>();
+  if (params.sourceGenerationIds.length === 0) return bundles;
+  const { data: posts, error: postError } = await params.supabase
+    .from('posts')
+    .select('id, generation_id')
+    .in('generation_id', params.sourceGenerationIds)
+    .in('user_id', params.ownerUserIds);
+  if (postError) throw postError;
+  const postRows = ((posts ?? []) as Array<{ id: string; generation_id: string | null }>).filter((post) => post.generation_id);
+  if (postRows.length === 0) return bundles;
+  const { data, error } = await params.supabase
+    .from('post_resource_bundles')
+    .select('post_id, access_mode, status, price_usd_cents')
+    .in('post_id', postRows.map((post) => post.id));
+  if (error) throw error;
+  const byPost = new Map(((data ?? []) as LinkedPostBundleRow[]).map((row) => [row.post_id, {
+    accessMode: row.access_mode,
+    status: row.status,
+    priceUsdCents: row.price_usd_cents,
+  }] as const));
+  for (const post of postRows) bundles.set(post.generation_id!, byPost.get(post.id) ?? null);
+  return bundles;
+}
+
+/**
  * Why a failed creation failed, as its settlement stored it: the provider's
  * reason already rewritten for the creator (`provider-failure-messages.ts`),
  * or the public start-failure copy. The creator's own status poll returns the
@@ -742,14 +778,8 @@ export async function listOwnerGenerationsForRoute({
   const ownSourceIds = summaryOnly
     ? []
     : [...new Set(generations.flatMap((generation) => (generation.source_generation_id ? [generation.source_generation_id] : [])))];
-  const ownSourcePostMapPromise = ownSourceIds.length > 0
-    ? loadLinkedPostMap({ supabase: adminSupabase, generationIds: ownSourceIds, ownerUserIds, includeArchived: true })
-    : Promise.resolve(new Map<string, LinkedPostRow>());
-  const ownSourceBundleMapPromise = ownSourcePostMapPromise.then((posts) => loadLinkedPostBundleMap({
-    supabase: adminSupabase,
-    postIds: Array.from(new Set(Array.from(posts.values(), (post) => post.id))),
-  }));
-  const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls, ownSourcePostMap, ownSourceBundleMap] = await Promise.all([
+  const ownSourceBundlesPromise = loadOwnSourcePostBundles({ supabase: adminSupabase, sourceGenerationIds: ownSourceIds, ownerUserIds });
+  const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls, ownSourceBundles] = await Promise.all([
     linkedPostMapPromise,
     linkedPostMapPromise.then((linkedPosts) => loadLinkedPostBundleMap({
       supabase: adminSupabase,
@@ -771,8 +801,7 @@ export async function listOwnerGenerationsForRoute({
       outputUrls: collectOwnerMediaUrlCandidates(generations, summaryOnly),
       ownerUserIds,
     }),
-    ownSourcePostMapPromise,
-    ownSourceBundleMapPromise,
+    ownSourceBundlesPromise,
   ]);
 
   // Whose each input is (`generationInputOrigin`): the recipe's prefill counts the creator's
@@ -916,10 +945,9 @@ export async function listOwnerGenerationsForRoute({
       linked_post_bundle: linkedPost ? linkedPostBundleMap.get(linkedPost.id) ?? null : null,
       // The recipe of the caller's own post this run remixed (`readOwnSourceRecipe`), with the inputs.
       ...(summaryOnly ? {} : {
-        own_source_post_bundle: (() => {
-          const sourcePost = generation.source_generation_id ? ownSourcePostMap.get(generation.source_generation_id) : undefined;
-          return sourcePost ? ownSourceBundleMap.get(sourcePost.id) ?? null : null;
-        })(),
+        own_source_post_bundle: generation.source_generation_id
+          ? ownSourceBundles.get(generation.source_generation_id) ?? null
+          : null,
       }),
       // A failed card shows what came back and why in place of a cost it did not keep.
       refunded: generation.refunded === true,

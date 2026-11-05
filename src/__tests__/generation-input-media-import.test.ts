@@ -846,15 +846,29 @@ describe('resolveRemixResultMedia', () => {
   // The review of phase 2, finding 1, and the owner's word on blocks (2026-11-06): a run's use of the
   // result a remix handed the viewer is a reuse, no new remix, so neither the post's "Allow remixes"
   // off nor a block since stops it, and no block is asked.
-  it('answers a viewer blocked since, and a post whose Allow remixes went off, without asking about the block', async () => {
+  // The owner, 2026-11-06: "no more post of A can be visible ... to B, but already bought posts won't be
+  // affected". A result is never held, so a block refuses it to a viewer who bought nothing (the
+  // re-review), and a post whose Allow remixes went off still serves it.
+  it('refuses the result to a viewer blocked since who bought nothing, and answers one with remixes off', async () => {
     const blocked = resultStub();
     const blockedDependencies = createDependencies(blocked, { blocked: true });
     await expect(resolveRemixResultMedia({ source: SHOWCASE_RESULT, viewerUserId: VIEWER, dependencies: blockedDependencies }))
-      .resolves.toMatchObject({ outcome: 'resolved' });
-    expect(blockedDependencies.isUserRelationshipBlocked).not.toHaveBeenCalled();
+      .resolves.toEqual({ outcome: 'not-eligible' });
+    expect(blockedDependencies.isUserRelationshipBlocked).toHaveBeenCalled();
 
     const closed = resultStub({ postRows: [{ ...VIDEO_POST, remixes_allowed: false }] });
     await expect(resolveResult(closed)).resolves.toMatchObject({ outcome: 'resolved' });
+  });
+
+  it('answers the result to a viewer blocked since who bought its recipe, without asking about the block', async () => {
+    const bought = resultStub({
+      bundleRows: [PAID_REMIX_RECIPE],
+      purchaseRows: [{ id: 'purchase-1', bundle_id: 'bundle-9', buyer_user_id: VIEWER }],
+    });
+    const boughtDependencies = createDependencies(bought, { blocked: true });
+    await expect(resolveRemixResultMedia({ source: SHOWCASE_RESULT, viewerUserId: VIEWER, dependencies: boughtDependencies }))
+      .resolves.toMatchObject({ outcome: 'resolved' });
+    expect(boughtDependencies.isUserRelationshipBlocked).not.toHaveBeenCalled();
   });
 
   it('refuses a template result', async () => {

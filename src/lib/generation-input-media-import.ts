@@ -413,6 +413,23 @@ export async function resolveRemixResultMedia(params: {
       dependencies: { isOwnOrLinkedAccountId: async () => ownedByViewer },
     });
     if (!access.allowed) return { outcome: 'not-eligible' };
+    // The result is never the viewer's to hold: each run reads the creator's file again. What they
+    // bought stays theirs after a block, and anything else ends with one (owner, 2026-11-06: "no more
+    // post of A can be visible ... to B, but already bought posts won't be affected"; the re-review).
+    // A check that errors refuses.
+    if (!ownedByViewer && access.basis !== 'unlocked' && access.basis !== 'owner') {
+      let blocked = true;
+      try {
+        blocked = await (params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked)({
+          adminSupabase,
+          firstUserId: params.viewerUserId,
+          secondUserId: await loadCreatorAccountId(adminSupabase, generation.user_id),
+        });
+      } catch (error) {
+        logBackendError('failed_to_verify_block_state_before_remix_result', { error });
+      }
+      if (blocked) return { outcome: 'not-eligible' };
+    }
   } catch (error) {
     logBackendError('failed_to_resolve_remix_access_for_remix_result', { error });
     return { outcome: 'failed' };

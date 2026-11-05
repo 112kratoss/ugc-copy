@@ -1688,6 +1688,33 @@ describe('updateOwnerPostForRoute', () => {
         expect(kept.written?.resources?.allowRemix).toBe(true);
       });
 
+      // The re-review of the max review's fixes: an older recipe handed every input over live; removing
+      // one on an edit turns that off, so the inputs still in are copied, never dropped from the recipe.
+      it('copies the inputs still in when removing one ends an older recipe’s live hand-over', async () => {
+        const stored = {
+          id: 'bundle-1',
+          access_mode: 'free',
+          status: 'published',
+          allow_remix: true,
+          resource_items: [promptItem],
+        };
+        const dependencies = referenceDependencies({
+          planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput('input-2', 'Kept')] })),
+          copyPlannedGenerationReferences: vi.fn(async () => copiedAll(['input-2'])),
+        });
+        const { result, written } = await save({
+          leaveOutGenerationReferenceIds: ['input-1'],
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        }, { bundle: stored, dependencies });
+
+        expect(result).toMatchObject({ ok: true });
+        expect(written?.resources?.allowRemix).toBe(false);
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+          exceptRowIds: new Set(['input-1']),
+        }));
+        expect((written?.resources?.items ?? []).map((item) => item.id)).toContain('reference-input-2');
+      });
+
       it('writes "Allow remixes" only when it is sent, and refuses one that is no switch', async () => {
         const off = await save({ allowRemixes: false, resourceBundle: recipe('free') });
         expect(vi.mocked(off.dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].patch)

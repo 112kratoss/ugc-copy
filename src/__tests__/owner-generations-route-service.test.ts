@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
+import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-rows';
 import {
   listOwnerGenerationsForRoute,
   OwnerGenerationsQueryError,
@@ -1117,6 +1117,24 @@ describe('listOwnerGenerationsForRoute', () => {
       expect(byId.get('gen-own-remix')?.own_source_post_bundle).toEqual({ accessMode: 'paid', status: 'published', priceUsdCents: 40 });
       expect(byId.get('gen-other-remix')?.own_source_post_bundle).toBeNull();
       expect(byId.get('gen-own-remix')).not.toHaveProperty('source_generation_id');
+    });
+
+    // The re-review: read as "no paid post", a failed read would start a remix of the caller's own paid
+    // post Free, and one press would give the paid prompt away. The page fails for a retry instead.
+    it('fails the page when the recipe of the caller’s own original cannot be read', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const stored = createStoredRows({
+        profiles,
+        generations: [libraryRow({ id: 'gen-own-remix', source_generation_id: 'gen-own-original' })],
+        posts: databaseError('57014', 'canceling statement due to statement timeout'),
+      });
+
+      await expect(listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase: () => stored.client,
+        searchParams: new URLSearchParams('includeArchived=true&limit=10'),
+      })).rejects.toBeTruthy();
     });
 
     // #708's max review: a passed-on file whose link failed to sign was never checked, so it is not offered.
