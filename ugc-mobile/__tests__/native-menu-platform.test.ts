@@ -4,6 +4,7 @@ import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const appState = vi.hoisted(() => ({ listener: null as ((state: string) => void) | null }));
+const keyboard = vi.hoisted(() => ({ visible: false }));
 
 vi.mock('react-native', () => ({
   AppState: {
@@ -12,6 +13,7 @@ vi.mock('react-native', () => ({
       return { remove: () => undefined };
     },
   },
+  Keyboard: { isVisible: () => keyboard.visible },
 }));
 
 import {
@@ -54,12 +56,18 @@ describe('the tap on an iOS menu\'s •••', () => {
   // A card's second opening never raised the shield while it hung on the rows'
   // onAppear, so the tap that closed the menu opened the post (2026-11-05).
   const at = (pageX: number, pageY: number) => ({ nativeEvent: { pageX, pageY } }) as never;
+  const trigger = nativeMenuTriggerTouchProps;
+  /** A touch the ••• owns: no scroll view claimed it first, so it is granted. */
   const press = (from: [number, number], to: [number, number] = from) => {
-    nativeMenuTriggerTouchProps.onTouchStart?.(at(...from));
-    nativeMenuTriggerTouchProps.onTouchEnd?.(at(...to));
+    trigger.onTouchStart?.(at(...from));
+    if (trigger.onStartShouldSetResponder?.(at(...from))) trigger.onResponderGrant?.(at(...from));
+    trigger.onTouchEnd?.(at(...to));
   };
 
-  beforeEach(() => lowerNativeMenuShield());
+  beforeEach(() => {
+    lowerNativeMenuShield();
+    keyboard.visible = false;
+  });
 
   it('raises the shield on every opening, not only the first', () => {
     press([10, 10]);
@@ -80,17 +88,57 @@ describe('the tap on an iOS menu\'s •••', () => {
   });
 
   it('leaves it down for a touch the scroll view takes', () => {
-    nativeMenuTriggerTouchProps.onTouchStart?.(at(10, 10));
-    nativeMenuTriggerTouchProps.onTouchCancel?.(at(10, 10));
-    nativeMenuTriggerTouchProps.onTouchEnd?.(at(10, 10));
+    trigger.onTouchStart?.(at(10, 10));
+    trigger.onTouchCancel?.(at(10, 10));
+    trigger.onTouchEnd?.(at(10, 10));
+    expect(isNativeMenuShieldRaised()).toBe(false);
+  });
+
+  it('leaves it down for a drag the scroll view takes over from the •••', () => {
+    trigger.onTouchStart?.(at(10, 10));
+    trigger.onResponderGrant?.(at(10, 10));
+    expect(trigger.onResponderTerminationRequest?.(at(10, 14))).toBe(true);
+    trigger.onResponderTerminate?.(at(10, 14));
+    trigger.onTouchEnd?.(at(10, 10));
+    expect(isNativeMenuShieldRaised()).toBe(false);
+  });
+
+  it('leaves it down for a still tap that only stops a fling', () => {
+    // The moving scroll view claims the touch in the capture phase, so the
+    // ••• is never granted it, and UIKit opens no menu (review of #703).
+    trigger.onTouchStart?.(at(10, 10));
+    trigger.onTouchEnd?.(at(10, 10));
+    expect(isNativeMenuShieldRaised()).toBe(false);
+  });
+
+  it('counts a tap a scroll view claims while the keyboard is up, which still opens the menu', () => {
+    keyboard.visible = true;
+    trigger.onTouchStart?.(at(10, 10));
+    trigger.onTouchEnd?.(at(10, 10));
+    expect(isNativeMenuShieldRaised()).toBe(true);
+  });
+
+  it('leaves it down when the press slides onto a row and the row reaches JS first', () => {
+    trigger.onTouchStart?.(at(10, 10));
+    trigger.onResponderGrant?.(at(10, 10));
+    lowerNativeMenuShield(); // the row's choose()
+    trigger.onTouchEnd?.(at(14, 16));
+    expect(isNativeMenuShieldRaised()).toBe(false);
+  });
+
+  it('does not carry one touch\'s grant into the next', () => {
+    press([10, 10]);
+    lowerNativeMenuShield();
+    trigger.onTouchStart?.(at(10, 10));
+    trigger.onTouchEnd?.(at(10, 10));
     expect(isNativeMenuShieldRaised()).toBe(false);
   });
 
   it('does not raise it again for the tap on the ••• that closes the open menu', () => {
     raiseNativeMenuShield();
-    nativeMenuTriggerTouchProps.onTouchStart?.(at(10, 10));
+    trigger.onTouchStart?.(at(10, 10));
     nativeMenuTouchGuardProps.onResponderRelease?.({} as never);
-    nativeMenuTriggerTouchProps.onTouchEnd?.(at(10, 10));
+    trigger.onTouchEnd?.(at(10, 10));
     expect(isNativeMenuShieldRaised()).toBe(false);
   });
 });
