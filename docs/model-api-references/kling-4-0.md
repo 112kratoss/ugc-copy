@@ -91,7 +91,8 @@ top-ups.
 App id `kling-4.0`, provider `kling` with a branch of its own, maker Kuaishou. Text; a start frame
 and an optional end frame (keyframe endpoint); or up to 10 reference pictures (reference
 endpoint), whose @handles are rewritten to `@image_N` in the order the pictures are sent. Every
-other `@` in a prompt is refused before anything is held, since Kie rejects an undeclared mention.
+other `@` in a prompt is refused before anything is held, since Kie rejects an undeclared mention;
+a frames run names nothing, so the keyframe names above (`@first_frame` …) are not offered.
 No sound toggle: the model always generates audio. Its own enhancer playbook.
 
 ## Paid runs (2026-11-05)

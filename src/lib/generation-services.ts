@@ -3134,25 +3134,22 @@ export async function startVideoGeneration(params: {
   // Kling 4.0 reads its pictures by place, `@image_1` …, not by the legend the other models are
   // sent, and refuses a request whose prompt has an @ naming nothing it declares. So it is sent
   // the typed prompt with each picture's @handle as the name of its place, and a mention that
-  // would name nothing is refused here, before anything is held (kling-4-prompt.ts).
+  // would name nothing is refused here, before anything is held (kling-4-prompt.ts). The handles
+  // are those of the pictures the provider is sent, in order; a run of frames or text sends none
+  // and can name nothing.
+  const kling4PictureHandles = model === 'kling-4.0' && providerReferenceImageUrls.length > 0
+    ? normalizedReferences.length > 0
+      ? normalizedReferences.map((reference) => reference.handle)
+      : resolvedReferenceImageUrls.length > 0
+        ? providerReferenceImageUrls.map(() => null)
+        : normalizedElements.map((element) => element.handle)
+    : [];
   const kling4Prompt = model === 'kling-4.0'
-    ? kling4ProviderPrompt(trimmedPrompt, providerReferenceImageUrls.length > 0
-      ? {
-          kind: 'references',
-          // The pictures the provider is sent, each with the handle it was named by, if any.
-          pictureHandles: normalizedReferences.length > 0
-            ? normalizedReferences.map((reference) => reference.handle)
-            : resolvedReferenceImageUrls.length > 0
-              ? providerReferenceImageUrls.map(() => null)
-              : normalizedElements.map((element) => element.handle),
-        }
-      : frameImageUrls.length > 0
-        ? { kind: 'frames', startFrame: Boolean(frameImageUrls[0]), endFrame: Boolean(frameImageUrls[1]) }
-        : { kind: 'text' })
+    ? kling4ProviderPrompt(trimmedPrompt, kling4PictureHandles)
     : null;
   if (kling4Prompt && kling4Prompt.undeclaredMentions.length > 0) {
     throw new GenerationServiceError(
-      kling4UndeclaredMentionRefusal(kling4Prompt.undeclaredMentions),
+      kling4UndeclaredMentionRefusal(kling4Prompt.undeclaredMentions, kling4PictureHandles.length),
       400,
       PROVIDER_INPUT_REFUSED,
     );

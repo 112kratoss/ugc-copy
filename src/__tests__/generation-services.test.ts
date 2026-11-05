@@ -1140,8 +1140,19 @@ describe('generation services', () => {
         resolution: '720p',
         aspectRatio: '16:9',
       })).rejects.toThrow(
-        'Kling 4.0 reads every @ as a mention of an attached picture. Mention a reference by its @name, or take the @ out of @Chef, @example.com.',
+        'Kling 4.0 reads every @ as a mention of an attached reference picture, and this run has none. Take the @ out of @Chef, @example.com.',
       );
+      // A frames run names nothing either: Kie's `@first_frame` is no element of the run.
+      await expect(startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'From @first_frame the camera rises.',
+        model: 'kling-4.0',
+        duration: 5,
+        resolution: '720p',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+      })).rejects.toThrow('Unknown element mention: @first_frame');
       expect(rpcCalls.filter((call) => call.fn === 'start_generation')).toEqual([]);
       expect(fetch).not.toHaveBeenCalled();
     });

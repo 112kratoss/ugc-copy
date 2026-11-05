@@ -5,7 +5,7 @@
     "schemaVersion": 2,
     "revision": "kie-models-20261105",
     "basedOnRevision": "kling-3-image-orientation-20261105",
-    "changeNote": "Five Kie models listed since 2026-10-07 (docs/model-api-references/{nano-banana-2-1,flux-3-klein,pixverse-v6-max,kling-4-0,vidu-q4}.md, read 2026-11-05): Nano Banana 2.1 (4/6/9 credits at 1K/2K/4K) and FLUX.3 Klein (1.6/2.5/6.5) images; PixVerse V6 Max (text or a start frame, 4.8-22.4 credits/s), Kling 4.0 (text, a frame pair or up to 10 reference pictures, 28.5/42.5 credits/s, audio always on) and Vidu Q4 (a start frame or 1-15 pictures, 7.2-62.4 credits/s, web only until the apps name ShengShu) videos. Ids confirmed live by zero-cost probes; no paid run yet.",
+    "changeNote": "Five Kie models listed since 2026-10-07 (docs/model-api-references/{nano-banana-2-1,flux-3-klein,pixverse-v6-max,kling-4-0,vidu-q4}.md, read 2026-11-05): Nano Banana 2.1 (4/6/9 credits at 1K/2K/4K) and FLUX.3 Klein (1.6/2.5/6.5) images; PixVerse V6 Max (text or a start frame, 4.8-22.4 credits/s), Kling 4.0 (text, a frame pair or up to 10 reference pictures, 28.5/42.5 credits/s, audio always on) and Vidu Q4 (a start frame or 1-15 pictures, 7.2-62.4 credits/s, web only until the apps name ShengShu) videos. Ids confirmed live by zero-cost probes; one paid run per endpoint on 2026-11-05 charged exactly these prices.",
     "createdBy": "catalog-operations"
   },
   "upgrade": {
