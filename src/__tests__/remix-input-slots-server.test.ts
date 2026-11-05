@@ -19,7 +19,8 @@ import { holdBackFromRemix, remixSlotWords, splitRemixInputsByCopy } from '@/lib
 // whose copies "Include creation references" put in it.
 
 const SELLER = 'creator-1';
-const GENERATION = 'gen-1';
+// A creation id as the database names it: the withhold reads a uuid segment only (#708's max review).
+const GENERATION = 'c0ffee00-0000-4000-8000-0000000000a1';
 const ROW_A = '6f1c2d3e-4a5b-4c6d-8e7f-00000000000a';
 const ROW_B = '6f1c2d3e-4a5b-4c6d-8e7f-00000000000b';
 const FOLDER = `${SELLER}/generation-references/${GENERATION}`;

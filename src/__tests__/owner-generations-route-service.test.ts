@@ -1057,11 +1057,20 @@ describe('listOwnerGenerationsForRoute', () => {
         // Every recipe file here is still the creator's to read.
         recipe_files_readable_by: (args) => args.p_paths,
       });
+      // Each input linked, as a passed-on file with no link is never offered (#708's max review).
+      const signing = {
+        createSignedUrls: async (paths: string[]) => ({
+          data: paths.map((path) => ({ path, signedUrl: `https://signed.example/${path}`, error: null })),
+          error: null,
+        }),
+        createSignedUrl: async (path: string) => ({ data: { signedUrl: `https://signed.example/${path}` }, error: null }),
+      };
+      const client = Object.assign(stored.client, { storage: { from: () => signing } });
 
       const payload = await listOwnerGenerationsForRoute({
         userId: OWNER,
-        supabase: stored.client,
-        getAdminSupabase: () => stored.client,
+        supabase: client,
+        getAdminSupabase: () => client,
         searchParams: new URLSearchParams('id=gen-inputs&includeArchived=true&limit=1'),
       });
       const generation = (payload.generations as Array<Record<string, unknown>>)[0]!;
@@ -1073,6 +1082,36 @@ describe('listOwnerGenerationsForRoute', () => {
         ['other-recipe', false],
       ]);
       expect(generation.paywallPrefill).toMatchObject({ referenceCount: 2 });
+      // The run's remixed recipe is read for the folder, and never shown.
+      expect(generation).not.toHaveProperty('remix_recipe_bundle_id');
+    });
+
+    // #708's max review: a passed-on file whose link failed to sign was never checked, so it is not offered.
+    it('offers no passed-on file whose link could not be made', async () => {
+      const SELLER = '11111111-1111-4111-8111-111111111111';
+      const ORIGINAL = '22222222-2222-4222-8222-222222222222';
+      const stored = createStoredRows({
+        profiles,
+        generations: [libraryRow({ id: 'gen-inputs', remix_recipe_bundle_id: 'bundle-original' })],
+        posts: [{ id: 'post-original', generation_id: ORIGINAL, deleted_generation_id: null, title: 'Original', visibility: 'public', archived_at: null, user_id: SELLER }],
+        post_resource_bundles: [{ id: 'bundle-original', owner_user_id: SELLER, post_id: 'post-original' }],
+        generation_input_media: [{
+          ...inputRow('passed-on', OWNER, `generation_inputs/${OWNER}/gen-inputs/01-reference-image.png`, 0),
+          metadata: { sourceKind: 'recipe-file', recipeFile: `post_resource_files/${SELLER}/generation-references/${ORIGINAL}/00-reference-image-row-a.png` },
+        }],
+      }, {
+        recipe_files_readable_by: (args) => args.p_paths,
+      });
+
+      const payload = await listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase: () => stored.client,
+        searchParams: new URLSearchParams('id=gen-inputs&includeArchived=true&limit=1'),
+      });
+      const generation = (payload.generations as Array<Record<string, unknown>>)[0]!;
+      expect((generation.input_media as Array<{ id: string; recipeCopyable: boolean }>)
+        .map(({ id, recipeCopyable }) => [id, recipeCopyable])).toEqual([['passed-on', false]]);
     });
   });
 

@@ -95,6 +95,7 @@ import { loadRemixSourceBundle, RemixSourceError } from '@/lib/remix-source-serv
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { WITHHELD_INPUTS_RESTORE_ISSUE } from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
 const LOCKED_PROMPT = 'The prompt a buyer pays for';
 
@@ -713,6 +714,34 @@ describe('input slots for a remix given none of the run’s inputs', () => {
       expect(JSON.stringify(bundle.workflowSettings.seedanceAssets ?? null)).not.toContain('asset-kept-bought');
     });
 
+    // #708's max review: a restore pairs assets by position, so a passed-on file left out of the
+    // assets moved the next one onto it. First among the references, it keeps its place with none.
+    it('keeps a passed-on file’s place among the assets with none, so the next asset stays on its own input', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, recipeEntitled: true });
+      const kept = { ...BOUGHT, sortOrder: 0, url: null, metadata: { ...BOUGHT.metadata, seedanceAsset: { assetId: 'asset-kept-bought', assetType: 'Image', status: 'active' } } };
+      const product = { ...PRODUCT, sortOrder: 1 };
+      mocks.generation = {
+        ...mocks.generation!,
+        workflow_settings: {
+          ...(mocks.generation!.workflow_settings as Record<string, unknown>),
+          seedanceAssets: { images: [
+            { assetId: 'asset-kept-bought', assetType: 'Image', status: 'active', sourceUrl: kept.storagePath },
+            { assetId: 'asset-product', assetType: 'Image', status: 'active', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000000-product.png?token=prep' },
+          ] },
+        },
+      };
+      mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([signed(product)]);
+      mocks.recipeFiles = [kept];
+      const COPY = 'post_resource_files/creator-1/generation-references/gen-1/00-reference-image-row-bought.png';
+      mocks.loadGenerationRecipeReferenceCopies.mockResolvedValue(new Map([['row-bought', { storagePath: COPY, url: SIGNED(COPY) }]]));
+
+      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+      expect(bundle.inputs.image?.elements?.map((element) => element.id)).toEqual(['row-bought', 'row-product']);
+      const images = (bundle.workflowSettings.seedanceAssets as { images?: Array<{ assetId: string } | null> } | undefined)?.images ?? [];
+      expect(images.map((asset) => asset?.assetId ?? null)).toEqual([null, 'asset-product']);
+    });
+
     // Phase 1b's review: a creator who shares their run's inputs and sells its recipe; a buyer of the
     // recipe gets the passed-on file from its copy, where the shared inputs alone would give a slot.
     it('gives a buyer of a recipe whose creator shares the inputs a passed-on file from the recipe’s copy', async () => {
@@ -735,13 +764,19 @@ describe('input slots for a remix given none of the run’s inputs', () => {
       expect(bundle.inputSlots).toEqual([{ id: 'slot-1', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 1' }]);
     });
 
-    it('fails a remix whose passed-on copies cannot be read, rather than giving the file a slot', async () => {
+    // #708's max review: a failed read of the passed-on copies left a whole remix failing, where the
+    // file could be a slot. It is one now, and the remix is told its inputs were not all read.
+    it('gives a passed-on file whose copy cannot be read a slot, and says the inputs were not all read', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
       mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, recipeEntitled: true });
       mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([signed(PRODUCT)]);
       mocks.recipeFiles = [{ ...BOUGHT, url: null }];
       mocks.loadGenerationRecipeReferenceCopies.mockRejectedValue(new Error('statement timeout'));
 
-      await expect(loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' })).rejects.toThrow();
+      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+      expect(bundle.inputSlots?.length ?? 0).toBeGreaterThan(0);
+      expect(bundle.restoreIssues).toContain(WITHHELD_INPUTS_RESTORE_ISSUE);
     });
 
     // A subject whose held-back picture leaves it one picture is no subject (2026-11-03 re-review): it

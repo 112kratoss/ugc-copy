@@ -138,6 +138,22 @@ describe('post resource bundle validation', () => {
     expect(validatePostResourceBundleInput(bundle, { mediaKeys: ['proof-a'] })).toMatch(/not part of this post/i);
   });
 
+  // #708's max review: an item path is stored as written but read decoded, so an encoded spelling of
+  // a passed-on copy escaped its withholding. No file a save writes has a percent sign in its name.
+  it('refuses an item or attachment path spelled with a percent sign', () => {
+    const withPath = (storagePath: string) => ({
+      accessMode: 'free' as const,
+      summary: 'Lantern recipe',
+      previewText: 'The prompt and the reference behind this still.',
+      priceUsdCents: 0,
+      resources: {
+        items: [{ id: 'ref-1', type: 'reference_image' as const, title: 'Reference', storagePath, contentType: 'image/png' }],
+      },
+    });
+    expect(validatePostResourceBundleInput(withPath('user-1/generation-references/c0ffee00-0000-4000-8000-000000000001/00-reference-image-r.png'), { ownerUserId: 'user-1' })).toBeNull();
+    expect(validatePostResourceBundleInput(withPath('user-1/generation-references/c0ffee00-0000-4000-8000-000000000001/%30%30-reference-image-r.png'), { ownerUserId: 'user-1' })).not.toBeNull();
+  });
+
   it('counts video, audio, and gated remix-link resources without enabling native remix', () => {
     const items = normalizePostResourceItems([
       { type: 'reference_video', title: 'Motion reference', storagePath: 'user-1/reference.mp4' },
