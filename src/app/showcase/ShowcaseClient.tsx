@@ -7,6 +7,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
 import CreatorIdentity from '@/components/CreatorIdentity';
+import RemixCreditLine from '@/app/showcase/RemixCreditLine';
+import { withoutBlockedRemixCredit } from '../../../ugc-mobile/lib/remix-credit/remix-credit';
 import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import PublicShareButton from '@/components/PublicShareButton';
 import SkeletonLoader from '@/components/SkeletonLoader';
@@ -471,6 +473,26 @@ interface ShowcaseGridCardProps {
  * values, and functions kept across renders; the reel's post and slide, which
  * the page's URL carries, are not among them.
  */
+/**
+ * The cards with their remix credits naming no one in `blocked`: the list
+ * handed back as it was when no credit changes, so nothing draws again.
+ */
+function withoutBlockedRemixCredits(items: ShowcaseFeedItem[], blocked: Set<string>): ShowcaseFeedItem[] {
+    if (blocked.size === 0) return items;
+    let changed = false;
+    const next = items.map((item) => {
+        if (!item.remixCredit) return item;
+        const remixCredit = withoutBlockedRemixCredit(item.remixCredit, (id) => blocked.has(id));
+        if (remixCredit === item.remixCredit) return item;
+        changed = true;
+        if (remixCredit) return { ...item, remixCredit };
+        const uncredited = { ...item };
+        delete uncredited.remixCredit;
+        return uncredited;
+    });
+    return changed ? next : items;
+}
+
 const ShowcaseGridCard = memo(function ShowcaseGridCard({
     item,
     index,
@@ -629,6 +651,9 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
                         {formatShowcaseDate(item.createdAt)}
                     </span>
                 </div>
+
+                {/* A remix credits what it remixed (owner, 2026-11-05), carried by the card. */}
+                <RemixCreditLine credit={item.remixCredit} compact />
 
                 <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0 flex-1">
@@ -960,6 +985,8 @@ export default function ShowcaseClient({
 
             rememberViewerExclusionsForVisit(userId, exclusions);
             exclusions.blockedCreatorIds.forEach((id) => sessionHiddenCreatorIdsRef.current.add(id));
+            // A remix credit names nobody a block stands between and the viewer.
+            const blockedCreditPeople = new Set(exclusions.blockedCreatorIds);
             if (initialSort === DEFAULT_SHOWCASE_SORT) {
                 exclusions.hiddenCreatorIds.forEach((id) => sessionHiddenCreatorIdsRef.current.add(id));
                 exclusions.hiddenPostIds.forEach((id) => sessionHiddenPostIdsRef.current.add(id));
@@ -970,7 +997,8 @@ export default function ShowcaseClient({
                     item.id === openItemId
                     || !isSessionHiddenItem(item, sessionHiddenPostIdsRef.current, sessionHiddenCreatorIdsRef.current)
                 ));
-                return visibleItems.length === latestItems.length ? latestItems : visibleItems;
+                const keptItems = visibleItems.length === latestItems.length ? latestItems : visibleItems;
+                return withoutBlockedRemixCredits(keptItems, blockedCreditPeople);
             });
         });
 

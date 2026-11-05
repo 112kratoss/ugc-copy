@@ -111,6 +111,8 @@ describe('owner post route service', () => {
         title: 'Updated title',
         visibility: 'private',
       },
+      // A remix made public tells its original's creator behind the answer.
+      runAfterResponse: expect.any(Function),
     });
   });
 

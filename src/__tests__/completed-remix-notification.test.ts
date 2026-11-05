@@ -16,26 +16,34 @@ import { hasAnswered } from '@/__tests__/fixtures/mobile-notification-history';
 import { notifyCompletedRemix } from '@/lib/completed-remix-notification';
 import { settleGenerationSucceeded } from '@/lib/generation-settlement';
 
-/** `linked`: the guest identities linked to each account (`profiles.merged_into_user_id`). */
-function client(remix: unknown, linked: Record<string, string[]> = {}) {
+/**
+ * `linked`: the guest identities linked to each account (`profiles.merged_into_user_id`).
+ * `handles`: each account's handle, read for the alert's name.
+ */
+function client(remix: unknown, linked: Record<string, string[]> = {}, handles: Record<string, string> = {}) {
   const query = { select: vi.fn(), eq: vi.fn(), maybeSingle: vi.fn().mockResolvedValue({ data: remix, error: null }) };
   query.select.mockReturnValue(query); query.eq.mockReturnValue(query);
-  const linkedGuests = (accountId: string) => {
+  const profiles = () => {
+    let filter: { column: string; value: string } | null = null;
     const read = {
       select: () => read,
       eq: (column: string, value: string) => {
-        if (column !== 'merged_into_user_id') throw new Error(`Unexpected filter ${column}`);
-        accountId = value;
+        if (column !== 'merged_into_user_id' && column !== 'id') throw new Error(`Unexpected filter ${column}`);
+        filter = { column, value };
         return read;
       },
+      maybeSingle: async () => ({
+        data: filter?.column === 'id' && handles[filter.value] ? { username: handles[filter.value] } : null,
+        error: null,
+      }),
       then: (resolve: (value: unknown) => unknown) => Promise.resolve({
-        data: (linked[accountId] ?? []).map((id) => ({ id })),
+        data: (filter?.column === 'merged_into_user_id' ? linked[filter.value] ?? [] : []).map((id) => ({ id })),
         error: null,
       }).then(resolve),
     };
     return read;
   };
-  const from = vi.fn((table: string) => (table === 'profiles' ? linkedGuests('') : query));
+  const from = vi.fn((table: string) => (table === 'profiles' ? profiles() : query));
   return { db: { from } as unknown as SupabaseClient, from, query };
 }
 
@@ -89,11 +97,26 @@ describe('completed remix notifications', () => {
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ userId: 'creator', actorUserId: 'reader', dedupeKey: 'completed-remix:output', body: 'They finished a new creation from it.' }));
   });
 
-  it('opens the remixed post page, as every post alert does', async () => {
-    const { db } = client(recorded);
+  // Owner, 2026-11-05: the creator hears who remixed their post, and the alert
+  // opens the remixer's page, since the creation is theirs alone until posted.
+  it('names the remixer by their handle and opens their page', async () => {
+    const { db } = client(recorded, {}, { reader: 'maya' });
     await notifyCompletedRemix(db, 'prediction');
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({
       type: 'post_remixed',
+      title: '@maya remixed your post',
+      body: 'They finished a new creation from it.',
+      deepLink: '/creators/maya',
+      objectType: 'post',
+      objectId: 'post',
+    }));
+  });
+
+  it('names no one, and opens the remixed post, for a remixer with no handle to name', async () => {
+    const { db } = client(recorded);
+    await notifyCompletedRemix(db, 'prediction');
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Someone remixed your post',
       deepLink: '/showcase/post',
       objectId: 'post',
     }));

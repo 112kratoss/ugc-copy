@@ -12,6 +12,7 @@ import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
+import PostRemixes from './PostRemixes';
 import { useShowcaseDetailCommentCount } from './ShowcaseDetailCommentCount';
 
 /**
@@ -148,9 +149,11 @@ export default function ShowcaseDetailEngagementRow({
             className="ui-focus-ring mr-1 inline-flex min-h-11 items-center gap-2 rounded-full border border-[var(--ui-primary-strong)]/40 bg-[var(--ui-primary)]/10 px-4 text-xs font-extrabold text-[var(--ui-primary)] transition hover:bg-[var(--ui-primary)]/20 disabled:opacity-60"
           >
             {isRemixing ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Repeat2 className="h-4 w-4" aria-hidden="true" />}
-            {remixCount > 0 ? `Remix · ${formatCompactCount(remixCount)}` : 'Remix'}
+            Remix
           </button>
         ) : null}
+        {/* The count opens the remixes posted from this post (owner, 2026-11-05). */}
+        {remixCount > 0 ? <PostRemixes postId={postId} remixCount={remixCount} /> : null}
         <button
           type="button"
           onClick={() => void toggleSave(postId)}

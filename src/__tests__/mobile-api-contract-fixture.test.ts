@@ -175,6 +175,7 @@ const expectedEndpointKeys = [
   'getSavedMedia',
   'getShowcasePost',
   'resolveShowcasePost',
+  'listPostRemixes',
   'listPostComments',
   'createPostComment',
   'deletePostComment',

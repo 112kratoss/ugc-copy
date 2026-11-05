@@ -2028,6 +2028,86 @@ describe('publishGenerationToShowcaseForRoute', () => {
     });
   });
 
+  // Owner, 2026-11-05: when B posts a remix publicly, A hears "@B posted a remix
+  // of your post". Who A is comes from the post's own credit, which the alert
+  // reads; publishing only says which post went public, behind its answer.
+  describe('the alert for a remix posted publicly', () => {
+    const generation = {
+      id: 'gen-1',
+      user_id: 'user-1',
+      status: 'succeeded',
+      model: 'nano-banana-2',
+      category: 'image',
+      creation_mode: null,
+      output_url: 'generated_images/user-1/example.jpg',
+      showcase_asset_path: null,
+      title: 'A title',
+      description: null,
+      prompt: 'Original prompt',
+    };
+
+    function publish(visibility: 'public' | 'unlisted' | 'private', extra: Partial<ShowcasePublishServiceDependencies>) {
+      const adminClient = createAdminClientMock(generation).client;
+      return {
+        adminClient,
+        result: publishGenerationToShowcaseForRoute({
+          adminSupabase: adminClient,
+          body: { generationId: 'gen-1', visibility },
+          userId: 'user-1',
+          dependencies: {
+            ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+              outputUrl: mediaGeneration.outputUrl,
+              createdLocation: null,
+            })),
+            listSourceToolsCatalog: vi.fn(async () => [
+              { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+            ]),
+            getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+            publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+              postId: 'post-1',
+              visibility,
+              bundleId: null,
+              bundleStatus: null,
+            })),
+            ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+            requestPostEmbedding: vi.fn(async () => undefined),
+            ...extra,
+          },
+        }),
+      };
+    }
+
+    it('hands the alert to the route to send once the publish has answered', async () => {
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const tasks: Array<() => Promise<unknown>> = [];
+      const runAfterResponse = vi.fn((task: () => Promise<unknown>) => { tasks.push(task); });
+
+      const { adminClient, result } = publish('public', { notifyPostedRemix, runAfterResponse });
+
+      await expect(result).resolves.toMatchObject({ ok: true, body: { postId: 'post-1', visibility: 'public' } });
+      expect(notifyPostedRemix).not.toHaveBeenCalled();
+      expect(tasks).toHaveLength(1);
+      await tasks[0]();
+      expect(notifyPostedRemix).toHaveBeenCalledWith(adminClient, { postId: 'post-1' });
+    });
+
+    it('sends it before answering where the route has nowhere to send it', async () => {
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const { result } = publish('public', { notifyPostedRemix });
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(notifyPostedRemix).toHaveBeenCalledWith(expect.anything(), { postId: 'post-1' });
+    });
+
+    it.each(['unlisted', 'private'] as const)('sends nothing for a post saved %s', async (visibility) => {
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const runAfterResponse = vi.fn();
+      const { result } = publish(visibility, { notifyPostedRemix, runAfterResponse });
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(runAfterResponse).not.toHaveBeenCalled();
+      expect(notifyPostedRemix).not.toHaveBeenCalled();
+    });
+  });
+
   // The route's own suite caught this: a client that *throws* rather than
   // returning an error escaped the publish entirely and answered 500, for a
   // post that had already been written.

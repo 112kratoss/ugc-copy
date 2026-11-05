@@ -1,4 +1,5 @@
 import 'server-only';
+import { after } from 'next/server';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -145,6 +146,8 @@ export async function updateOwnerPostRoute({
       ownerUserId: auth.userId,
       postId,
       body,
+      // A remix made public tells its original's creator once the answer has gone.
+      runAfterResponse: (task) => after(task),
     });
   } catch (error) {
     logBackendError('failed_to_update_owner_post', { error: error });

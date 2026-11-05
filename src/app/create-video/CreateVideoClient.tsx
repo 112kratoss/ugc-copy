@@ -143,7 +143,7 @@ import {
 } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
-import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle, RemixSourceResult } from '@/lib/remix-source';
+import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle, RemixSourcePost, RemixSourceResult } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
@@ -1439,6 +1439,8 @@ function VideoCreator({
 
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
+    // The post being remixed, which the notice names with its creator (owner, 2026-11-05).
+    const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixResult, setRemixResult] = useState<RemixSourceResult | null>(null);
     const remixVideoUrl = remixResult?.mediaType === 'video' ? remixResult.url : null;
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
@@ -2594,6 +2596,7 @@ function VideoCreator({
                 }
 
                 setRemixTitle(bundle.generation.title);
+                setRemixSourcePost(bundle.sourcePost ?? null);
                 setRemixResult(bundle.result);
                 setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
 
@@ -5823,6 +5826,7 @@ function VideoCreator({
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
                                         description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
+                                        source={remixSourcePost}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={offersOriginalResult ? (
                                             <StudioUseOriginalButton using={usingOriginalResult} onUse={() => void addOriginalResultAsReferenceVideo()} />

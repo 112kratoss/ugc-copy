@@ -32,6 +32,8 @@ import {
 import { createServiceClient } from '@/lib/server-helpers';
 import { buildVisualMediaDescriptor } from '@/lib/media-descriptor';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
+import { POST_REMIX_CREDIT_COLUMNS, loadPostRemixCredit } from '@/lib/post-remix-credit';
+import type { RemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 import {
   PUBLIC_GENERATION_SETUP_COLUMNS,
   buildPublicGenerationSetup,
@@ -77,6 +79,10 @@ type PublicPostRow = {
   is_nsfw?: boolean;
   created_at: string;
   post_format: ShowcasePostFormat;
+  /** Whom a remix post credits (`post-remix-credit.ts`); the legacy read leaves them out. */
+  remix_parent_post_id?: string | null;
+  remix_parent_user_id?: string | null;
+  remix_origin_user_id?: string | null;
 };
 
 type ProfileSummary = {
@@ -125,6 +131,12 @@ export interface PublicPostDetail {
    * the catalog could not be read.
    */
   generationSetup?: GenerationSetupEntry[];
+  /**
+   * A remix post's credit as everyone may see it (`post-remix-credit.ts`): the
+   * page is cached for a signed-out visitor, so the browser leaves out anyone
+   * the viewer is blocked with (`useShowcasePostViewer`).
+   */
+  remixCredit?: RemixCredit;
 }
 
 async function fetchPublicPostRow(
@@ -134,7 +146,7 @@ async function fetchPublicPostRow(
 
   const result = await adminSupabase
     .from('posts')
-    .select('id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format')
+    .select(`id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
@@ -438,7 +450,7 @@ export async function getPublicPostDetail(
 
   // The four reads below depend only on the row, so they run together; a
   // post page used to pay for them one after the other.
-  const [mediaItems, creator, resourceBundle, generation] = await Promise.all([
+  const [mediaItems, creator, resourceBundle, generation, remixCredit] = await Promise.all([
     loadPublicPostMediaItems(adminSupabase, row),
     loadPublicPostCreator(adminSupabase, row.user_id),
     getPostResourceBundleDetailByPostId(row.id, {
@@ -449,6 +461,7 @@ export async function getPublicPostDetail(
       ...(options?.countLockedRecipeReferences === false ? { countLockedReferences: false } : {}),
     }),
     loadPublicPostGeneration(adminSupabase, row.generation_id),
+    loadPostRemixCredit(adminSupabase, row),
   ]);
   const coverMedia = mediaItems[0] ?? null;
   const mediaUrl = coverMedia?.url ?? null;
@@ -530,6 +543,7 @@ export async function getPublicPostDetail(
     remixCapability: remix.capability,
     remixTarget: remix.target,
     ...(generationSetup ? { generationSetup } : {}),
+    ...(remixCredit ? { remixCredit } : {}),
   };
   if (!row.is_nsfw) return detail;
   const revealed = options?.revealNsfw && await hasNsfwReveal(adminSupabase, row.id, viewerUserId);

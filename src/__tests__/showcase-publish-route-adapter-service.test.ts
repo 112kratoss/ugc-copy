@@ -214,6 +214,8 @@ describe('showcase publish route adapter service', () => {
       body,
       dependencies: {
         fetchWithProviderTimeout,
+        // A public remix's alert goes out behind the answer.
+        runAfterResponse: expect.any(Function),
       },
       userId: 'user-1',
     });

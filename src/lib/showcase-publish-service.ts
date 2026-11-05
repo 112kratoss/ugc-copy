@@ -67,6 +67,8 @@ import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { notifyPostedRemix } from '@/lib/completed-remix-notification';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
 import {
   getRemixRecipeTermsRefusalBody,
@@ -181,6 +183,10 @@ export type ShowcasePublishServiceDependencies = {
   requestPostEmbedding: typeof requestPostEmbedding;
   /** The free or paid terms the creation's run carries as a remix. */
   loadRemixRecipeTerms: typeof loadRemixRecipeTerms;
+  /** Tells the creator of the post a public remix credits (owner, 2026-11-05). */
+  notifyPostedRemix: typeof notifyPostedRemix;
+  /** Where the route sends work that need not hold its answer (Next's `after`). */
+  runAfterResponse?: RunAfterResponse;
 };
 
 export type ShowcasePublishServiceResult =
@@ -250,6 +256,8 @@ function resolveDependencies(
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
     requestPostEmbedding: dependencies?.requestPostEmbedding ?? requestPostEmbedding,
     loadRemixRecipeTerms: dependencies?.loadRemixRecipeTerms ?? loadRemixRecipeTerms,
+    notifyPostedRemix: dependencies?.notifyPostedRemix ?? notifyPostedRemix,
+    runAfterResponse: dependencies?.runAfterResponse,
   };
 }
 
@@ -1219,6 +1227,17 @@ export async function publishGenerationToShowcaseForRoute({
   }
 
   invalidateShowcaseFeedCache();
+
+  // A remix posted where everyone can see it tells the creator of the post it
+  // remixed, by the remixer's name, behind the answer. Once per creation, so a
+  // republish of a public post sends nothing new.
+  if (effectiveVisibility === 'public' && postId) {
+    const publishedPostId = postId;
+    await sendDeferrableNotification(
+      resolvedDependencies.runAfterResponse,
+      () => resolvedDependencies.notifyPostedRemix(adminSupabase, { postId: publishedPostId }),
+    );
+  }
 
   // Feed v4: embed the public post now rather than at the next embeddings run,
   // so it is clustered and checked for near-duplicates within minutes.

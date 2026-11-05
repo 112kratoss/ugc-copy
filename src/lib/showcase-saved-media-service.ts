@@ -5,6 +5,7 @@ import { logBackendError } from '@/lib/backend-logger';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isMissingPostsSchemaError } from '@/lib/posts-server';
+import { POST_REMIX_CREDIT_COLUMNS } from '@/lib/post-remix-credit';
 import {
   addCreationReferenceCountsToFeedItems,
   attachLocalizedAssetPrices,
@@ -172,7 +173,7 @@ export async function getSavedMediaFeedForRoute({
   const { data: postRows, error: postError } = await adminSupabase
     .from('posts')
     .select(
-      'id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility'
+      `id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, ${POST_REMIX_CREDIT_COLUMNS}`
     )
     .in(saveSource === 'post' ? 'id' : 'generation_id', lookupIds)
     .in('visibility', ['public', 'unlisted'])

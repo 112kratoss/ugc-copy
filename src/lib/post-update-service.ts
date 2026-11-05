@@ -106,6 +106,8 @@ import {
 } from '@/lib/storage-ownership';
 import { storedMediaOwnerId } from '@/lib/generation-input-origin';
 import { getRemixRecipeTermsRefusalBody } from '@/lib/remix-recipe-terms';
+import { notifyPostedRemix } from '@/lib/completed-remix-notification';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
@@ -281,6 +283,8 @@ export type PostUpdateDependencies = {
   ensureDurableGenerationMedia?: typeof ensureDurableGenerationMedia;
   loadGenerationTitleSource?: typeof loadGenerationTitleSource;
   isTemplateLinkedGeneration?: typeof isTemplateLinkedGeneration;
+  /** Tells the creator of the post a remix credits, once the remix goes public (owner, 2026-11-05). */
+  notifyPostedRemix?: typeof notifyPostedRemix;
 };
 
 type ResolvedPostUpdateDependencies = Required<PostUpdateDependencies>;
@@ -359,6 +363,7 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
     ensureDurableGenerationMedia: dependencies?.ensureDurableGenerationMedia ?? ensureDurableGenerationMedia,
     loadGenerationTitleSource: dependencies?.loadGenerationTitleSource ?? loadGenerationTitleSource,
     isTemplateLinkedGeneration: dependencies?.isTemplateLinkedGeneration ?? isTemplateLinkedGeneration,
+    notifyPostedRemix: dependencies?.notifyPostedRemix ?? notifyPostedRemix,
   };
 }
 
@@ -1319,12 +1324,15 @@ export async function updateOwnerPostForRoute({
   postId,
   body: requestBody,
   dependencies,
+  runAfterResponse,
 }: {
   adminSupabase: SupabaseClient;
   ownerUserId: string;
   postId: string;
   body: PostUpdateRequestBody;
   dependencies?: PostUpdateDependencies;
+  /** Where the route sends work that need not hold its answer (Next's `after`). */
+  runAfterResponse?: RunAfterResponse;
 }): Promise<PostUpdateRouteResult> {
   const resolvedDependencies = resolveDependencies(dependencies);
 
@@ -2156,6 +2164,15 @@ export async function updateOwnerPostForRoute({
       }));
     } catch (mediaReadError) {
       logBackendWarning('failed_to_read_post_media_after_update', { error: mediaReadError });
+    }
+
+    // A remix made public here tells the creator of the post it remixed, as a
+    // public publish does, behind the answer and once per creation.
+    if (updatedPost.visibility === 'public' && post.visibility !== 'public') {
+      await sendDeferrableNotification(
+        runAfterResponse,
+        () => resolvedDependencies.notifyPostedRemix(adminSupabase, { postId }),
+      );
     }
 
     // A recipe this save removed (deleted, or retired for the people who have

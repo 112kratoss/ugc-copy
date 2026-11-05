@@ -80,8 +80,35 @@ describe('showcase viewer exclusions route adapter service', () => {
     expect(getShowcaseViewerExclusionsForRoute).toHaveBeenCalledWith({
       adminSupabase,
       items: [{ postId: POST_ID, creatorId: CREATOR_ID }],
+      creditCreatorIds: [],
       viewerUserId: 'user-1',
     });
+  });
+
+  // A remix credit names people too (owner, 2026-11-05): a page asks about them
+  // beside its posts' creators, ids that are ids only.
+  it('passes on the people the page\'s remix credits name', async () => {
+    const getShowcaseViewerExclusionsForRoute = vi.fn(async (): Promise<ShowcaseViewerExclusionsRouteResult> => ({
+      ok: true,
+      body: { blockedCreatorIds: [], hiddenCreatorIds: [], hiddenPostIds: [] },
+    }));
+    const creditCreatorId = '00000000-0000-4000-8000-00000000000b';
+
+    await postShowcaseViewerExclusionsRouteResponse({
+      request: exclusionsRequest({
+        items: [{ postId: POST_ID, creatorId: CREATOR_ID }],
+        creditCreatorIds: [creditCreatorId, 'not-an-id', creditCreatorId.toUpperCase()],
+      }),
+      dependencies: {
+        createServiceClient: () => ({}) as SupabaseClient,
+        createUserClient: () => createUserClient({ id: 'user-1' }),
+        getShowcaseViewerExclusionsForRoute,
+      },
+    });
+
+    expect(getShowcaseViewerExclusionsForRoute).toHaveBeenCalledWith(expect.objectContaining({
+      creditCreatorIds: [creditCreatorId],
+    }));
   });
 
   it.each([

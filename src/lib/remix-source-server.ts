@@ -35,6 +35,7 @@ import {
   type RemixResolvedAsset,
   type RemixResolvedImageElement,
   type RemixSourceBundle,
+  type RemixSourcePost,
   type RemixSourceResult,
 } from '@/lib/remix-source';
 import { isRecipeFileInput } from '@/lib/generation-input-origin';
@@ -46,6 +47,7 @@ import {
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import { loadProfileHandle } from '@/lib/profile-server';
 import type { TemplateRunLink } from '@/lib/template-result';
 
 type RemixSourceGenerationRow = TemplateRunLink & {
@@ -250,6 +252,20 @@ async function fetchGenerationById(
   return generation;
 }
 
+/**
+ * The post a remix names in its creator: its title and its creator's handle.
+ * Null when its creator has no handle to name.
+ */
+async function loadRemixSourcePost(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  post: { id: string; user_id: string | null; title?: string | null },
+): Promise<RemixSourcePost | null> {
+  if (!post.user_id) return null;
+  const creatorUsername = await loadProfileHandle(adminSupabase, post.user_id);
+  if (!creatorUsername) return null;
+  return { id: post.id, title: post.title?.trim() || 'Untitled Creation', creatorUsername };
+}
+
 export async function loadRemixSourceBundle(
   request: NextRequest,
   generationId: string,
@@ -350,6 +366,12 @@ export async function loadRemixSourceBundle(
     throw new RemixSourceError('Remix source not found', 404);
   }
   const isOwner = access.basis === 'owner';
+  // Whom the creator names (owner, 2026-11-05): the post being remixed and its
+  // creator, who hears of the remix. Read beside the rest; a remix of one's own
+  // creation names no one.
+  const sourcePostRead = !isOwner && access.post
+    ? loadRemixSourcePost(adminSupabase, access.post).catch(() => null)
+    : Promise.resolve(null);
 
   const category = normalizeCategory(typedGeneration.category, typedGeneration.model);
   if (!category) {
@@ -564,9 +586,10 @@ export async function loadRemixSourceBundle(
     };
   };
 
-  const [resultUrl, resultSeconds] = await Promise.all([
+  const [resultUrl, resultSeconds, sourcePost] = await Promise.all([
     resolveGenerationResultUrl(adminSupabase, typedGeneration),
     resultSecondsRead,
+    sourcePostRead,
   ]);
   const result: RemixSourceResult | null = {
     mediaType: resultMediaType,
@@ -597,6 +620,7 @@ export async function loadRemixSourceBundle(
     ...(inputSlots.length > 0 ? { inputSlots } : {}),
     workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
+    ...(sourcePost ? { sourcePost } : {}),
   };
 
   if (restoredInputMedia.length > 0) {

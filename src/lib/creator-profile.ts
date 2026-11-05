@@ -196,6 +196,9 @@ function normalizeCreatorPostRow(
     review_status: row.review_status === 'visible' || row.review_status === 'flagged' || row.review_status === 'hidden'
       ? row.review_status
       : null,
+    remix_parent_post_id: asNullableString(row.remix_parent_post_id),
+    remix_parent_user_id: asNullableString(row.remix_parent_user_id),
+    remix_origin_user_id: asNullableString(row.remix_origin_user_id),
   };
 }
 
@@ -235,6 +238,10 @@ async function fetchCreatorPostRows({
           'source_tool',
           includeSourceToolSlug ? 'source_tool_slug' : null,
           includeReviewStatus ? 'review_status' : null,
+          // A remix post's credit (`post-remix-credit.ts`), drawn on its card.
+          'remix_parent_post_id',
+          'remix_parent_user_id',
+          'remix_origin_user_id',
         ]
       : [
           'id',

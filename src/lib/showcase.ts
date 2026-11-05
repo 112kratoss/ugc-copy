@@ -9,6 +9,7 @@ import {
 } from '@/lib/post-resource-bundles';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import type { GenerationSetupEntry } from '../../ugc-mobile/lib/generation-setup/generation-setup';
+import type { RemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 
 export const SHOWCASE_PAGE_SIZE = 12;
 // A full page in the bootstrap keeps the grid from sitting near-empty while
@@ -185,6 +186,14 @@ export interface ShowcaseFeedItem {
      * Details reads the post again for.
      */
     generationSetup?: GenerationSetupEntry[];
+    /**
+     * A remix post's credit (`ugc-mobile/lib/remix-credit`): the post it
+     * remixed while that post is public and visible, and the chain's first
+     * creator when someone else. Carried by every card from the read that
+     * hydrates it, without a read of its own; absent on a post that is no
+     * remix, and on one whose credit has nothing it may show this viewer.
+     */
+    remixCredit?: RemixCredit;
 }
 
 interface ShowcaseFeedPageInfo {
