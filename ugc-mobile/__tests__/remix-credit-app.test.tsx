@@ -104,6 +104,20 @@ describe('the credit line', () => {
     expect(onOpenCreator).toHaveBeenCalledWith('cora');
   });
 
+  // Held to two lines (cards, the reel), a long title is shortened so the original keeps its room.
+  it('shortens a long title on a held line, and VoiceOver hears it whole', () => {
+    const long = { ...chain, parent: { ...chain.parent!, title: 'A very long title about a coral sunset over a quiet beach at dawn' } };
+    let tree!: renderer.ReactTestRenderer;
+    act(() => {
+      tree = renderer.create(<RemixCreditLine remixCredit={long} numberOfLines={2} onOpenPost={vi.fn()} onOpenCreator={vi.fn()} />);
+    });
+    const link = tree.root.findByProps({ testID: 'remix-credit' });
+    const shown = link.findAllByType('text' as never).map((node) => node.children.filter((child) => typeof child === 'string').join('')).join('');
+    expect(shown).toContain('“A very long title about a coral…”');
+    expect(shown).toContain('Original by');
+    expect(link.props.accessibilityLabel).toContain('A very long title about a coral sunset over a quiet beach at dawn');
+  });
+
   it('draws nothing for a post that is no remix', () => {
     const { tree } = draw(null);
     expect(tree.toJSON()).toBeNull();
@@ -188,6 +202,14 @@ describe('a block, in what the app holds', () => {
     const untouched = removeBlockedCreatorFromInfiniteData(lane([chain, plain]), 'someone-else') as unknown as { pages: Array<{ items: ShowcaseFeedItem[] }> };
     expect(untouched.pages[0].items[0]).toBe(chain);
     expect(untouched.pages[0].items[1]).toBe(plain);
+  });
+
+  // A posts, B remixes A, A remixes B: blocking B leaves A's own post no "Original by @A" alone.
+  it('never leaves a lone original naming the post\'s own creator', () => {
+    const credit = { parent: { postId: 'post-b', title: 'Sunset, again', creator: { id: 'user-b', username: 'maya' } }, original: { id: 'user-a', username: 'cora' } };
+    const [own] = buildImmersiveShowcaseItems('showcase-feed', [{ ...chain, creator: { ...chain.creator, id: 'user-a' }, remixCredit: credit } as ShowcaseFeedItem]);
+    const [unnamed] = unnameCreatorInImmersiveItems([own], 'user-b');
+    expect(unnamed.details).not.toHaveProperty('remixCredit');
   });
 
   it('takes the name out of the reel\'s Details, and hands back what no credit names', () => {

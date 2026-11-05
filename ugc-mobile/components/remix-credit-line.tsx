@@ -3,6 +3,7 @@ import { Pressable, Text, View, type TextStyle } from 'react-native';
 
 import { verticalHitSlop } from '@/lib/hit-target';
 import {
+  REMIX_CREDIT_CARD_TITLE_MAX_LENGTH,
   remixCreditLabel,
   remixCreditSegments,
   type RemixCredit,
@@ -39,7 +40,9 @@ export function RemixCreditLine({
 }) {
   const theme = useAppTheme();
   if (!credit) return null;
-  const segments = remixCreditSegments(credit);
+  // Held to its lines (the cards, the reel, Details), a long title is shortened so "Original by" keeps
+  // its room; what VoiceOver reads keeps the whole line.
+  const segments = remixCreditSegments(credit, numberOfLines ? { titleMaxLength: REMIX_CREDIT_CARD_TITLE_MAX_LENGTH } : {});
   const parent = credit.parent;
   const original = credit.original;
   const open = parent

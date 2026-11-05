@@ -408,16 +408,17 @@ export function profileMediaFeedHref({
 }
 
 /**
- * The reel's items with no remix credit naming `creatorId` (owner, 2026-11-05: nobody a block stands
+ * The reel's items with no remix credit naming `blockedCreatorId` (owner, 2026-11-05: nobody a block stands
  * between the viewer and is named): a block takes the creator's name out of the posts that stay. The
  * same array comes back where no credit names them.
  */
-export function unnameCreatorInImmersiveItems(items: ImmersivePreviewItem[], creatorId: string): ImmersivePreviewItem[] {
+export function unnameCreatorInImmersiveItems(items: ImmersivePreviewItem[], blockedCreatorId: string): ImmersivePreviewItem[] {
   let changed = false;
   const next = items.map((item) => {
     const credit = item.details?.remixCredit;
     if (!item.details || !credit) return item;
-    const kept = withoutBlockedRemixCredit(credit, (id) => id === creatorId);
+    // An original left alone never names the post's own creator (`buildRemixCredit`).
+    const kept = withoutBlockedRemixCredit(credit, (id) => id === blockedCreatorId, item.creatorId);
     if (kept === credit) return item;
     changed = true;
     const details: ImmersivePostDetails = { ...item.details };
