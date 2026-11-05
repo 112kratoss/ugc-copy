@@ -65,6 +65,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const theme = useAppTheme();
   const accent = accentColor(card.accent, theme.colors);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
+  // A remix's credit, read once: a card that is no remix draws no line and leaves no gap.
+  const remixCredit = readRemixCredit(card.item.remixCredit);
   // The inset media and measured zoom source keep exactly the same width.
   const mediaWidth = feedCardMediaWidth(contentWidth);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, mediaWidth) : 0;
@@ -117,14 +119,14 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       openAccessibilityLabel={`Open ${card.title}`}
       timeLabel={card.timeLabel}
       title={card.title}
-      creditLine={(
+      creditLine={remixCredit ? (
         <RemixCreditLine
           numberOfLines={2}
-          remixCredit={readRemixCredit(card.item.remixCredit)}
+          remixCredit={remixCredit}
           onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
           onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}
         />
-      )}
+      ) : null}
       body={card.bodyText ? (
         <PostTextBlock
           text={card.bodyText}

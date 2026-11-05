@@ -56,6 +56,10 @@ async function renderShell(props: {
   categoryLabel: string;
   modelLabel?: string | null;
   creatorPress?: CreatorProfilePress | null;
+  media?: React.ReactNode;
+  body?: React.ReactNode;
+  readMore?: React.ReactNode;
+  creditLine?: React.ReactNode | null;
 }) {
   let tree: renderer.ReactTestRenderer | null = null;
   await act(async () => {
@@ -159,6 +163,54 @@ describe('FeedCardShell byline', () => {
     expect(byline.props.accessibilityRole).toBeUndefined();
     expect(byline.props.onPressIn).toBeUndefined();
     expect(byline.props.onPress).toBeUndefined();
+
+    await act(async () => tree.unmount());
+  });
+});
+
+// A remix's credit (owner, 2026-11-05) under a card's title: a media card holds it in its heading;
+// a written card's heading holds its text, so the credit follows the text and its Read more. A card
+// that is no remix gets no line, and no space held for one.
+describe('FeedCardShell remix credit', () => {
+  const host = (type: string, testID: string, text?: string) => React.createElement(type, { testID }, text);
+  const credit = host('text', 'credit', 'Remix of “Sunset beach” by @cora');
+  const order = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAll((node) => isHost(node, 'text') && ['body', 'read-more', 'credit'].includes(String(node.props.testID)))
+    .map((node) => String(node.props.testID));
+
+  it('follows a written post\'s text and its Read more', async () => {
+    const tree = await renderShell({
+      categoryLabel: 'Note',
+      body: host('text', 'body', 'A long note'),
+      readMore: host('text', 'read-more', 'Read more'),
+      creditLine: credit,
+    });
+
+    expect(order(tree)).toEqual(['body', 'read-more', 'credit']);
+
+    await act(async () => tree.unmount());
+  });
+
+  it('leaves no space on a written post that is no remix', async () => {
+    const withCredit = await renderShell({ categoryLabel: 'Note', body: host('text', 'body', 'A long note'), creditLine: credit });
+    const without = await renderShell({ categoryLabel: 'Note', body: host('text', 'body', 'A long note'), creditLine: null });
+    const views = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => isHost(node, 'view')).length;
+
+    expect(views(withCredit) - views(without)).toBe(1);
+    expect(without.root.findAll((node) => node.props.testID === 'credit')).toHaveLength(0);
+
+    await act(async () => { withCredit.unmount(); without.unmount(); });
+  });
+
+  it('sits under a media post\'s title, inside its heading', async () => {
+    const tree = await renderShell({
+      categoryLabel: 'Image',
+      media: host('view', 'media'),
+      body: host('text', 'body', 'A caption'),
+      creditLine: credit,
+    });
+
+    expect(order(tree)).toEqual(['credit', 'body']);
 
     await act(async () => tree.unmount());
   });

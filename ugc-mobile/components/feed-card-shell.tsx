@@ -65,7 +65,7 @@ export function FeedCardShell({
    * A remix's credit (`RemixCreditLine`), under the title: a target of its own,
    * so never inside the card's open button, where VoiceOver would not reach it.
    */
-  creditLine?: ReactNode;
+  creditLine?: ReactNode | null;
   categoryLabel: string;
   /**
    * The model the post was made with, drawn after the category ("Video ·
@@ -256,11 +256,6 @@ export function FeedCardShell({
         {media ?? heading}
       </Pressable>
 
-      {/* A written post's heading is the card's open button, so its credit follows it. */}
-      {!media && creditLine ? (
-        <View style={{ paddingBottom: appTheme.spacing.compact }}>{creditLine}</View>
-      ) : null}
-
       {media && body ? (
         <Pressable
           accessible={false}
@@ -273,6 +268,12 @@ export function FeedCardShell({
       ) : null}
 
       {readMore}
+
+      {/* A written post's heading is the card's open button and holds its text, so its credit
+          follows the text and its Read more. */}
+      {!media && creditLine ? (
+        <View style={{ paddingTop: appTheme.spacing.compact }}>{creditLine}</View>
+      ) : null}
 
       {player}
 

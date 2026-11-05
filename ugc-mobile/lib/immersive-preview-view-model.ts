@@ -3,7 +3,7 @@ import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResource
 import { withAppleZoom, type AppleZoomOpen } from './apple-zoom';
 import { getCreationAvailability, type CreationAvailability } from './creation-library';
 import { readGenerationSetup, type GenerationSetupEntry } from './generation-setup/generation-setup';
-import { readRemixCredit, type RemixCredit } from './remix-credit/remix-credit';
+import { readRemixCredit, withoutBlockedRemixCredit, type RemixCredit } from './remix-credit/remix-credit';
 import {
   getGenerationKind,
   getGenerationLabel,
@@ -405,6 +405,27 @@ export function profileMediaFeedHref({
       ...(scope ? { scope } : {}),
     },
   };
+}
+
+/**
+ * The reel's items with no remix credit naming `creatorId` (owner, 2026-11-05: nobody a block stands
+ * between the viewer and is named): a block takes the creator's name out of the posts that stay. The
+ * same array comes back where no credit names them.
+ */
+export function unnameCreatorInImmersiveItems(items: ImmersivePreviewItem[], creatorId: string): ImmersivePreviewItem[] {
+  let changed = false;
+  const next = items.map((item) => {
+    const credit = item.details?.remixCredit;
+    if (!item.details || !credit) return item;
+    const kept = withoutBlockedRemixCredit(credit, (id) => id === creatorId);
+    if (kept === credit) return item;
+    changed = true;
+    const details: ImmersivePostDetails = { ...item.details };
+    if (kept) details.remixCredit = kept;
+    else delete details.remixCredit;
+    return { ...item, details };
+  });
+  return changed ? next : items;
 }
 
 export function buildImmersiveShowcaseItems(

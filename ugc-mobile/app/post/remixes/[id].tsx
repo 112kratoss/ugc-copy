@@ -9,6 +9,7 @@ import { AppText, Card, Screen, SecondaryButton, SectionTitle, StatusBlock } fro
 import { useAuth } from '@/lib/auth';
 import {
   POST_REMIXES_EMPTY,
+  POST_REMIXES_EMPTY_TITLE,
   POST_REMIXES_PAGE_SIZE,
   POST_REMIXES_SUBTITLE,
   POST_REMIXES_TITLE,
@@ -41,6 +42,7 @@ export default function PostRemixesScreen() {
     fetchNextPage,
     hasNextPage,
     isFetchNextPageError,
+    isFetching,
     isFetchingNextPage,
     isLoading,
     refetch,
@@ -70,12 +72,13 @@ export default function PostRemixesScreen() {
             title="Could not load remixes"
             body={firstLoadError instanceof Error ? firstLoadError.message : 'Check your connection, then try again.'}
           />
-          <SecondaryButton label="Try again" onPress={() => void refetch()} />
+          {/* Each tap mid-read would cancel the read and send it again, against the route's limit. */}
+          <SecondaryButton label="Try again" loading={isFetching} loadingLabel="Loading…" disabled={isFetching} onPress={() => void refetch()} />
         </View>
       ) : null}
 
       {!isLoading && !firstLoadError && items.length === 0 ? (
-        <StatusBlock title="No remixes yet" body={POST_REMIXES_EMPTY} />
+        <StatusBlock title={POST_REMIXES_EMPTY_TITLE} body={POST_REMIXES_EMPTY} />
       ) : null}
 
       {items.map((item) => <PostRemixRow key={item.id} item={item} />)}
@@ -97,6 +100,7 @@ export default function PostRemixesScreen() {
           ) : null}
           <SecondaryButton
             label={isFetchingNextPage ? 'Loading…' : nextPageFailed ? 'Retry' : 'Load more'}
+            disabled={isFetchingNextPage}
             onPress={() => void fetchNextPage()}
           />
         </View>

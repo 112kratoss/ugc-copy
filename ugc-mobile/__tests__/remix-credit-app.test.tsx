@@ -25,7 +25,8 @@ vi.mock('@/lib/theme-context', async () => {
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { RemixCreditLine } from '../components/remix-credit-line';
-import { buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { buildImmersiveShowcaseItems, unnameCreatorInImmersiveItems } from '../lib/immersive-preview-view-model';
+import { removeBlockedCreatorFromInfiniteData } from '../lib/showcase-feed-events';
 import { buildPostDetailsMeta, postRemixesLink } from '../lib/post-details-view-model';
 import {
   hasUnpostedRemixes,
@@ -155,5 +156,45 @@ describe('the remixes list', () => {
     expect(postRemixRowLabel(remix)).toBe('Launch frame, at night, by @maya');
     expect(postRemixThumbnailUrl(remix)).toBe('https://cdn.example.test/post-1.png');
     expect(postRemixThumbnailUrl({ mediaItems: [], mediaKind: null, mediaUrl: null })).toBeNull();
+  });
+});
+
+// Owner, 2026-11-05: nobody a block stands between the viewer and is named. A block in the app takes
+// the creator's own posts out (as before) and their name out of the credits of the posts that stay,
+// as the server leaves them at the next read.
+describe('a block, in what the app holds', () => {
+  const chain = variants.remixOfRemix.item as unknown as ShowcaseFeedItem;
+  const parentCreatorId = chain.remixCredit!.parent!.creator.id;
+  const originalId = chain.remixCredit!.original!.id;
+  const plain = mobileApiContract.endpoints.getShowcasePost.response.item as unknown as ShowcaseFeedItem;
+  const lane = (items: ShowcaseFeedItem[]) => ({
+    pageParams: [0],
+    pages: [{ success: true, items, pageInfo: { hasMore: false, nextOffset: null, limit: 24, offset: 0 } }],
+  }) as never;
+
+  it('takes the name out of a lane\'s credits, keeping the rest of the credit', () => {
+    const data = removeBlockedCreatorFromInfiniteData(lane([chain, plain]), parentCreatorId) as unknown as { pages: Array<{ items: ShowcaseFeedItem[] }> };
+    const [remix] = data.pages[0].items;
+    expect(remix.remixCredit).toEqual({ parent: null, original: chain.remixCredit!.original });
+    expect(data.pages[0].items).toHaveLength(2);
+  });
+
+  it('drops a credit with no one left to name, and hands back what no credit names', () => {
+    const both = removeBlockedCreatorFromInfiniteData(
+      removeBlockedCreatorFromInfiniteData(lane([chain]), parentCreatorId),
+      originalId,
+    ) as unknown as { pages: Array<{ items: ShowcaseFeedItem[] }> };
+    expect(both.pages[0].items[0]).not.toHaveProperty('remixCredit');
+    const untouched = removeBlockedCreatorFromInfiniteData(lane([chain, plain]), 'someone-else') as unknown as { pages: Array<{ items: ShowcaseFeedItem[] }> };
+    expect(untouched.pages[0].items[0]).toBe(chain);
+    expect(untouched.pages[0].items[1]).toBe(plain);
+  });
+
+  it('takes the name out of the reel\'s Details, and hands back what no credit names', () => {
+    const reel = buildImmersiveShowcaseItems('showcase-feed', [chain, plain]);
+    const [remix, other] = unnameCreatorInImmersiveItems(reel, parentCreatorId);
+    expect(remix.details?.remixCredit).toEqual({ parent: null, original: chain.remixCredit!.original });
+    expect(other).toBe(reel[1]);
+    expect(unnameCreatorInImmersiveItems(reel, 'someone-else')).toBe(reel);
   });
 });

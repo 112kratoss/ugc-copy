@@ -98,14 +98,14 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       statusChip={card.state ? <ProfileStateChip label={card.state.label} tone={card.state.tone} /> : null}
       timeLabel={card.timeLabel}
       title={card.title}
-      creditLine={(
+      creditLine={item.details?.remixCredit ? (
         <RemixCreditLine
           numberOfLines={2}
-          remixCredit={item.details?.remixCredit}
+          remixCredit={item.details.remixCredit}
           onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
           onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}
         />
-      )}
+      ) : null}
       body={card.bodyText ? (
         <PostTextBlock
           text={card.bodyText}

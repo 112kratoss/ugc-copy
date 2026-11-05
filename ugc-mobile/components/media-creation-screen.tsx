@@ -25,7 +25,7 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { MediaPreview, StableMediaImage } from '@/components/media-preview';
 import { Overlay } from '@/components/overlay-host';
 import { PushOfferCard } from '@/components/push-offer-card';
-import { RemixSourceRow, type RemixSourceSeed } from '@/components/remix-source-row';
+import { RemixSourceRow, remixSourcePostOf, type RemixSourceSeed } from '@/components/remix-source-row';
 import {
   AppText,
   ChoiceChip,
@@ -1173,7 +1173,12 @@ function IdentityCreationScreen({
   // The source's own result, which the remix may add as a reference (the source row's button): read
   // with the source, or from the saved session a resume reads in its place, and kept with the source
   // it was read for. None read for this source is not "none offered", so a session never saves it so.
-  const [remixOriginalRead, setRemixOriginalRead] = useState<{ sourceId: string; original: RemixOriginal | null } | null>(null);
+  // The bundle's word on whose post it is (`sourcePost`) comes with it; a saved session does not keep it.
+  const [remixOriginalRead, setRemixOriginalRead] = useState<{
+    sourceId: string;
+    original: RemixOriginal | null;
+    sourcePost?: ReturnType<typeof remixSourcePostOf>;
+  } | null>(null);
   const remixOriginalAskedRef = useRef<string | null>(null);
   // The source whose original the saved session holds, so a session saved before sessions kept it
   // is saved again once its original is read, and its next resume reads nothing.
@@ -1181,6 +1186,7 @@ function IdentityCreationScreen({
   const remixSourceId = remixSource?.generationId?.trim() || null;
   const remixOriginalKnown = Boolean(remixSourceId && remixOriginalRead?.sourceId === remixSourceId);
   const remixOriginal = remixOriginalKnown ? remixOriginalRead!.original : null;
+  const remixSourcePost = remixOriginalKnown ? remixOriginalRead!.sourcePost ?? null : null;
   // A Remix tap opens this creator before its start is answered (`launchShowcaseRemix`). The
   // source it restores, its saves and a run wait for the answer, which can still send the
   // creator to another link or close it while the tapped screen says why.
@@ -1906,7 +1912,7 @@ function IdentityCreationScreen({
         const restoredCatalog = await loadCatalogDetails([modelId]);
         if (isCancelled) return;
         const original = remixOriginalOf(bundle);
-        setRemixOriginalRead({ sourceId: generationId, original });
+        setRemixOriginalRead({ sourceId: generationId, original, sourcePost: remixSourcePostOf(bundle) });
         const baseDraft = createDefaultCreationDraft(targetTool);
         const restored = hydrateCatalogCreationDraftFromRemixSource(baseDraft, bundle, restoredCatalog);
         const creatorPrompt = draftPromptsRef.current[targetTool];
@@ -1998,7 +2004,9 @@ function IdentityCreationScreen({
     let active = true;
     // A Remix tap's creator asks it through the tap's launch, as its restore would.
     void (remixLaunch ? remixLaunch.readSource() : api.getRemixSourceBundle(generationId, { postId: remixSource?.postId ?? null })).then(
-      (bundle) => { if (active) setRemixOriginalRead({ sourceId: generationId, original: remixOriginalOf(bundle) }); },
+      (bundle) => {
+        if (active) setRemixOriginalRead({ sourceId: generationId, original: remixOriginalOf(bundle), sourcePost: remixSourcePostOf(bundle) });
+      },
       () => { remixOriginalAskedRef.current = null; },
     );
     return () => { active = false; };
@@ -3210,6 +3218,7 @@ function IdentityCreationScreen({
   const remixSourceRow = remixSource ? (
     <RemixSourceRow
       source={remixSource}
+      sourcePost={remixSourcePost}
       original={offersOriginal ? { using: originalUsed, busy: isUploading, onUse: () => void addRemixOriginalAsReference() } : null}
     />
   ) : null;

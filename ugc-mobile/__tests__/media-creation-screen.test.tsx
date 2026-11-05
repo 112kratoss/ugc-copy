@@ -9492,7 +9492,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.getShowcasePost.mockResolvedValue({ success: true, item: kungFuCats });
         const tree = await open(idsOnly());
 
-        expect(collectText(row(tree))).toEqual(['Remixing @whiskers’s “Rooftop sparring”', 'When your remix is done, @whiskers is told you made it.']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
         expect(poster(tree)).toEqual(['https://cdn.example.com/post-9/poster.webp']);
         expect(authState.api.getShowcasePost).toHaveBeenCalledTimes(1);
         expect(authState.api.getShowcasePost).toHaveBeenCalledWith('post-9');
@@ -9502,7 +9502,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         authState.api.getShowcasePost.mockResolvedValue({ success: true, item: { ...kungFuCats, title: 'Untitled Creation' } });
         const tree = await open(idsOnly());
 
-        expect(collectText(row(tree))).toEqual(['Remixing @whiskers’s “Two cats sparring on a rooftop”', 'When your remix is done, @whiskers is told you made it.']);
+        expect(collectText(row(tree))).toEqual(['Two cats sparring on a rooftop', 'By @whiskers']);
       });
 
       it('draws the row a link brings from its first frame, and never reads the post', async () => {
@@ -9515,34 +9515,65 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
             />,
           );
         });
-        expect(collectText(row(tree))).toEqual(['Remixing @whiskers’s “Rooftop sparring”', 'When your remix is done, @whiskers is told you made it.']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
         expect(poster(tree)).toEqual(['https://cdn.example.com/post-9/poster.webp']);
 
         await settle();
         expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
       });
 
-      // Owner, 2026-11-05: the row names whose post is remixed and that they hear of it, but a
-      // remix of the viewer's own post tells no one, so it keeps the plain row.
-      it("keeps the plain row for the viewer's own post", async () => {
-        const viewer = authState.user;
-        authState.user = { id: 'user-whiskers', email: 'whiskers@example.com' };
-        testQueryClient.setQueryData(['profile', 'user-whiskers'], { id: 'user-whiskers', username: 'whiskers' });
-        try {
-          let tree!: renderer.ReactTestRenderer;
-          renderer.act(() => {
-            tree = renderer.create(
-              <MediaCreationScreen
-                initialTool="image"
-                remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Rooftop sparring', creatorLabel: '@whiskers' }}
-              />,
-            );
-          });
+      // Owner, 2026-11-05: the row names whose post is remixed and that they hear of it. Only the
+      // server says whose it is: the source's bundle carries sourcePost for someone else's post
+      // and none for the viewer's own, a guest's included (a guest's own creations are labelled
+      // "@creator", a real handle someone may hold), so a label alone never names anyone.
+      describe('who hears of the remix', () => {
+        const bundle = (sourcePost?: { id: string; title: string; creatorUsername: string }) => ({
+          generation: { id: 'gen-9', title: 'Rooftop sparring', prompt: 'Two cats sparring on a rooftop', category: 'image', model: 'nano-banana-2' },
+          result: null,
+          inputs: { image: { elements: [] } },
+          workflowSettings: { model: 'nano-banana-2' },
+          restoreIssues: [],
+          ...(sourcePost ? { sourcePost } : {}),
+        });
+        const remixOf = (creatorLabel: string) => (
+          <MediaCreationScreen
+            initialTool="image"
+            remixSource={{ generationId: 'gen-9', postId: 'post-9', title: 'Rooftop sparring', creatorLabel }}
+          />
+        );
+
+        it('names the creator, and that they are told, once the bundle says the post is theirs', async () => {
+          authState.api.getRemixSourceBundle.mockResolvedValue(bundle({ id: 'post-9', title: 'Rooftop sparring', creatorUsername: 'whiskers' }));
+          const tree = await open(remixOf('@whiskers'));
+
+          expect(collectText(row(tree))).toEqual(['Remixing @whiskers’s “Rooftop sparring”', 'When your remix is done, @whiskers is told you made it.']);
+        });
+
+        it("keeps the plain row for the viewer's own creation, which the bundle names no one for", async () => {
+          authState.api.getRemixSourceBundle.mockResolvedValue(bundle());
+          const tree = await open(remixOf('@whiskers'));
+
           expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
-        } finally {
-          authState.user = viewer;
-          testQueryClient.removeQueries({ queryKey: ['profile', 'user-whiskers'] });
-        }
+        });
+
+        it("never names the stranger a guest's own label looks like", async () => {
+          const viewer = authState.user;
+          authState.user = null;
+          authState.api.getRemixSourceBundle.mockResolvedValue(bundle());
+          try {
+            const tree = await open(remixOf('@creator'));
+            expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @creator']);
+          } finally {
+            authState.user = viewer;
+          }
+        });
+
+        it('keeps the plain row for a bundle whose word is not a handle', async () => {
+          authState.api.getRemixSourceBundle.mockResolvedValue(bundle({ id: 'post-9', title: 'Rooftop sparring', creatorUsername: 'not a handle' }));
+          const tree = await open(remixOf('@whiskers'));
+
+          expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
+        });
       });
 
       it("holds the row's place while the post is read, and keeps the plain row when it cannot be", async () => {
@@ -9602,7 +9633,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         renderer.act(() => { image.props.onError?.({ error: 'HTTP 404' }); });
 
         expect(poster(tree)).toEqual([]);
-        expect(collectText(row(tree))).toEqual(['Remixing @whiskers’s “Rooftop sparring”', 'When your remix is done, @whiskers is told you made it.']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
       });
 
       // A disabled query still reports the shared entry's state, so the post page reading the
@@ -9613,7 +9644,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         const tree = await open(brought());
 
         expect(row(tree).findAllByType(SkeletonBone)).toHaveLength(0);
-        expect(collectText(row(tree))).toEqual(['Remixing @whiskers’s “Rooftop sparring”', 'When your remix is done, @whiskers is told you made it.']);
+        expect(collectText(row(tree))).toEqual(['Rooftop sparring', 'By @whiskers']);
         expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
       });
 

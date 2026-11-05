@@ -78,6 +78,7 @@ import {
   forgetAnonymousShowcaseFeedRemoval,
   getQualifiedImpressionKey,
   rememberAnonymousShowcaseFeedRemoval,
+  removeBlockedCreatorFromInfiniteData,
   removeShowcaseFeedItemsFromInfiniteData,
   restoreShowcaseFeedItemsToInfiniteData,
   trackFeedFeedbackRequest,
@@ -979,7 +980,7 @@ export function HomeDashboard() {
         await api.blockUser(creatorId);
         queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
           { queryKey: viewerFeedQueryKey },
-          (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
+          (current) => removeBlockedCreatorFromInfiniteData(current, creatorId)
         );
         takeOffHomeShelf(queryClient, { creatorId });
         void AccessibilityInfo.announceForAccessibility('Creator blocked.');

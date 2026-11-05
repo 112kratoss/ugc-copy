@@ -32,14 +32,11 @@ export function nextPostRemixesOffset(page: PostRemixesResponse): number | undef
   return page.pageInfo?.hasMore && typeof page.pageInfo.nextOffset === 'number' ? page.pageInfo.nextOffset : undefined;
 }
 
-/** "3 remixes", the count that opens the list. */
-export function postRemixesCountLabel(count: number): string {
-  return `${count} ${count === 1 ? 'remix' : 'remixes'}`;
-}
-
 /** The screen's heading under its bar's "Remixes". */
 export const POST_REMIXES_TITLE = 'Made from this post';
 export const POST_REMIXES_SUBTITLE = 'Remixes their creators posted, newest first.';
+/** The count that opened the list holds unposted remixes too, so the empty list never says there are none. */
+export const POST_REMIXES_EMPTY_TITLE = 'No posted remixes yet';
 export const POST_REMIXES_EMPTY = 'No remixes are posted yet. They show here once their creators post them.';
 export const POST_REMIXES_UNPOSTED_NOTE = 'Some remixes haven’t been posted.';
 
