@@ -53,7 +53,10 @@
 --    whenever its maker holds it, retired or back in draft included: the run
 --    imports that recipe's copies, and a remix's recipe holds what its run used
 --    (#708's max review; the hub's rule, 2026-11-06). Archiving or removing the
---    original creation still withholds the files.
+--    original creation still withholds the files. A run whose maker holds the
+--    recipe is a paid-recipe remix while that recipe is paid, an earlier free
+--    claim included (owner, 2026-11-06: "B's recipe must be paid"); a remix by
+--    someone who never held it is unchanged.
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
@@ -315,6 +318,8 @@ DECLARE
   v_bundle_status text;
   v_bought_paid boolean;
   v_held_bundle_id uuid;
+  v_held_paid boolean;
+  v_bundle_access text;
 BEGIN
   IF p_source_generation_id IS NULL THEN
     RETURN;
@@ -335,15 +340,17 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT b.id, b.status
-  INTO v_bundle_id, v_bundle_status
+  -- The post's recipe as it stands: its live one before a retired one.
+  SELECT b.id, b.status, b.access_mode
+  INTO v_bundle_id, v_bundle_status, v_bundle_access
   FROM public.posts AS p
   JOIN public.post_resource_bundles AS b ON b.post_id = p.id
   WHERE p.generation_id = v_source.id
+  ORDER BY (b.retired_at IS NULL) DESC, b.created_at DESC
   LIMIT 1;
-  -- The recipe of this post the caller holds, whatever its state now.
-  SELECT b.id
-  INTO v_held_bundle_id
+  -- The recipe of this post the caller holds, whatever its state now, and whether it is paid now.
+  SELECT b.id, b.access_mode = 'paid'
+  INTO v_held_bundle_id, v_held_paid
   FROM public.posts AS p
   JOIN public.post_resource_bundles AS b ON b.post_id = p.id
   JOIN public.post_resource_bundle_purchases AS purchase ON purchase.bundle_id = b.id
@@ -355,7 +362,13 @@ BEGIN
   v_bought_paid := public.remix_source_bought_paid(p_user_id, v_source.id);
 
   RETURN QUERY SELECT
-    CASE WHEN v_bought_paid OR v_source.remix_recipe_mode = 'paid' THEN 'paid' ELSE 'free' END,
+    CASE
+      WHEN v_bought_paid OR v_source.remix_recipe_mode = 'paid' THEN 'paid'
+      -- A holder of the recipe, a free claim included, remixes a paid recipe while it is paid.
+      WHEN v_held_bundle_id IS NOT NULL
+        AND (coalesce(v_held_paid, false) OR (v_bundle_status = 'published' AND v_bundle_access = 'paid')) THEN 'paid'
+      ELSE 'free'
+    END,
     coalesce(v_held_bundle_id, CASE WHEN v_bundle_status = 'published' OR v_bought_paid THEN v_bundle_id END),
     coalesce(v_source.remix_origin_generation_id, v_source.id);
 END;

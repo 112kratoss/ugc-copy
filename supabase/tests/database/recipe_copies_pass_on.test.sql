@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(46);
+select plan(48);
 
 insert into auth.users(id, email, aud, role, created_at, is_anonymous, raw_app_meta_data, raw_user_meta_data)
 values
@@ -239,6 +239,19 @@ select is(
   (select remix_recipe_bundle_id from public.generations where id = 'ad120010-1000-4000-8000-0000000000dd'),
   'ad120030-1000-4000-8000-00000000000b'::uuid,
   'a remix by someone who claimed the recipe records it, though it is no longer published');
+-- The owner, 2026-11-06 ("B's recipe must be paid"): that claim was free, the recipe is paid now.
+select is(
+  (select remix_recipe_mode from public.generations where id = 'ad120010-1000-4000-8000-0000000000dd'),
+  'paid',
+  'a holder''s run through an earlier free claim of a recipe now paid is a paid-recipe remix');
+-- Someone who never held the recipe: unchanged (free, no recipe recorded).
+insert into public.generations(id, user_id, model, status, is_public, source_generation_id)
+values ('ad120010-1000-4000-8000-0000000000de', 'ad120004-1000-4000-8000-000000000004', 'test-model', 'succeeded', false,
+        'ad120010-1000-4000-8000-00000000000a');
+select is(
+  (select remix_recipe_mode || ':' || coalesce(remix_recipe_bundle_id::text, 'none') from public.generations where id = 'ad120010-1000-4000-8000-0000000000de'),
+  'free:ad120030-1000-4000-8000-00000000000a',
+  'a remix by someone who never held the recipe keeps phase 1''s terms');
 
 -- ─── What the table holds ───────────────────────────────────────────────────
 
