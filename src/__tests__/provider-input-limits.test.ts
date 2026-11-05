@@ -23,6 +23,7 @@ const KIE_PROMPT_CAPS: Record<string, number> = {
   'kling-o3': 3072,
   'grok-imagine-video-1.5': 4096,
   'flux-2-pro': 5000,
+  'flux-3-klein': 5000,
   'grok-imagine-image': 5000,
   'grok-imagine-video': 5000,
   'hailuo-2.3': 5000,
@@ -30,6 +31,7 @@ const KIE_PROMPT_CAPS: Record<string, number> = {
   'ideogram-character': 5000,
   'ideogram-v3': 5000,
   'pixverse-v6': 5000,
+  'pixverse-v6-max': 5000,
   'qwen-image-2.1': 5000,
   'qwen3': 5000,
   'qwen3-pro': 5000,
@@ -40,6 +42,7 @@ const KIE_PROMPT_CAPS: Record<string, number> = {
   'wan-2.7-image-pro': 5000,
   'minimax-h3': 7000,
   'grok-imagine-image-2': 8000,
+  'kling-4.0': 8000,
 };
 
 const ALL_MODEL_IDS = [

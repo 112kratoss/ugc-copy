@@ -1009,6 +1009,180 @@ describe('generation services', () => {
     expect(generations[0].duration).toBe(7);
   });
 
+  describe('the three Kie video models added 2026-11-05', () => {
+    // Bodies pinned to docs/model-api-references/{pixverse-v6-max,kling-4-0,vidu-q4}.md. Each run
+    // returns the provider body the mock saw.
+    async function providerBodyFor(params: Record<string, unknown>) {
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      let providerBody: Record<string, unknown> | null = null;
+      vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          json: async () => ({ code: 200, data: { taskId: 'task-new-video-2' } }),
+        } as Response;
+      });
+      const { supabase } = createSupabaseMock();
+      await startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'A chef plates a dish under warm kitchen light.',
+        ...(params as object),
+      } as Parameters<typeof startVideoGeneration>[0]);
+      return providerBody as Record<string, unknown> | null;
+    }
+    const PROMPT = 'A chef plates a dish under warm kitchen light.';
+    const chef = { id: 'element-1', displayName: 'The chef', handle: '@chef', storagePath: null, sourceGenerationId: null };
+    const dish = { id: 'element-2', displayName: 'The dish', handle: '@dish', storagePath: null, sourceGenerationId: null };
+
+    it('routes PixVerse V6 Max to its own two ids, and takes no frame pair or references', async () => {
+      const common = { model: 'pixverse-v6-max', duration: 5, resolution: '720p', aspectRatio: '21:9', sound: true };
+
+      expect(await providerBodyFor(common)).toEqual({
+        model: 'pixverse-v6-max/text-to-video',
+        input: { prompt: PROMPT, quality: '720p', duration: 5, generate_audio_switch: true, aspect_ratio: '21:9' },
+        callBackUrl: expect.any(String),
+      });
+      expect(await providerBodyFor({ ...common, startImageUrl: 'https://cdn.example.com/start.jpg' })).toEqual({
+        model: 'pixverse-v6-max/image-to-video',
+        input: { prompt: PROMPT, quality: '720p', duration: 5, generate_audio_switch: true, image_urls: ['https://cdn.example.com/start.jpg'] },
+        callBackUrl: expect.any(String),
+      });
+
+      await expect(providerBodyFor({
+        ...common,
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).rejects.toThrow('PixVerse V6 Max supports a start frame only.');
+      await expect(providerBodyFor({
+        ...common,
+        referenceMode: 'elements',
+        elements: [chef],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg'],
+      })).rejects.toThrow('Reusable references are not available for this model yet.');
+    });
+
+    it('sends Kling 4.0 text to reference-to-video, a frame pair to keyframe-to-video, with an integer duration and no sound field', async () => {
+      expect(await providerBodyFor({ model: 'kling-4.0', duration: 12, resolution: '1080p', aspectRatio: '9:16', sound: true })).toEqual({
+        model: 'kling-4.0/reference-to-video',
+        input: { prompt: PROMPT, duration: 12, resolution: '1080p', aspect_ratio: '9:16' },
+        callBackUrl: expect.any(String),
+      });
+
+      // The frames give the run its shape, so no ratio is sent.
+      expect(await providerBodyFor({
+        model: 'kling-4.0',
+        duration: 5,
+        resolution: '720p',
+        aspectRatio: '16:9',
+        startImageUrl: 'https://cdn.example.com/start.jpg',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).toEqual({
+        model: 'kling-4.0/keyframe-to-video',
+        input: {
+          prompt: PROMPT,
+          duration: 5,
+          resolution: '720p',
+          first_frame_url: 'https://cdn.example.com/start.jpg',
+          last_frame_url: 'https://cdn.example.com/end.jpg',
+        },
+        callBackUrl: expect.any(String),
+      });
+
+      await expect(providerBodyFor({
+        model: 'kling-4.0',
+        duration: 5,
+        resolution: '720p',
+        aspectRatio: '16:9',
+        endImageUrl: 'https://cdn.example.com/end.jpg',
+      })).rejects.toThrow('Add a start frame to use an end frame with this model.');
+    });
+
+    it('sends Kling 4.0 named pictures as image_urls, each @handle as the @image_N of its place', async () => {
+      const body = await providerBodyFor({
+        model: 'kling-4.0',
+        duration: 8,
+        resolution: '720p',
+        aspectRatio: '1:1',
+        prompt: '@chef lifts @dish toward the camera, then @chef smiles.',
+        referenceMode: 'elements',
+        elements: [chef, dish],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+      });
+      // The typed prompt, not the legend the other models are sent: Kie refuses any @ that
+      // names no declared picture, and declares them by place.
+      expect(body).toEqual({
+        model: 'kling-4.0/reference-to-video',
+        input: {
+          prompt: '@image_1 lifts @image_2 toward the camera, then @image_1 smiles.',
+          duration: 8,
+          resolution: '720p',
+          aspect_ratio: '1:1',
+          image_urls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+        },
+        callBackUrl: expect.any(String),
+      });
+    });
+
+    it('refuses a Kling 4.0 prompt whose @ would name nothing, before anything is held', async () => {
+      const { supabase, rpcCalls } = createSupabaseMock();
+      const { startVideoGeneration } = await import('@/lib/generation-services');
+      vi.mocked(fetch).mockClear();
+
+      await expect(startVideoGeneration({
+        supabase,
+        creditSupabase: supabase,
+        userId: 'user-1',
+        prompt: 'Meet @Chef at noon, email chef@example.com.',
+        model: 'kling-4.0',
+        duration: 5,
+        resolution: '720p',
+        aspectRatio: '16:9',
+      })).rejects.toThrow(
+        'Kling 4.0 reads every @ as a mention of an attached picture. Mention a reference by its @name, or take the @ out of @Chef, @example.com.',
+      );
+      expect(rpcCalls.filter((call) => call.fn === 'start_generation')).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('sends Vidu Q4 a start frame as image_url or pictures as reference_image_urls with the ratio, and refuses text alone', async () => {
+      const common = { model: 'vidu-q4', duration: 6, resolution: '1080p', aspectRatio: '4:3', sound: true };
+
+      expect(await providerBodyFor({ ...common, startImageUrl: 'https://cdn.example.com/start.jpg' })).toEqual({
+        model: 'vidu-q4/image-to-video',
+        input: { prompt: PROMPT, duration: 6, resolution: '1080p', audio: true, image_url: 'https://cdn.example.com/start.jpg' },
+        callBackUrl: expect.any(String),
+      });
+
+      const references = await providerBodyFor({
+        ...common,
+        sound: false,
+        prompt: '@chef serves @dish.',
+        referenceMode: 'elements',
+        elements: [chef, dish],
+        elementImageUrls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+      });
+      expect(references).toMatchObject({
+        model: 'vidu-q4/reference-to-video',
+        input: {
+          duration: 6,
+          resolution: '1080p',
+          audio: false,
+          aspect_ratio: '4:3',
+          reference_image_urls: ['https://cdn.example.com/chef.jpg', 'https://cdn.example.com/dish.jpg'],
+        },
+      });
+      // Vidu reads its pictures by order, so it is sent the legend that numbers them.
+      const sentPrompt = String((references as { input: { prompt: string } }).input.prompt);
+      expect(sentPrompt).toContain('@chef = attached reference image 1 (The chef)');
+      expect(sentPrompt).toContain('@chef serves @dish.');
+      expect((references as { input: Record<string, unknown> }).input).not.toHaveProperty('image_url');
+
+      await expect(providerBodyFor(common)).rejects.toThrow('Vidu Q4 needs a start frame or at least one reference picture.');
+    });
+  });
+
   describe('the five Kie video models added 2026-10-08', () => {
     // Bodies pinned to docs/model-api-references/{wan-3-0,pixverse-v6,gemini-omni-1-1-flash,
     // grok-imagine-video-1-5}.md. Each run returns the provider body the mock saw.
@@ -5001,6 +5175,8 @@ describe('generation services', () => {
       model: VideoStart['model'];
       settings: Partial<VideoStart>;
       request: ProviderRequest;
+      /** How the sent prompt names the picture, where the legend is not how (Kling 4.0). */
+      promptNames?: string;
     }> = [
       {
         label: 'Seedance 2',
@@ -5109,14 +5285,30 @@ describe('generation services', () => {
           input: { image_references: [{ image_url: REFERENCE, type: 'subject', ref_name: 'lead' }], aspect_ratio: '16:9' },
         },
       },
+      // Added 2026-11-05 (docs/model-api-references/kling-4-0.md, vidu-q4.md). Kling 4.0 reads its
+      // pictures by place and refuses an @ that names nothing it declares, so its prompt names
+      // the picture @image_1 rather than carrying the legend.
+      {
+        label: 'Kling 4.0',
+        model: 'kling-4.0',
+        settings: { duration: 5, resolution: '720p' },
+        request: { model: 'kling-4.0/reference-to-video', input: { image_urls: [REFERENCE], aspect_ratio: '16:9' } },
+        promptNames: '@image_1 walks along the harbour at dusk.',
+      },
+      {
+        label: 'Vidu Q4',
+        model: 'vidu-q4',
+        settings: { duration: 5, resolution: '540p' },
+        request: { model: 'vidu-q4/reference-to-video', input: { reference_image_urls: [REFERENCE], aspect_ratio: '16:9' } },
+      },
     ];
 
-    it.each(ROUTES)('reaches $label, whose prompt says it is attached', async ({ model, settings, request: expected }) => {
+    it.each(ROUTES)('reaches $label, whose prompt says it is attached', async ({ model, settings, request: expected, promptNames }) => {
       const { request, generations, inputMediaRows } = await startPageRun(model, settings);
 
       expect(request).toMatchObject(expected);
       // The prompt, the kept input and the stored recipe all describe that picture.
-      expect(String(request.input?.prompt ?? request.prompt)).toContain('@lead = attached reference image 1');
+      expect(String(request.input?.prompt ?? request.prompt)).toContain(promptNames ?? '@lead = attached reference image 1');
       expect(inputMediaRows).toEqual([
         expect.objectContaining({ role: 'reference_image', metadata: expect.objectContaining({ handle: '@lead' }) }),
       ]);

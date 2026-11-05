@@ -38,6 +38,7 @@ export const PROVIDER_PROMPT_RULES: Readonly<Record<string, ProviderPromptRule>>
   'seedream-5-lite': { maxLength: 2995, minLength: 4 }, // seedream/5-lite-text-to-image:113-114, seedream-5-lite-image-to-image:111-112
   'seedream-5-flash': { maxLength: 5000, minLength: 4 }, // seedream/5-flash-text-to-image:117-118, -image-to-image:117-118
   'seedream-5-pro': { maxLength: 5000, minLength: 4 }, // seedream/5-pro-text-to-image:117-118, -image-to-image:123-124
+  'flux-3-klein': { maxLength: 5000 }, // flux3/klein-text-to-image:83-89; klein-edit-image:83-89 (read 2026-11-05)
   'flux-2-pro': { maxLength: 5000, minLength: 3 }, // flux2/pro-text-to-image:106,117; pro-image-to-image:124-126
   // grok-imagine/text-to-image:113; its image-to-image endpoint takes 390,000 (:148).
   'grok-imagine-image': { maxLength: 5000, textOnly: true },
@@ -67,6 +68,10 @@ export const PROVIDER_PROMPT_RULES: Readonly<Record<string, ProviderPromptRule>>
   'hailuo-2.3': { maxLength: 5000 }, // hailuo/2-3-image-to-video-pro:111; -standard:113
   'happyhorse-1.1': { maxLength: 5000 }, // happyhorse-1-1/text-to-video:102; image-to-video:102; reference-to-video:106
   'pixverse-v6': { maxLength: 5000, minLength: 3 }, // pixverse/text-to-video:113-114 (and its three siblings)
+  // Read 2026-11-05 (docs/model-api-references/*): Max asks 1–5,000, Kling 4.0 1–8,000 on both
+  // endpoints.
+  'pixverse-v6-max': { maxLength: 5000 }, // pixverse/v6-max-text-to-video:113-124; v6-max-image-to-video:115-127
+  'kling-4.0': { maxLength: 8000 }, // kling/v4-reference-to-video:160-187; v4-keyframe-to-video:115-138
   'wan-2.7': { maxLength: 5000 }, // wan/2-7-text-to-video:82; 2-7-image-to-video:111; 2-7-r2v:90
   'minimax-h3': { maxLength: 7000 }, // minimax-h3/text-to-video:94; image-to-video:93; reference-to-video:104
 };

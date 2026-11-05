@@ -4299,7 +4299,7 @@ describe('CreateVideoClient Kling video elements', () => {
         return `${limits.images > 0 ? 'images' : '-'} ${limits.videos > 0 && modelId !== 'kling-3.0-video' ? 'clips' : '-'} ${limits.audios > 0 ? 'tracks' : '-'}`;
       };
 
-      expect(videoModelIds.filter((modelId) => takes(modelId) === '- - -').sort()).toEqual(['hailuo-2.3', 'kling-3.0-turbo', 'kling-3.0-video']);
+      expect(videoModelIds.filter((modelId) => takes(modelId) === '- - -').sort()).toEqual(['hailuo-2.3', 'kling-3.0-turbo', 'kling-3.0-video', 'pixverse-v6-max']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images - -').length).toBeGreaterThan(2);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips -')).toEqual(['gemini-omni-video', 'gemini-omni-1.1-flash']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips tracks').length).toBeGreaterThan(2);

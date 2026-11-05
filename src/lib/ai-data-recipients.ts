@@ -33,6 +33,7 @@ export type AiModelMaker =
   | 'Ideogram'
   | 'Black Forest Labs'
   | 'PixVerse'
+  | 'ShengShu'
   | 'ElevenLabs';
 
 type CatalogModelId = MotionModelId | ImageModelId | VideoModelId | VoiceoverModelId | SoundEffectModelId;
@@ -65,6 +66,8 @@ export const AI_MODEL_MAKER_BY_MODEL_ID = {
   'flux-2-pro': 'Black Forest Labs',
   'grok-imagine-image': 'xAI',
   'grok-imagine-image-2': 'xAI',
+  'nano-banana-2.1': 'Google',
+  'flux-3-klein': 'Black Forest Labs',
   // Video
   'kling-3.0-video': 'Kuaishou',
   'kling-3.0-turbo': 'Kuaishou',
@@ -87,6 +90,11 @@ export const AI_MODEL_MAKER_BY_MODEL_ID = {
   'wan-3.0-prime': 'Alibaba',
   'grok-imagine-video-1.5': 'xAI',
   'pixverse-v6': 'PixVerse',
+  'pixverse-v6-max': 'PixVerse',
+  'kling-4.0': 'Kuaishou',
+  // ShengShu Technology makes Vidu. Web only until an app update names it in the AI-data
+  // question (WEB_ONLY_VIDEO_MODEL_IDS in generation-model-catalog.ts).
+  'vidu-q4': 'ShengShu',
   // Voice and sound effects, in web workflows only
   'text-to-speech-turbo-2-5': 'ElevenLabs',
   'text-to-speech-multilingual-v2': 'ElevenLabs',
@@ -109,5 +117,6 @@ export const AI_MODEL_MAKERS: ReadonlyArray<{ maker: AiModelMaker; models: strin
   { maker: 'Ideogram', models: 'Ideogram' },
   { maker: 'Black Forest Labs', models: 'FLUX' },
   { maker: 'PixVerse', models: 'PixVerse' },
+  { maker: 'ShengShu', models: 'Vidu, on the web' },
   { maker: 'ElevenLabs', models: 'voice and sound effects in web workflows' },
 ];

@@ -101,6 +101,17 @@ describe('Model Pricing', () => {
             expect(getImageCost('qwen-image-2.1', '2K')).toBe(8);
             expect(getImageCost('qwen-image-2.1', '2K', { referenceCount: 10 })).toBe(8);
         });
+        it('prices Nano Banana 2.1 and FLUX.3 Klein by resolution, references free on both', () => {
+            // docs/model-api-references/nano-banana-2-1.md and flux-3-klein.md, read 2026-11-05.
+            // FLUX.3 Klein's fractional rates are the catalog's figures; a run is charged them
+            // rounded up to whole credits (kie-models-2026-11-manifest.test.ts quotes 2 / 3 / 7).
+            expect(getImageCost('nano-banana-2.1', '1K')).toBe(4);
+            expect(getImageCost('nano-banana-2.1', '2K')).toBe(6);
+            expect(getImageCost('nano-banana-2.1', '4K', { referenceCount: 10 })).toBe(9);
+            expect(getImageCost('flux-3-klein', '1K')).toBe(1.6);
+            expect(getImageCost('flux-3-klein', '2K')).toBe(2.5);
+            expect(getImageCost('flux-3-klein', '4K', { referenceCount: 10 })).toBe(6.5);
+        });
         it('prices the expanded non-Runway image catalog', () => {
             expect(getImageCost('seedream-5-lite', '3K')).toBe(5.5);
             expect(getImageCost('wan-2.7-image', '2K')).toBe(4.8);
@@ -316,6 +327,25 @@ describe('Model Pricing', () => {
             expect(getVideoCost('pixverse-v6', { resolution: '720p', durationSeconds: 10, sound: true, hasReusableReference: true })).toBe(96);
             // Frames are not references: a start frame or a frame pair bills the base table.
             expect(getVideoCost('pixverse-v6', { resolution: '540p', durationSeconds: 5, hasReferenceImage: true })).toBe(28);
+        });
+        it('prices PixVerse V6 Max, Kling 4.0 and Vidu Q4 per second of output', () => {
+            // docs/model-api-references/pixverse-v6-max.md, kling-4-0.md and vidu-q4.md (2026-11-05).
+            expect(getVideoCost('pixverse-v6-max', { resolution: '360p', durationSeconds: 5 })).toBe(24);
+            expect(getVideoCost('pixverse-v6-max', { resolution: '360p', durationSeconds: 5, sound: true })).toBe(36);
+            expect(getVideoCost('pixverse-v6-max', { resolution: '720p', durationSeconds: 15 })).toBe(132);
+            expect(getVideoCost('pixverse-v6-max', { resolution: '1080p', durationSeconds: 15, sound: true })).toBe(336);
+            // Kling 4.0 bills its no-clip rate on both endpoints, with no audio surcharge:
+            // audio is always generated. 28.5 × 5 = 142.5 is charged 143.
+            expect(getVideoCost('kling-4.0', { resolution: '720p', durationSeconds: 5 })).toBe(143);
+            expect(getVideoCost('kling-4.0', { resolution: '720p', durationSeconds: 5, sound: true, hasReferenceImage: true })).toBe(143);
+            expect(getVideoCost('kling-4.0', { resolution: '1080p', durationSeconds: 30, hasReusableReference: true })).toBe(1275);
+            // Vidu Q4: one rate per resolution, audio or not.
+            expect(getVideoCost('vidu-q4', { resolution: '540p', durationSeconds: 5 })).toBe(36);
+            expect(getVideoCost('vidu-q4', { resolution: '720p', durationSeconds: 5, sound: true })).toBe(76);
+            expect(getVideoCost('vidu-q4', { resolution: '2k', durationSeconds: 3 })).toBe(92);
+            expect(getVideoCost('vidu-q4', { resolution: '4k', durationSeconds: 16 })).toBe(999);
+            expect(getVideoDurationRange('kling-4.0')).toEqual({ min: 3, max: 30, default: 5 });
+            expect(getVideoDurationRange('vidu-q4')).toEqual({ min: 3, max: 16, default: 5 });
         });
     });
 

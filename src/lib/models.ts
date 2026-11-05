@@ -482,6 +482,50 @@ export const IMAGE_MODELS = {
             '2K': 8,
         },
     },
+    // docs/model-api-references/nano-banana-2-1.md (read 2026-11-05): Nano Banana 2's body
+    // field for field under its own id, at Kie's listed 4/6/9; "below official pricing" is
+    // Kie's standing rate against Google's API, not a dated offer.
+    'nano-banana-2.1': {
+        id: 'nano-banana-2.1' as const,
+        displayName: 'Nano Banana 2.1',
+        description: 'Newest Nano Banana: generation and multi-image edits up to 4K at a lower price',
+        badge: 'New',
+        badgeColor: 'from-blue-500 to-cyan-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: true,
+        aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'] as const,
+        resolutions: ['1K', '2K', '4K'] as const,
+        outputFormats: ['jpg', 'png'] as const,
+        pricing: {
+            '1K': 4,
+            '2K': 6,
+            '4K': 9,
+        },
+    },
+    // docs/model-api-references/flux-3-klein.md (read 2026-11-05): 1.6 / 2.5 / 6.5 credits a
+    // picture, references free. A run is charged whole credits, so people pay 2 / 3 / 7. The
+    // edit endpoint's `auto` ratio is not offered: the text endpoint has none.
+    'flux-3-klein': {
+        id: 'flux-3-klein' as const,
+        displayName: 'FLUX.3 Klein',
+        description: 'Fast, low-cost FLUX generation and edits with up to ten references, up to 4K',
+        badge: 'Value',
+        badgeColor: 'from-sky-500 to-cyan-500',
+        accentColor: 'blue',
+        maxImages: 10,
+        supportsGoogleSearch: false,
+        supportsOutputFormat: false,
+        aspectRatios: ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21'] as const,
+        resolutions: ['1K', '2K', '4K'] as const,
+        outputFormats: ['jpg'] as const,
+        pricing: {
+            '1K': 1.6,
+            '2K': 2.5,
+            '4K': 6.5,
+        },
+    },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -1157,6 +1201,95 @@ export const VIDEO_MODELS = {
             '1080p': { noSound: 14.4, withSound: 18.4 },
         },
     },
+    // docs/model-api-references/pixverse-v6-max.md (read 2026-11-05): V6's text and
+    // image-to-video bodies under their own ids, with no frame pair or references.
+    'pixverse-v6-max': {
+        id: 'pixverse-v6-max' as const,
+        displayName: 'PixVerse V6 Max',
+        description: 'Top PixVerse tier from text or a start frame, up to 1080p, with optional audio',
+        provider: 'pixverse' as const,
+        apiModelId: 'pixverse-v6-max/text-to-video',
+        enhancerModelId: 'pixverse-v6-max',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'] as const,
+        durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+        singleShotDurationRange: {
+            min: 1,
+            max: 15,
+            default: 5,
+        } as const,
+        resolutions: ['360p', '540p', '720p', '1080p'] as const,
+        modeOptions: [] as const,
+        /** Credits per second, keyed by resolution + generated audio, for text and a start frame alike. */
+        pricing: {
+            '360p': { noSound: 4.8, withSound: 7.2 },
+            '540p': { noSound: 7.2, withSound: 8.8 },
+            '720p': { noSound: 8.8, withSound: 12 },
+            '1080p': { noSound: 17.6, withSound: 22.4 },
+        },
+    },
+    // docs/model-api-references/kling-4-0.md (read 2026-11-05): text and reference pictures on
+    // kling-4.0/reference-to-video, a frame pair on kling-4.0/keyframe-to-video. Audio is always
+    // generated, so there is no sound toggle. Clips are left out: Kie bills a run with a clip
+    // `rate × (output + max(output, input))`, which the catalog's pricing cannot express yet.
+    'kling-4.0': {
+        id: 'kling-4.0' as const,
+        displayName: 'Kling 4.0',
+        description: 'Kling 4.0 with native audio from text, a frame pair, or up to ten reference pictures, up to 30 seconds',
+        provider: 'kling' as const,
+        apiModelId: 'kling-4.0/reference-to-video',
+        enhancerModelId: 'kling-4.0',
+        supportsMultiShot: false,
+        supportsSound: false,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '21:9'] as const,
+        durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] as const,
+        singleShotDurationRange: {
+            min: 3,
+            max: 30,
+            default: 5,
+        } as const,
+        resolutions: ['720p', '1080p'] as const,
+        modeOptions: [] as const,
+        /** Credits per second of output with no clip attached, both endpoints. */
+        pricing: {
+            '720p': 28.5,
+            '1080p': 42.5,
+        },
+    },
+    // docs/model-api-references/vidu-q4.md (read 2026-11-05): a start frame on
+    // vidu-q4/image-to-video or 1–15 pictures on vidu-q4/reference-to-video; there is no
+    // text-only run. One rate per resolution, with or without audio; "20% below official
+    // pricing" is Kie's standing rate, not a dated offer.
+    'vidu-q4': {
+        id: 'vidu-q4' as const,
+        displayName: 'Vidu Q4',
+        description: 'Vidu video from a start frame or up to fifteen reference pictures, with audio, up to 4K',
+        provider: 'vidu' as const,
+        apiModelId: 'vidu-q4/image-to-video',
+        enhancerModelId: 'vidu-q4',
+        supportsMultiShot: false,
+        supportsSound: true,
+        supportsFixedLens: false,
+        aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] as const,
+        durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] as const,
+        singleShotDurationRange: {
+            min: 3,
+            max: 16,
+            default: 5,
+        } as const,
+        resolutions: ['540p', '720p', '1080p', '2k', '4k'] as const,
+        modeOptions: [] as const,
+        pricing: {
+            '540p': 7.2,
+            '720p': 15.2,
+            '1080p': 19.2,
+            '2k': 30.4,
+            '4k': 62.4,
+        },
+    },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
@@ -1258,9 +1391,15 @@ export function getVideoElementSupport(
         return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
     }
 
-    // Wan 3.0's `reference_image_urls` takes 10 where Wan 2.7's reference mode stops at 5.
-    if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') {
+    // Wan 3.0's `reference_image_urls` takes 10 where Wan 2.7's reference mode stops at 5, and
+    // kling-4.0/reference-to-video's `image_urls` takes 10, each one @image_N in the prompt.
+    if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' || modelId === 'kling-4.0') {
         return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
+    }
+
+    // vidu-q4/reference-to-video: `reference_image_urls`, 1 to 15.
+    if (modelId === 'vidu-q4') {
+        return { enabled: true, maxElements: 15, maxNamed: 15, reason: null };
     }
 
     if (modelId === 'kling-3.0-video') {
@@ -1584,14 +1723,25 @@ export function getVideoCost(
         return Math.ceil(durationSeconds * pricingTable[resolution]);
     }
 
-    if (modelId === 'pixverse-v6') {
-        const table = VIDEO_MODELS['pixverse-v6'].pricing;
+    if (modelId === 'pixverse-v6' || modelId === 'pixverse-v6-max') {
+        const table = VIDEO_MODELS[modelId].pricing;
         const resolution = options.resolution && options.resolution in table
             ? options.resolution as keyof typeof table
             : '360p';
         const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
         const rates = table[resolution];
         return Math.ceil(durationSeconds * (options.sound ? rates.withSound : rates.noSound));
+    }
+
+    // Kling 4.0 takes no clip here, so every run bills its no-video rate on the output
+    // seconds; Vidu Q4 bills one rate per resolution, audio or not.
+    if (modelId === 'kling-4.0' || modelId === 'vidu-q4') {
+        const pricingTable: Readonly<Record<string, number>> = VIDEO_MODELS[modelId].pricing;
+        const resolution = options.resolution && options.resolution in pricingTable
+            ? options.resolution
+            : VIDEO_MODELS[modelId].resolutions[0];
+        const durationSeconds = options.durationSeconds ?? getDefaultVideoDuration(modelId);
+        return Math.ceil(durationSeconds * pricingTable[resolution]);
     }
 
     // Every model must be matched explicitly. This used to fall through to Veo

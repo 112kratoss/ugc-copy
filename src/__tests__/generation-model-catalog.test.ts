@@ -153,8 +153,13 @@ describe('generation model quotes', () => {
       // Models whose provider requires an input declare a min-slot rule, so the
       // default-settings quote has to satisfy it or validation throws before pricing.
       const requiresOneImage = model.id === 'hailuo-2.3'
+        || model.id === 'vidu-q4'
         || model.id === 'ideogram-character'
         || model.kind === 'motion';
+      // Vidu Q4 can take that picture as a start frame or as a reference. The schema-v1
+      // projection has no Input mode control to say which, and a v1 quote reads a picture
+      // as a reference while the v2 descriptor reads it as the frame, so the run names it.
+      if (model.id === 'vidu-q4') settings.referenceMode = 'frames';
       const inputCounts = {
         images: requiresOneImage ? 1 : 0,
         videos: model.kind === 'motion' ? 1 : 0,
