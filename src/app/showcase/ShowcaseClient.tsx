@@ -950,8 +950,12 @@ export default function ShowcaseClient({
             return;
         }
 
+        // The page's own first page first: a lane change runs this before the
+        // lane's rows are reset, and the ask is cut at its item limit, so the
+        // posts (and the people their credits name) of the lane now drawn come
+        // before the ones it replaces.
         const drawnItems = [...new Map(
-            [...feedItemsForEventsRef.current, ...initialFeed.items].map((item) => [item.id, item])
+            [...initialFeed.items, ...feedItemsForEventsRef.current].map((item) => [item.id, item])
         ).values()];
         const controller = new AbortController();
         void fetchShowcaseViewerExclusions({
@@ -2106,9 +2110,11 @@ export default function ShowcaseClient({
         if (outcome.status === 'done') {
             sessionHiddenCreatorIdsRef.current.add(creatorId);
             removeAfterSafetyAction((candidate) => candidate.creator.id === creatorId);
+            // Their name leaves the credits of the posts that stay (owner, 2026-11-05).
+            setItems((latestItems) => itemsWithoutBlockedRemixCredits(latestItems, (id) => id === creatorId));
         }
         showSafetyOutcome(outcome);
-    }, [clearFeedbackNotice, removeAfterSafetyAction, requireAccount, showSafetyOutcome, userId]);
+    }, [clearFeedbackNotice, removeAfterSafetyAction, requireAccount, setItems, showSafetyOutcome, userId]);
 
     // "New posts" (D2): For you only, Recent has its own order to come back to
     // and Saved, Remixed and Sales are not ordered by time; and only without a

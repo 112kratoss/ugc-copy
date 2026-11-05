@@ -17,8 +17,9 @@
 --    part out.
 -- 2. A creation records its credit when it is made, as remix terms are recorded
 --    (20261105123244): a run from someone else's creation names that creation's
---    public post; a run from the maker's own creation (a re-run, a self-remix, by
---    them or a guest linked to them) takes the credit that creation carries. It
+--    public post (posted by its maker, or by the account a guest maker linked to);
+--    a run from the maker's own creation (a re-run, a self-remix, by them or a
+--    guest linked to them) takes the credit that creation carries. It
 --    stays: deleting the source clears source_generation_id (ON DELETE SET NULL)
 --    and the source's row in completed_post_remixes (ON DELETE CASCADE), and
 --    neither takes the credit with it. So a remixer who re-runs their remix,
@@ -30,7 +31,7 @@
 -- 4. A row with no credit yet, on either table, is worked out again when an
 --    update names those columns, from what it records, the remix ledger
 --    (completed_post_remixes) and the maker's own creations it came from. That is
---    how 20261105150200_remix_post_credit_backfill.sql fills the rows made before.
+--    how 20261105175341_remix_post_credit_backfill.sql fills the rows made before.
 -- 5. An index for the remixes a post lists (GET /api/showcase/posts/:id/remixes).
 -- It runs inside lock_timeout; the backfill is a migration of its own so these
 -- locks are not held through it.
@@ -64,10 +65,40 @@ COMMENT ON COLUMN public.generations.remix_parent_user_id IS
 COMMENT ON COLUMN public.generations.remix_origin_user_id IS
   'The first creator of this run''s remix chain; no foreign key. Written by record_generation_remix_credit only.';
 
+-- The credit a remix of p_source_generation_id names: the public post it was posted
+-- as, by its maker or by the account a guest maker linked to (publish files a
+-- guest's creation under the account), as the remix ledger finds it
+-- (record_completed_post_remix). The parent's origin is that post's own, or the
+-- one its creation recorded (the post may not have its own yet while the backfill
+-- fills creations first). No row for a creation with no public post.
+CREATE OR REPLACE FUNCTION public.remix_credit_from_source_post(p_source_generation_id uuid)
+RETURNS TABLE (parent_post_id uuid, parent_user_id uuid, origin_user_id uuid)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT p.id, p.user_id, coalesce(p.remix_origin_user_id, source.remix_origin_user_id, p.user_id)
+  FROM public.generations AS source
+  JOIN public.posts AS p ON p.generation_id = source.id
+  WHERE source.id = p_source_generation_id
+    AND p.visibility = 'public'
+    AND (
+      p.user_id = source.user_id
+      OR EXISTS (
+        SELECT 1
+        FROM public.profiles AS owner
+        WHERE owner.id = source.user_id
+          AND owner.merged_into_user_id = p.user_id
+      )
+    )
+  LIMIT 1;
+$$;
+REVOKE ALL ON FUNCTION public.remix_credit_from_source_post(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.remix_credit_from_source_post(uuid) TO service_role;
+
 -- The credit a creation carries: what it recorded when it was made, else, for a
 -- creation made before creations recorded one, the remix ledger's row for it or
--- for the maker's own creation it came from. No row for a creation that is not a
--- remix of anyone's.
+-- for the maker's own creation it came from, or, for a run from someone else's
+-- creation that has no ledger row yet (one still running), that creation's
+-- public post. A recorded credit that names no post gives way to a ledger row
+-- that does. No row for a creation that is not a remix of anyone's.
 CREATE OR REPLACE FUNCTION public.remix_credit_for_generation(p_generation_id uuid)
 RETURNS TABLE (parent_post_id uuid, parent_user_id uuid, origin_user_id uuid)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -77,6 +108,7 @@ DECLARE
   v_origin_generation_id uuid;
   v_run record;
   v_parent record;
+  v_ledger boolean;
   v_source_user_id uuid;
 BEGIN
   IF p_generation_id IS NULL THEN
@@ -96,17 +128,9 @@ BEGIN
       v_origin_generation_id := v_run.remix_origin_generation_id;
     END IF;
 
-    -- What the creation recorded when it was made (record_generation_remix_credit).
-    IF num_nonnulls(v_run.remix_parent_post_id, v_run.remix_parent_user_id, v_run.remix_origin_user_id) > 0 THEN
-      RETURN QUERY SELECT v_run.remix_parent_post_id, v_run.remix_parent_user_id, v_run.remix_origin_user_id;
-      RETURN;
-    END IF;
-
     -- The remix ledger names the post a finished run remixed. A run from its
     -- maker's own creation has no row of its own (20261105123244 stopped counting
-    -- those), so it takes the row of the creation it was made from. The parent's
-    -- origin is the parent post's, or the one its creation recorded (the post may
-    -- not have its own yet while the backfill fills creations first).
+    -- those), so it takes the row of the creation it was made from.
     SELECT p.id, p.user_id,
       coalesce(p.remix_origin_user_id, parent_run.remix_origin_user_id, p.user_id) AS origin_user_id
     INTO v_parent
@@ -114,17 +138,38 @@ BEGIN
     JOIN public.posts AS p ON p.id = remix.post_id
     LEFT JOIN public.generations AS parent_run ON parent_run.id = p.generation_id
     WHERE remix.generation_id = v_current;
-    IF FOUND THEN
+    v_ledger := FOUND;
+
+    -- What the creation recorded when it was made (record_generation_remix_credit),
+    -- unless it names no post and the ledger names one.
+    IF num_nonnulls(v_run.remix_parent_post_id, v_run.remix_parent_user_id, v_run.remix_origin_user_id) > 0
+      AND (v_run.remix_parent_post_id IS NOT NULL OR NOT v_ledger) THEN
+      RETURN QUERY SELECT v_run.remix_parent_post_id, v_run.remix_parent_user_id, v_run.remix_origin_user_id;
+      RETURN;
+    END IF;
+    IF v_ledger THEN
       RETURN QUERY SELECT v_parent.id, v_parent.user_id, v_parent.origin_user_id;
       RETURN;
     END IF;
 
-    EXIT WHEN v_run.source_generation_id IS NULL OR v_steps >= 20;
+    EXIT WHEN v_run.source_generation_id IS NULL OR v_run.user_id IS NULL OR v_steps >= 20;
     SELECT s.user_id INTO v_source_user_id
     FROM public.generations AS s
     WHERE s.id = v_run.source_generation_id;
-    EXIT WHEN NOT FOUND OR v_source_user_id IS NULL
-      OR v_source_user_id NOT IN (SELECT public.linked_account_ids(v_run.user_id));
+    EXIT WHEN NOT FOUND OR v_source_user_id IS NULL;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM public.linked_account_ids(v_run.user_id) AS linked(id) WHERE linked.id = v_source_user_id
+    ) THEN
+      -- Someone else's creation, and no ledger row for this run yet: the public
+      -- post it was remixed from, as a run made now records it.
+      SELECT * INTO v_parent FROM public.remix_credit_from_source_post(v_run.source_generation_id);
+      IF FOUND THEN
+        RETURN QUERY SELECT v_parent.parent_post_id, v_parent.parent_user_id, v_parent.origin_user_id;
+        RETURN;
+      END IF;
+      EXIT;
+    END IF;
 
     v_current := v_run.source_generation_id;
     v_steps := v_steps + 1;
@@ -169,24 +214,17 @@ BEGIN
 
   -- The caller's own creation, or one made as a guest since linked to them: the
   -- credit it carries, as remix terms pass down.
-  IF v_source.user_id IN (SELECT public.linked_account_ids(p_user_id)) THEN
+  IF EXISTS (
+    SELECT 1 FROM public.linked_account_ids(p_user_id) AS linked(id) WHERE linked.id = v_source.user_id
+  ) THEN
     RETURN QUERY SELECT * FROM public.remix_credit_for_generation(v_source.id);
     RETURN;
   END IF;
 
-  -- Someone else's creation: the public post it was remixed from, as the remix
-  -- ledger counts it (record_completed_post_remix).
-  SELECT p.id, p.user_id, p.remix_origin_user_id
-  INTO v_parent
-  FROM public.posts AS p
-  WHERE p.generation_id = v_source.id
-    AND p.user_id = v_source.user_id
-    AND p.visibility = 'public'
-  ORDER BY p.created_at, p.id
-  LIMIT 1;
+  -- Someone else's creation: the public post it was remixed from.
+  SELECT * INTO v_parent FROM public.remix_credit_from_source_post(v_source.id);
   IF FOUND THEN
-    RETURN QUERY SELECT v_parent.id, v_parent.user_id,
-      coalesce(v_parent.remix_origin_user_id, v_source.remix_origin_user_id, v_parent.user_id);
+    RETURN QUERY SELECT v_parent.parent_post_id, v_parent.parent_user_id, v_parent.origin_user_id;
     RETURN;
   END IF;
 

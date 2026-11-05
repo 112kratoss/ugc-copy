@@ -296,6 +296,30 @@ describe('showcase client cache', () => {
       expect(ids(readShowcaseClientSnapshot(cacheKey))).toEqual(['post-7']);
     });
 
+    // Owner, 2026-11-05: nobody a block stands between the viewer and is named.
+    it("takes the creator's name out of the credits of the posts that stay", () => {
+      const cacheKey = buildKey('user-1');
+      const credit = {
+        parent: { postId: 'a-1', title: 'Sunset beach', creator: { id: 'creator-a', username: 'cora' } },
+        original: null,
+      };
+      writeShowcaseClientSnapshot(cacheKey, {
+        feed: {
+          ...feed,
+          items: [{ ...postBy('b-1', 'creator-b'), remixCredit: credit }, postBy('c-1', 'creator-c')],
+        },
+        renderedItemCount: 2,
+        savedItemIds: [],
+      }, Date.now());
+
+      takeBlockedCreatorOffClientFeeds('creator-a');
+
+      const items = readShowcaseClientSnapshot(cacheKey)?.feed.items ?? [];
+      expect(items.map((item) => item.id)).toEqual(['b-1', 'c-1']);
+      expect(items[0]).not.toHaveProperty('remixCredit');
+      expect(storedSnapshot(cacheKey)?.feed.items[0]).not.toHaveProperty('remixCredit');
+    });
+
     // Explore's first page is the server's for everyone, so it asks who was
     // blocked since the tab loaded before it draws.
     it('remembers the creator for the rest of the visit', () => {

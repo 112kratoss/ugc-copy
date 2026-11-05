@@ -1,4 +1,4 @@
--- The creations and posts made before 20261105150143_remix_posts_carry_their_credit.sql
+-- The creations and posts made before 20261105175340_remix_posts_carry_their_credit.sql
 -- take their credit, in a transaction of its own so that migration's table locks
 -- are not held through it. As a function, so pgTAP can run it over seeded rows; a
 -- second run changes nothing.
@@ -15,7 +15,12 @@
 -- A post whose owner has an account deletion job is left alone: the content freeze
 -- (reject_post_write_during_account_deletion) refuses a write to it, and the
 -- deletion removes it anyway. A job that begins while this runs is met the same
--- way, row by row, instead of failing the migration and the release.
+-- way, row by row, instead of failing the migration and the release, and so is a
+-- row an edit holds (this takes creations, then posts; an edit takes a post, then
+-- its creation): a deadlock or a lock wait past lock_timeout skips that row. A
+-- creation skipped is worked out again when a post is made from it, from the rows
+-- still there; a post skipped waits for the next run of this function, which
+-- changes nothing it already filled.
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
@@ -40,9 +45,13 @@ BEGIN
     ORDER BY g.created_at, g.id
   LOOP
     IF EXISTS (SELECT 1 FROM public.remix_credit_for_generation(v_run.id)) THEN
-      UPDATE public.generations
-      SET remix_parent_post_id = NULL
-      WHERE id = v_run.id;
+      BEGIN
+        UPDATE public.generations
+        SET remix_parent_post_id = NULL
+        WHERE id = v_run.id;
+      EXCEPTION WHEN deadlock_detected OR lock_not_available THEN
+        NULL;
+      END;
     END IF;
   END LOOP;
 
@@ -61,8 +70,8 @@ BEGIN
       UPDATE public.posts
       SET remix_parent_post_id = NULL
       WHERE id = v_post.id;
-    EXCEPTION WHEN object_not_in_prerequisite_state THEN
-      -- An account deletion begun since the row was read.
+    EXCEPTION WHEN object_not_in_prerequisite_state OR deadlock_detected OR lock_not_available THEN
+      -- An account deletion begun since the row was read, or a row an edit holds.
       NULL;
     END;
   END LOOP;

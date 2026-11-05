@@ -2057,6 +2057,18 @@ export async function updateOwnerPostForRoute({
       throw error;
     }
 
+    // A remix made public here tells the creator of the post it remixed, as a
+    // public publish does, behind the answer and once per creation. Handed off
+    // as soon as the change is committed: a step after this that fails answers
+    // the edit with an error, and the retry finds the post already public, so
+    // an alert left for the end would never go.
+    if (updatedPost.visibility === 'public' && post.visibility !== 'public') {
+      await sendDeferrableNotification(
+        runAfterResponse,
+        () => resolvedDependencies.notifyPostedRemix(adminSupabase, { postId }),
+      );
+    }
+
     if (creationId && coverMediaToRecord) {
       // Best-effort for the same reason as the publish route: the post is
       // already committed, so a failure here must not report the edit as
@@ -2164,15 +2176,6 @@ export async function updateOwnerPostForRoute({
       }));
     } catch (mediaReadError) {
       logBackendWarning('failed_to_read_post_media_after_update', { error: mediaReadError });
-    }
-
-    // A remix made public here tells the creator of the post it remixed, as a
-    // public publish does, behind the answer and once per creation.
-    if (updatedPost.visibility === 'public' && post.visibility !== 'public') {
-      await sendDeferrableNotification(
-        runAfterResponse,
-        () => resolvedDependencies.notifyPostedRemix(adminSupabase, { postId }),
-      );
     }
 
     // A recipe this save removed (deleted, or retired for the people who have

@@ -165,6 +165,16 @@ describe('the alert for a remix posted publicly', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  // Deleted while it had buyers, it is kept for them alone: still a row, no longer the creator's post.
+  it('sends nothing for a post remixed that its creator deleted and its buyers keep', async () => {
+    const { db } = database({
+      posts: { 'post-b': remixPost, 'post-a': { id: 'post-a', tombstoned_at: '2026-11-05T10:00:00.000Z' } as { id: string } },
+      handles: { maya: 'maya' },
+    });
+    await notifyPostedRemix(db, { postId: 'post-b' });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('sends nothing once the post remixed is deleted', async () => {
     const { db } = database({ posts: { 'post-b': remixPost }, handles: { maya: 'maya' } });
     await notifyPostedRemix(db, { postId: 'post-b' });
@@ -188,7 +198,7 @@ describe('the alert for a remix posted publicly', () => {
   });
 });
 
-// The database's `unnamed_remix_alert_words` (20261105150333) matches these
+// The database's `unnamed_remix_alert_words` (20261105175342) matches these
 // titles to take a name back out: the words here and there change together.
 describe('remix alert words', () => {
   it.each([
@@ -210,10 +220,15 @@ describe('remix alert words', () => {
   it('matches the patterns the database unnames', async () => {
     const { readFileSync } = await import('node:fs');
     const migration = readFileSync(
-      'supabase/migrations/20261105150333_unname_remix_alerts_across_blocks_and_deletion.sql',
+      'supabase/migrations/20261105175342_unname_remix_alerts_across_blocks_and_deletion.sql',
       'utf8',
     );
-    const patterns = [...migration.matchAll(/p_title ~ '([^']+)'/g)].map((match) => new RegExp(match[1].replace(/\\\\S/g, '\\S')));
+    // The unnaming function's own patterns (the rename's words sit beside it).
+    const unnaming = migration.slice(
+      migration.indexOf('CREATE OR REPLACE FUNCTION public.unnamed_remix_alert_words('),
+      migration.indexOf('CREATE OR REPLACE FUNCTION public.renamed_remix_alert_words('),
+    );
+    const patterns = [...unnaming.matchAll(/p_title ~ '([^']+)'/g)].map((match) => new RegExp(match[1].replace(/\\\\S/g, '\\S')));
     expect(patterns).toHaveLength(2);
     const named = [
       remixAlertWords('finished', { remixerHandle: 'maya', remixedPostId: 'post-a' }).title,
@@ -225,10 +240,11 @@ describe('remix alert words', () => {
     expect(migration).toContain(`'${remixAlertWords('posted', { remixerHandle: null, remixedPostId: 'p' }).title}'`);
   });
 
-  // 20261105165100 writes a remixer's new handle into these words.
+  // 20261105175342's words for a remixer's handle, which its insert trigger and
+  // 20261105175343's rename write.
   it('matches the words the database writes for a new handle', async () => {
     const { readFileSync } = await import('node:fs');
-    const migration = readFileSync('supabase/migrations/20261105165100_remix_alerts_follow_the_remixers_handle.sql', 'utf8');
+    const migration = readFileSync('supabase/migrations/20261105175342_unname_remix_alerts_across_blocks_and_deletion.sql', 'utf8');
     const finished = remixAlertWords('finished', { remixerHandle: 'ivy-two', remixedPostId: 'post-a' });
     const posted = remixAlertWords('posted', { remixerHandle: 'ivy-two', remixedPostId: 'post-a', remixPostId: 'post-b' });
     expect(finished.title).toBe('@ivy-two remixed your post');

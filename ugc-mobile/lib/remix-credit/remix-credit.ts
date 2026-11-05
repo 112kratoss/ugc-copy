@@ -12,7 +12,7 @@
  *
  * The server builds the credit from what the post stores
  * (posts.remix_parent_post_id, remix_parent_user_id, remix_origin_user_id,
- * 20261105150143) and leaves out what may not be shown; each client draws the
+ * 20261105175340) and leaves out what may not be shown; each client draws the
  * segments it is given. The creator's remix notice ("Remixing @A’s “title”")
  * is here too, so both creators say the same.
  *
@@ -89,25 +89,31 @@ export function remixCreditUserIds(credit: RemixCredit | null | undefined): stri
 export function withoutBlockedRemixCredit(
   credit: RemixCredit | null | undefined,
   isBlocked: (userId: string) => boolean,
+  /** The post's own creator: an original left standing alone never names them back (`buildRemixCredit`). */
+  postCreatorId?: string | null,
 ): RemixCredit | null {
   if (!credit) return null;
   const parent = credit.parent && !isBlocked(credit.parent.creator.id) ? credit.parent : null;
-  const original = credit.original && !isBlocked(credit.original.id) ? credit.original : null;
+  let original = credit.original && !isBlocked(credit.original.id) ? credit.original : null;
+  if (!parent && original && postCreatorId && original.id === postCreatorId) original = null;
   if (parent === credit.parent && original === credit.original) return credit;
   return parent || original ? { parent, original } : null;
 }
+
+/** A card that may carry a credit, with its own creator. */
+type RemixCreditCard = { remixCredit?: RemixCredit | null; creator?: { id?: string | null } | null };
 
 /**
  * A card with its credit naming no one `isBlocked` picks out; the field goes
  * when no one is left to name. The same card comes back when its credit
  * doesn't change.
  */
-export function itemWithoutBlockedRemixCredit<T extends { remixCredit?: RemixCredit | null }>(
+export function itemWithoutBlockedRemixCredit<T extends RemixCreditCard>(
   item: T,
   isBlocked: (userId: string) => boolean,
 ): T {
   if (!item.remixCredit) return item;
-  const remixCredit = withoutBlockedRemixCredit(item.remixCredit, isBlocked);
+  const remixCredit = withoutBlockedRemixCredit(item.remixCredit, isBlocked, item.creator?.id);
   if (remixCredit === item.remixCredit) return item;
   if (remixCredit) return { ...item, remixCredit };
   const uncredited: { remixCredit?: RemixCredit | null } = { ...item };
@@ -120,7 +126,7 @@ export function itemWithoutBlockedRemixCredit<T extends { remixCredit?: RemixCre
  * comes back when no credit changes, so a list kept in state draws nothing
  * again.
  */
-export function itemsWithoutBlockedRemixCredits<T extends { remixCredit?: RemixCredit | null }>(
+export function itemsWithoutBlockedRemixCredits<T extends RemixCreditCard>(
   items: T[],
   isBlocked: (userId: string) => boolean,
 ): T[] {
@@ -146,12 +152,43 @@ export type RemixCreditSegment =
  *   Remix of “Sunset, again” by @maya · Original by @cora
  *   Original by @cora
  */
-export function remixCreditSegments(credit: RemixCredit): RemixCreditSegment[] {
+/**
+ * The longest title a credit shows in a card's two lines (the web's cards, the
+ * app's cards and reel). A line cut at its end would cut "Original by @A" first;
+ * a long title shortened leaves it room. What a screen reader hears
+ * (`remixCreditLabel`) keeps the whole title.
+ */
+export const REMIX_CREDIT_CARD_TITLE_MAX_LENGTH = 32;
+
+/** A title at most `maxLength` characters long, cut at a word where one is near, with an ellipsis. */
+export function shortenRemixCreditTitle(title: string, maxLength?: number): string {
+  const characters = Array.from(title);
+  if (!maxLength || characters.length <= maxLength) return title;
+  const cut = characters.slice(0, maxLength - 1).join('');
+  // A word that ends right at the cut stays; one cut through goes, where a word
+  // boundary is near enough to keep most of the title.
+  const endsAtWord = characters[maxLength - 1] === ' ';
+  const lastSpace = cut.lastIndexOf(' ');
+  const atWord = endsAtWord || lastSpace < Math.floor(maxLength * 0.6) ? cut : cut.slice(0, lastSpace);
+  return `${atWord.trimEnd()}…`;
+}
+
+export function remixCreditSegments(
+  credit: RemixCredit,
+  options: {
+    /** A card's: the title shortened to this many characters (`REMIX_CREDIT_CARD_TITLE_MAX_LENGTH`). */
+    titleMaxLength?: number;
+  } = {},
+): RemixCreditSegment[] {
   const segments: RemixCreditSegment[] = [];
   if (credit.parent) {
     segments.push(
       { kind: 'text', text: `${REMIX_CREDIT_WORDS.remixOf} ` },
-      { kind: 'post', text: `“${credit.parent.title}”`, postId: credit.parent.postId },
+      {
+        kind: 'post',
+        text: `“${shortenRemixCreditTitle(credit.parent.title, options.titleMaxLength)}”`,
+        postId: credit.parent.postId,
+      },
       { kind: 'text', text: ` ${REMIX_CREDIT_WORDS.by} ` },
       { kind: 'creator', text: `@${credit.parent.creator.username}`, username: credit.parent.creator.username },
     );

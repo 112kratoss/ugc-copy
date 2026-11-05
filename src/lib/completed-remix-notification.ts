@@ -4,6 +4,7 @@ import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 import { buildMobileNotificationDeepLink, createMobileNotification } from '@/lib/mobile-notifications';
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
+import { isPostOpenToEveryone } from '@/lib/post-remix-credit';
 import { loadProfileHandle } from '@/lib/profile-server';
 import { recordAuthoritativeFeedEvent } from '@/lib/showcase-feed-events-service';
 
@@ -22,7 +23,7 @@ export const COMPLETED_REMIX_DELIVERY_LOOKBACK_HOURS = 48;
  *   posted    "@maya posted a remix of your post", opening her post.
  * With no handle to name, "Someone …", opening the post remixed. The database
  * turns the named words into those after a block, either way round, or the
- * remixer's account deletion (`unnamed_remix_alert_words`, 20261105150333), so
+ * remixer's account deletion (`unnamed_remix_alert_words`, 20261105175342), so
  * the two change together.
  */
 export function remixAlertWords(
@@ -85,7 +86,7 @@ async function notifyRemixedCreator(
  * (`source-generation.ts`), so a pair blocked by then has no row here. A block
  * made while the run is in flight is not asked about here: the settlement has
  * written the row and raised the count by then, and the database stores the
- * alert without the remixer's name or page (20261105150333).
+ * alert without the remixer's name or page (20261105175342).
  *
  * The same row is v4's server-written `remix_complete` feed event: the remixer
  * finished a creation from the original. It is written beside the notification,
@@ -135,13 +136,6 @@ type PostedRemixRow = {
   remix_parent_user_id: string | null;
 };
 
-/** A post anyone can open: public, not archived, taken down or held by moderation. */
-function isOpenToEveryone(post: PostedRemixRow): boolean {
-  return post.visibility === 'public'
-    && !post.archived_at
-    && !post.tombstoned_at
-    && (post.review_status ?? 'visible') === 'visible';
-}
 
 /**
  * A remix posted where everyone can see it tells the creator of the post it
@@ -151,7 +145,7 @@ function isOpenToEveryone(post: PostedRemixRow): boolean {
  * taken down or held by moderation would send them to a page that isn't there,
  * and use up the one alert it may send. Whom to tell is
  * the post's own credit (posts.remix_parent_post_id and remix_parent_user_id,
- * 20261105150143), never anything a request sends. Nobody hears of their own
+ * 20261105175340), never anything a request sends. Nobody hears of their own
  * remix, of a remix of a post since deleted, or of one across a block, either
  * way round; a block made later takes the name out in the database.
  *
@@ -168,17 +162,19 @@ export async function notifyPostedRemix(adminSupabase: SupabaseClient, params: {
       .maybeSingle();
     if (error) throw error;
     const post = data as PostedRemixRow | null;
-    if (!post?.user_id || !isOpenToEveryone(post) || !post.remix_parent_post_id || !post.remix_parent_user_id) return;
+    if (!post?.user_id || !isPostOpenToEveryone(post) || !post.remix_parent_post_id || !post.remix_parent_user_id) return;
     const creatorUserId = post.remix_parent_user_id;
     if (await isOwnOrLinkedAccountId(adminSupabase, creatorUserId, post.user_id)) return;
 
     const [remixedPost, blocked, remixerHandle] = await Promise.all([
-      adminSupabase.from('posts').select('id').eq('id', post.remix_parent_post_id).maybeSingle(),
+      adminSupabase.from('posts').select('id, tombstoned_at').eq('id', post.remix_parent_post_id).maybeSingle(),
       isUserRelationshipBlocked({ adminSupabase, firstUserId: creatorUserId, secondUserId: post.user_id }),
       loadProfileHandle(adminSupabase, post.user_id),
     ]);
     if (remixedPost.error) throw remixedPost.error;
-    if (!remixedPost.data || blocked) return;
+    // A post remixed that its creator deleted (gone, or kept for its buyers alone) is no news to them.
+    const remixed = remixedPost.data as { id: string; tombstoned_at: string | null } | null;
+    if (!remixed || remixed.tombstoned_at || blocked) return;
 
     await createMobileNotification({
       adminSupabase,

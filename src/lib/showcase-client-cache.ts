@@ -7,7 +7,7 @@ import type {
   ShowcaseSort,
   ShowcaseUnlockFilter,
 } from '@/lib/showcase';
-import { itemWithoutBlockedRemixCredit, type RemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
+import { itemWithoutBlockedRemixCredit, itemsWithoutBlockedRemixCredits, type RemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 
 // v2 added `surface` to the key. The home feed and the showcase grid both cache
 // here and their filter tuples overlap, so without it a home-feed snapshot could
@@ -386,8 +386,10 @@ export function takeBlockedCreatorOffClientFeeds(creatorId: string) {
       continue;
     }
 
-    const items = snapshot.feed.items.filter((item) => item.creator?.id !== creatorId);
-    if (items.length === snapshot.feed.items.length) {
+    // Their posts go, and their name leaves the credits of the posts that stay.
+    const kept = snapshot.feed.items.filter((item) => item.creator?.id !== creatorId);
+    const items = itemsWithoutBlockedRemixCredits(kept, (id) => id === creatorId);
+    if (kept.length === snapshot.feed.items.length && items === kept) {
       continue;
     }
 

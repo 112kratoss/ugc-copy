@@ -3,6 +3,7 @@ import { Repeat2 } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
+  REMIX_CREDIT_CARD_TITLE_MAX_LENGTH,
   remixCreditLabel,
   remixCreditSegments,
   type RemixCredit,
@@ -15,9 +16,10 @@ import {
  * leaves out are the shared rule's (`ugc-mobile/lib/remix-credit`); this only
  * draws the segments it is given. Nothing for a post that is no remix.
  *
- * `compact` is a card's: at most two lines, so a chain's "Original by" is not
- * the part cut off (the app's cards do the same); the post page and the reel
- * let it wrap freely.
+ * `compact` is a card's: at most two lines, with a long title shortened
+ * (`REMIX_CREDIT_CARD_TITLE_MAX_LENGTH`) so a chain's "Original by" keeps its
+ * room, as the app's cards do; the whole line stays its `title`. The post page
+ * and the reel let it wrap freely.
  */
 export default function RemixCreditLine({
   credit,
@@ -29,7 +31,7 @@ export default function RemixCreditLine({
   className?: string;
 }) {
   if (!credit) return null;
-  const segments = remixCreditSegments(credit);
+  const segments = remixCreditSegments(credit, compact ? { titleMaxLength: REMIX_CREDIT_CARD_TITLE_MAX_LENGTH } : {});
 
   return (
     <p
