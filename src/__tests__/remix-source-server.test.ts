@@ -661,6 +661,41 @@ describe('input slots for a remix given none of the run’s inputs', () => {
       expect(JSON.stringify(bundle)).not.toMatch(/row-bought|post_resource_files|seller-9|asset-bought/);
     });
 
+    // Remix plan, phase 1b: the file came through the recipe the creator's run remixed, and their
+    // recipe passed it on, so a buyer of that recipe gets it from the recipe's copy instead of a slot.
+    it('gives a buyer of a recipe that hands its inputs over a passed-on file from the recipe’s copy', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, recipeEntitled: true });
+      mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([signed(PRODUCT), signed(BACKDROP)]);
+      mocks.recipeFiles = [{ ...BOUGHT, url: null }];
+      const COPY = 'post_resource_files/creator-1/generation-references/gen-1/02-reference-image-row-bought.png';
+      mocks.loadGenerationRecipeReferenceCopies.mockResolvedValue(new Map([['row-bought', { storagePath: COPY, url: SIGNED(COPY) }]]));
+
+      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+      expect(mocks.loadGenerationRecipeReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+        recipe: BOUGHT_RECIPE,
+        generationId: 'gen-1',
+        inputRowIds: ['row-bought'],
+      }));
+      expect(bundle.inputs.image?.elements?.map((element) => [element.id, element.storagePath ?? null])).toEqual([
+        ['row-product', expect.anything()],
+        ['row-backdrop', expect.anything()],
+        ['row-bought', COPY],
+      ]);
+      expect(bundle).not.toHaveProperty('inputSlots');
+      // Never the creator's kept file, the seller's copy it came from, or the asset prepared from it.
+      expect(JSON.stringify(bundle)).not.toMatch(/generation_inputs\/creator-1\/gen-1\/02|seller-9|asset-bought/);
+    });
+
+    it('fails a remix whose passed-on copies cannot be read, rather than giving the file a slot', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, recipeEntitled: true });
+      mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([signed(PRODUCT)]);
+      mocks.recipeFiles = [{ ...BOUGHT, url: null }];
+      mocks.loadGenerationRecipeReferenceCopies.mockRejectedValue(new Error('statement timeout'));
+
+      await expect(loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' })).rejects.toThrow();
+    });
+
     // A subject whose held-back picture leaves it one picture is no subject (2026-11-03 re-review): it
     // was restored with one picture, and its box hid as answered by it.
     it('gives a subject left below what a subject takes by a held-back picture its slot, not the rest of it', async () => {

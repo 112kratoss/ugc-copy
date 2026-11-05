@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { recipeCopiesWithheldOver, type CreationMarks } from './fixtures/recipe-copies-withheld';
 
 type BundleRow = {
   id: string;
@@ -154,6 +155,12 @@ vi.mock('@/lib/server-helpers', () => ({
       }
       // Nobody in these fixtures has revealed an NSFW post.
       if (name === 'has_nsfw_reveal') return { data: false, error: null };
+      // Which of a recipe's copies are withheld now (`loadWithheldCopies`): those of the fixture's
+      // creation once it is removed or archived.
+      if (name === 'recipe_copies_withheld') {
+        const creation = generationRow as CreationMarks | null;
+        return { data: recipeCopiesWithheldOver(creation?.id ? [creation] : [])(args.p_paths as string[]), error: null };
+      }
       // The marketplace lists the published recipes there are, as its SQL
       // matched them: the fake searches nothing.
       if (name === 'list_marketplace_resource_bundles') {
@@ -513,7 +520,6 @@ vi.mock('@/lib/server-helpers', () => ({
                   },
                 };
               },
-              // The state of the creations a recipe's copies are of (`loadWithheldCopyCreations`).
               async in(_column: string, ids: unknown[]) {
                 const row = generationRow as { id?: string } | null;
                 return { data: row?.id && ids.includes(row.id) ? [row] : [], error: null };
@@ -3237,6 +3243,135 @@ describe('generation references packaged for a publish', () => {
       ['reference-ref-own-recipe-file', 'user-1/gen-1/04.png'],
     ]);
     expect(given).toEqual({ ok: true, references: [] });
+  });
+
+  // Remix plan, phase 1b (owner, 2026-11-05: a remix's recipe holds what its run used): the files of
+  // the recipe the run remixed go on into the remixer's recipe, matched by that recipe's copies' folder,
+  // while the remixer may still read them; a file of any other recipe never does.
+  describe('the files of the recipe the run remixed', () => {
+    const SELLER = '11111111-1111-4111-8111-111111111111';
+    const ORIGINAL = '22222222-2222-4222-8222-222222222222';
+    const FOLDER = `post_resource_files/${SELLER}/generation-references/${ORIGINAL}/`;
+    const fromRemixed = `${FOLDER}00-reference-image-row-a.png`;
+    const fromOtherRecipe = `post_resource_files/${SELLER}/generation-references/33333333-3333-4333-8333-333333333333/00-reference-image-row-b.png`;
+    const recipeFile = (id: string, file: string, sortOrder: number) => ({
+      ...reference(id, 'user-1', `generation_inputs/user-1/gen-1/0${sortOrder}.png`, sortOrder),
+      metadata: { sourceKind: 'recipe-file', recipeFile: file },
+    }) as unknown as ReferenceRow;
+    const rows = () => [
+      reference('ref-own', 'user-1', 'generation_inputs/user-1/gen-1/00.png'),
+      recipeFile('ref-remixed', fromRemixed, 1),
+      recipeFile('ref-other-recipe', fromOtherRecipe, 2),
+    ];
+
+    async function plan(options: {
+      folder?: string | null | Error;
+      readable?: string[] | Error;
+      onlyRowIds?: Set<string>;
+    } = {}) {
+      const { planGenerationReferenceCopies } = await import('@/lib/post-resource-bundles-server');
+      const asked: string[][] = [];
+      const loadReadableRecipeFiles = vi.fn(async (_client: unknown, _holder: string, files: Iterable<string>) => {
+        asked.push([...files]);
+        if (options.readable instanceof Error) throw options.readable;
+        const readable = options.readable ?? [fromRemixed, fromOtherRecipe];
+        return new Set(asked.at(-1)!.filter((file) => readable.includes(file)));
+      });
+      const result = await planGenerationReferenceCopies({
+        supabase: referenceClient(rows(), []).client,
+        ownerUserId: 'user-1',
+        generationId: 'gen-1',
+        ...(options.onlyRowIds ? { onlyRowIds: options.onlyRowIds } : {}),
+        dependencies: {
+          loadRecipePassOnFolder: vi.fn(async () => {
+            if (options.folder instanceof Error) throw options.folder;
+            return options.folder === undefined ? FOLDER : options.folder;
+          }),
+          loadReadableRecipeFiles: loadReadableRecipeFiles as never,
+        },
+      });
+      return { result, loadReadableRecipeFiles, asked };
+    }
+
+    it('plans the file that came through the remixed recipe, with where it came from, and no other recipe’s', async () => {
+      const { result, loadReadableRecipeFiles, asked } = await plan();
+
+      expect(result.ok && result.references.map((planned) => [planned.item.id, planned.passOn ?? null])).toEqual([
+        ['reference-ref-own', null],
+        ['reference-ref-remixed', { sourceFile: fromRemixed, holderUserId: 'user-1' }],
+      ]);
+      // Under the remixer's own creation, as any input's copy.
+      expect(result.ok && result.references[1]?.item.storagePath).toBe('user-1/generation-references/gen-1/01-reference-ref-remixed.png');
+      // Asked once for the holder, of the file in the folder alone.
+      expect(loadReadableRecipeFiles).toHaveBeenCalledTimes(1);
+      expect(asked).toEqual([[fromRemixed]]);
+    });
+
+    it('passes on what the web’s recipe sends among the rows that are not the creator’s own', async () => {
+      const { result } = await plan({ onlyRowIds: new Set(['ref-remixed', 'ref-other-recipe']) });
+
+      expect(result.ok && result.references.map((planned) => planned.item.id)).toEqual(['reference-ref-remixed']);
+    });
+
+    it('passes nothing on once the remixer may no longer read it, or for a run that remixed no recipe', async () => {
+      // A refund, a retracted purchase, or the original creation removed or archived.
+      const closed = await plan({ readable: [] });
+      const noRecipe = await plan({ folder: null });
+
+      for (const { result } of [closed, noRecipe]) {
+        expect(result.ok && result.references.map((planned) => planned.item.id)).toEqual(['reference-ref-own']);
+      }
+      expect(noRecipe.loadReadableRecipeFiles).not.toHaveBeenCalled();
+    });
+
+    it('passes nothing on when either read fails, and still plans the creator’s own', async () => {
+      for (const failing of [{ folder: new Error('statement timeout') }, { readable: new Error('statement timeout') }]) {
+        const { result } = await plan(failing);
+        expect(result.ok && result.references.map((planned) => planned.item.id)).toEqual(['reference-ref-own']);
+      }
+    });
+
+    it('records where a passed-on copy came from before it is made, and makes none it cannot record', async () => {
+      const { copyPlannedGenerationReferences } = await import('@/lib/post-resource-bundles-server');
+      const events: string[] = [];
+      const client = (recordError: { message: string } | null) => ({
+        from: (table: string) => {
+          if (table !== 'recipe_copy_sources') throw new Error(`Unexpected table access: ${table}`);
+          return {
+            upsert: async (row: Record<string, unknown>, upsertOptions: Record<string, unknown>) => {
+              events.push(`record ${row.copy_path} <- ${row.source_file} (${row.holder_user_id}) ${JSON.stringify(upsertOptions)}`);
+              return { error: recordError };
+            },
+          };
+        },
+        storage: {
+          from: () => ({
+            info: async () => ({ data: { size: 5, contentType: 'image/png' }, error: null }),
+            copy: async (_from: string, to: string) => {
+              events.push(`copy ${to}`);
+              return { data: { path: to }, error: null };
+            },
+          }),
+        },
+      }) as never;
+      const references = [{
+        item: { id: 'reference-ref-remixed', storagePath: 'user-1/generation-references/gen-1/01-reference-ref-remixed.png', contentType: 'image/png' },
+        source: { bucket: 'generation_inputs', filePath: 'user-1/gen-1/01.png' },
+        passOn: { sourceFile: fromRemixed, holderUserId: 'user-1' },
+      }] as never;
+
+      const copied = await copyPlannedGenerationReferences({ supabase: client(null), references });
+      expect(events).toEqual([
+        `record post_resource_files/user-1/generation-references/gen-1/01-reference-ref-remixed.png <- ${fromRemixed} (user-1) {"onConflict":"copy_path","ignoreDuplicates":true}`,
+        'copy user-1/generation-references/gen-1/01-reference-ref-remixed.png',
+      ]);
+      expect([...copied.failedItemIds]).toEqual([]);
+
+      events.length = 0;
+      const refused = await copyPlannedGenerationReferences({ supabase: client({ message: 'permission denied' }), references });
+      expect(events.filter((event) => event.startsWith('copy'))).toEqual([]);
+      expect([...refused.failedItemIds]).toEqual(['reference-ref-remixed']);
+    });
   });
 
   // The review of #677's merge with #678: the plan judged a recipe file by the publisher alone and

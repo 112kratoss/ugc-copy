@@ -38,7 +38,11 @@ import {
   type RemixSourceResult,
 } from '@/lib/remix-source';
 import { isRecipeFileInput } from '@/lib/generation-input-origin';
-import { loadGenerationRecipeRemixInputsByPostId } from '@/lib/post-resource-bundles-server';
+import {
+  loadGenerationRecipeReferenceCopies,
+  loadGenerationRecipeRemixInputsByPostId,
+  type GenerationReferenceCopy,
+} from '@/lib/post-resource-bundles-server';
 import { holdBackFromRemix, remixInputSlotsOf, remixSlotWords, resolveWithheldRemixInputs } from '@/lib/remix-input-slots-server';
 import { createServiceClient, createUserClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
@@ -433,11 +437,28 @@ export async function loadRemixSourceBundle(
   // A subject that would be left with fewer pictures than a subject takes is held back whole, for its slot.
   const creatorIds = new Set(typedGeneration.user_id ? [typedGeneration.user_id] : []);
   const recipeFileIds = new Set(recipeInputs.recipeFiles.map((item) => item.id));
+  // ...unless it came through the recipe the creator's run remixed and their recipe passed it on (remix
+  // plan, phase 1b; owner, 2026-11-05: a remix's recipe holds what its run used): a remix that unlocked
+  // that recipe restores it from the recipe's copy, as long as the copy is served. A read that fails
+  // fails the remix, as the inputs' read above does, never turning a passed-on file into a slot.
+  const passedOnCopies = !isOwner && access.recipe && recipeInputs.recipeFiles.length > 0
+    ? await loadGenerationRecipeReferenceCopies({
+        adminSupabase,
+        recipe: access.recipe,
+        generationId: typedGeneration.id,
+        viewerUserId: user.id,
+        inputRowIds: recipeInputs.recipeFiles.map((item) => item.id),
+      })
+    : new Map<string, GenerationReferenceCopy>();
   const handOver = isOwner
     ? { handedOn: inputMedia, heldBack: [] }
     : readsRunInputs
       ? holdBackFromRemix(inputMedia, (item) => isRecipeFileInput(item, creatorIds), slotTool)
-      : holdBackFromRemix([...recipeInputs.inputMedia, ...recipeInputs.recipeFiles], (item) => recipeFileIds.has(item.id), slotTool);
+      : holdBackFromRemix(
+        [...recipeInputs.inputMedia, ...recipeInputs.recipeFiles],
+        (item) => recipeFileIds.has(item.id) && !passedOnCopies.has(item.id),
+        slotTool,
+      );
   const keptInputMedia = handOver.handedOn;
   // Never with a link: a held-back input only names its slot.
   const heldBackRecipeFiles = handOver.heldBack.map((item) => ({ ...item, url: null }));
@@ -460,7 +481,13 @@ export async function loadRemixSourceBundle(
   // what a restore reads (`toRemixerInputMedia`), or to the recipe's copy of it.
   const restoredInputMedia = isOwner
     ? keptInputMedia
-    : [...keptInputMedia.map(toRemixerInputMedia), ...(withheldInputs?.restoredFromCopies ?? [])];
+    : [
+      ...keptInputMedia.map((item) => {
+        const copy = passedOnCopies.get(item.id);
+        return copy ? { ...toRemixerInputMedia(item), storagePath: copy.storagePath, url: copy.url } : toRemixerInputMedia(item);
+      }),
+      ...(withheldInputs?.restoredFromCopies ?? []),
+    ];
 
   const restoreIssues: string[] = withheldInputs?.restoreIssue ? [withheldInputs.restoreIssue] : [];
   // Keeping inputs fails one item at a time, so the kept rows can hold less

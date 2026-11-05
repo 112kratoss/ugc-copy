@@ -9,7 +9,6 @@ import {
   toRemixerInputMedia,
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
-import { isRecipeFileInput } from '@/lib/generation-input-origin';
 import { isValidElementHandle } from '@/lib/image-elements';
 import {
   loadGenerationRecipeReferenceCopies,
@@ -227,8 +226,9 @@ const UNREAD: WithheldRemixInputs = { restoredFromCopies: [], inputSlots: [], re
  * no one else (`loadGenerationRecipeReferenceCopies`). A read that fails, of the
  * rows or of the recipe, names no slot and raises `WITHHELD_INPUTS_RESTORE_ISSUE`:
  * an input with a copy is never turned into a slot by a failure. A file of
- * someone else's recipe the creator's run used is no copy of theirs to restore:
- * it gets its slot.
+ * someone else's recipe the creator's run used gets its slot, unless it came
+ * through the recipe the run remixed and the creator's recipe passed it on
+ * (remix plan, phase 1b): it is restored from that copy like any other.
  */
 export async function resolveWithheldRemixInputs(params: {
   adminSupabase: SupabaseClient;
@@ -262,10 +262,10 @@ export async function resolveWithheldRemixInputs(params: {
       return UNREAD;
     }
   }
-  const creatorIds = new Set(params.generation.user_id ? [params.generation.user_id] : []);
-  const copiedRowIds = new Set(inputs.items
-    .filter((item) => copies.has(item.id) && !isRecipeFileInput(item, creatorIds))
-    .map((item) => item.id));
+  // A file of someone else's recipe the creator's run used has a copy in the recipe only where it came
+  // through the recipe the run remixed (remix plan, phase 1b): the copy is the creator's to pass on, and
+  // is left out of `copies` once what it came from is closed to them (`loadWithheldCopies`).
+  const copiedRowIds = new Set(inputs.items.filter((item) => copies.has(item.id)).map((item) => item.id));
 
   const { restored, withheld } = splitRemixInputsByCopy(inputs.items, copiedRowIds, params.tool);
   return {

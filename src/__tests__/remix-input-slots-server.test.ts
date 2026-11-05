@@ -177,9 +177,9 @@ describe('reading the copies from the recipe the viewer bought', () => {
       storagePath: `post_resource_files/${COPY_A}`,
       url: `https://signed.example/post_resource_files/${COPY_A}?token=short`,
     }]]));
-    // What the gate read is not read again: no purchase, no post, no profile. The creation's state is
-    // read now, as the copies' own (owner, 2026-11-04).
-    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['post_resource_bundles', 'generations']);
+    // What the gate read is not read again: no purchase, no post, no profile. Whether each copy is
+    // withheld is asked now, of the database (owner, 2026-11-04; remix plan, phase 1b).
+    expect(client.from.mock.calls.map(([table]) => table)).toEqual(['post_resource_bundles']);
   });
 
   // Owner, 2026-11-04: a creation its creator archived or an operator removed lends its copies to no

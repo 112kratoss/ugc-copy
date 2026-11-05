@@ -12,6 +12,7 @@ import {
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner } from '@/lib/generation-input-origin';
+import { loadRecipePassOnFolders } from '@/lib/recipe-pass-on';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
@@ -51,6 +52,8 @@ type GenerationRow = {
   studio_visible?: boolean;
   /** Set when the output's only source is known to be gone; see the 20260908061500 migration. */
   source_unavailable_at?: string | null;
+  /** The recipe this run remixed (20261105123244), whose files its recipe passes on. */
+  remix_recipe_bundle_id?: string | null;
   /** Written by the failure settlement once it has given the held cost back. */
   refunded?: boolean | null;
   error_message?: string | null;
@@ -489,7 +492,7 @@ async function fetchOwnerGenerations({
   // level, and this one outgrew what the checker can represent (TS2590).
   const columns: string = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at`;
+    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at, remix_recipe_bundle_id`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -715,6 +718,17 @@ export async function listOwnerGenerationsForRoute({
     ownerUserIds,
     includeArchived,
   });
+  // The files of the recipe each run remixed, which its recipe passes on (remix plan, phase 1b). A
+  // read that fails offers none of them: the copy reads its own.
+  const recipePassOnFoldersPromise = summaryOnly
+    ? Promise.resolve(new Map<string, string>())
+    : loadRecipePassOnFolders(adminSupabase, generations
+      .filter((generation) => ordinaryGenerationIds.includes(generation.id))
+      .map((generation) => ({ id: generation.id, remixRecipeBundleId: generation.remix_recipe_bundle_id })))
+      .catch((error: unknown) => {
+        logBackendError('owner_generations_recipe_pass_on_read_failed', { error });
+        return new Map<string, string>();
+      });
   const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
     linkedPostMapPromise,
     linkedPostMapPromise.then((linkedPosts) => loadLinkedPostBundleMap({
@@ -723,14 +737,15 @@ export async function listOwnerGenerationsForRoute({
     })),
     summaryOnly
       ? Promise.resolve(new Map<string, GenerationInputMediaItem[]>())
-      : loadGenerationInputMediaMap({
+      : recipePassOnFoldersPromise.then((recipePassOnFolders) => loadGenerationInputMediaMap({
         supabase: adminSupabase,
         generationIds: ordinaryGenerationIds,
         urlMode: 'signed',
         // Which inputs "Include creation references" copies, so the composers
         // show and count only those (#677's review).
         recipeCopyableFor: ownerUserIds,
-      }),
+        recipePassOnFolders,
+      })),
     resolveOwnedStoredMediaUrlMap({
       supabase: adminSupabase,
       outputUrls: collectOwnerMediaUrlCandidates(generations, summaryOnly),
@@ -791,8 +806,9 @@ export async function listOwnerGenerationsForRoute({
         prompt: generation.prompt,
         workflowSettings,
         // A file of someone else's recipe goes in no recipe of this creator's (`isRecipeFileInput`),
-        // so the recipe they start from counts none.
-        inputMedia: inputMedia.filter((item) => inputOrigins.get(item.id) !== 'recipe'),
+        // so the recipe they start from counts none, but for one that came through the recipe this
+        // run remixed, which the copy takes (`recipeCopyable`, remix plan phase 1b).
+        inputMedia: inputMedia.filter((item) => inputOrigins.get(item.id) !== 'recipe' || item.recipeCopyable === true),
         ownInputIds,
       });
     const outputUrl = resolveGenerationOutputUrl(adminSupabase, generation, resolvedMediaUrls);

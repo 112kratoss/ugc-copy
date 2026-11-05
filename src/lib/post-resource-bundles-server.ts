@@ -34,7 +34,8 @@ import {
 import { getCreatorDisplayName } from '@/lib/profile';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
-import { loadWithheldCopyCreations, withholdCopiesOfCreationsOffView } from '@/lib/recipe-copy-access';
+import { loadReadableRecipeFiles, loadWithheldCopies, withholdCopiesOfCreationsOffView } from '@/lib/recipe-copy-access';
+import { loadRecipePassOnFolder, recordRecipeCopySource } from '@/lib/recipe-pass-on';
 import {
   createServiceClient,
 } from '@/lib/server-helpers';
@@ -112,6 +113,8 @@ import {
   isRecipeFileInput,
   loadSourceGenerationOwners,
   needsSourceGenerationOwner,
+  passesOnRecipeFile,
+  recipeFileCopyOf,
   type GenerationInputOrigin,
 } from '@/lib/generation-input-origin';
 import {
@@ -892,6 +895,12 @@ export type PlannedGenerationReference = {
    * file the creator chose instead: there is nothing to copy.
    */
   source: { bucket: string; filePath: string } | null;
+  /**
+   * For a file of the recipe the run remixed, which the recipe passes on
+   * (`passesOnRecipeFile`): the recipe file it stands for and its holder, which
+   * the copy records before it is made (`recordRecipeCopySource`).
+   */
+  passOn?: { sourceFile: string; holderUserId: string };
 };
 
 export type GenerationReferencePlan =
@@ -919,6 +928,13 @@ export type GenerationReferencePlan =
  * its original. `heldItems` are the recipe's items as sent and as stored: an
  * input whose copy is among them needs no second one, so saving the recipe
  * again moves no bytes for the inputs it holds.
+ *
+ * A file of someone else's recipe the run used goes in only where it came
+ * through the recipe the run remixed (remix plan, phase 1b): its copy sits in
+ * that recipe's folder (`loadRecipePassOnFolder`, `passesOnRecipeFile`) and its
+ * holder may still read it now (`loadReadableRecipeFiles`), so a refund, a
+ * retracted purchase or that creation's removal or archive passes nothing on.
+ * Any read of those that fails passes none of them on.
  */
 export async function planGenerationReferenceCopies(params: {
   supabase: SupabaseClient;
@@ -926,6 +942,10 @@ export async function planGenerationReferenceCopies(params: {
   generationId: string;
   onlyRowIds?: ReadonlySet<string>;
   heldItems?: readonly Pick<PostResourceItem, 'id' | 'storagePath' | 'contentType' | 'sizeBytes'>[];
+  dependencies?: {
+    loadRecipePassOnFolder?: typeof loadRecipePassOnFolder;
+    loadReadableRecipeFiles?: typeof loadReadableRecipeFiles;
+  };
 }): Promise<GenerationReferencePlan> {
   const { data, error } = await params.supabase
     .from('generation_input_media')
@@ -945,10 +965,13 @@ export async function planGenerationReferenceCopies(params: {
   // judges it by the set the owner's library read offers it by, so what the
   // composers offer is what is copied.
   const publisherOnly = new Set([params.ownerUserId]);
-  const sourceOwnerIds = rows.some((row) => row.user_id !== params.ownerUserId
-    || isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, publisherOnly))
+  const anyRecipeFile = rows.some((row) => isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, publisherOnly));
+  const sourceOwnerIds = anyRecipeFile || rows.some((row) => row.user_id !== params.ownerUserId)
     ? await resolveLinkedAccountIds(params.supabase, params.ownerUserId)
     : [params.ownerUserId];
+  const passOn = anyRecipeFile
+    ? await planRecipePassOn({ ...params, rows, sourceOwnerIds })
+    : { folder: null, sources: new Map<string, string>() };
   const heldItems = params.heldItems ?? [];
   const heldByPath = new Map(heldItems.flatMap((item) => (item.storagePath ? [[item.storagePath, item] as const] : [])));
   const heldIds = new Set(heldItems.flatMap((item) => (item.id ? [item.id] : [])));
@@ -956,9 +979,14 @@ export async function planGenerationReferenceCopies(params: {
   const references: PlannedGenerationReference[] = [];
   for (const [index, row] of rows.entries()) {
     // A file of someone else's recipe the run used through the publisher's unlock is theirs to use,
-    // never to sell or give on (owner, 2026-11-03), whatever this recipe's switches say: the copyable
-    // rule leaves it out (`isRecipeFileInput`), here and in what the composers offer.
-    if (!isRecipeCopyableInputRow(row, sourceOwnerIds)) {
+    // never to sell or give on (owner, 2026-11-03), whatever this recipe's switches say, unless it came
+    // through the recipe this run remixed (owner, 2026-11-05: a remix's recipe holds what its run
+    // used) and is still its holder's: the copyable rule decides, here and in what the composers offer.
+    if (!isRecipeCopyableInputRow(row, sourceOwnerIds, passOn.folder)) {
+      continue;
+    }
+    const passOnSource = passOn.sources.get(row.id);
+    if (!passOnSource && isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, new Set(sourceOwnerIds))) {
       continue;
     }
     const source = getUserOwnedStoredMediaLocation(row.storage_path, row.user_id);
@@ -991,10 +1019,53 @@ export async function planGenerationReferenceCopies(params: {
         remixUse: mapGenerationInputRemixUse(row),
       },
       source: held || heldIds.has(id) ? null : source,
+      ...(passOnSource ? { passOn: { sourceFile: passOnSource, holderUserId: row.user_id } } : {}),
     });
   }
 
   return { ok: true, references };
+}
+
+/**
+ * Which of a creation's recipe-file inputs its recipe passes on, by row id, with the recipe file each
+ * stands for: those in the folder of the recipe the run remixed whose holder may still read them now.
+ * A read that fails passes none on (logged): the inputs stay out, as every recipe file did before.
+ */
+async function planRecipePassOn(params: {
+  supabase: SupabaseClient;
+  generationId: string;
+  rows: readonly GenerationInputMediaRow[];
+  sourceOwnerIds: readonly string[];
+  dependencies?: {
+    loadRecipePassOnFolder?: typeof loadRecipePassOnFolder;
+    loadReadableRecipeFiles?: typeof loadReadableRecipeFiles;
+  };
+}): Promise<{ folder: string | null; sources: Map<string, string> }> {
+  const none = { folder: null, sources: new Map<string, string>() };
+  try {
+    const folder = await (params.dependencies?.loadRecipePassOnFolder ?? loadRecipePassOnFolder)(params.supabase, params.generationId);
+    if (!folder) return none;
+    const ownerIds = new Set(params.sourceOwnerIds);
+    const byHolder = new Map<string, Map<string, string>>();
+    for (const row of params.rows) {
+      const input = { metadata: row.metadata, storagePath: row.storage_path };
+      const file = passesOnRecipeFile(input, ownerIds, folder) ? recipeFileCopyOf(input, ownerIds) : null;
+      if (!file) continue;
+      byHolder.set(row.user_id, (byHolder.get(row.user_id) ?? new Map()).set(row.id, file));
+    }
+    const readFiles = params.dependencies?.loadReadableRecipeFiles ?? loadReadableRecipeFiles;
+    const sources = new Map<string, string>();
+    await Promise.all([...byHolder].map(async ([holderUserId, files]) => {
+      const readable = await readFiles(params.supabase, holderUserId, files.values());
+      for (const [rowId, file] of files) {
+        if (readable.has(file)) sources.set(rowId, file);
+      }
+    }));
+    return { folder, sources };
+  } catch (error) {
+    logBackendError('post_resource_recipe_pass_on_read_failed', { error });
+    return none;
+  }
 }
 
 export type CopiedGenerationReferences = {
@@ -1102,8 +1173,18 @@ export async function copyPlannedGenerationReferences(params: {
   references: readonly PlannedGenerationReference[];
 }): Promise<CopiedGenerationReferences> {
   const copied: CopiedGenerationReferences = { files: new Map(), failedItemIds: new Set() };
-  for (const { item, source } of params.references) {
+  for (const { item, source, passOn } of params.references) {
     if (!source || !item.id || !item.storagePath) {
+      continue;
+    }
+    // A passed-on file's copy is served only as long as what it came from is (`recipe_copy_sources`):
+    // where that cannot be recorded, it is not made.
+    if (passOn && !(await recordRecipeCopySource(params.supabase, {
+      copyPath: item.storagePath,
+      sourceFile: passOn.sourceFile,
+      holderUserId: passOn.holderUserId,
+    }))) {
+      copied.failedItemIds.add(item.id);
       continue;
     }
     const result = await copyGenerationReferenceFile(
@@ -1997,12 +2078,13 @@ export async function loadGenerationRecipeReferenceCopies(params: {
     inputRowIds: params.inputRowIds,
   });
   // None of a creation its operator removed or its creator archived (owner, 2026-11-04), read now, so
-  // un-archiving restores them: not to a remix, and not to a run start's import.
-  if (filePaths.size > 0 && (await loadWithheldCopyCreations(adminSupabase, filePaths.values())).size > 0) {
-    return new Map();
-  }
+  // un-archiving restores them: not to a remix, and not to a run start's import. A copy this recipe
+  // passed on from the recipe its creation remixed is also withheld once that file is closed to the
+  // creator (`loadWithheldCopies`): that copy alone, as an empty slot.
+  const withheld = filePaths.size > 0 ? await loadWithheldCopies(adminSupabase, filePaths.values()) : new Set<string>();
+  const servedPaths = [...filePaths].filter(([, filePath]) => !withheld.has(filePath));
 
-  return new Map(await Promise.all([...filePaths].map(async ([rowId, filePath]) => {
+  return new Map(await Promise.all(servedPaths.map(async ([rowId, filePath]) => {
     const storagePath = `${RECIPE_FILES_BUCKET}/${filePath}`;
     if (params.signUrls === false) {
       return [rowId, { storagePath, url: null } satisfies GenerationReferenceCopy] as const;

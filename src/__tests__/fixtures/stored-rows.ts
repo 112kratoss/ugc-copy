@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { embeddedTable, postgrestSelect, selectFields } from './postgrest-select';
+import { recipeCopiesWithheldOver, type CreationMarks } from './recipe-copies-withheld';
 
 type Row = Record<string, unknown>;
 type Call = (args: Row) => unknown;
@@ -175,6 +176,15 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
     });
   }
 
+  // `recipe_copies_withheld` over the stored creations' two marks, where a test names no answer of its
+  // own: a copy a remix's recipe passed on is held to where it came from too, which pgTAP proves.
+  function withheldCopiesOfStoredCreations(args: Row) {
+    const creations = tables.generations;
+    if (isFailure(creations)) return creations;
+    const paths = Array.isArray(args.p_paths) ? args.p_paths.filter((path): path is string => typeof path === 'string') : [];
+    return recipeCopiesWithheldOver((creations ?? []) as CreationMarks[])(paths);
+  }
+
   const client = {
     from(table: string) {
       return {
@@ -183,7 +193,7 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
       };
     },
     async rpc(name: string, args: Row = {}) {
-      const call = calls[name];
+      const call = calls[name] ?? (name === 'recipe_copies_withheld' && tables.generations ? withheldCopiesOfStoredCreations : undefined);
       if (!call) throw new Error(`Unexpected call: ${name}`);
       called.push(name);
       const answer = await call(args);

@@ -49,6 +49,7 @@ function libraryRow(overrides: Record<string, unknown>): Record<string, unknown>
     playback_rendition_source: null,
     playback_rendition_status: 'pending',
     source_unavailable_at: null,
+    remix_recipe_bundle_id: null,
     ...overrides,
   };
 }
@@ -1029,6 +1030,48 @@ describe('listOwnerGenerationsForRoute', () => {
         ['marked', false],
         ['seller-source', false],
       ]);
+    });
+
+    // Remix plan, phase 1b (owner, 2026-11-05: a remix's recipe holds what its run used): a file of
+    // the recipe the run remixed is offered as the copy takes it, and counted in the recipe it starts
+    // from; a file of any other recipe still is not.
+    it('marks a file that came through the recipe the run remixed, and counts it in the recipe’s prefill', async () => {
+      const SELLER = '11111111-1111-4111-8111-111111111111';
+      const ORIGINAL = '22222222-2222-4222-8222-222222222222';
+      const kept = (id: string, sortOrder: number, recipeFile: string) => ({
+        ...inputRow(id, OWNER, `generation_inputs/${OWNER}/gen-inputs/0${sortOrder}-reference-image.png`, sortOrder),
+        metadata: { sourceKind: 'recipe-file', recipeFile },
+      });
+      const stored = createStoredRows({
+        profiles,
+        generations: [libraryRow({ id: 'gen-inputs', remix_recipe_bundle_id: 'bundle-original' })],
+        posts: [{ id: 'post-original', generation_id: ORIGINAL, deleted_generation_id: null, title: 'Original', visibility: 'public', archived_at: null, user_id: SELLER }],
+        post_resource_bundles: [{ id: 'bundle-original', owner_user_id: SELLER, post_id: 'post-original' }],
+        generation_input_media: [
+          inputRow('own', OWNER, `generation_inputs/${OWNER}/gen-inputs/own.png`, 0),
+          kept('passed-on', 1, `post_resource_files/${SELLER}/generation-references/${ORIGINAL}/00-reference-image-row-a.png`),
+          kept('other-recipe', 2, `post_resource_files/${SELLER}/generation-references/33333333-3333-4333-8333-333333333333/00-reference-image-row-z.png`),
+        ],
+      }, {
+        // Every recipe file here is still the creator's to read.
+        recipe_files_readable_by: (args) => args.p_paths,
+      });
+
+      const payload = await listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase: () => stored.client,
+        searchParams: new URLSearchParams('id=gen-inputs&includeArchived=true&limit=1'),
+      });
+      const generation = (payload.generations as Array<Record<string, unknown>>)[0]!;
+
+      expect((generation.input_media as Array<{ id: string; recipeCopyable: boolean }>)
+        .map(({ id, recipeCopyable }) => [id, recipeCopyable])).toEqual([
+        ['own', true],
+        ['passed-on', true],
+        ['other-recipe', false],
+      ]);
+      expect(generation.paywallPrefill).toMatchObject({ referenceCount: 2 });
     });
   });
 
