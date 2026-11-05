@@ -105,8 +105,10 @@ describe('recipe copies pass on with their source migration', () => {
     expect(body).toContain('AND purchase.buyer_user_id IN (SELECT public.linked_account_ids(p_user_id))');
     expect(body).toContain('AND purchase.moderation_retracted_at IS NULL');
     expect(body).toContain("coalesce(v_held_bundle_id, CASE WHEN v_bundle_status = 'published' OR v_bought_paid THEN v_bundle_id END)");
-    // The mode and the chain's first creation are as 20261105123244 wrote them.
-    expect(body).toContain("CASE WHEN v_bought_paid OR v_source.remix_recipe_mode = 'paid' THEN 'paid' ELSE 'free' END");
+    // Paid as 20261105123244 wrote it, and for a holder while the recipe is paid, a free claim included
+    // (owner, 2026-11-06: "B's recipe must be paid").
+    expect(body).toContain("WHEN v_bought_paid OR v_source.remix_recipe_mode = 'paid' THEN 'paid'");
+    expect(body).toContain("WHEN v_held_bundle_id IS NOT NULL\n        AND (coalesce(v_held_paid, false) OR (v_bundle_status = 'published' AND v_bundle_access = 'paid')) THEN 'paid'");
     expect(sql).toContain('REVOKE ALL ON FUNCTION public.remix_terms_for(uuid, uuid) FROM PUBLIC, anon, authenticated;');
     expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.remix_terms_for(uuid, uuid) TO service_role;');
   });
