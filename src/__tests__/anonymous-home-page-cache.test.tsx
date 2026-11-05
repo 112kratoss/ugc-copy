@@ -399,15 +399,16 @@ describe('Anonymous home cacheability', () => {
     // `sr-only` and read "What will you create today?", which a crawler could
     // not use, since the only other headings on `/` are feed post titles; then
     // "Create AI videos, images, and motion-transfer UGC ads", which framed the
-    // product as an ad generator. Since 2026-10-31 it is the tagline with the
-    // selling half drawn apart, so the hero says Magicbooklet is somewhere to
-    // sell what you make (the owner's call); the category words stay in the
-    // page's title and description.
+    // product as an ad generator. Since 2026-10-31 it is the tagline with its
+    // commerce half drawn apart, so the hero says Magic Booklet is somewhere to
+    // earn from what you make (the owner's call); the category words stay in
+    // the page's title and description. The tagline became "Create, share and
+    // earn." on 2026-11-05 (owner).
     const headings = container.querySelectorAll('h1');
 
     expect(headings).toHaveLength(1);
-    expect(headings[0].textContent).toBe('Create the magic. Sell the method.');
-    expect(headings[0].querySelector('span')?.textContent).toBe('Sell the method.');
+    expect(headings[0].textContent).toBe('Create, share and earn.');
+    expect(headings[0].querySelector('span')?.textContent).toBe('and earn.');
     expect(headings[0].className).not.toContain('sr-only');
   });
 
@@ -419,7 +420,8 @@ describe('Anonymous home cacheability', () => {
       'Magic Booklet: Create, share and earn with AI video & images',
     );
     expect(JSON.stringify(metadata.title)).not.toMatch(/UGC Ads/i);
-    expect(metadata.description).toMatch(/AI images, AI videos, motion-transfer/);
+    expect(metadata.description).toMatch(/AI videos, AI images and motion transfer/);
+    expect(metadata.description).not.toMatch(/UGC ads/i);
   });
 
   it('keeps feed post titles out of the top-level document outline', async () => {

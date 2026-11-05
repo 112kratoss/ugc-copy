@@ -36,7 +36,7 @@ export const metadata: Metadata = {
   description: siteConfig.description,
   applicationName: siteConfig.name,
   keywords: [
-    "AI UGC ads",
+    "AI creator community",
     "AI video generator",
     "AI image generator",
     "motion transfer",

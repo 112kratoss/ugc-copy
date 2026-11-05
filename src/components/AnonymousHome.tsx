@@ -98,22 +98,24 @@ function AnonymousHero({ shelf }: { shelf: Promise<HomeShelfItem[]> }) {
         users navigate by, and for the search result this statically
         prerendered page exists to win.
 
-        It is the tagline, its selling half in the commerce accent: the hero
-        says Magic Booklet is somewhere to sell what you make, not only a tool to
-        make it (owner, 2026-10-31). It replaced "Create AI videos, images, and
+        It is the tagline, "Create, share and earn." (owner, 2026-11-05), its
+        earning half in the commerce accent: the hero says Magic Booklet is
+        somewhere to share and earn from what you make, not only a tool to make
+        it. Before that it was "Create the magic. Sell the method." (owner,
+        2026-10-31), which replaced "Create AI videos, images, and
         motion-transfer UGC ads", which framed the product as an ad generator;
         the category words a search matches stay in this page's title and
         description (`src/app/page.tsx`). Before that it was `sr-only` and read
         "What will you create today?", which gave a crawler nothing, since the
         only other headings on `/` are feed post titles. Visible, above the
         shelf, at the page title's own size (36px, 48px from 640px wide). The
-        second sentence is an inline-block, so the line breaks between the two
-        sentences (measured from 320px wide up).
+        accented half is an inline-block, so a narrow screen breaks the line
+        before "and earn." rather than inside it.
       */}
       <Text as="h1" variant="pageTitle" className="mb-6 max-w-3xl">
-        {siteConfig.tagline.create}{' '}
+        {siteConfig.tagline.lead}{' '}
         <span className={`inline-block ${getAccentClasses('commerce').accentText}`}>
-          {siteConfig.tagline.sell}
+          {siteConfig.tagline.earn}
         </span>
       </Text>
       {/*
