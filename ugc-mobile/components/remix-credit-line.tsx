@@ -1,5 +1,5 @@
 import { Repeat2 } from 'lucide-react-native';
-import { Pressable, Text, type TextStyle } from 'react-native';
+import { Pressable, Text, View, type TextStyle } from 'react-native';
 
 import { verticalHitSlop } from '@/lib/hit-target';
 import {
@@ -60,7 +60,7 @@ export function RemixCreditLine({
       hitSlop={verticalHitSlop(ROW_HEIGHT)}
       style={({ pressed }) => ({
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: 6,
         minHeight: ROW_HEIGHT,
         alignSelf: 'flex-start',
@@ -68,7 +68,10 @@ export function RemixCreditLine({
         opacity: pressed ? appTheme.opacity.pressed : 1,
       })}
     >
-      <Repeat2 size={appTheme.icon.xs} color={muted} />
+      {/* Centred on the first line, so a credit that wraps keeps its icon beside "Remix of". */}
+      <View style={{ height: ROW_HEIGHT, justifyContent: 'center' }}>
+        <Repeat2 size={appTheme.icon.xs} color={muted} />
+      </View>
       <Text numberOfLines={numberOfLines} style={[{ flexShrink: 1, color: muted, ...appTheme.type.caption }, textStyle]}>
         {segments.map((segment, index) => (
           <Text key={index} style={segment.kind === 'text' ? undefined : { color: strong, fontWeight: '700' }}>

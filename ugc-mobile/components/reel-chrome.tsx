@@ -387,6 +387,8 @@ export function ReelSlideChrome({
         <RemixCreditLine
           remixCredit={item.details?.remixCredit}
           tone="media"
+          // Two lines, so "Original by" is never the part cut off.
+          numberOfLines={2}
           textStyle={REEL_TEXT_SHADOW}
           onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
           onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}

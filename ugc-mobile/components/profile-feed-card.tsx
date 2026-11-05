@@ -100,6 +100,7 @@ export const ProfileFeedCardView = memo(function ProfileFeedCardView({
       title={card.title}
       creditLine={(
         <RemixCreditLine
+          numberOfLines={2}
           remixCredit={item.details?.remixCredit}
           onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
           onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}

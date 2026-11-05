@@ -119,6 +119,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       title={card.title}
       creditLine={(
         <RemixCreditLine
+          numberOfLines={2}
           remixCredit={readRemixCredit(card.item.remixCredit)}
           onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
           onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}

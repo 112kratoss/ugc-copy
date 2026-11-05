@@ -37,8 +37,9 @@ export function postRemixesCountLabel(count: number): string {
   return `${count} ${count === 1 ? 'remix' : 'remixes'}`;
 }
 
-export const POST_REMIXES_TITLE = 'Remixes';
-export const POST_REMIXES_SUBTITLE = 'Posted versions people made from this post';
+/** The screen's heading under its bar's "Remixes". */
+export const POST_REMIXES_TITLE = 'Made from this post';
+export const POST_REMIXES_SUBTITLE = 'Remixes their creators posted, newest first.';
 export const POST_REMIXES_EMPTY = 'No remixes are posted yet. They show here once their creators post them.';
 export const POST_REMIXES_UNPOSTED_NOTE = 'Some remixes haven’t been posted.';
 
