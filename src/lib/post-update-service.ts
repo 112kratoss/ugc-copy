@@ -106,7 +106,7 @@ import {
 } from '@/lib/storage-ownership';
 import { storedMediaOwnerId } from '@/lib/generation-input-origin';
 import { getRemixRecipeTermsRefusalBody } from '@/lib/remix-recipe-terms';
-import { isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
+import { isCreationReferenceCopyPath, isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 
@@ -1492,9 +1492,21 @@ export async function updateOwnerPostForRoute({
     if (!leftOutReferenceIds) {
       return { ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } };
     }
+    // A copy of one of the creation's inputs that the stored recipe holds and this save leaves out
+    // (the review of phase 2): the creator removed that file, as an older composer does too by
+    // deleting its item, and the live hand-over would put it back for every remix.
+    const dropsStoredInputCopy = (() => {
+      if (!post.generation_id || !liveBundle || !parsedResourceBundle?.resources?.allowRemix) return false;
+      const kept = new Set(
+        normalizePostResourceItems(parsedResourceBundle.resources.items, parsedResourceBundle.resources)
+          .flatMap((item) => (item.storagePath ? [item.storagePath] : [])),
+      );
+      return normalizePostResourceItems(liveBundle.resource_items, buildStoredBundleForQualityCheck(liveBundle).resources)
+        .some((item) => isCreationReferenceCopyPath(item.storagePath, post.generation_id) && !kept.has(item.storagePath!));
+    })();
     // A recipe the creator took inputs out of hands none of the creation's inputs to a remix (the
     // hand-over gives every input, the removed ones too): a remix restores its copies instead.
-    const submittedResourceBundle = leftOutReferenceIds.size > 0 && parsedResourceBundle?.resources?.allowRemix
+    const submittedResourceBundle = (leftOutReferenceIds.size > 0 || dropsStoredInputCopy) && parsedResourceBundle?.resources?.allowRemix
       ? { ...parsedResourceBundle, resources: { ...parsedResourceBundle.resources, allowRemix: false } }
       : parsedResourceBundle;
     // A creation's recipe, as the publish makes it (#677's review): its exact

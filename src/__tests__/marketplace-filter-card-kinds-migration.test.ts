@@ -134,7 +134,7 @@ describe('marketplace filter card kinds migration', () => {
     // What that rule says, against the function the app calls, called as
     // hydrateBundleRows calls it (no templateResult).
     expect(serverSource).toMatch(
-      /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+\}\)/,
+      /resolveRecipeAllowRemix\(\{\s+storedAllowRemix: row\.allow_remix,\s+status: row\.status,\s+generationId: post\?\.generationId \?\? null,\s+(?:remixesAllowed: post\?\.remixesAllowed,\s+)?\}\)/,
     );
     for (const storedAllowRemix of [true, false, null]) {
       for (const status of ['published', 'draft']) {

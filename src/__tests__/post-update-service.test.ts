@@ -1623,6 +1623,30 @@ describe('updateOwnerPostForRoute', () => {
         expect(written?.resources?.allowRemix).toBe(true);
       });
 
+      // The review of phase 2: an editor deletes a copied file's item (an older one too, which names no
+      // removed input); the live hand-over would give that file back to every remix.
+      it('hands no input over once a save drops a copy of one the stored recipe held', async () => {
+        const copyItem = { ...plannedInput().item, title: 'Product' };
+        const stored = {
+          id: 'bundle-1',
+          access_mode: 'free',
+          status: 'published',
+          allow_remix: true,
+          resource_items: [promptItem, copyItem],
+        };
+        const dropped = await save({
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        }, { bundle: stored });
+        expect(dropped.result).toMatchObject({ ok: true });
+        expect(dropped.written?.resources?.allowRemix).toBe(false);
+
+        const kept = await save({
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem, copyItem] } },
+        }, { bundle: stored });
+        expect(kept.result).toMatchObject({ ok: true });
+        expect(kept.written?.resources?.allowRemix).toBe(true);
+      });
+
       it('writes "Allow remixes" only when it is sent, and refuses one that is no switch', async () => {
         const off = await save({ allowRemixes: false, resourceBundle: recipe('free') });
         expect(vi.mocked(off.dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].patch)

@@ -545,6 +545,7 @@ function PostResourcesPage({
   onPostWithoutRecipe,
   postWithoutRecipeDisabled,
   isNewCreationPost,
+  offersAllowRemixes,
   recipeLock,
 }: {
   draft: PostComposerDraft;
@@ -552,6 +553,8 @@ function PostResourcesPage({
   isTemplateBacked: boolean;
   /** A creation's new post has no No recipe (owner, 2026-11-05): an edit keeps a post as it is. */
   isNewCreationPost: boolean;
+  /** The post's own "Allow remixes" is drawn: as the save sends it (`buildCreationRecipeChoicesPatch`). */
+  offersAllowRemixes: boolean;
   /** The terms a remix's recipe is held to, with why (`getCreationRecipeLock`); null where none. */
   recipeLock: { accessMode: 'free' | 'paid'; reason: string } | null;
   /** People who have the loaded recipe, paid or free (an edit's `resourceBundleBuyerCount`). */
@@ -704,7 +707,7 @@ function PostResourcesPage({
         </ComposerFieldShell>
       ) : null}
 
-      {selectedGeneration && !isTemplateBacked ? (
+      {offersAllowRemixes ? (
         <ToggleRow
           label={ALLOW_REMIXES_LABEL}
           body={ALLOW_REMIXES_DETAIL}
@@ -769,7 +772,7 @@ function PostResourcesPage({
             )}
 
             {includesCreationReferences ? (
-              <CreationReferencesRow fileCount={countCreationReferenceFiles(selectedGeneration, draft.resource.cards)} />
+              <CreationReferencesRow fileCount={countCreationReferenceFiles(selectedGeneration, draft.resource.cards, removedInputIds)} />
             ) : null}
 
             {/* Remix comes with any recipe on a post made from a creation (recipe audit S1): the
@@ -4169,6 +4172,8 @@ function NewPostComposer() {
             onPostWithoutRecipe={() => void postWithoutRecipe()}
             postWithoutRecipeDisabled={postWithoutRecipeDisabled}
             isNewCreationPost={!isEditMode && draft.mode === 'creation' && creationCarriesRecipe(selectedGeneration)}
+            // As the save sends it: a new post only where its creation carries a recipe, an edit always.
+            offersAllowRemixes={!isTemplateBacked && draft.mode === 'creation' && (isEditMode || creationCarriesRecipe(selectedGeneration))}
             recipeLock={isTemplateBacked ? null : getCreationRecipeLock(selectedGeneration) ?? remixRecipeLock(postQuery.data?.post?.remixRecipeMode ?? null)}
           />
           </>

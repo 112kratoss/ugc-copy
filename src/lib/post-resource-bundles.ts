@@ -1647,14 +1647,20 @@ function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor
  * includes it, whatever the stored `allow_remix` says: the composers' "Allow
  * direct remix" switch is gone, and `resolvePostRemixCapability` gates such a
  * post's Remix at the unlock. Read-time only; nothing stored changes, and a
- * stored `true` stays true.
+ * stored `true` stays true. A post whose creator turned "Allow remixes" off
+ * (`posts.remixes_allowed`, owner 2026-11-05) offers no Remix with its recipe,
+ * so none is listed, filtered on or sold with it.
  */
 export function resolveRecipeAllowRemix(input: {
   storedAllowRemix: boolean | null | undefined;
   status: string | null | undefined;
   generationId: string | null | undefined;
   templateResult?: boolean;
+  remixesAllowed?: boolean | null;
 }): boolean {
+  if (input.remixesAllowed === false) {
+    return false;
+  }
   if (input.storedAllowRemix === true) {
     return true;
   }

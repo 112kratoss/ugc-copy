@@ -731,8 +731,10 @@ export function foldRecipeSummaryIntoPreview(resource: PostComposerResourceDraft
 export function countCreationReferenceFiles(
   item: GenerationListItem | null | undefined,
   cards: readonly PostComposerResourceCardDraft[] = [],
+  /** The inputs the creator removed (`getRemovedCreationInputIds`): the save copies none of them. */
+  removedInputIds: ReadonlySet<string> = new Set(),
 ): number {
-  const { offered, included } = getCreationInputsInRecipe(cards, item);
+  const { offered, included } = getCreationInputsInRecipe(cards, item, removedInputIds);
   return offered.length - included;
 }
 
@@ -1363,30 +1365,32 @@ export function buildPublishGenerationPostPayload(item: GenerationListItem, draf
     sourceToolSlug: trimOrUndefined(primarySourceTool?.toolSlug) ?? trimOrUndefined(draft.sourceToolSlug),
     ...(sourceTools.length > 0 ? { sourceTools } : {}),
     ...(includeGenerationReferences ? { includeGenerationReferences: true } : {}),
-    ...buildCreationRecipeChoicesPatch(item, draft, includeGenerationReferences, templateResult),
+    ...buildCreationRecipeChoicesPatch(item, draft, { templateResult, isEdit: false }),
     resourceBundle: resourceBundle ?? { accessMode: 'none' },
   };
 }
 
 /**
  * What a creation's publish or save sends of the creator's own choices (remix plan, phase 2): the
- * inputs they removed, none of which the server copies, and "Allow remixes", which the server also
- * reads as a composer that offers no post of a creation without its recipe. A template result has no
- * Remix and sends neither.
+ * inputs they removed, which the server never copies and which turn off the recipe's live
+ * hand-over (named whether or not the rest are being copied now, the review of phase 2), and
+ * "Allow remixes". The server reads the switch on a publish as a composer that offers no post of
+ * a creation without its recipe, so a new post sends it only where its creation carries one
+ * (`creationCarriesRecipe`); an edit always sends it. A template result has no Remix and sends
+ * neither.
  */
 function buildCreationRecipeChoicesPatch(
   item: GenerationListItem | null | undefined,
   draft: PostComposerDraft,
-  includeGenerationReferences: boolean,
-  templateResult: boolean,
+  options: { templateResult: boolean; isEdit: boolean },
 ): { allowRemixes?: boolean; leaveOutGenerationReferenceIds?: string[] } {
-  if (templateResult) return {};
+  if (options.templateResult) return {};
   const removed = getRemovedCreationInputIds(draft);
-  const leftOut = includeGenerationReferences
+  const leftOut = draft.resource.accessMode !== 'none'
     ? recipeCopyableInputs(item?.input_media).filter((input) => removed.has(input.id)).map((input) => input.id)
     : [];
   return {
-    allowRemixes: draftAllowsRemixes(draft),
+    ...(options.isEdit || creationCarriesRecipe(item) ? { allowRemixes: draftAllowsRemixes(draft) } : {}),
     ...(leftOut.length > 0 ? { leaveOutGenerationReferenceIds: leftOut } : {}),
   };
 }
@@ -1426,7 +1430,7 @@ export function buildUpdatePostPayload(
       ?? { accessMode: 'none' as const },
     ...(includeGenerationReferences ? { includeGenerationReferences: true } : {}),
     ...(isGenerationBacked
-      ? buildCreationRecipeChoicesPatch(generation, draft, includeGenerationReferences, isTemplateGeneration(generation))
+      ? buildCreationRecipeChoicesPatch(generation, draft, { templateResult: Boolean(generation && isTemplateGeneration(generation)), isEdit: true })
       : {}),
   };
   const descriptionPatch = buildDescriptionPatch(draft);

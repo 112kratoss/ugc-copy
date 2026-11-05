@@ -249,6 +249,9 @@ interface ComposerSnapshot {
   resourcePreviewWritten: string | null;
   resourcePriceTokens: string;
   includeGenerationReferences: boolean;
+  /** The post's own "Allow remixes" and the saved inputs taken out of its recipe (owner, 2026-11-05). */
+  allowRemixes: boolean;
+  removedCreationInputIds: string;
 }
 
 // Field by field, cheapest first, so a keystroke in the title never serializes
@@ -262,6 +265,8 @@ function isSameComposerSnapshot(a: ComposerSnapshot, b: ComposerSnapshot): boole
     && a.resourcePreviewWritten === b.resourcePreviewWritten
     && a.resourcePriceTokens === b.resourcePriceTokens
     && a.includeGenerationReferences === b.includeGenerationReferences
+    && a.allowRemixes === b.allowRemixes
+    && a.removedCreationInputIds === b.removedCreationInputIds
     && a.mediaIds.join('\n') === b.mediaIds.join('\n')
     && JSON.stringify(a.madeWith) === JSON.stringify(b.madeWith)
     // By content, not identity: saving a card unchanged still copies it.
@@ -1243,8 +1248,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const recipeLock = prefilledGeneration?.origin === 'template'
     ? null
     : remixRecipeLock(initialPost?.remixRecipeMode ?? prefilledGeneration?.remixRecipeMode ?? null);
-  // A generation-backed post's own "Allow remixes"; a template result has no Remix.
-  const offersAllowRemixes = Boolean(generationId) && prefilledGeneration?.origin !== 'template';
+  // A generation-backed post's own "Allow remixes"; a template result has no Remix. A new post sends
+  // it only while its creation's recipe is required: the server reads the switch as a composer
+  // that offers no No recipe, so a form still offering one (its creation not read yet, or nothing
+  // to share) leaves it out, and the post allows remixes.
+  const offersAllowRemixes = Boolean(generationId)
+    && prefilledGeneration?.origin !== 'template'
+    && (isEditMode || isNewCreationPost);
   // The exact prompt is said to be in only while a card holds it.
   const creationPromptIncluded = Boolean(creationPrompt)
     && resourceCards.some((card) => holdsCreationPrompt(card, creationPrompt));
@@ -1285,9 +1295,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     resourcePreviewWritten: resourcePreviewText === suggestedResourcePreview ? null : resourcePreviewText,
     resourcePriceTokens,
     includeGenerationReferences,
+    allowRemixes,
+    removedCreationInputIds: [...removedCreationInputIds].sort().join('\n'),
   }), [
+    allowRemixes,
     body,
     includeGenerationReferences,
+    removedCreationInputIds,
     isNsfw,
     madeWithRows,
     mediaItems,
@@ -1736,7 +1750,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
               creationMode: nextGeneration.creationMode,
             },
             // A paid recipe keeps the prompt out of the title; a free one does not (owner, 2026-10-29).
-            recipeKeepsPromptPrivate(isTemplateResult ? 'none' : resourceAccessModeRef.current),
+            // A locked remix's mode is set above, not yet in the ref.
+            recipeKeepsPromptPrivate(isTemplateResult
+              ? 'none'
+              : startsLocked && startingLock ? startingLock.accessMode : resourceAccessModeRef.current),
           )?.title ?? '';
         setTitle((current) => current || prefillTitle);
         // A new post's Made with is the creation's row from here on (it is
@@ -3033,12 +3050,12 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             ...(includesCreationReferences && resourceBundle
               ? { includeGenerationReferences: true }
               : {}),
-            // None of these is copied, whatever else asks (owner, 2026-11-05: remove buttons).
-            ...(includesCreationReferences && resourceBundle && removedCreationInputs.length > 0
+            // None of these is copied, whatever else asks (owner, 2026-11-05: remove buttons), and a
+            // recipe missing any hands no live input over.
+            ...(resourceBundle && removedCreationInputs.length > 0
               ? { leaveOutGenerationReferenceIds: removedCreationInputs.map((input) => input.id) }
               : {}),
-            // Sent for every creation: the server reads it as a composer that offers no post of a
-            // creation without a recipe.
+            // The server reads it as a composer that offers no post of a creation without a recipe.
             ...(offersAllowRemixes ? { allowRemixes } : {}),
           }),
         });
@@ -3107,7 +3124,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
               ...(includesCreationReferences && resourceBundle
                 ? { includeGenerationReferences: true }
                 : {}),
-              ...(includesCreationReferences && resourceBundle && removedCreationInputs.length > 0
+              ...(resourceBundle && removedCreationInputs.length > 0
                 ? { leaveOutGenerationReferenceIds: removedCreationInputs.map((input) => input.id) }
                 : {}),
               ...(offersAllowRemixes ? { allowRemixes } : {}),

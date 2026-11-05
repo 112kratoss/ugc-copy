@@ -411,8 +411,23 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
     fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
 
     await waitFor(() => expect(onPublished).toHaveBeenCalled());
-    expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'none' }, allowRemixes: true });
+    expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'none' } });
     expect(publishBody(fetchMock)).not.toHaveProperty('includeGenerationReferences');
+    // No switch with the media alone: the server reads one as a form that offers no post without a
+    // recipe, and this one just did (the review of phase 2).
+    expect(publishBody(fetchMock)).not.toHaveProperty('allowRemixes');
+  });
+
+  // The review of phase 2: details that could not be read leave the media alone to publish, and
+  // that publish is not refused for its missing recipe.
+  it('publishes the media alone when the creation’s details could not be read, without the switch', async () => {
+    const fetchMock = installFetch();
+    const { onPublished } = renderPanel({ details: null });
+    fireEvent.click(within(form()).getByRole('button', { name: 'Publish to the feed' }));
+
+    await waitFor(() => expect(onPublished).toHaveBeenCalled());
+    expect(publishBody(fetchMock)).toMatchObject({ resourceBundle: { accessMode: 'none' } });
+    expect(publishBody(fetchMock)).not.toHaveProperty('allowRemixes');
   });
 
   it('says why a publish was refused, beside the form', async () => {
@@ -447,7 +462,7 @@ describe('CreatorPublishPanel: the form on the canvas', () => {
 // uploads included, each with a remove button and the line that says where they go; and it allows
 // remixes unless the creator turns that off.
 describe('CreatorPublishPanel: the recipe’s files and remixes', () => {
-  it('takes every saved input, the creator’s own included, and hands them over as they are', async () => {
+  it('takes every saved input, the creator’s own included, as copies, and hands no live input over', async () => {
     const fetchMock = installFetch();
     const { onPublished } = renderPanel({ details: WITH_FILES });
     const files = within(form()).getByRole('list', { name: 'Files in the recipe' });
@@ -461,7 +476,9 @@ describe('CreatorPublishPanel: the recipe’s files and remixes', () => {
     expect(body).toMatchObject({
       includeGenerationReferences: true,
       allowRemixes: true,
-      resourceBundle: { accessMode: 'free', resources: { allowRemix: true } },
+      // The review of phase 2: a live hand-over would give back a file removed on a later edit; a
+      // remix restores the recipe's copies instead.
+      resourceBundle: { accessMode: 'free', resources: { allowRemix: false } },
     });
     expect(body).not.toHaveProperty('leaveOutOwnGenerationReferences');
     expect(body).not.toHaveProperty('leaveOutGenerationReferenceIds');

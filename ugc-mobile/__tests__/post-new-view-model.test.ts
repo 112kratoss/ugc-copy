@@ -775,6 +775,9 @@ describe('post new view model', () => {
       });
 
       expect([...getRemovedCreationInputIds(removedDraft)]).toEqual(['input-2', 'input-3']);
+      // "What people receive" counts the files the save will copy, the removed one left out.
+      expect(countCreationReferenceFiles(creation(), [])).toBe(2);
+      expect(countCreationReferenceFiles(creation(), [], getRemovedCreationInputIds(removedDraft))).toBe(1);
       expect(getCreationInputsInRecipe([], creation(), getRemovedCreationInputIds(removedDraft)).offered.map((input) => input.id))
         .toEqual(['input-1']);
 
@@ -784,10 +787,20 @@ describe('post new view model', () => {
       const update = buildUpdatePostPayload(true, removedDraft, creation());
       expect(update).toMatchObject({ leaveOutGenerationReferenceIds: ['input-2'], allowRemixes: false });
 
-      // With the files switched off, none is named, and "Allow remixes" still goes.
+      // With the files switched off, the removed one is still named (the review of phase 2: it turns
+      // the recipe's live hand-over off), and "Allow remixes" still goes.
       const off = { ...removedDraft, creationPackage: { ...removedDraft.creationPackage, attachGenerationReferences: false } };
-      expect(buildPublishGenerationPostPayload(creation(), off)).not.toHaveProperty('leaveOutGenerationReferenceIds');
-      expect(buildPublishGenerationPostPayload(creation(), off)).toHaveProperty('allowRemixes', false);
+      expect(buildPublishGenerationPostPayload(creation(), off)).toMatchObject({ leaveOutGenerationReferenceIds: ['input-2'], allowRemixes: false });
+      expect(buildPublishGenerationPostPayload(creation(), off)).not.toHaveProperty('includeGenerationReferences');
+      // No recipe names none.
+      const none = { ...removedDraft, resource: { ...removedDraft.resource, accessMode: 'none' as const } };
+      expect(buildPublishGenerationPostPayload(creation(), none)).not.toHaveProperty('leaveOutGenerationReferenceIds');
+      // A new post of a creation with nothing to share offers No recipe, so it sends no switch: the
+      // server would read one as a composer that offers none.
+      const bare = generation({ prompt: null, input_media: [] });
+      expect(buildPublishGenerationPostPayload(bare, { ...none, selectedGenerationId: bare.id })).not.toHaveProperty('allowRemixes');
+      // An edit always sends it.
+      expect(buildUpdatePostPayload(true, none, bare)).toHaveProperty('allowRemixes', false);
     });
 
     it('sends neither switch for a template’s result, which has no Remix', () => {

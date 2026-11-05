@@ -2597,6 +2597,7 @@ async function hydrateRecipes(
         storedAllowRemix: row.allow_remix,
         status: row.status,
         generationId: post?.generationId ?? null,
+        remixesAllowed: post?.remixesAllowed,
       });
       const normalizedResources = { ...(storedResourcesByBundleId.get(row.id) ?? normalizeResources(row)), allowRemix };
       const updatedAt = contentUpdatedAtMap.get(row.id) ?? row.updated_at;

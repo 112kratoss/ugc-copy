@@ -4109,6 +4109,19 @@ describe('NewPostClient', () => {
       expect(leaveWouldPrompt()).toBe(true);
     });
 
+    // The review of phase 2: the post's own "Allow remixes" is a change like any other field.
+    it('counts "Allow remixes" switched on an existing creation post as unsaved, and switched back as saved', () => {
+      render(<NewPostClient initialPost={{ ...createSavedPost(), generationId: 'gen-guarded', remixesAllowed: true }} />);
+      expect(leaveWouldPrompt()).toBe(false);
+
+      const remixes = screen.getByRole('checkbox', { name: /allow remixes/i });
+      expect(remixes).toBeChecked();
+      fireEvent.click(remixes);
+      expect(leaveWouldPrompt()).toBe(true);
+      fireEvent.click(remixes);
+      expect(leaveWouldPrompt()).toBe(false);
+    });
+
     it('does not count what a linked creation fills in as unsaved work', async () => {
       searchParamsState.value = new URLSearchParams({ generationId: 'gen-guard-1' });
       enqueueResponse({
@@ -5648,6 +5661,49 @@ describe('NewPostClient', () => {
         allowRemixes: false,
         resourceBundle: { accessMode: 'free' },
       });
+    });
+
+    // The review of phase 2: a creation with nothing to share still offers No recipe, so its publish
+    // sends no "Allow remixes", which the server reads as a composer that offers none.
+    it('offers No recipe for a creation with nothing to share, and then sends no switch', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ prompt: '', input_media: [] });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-recipe-bare',
+          showcasePath: '/showcase/post-recipe-bare',
+          resourceBundlePath: null,
+          visibility: 'public',
+          resourceBundleStatus: null,
+        }),
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+      expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+      expect(screen.queryByRole('checkbox', { name: /allow remixes/i })).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
+      expect(payload).toMatchObject({ generationId: 'gen-recipe-1', resourceBundle: { accessMode: 'none' } });
+      expect(payload).not.toHaveProperty('allowRemixes');
+    });
+
+    // The review of phase 2: an untitled remix of a paid recipe starts locked to Paid, and its title
+    // follows the paid rule (the prompt stays off the post) from the start.
+    it('suggests an untitled paid remix’s title as a paid recipe keeps it', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ title: null, remix_recipe_mode: 'paid' });
+
+      render(<NewPostClient />);
+      const title = screen.getByRole('textbox', { name: /^title/i });
+      await waitFor(() => expect(title).toHaveValue('Image recipe'));
+      expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked();
     });
 
     // A remix pays its original in full (owner, 2026-11-05): its post is held to the terms its run

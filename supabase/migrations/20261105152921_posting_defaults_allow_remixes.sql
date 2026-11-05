@@ -251,4 +251,218 @@ $$;
 REVOKE ALL ON FUNCTION public.marketplace_resource_bundle_quality_issue(text, text, text, text, text, text, jsonb, jsonb, boolean, integer, text, text, text, text, timestamptz, text, boolean, text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.marketplace_resource_bundle_quality_issue(text, text, text, text, text, text, jsonb, jsonb, boolean, integer, text, text, text, text, timestamptz, text, boolean, text, text) TO service_role;
 
+-- 4. A post whose creator turned "Allow remixes" off sells no Remix with its recipe (the review of
+--    phase 2): the marketplace's Remix filter (`has_remix`) and its search text no longer count
+--    one there. The two refreshes are 20261101072014's, but for the call of
+--    post_resource_bundle_kinds, which now reads the post's switch; both posts triggers watch it.
+--    Every post allows remixes when this runs, so no listing changes until a switch does.
+CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_search_documents(
+  p_bundle_ids uuid[] DEFAULT NULL
+)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = ''
+AS $function$
+  INSERT INTO public.marketplace_bundle_search_documents AS documents (bundle_id, search_text)
+  SELECT
+    bundles.id,
+    lower(concat_ws(
+      ' ',
+      CASE
+        WHEN lower(btrim(coalesce(bundles.title, ''))) IN ('', 'attached unlock') THEN 'Recipe'
+        ELSE btrim(bundles.title)
+      END,
+      nullif(bundles.summary, ''),
+      nullif(bundles.preview_text, ''),
+      nullif(profiles.username, ''),
+      coalesce(nullif(btrim(profiles.display_name), ''), nullif(btrim(profiles.username), ''), 'Creator'),
+      nullif(btrim(posts.title), ''),
+      nullif(btrim(public.recipe_post_public_body(posts.body, bundles.access_mode)), ''),
+      nullif(posts.source_tool, ''),
+      nullif(array_to_string(public.post_resource_bundle_kinds(
+        bundles.resource_items,
+        bundles.allow_remix AND coalesce(posts.remixes_allowed, true),
+        bundles.status,
+        CASE WHEN coalesce(posts.remixes_allowed, true) THEN posts.generation_id END
+      ), ' '), '')
+    ))
+  FROM public.post_resource_bundles AS bundles
+  LEFT JOIN public.posts AS posts ON posts.id = bundles.post_id
+  LEFT JOIN public.profiles AS profiles ON profiles.id = bundles.owner_user_id
+  WHERE p_bundle_ids IS NULL OR bundles.id = ANY (p_bundle_ids)
+  ON CONFLICT (bundle_id) DO UPDATE SET search_text = excluded.search_text
+  WHERE documents.search_text IS DISTINCT FROM excluded.search_text;
+$function$;
+
+REVOKE ALL ON FUNCTION public.refresh_marketplace_bundle_search_documents(uuid[])
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.refresh_marketplace_bundle_search_documents(uuid[])
+  TO service_role;
+
+CREATE OR REPLACE FUNCTION public.refresh_marketplace_bundle_listings(
+  p_bundle_ids uuid[] DEFAULT NULL
+)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+  INSERT INTO public.marketplace_bundle_listings AS listings (
+    bundle_id, listable, created_at, sales_count, price_usd_cents,
+    access_mode, tool_slug, has_prompt, has_workflow, has_files, has_notes, has_remix
+  )
+  SELECT
+    bundles.id,
+    (
+      posts.id IS NOT NULL
+      AND bundles.status = 'published'
+      AND posts.visibility = 'public'
+      AND posts.archived_at IS NULL
+      AND coalesce(posts.review_status, 'visible') = 'visible'
+      AND posts.is_nsfw = false
+      AND public.marketplace_resource_bundle_quality_issue(
+        bundles.title,
+        bundles.summary,
+        bundles.preview_text,
+        bundles.prompt_text,
+        bundles.notes_markdown,
+        bundles.workflow_share_url,
+        bundles.workflow_snapshot,
+        (
+          CASE
+            WHEN jsonb_typeof(coalesce(bundles.attachments, '[]'::jsonb)) = 'array' THEN coalesce(bundles.attachments, '[]'::jsonb)
+            ELSE '[]'::jsonb
+          END
+          || coalesce(
+            (
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'label',
+                  coalesce(
+                    nullif(btrim(item->>'title'), ''),
+                    nullif(btrim(item->>'description'), ''),
+                    CASE coalesce(item->>'type', '')
+                      WHEN 'prompt' THEN 'Prompt resource'
+                      WHEN 'workflow' THEN 'Workflow resource'
+                      WHEN 'reference_image' THEN 'Reference image'
+                      WHEN 'reference_video' THEN 'Reference video'
+                      WHEN 'reference_audio' THEN 'Reference audio'
+                      WHEN 'source_file' THEN 'Source file'
+                      WHEN 'preset' THEN 'Preset resource'
+                      WHEN 'settings' THEN 'Settings resource'
+                      WHEN 'note' THEN 'Note resource'
+                      WHEN 'external_link' THEN 'External resource'
+                      WHEN 'remix_access' THEN 'Remix access'
+                      WHEN 'remix_link' THEN 'Remix link'
+                      ELSE 'Resource item'
+                    END
+                  )
+                )
+              )
+              FROM jsonb_array_elements(coalesce(bundles.resource_items, '[]'::jsonb)) AS item
+            ),
+            '[]'::jsonb
+          )
+        ),
+        bundles.allow_remix,
+        bundles.price_usd_cents,
+        bundles.access_mode,
+        posts.title,
+        posts.body,
+        posts.visibility,
+        posts.archived_at,
+        posts.review_status,
+        (nullif(btrim(coalesce(posts.showcase_asset_path, '')), '') IS NOT NULL OR nullif(btrim(coalesce(posts.output_url, '')), '') IS NOT NULL),
+        profiles.username,
+        profiles.display_name
+      ) IS NULL
+    ),
+    bundles.created_at,
+    bundles.sales_count,
+    bundles.price_usd_cents,
+    bundles.access_mode,
+    coalesce(
+      nullif(posts.source_tool_slug, ''),
+      lower(regexp_replace(btrim(coalesce(posts.source_tool, '')), '[^a-z0-9]+', '-', 'g'))
+    ),
+    -- The five filter flags: the kinds the recipe's card shows.
+    'prompt' = ANY (resource.kinds),
+    'workflow' = ANY (resource.kinds),
+    'files' = ANY (resource.kinds),
+    'notes' = ANY (resource.kinds),
+    'remix' = ANY (resource.kinds)
+  FROM public.post_resource_bundles bundles
+  LEFT JOIN public.posts posts ON posts.id = bundles.post_id
+  LEFT JOIN public.profiles profiles ON profiles.id = bundles.owner_user_id
+  CROSS JOIN LATERAL public.post_resource_bundle_kinds(
+    bundles.resource_items,
+    bundles.allow_remix AND coalesce(posts.remixes_allowed, true),
+    bundles.status,
+    CASE WHEN coalesce(posts.remixes_allowed, true) THEN posts.generation_id END
+  ) AS resource(kinds)
+  WHERE p_bundle_ids IS NULL OR bundles.id = ANY (p_bundle_ids)
+  ON CONFLICT (bundle_id) DO UPDATE SET
+    listable = excluded.listable,
+    created_at = excluded.created_at,
+    sales_count = excluded.sales_count,
+    price_usd_cents = excluded.price_usd_cents,
+    access_mode = excluded.access_mode,
+    tool_slug = excluded.tool_slug,
+    has_prompt = excluded.has_prompt,
+    has_workflow = excluded.has_workflow,
+    has_files = excluded.has_files,
+    has_notes = excluded.has_notes,
+    has_remix = excluded.has_remix
+  -- Assigns, never accumulates, and skips no-op writes so a re-run is free.
+  WHERE listings.* IS DISTINCT FROM excluded.*;
+$function$;
+
+REVOKE ALL ON FUNCTION public.refresh_marketplace_bundle_listings(uuid[])
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.refresh_marketplace_bundle_listings(uuid[])
+  TO service_role;
+
+-- Every post column the search document reads (20261031100330), the switch now among them.
+CREATE OR REPLACE TRIGGER posts_refresh_marketplace_search
+  AFTER UPDATE ON public.posts
+  FOR EACH ROW
+  WHEN (
+    OLD.title IS DISTINCT FROM NEW.title
+    OR OLD.body IS DISTINCT FROM NEW.body
+    OR OLD.source_tool IS DISTINCT FROM NEW.source_tool
+    OR OLD.generation_id IS DISTINCT FROM NEW.generation_id
+    OR OLD.remixes_allowed IS DISTINCT FROM NEW.remixes_allowed
+  )
+  EXECUTE FUNCTION public.trg_refresh_marketplace_search_for_post();
+
+-- Every post column the listing reads (20261101072014), the switch now among them.
+CREATE OR REPLACE TRIGGER posts_refresh_marketplace_listing
+  AFTER UPDATE ON public.posts
+  FOR EACH ROW
+  WHEN (
+    OLD.visibility IS DISTINCT FROM NEW.visibility
+    OR OLD.archived_at IS DISTINCT FROM NEW.archived_at
+    OR OLD.review_status IS DISTINCT FROM NEW.review_status
+    OR OLD.title IS DISTINCT FROM NEW.title
+    OR OLD.body IS DISTINCT FROM NEW.body
+    OR OLD.showcase_asset_path IS DISTINCT FROM NEW.showcase_asset_path
+    OR OLD.output_url IS DISTINCT FROM NEW.output_url
+    OR OLD.source_tool_slug IS DISTINCT FROM NEW.source_tool_slug
+    OR OLD.source_tool IS DISTINCT FROM NEW.source_tool
+    OR OLD.is_nsfw IS DISTINCT FROM NEW.is_nsfw
+    OR OLD.generation_id IS DISTINCT FROM NEW.generation_id
+    OR OLD.remixes_allowed IS DISTINCT FROM NEW.remixes_allowed
+  )
+  EXECUTE FUNCTION public.trg_refresh_marketplace_listing_for_post();
+
+-- 5. A recipe titled 3 to 5 characters is listable from here on (3 above): re-project those listings,
+--    as a retitled post's recipe may have been held back by the old minimum. Only rows whose values
+--    change are written.
+SELECT public.refresh_marketplace_bundle_listings(ARRAY(
+  SELECT bundles.id
+  FROM public.post_resource_bundles AS bundles
+  WHERE length(btrim(coalesce(bundles.title, ''))) BETWEEN 3 AND 5
+));
+
 COMMIT;

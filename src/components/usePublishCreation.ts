@@ -123,14 +123,13 @@ function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
 
 /**
  * The recipe packed from what the creation saved: its prompt, its references and its remix, free or
- * at the starting price. `handsOverInputs` is the creation's inputs handed to a remix as they are
- * (`allowRemix`), which a recipe the creator took any file out of never does: a remix then restores
- * the copies the recipe holds, and nothing they removed.
+ * at the starting price. It hands none of the creation's inputs over as they are (`allowRemix`):
+ * the recipe holds copies of those it shares, a remix restores the copies, and a file the creator
+ * removes, now or on a later edit, stays out (owner, 2026-11-05).
  */
 function buildAutoResourceBundle(
   prefill: GenerationPaywallPrefill,
   accessMode: 'free' | 'paid',
-  handsOverInputs: boolean,
 ): PostResourceBundleInput {
   const kinds = getAutoUnlockKinds(prefill);
 
@@ -143,7 +142,7 @@ function buildAutoResourceBundle(
       promptText: prefill.promptText?.trim() || null,
       workflowShareUrl: null,
       attachments: [],
-      allowRemix: handsOverInputs,
+      allowRemix: false,
     },
   };
 }
@@ -385,19 +384,17 @@ export function usePublishCreation({
 
     let resourceBundle: PostResourceBundleInput = { accessMode: 'none' };
     if (recipeAccess !== 'none') {
-      if (!sharedPrefill || autoUnlockKinds.length === 0) {
+      // Remix is no item of a recipe: one with neither the prompt nor a file holds nothing.
+      if (!sharedPrefill || !autoUnlockKinds.some((kind) => kind !== 'remix')) {
         setFormError(removedInputs.length > 0
-          ? 'This recipe holds nothing now. Put a file back, or allow remixes.'
+          ? 'This recipe holds nothing now. Put a file back to share it.'
           : 'This creation has no saved prompt or references to make a recipe from yet.');
         return false;
       }
 
-      // The creation's inputs go to a remix as they are only where the creator removed none.
-      resourceBundle = buildAutoResourceBundle(
-        sharedPrefill,
-        recipeAccess,
-        Boolean(paywallPrefill?.allowRemix) && removedInputs.length === 0,
-      );
+      // No live input is handed over (owner, 2026-11-05): the recipe holds copies of the inputs it
+      // shares, and a remix restores those, so a file removed now or on a later edit stays out.
+      resourceBundle = buildAutoResourceBundle(sharedPrefill, recipeAccess);
     }
 
     isPublishingRef.current = true;
@@ -425,7 +422,7 @@ export function usePublishCreation({
         shareInputMediaForRemix: boolean;
         includeGenerationReferences?: boolean;
         leaveOutGenerationReferenceIds?: string[];
-        allowRemixes: boolean;
+        allowRemixes?: boolean;
         resourceBundle: PostResourceBundleInput;
       } = {
         generationId,
@@ -433,8 +430,10 @@ export function usePublishCreation({
         visibility: 'public',
         title: normalizeOptionalText(publishTitle),
         shareInputMediaForRemix: false,
-        // Sent every time: the server reads it as a form that offers no post without a recipe.
-        allowRemixes,
+        // Sent with a recipe, where the panel draws the switch: the server reads it as a form that
+        // offers no post without one. The media alone (nothing to share, or the details unread)
+        // leaves it out, and the post allows remixes.
+        ...(resourceBundle.accessMode !== 'none' ? { allowRemixes } : {}),
         resourceBundle,
       };
 

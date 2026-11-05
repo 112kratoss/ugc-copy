@@ -697,6 +697,7 @@ async function toOwnerPostListItem(
       storedAllowRemix: bundleRow.allow_remix,
       status: bundleRow.status,
       generationId: row.generation_id,
+      remixesAllowed: row.remixes_allowed,
     })
     ? [...storedResourceKinds, 'remix']
     : storedResourceKinds;
