@@ -15,8 +15,9 @@ import {
  * leaves out are the shared rule's (`ugc-mobile/lib/remix-credit`); this only
  * draws the segments it is given. Nothing for a post that is no remix.
  *
- * `compact` is a card's single line, cut short at its end; the post page and
- * the reel give it the room to wrap.
+ * `compact` is a card's: at most two lines, so a chain's "Original by" is not
+ * the part cut off (the app's cards do the same); the post page and the reel
+ * let it wrap freely.
  */
 export default function RemixCreditLine({
   credit,
@@ -41,7 +42,7 @@ export default function RemixCreditLine({
       )}
     >
       <Repeat2 className={clsx('shrink-0 text-zinc-500', compact ? 'mt-px h-3.5 w-3.5' : 'mt-0.5 h-3.5 w-3.5')} aria-hidden="true" />
-      <span className={clsx('min-w-0', compact && 'truncate')}>
+      <span className={clsx('min-w-0', compact && 'line-clamp-2')}>
         {segments.map((segment, index) => {
           if (segment.kind === 'post') {
             return (
