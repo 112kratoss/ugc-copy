@@ -296,6 +296,34 @@ export const IMAGE_MODELS = {
     resolutions: ['1K', '2K'] as const,
     outputFormats: ['jpg', 'png'] as const,
   },
+  'nano-banana-2.1': {
+    id: 'nano-banana-2.1' as const,
+    displayName: 'Nano Banana 2.1',
+    description: 'Newest Nano Banana: generation and multi-image edits up to 4K at a lower price',
+    badge: 'New',
+    badgeColor: 'from-blue-500 to-cyan-500',
+    accentColor: 'blue',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: true,
+    aspectRatios: ['auto', '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'] as const,
+    resolutions: ['1K', '2K', '4K'] as const,
+    outputFormats: ['jpg', 'png'] as const,
+  },
+  'flux-3-klein': {
+    id: 'flux-3-klein' as const,
+    displayName: 'FLUX.3 Klein',
+    description: 'Fast, low-cost FLUX generation and edits with up to ten references, up to 4K',
+    badge: 'Value',
+    badgeColor: 'from-sky-500 to-cyan-500',
+    accentColor: 'blue',
+    maxImages: 10,
+    supportsGoogleSearch: false,
+    supportsOutputFormat: false,
+    aspectRatios: ['1:1', '4:3', '3:4', '3:2', '2:3', '16:9', '9:16', '21:9', '9:21'] as const,
+    resolutions: ['1K', '2K', '4K'] as const,
+    outputFormats: ['jpg'] as const,
+  },
 } as const;
 
 export type ImageModelId = keyof typeof IMAGE_MODELS;
@@ -606,6 +634,45 @@ export const VIDEO_MODELS = {
     resolutions: ['360p', '540p', '720p', '1080p'] as const,
     modeOptions: [] as const,
   },
+  'pixverse-v6-max': {
+    id: 'pixverse-v6-max' as const,
+    displayName: 'PixVerse V6 Max',
+    description: 'Top PixVerse tier from text or a start frame, up to 1080p, with optional audio',
+    supportsMultiShot: false,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '21:9'] as const,
+    durations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] as const,
+    singleShotDurationRange: { min: 1, max: 15, default: 5 } as const,
+    resolutions: ['360p', '540p', '720p', '1080p'] as const,
+    modeOptions: [] as const,
+  },
+  'kling-4.0': {
+    id: 'kling-4.0' as const,
+    displayName: 'Kling 4.0',
+    description: 'Kling 4.0 with native audio from text, a frame pair, or up to ten reference pictures, up to 30 seconds',
+    supportsMultiShot: false,
+    supportsSound: false,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '21:9'] as const,
+    durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] as const,
+    singleShotDurationRange: { min: 3, max: 30, default: 5 } as const,
+    resolutions: ['720p', '1080p'] as const,
+    modeOptions: [] as const,
+  },
+  'vidu-q4': {
+    id: 'vidu-q4' as const,
+    displayName: 'Vidu Q4',
+    description: 'Vidu video from a start frame or up to fifteen reference pictures, with audio, up to 4K',
+    supportsMultiShot: false,
+    supportsSound: true,
+    supportsFixedLens: false,
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'] as const,
+    durations: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] as const,
+    singleShotDurationRange: { min: 3, max: 16, default: 5 } as const,
+    resolutions: ['540p', '720p', '1080p', '2k', '4k'] as const,
+    modeOptions: [] as const,
+  },
 } as const;
 
 export type VideoModelId = keyof typeof VIDEO_MODELS;
@@ -652,8 +719,10 @@ export function getVideoElementSupport(
   ) {
     return { enabled: true, maxElements: 7, maxNamed: 7, reason: null };
   }
-  // Wan 3.0's reference_image_urls takes 10 where Wan 2.7's reference mode stops at 5.
-  if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime') return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
+  // Wan 3.0's reference_image_urls takes 10 where Wan 2.7's reference mode stops at 5; Kling 4.0's image_urls takes 10.
+  if (modelId === 'wan-3.0' || modelId === 'wan-3.0-prime' || modelId === 'kling-4.0') return { enabled: true, maxElements: 10, maxNamed: 10, reason: null };
+  // Vidu Q4's reference_image_urls takes 1 to 15.
+  if (modelId === 'vidu-q4') return { enabled: true, maxElements: 15, maxNamed: 15, reason: null };
   if (modelId === 'kling-3.0-video') return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable image references are not available for Kling yet.' };
   return { enabled: false, maxElements: 0, maxNamed: 0, reason: 'Reusable references are not available for this model yet.' };
 }
@@ -773,4 +842,7 @@ export const ALWAYS_ON_AUDIO_VIDEO_MODELS: ReadonlySet<string> = new Set([
   'grok-imagine-video',
   'minimax-h3',
   'happyhorse-1.1',
+  // kling-4.0/reference-to-video: "If no reference video is provided, native audio is always
+  // generated", and the app sends no clip.
+  'kling-4.0',
 ]);

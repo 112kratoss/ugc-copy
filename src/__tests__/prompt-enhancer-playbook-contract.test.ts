@@ -83,6 +83,12 @@ describe('prompt enhancer playbook contract', () => {
       // body without `mode`, plus first_frame_url/last_frame_url (as Gemini Omni 1.1 Flash's
       // adds a frame pair); audio is still generated with every clip.
       'grok-imagine-video-1.5': 'grok-imagine-video',
+      // docs.kie.ai/market/google/nanobanana-2-1.md, read 2026-11-05: a line-by-line diff
+      // against Nano Banana 2's page differs only in the title, the model enum and examples.
+      'nano-banana-2.1': 'nano-banana-2',
+      // docs.kie.ai/market/pixverse/v6-max-{text,image}-to-video.md, read 2026-11-05: V6's
+      // text and image bodies without generate_multi_clip_switch, prompt 1–5,000.
+      'pixverse-v6-max': 'pixverse-v6',
     });
   });
 

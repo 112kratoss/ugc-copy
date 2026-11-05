@@ -216,8 +216,9 @@ function legacyFallbackAffordances(
       start: modelId !== 'gemini-omni-video',
       // kling-o3 takes a single start image and no end frame; it was missing from this
       // list, so the surface offered an end-frame slot the model cannot use.
-      end: !['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3'].includes(modelId),
-      startRequired: modelId === 'hailuo-2.3',
+      end: !['grok-imagine-video', 'kling-3.0-turbo', 'hailuo-2.3', 'happyhorse-1.1', 'gemini-omni-video', 'kling-o3', 'pixverse-v6-max', 'vidu-q4'].includes(modelId),
+      // Mirrors VIDEO_MODELS_NEEDING_AN_IMAGE in generation-model-catalog.
+      startRequired: modelId === 'hailuo-2.3' || modelId === 'vidu-q4',
     },
     combineFramesWithReferences: START_BESIDE_REFERENCES.has(modelId) && activeMode === 'elements',
     namedVideoElements: { enabled: isKling, max: isKling ? references.videos : 0 },

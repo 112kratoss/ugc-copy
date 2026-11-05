@@ -1,0 +1,1263 @@
+{
+  "manifestVersion": 1,
+  "mode": "clone-active",
+  "release": {
+    "schemaVersion": 2,
+    "revision": "kie-models-20261105",
+    "basedOnRevision": "kling-3-image-orientation-20261105",
+    "changeNote": "Five Kie models listed since 2026-10-07 (docs/model-api-references/{nano-banana-2-1,flux-3-klein,pixverse-v6-max,kling-4-0,vidu-q4}.md, read 2026-11-05): Nano Banana 2.1 (4/6/9 credits at 1K/2K/4K) and FLUX.3 Klein (1.6/2.5/6.5) images; PixVerse V6 Max (text or a start frame, 4.8-22.4 credits/s), Kling 4.0 (text, a frame pair or up to 10 reference pictures, 28.5/42.5 credits/s, audio always on) and Vidu Q4 (a start frame or 1-15 pictures, 7.2-62.4 credits/s, web only until the apps name ShengShu) videos. Ids confirmed live by zero-cost probes; one paid run per endpoint on 2026-11-05 charged exactly these prices.",
+    "createdBy": "catalog-operations"
+  },
+  "upgrade": {
+    "legacyDescriptorsToV2": true
+  },
+  "expectedModelIds": [
+    "flux-2-pro",
+    "gemini-omni-1.1-flash",
+    "gemini-omni-video",
+    "gpt-image-2",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+    "grok-imagine-image",
+    "grok-imagine-image-2",
+    "grok-imagine-video",
+    "grok-imagine-video-1.5",
+    "hailuo-2.3",
+    "happyhorse-1.1",
+    "ideogram-character",
+    "ideogram-v3",
+    "imagen-4",
+    "imagen-4-fast",
+    "imagen-4-ultra",
+    "kling-2.6",
+    "kling-3.0",
+    "kling-3.0-turbo",
+    "kling-3.0-video",
+    "kling-o3",
+    "minimax-h3",
+    "nano-banana-2",
+    "nano-banana-2-lite",
+    "nano-banana-pro",
+    "pixverse-v6",
+    "qwen-image-2.1",
+    "qwen3",
+    "qwen3-pro",
+    "seedance-1.5-pro",
+    "seedance-2",
+    "seedance-2-5",
+    "seedance-2-fast",
+    "seedance-2-mini",
+    "seedream-5-flash",
+    "seedream-5-lite",
+    "seedream-5-pro",
+    "veo-3.1",
+    "wan-2.7",
+    "wan-2.7-image",
+    "wan-2.7-image-pro",
+    "wan-3.0",
+    "wan-3.0-prime",
+    "z-image"
+  ],
+  "addsModelIds": [
+    "flux-3-klein",
+    "kling-4.0",
+    "nano-banana-2.1",
+    "pixverse-v6-max",
+    "vidu-q4"
+  ],
+  "defaults": {
+    "web": {
+      "image": "nano-banana-2",
+      "video": "seedance-2-mini",
+      "motion": "kling-2.6"
+    },
+    "mobile": {
+      "image": "nano-banana-2",
+      "video": "seedance-2-mini",
+      "motion": "kling-2.6"
+    }
+  },
+  "entries": [
+    {
+      "modelId": "nano-banana-2.1",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "nano-banana-2.1",
+        "kind": "image",
+        "displayName": "Nano Banana 2.1",
+        "description": "Newest Nano Banana: generation and multi-image edits up to 4K at a lower price",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 230,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "select",
+            "defaultValue": "auto",
+            "options": [
+              {
+                "value": "auto",
+                "label": "auto"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "1:4",
+                "label": "1:4"
+              },
+              {
+                "value": "1:8",
+                "label": "1:8"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "4:1",
+                "label": "4:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "4:5",
+                "label": "4:5"
+              },
+              {
+                "value": "5:4",
+                "label": "5:4"
+              },
+              {
+                "value": "8:1",
+                "label": "8:1"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              },
+              {
+                "value": "4K",
+                "label": "4K"
+              }
+            ]
+          },
+          {
+            "key": "outputFormat",
+            "label": "Output format",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "jpg",
+            "options": [
+              {
+                "value": "jpg",
+                "label": "jpg"
+              },
+              {
+                "value": "png",
+                "label": "png"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": true
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 10,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 10,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          },
+          "resolution": {
+            "field": "resolution"
+          },
+          "outputFormat": {
+            "field": "output_format"
+          }
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "image_input",
+            "cardinality": "many",
+            "source": "url"
+          }
+        }
+      },
+      "providerModelMap": {
+        "default": "nano-banana-2-1"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          }
+        ],
+        "table": {
+          "1K": 4,
+          "2K": 6,
+          "4K": 9
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "flux-3-klein",
+      "kind": "image",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "flux-3-klein",
+        "kind": "image",
+        "displayName": "FLUX.3 Klein",
+        "description": "Fast, low-cost FLUX generation and edits with up to ten references, up to 4K",
+        "badge": "Value",
+        "recommended": false,
+        "sortOrder": 240,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "select",
+            "defaultValue": "1:1",
+            "options": [
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              },
+              {
+                "value": "9:21",
+                "label": "9:21"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "1K",
+            "options": [
+              {
+                "value": "1K",
+                "label": "1K"
+              },
+              {
+                "value": "2K",
+                "label": "2K"
+              },
+              {
+                "value": "4K",
+                "label": "4K"
+              }
+            ]
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 10,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": false,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "references",
+            "label": "Reference images",
+            "default": true,
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 10,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "kie-task-v1",
+      "adapterConfig": {
+        "settings": {
+          "aspectRatio": {
+            "field": "aspect_ratio"
+          },
+          "resolution": {
+            "field": "resolution"
+          }
+        },
+        "constants": {
+          "output_format": "jpeg",
+          "enhance_prompt": true,
+          "nsfw_checker": true
+        },
+        "slots": {
+          "imageReferences": {
+            "field": "image_urls",
+            "cardinality": "many",
+            "source": "url"
+          }
+        },
+        "variantSelector": {
+          "type": "slot-presence",
+          "slot": "imageReferences",
+          "present": "reference",
+          "absent": "text"
+        }
+      },
+      "providerModelMap": {
+        "text": "flux-3/klein-text-to-image",
+        "reference": "flux-3/klein-edit-image"
+      },
+      "pricingStrategy": "lookup",
+      "pricingConfig": {
+        "dimensions": [
+          {
+            "source": "setting",
+            "key": "resolution",
+            "defaultValue": "1K"
+          }
+        ],
+        "table": {
+          "1K": 1.6,
+          "2K": 2.5,
+          "4K": 6.5
+        }
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "normalizedDefaults": {
+          "outputFormat": "jpg",
+          "googleSearch": false
+        },
+        "rules": []
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "pixverse-v6-max",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "pixverse-v6-max",
+        "kind": "video",
+        "displayName": "PixVerse V6 Max",
+        "description": "Top PixVerse tier from text or a start frame, up to 1080p, with optional audio",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 200,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              },
+              {
+                "value": "3:2",
+                "label": "3:2"
+              },
+              {
+                "value": "2:3",
+                "label": "2:3"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "360p",
+            "options": [
+              {
+                "value": "360p",
+                "label": "360p"
+              },
+              {
+                "value": "540p",
+                "label": "540p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 1,
+            "max": 15,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": null,
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "pixverse-v6-max/text-to-video",
+        "text": "pixverse-v6-max/text-to-video",
+        "image": "pixverse-v6-max/image-to-video"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "durationSettingKey": "duration",
+        "rate": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "360p"
+              },
+              {
+                "source": "setting",
+                "key": "sound",
+                "defaultValue": false
+              }
+            ],
+            "table": {
+              "360p": {
+                "false": 4.8,
+                "true": 7.2
+              },
+              "540p": {
+                "false": 7.2,
+                "true": 8.8
+              },
+              "720p": {
+                "false": 8.8,
+                "true": 12
+              },
+              "1080p": {
+                "false": 17.6,
+                "true": 22.4
+              }
+            }
+          }
+        },
+        "rounding": "ceil"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 0,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "message": "Reusable references are not available for this model yet."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "kling-4.0",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "kling-4.0",
+        "kind": "video",
+        "displayName": "Kling 4.0",
+        "description": "Kling 4.0 with native audio from text, a frame pair, or up to ten reference pictures, up to 30 seconds",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 210,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "21:9",
+                "label": "21:9"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "720p",
+            "options": [
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 3,
+            "max": 30,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": false,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 10,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": true,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": true
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 0,
+                "max": 1
+              },
+              {
+                "key": "endFrame",
+                "kind": "image",
+                "role": "endFrame",
+                "label": "End frame",
+                "min": 0,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 0,
+                "max": 10,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": true,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "kling-4.0/reference-to-video",
+        "text": "kling-4.0/reference-to-video",
+        "image": "kling-4.0/keyframe-to-video",
+        "reference": "kling-4.0/reference-to-video"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "durationSettingKey": "duration",
+        "rate": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "720p"
+              }
+            ],
+            "table": {
+              "720p": 28.5,
+              "1080p": 42.5
+            }
+          }
+        },
+        "rounding": "ceil"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 10,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "startFrame",
+            "min": 1,
+            "conditions": [
+              {
+                "source": "inputCount",
+                "key": "endFrame",
+                "operator": "greaterThan",
+                "value": 0
+              }
+            ],
+            "field": "startFrame",
+            "message": "Add a start frame to use an end frame with this model."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    },
+    {
+      "modelId": "vidu-q4",
+      "kind": "video",
+      "publicDescriptor": {
+        "schemaVersion": 2,
+        "id": "vidu-q4",
+        "kind": "video",
+        "displayName": "Vidu Q4",
+        "description": "Vidu video from a start frame or up to fifteen reference pictures, with audio, up to 4K",
+        "badge": "New",
+        "recommended": false,
+        "sortOrder": 220,
+        "minClientSchemaVersion": 1,
+        "controls": [
+          {
+            "key": "aspectRatio",
+            "label": "Aspect ratio",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "16:9",
+            "options": [
+              {
+                "value": "16:9",
+                "label": "16:9"
+              },
+              {
+                "value": "9:16",
+                "label": "9:16"
+              },
+              {
+                "value": "1:1",
+                "label": "1:1"
+              },
+              {
+                "value": "4:3",
+                "label": "4:3"
+              },
+              {
+                "value": "3:4",
+                "label": "3:4"
+              }
+            ]
+          },
+          {
+            "key": "resolution",
+            "label": "Resolution",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "540p",
+            "options": [
+              {
+                "value": "540p",
+                "label": "540p"
+              },
+              {
+                "value": "720p",
+                "label": "720p"
+              },
+              {
+                "value": "1080p",
+                "label": "1080p"
+              },
+              {
+                "value": "2k",
+                "label": "2k"
+              },
+              {
+                "value": "4k",
+                "label": "4k"
+              }
+            ]
+          },
+          {
+            "key": "duration",
+            "label": "Duration",
+            "type": "integer",
+            "presentation": "stepper",
+            "defaultValue": 5,
+            "min": 3,
+            "max": 16,
+            "step": 1,
+            "unit": "seconds"
+          },
+          {
+            "key": "sound",
+            "label": "Sound",
+            "type": "boolean",
+            "presentation": "toggle",
+            "defaultValue": false
+          },
+          {
+            "key": "referenceMode",
+            "label": "Input mode",
+            "type": "choice",
+            "presentation": "chips",
+            "defaultValue": "frames",
+            "options": [
+              {
+                "value": "frames",
+                "label": "Frames"
+              },
+              {
+                "value": "elements",
+                "label": "References"
+              }
+            ],
+            "minClientSchemaVersion": 2
+          }
+        ],
+        "capabilities": {
+          "multiShot": false,
+          "sound": true,
+          "fixedLens": false,
+          "googleSearch": false,
+          "outputFormat": false
+        },
+        "inputs": {
+          "imageReferences": {
+            "max": 15,
+            "supportsNaming": true
+          },
+          "videoReferences": null,
+          "audioReferences": null,
+          "preparedAudioReferences": null,
+          "characterReferences": null,
+          "startFrame": true,
+          "endFrame": false,
+          "combineFramesWithReferences": false
+        },
+        "availability": {
+          "web": true,
+          "mobile": false
+        },
+        "inputModes": [
+          {
+            "key": "frames",
+            "label": "Frames",
+            "default": true,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ],
+            "slots": [
+              {
+                "key": "startFrame",
+                "kind": "image",
+                "role": "startFrame",
+                "label": "Start frame",
+                "min": 1,
+                "max": 1
+              }
+            ]
+          },
+          {
+            "key": "references",
+            "label": "Reusable references",
+            "default": false,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ],
+            "slots": [
+              {
+                "key": "imageReferences",
+                "kind": "image",
+                "role": "reference",
+                "label": "Reference images",
+                "min": 1,
+                "max": 15,
+                "supportsNaming": true
+              }
+            ]
+          }
+        ],
+        "inputConstraints": []
+      },
+      "webEnabled": true,
+      "mobileEnabled": false,
+      "adapterKey": "video-v1",
+      "adapterConfig": {},
+      "providerModelMap": {
+        "default": "vidu-q4/image-to-video",
+        "image": "vidu-q4/image-to-video",
+        "reference": "vidu-q4/reference-to-video"
+      },
+      "pricingStrategy": "per-second",
+      "pricingConfig": {
+        "durationSettingKey": "duration",
+        "rate": {
+          "strategy": "lookup",
+          "config": {
+            "dimensions": [
+              {
+                "source": "setting",
+                "key": "resolution",
+                "defaultValue": "540p"
+              }
+            ],
+            "table": {
+              "540p": 7.2,
+              "720p": 15.2,
+              "1080p": 19.2,
+              "2k": 30.4,
+              "4k": 62.4
+            }
+          }
+        },
+        "rounding": "ceil"
+      },
+      "validationStrategy": "descriptor-rules-v1",
+      "validationConfig": {
+        "passthroughSettingKeys": [
+          "referenceMode"
+        ],
+        "normalizedDefaults": {
+          "mode": "",
+          "resolution": "",
+          "sound": false,
+          "fixedLens": false,
+          "referenceMode": "frames"
+        },
+        "rules": [
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 2,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "frames"
+              }
+            ]
+          },
+          {
+            "type": "max-slot-count",
+            "slotKey": "images",
+            "max": 15,
+            "conditions": [
+              {
+                "source": "setting",
+                "key": "referenceMode",
+                "operator": "equals",
+                "value": "elements"
+              }
+            ]
+          },
+          {
+            "type": "min-slot-count",
+            "slotKey": "images",
+            "min": 1,
+            "message": "Vidu Q4 needs a start frame or at least one reference picture."
+          }
+        ]
+      },
+      "verificationConfig": {
+        "mode": "manual",
+        "provider": "kie"
+      }
+    }
+  ]
+}

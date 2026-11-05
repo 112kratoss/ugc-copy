@@ -63,6 +63,7 @@ import {
   type ReferenceMediaDescriptor,
 } from '@/lib/generation-input-media';
 import { importSharedGenerationInputMedia, resolveRemixResultMedia } from '@/lib/generation-input-media-import';
+import { kling4ProviderPrompt, kling4UndeclaredMentionRefusal } from '@/lib/kling-4-prompt';
 import {
   createRecipeCopyReads,
   reuseRecipeFile,
@@ -1713,6 +1714,16 @@ export function getKieImageModelId(model: ImageModelId, referenceCount: number):
     return referenceCount > 0 ? 'qwen2-1/image-to-image' : 'qwen2-1/text-to-image';
   }
 
+  // Verified 2026-11-05 against docs.kie.ai/market/google/nanobanana-2-1.md: the provider dashes
+  // the version the app id dots.
+  if (model === 'nano-banana-2.1') return 'nano-banana-2-1';
+
+  // Verified 2026-11-05 against docs.kie.ai/market/flux3/klein-*.md: `flux-3/`, though the docs
+  // path says `flux3/`.
+  if (model === 'flux-3-klein') {
+    return referenceCount > 0 ? 'flux-3/klein-edit-image' : 'flux-3/klein-text-to-image';
+  }
+
   // Everything else sends the app id unchanged, which is correct only because
   // those ids are byte-identical to the provider's (nano-banana-2,
   // nano-banana-2-lite, nano-banana-pro, z-image). Adding a model whose
@@ -2416,6 +2427,21 @@ export async function startImageGeneration(params: {
       if (resolvedImageUrls.length > 0) {
         input.input_urls = resolvedImageUrls;
       }
+    } else if (model === 'flux-3-klein') {
+      // docs/model-api-references/flux-3-klein.md: jpeg rather than the png default, Kie's
+      // own prompt rewrite (its default) said out loud, and the content checker on.
+      input = {
+        prompt: compiledPrompt,
+        aspect_ratio: aspectRatio,
+        resolution,
+        output_format: 'jpeg',
+        enhance_prompt: true,
+        nsfw_checker: true,
+      };
+
+      if (resolvedImageUrls.length > 0) {
+        input.image_urls = resolvedImageUrls;
+      }
     } else if (model === 'grok-imagine-image-2') {
       // Text-to-image only: the provider's edit endpoint keys off a prior task id,
       // so references never reach this model.
@@ -3015,6 +3041,12 @@ export async function startVideoGeneration(params: {
     throw new GenerationServiceError('Hailuo 2.3 requires a start image.', 400);
   }
 
+  // vidu-q4 has no text-only endpoint: image-to-video requires its start frame and
+  // reference-to-video at least one picture (docs/model-api-references/vidu-q4.md).
+  if (model === 'vidu-q4' && frameImageUrls.length === 0 && totalReferenceImageCount === 0) {
+    throw new GenerationServiceError('Vidu Q4 needs a start frame or at least one reference picture.', 400);
+  }
+
   // google/gemini-omni-flash-1-1: one video_list item, "occupying two image slots" of
   // seven; and both image_urls and video_list are "mutually exclusive with the
   // first-frame image".
@@ -3099,12 +3131,37 @@ export async function startVideoGeneration(params: {
   // leave the run's own prompt empty in multi-shot mode, so the first shot's prompt,
   // as the shots are sent, stands in for it.
   const klingO3Prompt = compiledPrompt || (isMultiShot ? normalizedMultiPrompts[0]?.prompt ?? '' : '');
+  // Kling 4.0 reads its pictures by place, `@image_1` …, not by the legend the other models are
+  // sent, and refuses a request whose prompt has an @ naming nothing it declares. So it is sent
+  // the typed prompt with each picture's @handle as the name of its place, and a mention that
+  // would name nothing is refused here, before anything is held (kling-4-prompt.ts). The handles
+  // are those of the pictures the provider is sent, in order; a run of frames or text sends none
+  // and can name nothing.
+  const kling4PictureHandles = model === 'kling-4.0' && providerReferenceImageUrls.length > 0
+    ? normalizedReferences.length > 0
+      ? normalizedReferences.map((reference) => reference.handle)
+      : resolvedReferenceImageUrls.length > 0
+        ? providerReferenceImageUrls.map(() => null)
+        : normalizedElements.map((element) => element.handle)
+    : [];
+  const kling4Prompt = model === 'kling-4.0'
+    ? kling4ProviderPrompt(trimmedPrompt, kling4PictureHandles)
+    : null;
+  if (kling4Prompt && kling4Prompt.undeclaredMentions.length > 0) {
+    throw new GenerationServiceError(
+      kling4UndeclaredMentionRefusal(kling4Prompt.undeclaredMentions, kling4PictureHandles.length),
+      400,
+      PROVIDER_INPUT_REFUSED,
+    );
+  }
   // What the provider is sent, held to its limits for the model before anything is
   // held. Kling 3.0's multi-shot body carries its shots and no prompt of its own.
   assertProviderPromptAccepted(model, {
     prompt: model === 'kling-o3'
       ? klingO3Prompt
-      : (model === 'kling-3.0-video' && isMultiShot ? null : compiledPrompt),
+      : kling4Prompt
+        ? kling4Prompt.prompt
+        : (model === 'kling-3.0-video' && isMultiShot ? null : compiledPrompt),
     typedPrompt: trimmedPrompt || undefined,
     shots: isMultiShot ? normalizedMultiPrompts.map((shot) => shot.prompt) : [],
     hasReferenceImages: totalReferenceImageCount > 0,
@@ -3288,6 +3345,31 @@ export async function startVideoGeneration(params: {
         }));
       }
 
+      body = { model: providerModelId, input };
+    } else if (model === 'kling-4.0') {
+      // docs/model-api-references/kling-4-0.md: a frame pair goes to keyframe-to-video as
+      // first_frame_url and last_frame_url, which take the run's shape from the first frame;
+      // text and reference pictures go to reference-to-video, which "behaves as plain
+      // text-to-video" with no materials. Both type duration as an integer, and neither takes a
+      // sound field: with no clip, audio is always generated.
+      const usesFrames = providerReferenceImageUrls.length === 0 && frameImageUrls.length > 0;
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        usesFrames ? 'image' : (providerReferenceImageUrls.length > 0 ? 'reference' : 'text'),
+        usesFrames ? 'kling-4.0/keyframe-to-video' : 'kling-4.0/reference-to-video',
+      );
+      const input: Record<string, unknown> = {
+        prompt: kling4Prompt?.prompt ?? trimmedPrompt,
+        duration,
+        resolution,
+      };
+      if (usesFrames) {
+        input.first_frame_url = frameImageUrls[0];
+        if (frameImageUrls[1]) input.last_frame_url = frameImageUrls[1];
+      } else {
+        input.aspect_ratio = aspectRatio;
+        if (providerReferenceImageUrls.length > 0) input.image_urls = providerReferenceImageUrls;
+      }
       body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'minimax') {
       const usesReferences = providerReferenceImageUrls.length > 0
@@ -3508,13 +3590,25 @@ export async function startVideoGeneration(params: {
           : frameImageUrls.length === 1
             ? 'image'
             : 'text';
-      const pixverseProviderIds = {
-        reference: 'pixverse-v6/reference-to-video',
-        transition: 'pixverse-v6/transition',
-        image: 'pixverse-v6/image-to-video',
-        text: 'pixverse-v6/text-to-video',
-      } as const;
-      providerModelId = resolveProviderModelId(runtimeConfig, pixverseVariant, pixverseProviderIds[pixverseVariant]);
+      // V6 Max has the text and image-to-video endpoints only
+      // (docs/model-api-references/pixverse-v6-max.md); the checks above refuse its frame pair
+      // and its pictures, so its other two shapes never reach here.
+      const pixverseProviderIds: Partial<Record<typeof pixverseVariant, string>> = model === 'pixverse-v6-max'
+        ? {
+            image: 'pixverse-v6-max/image-to-video',
+            text: 'pixverse-v6-max/text-to-video',
+          }
+        : {
+            reference: 'pixverse-v6/reference-to-video',
+            transition: 'pixverse-v6/transition',
+            image: 'pixverse-v6/image-to-video',
+            text: 'pixverse-v6/text-to-video',
+          };
+      const pixverseProviderId = pixverseProviderIds[pixverseVariant];
+      if (!pixverseProviderId) {
+        throw new GenerationServiceError(`${selectedModel.displayName} takes text or one start frame.`, 400);
+      }
+      providerModelId = resolveProviderModelId(runtimeConfig, pixverseVariant, pixverseProviderId);
       const input: Record<string, unknown> = {
         prompt: compiledPrompt,
         quality: resolution,
@@ -3540,6 +3634,30 @@ export async function startVideoGeneration(params: {
         input.image_urls = [frameImageUrls[0]];
       } else {
         input.aspect_ratio = aspectRatio;
+      }
+      body = { model: providerModelId, input };
+    } else if (selectedModel.provider === 'vidu') {
+      // docs/model-api-references/vidu-q4.md: a start frame goes to image-to-video as
+      // `image_url`, whose shape the video takes; pictures go to reference-to-video as
+      // `reference_image_urls`, with the ratio. `audio` is the sound toggle, whose default on
+      // Kie's side is on. A run with neither is refused above.
+      const usesReferences = providerReferenceImageUrls.length > 0;
+      providerModelId = resolveProviderModelId(
+        runtimeConfig,
+        usesReferences ? 'reference' : 'image',
+        usesReferences ? 'vidu-q4/reference-to-video' : 'vidu-q4/image-to-video',
+      );
+      const input: Record<string, unknown> = {
+        prompt: compiledPrompt,
+        duration,
+        resolution,
+        audio: soundEnabled,
+      };
+      if (usesReferences) {
+        input.reference_image_urls = providerReferenceImageUrls;
+        input.aspect_ratio = aspectRatio;
+      } else {
+        input.image_url = frameImageUrls[0];
       }
       body = { model: providerModelId, input };
     } else if (selectedModel.provider === 'happyhorse') {

@@ -1903,8 +1903,9 @@ function VideoCreator({
     // The mode control's own name from the model's descriptor ("Grok mode"), as the app shows it.
     const modeControlLabel = catalogDescriptor?.controls.find((control) => control.key === 'mode')?.label
         ?? (selectedModel === 'veo-3.1' ? 'Model variant' : 'Quality mode');
-    // Hailuo 2.3 animates a start image and has no run without one (handleGenerate says so).
-    const startFrameRequired = selectedModel === 'hailuo-2.3';
+    // Hailuo 2.3 animates a start image and Vidu Q4 has no run from text alone: their
+    // descriptors publish the start frame with a minimum of one (handleGenerate says so).
+    const startFrameRequired = affordances.frames.startRequired;
     // The settings chip, read as the app's ("720P · 16:9 · 5s").
     const currentModeLabel = videoModel.modeOptions.find((option) => option.value === currentMode)?.label ?? currentMode;
     const settingsSummary = videoSettingsSummary({
@@ -4893,8 +4894,11 @@ function VideoCreator({
             return;
         }
 
-        if (selectedModel === 'hailuo-2.3' && !startImageFile && !startImageUrl) {
-            setError('Hailuo 2.3 needs a start image to animate.');
+        if (startFrameRequired && activeReferenceMode === 'frames' && !startImageFile && !startImageUrl) {
+            // A model that also takes reference pictures (Vidu Q4) can start from those instead.
+            setError(affordances.elements.enabled
+                ? `${videoModel.displayName} needs a start frame or a reference picture.`
+                : `${videoModel.displayName} needs a start image to animate.`);
             return;
         }
 
@@ -5468,7 +5472,10 @@ function VideoCreator({
         : klingSubjectsActive
             ? 'Write a prompt that names your subjects, then Generate.'
             : inputView.side === 'references'
-                ? 'Write a prompt, add references if you like, then Generate.'
+                // A model with no run from text alone (Vidu Q4) needs a picture on this side.
+                ? startFrameRequired && runElements.length === 0
+                    ? 'Add a reference picture and write a prompt, then Generate.'
+                    : 'Write a prompt, add references if you like, then Generate.'
                 : startFrameRequired
                     ? startImageUrl || startImageFile
                         ? 'Write a prompt, then Generate.'
