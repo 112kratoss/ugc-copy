@@ -14,7 +14,7 @@ import { createMetadata, siteConfig } from '@/lib/seo';
  */
 export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
-  absoluteTitle: `${siteConfig.name}: Create, share and earn with AI video and images`,
+  absoluteTitle: `${siteConfig.name}: Create, share and earn with AI video & images`,
   description:
     'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with Magic Booklet.',
   path: '/',
