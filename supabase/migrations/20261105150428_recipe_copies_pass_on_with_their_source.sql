@@ -56,7 +56,9 @@
 --    original creation still withholds the files. A run whose maker holds the
 --    recipe is a paid-recipe remix while that recipe is paid, an earlier free
 --    claim included (owner, 2026-11-06: "B's recipe must be paid"); a remix by
---    someone who never held it is unchanged.
+--    someone who never held it is unchanged. remix_source_held_paid answers the
+--    same for the run start, which refuses a holder's refused remix (409) rather
+--    than start it unlinked and free (src/lib/source-generation.ts).
 
 BEGIN;
 SET LOCAL lock_timeout = '5s';
@@ -375,6 +377,37 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.remix_terms_for(uuid, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.remix_terms_for(uuid, uuid) TO service_role;
+
+-- Whether the caller, or a guest linked to them, holds the recipe of the source's post on paid terms:
+-- they paid for it, or they hold it (a free claim included) while it, or the post's live recipe, is
+-- paid. The run start refuses such a caller's refused remix rather than start it unlinked and free.
+CREATE OR REPLACE FUNCTION public.remix_source_held_paid(p_user_id uuid, p_source_generation_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT public.remix_source_bought_paid(p_user_id, p_source_generation_id)
+    OR EXISTS (
+      SELECT 1
+      FROM public.posts AS p
+      JOIN public.post_resource_bundles AS b ON b.post_id = p.id
+      JOIN public.post_resource_bundle_purchases AS purchase ON purchase.bundle_id = b.id
+      WHERE p.generation_id = p_source_generation_id
+        AND purchase.buyer_user_id IN (SELECT public.linked_account_ids(p_user_id))
+        AND purchase.moderation_retracted_at IS NULL
+        AND (
+          b.access_mode = 'paid'
+          OR EXISTS (
+            SELECT 1
+            FROM public.post_resource_bundles AS live
+            WHERE live.post_id = p.id
+              AND live.retired_at IS NULL
+              AND live.status = 'published'
+              AND live.access_mode = 'paid'
+          )
+        )
+    );
+$$;
+REVOKE ALL ON FUNCTION public.remix_source_held_paid(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.remix_source_held_paid(uuid, uuid) TO service_role;
 
 REVOKE ALL ON FUNCTION public.recipe_copy_source_withheld_at(text, integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.recipe_copy_withheld_at(text, integer) FROM PUBLIC, anon, authenticated;
