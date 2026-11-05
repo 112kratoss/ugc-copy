@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(36);
+select plan(40);
 
 insert into auth.users(id, email, aud, role, created_at, is_anonymous, raw_app_meta_data, raw_user_meta_data)
 values
@@ -165,6 +165,26 @@ select ok(not pg_temp.readable('ad120003-1000-4000-8000-000000000003', 'b_own'),
 select ok(not pg_temp.readable('ad120004-1000-4000-8000-000000000004', 'c'), 'and C''s copy of B''s file from D');
 select ok(pg_temp.readable('ad120002-1000-4000-8000-000000000002', 'b'), 'B still opens their own passed-on copy while A''s file is theirs');
 update public.generations set archived_at = null where id = 'ad120010-1000-4000-8000-00000000000b';
+
+-- ─── B's account is deleted ─────────────────────────────────────────────────
+
+-- The record keeps the copy with no holder (ON DELETE SET NULL), as an erasure leaves it.
+update public.recipe_copy_sources set holder_user_id = null
+where copy_path = (select path from paths where name = 'b');
+select ok(pg_temp.readable('ad120003-1000-4000-8000-000000000003', 'b'), 'with B''s account gone, C keeps the copy C bought');
+select ok(pg_temp.readable('ad120004-1000-4000-8000-000000000004', 'c'), 'and D keeps C''s');
+update public.generations set moderation_removed_at = now() where id = 'ad120010-1000-4000-8000-00000000000a';
+select ok(not pg_temp.readable('ad120004-1000-4000-8000-000000000004', 'c'), 'an operator''s removal of A''s creation still reaches the end of the chain');
+update public.generations set moderation_removed_at = null where id = 'ad120010-1000-4000-8000-00000000000a';
+select ok(
+  exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.recipe_copy_sources'::regclass and contype = 'f' and confdeltype = 'n'
+  ),
+  'deleting a holder''s account keeps the record, with no holder'
+);
+update public.recipe_copy_sources set holder_user_id = 'ad120002-1000-4000-8000-000000000002'
+where copy_path = (select path from paths where name = 'b');
 
 -- ─── A chain that loops closes ──────────────────────────────────────────────
 

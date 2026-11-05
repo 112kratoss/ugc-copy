@@ -972,6 +972,11 @@ export async function planGenerationReferenceCopies(params: {
   const passOn = anyRecipeFile
     ? await planRecipePassOn({ ...params, rows, sourceOwnerIds })
     : { folder: null, sources: new Map<string, string>() };
+  // Unread, which of the run's recipe files go on is not known: the save is refused for a retry, as
+  // when the inputs cannot be read, rather than leave out files the composer counted (phase 1b's review).
+  if (!passOn) {
+    return { ok: false };
+  }
   const heldItems = params.heldItems ?? [];
   const heldByPath = new Map(heldItems.flatMap((item) => (item.storagePath ? [[item.storagePath, item] as const] : [])));
   const heldIds = new Set(heldItems.flatMap((item) => (item.id ? [item.id] : [])));
@@ -1029,7 +1034,7 @@ export async function planGenerationReferenceCopies(params: {
 /**
  * Which of a creation's recipe-file inputs its recipe passes on, by row id, with the recipe file each
  * stands for: those in the folder of the recipe the run remixed whose holder may still read them now.
- * A read that fails passes none on (logged): the inputs stay out, as every recipe file did before.
+ * Null when a read fails (logged): nothing is planned then.
  */
 async function planRecipePassOn(params: {
   supabase: SupabaseClient;
@@ -1040,7 +1045,7 @@ async function planRecipePassOn(params: {
     loadRecipePassOnFolder?: typeof loadRecipePassOnFolder;
     loadReadableRecipeFiles?: typeof loadReadableRecipeFiles;
   };
-}): Promise<{ folder: string | null; sources: Map<string, string> }> {
+}): Promise<{ folder: string | null; sources: Map<string, string> } | null> {
   const none = { folder: null, sources: new Map<string, string>() };
   try {
     const folder = await (params.dependencies?.loadRecipePassOnFolder ?? loadRecipePassOnFolder)(params.supabase, params.generationId);
@@ -1064,7 +1069,7 @@ async function planRecipePassOn(params: {
     return { folder, sources };
   } catch (error) {
     logBackendError('post_resource_recipe_pass_on_read_failed', { error });
-    return none;
+    return null;
   }
 }
 

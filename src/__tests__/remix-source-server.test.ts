@@ -687,6 +687,54 @@ describe('input slots for a remix given none of the run’s inputs', () => {
       expect(JSON.stringify(bundle)).not.toMatch(/generation_inputs\/creator-1\/gen-1\/02|seller-9|asset-bought/);
     });
 
+    // Phase 1b's review: the creator's own asset of a passed-on file was prepared from their kept file,
+    // theirs alone; handed over, the remix's Generate was refused. It prepares its own from the copy.
+    it('hands a remix no asset of the creator’s for a passed-on file', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, recipeEntitled: true });
+      const kept = { ...BOUGHT, url: null, metadata: { ...BOUGHT.metadata, seedanceAsset: { assetId: 'asset-kept-bought', assetType: 'Image', status: 'active' } } };
+      mocks.generation = {
+        ...mocks.generation,
+        workflow_settings: {
+          ...(mocks.generation.workflow_settings as Record<string, unknown>),
+          seedanceAssets: { images: [
+            { assetId: 'asset-product', assetType: 'Image', status: 'active', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000000-product.png?token=prep' },
+            { assetId: 'asset-kept-bought', assetType: 'Image', status: 'active', sourceUrl: kept.storagePath },
+          ] },
+        },
+      };
+      mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([signed(PRODUCT)]);
+      mocks.recipeFiles = [kept];
+      const COPY = 'post_resource_files/creator-1/generation-references/gen-1/02-reference-image-row-bought.png';
+      mocks.loadGenerationRecipeReferenceCopies.mockResolvedValue(new Map([['row-bought', { storagePath: COPY, url: SIGNED(COPY) }]]));
+
+      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+      expect(bundle.inputs.image?.elements?.map((element) => element.id)).toEqual(['row-product', 'row-bought']);
+      expect(JSON.stringify(bundle.workflowSettings.seedanceAssets ?? null)).not.toContain('asset-kept-bought');
+    });
+
+    // Phase 1b's review: a creator who shares their run's inputs and sells its recipe; a buyer of the
+    // recipe gets the passed-on file from its copy, where the shared inputs alone would give a slot.
+    it('gives a buyer of a recipe whose creator shares the inputs a passed-on file from the recipe’s copy', async () => {
+      mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, includeSharedInputMedia: true });
+      const COPY = 'post_resource_files/creator-1/generation-references/gen-1/02-reference-image-row-bought.png';
+      mocks.loadGenerationRecipeReferenceCopies.mockResolvedValue(new Map([['row-bought', { storagePath: COPY, url: SIGNED(COPY) }]]));
+
+      const bundle = await loadRemixSourceBundle(request('post-verified'), 'gen-1', { postId: 'post-verified' });
+
+      expect(mocks.loadGenerationRecipeReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+        recipe: BOUGHT_RECIPE,
+        inputRowIds: ['row-bought', 'row-imported'],
+      }));
+      expect(bundle.inputs.image?.elements?.map((element) => [element.id, element.storagePath ?? null])).toEqual([
+        ['row-product', expect.anything()],
+        ['row-backdrop', expect.anything()],
+        ['row-bought', COPY],
+      ]);
+      // The import with no copy in the recipe keeps its slot.
+      expect(bundle.inputSlots).toEqual([{ id: 'slot-1', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 1' }]);
+    });
+
     it('fails a remix whose passed-on copies cannot be read, rather than giving the file a slot', async () => {
       mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, recipeEntitled: true });
       mocks.loadGenerationRecipeRemixInputMediaByPostId.mockResolvedValue([signed(PRODUCT)]);

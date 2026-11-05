@@ -3230,12 +3230,15 @@ describe('generation references packaged for a publish', () => {
       bought('ref-own-recipe-file', { sourceStoragePath: 'post_resource_files/user-1/resources/guide.png' }, 4),
     ];
 
-    const all = await planGenerationReferenceCopies({ supabase: referenceClient(rows, []).client, ownerUserId: 'user-1', generationId: 'gen-1' });
+    // A run that remixed no recipe: none of them came through one (phase 1b's rule, below).
+    const dependencies = { loadRecipePassOnFolder: async () => null };
+    const all = await planGenerationReferenceCopies({ supabase: referenceClient(rows, []).client, ownerUserId: 'user-1', generationId: 'gen-1', dependencies });
     const given = await planGenerationReferenceCopies({
       supabase: referenceClient(rows, []).client,
       ownerUserId: 'user-1',
       generationId: 'gen-1',
       onlyRowIds: new Set(['ref-bought', 'ref-seller-file', 'ref-imported']),
+      dependencies,
     });
 
     expect(all.ok && all.references.map((planned) => [planned.item.id, planned.source?.filePath])).toEqual([
@@ -3324,10 +3327,12 @@ describe('generation references packaged for a publish', () => {
       expect(noRecipe.loadReadableRecipeFiles).not.toHaveBeenCalled();
     });
 
-    it('passes nothing on when either read fails, and still plans the creator’s own', async () => {
+    // Phase 1b's review: a save that silently left out files the composer counted could not be told
+    // from one that meant to; refused, it is retried as when the inputs cannot be read.
+    it('plans nothing when either read fails, so the save is retried', async () => {
       for (const failing of [{ folder: new Error('statement timeout') }, { readable: new Error('statement timeout') }]) {
         const { result } = await plan(failing);
-        expect(result.ok && result.references.map((planned) => planned.item.id)).toEqual(['reference-ref-own']);
+        expect(result).toEqual({ ok: false });
       }
     });
 
@@ -3387,7 +3392,12 @@ describe('generation references packaged for a publish', () => {
       ['guest-1'],
     );
 
-    const plan = await planGenerationReferenceCopies({ supabase: source.client, ownerUserId: 'user-1', generationId: 'gen-1' });
+    const plan = await planGenerationReferenceCopies({
+      supabase: source.client,
+      ownerUserId: 'user-1',
+      generationId: 'gen-1',
+      dependencies: { loadRecipePassOnFolder: async () => null },
+    });
 
     expect(source.linkedLookups).toContain('merged_into_user_id=user-1');
     expect(plan.ok && plan.references.map((planned) => planned.item.id)).toEqual(['reference-ref-guest-file']);

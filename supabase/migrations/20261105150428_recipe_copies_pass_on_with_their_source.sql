@@ -25,13 +25,18 @@
 --    server with the copy, before any byte moves: the copy, the recipe file it
 --    stands for, and whose right to that file it rests on (the kept input's
 --    holder). It outlives the creation it was copied from, so deleting B's
---    creation, whose post keeps serving its recipe, loses nothing.
+--    creation, whose post keeps serving its recipe, loses nothing. Deleting the
+--    holder's account keeps the row with no holder: purchases and bought
+--    versions outlive an account (20260801150000), so its buyers keep the copy,
+--    and it is then held to where it came from alone (that file's creation
+--    removed or archived, up the chain), never to a purchase no one can read.
 -- 2. public.recipe_copy_source_withheld_at(path, depth): whether a copy stands on
 --    a recipe file its holder may no longer read: a refund or a retracted
 --    purchase of the recipe it came through, that file's creation removed or
 --    archived, or, down a chain (C remixed B, who remixed A), the same of the
 --    copy that file itself came from. A chain longer than sixteen copies is no
---    chain the copies make, and closes rather than follows.
+--    chain the copies make, and closes rather than follows. With no holder (an
+--    account deleted), only that file's creation, and its own source, count.
 -- 3. public.recipe_file_readable_by (20261103232019) keeps its signature and its
 --    answer for every other file, and now asks the above of a copy: a passed-on
 --    copy is read, by its buyers and by its own publisher, only while it
@@ -53,15 +58,16 @@ CREATE TABLE public.recipe_copy_sources (
   -- The recipe file the copied input stands for: a copy in another publisher's recipe files.
   source_file text NOT NULL
     CHECK (source_file ~ '^post_resource_files/[^/]+/generation-references/[^/]+/[^/]+$'),
-  -- The kept input's holder, whose right to source_file the copy rests on.
-  holder_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  -- The kept input's holder, whose right to source_file the copy rests on; null
+  -- once their account is deleted.
+  holder_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
   -- A copy never stands on a file of its own publisher's.
   CONSTRAINT recipe_copy_sources_other_publisher
     CHECK (split_part(copy_path, '/', 2) <> split_part(source_file, '/', 2))
 );
 
--- An account's rows go with it.
+-- Found by its holder when their account is deleted.
 CREATE INDEX recipe_copy_sources_holder_idx ON public.recipe_copy_sources (holder_user_id);
 
 ALTER TABLE public.recipe_copy_sources ENABLE ROW LEVEL SECURITY;
@@ -97,6 +103,10 @@ BEGIN
   END IF;
   IF coalesce(p_depth, 0) >= 16 THEN
     RETURN true;
+  END IF;
+  -- A holder whose account is gone: held to where the file came from alone.
+  IF v_source.holder_user_id IS NULL THEN
+    RETURN public.recipe_copy_withheld_at(v_source.source_file, coalesce(p_depth, 0) + 1);
   END IF;
   RETURN NOT public.recipe_file_readable_at(v_source.holder_user_id, v_source.source_file, coalesce(p_depth, 0) + 1);
 END;

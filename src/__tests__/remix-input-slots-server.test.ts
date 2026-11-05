@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { recipeCopiesWithheldOver } from './fixtures/recipe-copies-withheld';
 
 import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-rows';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
@@ -133,6 +134,8 @@ describe('reading the copies from the recipe the viewer bought', () => {
     purchases?: Array<Record<string, unknown>> | ReturnType<typeof databaseError>;
     failing?: string[];
     creation?: { archived_at?: string | null; moderation_removed_at?: string | null };
+    /** Copies the database withholds by where they came from (a passed-on copy, remix plan phase 1b). */
+    withheldPassedOn?: string[];
   } = {}) {
     const stored = createStoredRows({
       post_resource_bundles: [{ id: 'bundle-1', resource_items: options.currentItems ?? [], resource_sections: [] }],
@@ -144,6 +147,14 @@ describe('reading the copies from the recipe the viewer bought', () => {
         : options.purchasedItems
           ? [{ is_latest: false, resource_items: options.purchasedItems, resource_sections: [] }]
           : []),
+      ...(options.withheldPassedOn
+        ? {
+          recipe_copies_withheld: (args: Record<string, unknown>) => recipeCopiesWithheldOver(
+            [{ id: GENERATION, archived_at: null, moderation_removed_at: null, ...options.creation }],
+            options.withheldPassedOn,
+          )(args.p_paths as string[]),
+        }
+        : {}),
     });
     const createSignedUrl = vi.fn<(filePath: string, expiresIn: number) => Promise<SignedUrlAnswer>>(async (filePath) => (
       (options.failing ?? []).includes(filePath)
@@ -192,6 +203,19 @@ describe('reading the copies from the recipe the viewer bought', () => {
 
     expect(await load(client)).toEqual(new Map());
     expect(client.createSignedUrl).not.toHaveBeenCalled();
+  });
+
+  // Remix plan, phase 1b: a passed-on copy is withheld once the file it came from closes to the
+  // creator (a refund, its own creation archived): that copy alone becomes a slot, its siblings stay.
+  it('withholds a passed-on copy alone, and restores the creation’s other copies', async () => {
+    const client = recipeClient({
+      currentItems: [recipeItem(ROW_A, COPY_A), recipeItem(ROW_B, COPY_B)],
+      withheldPassedOn: [COPY_B],
+    });
+
+    const copies = await load(client);
+    expect([...copies.keys()]).toEqual([ROW_A]);
+    expect(client.createSignedUrl).toHaveBeenCalledTimes(1);
   });
 
   // A creator who edits a sold recipe cannot take back what it held when it was
