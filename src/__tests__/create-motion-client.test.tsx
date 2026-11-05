@@ -120,7 +120,7 @@ vi.mock('@/components/AuthProvider', () => ({
 
 // What the Enhance button was last given, which a button answering through what it had when pressed
 // calls, and the newest callbacks of the mounted button, which one keeping them in a ref calls.
-type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void };
+type EnhanceAnswerProps = { onEnhanced: (text: string) => void; onCreditsUpdate: (credits: number) => void; account?: string | null };
 const enhanceButton = vi.hoisted(() => ({
   props: null as EnhanceAnswerProps | null,
   mounted: null as { current: EnhanceAnswerProps } | null,
@@ -1551,26 +1551,26 @@ describe('CreateMotionClient drafts and media', () => {
       fireEvent.change(box(), { target: { value: 'Asha’s cartwheel across the stage' } });
       const pressedForAsha = enhanceButton.props!;
       const buttonAshaPressed = enhanceButton.mounted!;
+      // Her press goes out under her session only.
+      expect(pressedForAsha.account).toBe('user-1');
 
       ownDraftAs('user-2');
       view.rerender(<CreateMotionClient prefill={{}} />);
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
+      // The balance an answer brings after its button went is the button's to have read again (enhance-prompt-button.test.tsx).
       act(() => {
         pressedForAsha.onEnhanced('Asha’s cartwheel across the stage, arms wide');
-        pressedForAsha.onCreditsUpdate(41);
         // A button answering through its newest callbacks is drawn anew for Ben: the one Asha pressed has only hers.
         buttonAshaPressed.current.onEnhanced('Asha’s cartwheel across the stage, arms wide');
-        buttonAshaPressed.current.onCreditsUpdate(43);
       });
       expect(box()).toHaveValue(OPENING);
-      expect(authState.updateCredits).not.toHaveBeenCalledWith(41);
-      expect(authState.updateCredits).not.toHaveBeenCalledWith(43);
       await waitFor(() => expect(promptsSavedFor('user-2')).toContain(OPENING), { timeout: 2_000 });
       expect(promptsSavedFor('user-2')).not.toContain('Asha’s cartwheel across the stage, arms wide');
 
       // One pressed for the account on the page lands.
+      expect(enhanceButton.props!.account).toBe('user-2');
       act(() => {
         enhanceButton.props!.onEnhanced('Ben’s backflip off the pier');
         enhanceButton.props!.onCreditsUpdate(12);

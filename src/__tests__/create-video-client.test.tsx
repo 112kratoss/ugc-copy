@@ -5235,7 +5235,7 @@ describe('CreateVideoClient Kling video elements', () => {
       });
 
       it('drops an Enhance answer that comes back after another account signed in, and the notes one left', async () => {
-        type EnhanceAnswer = { onEnhanced: (text: string, result?: unknown) => void; onCreditsUpdate: (credits: number) => void };
+        type EnhanceAnswer = { onEnhanced: (text: string, result?: unknown) => void; account?: string | null };
         // An answer comes back through what the page gave the button when it was pressed, or, from a button
         // keeping its newest callbacks in a ref, through those of the button that was pressed.
         const lastEnhanceButton = () => enhanceButtonPropsMock.mock.calls.at(-1)?.[0] as unknown as EnhanceAnswer;
@@ -5253,44 +5253,41 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.getByText('Name the camera move.')).toBeInTheDocument();
         const pressedForAsha = lastEnhanceButton();
         const buttonAshaPressed = mountedButton();
+        // Her press goes out under her session only.
+        expect(pressedForAsha.account).toBe('user-1');
 
         ownDraftAs('user-2');
         view.rerender(<CreateVideoClient prefill={{}} />);
         await settle();
+        // The balance an answer brings after its button went is the button's to have read again (enhance-prompt-button.test.tsx).
         act(() => {
           pressedForAsha.onEnhanced(`${PROMPT} Golden hour, 35mm.`, note);
-          pressedForAsha.onCreditsUpdate(41);
           buttonAshaPressed.current.onEnhanced(`${PROMPT} Golden hour, 35mm.`, note);
-          buttonAshaPressed.current.onCreditsUpdate(43);
         });
         expect(promptBox()).toHaveValue('');
         expect(screen.queryByText('Name the camera move.')).toBeNull();
-        expect(mockUpdateCredits).not.toHaveBeenCalledWith(41);
-        expect(mockUpdateCredits).not.toHaveBeenCalledWith(43);
 
         // A shot's Enhance, pressed for Ben, as Cleo signs in.
         fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
         fireEvent.change(screen.getByRole('textbox', { name: 'Shot 1 prompt' }), { target: { value: 'A lamp lights on the quay' } });
         const shotPressedForBen = lastEnhanceButton();
         const shotButtonBenPressed = mountedButton();
+        expect(shotPressedForBen.account).toBe('user-2');
         ownDraftAs('user-3');
         view.rerender(<CreateVideoClient prefill={{}} />);
         await settle();
         act(() => {
           shotPressedForBen.onEnhanced('A lamp lights on the quay, one by one.', note);
-          shotPressedForBen.onCreditsUpdate(39);
           shotButtonBenPressed.current.onEnhanced('A lamp lights on the quay, one by one.', note);
-          shotButtonBenPressed.current.onCreditsUpdate(37);
         });
         // Cleo has the page's own form: one shot, and none of Ben's words.
         expect(screen.getByRole('radio', { name: 'Multi-shot' })).toHaveAttribute('aria-checked', 'false');
         expect(screen.queryByDisplayValue(/A lamp lights on the quay/)).toBeNull();
         expect(screen.queryByText('Name the camera move.')).toBeNull();
-        expect(mockUpdateCredits).not.toHaveBeenCalledWith(39);
-        expect(mockUpdateCredits).not.toHaveBeenCalledWith(37);
 
         // One pressed for the account on the page lands.
         fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
+        expect(lastEnhanceButton().account).toBe('user-3');
         act(() => lastEnhanceButton().onEnhanced('Cleo’s glasshouse at dawn'));
         expect(promptBox()).toHaveValue('Cleo’s glasshouse at dawn');
       });

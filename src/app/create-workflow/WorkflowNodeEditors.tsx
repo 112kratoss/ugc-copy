@@ -4,6 +4,7 @@ import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
+import { useAuth } from '@/components/AuthProvider';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import Image from 'next/image';
@@ -1439,6 +1440,9 @@ function PromptNodeEnhancer({
   const [error, setError] = useState<string | null>(null);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [isTargetPickerOpen, setIsTargetPickerOpen] = useState(false);
+  // A press goes out only under the account the page has signed in: one signed in from another
+  // tab meanwhile would pay for it (src/components/enhancePromptClient.ts).
+  const { session } = useAuth();
   // An answer that came back after the prompt was typed over, kept beside the words it found there.
   const [offer, setOffer] = useState<{ enhanced: string; kept: string } | null>(null);
   const prompt = (node.data as TextInputNodeData).text ?? '';
@@ -1478,7 +1482,7 @@ function PromptNodeEnhancer({
         selectedModel: request.selectedModel,
         prompt: sentPrompt,
         context: request.context,
-      });
+      }, { account: session?.user?.id ?? null });
 
       // Only the text goes in: the rest of the node may have changed during the wait,
       // and the update is merged into the node as it is then.

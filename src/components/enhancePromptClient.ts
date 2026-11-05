@@ -13,6 +13,19 @@ export interface PromptEnhancementRequest {
   context?: EnhancerContext;
 }
 
+/**
+ * Whose press it is, and how long its answer is wanted. Every ask goes out under `account`'s
+ * session: another account signed in from another tab takes the session before the page hears of
+ * it, and an ask under its token would be a new paid press charged to it, its answer applied to the
+ * earlier account's form. Without one, the press is the account the first ask finds. Once `signal`
+ * is aborted (the button went with its form, shot or node) no ask goes out; one already sent is
+ * left to finish.
+ */
+export interface PromptEnhancementPress {
+  account?: string | null;
+  signal?: AbortSignal;
+}
+
 export interface PromptEnhancementResult {
   enhancedPrompt: string;
   remainingCredits?: number;
@@ -51,6 +64,7 @@ export const PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE = 2;
 export const PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT = 1;
 const STILL_RUNNING_CODE = 'AI_USAGE_IN_PROGRESS';
 const LOST_ANSWER_MESSAGE = 'Could not get the enhanced prompt. Check your connection and try again.';
+const OTHER_ACCOUNT_MESSAGE = 'Another account signed in, so Enhance stopped.';
 
 export class PromptEnhancementError extends Error {
   remainingCredits?: number;
@@ -75,8 +89,17 @@ function createPressKey(): string {
   return `enhance:${random}`;
 }
 
-function wait(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+// Ends early when the signal is aborted, for the loop to stop at once.
+function wait(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timeoutId = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -89,14 +112,30 @@ function parseJsonObject(text: string): Record<string, unknown> {
   }
 }
 
-export async function requestPromptEnhancement(request: PromptEnhancementRequest): Promise<PromptEnhancementResult> {
+export async function requestPromptEnhancement(
+  request: PromptEnhancementRequest,
+  { account = null, signal }: PromptEnhancementPress = {},
+): Promise<PromptEnhancementResult> {
   const key = createPressKey();
   const firstAskAt = Date.now();
+  let pressedFor = account;
   let connectionFailures = 0;
   let timeouts = 0;
 
   for (;;) {
-    const ask = await askOnce(request, key);
+    signal?.throwIfAborted();
+    // Read for each ask, so a session the press's account refreshed meanwhile still carries it.
+    const { data: { session } } = await supabase.auth.getSession();
+    signal?.throwIfAborted();
+    if (!session) {
+      throw new PromptEnhancementError('Please log in to enhance prompts');
+    }
+    pressedFor ??= session.user.id;
+    if (session.user.id !== pressedFor) {
+      throw new PromptEnhancementError(OTHER_ACCOUNT_MESSAGE);
+    }
+
+    const ask = await askOnce(request, key, session.access_token);
     if (ask.outcome === 'answered') return ask.result;
     if (ask.outcome === 'still-running') {
       if (Date.now() - firstAskAt >= PROMPT_ENHANCE_WAIT_MS) throw ask.error;
@@ -105,19 +144,15 @@ export async function requestPromptEnhancement(request: PromptEnhancementRequest
     } else if (++connectionFailures > PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE) {
       throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
     }
-    await wait(PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS);
+    await wait(PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS, signal);
   }
 }
 
 async function askOnce(
   { medium, selectedModel, prompt, context }: PromptEnhancementRequest,
   key: string,
+  accessToken: string,
 ): Promise<Ask> {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session) {
-    throw new PromptEnhancementError('Please log in to enhance prompts');
-  }
-
   const controller = new AbortController();
   let timedOut = false;
   const timeoutId = setTimeout(() => {
@@ -131,7 +166,7 @@ async function askOnce(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${session.access_token}`,
+        Authorization: `Bearer ${accessToken}`,
         [PROMPT_ENHANCE_WAIT_HEADER]: String(PROMPT_ENHANCE_WAIT_MS),
         [PROMPT_ENHANCE_KEY_HEADER]: key,
       },

@@ -5329,18 +5329,6 @@ function VideoCreator({
         }
     };
 
-    /**
-     * The balance a paid Enhance answers with. One that answers after the page went (it was left, or
-     * another owner's form took its place) is read again for whoever holds the session instead.
-     */
-    const reportEnhanceBalance = (credits: number) => {
-        if (unmountSignal.current.aborted) {
-            window.dispatchEvent(new Event('credits_updated'));
-            return;
-        }
-        updateCredits(credits);
-    };
-
     // The creator's own choice to stop waiting, priced on its button: the unanswered
     // start may yet have started, so this can be a second run.
     const startNewRunInstead = () => {
@@ -5925,7 +5913,8 @@ function VideoCreator({
                                         setActiveMentionQuery(null);
                                         requestAnimationFrame(() => updateMentionState(text));
                                     }}
-                                    onCreditsUpdate={reportEnhanceBalance}
+                                    onCreditsUpdate={updateCredits}
+                                    account={formAccount}
                                     medium="video"
                                     selectedModel={selectedModel}
                                     helperText={
@@ -5964,7 +5953,8 @@ function VideoCreator({
                                                     [shot.id]: result?.warnings ?? [],
                                                 }));
                                             }}
-                                            onCreditsUpdate={reportEnhanceBalance}
+                                            onCreditsUpdate={updateCredits}
+                                            account={formAccount}
                                             medium="video"
                                             selectedModel={selectedModel}
                                             context={buildShotPromptQualityContext(shot, index)}
