@@ -16,14 +16,14 @@ export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
   absoluteTitle: `${siteConfig.name}: Create, share and earn with AI video & images`,
   description:
-    'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with Magic Booklet.',
+    'Make AI videos, AI images and motion transfer with Magic Booklet, share them with other creators, and earn by selling the recipes behind them.',
   path: '/',
   keywords: [
     'AI video generator',
     'AI image generator',
     'AI motion transfer',
-    'AI UGC ads',
-    'AI ad creative',
+    'AI creator community',
+    'sell AI prompts',
   ],
 });
 

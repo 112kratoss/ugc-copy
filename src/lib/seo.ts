@@ -85,14 +85,14 @@ function resolveSiteUrl() {
 export const siteConfig = {
     name: 'Magic Booklet',
     title: 'Magic Booklet',
-    defaultTitle: 'Magic Booklet: Create the magic. Sell the method.',
+    defaultTitle: 'Magic Booklet: Create, share and earn.',
     // The same tagline as `defaultTitle`, addressable on its own so the hero can
     // show it without the brand prefix reading as part of the sentence, and in
-    // its two sentences so the hero can draw the selling one apart. Kept in sync
+    // its two halves so the hero can draw the earning one apart. Kept in sync
     // with `defaultTitle` by hand — both are brand copy, not derived text.
-    tagline: { create: 'Create the magic.', sell: 'Sell the method.' },
+    tagline: { lead: 'Create, share', earn: 'and earn.' },
     description:
-        'Create AI images, videos, motion-transfer UGC ads, and reusable content workflows in one production-ready studio.',
+        'Create AI videos and images, share them with a community of creators, and earn by selling the recipes behind them.',
     siteUrl: resolveSiteUrl(),
     ogImage: '/opengraph-image.png',
     supportEmail: 'info@magicbooklet.com',
