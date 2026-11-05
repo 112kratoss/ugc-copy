@@ -1595,6 +1595,50 @@ describe('updateOwnerPostForRoute', () => {
         });
       });
 
+      // Remix plan, phase 2 (owner, 2026-11-05): the creator can take files out of the recipe, and a
+      // recipe missing some hands none of the creation's inputs over (the hand-over gives them all).
+      it('copies none of the inputs the creator removed, and then hands no input over', async () => {
+        const { result, dependencies, written } = await save({
+          includeGenerationReferences: true,
+          leaveOutGenerationReferenceIds: ['input-2'],
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        });
+
+        expect(result).toMatchObject({ ok: true });
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+          exceptRowIds: new Set(['input-2']),
+        }));
+        expect(written?.resources?.allowRemix).toBe(false);
+      });
+
+      it('keeps a recipe’s hand-over when no input was removed', async () => {
+        const { dependencies, written } = await save({
+          includeGenerationReferences: true,
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        });
+
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.not.objectContaining({
+          exceptRowIds: expect.anything(),
+        }));
+        expect(written?.resources?.allowRemix).toBe(true);
+      });
+
+      it('writes "Allow remixes" only when it is sent, and refuses one that is no switch', async () => {
+        const off = await save({ allowRemixes: false, resourceBundle: recipe('free') });
+        expect(vi.mocked(off.dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].patch)
+          .toMatchObject({ remixes_allowed: false });
+
+        const older = await save({ resourceBundle: recipe('free') });
+        expect(vi.mocked(older.dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].patch)
+          .not.toHaveProperty('remixes_allowed');
+
+        const wrong = await save({ allowRemixes: 1, resourceBundle: recipe('free') });
+        expect(wrong.result).toEqual({ ok: false, status: 400, body: { error: 'allowRemixes must be a boolean.' } });
+
+        const wrongIds = await save({ leaveOutGenerationReferenceIds: 'input-2', resourceBundle: recipe('free') });
+        expect(wrongIds.result).toEqual({ ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } });
+      });
+
       // The app reads these fields by the shared contract's example.
       it('answers with what the shared contract documents of a creation’s recipe', async () => {
         const { result } = await save({ includeGenerationReferences: true, resourceBundle: recipe('free') });

@@ -1529,6 +1529,14 @@
             "code": "REMIX_RECIPE_STAYS_FREE",
             "field": "resourceBundle"
           }
+        },
+        "creationRecipeRequired": {
+          "status": 400,
+          "response": {
+            "error": "A creation’s post shares its recipe. Choose Free or Paid.",
+            "code": "CREATION_RECIPE_REQUIRED",
+            "field": "resourceBundle"
+          }
         }
       }
     },
@@ -2123,6 +2131,8 @@
           "hasPaidOrders": false,
           "resourceBundleBuyerCount": 0,
           "resourceBundleEverUnlocked": false,
+          "remixesAllowed": true,
+          "remixRecipeMode": null,
           "archivedAt": null,
           "tombstonedAt": null,
           "generationId": "generation-1",

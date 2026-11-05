@@ -1075,20 +1075,19 @@ export function followCreationPromptRule(
 /**
  * A creation's new post starts with a free recipe that has its exact prompt
  * in it (owner, 2026-11-03), as on the web: the Remix that comes with a
- * creation's recipe fills the prompt in for whoever unlocks it anyway. A
- * template result shares its media only, and a recipe already chosen is the
- * creator's. A creation with no prompt keeps No recipe: an empty recipe would
- * only stop Publish until an item was added.
+ * creation's recipe fills the prompt in for whoever unlocks it anyway. Since
+ * the remix plan's phase 2 (owner, 2026-11-05) one always carries its recipe,
+ * with its saved inputs in (the creator's own uploads included) and remixes
+ * allowed, and a remix's keeps its original's terms, paid at the starting
+ * price where that recipe was paid. A template result, a creation off public
+ * view, and one with neither a prompt nor a saved input have nothing to share
+ * (`creationCarriesRecipe`) and keep No recipe; a recipe already chosen is the
+ * creator's.
  */
 export function withCreationRecipeDefaults(
   draft: PostComposerDraft,
   generation: GenerationListItem,
 ): PostComposerDraft {
-  // Owner, 2026-11-05 (remix plan, phase 2): a creation's new post always carries its recipe, free,
-  // with its references in (the creator's own uploads included) and remixes allowed; a remix's keeps
-  // its original's terms, paid at the starting price where that recipe was paid. A template result
-  // and a creation off public view (`getCreationRecipePrompt`, `creationMayShareRecipe`), or one with
-  // neither a prompt nor a saved input, have nothing to share and start on No recipe.
   if (draft.resource.accessMode !== 'none' || draft.resource.cards.length > 0 || !creationCarriesRecipe(generation)) {
     return draft;
   }

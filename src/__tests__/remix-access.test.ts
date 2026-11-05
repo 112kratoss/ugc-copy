@@ -401,6 +401,77 @@ describe('resolveRemixAccess', () => {
   // used to leave Remix public, and remix-source handed anyone the creation's
   // prompt and settings, the very thing the recipe sold. A creation post's
   // published recipe now includes its Remix, whatever the switch says.
+  // Remix plan, phase 2 (owner, 2026-11-05): the post's own "Allow remixes" off stops new remixes
+  // of that post, for a buyer too; its recipe can still be claimed or bought.
+  describe('a post whose creator turned "Allow remixes" off', () => {
+    const CLOSED_POST = { ...EXPOSED_POST, remixes_allowed: false };
+
+    it('closes Remix to someone who never unlocked its recipe, and to one who did', async () => {
+      const { client } = createClient({
+        tables: {
+          posts: [CLOSED_POST],
+          post_resource_bundles: [REMIX_RECIPE],
+          post_resource_bundle_purchases: [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'buyer-1' }],
+        },
+      });
+
+      for (const viewerUserId of ['viewer-1', 'buyer-1']) {
+        const decision = await resolveRemixAccess({
+          adminSupabase: client,
+          viewerUserId,
+          generation: GENERATION,
+          requestedPostId: 'post-1',
+          dependencies: notBlocked(),
+        });
+        expect(decision, viewerUserId).toEqual({ allowed: false, reason: 'not_found' });
+      }
+    });
+
+    it('closes a post that sells no recipe too, and leaves its creator their own', async () => {
+      const { client } = createClient({ tables: { posts: [CLOSED_POST] } });
+
+      const viewer = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GENERATION,
+        dependencies: notBlocked(),
+      });
+      const owner = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'creator-1',
+        generation: GENERATION,
+        dependencies: notBlocked(),
+      });
+
+      expect(viewer).toEqual({ allowed: false, reason: 'not_found' });
+      expect(owner).toMatchObject({ allowed: true, basis: 'owner' });
+    });
+
+    it('reads the switch with the post, and leaves a post that never set it open', async () => {
+      const { client } = createClient({ tables: { posts: [{ ...EXPOSED_POST, remixes_allowed: true }] } });
+
+      const decision = await resolveRemixAccess({
+        adminSupabase: client,
+        viewerUserId: 'viewer-1',
+        generation: GENERATION,
+        dependencies: notBlocked(),
+      });
+
+      expect(decision).toMatchObject({ allowed: true, basis: 'public' });
+      // The post surface draws no Remix where the switch is off, whatever its recipe offers.
+      const base = { generationId: 'gen-1', postFormat: 'media', category: 'image', sourceKind: 'magicbooklet' };
+      expect(resolvePostRemixCapability({ ...base, remixesAllowed: false }).capability).toBe('none');
+      expect(resolvePostRemixCapability({
+        ...base,
+        remixesAllowed: false,
+        resourceBundle: { viewerCanAccess: true, allowRemix: true, items: [] },
+      })).toEqual({ capability: 'none', target: null });
+      expect(resolvePostRemixCapability({ ...base, remixesAllowed: null }).capability)
+        .toBe(resolvePostRemixCapability(base).capability);
+      expect(resolvePostRemixCapability(base).capability).not.toBe('none');
+    });
+  });
+
   describe('a published recipe whose stored remix switch is off', () => {
     const SWITCH_OFF_RECIPE = { ...REMIX_RECIPE, allow_remix: false };
 

@@ -5,6 +5,7 @@ import { RouterContext } from 'next/dist/shared/lib/router-context.shared-runtim
 import type { NextRouter } from 'next/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { REMIX_RECIPE_MUST_BE_PAID } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import NewPostClient from '@/app/post/new/NewPostClient';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import FeedbackViewport from '@/components/FeedbackViewport';
@@ -5578,6 +5579,86 @@ describe('NewPostClient', () => {
       expect(payload.resourceBundle.resources.items).toMatchObject([
         { type: 'prompt', textContent: 'A product still lit like a window display.' },
       ]);
+    });
+
+    // Remix plan, phase 2 (owner, 2026-11-05): a creation's post always carries its recipe; the
+    // creator can take a file out and turn remixes off, and the save hears both.
+    it('offers no No recipe for a creation’s post, and sends the files removed and "Allow remixes"', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({
+        input_media: [
+          {
+            id: 'input-1', generationId: 'gen-recipe-1', mediaType: 'image', role: 'reference', label: 'Product',
+            url: 'https://proxy.example.com/generation_inputs/user-1/product.png', storagePath: 'generation_inputs/user-1/product.png',
+            sourceGenerationId: null, sortOrder: 0, metadata: {}, recipeCopyable: true,
+          },
+          {
+            id: 'input-2', generationId: 'gen-recipe-1', mediaType: 'image', role: 'reference', label: 'My face',
+            url: 'https://proxy.example.com/generation_inputs/user-1/face.png', storagePath: 'generation_inputs/user-1/face.png',
+            sourceGenerationId: null, sortOrder: 1, metadata: {}, recipeCopyable: true,
+          },
+        ],
+      });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({
+          success: true,
+          postId: 'post-recipe-3',
+          showcasePath: '/showcase/post-recipe-3',
+          resourceBundlePath: '/showcase/post-recipe-3#recipe',
+          visibility: 'public',
+          resourceBundleStatus: 'published',
+        }),
+      });
+
+      render(<NewPostClient />);
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+
+      expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
+      expect(screen.queryByRole('radio', { name: /no recipe/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
+      expect(screen.getByText(/Anyone who unlocks it can remix it and sell their version at their own price\./)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
+
+      const inputs = screen.getByRole('list', { name: 'Saved inputs' });
+      fireEvent.click(within(inputs).getByRole('button', { name: 'Remove My face from the recipe' }));
+      expect(within(screen.getByRole('list', { name: 'Saved inputs' })).queryByRole('img', { name: 'My face' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('checkbox', { name: /allow remixes/i }));
+      expect(screen.getByRole('checkbox', { name: /allow remixes/i })).not.toBeChecked();
+
+      fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
+        target: { value: 'The exact prompt and the product reference behind this still.' },
+      });
+      fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+      const payload = JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body));
+      expect(payload).toMatchObject({
+        generationId: 'gen-recipe-1',
+        includeGenerationReferences: true,
+        leaveOutGenerationReferenceIds: ['input-2'],
+        allowRemixes: false,
+        resourceBundle: { accessMode: 'free' },
+      });
+    });
+
+    // A remix pays its original in full (owner, 2026-11-05): its post is held to the terms its run
+    // remixed under, and the cards say why.
+    it('locks a remix of a paid recipe to Paid, with the reason', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1' });
+      enqueueCreation({ remix_recipe_mode: 'paid' });
+
+      render(<NewPostClient />);
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+
+      expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked();
+      expect(screen.getByRole('radio', { name: /free recipe/i })).toBeDisabled();
+      expect(screen.getByText(REMIX_RECIPE_MUST_BE_PAID)).toBeInTheDocument();
+      expect(screen.getByRole('spinbutton', { name: /price in credits/i })).toHaveValue(10);
     });
 
     it('sends no references unless asked, and offers none for a creation without saved inputs', async () => {

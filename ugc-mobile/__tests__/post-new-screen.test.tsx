@@ -337,6 +337,7 @@ import {
   type PostComposerMediaItem,
 } from '../lib/post-new-view-model';
 import { RECIPE_TITLE_TOO_SHORT_HINT } from '../lib/post-publish-policy/post-publish-policy';
+import { REMIX_RECIPE_MUST_BE_PAID } from '../lib/creation-recipe/creation-recipe';
 
 function collectText(root: renderer.ReactTestInstance) {
   return root
@@ -2832,6 +2833,68 @@ describe('mobile external post composer', () => {
       expect(text).toContain('Anyone who gets this recipe gets these files.');
       // Where the post starts: nothing for the leave guard to keep.
       expect(gestureEnabled(tree)).toBe(true);
+    });
+
+    // Remix plan, phase 2 (owner, 2026-11-05): a creation's post always carries its recipe, so No
+    // recipe is no choice; the creator can take a file out and turn remixes off, and the publish
+    // hears both.
+    it('offers no No recipe for a new creation post, and sends the files removed and "Allow remixes"', async () => {
+      generationState.item = {
+        ...generationItem,
+        input_media: [
+          { id: 'input-1', url: 'https://cdn.example.com/reference.jpg', kind: 'image', recipeCopyable: true },
+          { id: 'input-2', url: 'https://cdn.example.com/face.jpg', kind: 'image', recipeCopyable: true },
+        ],
+      };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(() => findPressableByText(tree.root, 'No recipe')).toThrow();
+      expect(findPressableByText(tree.root, 'Paid recipe').props.accessibilityState).toEqual({ checked: false, selected: false });
+      expect(toggle(tree, 'Allow remixes').props.value).toBe(true);
+      renderer.act(() => findPressableByText(tree.root, 'Paid recipe').props.onPress());
+      expect(collectText(tree.root)).toContain('Anyone who unlocks it can remix it and sell their version at their own price.');
+      renderer.act(() => findPressableByText(tree.root, 'Free recipe').props.onPress());
+
+      const removeButtons = tree.root.findAll((node) => (
+        String(node.type) === 'pressable' && /^Remove .* from the recipe$/.test(String(node.props.accessibilityLabel ?? ''))
+      ));
+      expect(removeButtons).toHaveLength(2);
+      renderer.act(() => removeButtons[1].props.onPress());
+      expect(collectText(tree.root)).toContain('Put the removed file back');
+      renderer.act(() => toggle(tree, 'Allow remixes').props.onValueChange(false));
+
+      authState.api.publishGeneration.mockResolvedValueOnce({ success: true, postId: 'post-new-creation', visibility: 'public' });
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+      const payload = authState.api.publishGeneration.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+      expect(payload).toMatchObject({
+        generationId: 'gen-1',
+        includeGenerationReferences: true,
+        leaveOutGenerationReferenceIds: ['input-2'],
+        allowRemixes: false,
+        resourceBundle: { accessMode: 'free' },
+      });
+    });
+
+    // A remix pays its original in full (owner, 2026-11-05): its post is held to the terms its run
+    // remixed under, and the cards say why.
+    it('locks a remix of a paid recipe to Paid at the starting price, with the reason', async () => {
+      generationState.item = { ...generationItem, remix_recipe_mode: 'paid' };
+      const tree = await renderScreen();
+      renderer.act(() => findPressableByText(tree.root, 'Next').props.onPress());
+
+      expect(findPressableByText(tree.root, 'Paid recipe').props.accessibilityState).toEqual({ checked: true, selected: true });
+      expect(findPressableByText(tree.root, 'Free recipe').props.accessibilityState).toEqual({ checked: false, selected: false, disabled: true });
+      expect(collectText(tree.root)).toContain(REMIX_RECIPE_MUST_BE_PAID);
+
+      authState.api.publishGeneration.mockResolvedValueOnce({ success: true, postId: 'post-paid-remix', visibility: 'public' });
+      await renderer.act(async () => {
+        await mutationState.options?.mutationFn?.('public');
+      });
+      const payload = authState.api.publishGeneration.mock.calls.at(-1)?.[0] as { resourceBundle: Record<string, unknown> };
+      expect(payload.resourceBundle).toMatchObject({ accessMode: 'paid', priceUsdCents: 10 });
     });
 
     it('keeps the recipe on Free with the prompt when the creation has no saved inputs', async () => {

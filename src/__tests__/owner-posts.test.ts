@@ -532,6 +532,22 @@ describe('owner posts', () => {
     expect(post?.resourceBundleInput.resources?.allowRemix).toBe(false);
   });
 
+  // Remix plan, phase 2 (owner, 2026-11-05): the edit page opens on the post's own "Allow remixes",
+  // and a remix's post on the terms its run remixed under, which lock Free or Paid.
+  it('hands the editor the post’s "Allow remixes" and its remix terms', async () => {
+    postRows.value = initialPostRows.map((post) => (post.id === 'post-3'
+      ? { ...post, remixes_allowed: false, remix_recipe_mode: 'paid' }
+      : post)) as unknown as typeof postRows.value;
+    const { getOwnerPostDetail } = await import('@/lib/owner-posts');
+
+    const closed = await getOwnerPostDetail('post-3', 'user-1');
+    // A post read without the switch, as before the column, allows remixes.
+    const older = await getOwnerPostDetail('post-1', 'user-1');
+
+    expect(closed).toMatchObject({ remixesAllowed: false, remixRecipeMode: 'paid' });
+    expect(older).toMatchObject({ remixesAllowed: true, remixRecipeMode: null });
+  });
+
   // Removing a recipe people have retires it: the row stays for them, but the
   // post has no recipe, so the editor opens on "No recipe".
   it('opens a retired recipe in the editor as no recipe', async () => {
