@@ -441,19 +441,27 @@ export async function loadRemixSourceBundle(
   // plan, phase 1b; owner, 2026-11-05: a remix's recipe holds what its run used): a remix that unlocked
   // that recipe restores it from the recipe's copy, as long as the copy is served. A read that fails
   // fails the remix, as the inputs' read above does, never turning a passed-on file into a slot.
-  const passedOnCopies = !isOwner && access.recipe && recipeInputs.recipeFiles.length > 0
+  // Whichever way the inputs come (shared by the creator, or handed over by the recipe), only someone
+  // who unlocked the recipe gets them (`loadGenerationRecipeReferenceCopies` reads no copy for anyone
+  // else). A read that fails fails the remix, as the inputs' read above does.
+  const runRecipeFiles = isOwner
+    ? []
+    : readsRunInputs
+      ? inputMedia.filter((item) => isRecipeFileInput(item, creatorIds))
+      : recipeInputs.recipeFiles;
+  const passedOnCopies = access.recipe && runRecipeFiles.length > 0
     ? await loadGenerationRecipeReferenceCopies({
         adminSupabase,
         recipe: access.recipe,
         generationId: typedGeneration.id,
         viewerUserId: user.id,
-        inputRowIds: recipeInputs.recipeFiles.map((item) => item.id),
+        inputRowIds: runRecipeFiles.map((item) => item.id),
       })
     : new Map<string, GenerationReferenceCopy>();
   const handOver = isOwner
     ? { handedOn: inputMedia, heldBack: [] }
     : readsRunInputs
-      ? holdBackFromRemix(inputMedia, (item) => isRecipeFileInput(item, creatorIds), slotTool)
+      ? holdBackFromRemix(inputMedia, (item) => isRecipeFileInput(item, creatorIds) && !passedOnCopies.has(item.id), slotTool)
       : holdBackFromRemix(
         [...recipeInputs.inputMedia, ...recipeInputs.recipeFiles],
         (item) => recipeFileIds.has(item.id) && !passedOnCopies.has(item.id),
@@ -468,7 +476,9 @@ export async function loadRemixSourceBundle(
     // with the input it was prepared from and in their places among them, which is how a restore pairs
     // them. An asset id runs the file it was prepared from (2026-11-04 re-review): none goes with a
     // held-back file, an input never kept, or a recipe file, nor to a recipe that hands over no input.
-    const handedOverIds = new Set(keptInputMedia.map((item) => item.id));
+    // A file restored from the recipe's copy takes no asset of the creator's: it was prepared from the
+    // creator's own kept file, theirs alone (phase 1b's review). The remix prepares its own.
+    const handedOverIds = new Set(keptInputMedia.filter((item) => !isRecipeFileInput(item, creatorIds)).map((item) => item.id));
     const prepared = preparedSeedanceAssetIdsFor(
       workflowSettings.seedanceAssets,
       [...keptInputMedia, ...heldBackRecipeFiles],

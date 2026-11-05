@@ -30,7 +30,8 @@ describe('recipe copies pass on with their source migration', () => {
     expect(sql).toMatch(/CREATE TABLE public\.recipe_copy_sources \(/);
     expect(sql).toContain("copy_path text PRIMARY KEY\n    CHECK (copy_path ~ '^post_resource_files/[^/]+/generation-references/[^/]+/[^/]+$')");
     expect(sql).toContain("CHECK (source_file ~ '^post_resource_files/[^/]+/generation-references/[^/]+/[^/]+$')");
-    expect(sql).toContain('holder_user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE');
+    // A deleted account keeps its copies' records, with no holder (its buyers keep their copies).
+    expect(sql).toContain('holder_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL');
     expect(sql).toContain("CHECK (split_part(copy_path, '/', 2) <> split_part(source_file, '/', 2))");
     expect(sql).toContain('CREATE INDEX recipe_copy_sources_holder_idx ON public.recipe_copy_sources (holder_user_id);');
   });
@@ -48,6 +49,8 @@ describe('recipe copies pass on with their source migration', () => {
     expect(body).toContain('FROM public.recipe_copy_sources AS sources');
     expect(body).toContain('IF coalesce(p_depth, 0) >= 16 THEN\n    RETURN true;');
     expect(body).toContain('RETURN NOT public.recipe_file_readable_at(v_source.holder_user_id, v_source.source_file, coalesce(p_depth, 0) + 1);');
+    // With no holder, only where the file came from counts.
+    expect(body).toContain('IF v_source.holder_user_id IS NULL THEN\n    RETURN public.recipe_copy_withheld_at(v_source.source_file, coalesce(p_depth, 0) + 1);');
   });
 
   it('withholds a copy of a creation removed or archived, by the two marks only, or one whose source is closed', () => {

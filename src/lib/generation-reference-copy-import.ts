@@ -7,6 +7,7 @@ import { isAlreadyExistsStorageError, type SharedInputMediaImportResult } from '
 import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeReferenceCopies } from '@/lib/post-resource-bundles-server';
 import { recordRecipeImportUse } from '@/lib/recipe-import-use';
+import { loadRecipeCopySource, ownRecipeCopyPath } from '@/lib/recipe-pass-on';
 import {
   type GenerationReferenceCopyParts,
   isRecipeImportSource,
@@ -51,6 +52,7 @@ export interface GenerationReferenceCopyImportDependencies {
   createServiceClient?: typeof createServiceClient;
   isUserRelationshipBlocked?: typeof isUserRelationshipBlocked;
   loadGenerationRecipeReferenceCopies?: typeof loadGenerationRecipeReferenceCopies;
+  loadRecipeCopySource?: typeof loadRecipeCopySource;
 }
 
 /**
@@ -279,6 +281,13 @@ export async function reuseRecipeFile(params: {
  * `failed` (retryable), never the caller's own: since 20261103232019 storage itself refuses them a
  * kept recipe file they no longer hold, so taken for theirs, it was signed with the service role and
  * a Seedance asset made of it recorded as their own file for good (2026-11-04 review).
+ *
+ * A copy in the caller's own recipe files is theirs, unless their recipe passed it on from the recipe
+ * their creation remixed (remix plan, phase 1b): it stands for the file it came from
+ * (`recipe_copy_sources`), and is reused as that file is, through their unlock, read again now. Taken
+ * for their own file, a new run of theirs held it unmarked for good, and that run's recipe handed it
+ * on with no record of where it came from (phase 1b's review). A read of that record that fails is
+ * `failed`.
  */
 export async function findHeldRecipeCopy(params: {
   source: string;
@@ -288,6 +297,19 @@ export async function findHeldRecipeCopy(params: {
   const own = new Set([params.viewerUserId]);
   const copySource = recipeCopyOfSource(params.source, own);
   if (copySource) return { outcome: 'copy', copySource };
+  const ownCopy = ownRecipeCopyPath(params.source, params.viewerUserId);
+  if (ownCopy) {
+    try {
+      const passedOn = await (params.dependencies?.loadRecipeCopySource ?? loadRecipeCopySource)(
+        (params.dependencies?.createServiceClient ?? createServiceClient)(),
+        ownCopy,
+      );
+      return passedOn ? { outcome: 'copy', copySource: passedOn.sourceFile } : null;
+    } catch (error) {
+      logBackendError('failed_to_read_recipe_copy_source_for_reuse', { error });
+      return { outcome: 'failed' };
+    }
+  }
   // An import whose path names no copy is none a start made: never the caller's own file either.
   if (isRecipeImportSource(params.source)) return { outcome: 'not-eligible' };
   const kept = getUserOwnedStoredMediaLocation(params.source, params.viewerUserId, { allowedBuckets: [GENERATION_INPUTS_BUCKET] });

@@ -758,7 +758,7 @@ describe('/api/remix-source route', () => {
       id,
       generation_id: 'source-1',
       user_id: 'creator-1',
-      media_type: 'image',
+      media_type: 'image' as const,
       role: 'reference_image',
       label: handle.slice(1),
       storage_path: `generation_inputs/creator-1/source-1/0${sortOrder}-reference_image.png`,

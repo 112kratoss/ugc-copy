@@ -1,7 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
-import { generationReferenceCopyFolder, RECIPE_FILES_BUCKET } from '@/lib/recipe-file-paths';
+import {
+  generationReferenceCopyFolder,
+  parseGenerationReferenceCopyPath,
+  RECIPE_FILES_BUCKET,
+} from '@/lib/recipe-file-paths';
+import { getCanonicalStoredMediaLocation } from '@/lib/storage-ownership';
 
 /**
  * What a remix's recipe passes on of the recipe its run remixed (remix plan, phase 1b; owner,
@@ -106,4 +111,36 @@ export async function recordRecipeCopySource(
     return false;
   }
   return true;
+}
+
+/**
+ * A copy in this account's own recipe files (`post_resource_files/<account>/generation-references/…`),
+ * as a path or a storage link, bucket-qualified; null for anything else. Such a copy is the account's
+ * own file unless its recipe passed it on (`loadRecipeCopySource`).
+ */
+export function ownRecipeCopyPath(source: unknown, accountUserId: string): string | null {
+  if (typeof source !== 'string' || !source.trim()) return null;
+  const location = getCanonicalStoredMediaLocation(source, { allowedBuckets: [RECIPE_FILES_BUCKET] });
+  const copy = location ? parseGenerationReferenceCopyPath(location.filePath) : null;
+  return copy && copy.ownerUserId === accountUserId ? `${RECIPE_FILES_BUCKET}/${location!.filePath}` : null;
+}
+
+/**
+ * Where a passed-on copy came from (`recipe_copy_sources`): the recipe file it stands for and its
+ * holder, null for a copy that was never passed on. Throws when the read fails, so a caller never
+ * takes a failure for "the account's own file".
+ */
+export async function loadRecipeCopySource(
+  supabase: SupabaseClient,
+  copyPath: string,
+): Promise<{ sourceFile: string; holderUserId: string | null } | null> {
+  const path = copyPath.startsWith(`${RECIPE_FILES_BUCKET}/`) ? copyPath : `${RECIPE_FILES_BUCKET}/${copyPath}`;
+  const { data, error } = await supabase
+    .from('recipe_copy_sources')
+    .select('source_file, holder_user_id')
+    .eq('copy_path', path)
+    .maybeSingle();
+  if (error) throw error;
+  const row = data as { source_file: string; holder_user_id: string | null } | null;
+  return row ? { sourceFile: row.source_file, holderUserId: row.holder_user_id } : null;
 }

@@ -463,4 +463,34 @@ describe('reusing a recipe file the caller already holds', () => {
   it('answers the seller’s copy itself as the start’s import does', async () => {
     await expect(reuse(SOURCE, setUp())).resolves.toMatchObject({ outcome: 'imported' });
   });
+
+  // Phase 1b's review: the caller's recipe passed on a file of the recipe their creation remixed. The
+  // copy sits in their own recipe files, yet it is the seller's file: reused as their own, a new run
+  // held it unmarked for good and that run's recipe handed it on. It is reused as its source is.
+  describe('a copy in the caller’s own recipe files that their recipe passed on', () => {
+    const OWN_COPY = `post_resource_files/${VIEWER}/generation-references/d1b2c3d4-0000-4000-8000-00000000000a/00-reference-image-row-b.png`;
+    const lineage = (sourceFile = SOURCE) => [{ copy_path: OWN_COPY, source_file: sourceFile, holder_user_id: VIEWER }];
+
+    it('imports the file it came from, through the caller’s unlock, read again now', async () => {
+      const stub = setUp({ tables: { recipe_copy_sources: lineage() } });
+      await expect(reuse(OWN_COPY, stub)).resolves.toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DESTINATION}` });
+      expect(stub.copy).toHaveBeenCalledWith(COPY, DESTINATION, { destinationBucket: 'generation_inputs' });
+    });
+
+    it('refuses it once that unlock is gone', async () => {
+      const stub = setUp({ tables: { recipe_copy_sources: lineage(), post_resource_bundle_purchases: [] } });
+      await expect(reuse(OWN_COPY, stub)).resolves.toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+    });
+
+    it('leaves a copy that was never passed on to the start, as the caller’s own file', async () => {
+      await expect(reuse(OWN_COPY, setUp({ tables: { recipe_copy_sources: [] } }))).resolves.toBeNull();
+    });
+
+    it('fails retryably when where it came from cannot be read', async () => {
+      const unreadable = setUp({ tables: { recipe_copy_sources: databaseError('57014', 'canceling statement due to statement timeout') } });
+      await expect(reuse(OWN_COPY, unreadable)).resolves.toEqual({ outcome: 'failed' });
+      expect(unreadable.copy).not.toHaveBeenCalled();
+    });
+  });
 });
