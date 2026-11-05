@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
 import { NSFW_TITLE } from '@/lib/nsfw-content';
+import { isGeneratedRecipeSetupText } from '@/lib/post-public-content';
 import { deriveTitleFromBody } from '@/lib/posts-server';
 import {
   buildRemixCredit,
@@ -62,12 +63,15 @@ export function postRemixCreditUserIds(rows: PostRemixCreditFields[]): string[] 
  * The title a credit gives the post remixed: its own, else the start of its
  * writing, as its card names it; "Mature content" for a post under its NSFW
  * cover, which a credit never uncovers. Never the prompt, which a paid recipe
- * keeps private.
+ * keeps private, nor a recipe's generated setup text, which its card leaves out
+ * of a paid recipe's post (`sanitizePublicPostContent`): the credit reads no
+ * recipe, so it leaves that text out of every post.
  */
 export function remixCreditParentTitle(row: Pick<RemixCreditParentRow, 'title' | 'body' | 'post_format' | 'is_nsfw'>): string {
   if (row.is_nsfw) return NSFW_TITLE;
+  const body = isGeneratedRecipeSetupText(row.body) ? null : row.body;
   return row.title?.trim()
-    || deriveTitleFromBody(row.body)
+    || deriveTitleFromBody(body)
     || (row.post_format === 'text' ? 'Untitled Note' : 'Untitled Creation');
 }
 

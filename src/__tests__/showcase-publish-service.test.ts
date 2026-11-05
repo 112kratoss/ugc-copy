@@ -2030,7 +2030,8 @@ describe('publishGenerationToShowcaseForRoute', () => {
 
   // Owner, 2026-11-05: when B posts a remix publicly, A hears "@B posted a remix
   // of your post". Who A is comes from the post's own credit, which the alert
-  // reads; publishing only says which post went public, behind its answer.
+  // reads; publishing only says which post went public, behind its answer, and
+  // only when this publish is what made a remix public.
   describe('the alert for a remix posted publicly', () => {
     const generation = {
       id: 'gen-1',
@@ -2071,6 +2072,9 @@ describe('publishGenerationToShowcaseForRoute', () => {
             })),
             ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
             requestPostEmbedding: vi.fn(async () => undefined),
+            // A remix of someone's free post, never posted before.
+            loadRemixRecipeTerms: vi.fn(async () => ({ mode: 'free' as const, bundleId: null, originGenerationId: 'gen-0' })),
+            loadGenerationPostVisibility: vi.fn(async () => null),
             ...extra,
           },
         }),
@@ -2105,6 +2109,54 @@ describe('publishGenerationToShowcaseForRoute', () => {
       await expect(result).resolves.toMatchObject({ ok: true });
       expect(runAfterResponse).not.toHaveBeenCalled();
       expect(notifyPostedRemix).not.toHaveBeenCalled();
+    });
+
+    it('sends it for a remix whose post was private until now', async () => {
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const loadGenerationPostVisibility = vi.fn(async () => 'private');
+      const { adminClient, result } = publish('public', { notifyPostedRemix, loadGenerationPostVisibility });
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(loadGenerationPostVisibility).toHaveBeenCalledWith({ generationId: 'gen-1', ownerUserId: 'user-1', supabase: adminClient });
+      expect(notifyPostedRemix).toHaveBeenCalledWith(adminClient, { postId: 'post-1' });
+    });
+
+    // A remix public before this alert existed has no dedupe record: its first
+    // republish would tell A weeks late.
+    it('sends nothing when the remix was already public', async () => {
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const runAfterResponse = vi.fn();
+      const { result } = publish('public', {
+        notifyPostedRemix,
+        runAfterResponse,
+        loadGenerationPostVisibility: vi.fn(async () => 'public'),
+      });
+      await expect(result).resolves.toMatchObject({ ok: true, body: { visibility: 'public' } });
+      expect(runAfterResponse).not.toHaveBeenCalled();
+      expect(notifyPostedRemix).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing and sends nothing for a creation that remixed no one', async () => {
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const loadGenerationPostVisibility = vi.fn(async () => null);
+      const { result } = publish('public', {
+        notifyPostedRemix,
+        loadGenerationPostVisibility,
+        loadRemixRecipeTerms: vi.fn(async () => ({ mode: null, bundleId: null, originGenerationId: null })),
+      });
+      await expect(result).resolves.toMatchObject({ ok: true });
+      expect(loadGenerationPostVisibility).not.toHaveBeenCalled();
+      expect(notifyPostedRemix).not.toHaveBeenCalled();
+    });
+
+    it('publishes, and sends nothing, when how the post stood could not be read', async () => {
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const { result } = publish('public', {
+        notifyPostedRemix,
+        loadGenerationPostVisibility: vi.fn(async () => { throw new Error('read failed'); }),
+      });
+      await expect(result).resolves.toMatchObject({ ok: true, body: { postId: 'post-1' } });
+      expect(notifyPostedRemix).not.toHaveBeenCalled();
+      expect(logBackendErrorMock).toHaveBeenCalledWith('failed_to_load_post_visibility_for_remix_alert', expect.objectContaining({ error: expect.any(Error) }));
     });
   });
 

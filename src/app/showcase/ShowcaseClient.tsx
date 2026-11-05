@@ -8,7 +8,7 @@ import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, Shopping
 import { useAuth } from '@/components/AuthProvider';
 import CreatorIdentity from '@/components/CreatorIdentity';
 import RemixCreditLine from '@/app/showcase/RemixCreditLine';
-import { withoutBlockedRemixCredit } from '../../../ugc-mobile/lib/remix-credit/remix-credit';
+import { itemsWithoutBlockedRemixCredits } from '../../../ugc-mobile/lib/remix-credit/remix-credit';
 import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import PublicShareButton from '@/components/PublicShareButton';
 import SkeletonLoader from '@/components/SkeletonLoader';
@@ -473,26 +473,6 @@ interface ShowcaseGridCardProps {
  * values, and functions kept across renders; the reel's post and slide, which
  * the page's URL carries, are not among them.
  */
-/**
- * The cards with their remix credits naming no one in `blocked`: the list
- * handed back as it was when no credit changes, so nothing draws again.
- */
-function withoutBlockedRemixCredits(items: ShowcaseFeedItem[], blocked: Set<string>): ShowcaseFeedItem[] {
-    if (blocked.size === 0) return items;
-    let changed = false;
-    const next = items.map((item) => {
-        if (!item.remixCredit) return item;
-        const remixCredit = withoutBlockedRemixCredit(item.remixCredit, (id) => blocked.has(id));
-        if (remixCredit === item.remixCredit) return item;
-        changed = true;
-        if (remixCredit) return { ...item, remixCredit };
-        const uncredited = { ...item };
-        delete uncredited.remixCredit;
-        return uncredited;
-    });
-    return changed ? next : items;
-}
-
 const ShowcaseGridCard = memo(function ShowcaseGridCard({
     item,
     index,
@@ -998,7 +978,7 @@ export default function ShowcaseClient({
                     || !isSessionHiddenItem(item, sessionHiddenPostIdsRef.current, sessionHiddenCreatorIdsRef.current)
                 ));
                 const keptItems = visibleItems.length === latestItems.length ? latestItems : visibleItems;
-                return withoutBlockedRemixCredits(keptItems, blockedCreditPeople);
+                return itemsWithoutBlockedRemixCredits(keptItems, (id) => blockedCreditPeople.has(id));
             });
         });
 

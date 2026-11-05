@@ -75,7 +75,7 @@ import {
   postRemixCreditUserIds,
   remixCreditCreator,
 } from '@/lib/post-remix-credit';
-import { remixCreditUserIds, withoutBlockedRemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
+import { itemWithoutBlockedRemixCredit, remixCreditUserIds } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 import {
   SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS,
   SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS,
@@ -1628,18 +1628,30 @@ export async function getShowcaseFeedPage(options: {
     measurePhase('pricing', () => attachLocalizedAssetPrices(baseFeed, options.countryCode)),
     measurePhase('viewer_state', () => attachViewerStateToFeed(baseFeed, viewerUserId, adminSupabase)),
   ]);
+  return sanitizeShowcaseFeedPage(mergePricedAndViewerFeed(pricedFeed, viewerFeed));
+}
+
+/**
+ * The two passes over one neutral page, run side by side, as one page: the
+ * viewer pass's items in the priced pass's order, each with its priced recipe
+ * (the pricing pass changes nothing else). The viewer pass's item is taken
+ * whole, so what it took out stays out: an item it left out, and a field it
+ * removed, as it removes a credit naming someone blocked.
+ */
+export function mergePricedAndViewerFeed(
+  pricedFeed: ShowcaseFeedPage,
+  viewerFeed: ShowcaseFeedPage,
+): ShowcaseFeedPage {
   const viewerItemById = new Map(viewerFeed.items.map((item) => [item.id, item]));
-  const hydratedFeed = {
+  return {
     ...pricedFeed,
     items: pricedFeed.items.flatMap((pricedItem) => {
       const viewerItem = viewerItemById.get(pricedItem.id);
       return viewerItem
-        ? [{ ...pricedItem, ...viewerItem, asset: mergeViewerAssetState(pricedItem.asset, viewerItem.asset) }]
+        ? [{ ...viewerItem, asset: mergeViewerAssetState(pricedItem.asset, viewerItem.asset) }]
         : [];
     }),
   };
-
-  return sanitizeShowcaseFeedPage(hydratedFeed);
 }
 
 /**
@@ -1655,17 +1667,6 @@ export function mergeViewerAssetState(
   }
 
   return { ...pricedAsset, viewerHasUnlocked: viewerAsset.viewerHasUnlocked };
-}
-
-/** A card's credit without anyone in `blockedUserIds`; the field goes when nothing is left. */
-function withViewerRemixCredit(item: ShowcaseFeedItem, blockedUserIds: Set<string>): ShowcaseFeedItem {
-  if (!item.remixCredit) return item;
-  const remixCredit = withoutBlockedRemixCredit(item.remixCredit, (userId) => blockedUserIds.has(userId));
-  if (remixCredit === item.remixCredit) return item;
-  if (remixCredit) return { ...item, remixCredit };
-  const uncredited = { ...item };
-  delete uncredited.remixCredit;
-  return uncredited;
 }
 
 export async function attachViewerStateToFeed(
@@ -1782,7 +1783,7 @@ export async function attachViewerStateToFeed(
     ...feed,
     items: viewerSafeItems.map((viewerItem) => {
       // A credit names nobody with a block between them and the viewer, either way.
-      const item = withViewerRemixCredit(viewerItem, blockedCreatorIds);
+      const item = itemWithoutBlockedRemixCredit(viewerItem, (userId) => blockedCreatorIds.has(userId));
       if (item.isNsfw && !item.nsfwRevealed) return { ...item, isSaved: savedIdSet.has(item.id) };
       // A creator opens their own recipe even when its summary could not be
       // read (no asset, Remix locked); a buyer is known by the recipe's id.

@@ -185,6 +185,8 @@ export type ShowcasePublishServiceDependencies = {
   loadRemixRecipeTerms: typeof loadRemixRecipeTerms;
   /** Tells the creator of the post a public remix credits (owner, 2026-11-05). */
   notifyPostedRemix: typeof notifyPostedRemix;
+  /** The visibility of the post the creation already has, null for none. */
+  loadGenerationPostVisibility: typeof loadGenerationPostVisibility;
   /** Where the route sends work that need not hold its answer (Next's `after`). */
   runAfterResponse?: RunAfterResponse;
 };
@@ -257,6 +259,7 @@ function resolveDependencies(
     requestPostEmbedding: dependencies?.requestPostEmbedding ?? requestPostEmbedding,
     loadRemixRecipeTerms: dependencies?.loadRemixRecipeTerms ?? loadRemixRecipeTerms,
     notifyPostedRemix: dependencies?.notifyPostedRemix ?? notifyPostedRemix,
+    loadGenerationPostVisibility: dependencies?.loadGenerationPostVisibility ?? loadGenerationPostVisibility,
     runAfterResponse: dependencies?.runAfterResponse,
   };
 }
@@ -463,6 +466,25 @@ type StoredRecipeTextRow = Pick<
  * would otherwise be rebuilt from the generation — and the generation never
  * saw the caption, body, or title edits made in the post editor.
  */
+async function loadGenerationPostVisibility({
+  generationId,
+  ownerUserId,
+  supabase,
+}: {
+  generationId: string;
+  ownerUserId: string;
+  supabase: SupabaseClient;
+}): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('posts')
+    .select('visibility')
+    .eq('generation_id', generationId)
+    .eq('user_id', ownerUserId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { visibility?: string | null } | null)?.visibility ?? null;
+}
+
 async function loadExistingGenerationPostContent({
   generationId,
   ownerUserId,
@@ -770,6 +792,24 @@ export async function publishGenerationToShowcaseForRoute({
     } catch (error) {
       logBackendError('failed_to_load_remix_recipe_terms_for_publish', { error });
       return { ok: false, status: 500, body: { error: REMIX_RECIPE_TERMS_UNREADABLE_ERROR } };
+    }
+  }
+  // "@B posted a remix of your post" is news when the remix goes public, not at
+  // every republish of a public one: a remix public before that alert existed
+  // has no dedupe record to stop it arriving weeks late. So a remix's publish
+  // asks how its post stood before (a creation that remixed no one asks
+  // nothing), and a read that fails sends no alert rather than a late one.
+  let remixGoesPublic = false;
+  if (effectiveVisibility === 'public' && remixTerms?.mode) {
+    try {
+      const visibilityBefore = await resolvedDependencies.loadGenerationPostVisibility({
+        generationId,
+        ownerUserId: userId,
+        supabase: adminSupabase,
+      });
+      remixGoesPublic = visibilityBefore !== 'public';
+    } catch (error) {
+      logBackendError('failed_to_load_post_visibility_for_remix_alert', { error });
     }
   }
   // A version of someone's paid recipe never shows its prompt on the post, at
@@ -1229,9 +1269,9 @@ export async function publishGenerationToShowcaseForRoute({
   invalidateShowcaseFeedCache();
 
   // A remix posted where everyone can see it tells the creator of the post it
-  // remixed, by the remixer's name, behind the answer. Once per creation, so a
-  // republish of a public post sends nothing new.
-  if (effectiveVisibility === 'public' && postId) {
+  // remixed, by the remixer's name, behind the answer: when it goes public, and
+  // once per creation besides.
+  if (remixGoesPublic && postId) {
     const publishedPostId = postId;
     await sendDeferrableNotification(
       resolvedDependencies.runAfterResponse,
