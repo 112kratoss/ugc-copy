@@ -28,6 +28,7 @@ import {
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import { GenerationServiceError } from '@/lib/generation-service-core';
+import { getVideoCost } from '@/lib/models';
 import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
 import { ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
@@ -596,7 +597,7 @@ describe('workflow-runner recovery', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts private template video steps without counting start/end frames as generic references', async () => {
+  it('quotes a private template video step as the frames run it starts, its two frames counted', async () => {
     const prompt = createWorkflowNode('text-input', { x: 0, y: 0 });
     const start = createWorkflowNode('image-input', { x: 0, y: 160 });
     const end = createWorkflowNode('image-input', { x: 0, y: 320 });
@@ -645,10 +646,13 @@ describe('workflow-runner recovery', () => {
       templateContext: { runId: 'run-1', stepId: 'step-1' },
     });
 
+    // Frames, not references: the start sends them as the run's first and last frame.
     expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
-      inputCounts: expect.objectContaining({ images: 0 }),
+      settings: expect.objectContaining({ referenceMode: 'frames' }),
+      inputCounts: { images: 2, videos: 0, audios: 0 },
     }));
     expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      references: [],
       startImageUrl: 'https://signed.example/start.png',
       endImageUrl: 'https://signed.example/end.png',
       persistInputMedia: false,
@@ -985,7 +989,8 @@ describe('workflow-runner recovery', () => {
         }));
       });
 
-      // Pricing and counts stay those of the kind-total quote every canvas step has had.
+      // Pricing and counts stay those of the kind-total quote every canvas step has had; the
+      // references mode it now names is the one the quote read such a step in before.
       it('quotes a step with tracks as it always has: kind totals, the clip’s length, and no slot named', async () => {
         // The code catalog stands in for the step's release.
         const realQuote = (input: GenerationModelQuoteInput) => quoteGenerationModel(
@@ -1011,6 +1016,7 @@ describe('workflow-runner recovery', () => {
             resolution: step.data.resolution,
             fixedLens: step.data.fixedLens,
             isMultiShot: step.data.isMultiShot,
+            referenceMode: 'elements',
           },
           inputCounts: { images: 0, videos: 1, audios: 2 },
           inputMetadata: { referenceVideoDurationsSeconds: [7] },
@@ -1018,6 +1024,9 @@ describe('workflow-runner recovery', () => {
         };
         expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
         expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expectedInput);
+        const settingsBefore = { ...expectedInput.settings };
+        delete settingsBefore.referenceMode;
+        expect(realQuote(expectedInput)).toEqual(realQuote({ ...expectedInput, settings: settingsBefore }));
         expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
           referenceVideoUrls: ['https://cdn.example.com/clip.mp4'],
           referenceAudioUrls: ['https://cdn.example.com/track-1.mp3', 'https://cdn.example.com/track-2.mp3'],
@@ -1251,6 +1260,100 @@ describe('workflow-runner recovery', () => {
         expect(sent).toEqual(['characterImage:image:https://cdn.example.com/character.png', 'videoReferences:video:https://cdn.example.com/reference.mp4']);
         expect(planned).toEqual(['characterImage', 'videoReferences']);
       });
+    });
+  });
+
+  // A step's quote is its credit hold, so it is asked about the run the step starts: the
+  // mode the video start routes it to and the pictures it sends, its frames among them.
+  // Vidu Q4 and Hailuo 2.3 have no run without a picture, and a quote that counted no
+  // frames refused every step of theirs that had a start frame alone.
+  describe('a video step’s frames', () => {
+    const codeCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
+    const codeOperations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+    const quoteAsCreated = quoteGenerationModelMock.getMockImplementation()!;
+
+    beforeEach(() => {
+      // The code catalog stands in for the step's release.
+      quoteGenerationModelMock.mockImplementation((input) => quoteGenerationModel(
+        { ...(input as GenerationModelQuoteInput), catalogRevision: null },
+        { catalog: codeCatalog, operations: codeOperations },
+      ));
+    });
+
+    afterEach(() => {
+      quoteGenerationModelMock.mockImplementation(quoteAsCreated);
+    });
+
+    /** A video step given a prompt and an uploaded picture on each frame input named. */
+    async function runFrameStep(model: VideoGenerateNodeData['model'], frames: Array<'start-frame' | 'end-frame'>) {
+      const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
+      const pictures = frames.map((_, index) => createWorkflowNode('image-input', { x: 40, y: 200 + index * 160 }));
+      const step = createWorkflowNode('video-generate', { x: 320, y: 40 });
+      const graph = normalizeWorkflowGraph({
+        nodes: [
+          { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'The camera pushes in slowly.' } },
+          ...pictures.map((picture, index) => ({
+            ...picture,
+            data: { ...(picture.data as ImageInputNodeData), imageUrl: `https://cdn.example.com/frame-${index + 1}.png` },
+          })),
+          { ...step, data: { ...(step.data as VideoGenerateNodeData), model } },
+        ],
+        edges: [
+          createCanvasEdge(prompt.id, 'text', step.id, 'prompt'),
+          ...pictures.map((picture, index) => createCanvasEdge(picture.id, 'image', step.id, frames[index])),
+        ],
+      });
+      const node = graph.nodes.find((candidate) => candidate.id === step.id)!;
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      return {
+        data: node.data as VideoGenerateNodeData,
+        run: () => executeWorkflowRunnableNode({
+          supabase: {} as never,
+          userId: 'user-1',
+          graph,
+          node,
+          catalogRevision: 'catalog-rev-1',
+          clientRequestKeyHash: 'e'.repeat(64),
+        }),
+      };
+    }
+
+    it.each(['vidu-q4', 'hailuo-2.3'] as const)('quotes a %s step given a start frame alone, and holds the price of its run', async (model) => {
+      const step = await runFrameStep(model, ['start-frame']);
+
+      await expect(step.run()).resolves.toMatchObject({ status: 'processing', generation_id: 'gen-video' });
+      // The video start's own price for the run it sends: a picture, so an image-to-video run.
+      const price = getVideoCost(model, {
+        mode: step.data.mode,
+        sound: step.data.sound,
+        durationSeconds: step.data.duration,
+        resolution: step.data.resolution,
+        hasReferenceImage: true,
+      });
+      expect(price).toBeGreaterThan(0);
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        model,
+        startImageUrl: 'https://cdn.example.com/frame-1.png',
+        endImageUrl: null,
+        references: [],
+        quotedCostCredits: price,
+      }));
+    });
+
+    it('asks the quote about the frames the start sends, in the mode it sends them', async () => {
+      const step = await runFrameStep('kling-3.0-video', ['start-frame', 'end-frame']);
+
+      await step.run();
+
+      expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
+      expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+        settings: expect.objectContaining({ referenceMode: 'frames' }),
+        inputCounts: { images: 2, videos: 0, audios: 0 },
+      }));
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        startImageUrl: 'https://cdn.example.com/frame-1.png',
+        endImageUrl: 'https://cdn.example.com/frame-2.png',
+      }));
     });
   });
 

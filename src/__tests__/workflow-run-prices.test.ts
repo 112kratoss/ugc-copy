@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { planWorkflowStepPrice, useWorkflowRunPrices } from '@/app/create-workflow/useWorkflowRunPrices';
 import { formatWorkflowRunPrice } from '@/app/create-workflow/workflowCanvasUiUtils';
+import { quoteGenerationModel, type GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
+import { getVideoCost } from '@/lib/models';
 import {
   createCanvasEdge,
   createStarterGraph,
   createWorkflowNode,
   getExecutionOrder,
+  normalizeNodeData,
   type VideoGenerateNodeData,
   type WorkflowCanvasGraph,
   type WorkflowCanvasNode,
@@ -43,10 +46,15 @@ describe('planWorkflowStepPrice', () => {
       approximate: false,
       input: { kind: 'image', inputCounts: { images: 0, videos: 0, audios: 0 } },
     });
-    // The image input is the video's start frame, not one of its references.
+    // The image input is the video's start frame, not one of its references: a frames run
+    // of one picture, as the runner quotes it.
     expect(planWorkflowStepPrice(graph, video)).toMatchObject({
       kind: 'quote',
-      input: { kind: 'video', settings: { duration: videoSeconds }, inputCounts: { images: 0, videos: 0, audios: 0 } },
+      input: {
+        kind: 'video',
+        settings: { duration: videoSeconds, referenceMode: 'frames' },
+        inputCounts: { images: 1, videos: 0, audios: 0 },
+      },
     });
     // The motion step is charged for the clip the video step will make.
     expect(planWorkflowStepPrice(graph, nodeOfType(graph, 'motion-generate'))).toMatchObject({
@@ -54,6 +62,35 @@ describe('planWorkflowStepPrice', () => {
       approximate: true,
       input: { kind: 'motion', modelId: 'kling-3.0', settings: { resolution: '720p', duration: videoSeconds }, inputCounts: { images: 1, videos: 1 } },
     });
+  });
+
+  // Vidu Q4 and Hailuo 2.3 have no run from text alone. Their step's start frame is counted, as
+  // the runner counts it, so the canvas shows the price the run is held, not "Cost unavailable".
+  it.each(['vidu-q4', 'hailuo-2.3'] as const)('prices a %s step given a start frame alone at its run’s price', (model) => {
+    const graph = createStarterGraph();
+    const video = nodeOfType(graph, 'video-generate');
+    const step = { ...video, data: normalizeNodeData('video-generate', { ...video.data, model }) } as WorkflowCanvasNode;
+    const withModel: WorkflowCanvasGraph = {
+      ...graph,
+      nodes: graph.nodes.map((node) => (node.id === video.id ? step : node)),
+    };
+
+    const plan = planWorkflowStepPrice(withModel, step);
+
+    expect(plan).toMatchObject({
+      kind: 'quote',
+      approximate: false,
+      input: { modelId: model, settings: { referenceMode: 'frames' }, inputCounts: { images: 1, videos: 0, audios: 0 } },
+    });
+    const data = step.data as VideoGenerateNodeData;
+    // The code catalog stands in for the published release.
+    expect(quoteGenerationModel((plan as { input: GenerationModelQuoteInput }).input).costCredits).toBe(getVideoCost(model, {
+      mode: data.mode,
+      sound: data.sound,
+      durationSeconds: data.duration,
+      resolution: data.resolution,
+      hasReferenceImage: true,
+    }));
   });
 
   it('prices a multi-shot video by its shots and a motion step by an uploaded clip’s length', () => {

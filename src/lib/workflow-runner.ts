@@ -89,6 +89,7 @@ import {
 import { generationModelConditionMatches, type GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
+import { workflowVideoStepQuoteFacts } from '@/lib/workflow-video-step-quote';
 import { catalogMotionInputSlots } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 export interface WorkflowRunExecutionResult {
@@ -1155,6 +1156,17 @@ export async function executeWorkflowRunnableNode(params: {
     const quotedDuration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
       : data.duration;
+    // The run the start below sends, in the mode it routes it to, its frames counted when it
+    // is a frames run: the quote is the hold, and the canvas and a template's price read the
+    // step the same way (workflow-video-step-quote).
+    const { referenceMode, inputCounts } = workflowVideoStepQuoteFacts({
+      referencePictures: elementPayload.references.length,
+      startFrame: Boolean(inputs.startFrameUrl),
+      endFrame: Boolean(inputs.endFrameUrl),
+      referenceClips: elementPayload.referenceVideoUrls.length,
+      referenceTracks: elementPayload.referenceAudioUrls.length,
+      videoElements: klingVideoElements.length,
+    });
     const quoteInput: Omit<GenerationModelQuoteInput, 'catalogRevision'> = {
       kind: 'video',
       modelId: data.model,
@@ -1166,14 +1178,9 @@ export async function executeWorkflowRunnableNode(params: {
         resolution: data.resolution,
         fixedLens: data.fixedLens,
         isMultiShot: data.isMultiShot,
+        referenceMode,
       },
-      inputCounts: {
-        // Start/end frames are validated by their dedicated capabilities and
-        // are not generic image references for catalog limits or pricing.
-        images: elementPayload.references.length,
-        videos: elementPayload.referenceVideoUrls.length + klingVideoElements.length,
-        audios: elementPayload.referenceAudioUrls.length,
-      },
+      inputCounts,
       ...(referenceVideoDurationsSeconds.length > 0 ? { inputMetadata: { referenceVideoDurationsSeconds } } : {}),
     };
     const quote = await quoteRunnableNode(quoteInput);
