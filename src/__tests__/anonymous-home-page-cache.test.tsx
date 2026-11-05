@@ -415,7 +415,10 @@ describe('Anonymous home cacheability', () => {
     const { metadata } = await import('@/app/page');
 
     // The words a search matches left the h1 on 2026-10-31; these two now carry them.
-    expect(JSON.stringify(metadata.title)).toContain('AI Video, Image & Motion Transfer');
+    expect(JSON.stringify(metadata.title)).toContain(
+      'Magic Booklet: Create, share and earn with AI video and images',
+    );
+    expect(JSON.stringify(metadata.title)).not.toMatch(/UGC Ads/i);
     expect(metadata.description).toMatch(/AI images, AI videos, motion-transfer/);
   });
 

@@ -4,17 +4,17 @@ import AnonymousHome from '@/components/AnonymousHome';
 import { createMetadata, siteConfig } from '@/lib/seo';
 
 /**
- * The title leads with the category and keeps the brand name second.
- *
- * It was previously the brand tagline alone, which named no capability a person
- * searches for — the highest-authority page in the site was competing for
- * nothing. The tagline is the hero's h1 (`AnonymousHome`, since 2026-10-31), so
- * this title and the description below are where the page names what the
- * product does; a test holds both to those words.
+ * The title is the brand and its line, "Create, share and earn" (owner,
+ * 2026-11-05), followed by what a person makes here, so the page still names
+ * something a person searches for. It replaced "AI Video, Image & Motion
+ * Transfer for UGC Ads": the product is more than an ad maker. The tagline is
+ * the hero's h1 (`AnonymousHome`, since 2026-10-31), so this title and the
+ * description below are where the page names what the product does; a test
+ * holds both to those words.
  */
 export const metadata: Metadata = createMetadata({
   title: siteConfig.name,
-  absoluteTitle: `AI Video, Image & Motion Transfer for UGC Ads | ${siteConfig.name}`,
+  absoluteTitle: `${siteConfig.name}: Create, share and earn with AI video and images`,
   description:
     'Generate AI images, AI videos, motion-transfer UGC ads, and reusable creative workflows with Magic Booklet.',
   path: '/',
