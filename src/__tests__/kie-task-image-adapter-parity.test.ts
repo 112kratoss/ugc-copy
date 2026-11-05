@@ -148,6 +148,38 @@ describe('kie-task-v1 image adapter parity with the legacy payload ladder', () =
     });
   });
 
+  it('nano banana 2.1 sends nano banana 2\'s body under its own dashed id', () => {
+    // docs/model-api-references/nano-banana-2-1.md, read 2026-11-05.
+    expect(build('nano-banana-2.1', { ...BASE_SETTINGS, aspectRatio: '4:5', resolution: '4K', outputFormat: 'png' }).body).toEqual({
+      model: 'nano-banana-2-1',
+      input: { prompt: PROMPT, aspect_ratio: '4:5', resolution: '4K', output_format: 'png' },
+    });
+    expect(build('nano-banana-2.1', BASE_SETTINGS, [REF_URL, REF_URL_2]).body).toEqual({
+      model: 'nano-banana-2-1',
+      input: { prompt: PROMPT, aspect_ratio: '1:1', resolution: '1K', output_format: 'jpg', image_input: [REF_URL, REF_URL_2] },
+    });
+  });
+
+  it('flux 3 klein asks for jpeg, says the prompt rewrite and checker, and edits with references', () => {
+    // docs/model-api-references/flux-3-klein.md, read 2026-11-05.
+    expect(build('flux-3-klein', { ...BASE_SETTINGS, aspectRatio: '9:21', resolution: '4K' }).body).toEqual({
+      model: 'flux-3/klein-text-to-image',
+      input: { prompt: PROMPT, aspect_ratio: '9:21', resolution: '4K', output_format: 'jpeg', enhance_prompt: true, nsfw_checker: true },
+    });
+    expect(build('flux-3-klein', { ...BASE_SETTINGS, resolution: '2K' }, [REF_URL, REF_URL_2]).body).toEqual({
+      model: 'flux-3/klein-edit-image',
+      input: {
+        prompt: PROMPT,
+        aspect_ratio: '1:1',
+        resolution: '2K',
+        output_format: 'jpeg',
+        enhance_prompt: true,
+        nsfw_checker: true,
+        image_urls: [REF_URL, REF_URL_2],
+      },
+    });
+  });
+
   it('flux 2 pro keeps nsfw checker and switches provider id on references', () => {
     expect(build('flux-2-pro', BASE_SETTINGS).body).toEqual({
       model: 'flux-2/pro-text-to-image',

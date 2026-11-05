@@ -115,6 +115,12 @@ export const MODEL_ALIASES: Record<string, string> = {
   // (first_frame_url, last_frame_url), as Gemini Omni 1.1 Flash's body adds one to its target's;
   // the same prompt grammar and audio rule.
   'grok-imagine-video-1.5': 'grok-imagine-video',
+  // docs/model-api-references/nano-banana-2-1.md: Nano Banana 2's body field for field under
+  // its own id, from the same Google model line.
+  'nano-banana-2.1': 'nano-banana-2',
+  // docs/model-api-references/pixverse-v6-max.md: PixVerse V6's text and image-to-video bodies
+  // (no multi-clip switch), the same prompt grammar and sound toggle; Max has no references.
+  'pixverse-v6-max': 'pixverse-v6',
 };
 
 // ─── Image playbooks ─────────────────────────────────────────────────────────
@@ -389,6 +395,41 @@ const IMAGE_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
       label: 'FLUX.2 photographer',
       strategyRules: [
         'No contradictory directions (bright sunny day with moody dramatic shadows) — pick one coherent look.',
+      ],
+      defaultSafeguards: [PRESERVE_INTENT_SAFEGUARD],
+    },
+  },
+  // docs/model-api-references/flux-3-klein.md: Kie rewrites the prompt itself (`enhance_prompt`,
+  // sent on), so the brief stays short and literal and leaves the embellishing to that pass.
+  'flux-3-klein': {
+    modelId: 'flux-3-klein',
+    label: 'FLUX.3 Klein',
+    medium: 'image',
+    plannerMode: 'structured-image',
+    compilerProfile: 'prose-photo',
+    budget: { targetWords: [20, 80], maxChars: 4800 },
+    strategyRules: [
+      'Treat FLUX.3 Klein as a fast model whose provider expands the prompt before it renders: write a short, literal brief, subject first, and leave adjectives and atmosphere to that expansion.',
+      'Order it subject, action, setting, then one lighting clause and one style or camera note; one image idea per prompt.',
+      'Say every exclusion as a positive state; there is no negative-prompt field.',
+      'With references, give each picture one job and name it by place and a visible attribute ("the red sneaker in image 2"), and say what stays unchanged in an edit.',
+      'Keep any words that must appear in the image in quotes, word for word, so the expansion cannot paraphrase them.',
+    ],
+    workflowRules: [
+      'If stillImageModel is flux-3-klein, write a short literal brief with the subject first and clear reference roles.',
+    ],
+    plannerNotes: [
+      'The provider-side rewrite lengthens the prompt, so stop well under the budget rather than padding it.',
+      'Never emit tag lists, prompt weighting or quality-word spam.',
+    ],
+    textRenderingRules: [
+      'Put the exact words in quotes with their placement; a few words render best.',
+    ],
+    agent: {
+      id: 'flux-3-klein-sketcher',
+      label: 'FLUX.3 Klein sketcher',
+      strategyRules: [
+        'Prefer concrete nouns and verbs to adjectives; the expansion pass adds the polish.',
       ],
       defaultSafeguards: [PRESERVE_INTENT_SAFEGUARD],
     },
@@ -1190,6 +1231,79 @@ const VIDEO_PLAYBOOKS: Record<string, EnhancerPlaybook> = {
       ],
       defaultSafeguards: [
         { code: 'named_references_verbatim', message: 'Keep PixVerse @names exactly as the user wrote them.' },
+      ],
+    },
+  },
+  // docs/model-api-references/kling-4-0.md: audio is always generated (no clip is sent), each
+  // @ in the prompt must name an attached picture, and a run lasts 3 to 30 seconds.
+  'kling-4.0': {
+    modelId: 'kling-4.0',
+    label: 'Kling 4.0',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    compilerProfile: 'kling-shot',
+    budget: { targetWords: [60, 220], maxChars: 7500 },
+    audioBehavior: 'always',
+    strategyRules: [
+      'Treat Kling 4.0 as a cinematic scene engine: prose direction in the order scene, subject, sequential visible action, camera, lighting, atmosphere, then sound.',
+      'Name one camera move per beat with framing, direction and speed ("slow push-in"); the bare word "cinematic" is not a direction.',
+      'Chain actions chronologically with "then", "as" or "while", one beat per five seconds; a long run is a progression, never a pile of simultaneous verbs.',
+      'Audio is always generated: close with the soundscape (ambience, effects, any spoken line as [Speaker, tone] says: "line"), or ask for silence explicitly.',
+      'Keep every @name the user wrote exactly as written and never add one: each @ must name an attached picture, or the run is refused.',
+      'With a start frame, and an end frame, describe only what changes and the path between them, never the pictures themselves.',
+      'Fold avoidances into positive phrasing; there is no negative-prompt field.',
+    ],
+    workflowRules: [
+      'If primaryModel is kling-4.0, write cinematic scene direction with one camera move per beat, keep @names verbatim, and script the always-on audio.',
+    ],
+    plannerNotes: [
+      'Three to thirty seconds: scale the beats to the duration and keep one continuous scene unless the user asks for cuts.',
+      'Up to ten reference pictures; describe what each named subject does, not what it looks like.',
+    ],
+    agent: {
+      id: 'kling-4-director',
+      label: 'Kling 4.0 director',
+      strategyRules: [
+        'For a frame pair the frames carry appearance: spend the words on motion, camera path and sound.',
+      ],
+      defaultSafeguards: [
+        { code: 'named_references_verbatim', message: 'Keep Kling 4.0 @names exactly as the user wrote them, and add none.' },
+        { code: 'duration_aware_motion', message: 'Keep Kling 4.0 motion simple enough for the selected duration.' },
+      ],
+    },
+  },
+  // docs/model-api-references/vidu-q4.md: every run starts from a start frame or 1–15 pictures,
+  // which the model reads by order; audio follows the sound toggle; 3 to 16 seconds.
+  'vidu-q4': {
+    modelId: 'vidu-q4',
+    label: 'Vidu Q4',
+    medium: 'video',
+    plannerMode: 'structured-video',
+    compilerProfile: 'single-clip',
+    budget: { targetWords: [40, 160] },
+    audioBehavior: 'optional',
+    strategyRules: [
+      'Treat Vidu Q4 as an image-led single-clip director: every run starts from a start frame or reference pictures, so the prompt carries motion, camera and sound, not appearance.',
+      'With a start frame, describe only what moves and changes from it and the camera path; never restate the picture.',
+      'With reference pictures, say what each named subject does and how they meet in one scene; keep every @name exactly as written, since the legend sent beside the prompt binds it to its picture.',
+      'One scene, one camera move, and one action beat per five seconds, across three to sixteen seconds.',
+      'When sound is on, close with one Audio line: ambience, effects and any spoken line in quotes with its speaker; when it is off, write nothing about sound.',
+      'Phrase avoidances positively; there is no negative-prompt field.',
+    ],
+    workflowRules: [
+      'If primaryModel is vidu-q4, write motion, camera and sound for the attached frame or pictures, keep @names verbatim, and add an Audio line only when sound is on.',
+    ],
+    plannerNotes: [
+      'Up to fifteen reference pictures; a run with neither a start frame nor a picture cannot start.',
+    ],
+    agent: {
+      id: 'vidu-q4-animator',
+      label: 'Vidu Q4 animator',
+      strategyRules: [
+        'Plain, concrete sentences beat adjectives; describe action and camera in the order they happen.',
+      ],
+      defaultSafeguards: [
+        { code: 'named_references_verbatim', message: 'Keep Vidu @names exactly as the user wrote them.' },
       ],
     },
   },

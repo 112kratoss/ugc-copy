@@ -65,6 +65,10 @@ const IMAGE_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   // Seedream 5 Lite's and Qwen 3's figures until real runs give each its own.
   'seedream-5-flash': 90_000,
   'qwen-image-2.1': 105_000,
+  // 2026-11-05: Nano Banana 2's figure for its 2.1 body, and Seedream 5 Flash's for the fast
+  // FLUX.3 Klein, until real runs give each its own.
+  'nano-banana-2.1': 120_000,
+  'flux-3-klein': 90_000,
   // Registration audit 2026-08-16: these models had no estimate, which silently
   // disabled their progress bars (estimateGenerationDurationMs returns null).
   'seedream-5-lite': 105_000,
@@ -106,6 +110,11 @@ const VIDEO_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {
   'wan-3.0-prime': 120_000,
   'grok-imagine-video-1.5': 120_000,
   'pixverse-v6': 120_000,
+  // 2026-11-05: neighbours' figures until real runs give each its own. V6 Max is V6's top
+  // tier; Kling 4.0 renders up to 30 s like Wan 3.0; Vidu Q4 reaches 4K.
+  'pixverse-v6-max': 120_000,
+  'kling-4.0': 180_000,
+  'vidu-q4': 150_000,
 };
 
 const MOTION_MODEL_BASE_ESTIMATE_MS: Record<string, number> = {

@@ -64,6 +64,15 @@ const VERIFIED_PROVIDER_IDS: Partial<Record<ImageModelId, { text: string; refere
     text: 'qwen2-1/text-to-image',
     reference: 'qwen2-1/image-to-image',
   },
+  // Verified 2026-11-05 against docs.kie.ai/market/google/nanobanana-2-1.md (one id for text and
+  // references, dashed) and a zero-cost probe (docs/model-api-references/nano-banana-2-1.md).
+  'nano-banana-2.1': { text: 'nano-banana-2-1', reference: 'nano-banana-2-1' },
+  // Verified 2026-11-05 against docs.kie.ai/market/flux3/klein-{text-to-image,edit-image}.md:
+  // `flux-3/` though the docs path says `flux3/` (docs/model-api-references/flux-3-klein.md).
+  'flux-3-klein': {
+    text: 'flux-3/klein-text-to-image',
+    reference: 'flux-3/klein-edit-image',
+  },
   // UNVERIFIED. No published spec was found for z-image under any probed path
   // on docs.kie.ai, so this records current behaviour rather than a confirmed
   // provider id. It is listed so the completeness check below still forces a

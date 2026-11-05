@@ -114,6 +114,9 @@ const END_FRAME_NEEDS_START_FRAME: readonly string[] = [
   'pixverse-v6',
   // grok-imagine-video-1-5-preview: Kie's own form clears the end frame when the first goes.
   'grok-imagine-video-1.5',
+  // kling-4.0/keyframe-to-video names no rule for a lone last frame; it is held to the pair
+  // contract of Kling 3.0 rather than sent to find out after the hold.
+  'kling-4.0',
 ];
 
 /**
@@ -176,6 +179,8 @@ const VIDEO_REFERENCE_IMAGE_CAPS: Record<string, number> = {
   'wan-3.0-prime': 10,
   'grok-imagine-video-1.5': 7,
   'pixverse-v6': 7,
+  'kling-4.0': 10,
+  'vidu-q4': 15,
 };
 
 export const GENERATION_MODEL_VALIDATION_RULE_TYPES = [
@@ -316,6 +321,15 @@ const IMAGE_PROVIDER_MODELS: Record<ImageModelId, Record<string, string>> = {
     text: 'qwen2-1/text-to-image',
     reference: 'qwen2-1/image-to-image',
   },
+  // Verified 2026-11-05 against docs.kie.ai/market/google/nanobanana-2-1.md: one id for text
+  // and references, dashed where the app id has a dot.
+  'nano-banana-2.1': { default: 'nano-banana-2-1' },
+  // Verified 2026-11-05 against docs.kie.ai/market/flux3/klein-*.md: the docs path says
+  // `flux3/`, the ids say `flux-3/`.
+  'flux-3-klein': {
+    text: 'flux-3/klein-text-to-image',
+    reference: 'flux-3/klein-edit-image',
+  },
 };
 
 /**
@@ -426,6 +440,21 @@ const KIE_TASK_IMAGE_ADAPTER_CONFIGS: Partial<Record<ImageModelId, Record<string
     slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
     variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
   },
+  // docs/model-api-references/nano-banana-2-1.md: Nano Banana 2's body under its own id.
+  'nano-banana-2.1': NANO_BANANA_ADAPTER_CONFIG,
+  // docs/model-api-references/flux-3-klein.md: `output_format` defaults to png, so jpeg is
+  // sent to match the jpg the app records; `enhance_prompt` is Kie's default, sent so the
+  // request says what runs; `nsfw_checker` as FLUX.2 Pro's. One picture a run (`num_images`
+  // left at its default of 1, the priced figure).
+  'flux-3-klein': {
+    settings: {
+      aspectRatio: { field: 'aspect_ratio' },
+      resolution: { field: 'resolution' },
+    },
+    constants: { output_format: 'jpeg', enhance_prompt: true, nsfw_checker: true },
+    slots: { imageReferences: { field: 'image_urls', cardinality: 'many', source: 'url' } },
+    variantSelector: { type: 'slot-presence', slot: 'imageReferences', present: 'reference', absent: 'text' },
+  },
 };
 
 const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
@@ -497,6 +526,27 @@ const VIDEO_PROVIDER_MODELS: Record<VideoModelId, Record<string, string>> = {
     image: 'pixverse-v6/image-to-video',
     transition: 'pixverse-v6/transition',
     reference: 'pixverse-v6/reference-to-video',
+  },
+  // docs/model-api-references/pixverse-v6-max.md (2026-11-05): text and a start frame only.
+  'pixverse-v6-max': {
+    default: 'pixverse-v6-max/text-to-video',
+    text: 'pixverse-v6-max/text-to-video',
+    image: 'pixverse-v6-max/image-to-video',
+  },
+  // docs/model-api-references/kling-4-0.md (2026-11-05): no text-to-video id; the reference
+  // endpoint "behaves as plain text-to-video" with no materials, and the keyframe endpoint
+  // takes the frame pair.
+  'kling-4.0': {
+    default: 'kling-4.0/reference-to-video',
+    text: 'kling-4.0/reference-to-video',
+    image: 'kling-4.0/keyframe-to-video',
+    reference: 'kling-4.0/reference-to-video',
+  },
+  // docs/model-api-references/vidu-q4.md (2026-11-05): no text-only run.
+  'vidu-q4': {
+    default: 'vidu-q4/image-to-video',
+    image: 'vidu-q4/image-to-video',
+    reference: 'vidu-q4/reference-to-video',
   },
 };
 
@@ -712,13 +762,19 @@ function videoPricingExpression(model: (typeof VIDEO_MODELS)[VideoModelId]): Pri
     case 'happyhorse-1.1':
     case 'grok-imagine-video':
     case 'grok-imagine-video-1.5':
+    // kling-4.0 sends no clip, so its no-video rate bills the output seconds on both endpoints
+    // (docs/model-api-references/kling-4-0.md); vidu-q4 bills one rate per resolution, audio or not.
+    case 'kling-4.0':
+    case 'vidu-q4':
       return perSecond(lookup(
         [selector('setting', 'resolution', { defaultValue: model.resolutions[0] })],
         model.pricing,
       ));
     case 'pixverse-v6':
-      // One table for every shape: Kie dropped the 12.5 % reference-to-video surcharge
-      // (re-read 2026-10-20), so a references run no longer has a branch of its own.
+    // One table for every shape: Kie dropped the 12.5 % reference-to-video surcharge
+    // (re-read 2026-10-20), so a references run no longer has a branch of its own. V6 Max
+    // prices its text and start-frame runs alike (docs/model-api-references/pixverse-v6-max.md).
+    case 'pixverse-v6-max':
       return perSecond(lookup(
         [
           selector('setting', 'resolution', { defaultValue: model.resolutions[0] }),
@@ -1134,6 +1190,17 @@ function validationConfigForModel(
           message: 'Hailuo 2.3 supports 1080P output at 6 seconds only.',
         },
       );
+    }
+    if (modelId === 'vidu-q4') {
+      // vidu-q4 has no text-only endpoint: image-to-video requires `image_url` and
+      // reference-to-video `reference_image_urls` (minItems 1). The descriptor's slots say so
+      // for a client that reports them; this holds a count-only quote to the same.
+      rules.push({
+        type: 'min-slot-count',
+        slotKey: 'images',
+        min: 1,
+        message: 'Vidu Q4 needs a start frame or at least one reference picture.',
+      });
     }
     // Kie caps the combined duration of reference videos separately from the file
     // count, so the extra slots seedance-2-5 and minimax-h3 accept buy more clips, not

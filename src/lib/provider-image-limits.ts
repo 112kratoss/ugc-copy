@@ -15,7 +15,9 @@ import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/models';
  * is held as at most 30 MB for the same reason. An endpoint or field with no entry
  * documents no size for its pictures and is never measured: among the endpoints the app
  * sends pictures to, the GPT Image and Wan 2.7 pages, pixverse/reference-to-video,
- * kling-3.0/video's frames, the Seedance 2 frames and Veo name none, and wan/2-7-r2v's
+ * kling-3.0/video's frames, the Seedance 2 frames, Veo, vidu-q4/reference-to-video and both
+ * Kling 4.0 endpoints (whose pictures have a pixel range, 300–65536 a side, and no file size)
+ * name none, and wan/2-7-r2v's
  * "up to `30MB`" (:168) is its reference voice. Seedance 1.5 Pro's page is gone (404); its
  * entry keeps the 10 MB of the page's archived capture.
  */
@@ -105,6 +107,9 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   // (pixverse/image-to-video:121-129); each frame of a transition "must not exceed 20 MB"
   // (pixverse/transition:120-127, :130-137).
   'pixverse-v6/image-to-video': [limit('image_urls', 'frame', 20)],
+  // PixVerse V6 Max: the start frame "file size must be ≤ 20 MB"
+  // (pixverse/v6-max-image-to-video:128-143, read 2026-11-05).
+  'pixverse-v6-max/image-to-video': [limit('image_urls', 'frame', 20)],
   'pixverse-v6/transition': [
     limit('first_frame_image_url', 'frame', 20),
     limit('last_frame_image_url', 'frame', 20),
@@ -121,6 +126,11 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   'nano-banana-2': [limit('image_input', 'reference', 30)],
   'nano-banana-2-lite': [limit('image_urls', 'reference', 30)],
   'nano-banana-pro': [limit('image_input', 'reference', 30)],
+  // Nano Banana 2.1: "Max size: 30.0MB" (google/nanobanana-2-1:127-139, read 2026-11-05).
+  'nano-banana-2-1': [limit('image_input', 'reference', 30)],
+  // FLUX.3 Klein's edit endpoint: image_urls "Max size: 30.0MB" (flux3/klein-edit-image:90-101,
+  // read 2026-11-05).
+  'flux-3/klein-edit-image': [limit('image_urls', 'reference', 30)],
   // Seedream 5 Pro, Lite and Flash: image_urls "Max size: 30.0MB"
   // (seedream/5-pro-image-to-image:126-130, seedream-5-lite-image-to-image:114-118,
   // seedream/5-flash-image-to-image:120-124).
@@ -155,6 +165,8 @@ const PROVIDER_IMAGE_LIMITS: Readonly<Record<string, readonly ProviderImageField
   // (kling/v3-omni-reference-to-video:129-143, :530-541).
   'kling-3.0-omni/image-to-video': [limit('image_urls', 'frame', 50)],
   'kling-3.0-omni/reference-to-video': [limit('image_urls', 'reference', 50)],
+  // Vidu Q4: the first frame "up to 50 MB" (vidu-q4/image-to-video:109-116, read 2026-11-05).
+  'vidu-q4/image-to-video': [limit('image_url', 'frame', 50)],
 };
 
 /** The picture fields of a Kie endpoint that have a documented size limit. */

@@ -50,12 +50,20 @@ const RULES_BEFORE_THE_MOVE = {
   'minimax-h3': { maxLength: 7000 },
 };
 
+/** Rules for models added after the move, each from its evidence file in docs/model-api-references. */
+const RULES_ADDED_SINCE = {
+  // 2026-11-05: flux-3-klein.md, pixverse-v6-max.md, kling-4-0.md.
+  'flux-3-klein': { maxLength: 5000 },
+  'pixverse-v6-max': { maxLength: 5000 },
+  'kling-4.0': { maxLength: 8000 },
+};
+
 const MODELS = { ...IMAGE_MODELS, ...VIDEO_MODELS, ...MOTION_MODELS } as Record<string, { displayName: string }>;
 const ALL_MODEL_IDS = Object.keys(MODELS);
 
 describe('shared provider prompt limits', () => {
   it('holds every model to the numbers the server held it to before they were shared', () => {
-    expect(PROVIDER_PROMPT_RULES).toEqual(RULES_BEFORE_THE_MOVE);
+    expect(PROVIDER_PROMPT_RULES).toEqual({ ...RULES_BEFORE_THE_MOVE, ...RULES_ADDED_SINCE });
     // Every rule names a model the app runs.
     for (const modelId of Object.keys(PROVIDER_PROMPT_RULES)) expect(ALL_MODEL_IDS, modelId).toContain(modelId);
   });
