@@ -1,12 +1,13 @@
 ---
 name: ship-ota
 description: Publish a JS-only over-the-air (OTA) update of the Magicbooklet mobile app with ugc-mobile/scripts/publish-ota.mjs and prove it reached phones. Use when the owner asks to ship, publish or roll out an OTA, to "update the apps" after a mobile fix merged, for a dry run, or to roll a live update back. Not for store binaries (that is mobile-store-release.yml), and not before the web release is live when the app half calls a new server route.
-disable-model-invocation: true
 ---
 
 # Ship an OTA
 
 Every step here is one the publish script enforces or a check around it. The script is the only way an update leaves this Mac; never call `eas update` yourself (the Bash guard in `.claude/hooks/guard-bash.py` blocks it). Say "OTA" when reporting, never "release" or "deploy": merging to `main` never reaches phones.
+
+An OTA reaches users' phones, so `--publish` (and a rollback) waits for the owner's word in chat for that update; a dry run does not. Agents load this skill themselves (owner, 2026-11-05: the `disable-model-invocation` flag it carried from 2026-10-18 sent every publish back to the owner as a `/ship-ota` to type).
 
 ## Before the dry run
 
