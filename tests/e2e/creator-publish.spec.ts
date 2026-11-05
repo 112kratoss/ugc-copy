@@ -202,7 +202,10 @@ test('publishes from the canvas: the creation’s title, its recipe on, a first 
 
   const form = publishForm(page);
   await expect(form.getByRole('textbox', { name: 'Title' })).toHaveValue('Paper boat at dawn');
-  await expect(form.getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'true');
+  // A creation's post always carries its recipe, free, with remixes allowed (owner, 2026-11-05).
+  await expect(form.getByRole('heading', { name: 'Free recipe' })).toBeVisible();
+  await expect(form.getByRole('switch', { name: 'Share the recipe' })).toHaveCount(0);
+  await expect(form.getByRole('switch', { name: 'Allow remixes' })).toHaveAttribute('aria-checked', 'true');
   await expect(form).toContainText('your first post sets these');
   // The Publish window this replaces is gone from the page.
   await expect(page.locator('main').getByRole('button', { name: /Publish & share/ })).toHaveCount(0);
@@ -226,6 +229,7 @@ test('publishes from the canvas: the creation’s title, its recipe on, a first 
     visibility: 'public',
     title: 'Paper boat at dawn',
     resourceBundle: { accessMode: 'free', priceUsdCents: 0, resources: { promptText: PROMPT } },
+    allowRemixes: true,
   });
 });
 
