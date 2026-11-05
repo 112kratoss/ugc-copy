@@ -61,6 +61,26 @@ function createRateLimitResult(error: BackendRateLimitError): PostResourceBundle
   };
 }
 
+/** Said when a free recipe on a version of someone's paid recipe is asked for. */
+export const PAID_VERSION_NOT_FREE_ERROR =
+  "This recipe is a version of a paid recipe, so it can't be taken for free.";
+export const PAID_VERSION_NOT_FREE_CODE = 'REMIX_RECIPE_NOT_FREE';
+
+/**
+ * The remix terms the post keeps (`posts.remix_recipe_mode`, 20261105123244),
+ * read with the service client. A read that fails throws, and the claim is
+ * refused with a 500.
+ */
+async function defaultLoadPostRemixMode(adminSupabase: SupabaseClient, postId: string): Promise<string | null> {
+  const { data, error } = await adminSupabase
+    .from('posts')
+    .select('remix_recipe_mode')
+    .eq('id', postId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { remix_recipe_mode?: string | null } | null)?.remix_recipe_mode ?? null;
+}
+
 function rpcObject<T extends { status: string }>(value: unknown): T | null {
   const candidate = Array.isArray(value) ? value[0] : value;
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return null;
@@ -76,6 +96,7 @@ export async function unlockFreePostResourceBundleForRoute({
   isPostResourceBundleBuyWithheld = defaultIsPostResourceBundleBuyWithheld,
   notifyPostResourceUnlockCompleted = defaultNotifyPostResourceUnlockCompleted,
   invalidateMarketplaceResourceListCache = defaultInvalidateMarketplaceResourceListCache,
+  loadPostRemixMode = defaultLoadPostRemixMode,
   createId = randomUUID,
   runAfterResponse,
 }: {
@@ -86,6 +107,7 @@ export async function unlockFreePostResourceBundleForRoute({
   isPostResourceBundleBuyWithheld?: typeof defaultIsPostResourceBundleBuyWithheld;
   notifyPostResourceUnlockCompleted?: NotifyPostResourceUnlockCompleted;
   invalidateMarketplaceResourceListCache?: () => void;
+  loadPostRemixMode?: typeof defaultLoadPostRemixMode;
   createId?: () => string;
   /**
    * Runs a task once the caller has answered its request. The route passes one
@@ -133,6 +155,21 @@ export async function unlockFreePostResourceBundleForRoute({
 
   if (bundle.access_mode !== 'free' || bundle.price_usd_cents !== 0) {
     return { ok: false, status: 400, body: { error: 'This bundle requires payment.' } };
+  }
+
+  // A version of someone's paid recipe is never given away (owner, 2026-11-05:
+  // paid stays paid). Publish and edit refuse a free recipe on one; a post that
+  // held one before that rule keeps it out of reach here until its creator makes
+  // it paid.
+  let remixMode: string | null;
+  try {
+    remixMode = await loadPostRemixMode(adminSupabase, postId);
+  } catch (error) {
+    logBackendError('failed_to_check_free_unlock_remix_terms', { error });
+    return { ok: false, status: 500, body: { error: 'Failed to get the free recipe.' } };
+  }
+  if (remixMode === 'paid') {
+    return { ok: false, status: 400, body: { error: PAID_VERSION_NOT_FREE_ERROR, code: PAID_VERSION_NOT_FREE_CODE } };
   }
 
   const freeOrderId = `free_bundle_${createId()}`;

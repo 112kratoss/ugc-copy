@@ -13,6 +13,7 @@ const GENERATION: RemixAccessGeneration = {
   share_input_media_for_remix: true,
   template_run_id: null,
   template_run_step_id: null,
+  remix_recipe_mode: null,
 };
 
 const EXPOSED_POST = {
@@ -33,6 +34,8 @@ const REMIX_RECIPE = {
   owner_user_id: 'creator-1',
   status: 'published',
   allow_remix: true,
+  access_mode: 'paid',
+  retired_at: null as string | null,
 };
 
 /**
@@ -455,8 +458,8 @@ describe('resolveRemixAccess', () => {
   });
 
   it.each([
-    ['a recipe that is not published', { ...REMIX_RECIPE, status: 'draft' }],
-    ['a recipe removed after people had it', { ...REMIX_RECIPE, allow_remix: false, status: 'draft' }],
+    ['a free recipe not published yet', { ...REMIX_RECIPE, access_mode: 'free', status: 'draft' }],
+    ['a recipe removed after people had it', { ...REMIX_RECIPE, allow_remix: false, status: 'draft', retired_at: '2026-10-28T00:00:00.000Z' }],
   ])('keeps remixing public for %s', async (_label, bundle) => {
     const { client } = createClient({ tables: { post_resource_bundles: [bundle] } });
 
@@ -468,6 +471,53 @@ describe('resolveRemixAccess', () => {
     });
 
     expect(decision).toMatchObject({ allowed: true, basis: 'public', recipeEntitled: false });
+  });
+
+  // Plan review, 2026-11-05: a paid recipe still a draft on a public post (short of the listing
+  // rules) gated nothing, so Remix handed anyone the prompt it was meant to sell.
+  it('closes Remix while a paid recipe on the post is not live yet', async () => {
+    const { client } = createClient({ tables: { post_resource_bundles: [{ ...REMIX_RECIPE, status: 'draft' }] } });
+
+    const decision = await resolveRemixAccess({
+      adminSupabase: client,
+      viewerUserId: 'viewer-1',
+      generation: GENERATION,
+      dependencies: notBlocked(),
+    });
+
+    expect(decision).toEqual({ allowed: false, reason: 'not_found' });
+  });
+
+  // A version of someone's paid recipe is remixed only through a paid recipe live on its post
+  // (owner, 2026-11-05: paid stays paid), never as an open post.
+  it.each([
+    ['no recipe', []],
+    ['a free recipe', [{ ...REMIX_RECIPE, access_mode: 'free' }]],
+    ['a paid recipe it took down', [{ ...REMIX_RECIPE, status: 'draft', retired_at: '2026-10-28T00:00:00.000Z' }]],
+  ])('closes Remix on a version of a paid recipe whose post has %s', async (_label, bundles) => {
+    const { client } = createClient({ tables: { post_resource_bundles: bundles } });
+
+    const decision = await resolveRemixAccess({
+      adminSupabase: client,
+      viewerUserId: 'viewer-1',
+      generation: { ...GENERATION, remix_recipe_mode: 'paid' },
+      dependencies: notBlocked(),
+    });
+
+    expect(decision).toEqual({ allowed: false, reason: 'not_found' });
+  });
+
+  it('sends a version of a paid recipe to the unlock of the paid recipe live on its post', async () => {
+    const { client } = createClient({ tables: { post_resource_bundles: [REMIX_RECIPE] } });
+
+    const decision = await resolveRemixAccess({
+      adminSupabase: client,
+      viewerUserId: 'viewer-1',
+      generation: { ...GENERATION, remix_recipe_mode: 'paid' },
+      dependencies: notBlocked(),
+    });
+
+    expect(decision).toEqual({ allowed: false, reason: 'unlock_required' });
   });
 
   // A retired recipe gates no Remix, and its buyers keep it: the gate names it, unasked about the

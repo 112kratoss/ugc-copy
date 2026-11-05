@@ -34,6 +34,7 @@ type GenerationRow = TemplateRunLink & {
   model?: string | null;
   prompt?: string | null;
   workflow_settings?: unknown;
+  remix_recipe_mode?: string | null;
 };
 
 export type ShowcaseRemixServiceDependencies = {
@@ -159,7 +160,7 @@ export async function remixShowcasePostForRoute({
   // remix-enabled recipe on it is unlocked, and nobody for a template's result.
   const { data: generation, error: generationError } = await serviceClient
     .from('generations')
-    .select('id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings, template_run_id, template_run_step_id')
+    .select('id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings, template_run_id, template_run_step_id, remix_recipe_mode')
     .eq('id', post.generation_id)
     .maybeSingle();
 
@@ -181,6 +182,7 @@ export async function remixShowcasePostForRoute({
       share_input_media_for_remix: generationRow.share_input_media_for_remix ?? null,
       template_run_id: generationRow.template_run_id ?? null,
       template_run_step_id: generationRow.template_run_step_id ?? null,
+      remix_recipe_mode: generationRow.remix_recipe_mode ?? null,
     },
     requestedPostId: post.id,
     dependencies: { isUserRelationshipBlocked: resolvedDependencies.isUserRelationshipBlocked },

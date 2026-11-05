@@ -61,6 +61,7 @@ type RemixSourceGenerationRow = TemplateRunLink & {
   title: string | null;
   creation_mode?: string | null;
   workflow_settings: Record<string, unknown> | null;
+  remix_recipe_mode?: string | null;
 };
 
 type ResultGenerationRow = Pick<
@@ -69,7 +70,7 @@ type ResultGenerationRow = Pick<
 >;
 
 const GENERATION_SELECT =
-  'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, creation_mode, model, prompt, title, workflow_settings, template_run_id, template_run_step_id';
+  'id, user_id, is_public, share_input_media_for_remix, output_url, showcase_asset_path, category, creation_mode, model, prompt, title, workflow_settings, template_run_id, template_run_step_id, remix_recipe_mode';
 
 // The proxy's answer to a guest on a registered-only path, word for word: the
 // app already reads this code as "sign in to do that".
@@ -335,6 +336,7 @@ export async function loadRemixSourceBundle(
       share_input_media_for_remix: typedGeneration.share_input_media_for_remix ?? null,
       template_run_id: typedGeneration.template_run_id ?? null,
       template_run_step_id: typedGeneration.template_run_step_id ?? null,
+      remix_recipe_mode: typedGeneration.remix_recipe_mode ?? null,
     },
     requestedPostId: options?.postId ?? null,
   });

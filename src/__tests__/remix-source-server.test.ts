@@ -167,6 +167,7 @@ describe('loadRemixSourceBundle access', () => {
         share_input_media_for_remix: true,
         template_run_id: null,
         template_run_step_id: null,
+        remix_recipe_mode: null,
       },
     }));
     expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();

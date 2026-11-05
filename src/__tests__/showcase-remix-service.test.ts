@@ -56,6 +56,8 @@ const REMIX_RECIPE_BUNDLE = {
   id: 'bundle-1',
   post_id: 'post-1',
   status: 'published',
+  access_mode: 'paid',
+  retired_at: null,
   allow_remix: true,
 };
 
@@ -197,7 +199,7 @@ describe('remixShowcasePostForRoute', () => {
     );
     expect(serviceClient.fromMock).toHaveBeenCalledWith('generations');
     expect(serviceClient.selectMock).toHaveBeenCalledWith(
-      'id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings, template_run_id, template_run_step_id',
+      'id, user_id, is_public, share_input_media_for_remix, category, creation_mode, model, prompt, workflow_settings, template_run_id, template_run_step_id, remix_recipe_mode',
     );
     expect(serviceClient.eqMock).toHaveBeenCalledWith('id', 'gen-1');
     expect(serviceClient.rpcMock).not.toHaveBeenCalled();

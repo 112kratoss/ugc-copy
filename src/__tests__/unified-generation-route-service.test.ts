@@ -15,7 +15,12 @@ import { GenerationServiceError } from '@/lib/generation-services';
 import { GenerationStartIdempotencyError } from '@/lib/generation-start-idempotency';
 import { registerIdentityAdmissionContext } from '@/lib/identity-admission-assertion';
 import { createAdmittedIdentityHeaders, evaluateUserFacingRouteIdentity } from '@/lib/route-identity-admission';
-import { SourceGenerationValidationError } from '@/lib/source-generation';
+import {
+  REMIX_SOURCE_NO_LONGER_REMIXABLE,
+  REMIX_SOURCE_NO_LONGER_REMIXABLE_CODE,
+  SourceGenerationValidationError,
+} from '@/lib/source-generation';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 const startUnifiedGenerationForRouteMock = vi.hoisted(() => vi.fn());
 const reportKieInsufficientCreditsRefusalMock = vi.hoisted(() => vi.fn());
@@ -550,6 +555,19 @@ describe('unified generation route service', () => {
       const result = await postRefusedStart(error);
 
       expect(result).toEqual({ ok: false, status, body: { code, error: error.message } });
+    });
+
+    // Plan review, 2026-11-05: someone who paid for a post's recipe and can no longer remix it is
+    // told so under a code of its own, pinned in the contract, rather than starting a free run.
+    it('answers a bought remix that can no longer start with its own code, as the contract pins it', async () => {
+      const refusal = mobileApiContract.endpoints.startGeneration.errors.remixSourceNoLongerRemixable;
+      const result = await postRefusedStart(new SourceGenerationValidationError(
+        REMIX_SOURCE_NO_LONGER_REMIXABLE,
+        409,
+        REMIX_SOURCE_NO_LONGER_REMIXABLE_CODE,
+      ));
+
+      expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
     });
 
     it.each([

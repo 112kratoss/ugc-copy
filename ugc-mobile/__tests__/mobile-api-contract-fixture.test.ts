@@ -10,7 +10,7 @@ import {
   type SaveShowcasePostOptions,
 } from '../lib/api-client';
 import { isCreationLibraryMember } from '../lib/creation-library';
-import { recipeCopyableInputs } from '../lib/creation-recipe/creation-recipe';
+import { recipeCopyableInputs, remixRecipeRefusal } from '../lib/creation-recipe/creation-recipe';
 import { isRecipeTitleTooShortRefusal } from '../lib/post-new-view-model';
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
@@ -163,6 +163,49 @@ it('hands the composer the code it offers Post without recipe on, from every rou
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 400, message: refusal.response.error, code: 'RECIPE_TITLE_TOO_SHORT' });
     expect(isRecipeTitleTooShortRefusal(error)).toBe(true);
+  }
+});
+
+// Owner, 2026-11-05: a version of a paid recipe can't be taken free, and the app reads the
+// refusal by its code. (A start a buyer can no longer make from a post they can't remix,
+// `remixSourceNoLongerRemixable`, is read with the start's other refusals below.)
+it('hands the app the refusal of a free claim on a version of a paid recipe', async () => {
+  const refusal = mobileApiContract.endpoints.unlockFreeBundle.errors.paidVersionNotFree;
+  const api = createApiClient({
+    baseUrl: 'https://magicbooklet.test',
+    getAccessToken: async () => 'token-1',
+    fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)) as unknown as typeof fetch,
+  });
+  const error = await api.unlockFreeBundle('post-1').catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error).toMatchObject({ status: refusal.status, message: refusal.response.error, code: refusal.response.code });
+});
+
+// Owner, 2026-11-05: a remix of a paid recipe goes public only with a paid
+// recipe, and a remix of a free one only with a free one or none. Both saves
+// refuse in the shared module's words, under codes the composers can read.
+it('hands the composer the remix terms refusals, in the shared words', async () => {
+  const calls = {
+    publishGeneration: (api: MagicbookletApiClient) => api.publishGeneration({ generationId: 'generation-1', visibility: 'public' }),
+    updatePost: (api: MagicbookletApiClient) => api.updatePost('post-1', { visibility: 'public' }),
+  } as const;
+  const shared = {
+    remixRecipeMustBePaid: remixRecipeRefusal('paid', 'free'),
+    remixRecipeStaysFree: remixRecipeRefusal('free', 'paid'),
+  } as const;
+  for (const [key, call] of Object.entries(calls) as Array<[keyof typeof calls, (api: MagicbookletApiClient) => Promise<unknown>]>) {
+    for (const name of ['remixRecipeMustBePaid', 'remixRecipeStaysFree'] as const) {
+      const refusal = mobileApiContract.endpoints[key].errors[name];
+      expect(refusal.response).toMatchObject({ ...shared[name], field: 'resourceBundle' });
+      const api = createApiClient({
+        baseUrl: 'https://magicbooklet.test',
+        getAccessToken: async () => 'token-1',
+        fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)) as unknown as typeof fetch,
+      });
+      const error = await call(api).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ status: 400, message: refusal.response.error, code: refusal.response.code });
+    }
   }
 });
 

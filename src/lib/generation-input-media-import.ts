@@ -18,7 +18,7 @@ const MAX_POSTS_PER_GENERATION = 5;
 /** Where a creation's result can live: its post's public copy, or the creator's private output. */
 const REMIX_RESULT_BUCKETS = [SHOWCASE_MEDIA_BUCKET, 'generated_images', 'generated_videos'];
 const REMIX_RESULT_GENERATION_SELECT =
-  'id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id, showcase_asset_path, output_url';
+  'id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id, showcase_asset_path, output_url, remix_recipe_mode';
 
 type RemixResultGeneration = RemixAccessGeneration & {
   showcase_asset_path: string | null;
@@ -123,7 +123,7 @@ export async function importSharedGenerationInputMedia(params: {
 
   const generationResult = await adminSupabase
     .from('generations')
-    .select('id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id')
+    .select('id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id, remix_recipe_mode')
     .eq('id', mediaRow.generation_id)
     .maybeSingle();
   if (generationResult.error) {
