@@ -1,6 +1,7 @@
 import type { GenerationSetupEntry } from './generation-setup/generation-setup';
 import type { SeedanceAssetCollections, SeedanceAssetKind, SeedanceAssetStatus } from './model-catalog/seedance-assets';
 import type { RemixInputSlot } from './remix-input-slots/remix-input-slots';
+import type { RemixCredit } from './remix-credit/remix-credit';
 
 export type CreatorToolId = 'image' | 'video' | 'motion';
 
@@ -1063,6 +1064,20 @@ export interface ShowcaseFeedItem {
    * the post for them (`usePostGenerationSetup`).
    */
   generationSetup?: GenerationSetupEntry[];
+  /**
+   * A remix post's credit (owner, 2026-11-05; `lib/remix-credit`): the post it
+   * remixed, while that post is public and visible, and the chain's first
+   * creator when someone else, without anyone the viewer is blocked with.
+   * Absent on a post that is no remix, and on a card from an older server.
+   */
+  remixCredit?: RemixCredit;
+}
+
+/** A post's posted remixes, a page at a time (`GET /api/showcase/posts/:id/remixes`). */
+export interface PostRemixesResponse {
+  success: boolean;
+  items: ShowcaseFeedItem[];
+  pageInfo: { hasMore: boolean; nextOffset: number | null; limit: number; offset: number };
 }
 
 export interface ShowcaseFeedResponse {

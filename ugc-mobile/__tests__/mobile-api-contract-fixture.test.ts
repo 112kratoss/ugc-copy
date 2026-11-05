@@ -374,6 +374,7 @@ const successCases: Array<{
   { key: 'getSavedMedia', call: (api) => api.getSavedMedia({ limit: 10 }) },
   { key: 'getShowcasePost', call: (api) => api.getShowcasePost('post-1') },
   { key: 'resolveShowcasePost', call: (api) => api.resolveShowcasePost('generation-1') },
+  { key: 'listPostRemixes', call: (api) => api.listPostRemixes('post-1', { offset: 0, limit: 24 }) },
   { key: 'listPostComments', call: (api) => api.listPostComments('post-1', { sort: 'top', limit: 20 }) },
   {
     key: 'createPostComment',
