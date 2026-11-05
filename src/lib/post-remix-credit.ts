@@ -15,7 +15,7 @@ import {
 /**
  * A remix post's credit, read for the cards and pages that draw it
  * (`ugc-mobile/lib/remix-credit`). The post stores whom it credits
- * (20261105150143): the post its creation remixed, that post's creator and the
+ * (20261105175340): the post its creation remixed, that post's creator and the
  * chain's first creator, written when the post was made and kept. A read adds
  * only what may change since: the post remixed's title and whether it is still
  * public and visible, and the people's handles, which the reads that hydrate a
@@ -35,7 +35,7 @@ export type PostRemixCreditFields = {
 export type RemixCreditParentPost = {
   id: string;
   title: string;
-  /** Public, visible and not archived: what anyone may open. */
+  /** What anyone may open (`isPostOpenToEveryone`). */
   linkable: boolean;
 };
 
@@ -47,8 +47,28 @@ type RemixCreditParentRow = {
   visibility: string | null;
   review_status: string | null;
   archived_at: string | null;
+  tombstoned_at: string | null;
   is_nsfw: boolean | null;
 };
+
+/**
+ * Whether anyone may open a post: public, not archived, not taken down (a post
+ * its owner deleted while it had buyers, kept for them alone), and not held by
+ * moderation. A row from before review statuses reads as visible, as the feed
+ * reads it. A credit links a post remixed only while this holds, and a remix
+ * posted where this fails is no news to the creator of the post it remixed.
+ */
+export function isPostOpenToEveryone(row: {
+  visibility?: string | null;
+  review_status?: string | null;
+  archived_at?: string | null;
+  tombstoned_at?: string | null;
+}): boolean {
+  return row.visibility === 'public'
+    && !row.archived_at
+    && !row.tombstoned_at
+    && (row.review_status ?? 'visible') === 'visible';
+}
 
 function uniqueIds(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
@@ -89,7 +109,7 @@ export async function loadRemixCreditParents(
 
   const { data, error } = await adminSupabase
     .from('posts')
-    .select('id, title, body, post_format, visibility, review_status, archived_at, is_nsfw')
+    .select('id, title, body, post_format, visibility, review_status, archived_at, tombstoned_at, is_nsfw')
     .in('id', parentIds);
   if (error) {
     logBackendError('failed_to_load_remix_credit_parents', { error });
@@ -99,7 +119,7 @@ export async function loadRemixCreditParents(
   return new Map(((data ?? []) as RemixCreditParentRow[]).map((row) => [row.id, {
     id: row.id,
     title: remixCreditParentTitle(row),
-    linkable: row.visibility === 'public' && row.review_status === 'visible' && !row.archived_at,
+    linkable: isPostOpenToEveryone(row),
   }]));
 }
 

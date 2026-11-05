@@ -68,7 +68,13 @@ export async function revealNsfwPostResponse(request: Request, context: { params
     const detail = await getPublicPostDetail(postId, options);
     if (!detail?.nsfwRevealed) return json({ error: 'Post not found.' }, 404);
     const item = await getShowcaseFeedItemById({ postId, ...options });
-    return json({ success: true, detail, item, expiresInSeconds: 600 });
+    // The detail's remix credit is the post page's, the same for everyone; the
+    // item's is this viewer's, without anyone a block stands between them
+    // (owner, 2026-11-05). The detail takes the viewer's.
+    const viewerDetail = { ...detail };
+    delete viewerDetail.remixCredit;
+    if (item?.remixCredit) viewerDetail.remixCredit = item.remixCredit;
+    return json({ success: true, detail: viewerDetail, item, expiresInSeconds: 600 });
   } catch (error) {
     if (error instanceof BackendRateLimitError) return createBackendRateLimitResponse(error);
     if (error instanceof SyntaxError) return json({ error: 'Invalid JSON.' }, 400);

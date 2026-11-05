@@ -460,12 +460,7 @@ type StoredRecipeTextRow = Pick<
   'access_mode' | 'summary' | 'preview_text' | 'prompt_text' | 'notes_markdown' | 'attachments' | 'resource_sections' | 'resource_items'
 >;
 
-/**
- * The content a visibility-only request must carry forward. The post row is
- * written with upsert semantics, so every column this caller does not supply
- * would otherwise be rebuilt from the generation — and the generation never
- * saw the caption, body, or title edits made in the post editor.
- */
+/** How the post a creation already has stands (its visibility), null for none. */
 async function loadGenerationPostVisibility({
   generationId,
   ownerUserId,
@@ -485,6 +480,12 @@ async function loadGenerationPostVisibility({
   return (data as { visibility?: string | null } | null)?.visibility ?? null;
 }
 
+/**
+ * The content a visibility-only request must carry forward. The post row is
+ * written with upsert semantics, so every column this caller does not supply
+ * would otherwise be rebuilt from the generation — and the generation never
+ * saw the caption, body, or title edits made in the post editor.
+ */
 async function loadExistingGenerationPostContent({
   generationId,
   ownerUserId,
@@ -796,11 +797,13 @@ export async function publishGenerationToShowcaseForRoute({
   }
   // "@B posted a remix of your post" is news when the remix goes public, not at
   // every republish of a public one: a remix public before that alert existed
-  // has no dedupe record to stop it arriving weeks late. So a remix's publish
-  // asks how its post stood before (a creation that remixed no one asks
-  // nothing), and a read that fails sends no alert rather than a late one.
+  // has no dedupe record to stop it arriving weeks late. So a public publish
+  // asks how its post stood before, and a read that fails sends no alert rather
+  // than a late one. Whether the creation is a remix is the alert's to say, from
+  // the post's own credit: a creation can carry a credit and no remix terms (one
+  // whose source was deleted before those terms were recorded).
   let remixGoesPublic = false;
-  if (effectiveVisibility === 'public' && remixTerms?.mode) {
+  if (effectiveVisibility === 'public') {
     try {
       const visibilityBefore = await resolvedDependencies.loadGenerationPostVisibility({
         generationId,

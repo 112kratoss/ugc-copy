@@ -2135,17 +2135,19 @@ describe('publishGenerationToShowcaseForRoute', () => {
       expect(notifyPostedRemix).not.toHaveBeenCalled();
     });
 
-    it('asks nothing and sends nothing for a creation that remixed no one', async () => {
+    // A creation can carry a credit with no remix terms (its source deleted before
+    // those were recorded): the alert, which reads the post's credit, decides.
+    it('leaves a creation with no remix terms to the alert, which reads the post\'s credit', async () => {
       const notifyPostedRemix = vi.fn(async () => undefined);
       const loadGenerationPostVisibility = vi.fn(async () => null);
-      const { result } = publish('public', {
+      const { adminClient, result } = publish('public', {
         notifyPostedRemix,
         loadGenerationPostVisibility,
         loadRemixRecipeTerms: vi.fn(async () => ({ mode: null, bundleId: null, originGenerationId: null })),
       });
       await expect(result).resolves.toMatchObject({ ok: true });
-      expect(loadGenerationPostVisibility).not.toHaveBeenCalled();
-      expect(notifyPostedRemix).not.toHaveBeenCalled();
+      expect(loadGenerationPostVisibility).toHaveBeenCalledTimes(1);
+      expect(notifyPostedRemix).toHaveBeenCalledWith(adminClient, { postId: 'post-1' });
     });
 
     it('publishes, and sends nothing, when how the post stood could not be read', async () => {

@@ -95,4 +95,38 @@ describe('the remixes a post\'s count opens', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t load remixes.');
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
+
+  // Pressing Show more took the button off the page while the read ran, so a
+  // keyboard or screen reader was dropped back to the page.
+  it('keeps Show more in place, with focus, while the next page is read', async () => {
+    const remix = (id: string) => ({
+      id,
+      title: id,
+      mediaKind: 'image',
+      mediaUrl: `https://cdn.example.test/${id}.png`,
+      mediaItems: [],
+      creator: { id: maya.id, username: 'maya', name: 'Maya', avatar: null },
+    });
+    let answerNext!: (value: unknown) => void;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ success: true, items: [remix('post-b')], pageInfo: { hasMore: true, nextOffset: 1 } }) })
+      .mockReturnValueOnce(new Promise((resolve) => { answerNext = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<PostRemixes postId="post-a" remixCount={2} />);
+    fireEvent.click(screen.getByRole('button', { name: '2 remixes' }));
+
+    const more = await screen.findByRole('button', { name: 'Show more' });
+    more.focus();
+    fireEvent.click(more);
+
+    expect(screen.getByRole('button', { name: 'Loading…' })).toBe(more);
+    expect(more).toHaveAttribute('aria-disabled', 'true');
+    expect(document.activeElement).toBe(more);
+    fireEvent.click(more);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    answerNext({ ok: true, status: 200, json: async () => ({ success: true, items: [remix('post-c')], pageInfo: { hasMore: false, nextOffset: null } }) });
+    expect(await screen.findByRole('link', { name: /post-c/ })).toBeInTheDocument();
+    expect(screen.getByText('2 remixes listed')).toBeInTheDocument();
+  });
 });

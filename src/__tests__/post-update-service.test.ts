@@ -603,6 +603,38 @@ describe('updateOwnerPostForRoute', () => {
       expect(notifyPostedRemix).toHaveBeenCalledWith(client, { postId: 'post-1' });
     });
 
+    // The change is committed before the steps after it: one that fails answers
+    // the edit with an error, and the retry finds the post already public.
+    it('hands it off as soon as the change is committed, before a later step can fail', async () => {
+      const { client } = createSupabaseMock({ bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft' } });
+      const notifyPostedRemix = vi.fn(async () => undefined);
+      const tasks: Array<() => Promise<unknown>> = [];
+      const dependencies = {
+        ...createDependencies(notifyPostedRemix),
+        replacePostSourceTools: vi.fn(async () => {
+          throw new Error('source tool insert failed');
+        }),
+      } satisfies PostUpdateDependencies;
+
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body: {
+          visibility: 'public',
+          title: 'Draft post',
+          sourceTools: [{ toolLabel: 'magicbooklet', toolSlug: 'magicbooklet' }],
+        },
+        dependencies,
+        runAfterResponse: (task) => { tasks.push(task); },
+      });
+
+      expect(result).toMatchObject({ ok: false, status: 500 });
+      expect(tasks).toHaveLength(1);
+      await tasks[0]();
+      expect(notifyPostedRemix).toHaveBeenCalledWith(client, { postId: 'post-1' });
+    });
+
     it.each([
       ['a public post edited and kept public', 'public', 'public'],
       ['a private post edited and kept private', 'private', 'private'],

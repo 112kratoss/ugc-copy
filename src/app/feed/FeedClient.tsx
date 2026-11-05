@@ -53,6 +53,7 @@ import {
 } from '@/lib/showcase-client-cache';
 import { mergeShowcaseFeedKeepingVisibleItems } from '@/lib/showcase-feed-stability';
 import { scheduleIdleDebouncedWork } from '@/lib/schedule-idle-work';
+import { itemsWithoutBlockedRemixCredits } from '../../../ugc-mobile/lib/remix-credit/remix-credit';
 
 const FEED_SNAPSHOT_QUIET_PERIOD_MS = 1_000;
 const FEED_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
@@ -1078,10 +1079,12 @@ export default function FeedClient({
         if (outcome.status === 'done') {
             removedForViewer.creatorIds.add(creatorId);
             removeFromLane((item) => item.creator.id === creatorId);
+            // Their name leaves the credits of the posts that stay (owner, 2026-11-05).
+            setItems((current) => itemsWithoutBlockedRemixCredits(current, (id) => id === creatorId));
             removeFromHomeShelf({ creatorId });
         }
         showOutcome(outcome);
-    }, [clearNotice, removeFromLane, removedForViewer, requireAccount, showOutcome, user?.id]);
+    }, [clearNotice, removeFromLane, removedForViewer, requireAccount, setItems, showOutcome, user?.id]);
     const priorityPoster = useMemo(() => (initialPriorityPreview
         ? { mediaId: initialPriorityPreview.mediaId, dataUrl: initialPriorityPreview.dataUrl }
         : null), [initialPriorityPreview]);

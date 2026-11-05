@@ -1,4 +1,5 @@
 import 'server-only';
+import { remixCreditParentTitle } from '@/lib/post-remix-credit';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -262,12 +263,17 @@ async function loadRemixSourcePost(
 ): Promise<RemixSourcePost | null> {
   if (!post.user_id) return null;
   const [titleRead, creatorUsername] = await Promise.all([
-    adminSupabase.from('posts').select('title').eq('id', post.id).maybeSingle(),
+    adminSupabase.from('posts').select('title, body, post_format, is_nsfw').eq('id', post.id).maybeSingle(),
     loadProfileHandle(adminSupabase, post.user_id),
   ]);
   if (!creatorUsername || titleRead.error) return null;
-  const title = (titleRead.data as { title?: string | null } | null)?.title?.trim();
-  return { id: post.id, title: title || 'Untitled Creation', creatorUsername };
+  const row = titleRead.data as { title: string | null; body: string | null; post_format: string | null; is_nsfw: boolean | null } | null;
+  // Named as the post's credit names it (`remixCreditParentTitle`): its title or the start of its
+  // writing, never the prompt or a recipe's setup text, and "Mature content" under an NSFW cover.
+  const title = row
+    ? remixCreditParentTitle({ title: row.title, body: row.body, post_format: row.post_format, is_nsfw: row.is_nsfw })
+    : 'Untitled Creation';
+  return { id: post.id, title, creatorUsername };
 }
 
 export async function loadRemixSourceBundle(

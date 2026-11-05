@@ -27,6 +27,7 @@ import {
 } from '@/lib/showcase';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
 import {
+    REMIX_CREDIT_CARD_TITLE_MAX_LENGTH,
     remixCreditLabel,
     remixCreditSegments,
     type RemixCredit,
@@ -209,7 +210,7 @@ function BootstrapRemixCredit({ credit }: { credit: RemixCredit }) {
             title={remixCreditLabel(credit)}
             className="mt-0.5 line-clamp-2 max-w-full text-[11px] leading-4 text-zinc-400"
         >
-            {remixCreditSegments(credit).map((segment, index) => (
+            {remixCreditSegments(credit, { titleMaxLength: REMIX_CREDIT_CARD_TITLE_MAX_LENGTH }).map((segment, index) => (
                 segment.kind === 'text' ? (
                     <span key={index}>{segment.text}</span>
                 ) : (

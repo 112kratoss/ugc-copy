@@ -37,6 +37,9 @@ export default function PostRemixes({ postId, remixCount }: { postId: string; re
   const { session } = useAuth();
   const accessToken = session?.access_token ?? null;
   const [state, setState] = useState<RemixesState>({ items: [], nextOffset: 0, status: 'idle' });
+  // A load the list's own button started: the button stays in its place, saying it is loading,
+  // so focus is not dropped to the page while the read runs.
+  const [loadingFromButton, setLoadingFromButton] = useState(false);
 
   const load = useCallback(async (offset: number) => {
     setState((current) => ({ ...current, status: 'loading' }));
@@ -65,6 +68,19 @@ export default function PostRemixes({ postId, remixCount }: { postId: string; re
     dialogRef.current?.showModal();
     if (state.status === 'idle' || state.status === 'error') void load(0);
   };
+
+  const runListAction = (offset: number) => {
+    if (state.status === 'loading') return;
+    setLoadingFromButton(true);
+    void load(offset).finally(() => setLoadingFromButton(false));
+  };
+  const listAction = state.status === 'error'
+    ? { label: 'Try again', offset: state.items.length > 0 ? state.nextOffset ?? 0 : 0 }
+    : state.status === 'ready' && state.nextOffset !== null
+      ? { label: 'Show more', offset: state.nextOffset }
+      : state.status === 'loading' && loadingFromButton
+        ? { label: 'Loading…', offset: null }
+        : null;
 
   const label = `${formatCompactCount(remixCount)} ${remixCount === 1 ? 'remix' : 'remixes'}`;
   const unposted = state.status === 'ready' && state.nextOffset === null && state.items.length < remixCount;
@@ -137,18 +153,15 @@ export default function PostRemixes({ postId, remixCount }: { postId: string; re
               </ul>
             ) : null}
 
-            {state.status === 'loading' ? (
+            {state.status === 'loading' && !loadingFromButton ? (
               <p role="status" className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-500">
                 <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
                 Loading remixes…
               </p>
             ) : null}
             {state.status === 'error' ? (
-              <p role="alert" className="px-2 py-6 text-center text-sm text-rose-300">
+              <p role="alert" className="px-2 pt-6 text-center text-sm text-rose-300">
                 Couldn’t load remixes.
-                <button type="button" onClick={() => void load(state.items.length > 0 ? state.nextOffset ?? 0 : 0)} className="ml-2 underline underline-offset-2 hover:text-rose-100">
-                  Try again
-                </button>
               </p>
             ) : null}
             {state.status === 'ready' && state.items.length === 0 ? (
@@ -159,17 +172,24 @@ export default function PostRemixes({ postId, remixCount }: { postId: string; re
             {unposted && state.items.length > 0 ? (
               <p className="px-2 pt-3 text-center text-xs text-zinc-500">Some remixes haven’t been posted.</p>
             ) : null}
-            {state.status === 'ready' && state.nextOffset !== null ? (
+            {/* One button for Show more and Try again, kept in place while the read it started runs. */}
+            {listAction ? (
               <div className="flex justify-center pt-2">
                 <button
                   type="button"
-                  onClick={() => void load(state.nextOffset ?? 0)}
-                  className="ui-focus-ring inline-flex min-h-11 items-center rounded-full border border-white/10 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
+                  onClick={() => { if (listAction.offset !== null) runListAction(listAction.offset); }}
+                  aria-disabled={listAction.offset === null}
+                  className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 px-4 text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.06] hover:text-white aria-disabled:cursor-wait aria-disabled:opacity-70"
                 >
-                  Show more
+                  {listAction.offset === null ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                  {listAction.label}
                 </button>
               </div>
             ) : null}
+            {/* Says how many are listed once a page lands, for a screen reader that pressed the button. */}
+            <p className="sr-only" aria-live="polite">
+              {state.status === 'ready' && state.items.length > 0 ? `${state.items.length} ${state.items.length === 1 ? 'remix' : 'remixes'} listed` : ''}
+            </p>
           </div>
         </div>
       </dialog>

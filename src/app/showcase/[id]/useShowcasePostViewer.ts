@@ -253,9 +253,9 @@ export function useShowcasePostViewer({
     : null;
   const remixCredit = useMemo(() => (
     blockedCreditIds?.length
-      ? withoutBlockedRemixCredit(pageRemixCredit, (id) => blockedCreditIds.includes(id))
+      ? withoutBlockedRemixCredit(pageRemixCredit, (id) => blockedCreditIds.includes(id), creatorId)
       : pageRemixCredit
-  ), [blockedCreditIds, pageRemixCredit]);
+  ), [blockedCreditIds, creatorId, pageRemixCredit]);
 
   // A share visit is a landing from a link that left the product: the address
   // carries `?s=<surface>`, and in-app links never do (they carry `from`). It

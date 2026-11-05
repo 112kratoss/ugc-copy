@@ -25,6 +25,7 @@ import {
   type HomeShelfPrice,
 } from '@/lib/home-shelf';
 import { HOME_SHELF_EARN_CARD_ENABLED, HOME_SHELF_PINS } from '@/lib/home-shelf-lineup';
+import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import { POST_RESOURCE_CREATOR_SHARE_PERCENT } from '@/lib/post-resource-commerce';
 import { loadReferralProgramTerms } from '@/lib/referral-route-service';
 import { createServiceClient } from '@/lib/server-helpers';
@@ -33,6 +34,7 @@ import { getShowcaseFeedItemsByPostIds } from '@/lib/showcase-feed';
 import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { loadViewerRelations } from '@/lib/showcase-feed-personalization';
 import { loadWelcomeCreditAmount } from '@/lib/welcome-credit-program-server';
+import { itemWithoutBlockedRemixCredit, remixCreditUserIds } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 
 /**
  * Server side of the "Make this" shelf (`home-shelf.ts`): reads the pinned
@@ -361,7 +363,46 @@ async function loadHomeShelfForViewer(
   }
 
   const visible = creations.filter((creation) => !isExcludedForViewer(creation.post, relations));
-  return arrangeHomeShelf(visible, actions);
+  return arrangeHomeShelf(await withoutBlockedCredits(visible, relations, viewerUserId), actions);
+}
+
+/**
+ * The shelf's posts are its shared build, for every viewer alike, so their remix
+ * credits name everyone (owner, 2026-11-05). For this viewer they name nobody a
+ * block stands between them and the viewer, as the feed's viewer pass leaves its
+ * cards: the people the credits name are asked about here (the posts' creators
+ * were, above). A read that fails leaves the credits out rather than risk a name.
+ */
+async function withoutBlockedCredits(
+  creations: HomeShelfCreationWithPost[],
+  relations: FeedViewerRelations,
+  viewerUserId: string | null,
+): Promise<HomeShelfCreationWithPost[]> {
+  if (!viewerUserId) return creations;
+  const creditIds = [...new Set(creations.flatMap((creation) => remixCreditUserIds(creation.post.remixCredit)))]
+    .filter((id) => !relations.blockedCreatorIds.has(id));
+  let blocked: Set<string> | null = relations.blockedCreatorIds;
+  if (creditIds.length > 0) {
+    try {
+      const creditBlocks = await loadBlockedCreatorIds({ adminSupabase: createServiceClient(), creatorIds: creditIds, viewerUserId });
+      blocked = new Set([...relations.blockedCreatorIds, ...creditBlocks]);
+    } catch (error) {
+      logBackendError('home_shelf_credit_blocks_load_failed', { error });
+      blocked = null;
+    }
+  }
+  return creations.map((creation) => {
+    if (!creation.post.remixCredit) return creation;
+    let post: ShowcaseFeedItem;
+    if (blocked) {
+      const blockedIds = blocked;
+      post = itemWithoutBlockedRemixCredit(creation.post, (id) => blockedIds.has(id));
+    } else {
+      post = { ...creation.post };
+      delete post.remixCredit;
+    }
+    return post === creation.post ? creation : { ...creation, post };
+  });
 }
 
 export function withoutPost({ post, ...creation }: HomeShelfCreationWithPost): HomeShelfCreation {

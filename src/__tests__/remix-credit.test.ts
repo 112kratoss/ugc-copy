@@ -3,12 +3,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
+  REMIX_CREDIT_CARD_TITLE_MAX_LENGTH,
   buildRemixCredit,
+  itemWithoutBlockedRemixCredit,
   readRemixCredit,
   remixCreditLabel,
   remixCreditSegments,
   remixCreditUserIds,
   remixingNotice,
+  shortenRemixCreditTitle,
   withoutBlockedRemixCredit,
   type RemixCredit,
 } from '../../ugc-mobile/lib/remix-credit/remix-credit';
@@ -375,5 +378,40 @@ describe('the remix credit in the mobile contract', () => {
     const listed = mobileApiContract.endpoints.listPostRemixes;
     expect(listed).toMatchObject({ method: 'GET', path: '/api/showcase/posts/:postId/remixes', auth: 'optional' });
     expect(listed.response.items.every((item) => readRemixCredit(item.remixCredit)?.parent?.postId === 'post-1')).toBe(true);
+  });
+});
+
+// A posts, B remixes A's post, A remixes B's: A's post credits B's post and A as
+// the original, which only stands beside the parent. A viewer who blocked B gets
+// no "Original by @A" alone on A's own post (buildRemixCredit's rule).
+describe('a credit left with its original alone', () => {
+  const aPostedAfterB: RemixCredit = { parent: { postId: 'post-b', title: 'Sunset, again', creator: maya }, original: cora };
+
+  it('never names the post\'s own creator back to them', () => {
+    expect(withoutBlockedRemixCredit(aPostedAfterB, (id) => id === maya.id, cora.id)).toBeNull();
+    expect(withoutBlockedRemixCredit(aPostedAfterB, (id) => id === maya.id, lee.id)).toEqual({ parent: null, original: cora });
+  });
+
+  it('applies on a card by its own creator', () => {
+    const card = { id: 'post-a2', creator: { id: cora.id }, remixCredit: aPostedAfterB };
+    expect(itemWithoutBlockedRemixCredit(card, (id) => id === maya.id)).not.toHaveProperty('remixCredit');
+  });
+});
+
+// A card's two lines cut at their end, which is "Original by @A": a long title is
+// shortened there instead, and what a screen reader hears keeps it whole.
+describe('a credit in a card\'s two lines', () => {
+  const longTitle = 'A very long title about a coral sunset over a quiet beach at dawn';
+  const chain: RemixCredit = { parent: { postId: 'post-b', title: longTitle, creator: maya }, original: cora };
+
+  it('shortens a long title at a word, keeping the rest of the line', () => {
+    const text = remixCreditSegments(chain, { titleMaxLength: REMIX_CREDIT_CARD_TITLE_MAX_LENGTH }).map((segment) => segment.text).join('');
+    expect(text).toBe('Remix of “A very long title about a coral…” by @maya · Original by @cora');
+    expect(remixCreditLabel(chain)).toContain(longTitle);
+  });
+
+  it('leaves a title that fits as it is', () => {
+    expect(shortenRemixCreditTitle('Sunset beach', REMIX_CREDIT_CARD_TITLE_MAX_LENGTH)).toBe('Sunset beach');
+    expect(shortenRemixCreditTitle(longTitle)).toBe(longTitle);
   });
 });
