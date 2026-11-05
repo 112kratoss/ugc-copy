@@ -96,6 +96,8 @@ const RESOURCE_SOURCE_BUCKETS = [
 ] as const;
 const SIGNED_READ_EXPIRES_IN_SECONDS = 600;
 const NOT_ON_THIS_UNLOCK = 'Resource file not found on this unlock.';
+/** A seller's own passed-on copies could not be checked: a retry may open them. */
+const SELLER_COPIES_UNREADABLE = 'Could not open this recipe’s files right now. Try again.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -239,16 +241,18 @@ export async function createPostResourceFileReadUrlForRoute({
   // seller's do not, as the copies are their own files. One of them their recipe passed on from the
   // recipe their creation remixed is theirs only while that file is (remix plan, phase 1b): after a
   // refund, a retracted purchase or its creation's removal or archive, it stays in their recipe unopened.
-  // A read that fails opens none of their copies.
+  // A read that fails opens none of their copies, and says to try again rather than that they are not
+  // on this unlock (#708's max review).
   const sellerCopies = detail.viewerIsOwner && viewerUserId
     ? signableFiles.filter((file) => file.location.bucket === RESOURCE_FILES_BUCKET && parseGenerationReferenceCopyPath(file.location.filePath))
     : [];
   if (sellerCopies.length > 0) {
-    let readable = new Set<string>();
+    let readable: Set<string>;
     try {
       readable = await readableRecipeFiles(viewerUserId!, sellerCopies.map((file) => `${RESOURCE_FILES_BUCKET}/${file.location.filePath}`));
     } catch (error) {
       logBackendError('post_resource_seller_copy_access_read_failed', { error });
+      return { ok: false, status: 500, body: { error: SELLER_COPIES_UNREADABLE } };
     }
     const closed = new Set(sellerCopies.filter((file) => !readable.has(`${RESOURCE_FILES_BUCKET}/${file.location.filePath}`)));
     signableFiles = signableFiles.filter((file) => !closed.has(file));

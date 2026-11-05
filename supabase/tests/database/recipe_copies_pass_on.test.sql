@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(40);
+select plan(46);
 
 insert into auth.users(id, email, aud, role, created_at, is_anonymous, raw_app_meta_data, raw_user_meta_data)
 values
@@ -199,6 +199,46 @@ values
 select ok(not public.recipe_file_readable_by('ad120001-1000-4000-8000-000000000001',
   'post_resource_files/ad120001-1000-4000-8000-000000000001/generation-references/ad120010-1000-4000-8000-00000000000a/90-loop-1.png'),
   'a loop of records closes the copy rather than following it for ever');
+
+-- ─── #708's max review ──────────────────────────────────────────────────────
+
+-- A spelling with a percent sign is withheld: the file route decodes it, and no save writes one.
+select ok(
+  'post_resource_files/ad120002-1000-4000-8000-000000000002/generation-references/ad120010-1000-4000-8000-00000000000b/%30%30-reference-image-row-b.png'
+    = any(public.recipe_copies_withheld(array['post_resource_files/ad120002-1000-4000-8000-000000000002/generation-references/ad120010-1000-4000-8000-00000000000b/%30%30-reference-image-row-b.png'])),
+  'a copy spelled with a percent sign is withheld by the batch');
+select ok(public.recipe_copy_withheld_at(
+  'post_resource_files/ad120002-1000-4000-8000-000000000002/generation-references/ad120010-1000-4000-8000-00000000000%62/00-x.png', 0),
+  'and by the single read, an encoded creation segment included');
+-- A creation deleted outright keeps its post serving: its copies on no record are not withheld.
+select is(public.recipe_copies_withheld(array[
+  'post_resource_files/ad120005-1000-4000-8000-000000000005/generation-references/ad120010-1000-4000-8000-0000000000ff/00-gone.png']),
+  '{}'::text[], 'a copy of a creation deleted outright, on no record, is not withheld');
+
+-- A long chain of copies, each on the one before (no holder, so only where each came from counts).
+insert into public.recipe_copy_sources(copy_path, source_file, holder_user_id)
+select 'post_resource_files/chain-' || n || '/generation-references/ad120010-1000-4000-8000-0000000000ee/link.png',
+       'post_resource_files/chain-' || (n - 1) || '/generation-references/ad120010-1000-4000-8000-0000000000ee/link.png',
+       null
+from generate_series(1, 70) as n;
+select is(public.recipe_copies_withheld(array['post_resource_files/chain-20/generation-references/ad120010-1000-4000-8000-0000000000ee/link.png']),
+  '{}'::text[], 'a chain of twenty copies is followed to its end and served');
+select is(public.recipe_copies_withheld(array['post_resource_files/chain-70/generation-references/ad120010-1000-4000-8000-0000000000ee/link.png']),
+  array['post_resource_files/chain-70/generation-references/ad120010-1000-4000-8000-0000000000ee/link.png'],
+  'a chain past sixty-four copies closes');
+
+-- A run records the recipe its maker holds, a free claim of one now back in draft included: the run
+-- imports that recipe's copies, and its recipe passes them on (the hub's rule, 2026-11-06).
+insert into public.post_resource_bundle_purchases(bundle_id, buyer_user_id, price_usd_cents, amount_subunits, currency)
+values ('ad120030-1000-4000-8000-00000000000b', 'ad120005-1000-4000-8000-000000000005', 0, 0, 'USD');
+update public.post_resource_bundles set status = 'draft' where id = 'ad120030-1000-4000-8000-00000000000b';
+insert into public.generations(id, user_id, model, status, is_public, source_generation_id)
+values ('ad120010-1000-4000-8000-0000000000dd', 'ad120005-1000-4000-8000-000000000005', 'test-model', 'succeeded', false,
+        'ad120010-1000-4000-8000-00000000000b');
+select is(
+  (select remix_recipe_bundle_id from public.generations where id = 'ad120010-1000-4000-8000-0000000000dd'),
+  'ad120030-1000-4000-8000-00000000000b'::uuid,
+  'a remix by someone who claimed the recipe records it, though it is no longer published');
 
 -- ─── What the table holds ───────────────────────────────────────────────────
 

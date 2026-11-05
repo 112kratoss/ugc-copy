@@ -126,21 +126,20 @@ export function ownRecipeCopyPath(source: unknown, accountUserId: string): strin
 }
 
 /**
- * Where a passed-on copy came from (`recipe_copy_sources`): the recipe file it stands for and its
- * holder, null for a copy that was never passed on. Throws when the read fails, so a caller never
- * takes a failure for "the account's own file".
+ * Where a passed-on copy came from (`recipe_copy_sources`): the recipe file it stands for, null for a
+ * copy that was never passed on. `copyPath` is bucket-qualified, as `ownRecipeCopyPath` gives it.
+ * Throws when the read fails, so a caller never takes a failure for "the account's own file".
  */
 export async function loadRecipeCopySource(
   supabase: SupabaseClient,
   copyPath: string,
-): Promise<{ sourceFile: string; holderUserId: string | null } | null> {
-  const path = copyPath.startsWith(`${RECIPE_FILES_BUCKET}/`) ? copyPath : `${RECIPE_FILES_BUCKET}/${copyPath}`;
+): Promise<{ sourceFile: string } | null> {
   const { data, error } = await supabase
     .from('recipe_copy_sources')
-    .select('source_file, holder_user_id')
-    .eq('copy_path', path)
+    .select('source_file')
+    .eq('copy_path', copyPath)
     .maybeSingle();
   if (error) throw error;
-  const row = data as { source_file: string; holder_user_id: string | null } | null;
-  return row ? { sourceFile: row.source_file, holderUserId: row.holder_user_id } : null;
+  const row = data as { source_file: string } | null;
+  return row ? { sourceFile: row.source_file } : null;
 }

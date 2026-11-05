@@ -462,12 +462,12 @@ describe('createPostResourceFileReadUrlForRoute', () => {
         .toEqual([OWN_COPY, 'user-1/resources/guide.pdf']);
     });
 
-    it('signs none of the seller’s copies when that read fails', async () => {
+    // #708's max review: "not on this unlock" read as for good; a failed read says to try again.
+    it('signs none of the seller’s copies when that read fails, and says to try again', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const { result } = await sign(async () => { throw new Error('statement timeout'); });
 
-      expect(result.ok && 'files' in result.body && result.body.files.map((file) => file.storagePath))
-        .toEqual(['user-1/resources/guide.pdf']);
+      expect(result).toEqual({ ok: false, status: 500, body: { error: 'Could not open this recipe’s files right now. Try again.' } });
     });
 
     it('asks nothing for a buyer, whose recipe read already left out what is withheld', async () => {

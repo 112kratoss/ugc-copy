@@ -822,11 +822,14 @@ export async function loadGenerationInputMediaMap(params: {
     });
     // A kept input made from a recipe file is linked only while its holder may still read that file
     // (owner, 2026-11-04): a refund, a retracted purchase, or the copy's creation removed or archived.
-    // One its recipe would pass on is offered only while it is linked: the copy asks the same.
+    // One its recipe would pass on is offered only while it is linked: the copy asks the same. One with
+    // no link at all, its signing failed, was never asked about, so it is not offered either (#708's
+    // max review); the holder check skips an input with no link.
     const withheld = params.urlMode === 'none'
       ? items
       : (await withholdUnreadableRecipeFileInputsByHolder(params.supabase, preparedRows.map(({ row }) => row.user_id), items))
-        .map((item, index) => (item.recipeCopyable && item.url === null && items[index]!.url !== null
+        .map((item, index) => (item.recipeCopyable && item.url === null
+          && (items[index]!.url !== null || isRecipeFileInput(item, new Set(params.recipeCopyableFor ?? [])))
           ? { ...item, recipeCopyable: false }
           : item));
 
@@ -1288,6 +1291,12 @@ export function preparedSeedanceAssetIdsFor(
   restoredIds: ReadonlySet<string>,
   /** The run's creator and the guests linked to them, whose own recipe files are their own uploads. */
   creatorIds: ReadonlySet<string>,
+  /**
+   * Restored inputs that take no asset of the creator's, each keeping its place with a null (#708's
+   * max review): a restore pairs assets by position, so one left out moved every later asset onto
+   * the wrong input. A recipe file restored from the recipe's copy is one.
+   */
+  withoutAssetIds: ReadonlySet<string> = new Set(),
 ): ReturnType<typeof readSeedanceAssetCollections> {
   const collections = readSeedanceAssetCollections(value);
   if (!collections) return null;
@@ -1312,7 +1321,7 @@ export function preparedSeedanceAssetIdsFor(
     return asset ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status }) : null;
   };
   const restored = (items: GenerationInputMediaItem[], assets: Array<SeedanceAssetMetadata | null>) => (
-    items.flatMap((item) => (restoredIds.has(item.id) ? [assetOf(item, assets)] : []))
+    items.flatMap((item) => (restoredIds.has(item.id) ? [withoutAssetIds.has(item.id) ? null : assetOf(item, assets)] : []))
   );
   const subset = {
     images: restored(pictures.length > 0 ? pictures : frames, collections.images),

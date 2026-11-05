@@ -1290,8 +1290,11 @@ describe('post resource bundle server access', () => {
   // longer served to the recipe's buyers, from the recipe as it stands or from the version they bought,
   // so no file route signs them; un-archiving serves them again, and the seller's editor keeps them.
   describe('the copies of a creation now off public view', () => {
-    const COPY = 'owner-1/generation-references/gen-1/00-reference-image-input-1.png';
+    // A creation id as the database names it: the withhold reads a uuid segment only (#708's max review).
+    const CREATION = 'c0ffee00-0000-4000-8000-000000000001';
+    const COPY = `owner-1/generation-references/${CREATION}/00-reference-image-input-1.png`;
     beforeEach(() => {
+      generationRow = { ...(generationRow as NonNullable<typeof generationRow>), id: CREATION };
       bundleRow = {
         ...(bundleRow as BundleRow),
         resource_items: [

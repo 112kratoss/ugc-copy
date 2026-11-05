@@ -180,6 +180,8 @@ export function projectGenerationForStudio(
   const projected = { ...withoutWorkflowSettings(generation) } as Record<string, unknown>;
   delete projected.template_run_id;
   delete projected.template_run_step_id;
+  // Read for the pass-on folder (remix plan, phase 1b), never shown (#708's max review).
+  delete projected.remix_recipe_bundle_id;
   delete projected.studio_visible;
   delete projected.user_id;
   delete projected.preview_width;
@@ -719,16 +721,14 @@ export async function listOwnerGenerationsForRoute({
     includeArchived,
   });
   // The files of the recipe each run remixed, which its recipe passes on (remix plan, phase 1b). A
-  // read that fails offers none of them: the copy reads its own.
+  // read that fails fails the page for a retry (#708's max review): offering none of them would hide
+  // files the save, reading its own, then copies.
+  const ordinaryGenerationIdSet = new Set(ordinaryGenerationIds);
   const recipePassOnFoldersPromise = summaryOnly
     ? Promise.resolve(new Map<string, string>())
     : loadRecipePassOnFolders(adminSupabase, generations
-      .filter((generation) => ordinaryGenerationIds.includes(generation.id))
-      .map((generation) => ({ id: generation.id, remixRecipeBundleId: generation.remix_recipe_bundle_id })))
-      .catch((error: unknown) => {
-        logBackendError('owner_generations_recipe_pass_on_read_failed', { error });
-        return new Map<string, string>();
-      });
+      .filter((generation) => ordinaryGenerationIdSet.has(generation.id) && generation.remix_recipe_bundle_id)
+      .map((generation) => ({ id: generation.id, remixRecipeBundleId: generation.remix_recipe_bundle_id })));
   const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
     linkedPostMapPromise,
     linkedPostMapPromise.then((linkedPosts) => loadLinkedPostBundleMap({
