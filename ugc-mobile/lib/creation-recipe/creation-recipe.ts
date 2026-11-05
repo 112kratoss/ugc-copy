@@ -274,3 +274,53 @@ export function describeUncopiedCreationInputs(count: number): string {
     ? '1 saved input could not be copied into the recipe. Include it again and save to try once more.'
     : `${count} saved inputs could not be copied into the recipe. Include them again and save to try once more.`;
 }
+
+// ─── A remix's terms ─────────────────────────────────────────────────────────
+
+/**
+ * The terms a remix's run carries (`generations.remix_recipe_mode`, written by
+ * the database when the run starts): the recipe of the post it remixed was free
+ * or paid. A post with no recipe counts as free, a run from the creator's own
+ * creation inherits its source's terms, and paid sticks down a chain (owner,
+ * 2026-11-05: "free stays free", and a remix of a paid recipe stays paid at a
+ * price its creator sets). Null for a creation that remixed nobody else's post.
+ */
+export type RemixRecipeMode = 'free' | 'paid';
+
+export function isRemixRecipeMode(value: unknown): value is RemixRecipeMode {
+  return value === 'free' || value === 'paid';
+}
+
+/** Why a remix of a paid recipe can go public only with a paid recipe of its own. */
+export const REMIX_RECIPE_MUST_BE_PAID = 'This creation remixes a paid recipe, so its recipe has to be paid. You set the price.';
+/** Why a remix of a free recipe can't be sold. */
+export const REMIX_RECIPE_STAYS_FREE = 'This creation remixes a free recipe, so its recipe stays free.';
+
+/** The refusal codes the server answers with, which the composers read as these words. */
+export const REMIX_RECIPE_MUST_BE_PAID_CODE = 'REMIX_RECIPE_MUST_BE_PAID';
+export const REMIX_RECIPE_STAYS_FREE_CODE = 'REMIX_RECIPE_STAYS_FREE';
+
+/**
+ * Whether a public post of a creation whose run carries `mode` may hold a
+ * recipe of `accessMode` ('none' is no recipe). Private posts keep their recipe
+ * as a draft and are held to this when they go public.
+ */
+export function remixRecipeAllows(
+  mode: RemixRecipeMode | null | undefined,
+  accessMode: string | null | undefined,
+): boolean {
+  if (mode === 'paid') return accessMode === 'paid';
+  if (mode === 'free') return accessMode !== 'paid';
+  return true;
+}
+
+/** The refusal for a recipe that breaks the run's terms, or null where it keeps them. */
+export function remixRecipeRefusal(
+  mode: RemixRecipeMode | null | undefined,
+  accessMode: string | null | undefined,
+): { error: string; code: string } | null {
+  if (remixRecipeAllows(mode, accessMode)) return null;
+  return mode === 'paid'
+    ? { error: REMIX_RECIPE_MUST_BE_PAID, code: REMIX_RECIPE_MUST_BE_PAID_CODE }
+    : { error: REMIX_RECIPE_STAYS_FREE, code: REMIX_RECIPE_STAYS_FREE_CODE };
+}

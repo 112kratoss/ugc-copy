@@ -19,6 +19,12 @@ import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { DefinitiveSupabaseMutationRejection } from '@/lib/upload-byte-admission';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import {
+  REMIX_RECIPE_MUST_BE_PAID,
+  REMIX_RECIPE_MUST_BE_PAID_CODE,
+  REMIX_RECIPE_STAYS_FREE,
+  REMIX_RECIPE_STAYS_FREE_CODE,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 const sourceToolCatalog: SourceToolOption[] = [
   { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image', 'video'] },
@@ -3991,6 +3997,97 @@ describe('a title cut from the prompt of a post with a paid recipe', () => {
     expect(stored.dependencies.updatePostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       patch: expect.not.objectContaining({ title: 'Image recipe' }),
     }));
+  });
+
+  // A remix's recipe keeps the terms of the post it remixed (owner, 2026-11-05),
+  // held on an edit as publish holds them, read from the post, which keeps its
+  // creation's terms after the creation is deleted.
+  describe('a remix\'s recipe terms', () => {
+    async function saveRemix(
+      bundle: Record<string, unknown> | null,
+      body: Record<string, unknown>,
+      mode: 'free' | 'paid' | null,
+      postOverrides: Record<string, unknown> = {},
+    ) {
+      const post = { ...creationPost('Lantern remix'), remix_recipe_mode: mode, ...postOverrides };
+      const mock = createSupabaseMock({ post, bundle, generation });
+      const dependencies = createDependencies();
+      const result = await updateOwnerPostForRoute({
+        adminSupabase: mock.client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        body,
+        dependencies,
+      });
+      return { result, dependencies };
+    }
+
+    it('refuses to make a version of a paid recipe public with a free recipe', async () => {
+      const { result, dependencies } = await saveRemix(
+        null,
+        { visibility: 'public', resourceBundle: { ...composerRecipe(), accessMode: 'free' } },
+        'paid',
+      );
+
+      const refusal = mobileApiContract.endpoints.updatePost.errors.remixRecipeMustBePaid;
+      expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+      expect(refusal.response).toEqual({ error: REMIX_RECIPE_MUST_BE_PAID, code: REMIX_RECIPE_MUST_BE_PAID_CODE, field: 'resourceBundle' });
+      expect(dependencies.updatePostWithResourceBundleAtomically).not.toHaveBeenCalled();
+    });
+
+    it('refuses to make it public with no recipe at all', async () => {
+      const { result } = await saveRemix(null, { visibility: 'public' }, 'paid');
+
+      expect(result).toMatchObject({ ok: false, status: 400, body: { code: REMIX_RECIPE_MUST_BE_PAID_CODE } });
+    });
+
+    it('holds a post whose creation was deleted to the terms it kept', async () => {
+      const { result } = await saveRemix(
+        null,
+        { visibility: 'public', resourceBundle: { ...composerRecipe(), accessMode: 'free' } },
+        'paid',
+        { generation_id: null, deleted_generation_id: 'generation-1' },
+      );
+
+      expect(result).toMatchObject({ ok: false, status: 400, body: { code: REMIX_RECIPE_MUST_BE_PAID_CODE } });
+    });
+
+    it('refuses to sell a remix of a free recipe', async () => {
+      const { result } = await saveRemix(null, { visibility: 'public', resourceBundle: paidRecipe() }, 'free');
+
+      const refusal = mobileApiContract.endpoints.updatePost.errors.remixRecipeStaysFree;
+      expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+      expect(refusal.response).toEqual({ error: REMIX_RECIPE_STAYS_FREE, code: REMIX_RECIPE_STAYS_FREE_CODE, field: 'resourceBundle' });
+    });
+
+    it('lets a version of a paid recipe go public with the paid recipe it stored', async () => {
+      const { result } = await saveRemix(storedPaidRecipe(), { visibility: 'public' }, 'paid');
+
+      expect(result).toMatchObject({ ok: true });
+    });
+
+    // Code review, 2026-11-05: a post that broke its terms before this rule is
+    // not frozen against every edit; Remix and free claims stay closed on it.
+    it('saves an edit that leaves the recipe alone on a public post that already breaks its terms', async () => {
+      const { result } = await saveRemix(
+        storedRecipeRow(composerRecipe()),
+        { description: 'Warmer light, same lantern.' },
+        'paid',
+        { visibility: 'public' },
+      );
+
+      expect(result).toMatchObject({ ok: true });
+    });
+
+    it('holds nothing while the post stays private: its recipe is a draft', async () => {
+      const { result } = await saveRemix(
+        null,
+        { visibility: 'private', resourceBundle: { ...composerRecipe(), accessMode: 'free' } },
+        'paid',
+      );
+
+      expect(result).toMatchObject({ ok: true });
+    });
   });
 });
 

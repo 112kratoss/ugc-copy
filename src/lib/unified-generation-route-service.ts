@@ -194,7 +194,7 @@ export function mapGenerationStartRouteError(
     return {
       ok: false,
       body: {
-        code: error.status < 500 ? 'INVALID_GENERATION_REQUEST' : GENERATION_START_FAILED_CODE,
+        code: error.code ?? (error.status < 500 ? 'INVALID_GENERATION_REQUEST' : GENERATION_START_FAILED_CODE),
         error: error.message,
       },
       status: error.status,

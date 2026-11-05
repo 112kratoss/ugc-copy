@@ -69,6 +69,11 @@ import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
 import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
 import {
+  getRemixRecipeTermsRefusalBody,
+  loadRemixRecipeTerms,
+  REMIX_RECIPE_TERMS_UNREADABLE_ERROR,
+} from '@/lib/remix-recipe-terms';
+import {
   getPublicUgcRecipeTextFields,
   getPublicUgcSafetyViolation,
   PUBLIC_UGC_SAFETY_ERROR,
@@ -174,6 +179,8 @@ export type ShowcasePublishServiceDependencies = {
   replacePostSourceTools: typeof replacePostSourceTools;
   /** Feed v4: asks the `embed-post` function for the published post's embedding. */
   requestPostEmbedding: typeof requestPostEmbedding;
+  /** The free or paid terms the creation's run carries as a remix. */
+  loadRemixRecipeTerms: typeof loadRemixRecipeTerms;
 };
 
 export type ShowcasePublishServiceResult =
@@ -242,6 +249,7 @@ function resolveDependencies(
       dependencies?.ensureGenerationPostCoverMedia ?? ensureGenerationPostCoverMedia,
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
     requestPostEmbedding: dependencies?.requestPostEmbedding ?? requestPostEmbedding,
+    loadRemixRecipeTerms: dependencies?.loadRemixRecipeTerms ?? loadRemixRecipeTerms,
   };
 }
 
@@ -744,7 +752,23 @@ export async function publishGenerationToShowcaseForRoute({
   const bundleForPublicValidation = effectiveHasResourceBundlePayload
     ? effectiveResourceBundle
     : frozenSoldBundleForRepublish;
-  const shouldExposePromptPublic = requestBody.exposePromptPublic === true && !bundleForPublicValidation;
+  // The creation's remix terms (owner, 2026-11-05: paid stays paid), read where
+  // the post goes public or a caller asks for the prompt on the post. A read that
+  // fails refuses, so a paid prompt never goes out free by accident.
+  let remixTerms: Awaited<ReturnType<typeof loadRemixRecipeTerms>> | null = null;
+  if (!isCanonicalTemplateResult && (effectiveVisibility === 'public' || requestBody.exposePromptPublic === true)) {
+    try {
+      remixTerms = await resolvedDependencies.loadRemixRecipeTerms(adminSupabase, generationId);
+    } catch (error) {
+      logBackendError('failed_to_load_remix_recipe_terms_for_publish', { error });
+      return { ok: false, status: 500, body: { error: REMIX_RECIPE_TERMS_UNREADABLE_ERROR } };
+    }
+  }
+  // A version of someone's paid recipe never shows its prompt on the post, at
+  // any visibility: a private post can go public later with a paid recipe.
+  const shouldExposePromptPublic = requestBody.exposePromptPublic === true
+    && !bundleForPublicValidation
+    && remixTerms?.mode !== 'paid';
 
   if (shouldExposePost && (generation.category === 'audio' || isAudioModel(generation.model))) {
     return { ok: false, status: 400, body: { error: 'Audio generations are not publishable to the showcase yet' } };
@@ -781,6 +805,22 @@ export async function publishGenerationToShowcaseForRoute({
         status: 500,
         body: { error: 'Could not load the existing post before changing its visibility. Try again.' },
       };
+    }
+  }
+
+  // A remix's recipe keeps the terms of the post it remixed (owner, 2026-11-05):
+  // a version of a paid recipe goes public only with a paid recipe, at a price
+  // its creator sets, and a remix of a free one only with a free recipe or none.
+  // The recipe that travels with the post is the one this request sends, else
+  // the stored one a visibility change republishes. A private post keeps its
+  // recipe as a draft and is held to this when it goes public.
+  if (effectiveVisibility === 'public' && remixTerms) {
+    const recipeGoingPublic = effectiveHasResourceBundlePayload
+      ? effectiveResourceBundle
+      : existingPost?.resourceBundle ?? frozenSoldBundleForRepublish;
+    const remixTermsRefusal = getRemixRecipeTermsRefusalBody(remixTerms, recipeGoingPublic?.accessMode);
+    if (remixTermsRefusal) {
+      return { ok: false, status: 400, body: remixTermsRefusal };
     }
   }
 
@@ -1019,7 +1059,7 @@ export async function publishGenerationToShowcaseForRoute({
     description: sanitizedPublicContent.description || null,
     prompt: shouldExposePromptPublic
       ? normalizeTextValue(prompt) ?? generation.prompt?.trim() ?? null
-      : isComposeSubmission
+      : isComposeSubmission || remixTerms?.mode === 'paid'
         ? null
         : normalizeTextValue(existingPost?.prompt) || null,
     body: sanitizedPublicContent.body || null,

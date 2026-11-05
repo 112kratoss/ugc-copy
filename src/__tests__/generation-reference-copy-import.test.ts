@@ -42,6 +42,7 @@ const PUBLIC_GENERATION = {
   share_input_media_for_remix: false,
   template_run_id: null,
   template_run_step_id: null,
+  remix_recipe_mode: null,
   archived_at: null,
   moderation_removed_at: null,
 };
@@ -62,6 +63,8 @@ const RECIPE = {
   post_id: 'post-1',
   owner_user_id: SELLER,
   status: 'published',
+  access_mode: 'paid',
+  retired_at: null,
   allow_remix: false,
   resource_items: [copyItem(ROW, COPY)],
   resource_sections: [],

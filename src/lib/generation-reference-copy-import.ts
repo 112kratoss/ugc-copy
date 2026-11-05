@@ -27,7 +27,7 @@ const GENERATION_INPUTS_BUCKET = 'generation_inputs';
 const SIGNED_URL_TTL_SECONDS = 3600;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** What the remix gate reads of a creation, its run links included (`RemixAccessGeneration`). */
-const GENERATION_SELECT = 'id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id, archived_at, moderation_removed_at';
+const GENERATION_SELECT = 'id, user_id, is_public, share_input_media_for_remix, template_run_id, template_run_step_id, archived_at, moderation_removed_at, remix_recipe_mode';
 
 /** What one run start has read of a viewer's unlock of a creation: the copies it lets them import, or why none. */
 type RecipeCopyAccess =

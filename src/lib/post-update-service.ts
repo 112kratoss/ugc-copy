@@ -105,6 +105,8 @@ import {
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
 import { storedMediaOwnerId } from '@/lib/generation-input-origin';
+import { getRemixRecipeTermsRefusalBody } from '@/lib/remix-recipe-terms';
+import { isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 
@@ -151,6 +153,8 @@ type MutablePostRow = {
   generation_id: string | null;
   /** The creation whose delete unlinked the post; the database writes it. */
   deleted_generation_id?: string | null;
+  /** The remix terms of the post's creation, kept on the post after the creation is deleted (20261105123244). */
+  remix_recipe_mode?: string | null;
   visibility: ShowcaseVisibility;
   title: string | null;
   description: string | null;
@@ -653,7 +657,7 @@ async function loadOwnedPost(
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, deleted_generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, tombstoned_at, showcase_asset_path, output_url, review_status, is_nsfw',
+      'id, user_id, generation_id, deleted_generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, tombstoned_at, showcase_asset_path, output_url, review_status, is_nsfw, remix_recipe_mode',
     )
     .eq('id', postId)
     .eq('user_id', ownerUserId)
@@ -1657,6 +1661,25 @@ export async function updateOwnerPostForRoute({
       : liveBundle && liveBundle.access_mode !== 'none'
         ? buildStoredBundleForQualityCheck(liveBundle)
         : null;
+    // A remix's recipe keeps the terms of the post it remixed (owner,
+    // 2026-11-05), held as publish holds them: the recipe this save leaves on a
+    // public post, sent or stored, must be paid for a version of a paid recipe
+    // and must not be for a remix of a free one. Read from the post, which keeps
+    // its creation's terms after the creation is deleted
+    // (`copy_generation_remix_terms_to_post`). Held where the save sends a
+    // recipe or makes the post public: a caption fix on a post that already
+    // breaks them (made before this rule) is not refused, and Remix and free
+    // claims stay closed on such a post meanwhile (remix-access.ts and the free
+    // unlock).
+    if (nextVisibility === 'public' && (hasResourceBundlePayload || post.visibility !== 'public')) {
+      const remixTermsRefusal = getRemixRecipeTermsRefusalBody(
+        { mode: isRemixRecipeMode(post.remix_recipe_mode) ? post.remix_recipe_mode : null },
+        hasResourceBundlePayload ? resourceBundle?.accessMode : liveBundle?.access_mode,
+      );
+      if (remixTermsRefusal) {
+        return { ok: false, status: 400, body: remixTermsRefusal };
+      }
+    }
     const safetyViolation = nextVisibility !== 'private'
       ? getPublicUgcSafetyViolation({
           title: nextTitle,

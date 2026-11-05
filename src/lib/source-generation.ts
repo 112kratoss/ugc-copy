@@ -9,11 +9,14 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 export class SourceGenerationValidationError extends Error {
   status: number;
+  /** The refusal's own code, where a client tells it apart; the route answers the generic one otherwise. */
+  code?: string;
 
-  constructor(message: string, status = 400) {
+  constructor(message: string, status = 400, code?: string) {
     super(message);
     this.name = 'SourceGenerationValidationError';
     this.status = status;
+    if (code) this.code = code;
   }
 }
 
@@ -47,7 +50,7 @@ export async function resolveSourceGenerationId(
   // a PostgREST `.or()` expression, which postgrest-js does not escape.
   const { data, error } = await adminSupabase
     .from('generations')
-    .select('id, user_id, is_public, template_run_id, template_run_step_id')
+    .select('id, user_id, is_public, template_run_id, template_run_step_id, remix_recipe_mode')
     .eq('id', sourceGenerationId)
     .maybeSingle();
 
@@ -79,13 +82,38 @@ export async function resolveSourceGenerationId(
     // anyone else's before asking it, as here, and the proxy keeps guests off
     // `/api/showcase/remix`.
     if (callerIsGuest && !(await isOwnOrLinkedAccountId(adminSupabase, userId, data.user_id))) return null;
-    if (!(await remixWouldBeAllowed(adminSupabase, userId, data))) return null;
+    if (!(await remixWouldBeAllowed(adminSupabase, userId, data))) {
+      // The link also carries the run's remix terms (`record_generation_remix_terms`):
+      // a run that left it would go out free. Someone who paid for this post's
+      // recipe has its prompt in their creator, so when they can no longer remix
+      // it (a block since, the post archived, the recipe taken down) the run
+      // does not start from it rather than start as an ordinary one (owner,
+      // 2026-11-05: paid stays paid). Anyone else's refused remix still starts
+      // as an ordinary run, as before: they never had the prompt.
+      if (await boughtPaidRecipeOf(adminSupabase, userId, sourceGenerationId)) {
+        throw new SourceGenerationValidationError(
+          REMIX_SOURCE_NO_LONGER_REMIXABLE,
+          409,
+          REMIX_SOURCE_NO_LONGER_REMIXABLE_CODE,
+        );
+      }
+      return null;
+    }
   }
 
   return sourceGenerationId;
 }
 
-/** Bookkeeping, so a check that cannot be made credits no remix rather than failing the start. */
+export const REMIX_SOURCE_NO_LONGER_REMIXABLE_CODE = 'REMIX_SOURCE_NO_LONGER_REMIXABLE';
+export const REMIX_SOURCE_NO_LONGER_REMIXABLE =
+  "This post can't be remixed any more, so this run can't start from it. Your recipe is still in your library: start a new creation from it.";
+
+/**
+ * Whether the remix may go ahead now. The answer credits the post and tells its
+ * creator, and the link it keeps carries the run's terms, so a check that
+ * cannot be made keeps the link: crediting a remix by mistake costs less than a
+ * paid version going out free.
+ */
 async function remixWouldBeAllowed(
   adminSupabase: SupabaseClient,
   userId: string,
@@ -96,6 +124,18 @@ async function remixWouldBeAllowed(
     return access.allowed;
   } catch (error) {
     logBackendError('failed_to_check_remix_access_for_source_generation', { error });
-    return false;
+    return true;
   }
+}
+
+/** Whether the caller, or a guest linked to them, paid for the recipe on the source's post. */
+async function boughtPaidRecipeOf(adminSupabase: SupabaseClient, userId: string, sourceGenerationId: string) {
+  const { data, error } = await adminSupabase.rpc('remix_source_bought_paid', {
+    p_user_id: userId,
+    p_source_generation_id: sourceGenerationId,
+  });
+  if (error) {
+    throw new SourceGenerationValidationError('Failed to validate the remix source.', 500);
+  }
+  return data === true;
 }

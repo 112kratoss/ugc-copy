@@ -25,6 +25,12 @@ export type RemixAccessGeneration = {
    */
   template_run_id: string | null;
   template_run_step_id: string | null;
+  /**
+   * The free or paid terms the creation carries as a remix (`remix_recipe_mode`,
+   * 20261105123244). Required, so a caller cannot leave it out and have a
+   * version of a paid recipe read as free.
+   */
+  remix_recipe_mode: string | null;
 };
 
 export type RemixAccessPost = {
@@ -98,6 +104,8 @@ type RemixBundleRow = {
   owner_user_id: string | null;
   status: string | null;
   allow_remix: boolean | null;
+  access_mode: string | null;
+  retired_at: string | null;
 };
 
 async function loadPostBundle(
@@ -106,7 +114,7 @@ async function loadPostBundle(
 ): Promise<RemixBundleRow | null> {
   const { data, error } = await adminSupabase
     .from('post_resource_bundles')
-    .select('id, owner_user_id, status, allow_remix')
+    .select('id, owner_user_id, status, allow_remix, access_mode, retired_at')
     .eq('post_id', postId)
     .maybeSingle();
 
@@ -266,6 +274,22 @@ export async function resolveRemixAccess({
   // predicate getPostResourceBundleDetailByPostId applies before the post
   // surface reports `unlock_required`, so the two cannot disagree.
   const bundle = postBundle?.status === 'published' ? postBundle : null;
+  // A paid recipe guards the creation's prompt only while it is live (owner,
+  // 2026-11-05: paid stays paid). One still a draft on a public post, short of
+  // the listing rules, gated nothing and handed the prompt to anyone, so such a
+  // post has no Remix until its recipe goes out. A paid recipe its creator took
+  // down after people bought it (retired) is their choice to stop selling, as
+  // no recipe is. And a version of someone's paid recipe is remixed only through
+  // a paid recipe live on its post, never as an open post.
+  const paidRecipeNotLive = postBundle?.access_mode === 'paid'
+    && postBundle.status !== 'published'
+    && postBundle.status !== 'retired'
+    && !postBundle.retired_at;
+  const paidVersionWithoutLivePaidRecipe = generation.remix_recipe_mode === 'paid'
+    && bundle?.access_mode !== 'paid';
+  if (paidRecipeNotLive || paidVersionWithoutLivePaidRecipe) {
+    return NOT_FOUND;
+  }
   const viewerHasPurchased = bundle
     ? await hasPurchasedBundle(adminSupabase, bundle.id, viewerUserId)
     : false;

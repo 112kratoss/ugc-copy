@@ -1512,6 +1512,22 @@
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }
+        },
+        "remixRecipeMustBePaid": {
+          "status": 400,
+          "response": {
+            "error": "This creation remixes a paid recipe, so its recipe has to be paid. You set the price.",
+            "code": "REMIX_RECIPE_MUST_BE_PAID",
+            "field": "resourceBundle"
+          }
+        },
+        "remixRecipeStaysFree": {
+          "status": 400,
+          "response": {
+            "error": "This creation remixes a free recipe, so its recipe stays free.",
+            "code": "REMIX_RECIPE_STAYS_FREE",
+            "field": "resourceBundle"
+          }
         }
       }
     },
@@ -1808,6 +1824,13 @@
             "fieldErrors": {
               "expectedCostCredits": "expectedCostCredits must be a whole number of credits, zero or more."
             }
+          }
+        },
+        "remixSourceNoLongerRemixable": {
+          "status": 409,
+          "response": {
+            "code": "REMIX_SOURCE_NO_LONGER_REMIXABLE",
+            "error": "This post can't be remixed any more, so this run can't start from it. Your recipe is still in your library: start a new creation from it."
           }
         }
       }
@@ -2177,6 +2200,22 @@
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }
+        },
+        "remixRecipeMustBePaid": {
+          "status": 400,
+          "response": {
+            "error": "This creation remixes a paid recipe, so its recipe has to be paid. You set the price.",
+            "code": "REMIX_RECIPE_MUST_BE_PAID",
+            "field": "resourceBundle"
+          }
+        },
+        "remixRecipeStaysFree": {
+          "status": 400,
+          "response": {
+            "error": "This creation remixes a free recipe, so its recipe stays free.",
+            "code": "REMIX_RECIPE_STAYS_FREE",
+            "field": "resourceBundle"
+          }
         }
       }
     },
@@ -2393,6 +2432,15 @@
       "response": {
         "success": true,
         "alreadyProcessed": false
+      },
+      "errors": {
+        "paidVersionNotFree": {
+          "status": 400,
+          "response": {
+            "error": "This recipe is a version of a paid recipe, so it can't be taken for free.",
+            "code": "REMIX_RECIPE_NOT_FREE"
+          }
+        }
       }
     },
     "unlockBundleWithCredits": {

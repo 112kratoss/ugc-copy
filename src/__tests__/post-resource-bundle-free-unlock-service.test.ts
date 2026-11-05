@@ -2,8 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { isPostResourceBundleBuyWithheld } from '@/lib/marketplace-viewer-filter';
-import { unlockFreePostResourceBundleForRoute } from '@/lib/post-resource-bundle-free-unlock-service';
+import {
+  PAID_VERSION_NOT_FREE_CODE,
+  PAID_VERSION_NOT_FREE_ERROR,
+  unlockFreePostResourceBundleForRoute,
+} from '@/lib/post-resource-bundle-free-unlock-service';
 import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-server';
+
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 type BundleForUnlock = {
   id: string;
@@ -13,6 +19,9 @@ type BundleForUnlock = {
   status: 'published' | 'draft';
   price_usd_cents: number;
 };
+
+/** The post remixed nobody's paid recipe: the rule that keeps a paid version's recipe paid has nothing to say. */
+const noRemixTerms = async () => null;
 
 function createBundle(overrides?: Partial<BundleForUnlock>): BundleForUnlock {
   return {
@@ -102,6 +111,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const notifyPostResourceUnlockCompleted = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -135,6 +145,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const admin = createAdminSupabaseMock();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -156,6 +167,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const isWithheld = notWithheld();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'owner-1',
@@ -187,6 +199,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const runAfterResponse = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -210,6 +223,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const isWithheld = vi.fn(async () => true);
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -227,6 +241,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const notifyPostResourceUnlockCompleted = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -246,6 +261,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const admin = createAdminSupabaseMock();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -272,6 +288,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const idValues = ['order-id', 'payment-id'];
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -317,6 +334,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const deferred: Array<() => Promise<unknown>> = [];
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -354,6 +372,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const runAfterResponse = vi.fn();
 
     await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -380,6 +399,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const invalidateMarketplaceResourceListCache = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -405,6 +425,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const invalidateMarketplaceResourceListCache = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -430,6 +451,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const notifyPostResourceUnlockCompleted = vi.fn();
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -452,6 +474,7 @@ describe('unlockFreePostResourceBundleForRoute', () => {
     const admin = createAdminSupabaseMock({ unlockResult: { status: 'quote_unavailable' } });
 
     const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: noRemixTerms,
       adminSupabase: admin.client,
       postId: 'post-1',
       buyerUserId: 'buyer-1',
@@ -466,5 +489,38 @@ describe('unlockFreePostResourceBundleForRoute', () => {
       status: 500,
       body: { error: 'Failed to get the free recipe.' },
     });
+  });
+  // Owner, 2026-11-05: a version of someone's paid recipe is never given away. A post that
+  // held a free recipe on one before publish and edit refused it keeps it out of reach.
+  it('refuses the free recipe of a version of a paid recipe, before any order', async () => {
+    const admin = createAdminSupabaseMock();
+    const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: async () => 'paid',
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
+    });
+
+    const refusal = mobileApiContract.endpoints.unlockFreeBundle.errors.paidVersionNotFree;
+    expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(refusal.response).toEqual({ error: PAID_VERSION_NOT_FREE_ERROR, code: PAID_VERSION_NOT_FREE_CODE });
+    expect(admin.rpcCalls.map(({ fn }) => fn)).not.toContain('unlock_free_post_resource_bundle');
+  });
+
+  it('refuses rather than give it away when the post\'s terms cannot be read', async () => {
+    const admin = createAdminSupabaseMock();
+    const result = await unlockFreePostResourceBundleForRoute({
+      loadPostRemixMode: async () => { throw new Error('connection reset'); },
+      adminSupabase: admin.client,
+      postId: 'post-1',
+      buyerUserId: 'buyer-1',
+      getBundleForOrderByPostId: vi.fn(async () => createBundle()),
+      isPostResourceBundleBuyWithheld: notWithheld(),
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 500 });
+    expect(admin.rpcCalls.map(({ fn }) => fn)).not.toContain('unlock_free_post_resource_bundle');
   });
 });

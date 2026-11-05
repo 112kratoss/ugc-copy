@@ -22,6 +22,7 @@ const SHARING_GENERATION = {
   share_input_media_for_remix: true,
   template_run_id: null,
   template_run_step_id: null,
+  remix_recipe_mode: null,
 };
 
 // The creation's post as the feed shows it: public, live and visible.
@@ -45,6 +46,7 @@ const PAID_REMIX_RECIPE = {
   price_usd_cents: 499,
   status: 'published',
   allow_remix: true,
+  retired_at: null,
 };
 
 type AdminStubOptions = {

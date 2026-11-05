@@ -8,6 +8,7 @@ import {
 } from '@/__tests__/fixtures/remix-source-rows';
 import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
 import {
+  REMIX_SOURCE_NO_LONGER_REMIXABLE,
   resolveSourceGenerationId,
   SourceGenerationValidationError,
 } from '@/lib/source-generation';
@@ -20,7 +21,7 @@ vi.mock('@/lib/backend-logger', async (importOriginal) => ({
 }));
 
 const SOURCE_ID = '0f0e0d0c-0b0a-4901-8807-060504030201';
-const GENERATION_SELECT = ['id', 'user_id', 'is_public', 'template_run_id', 'template_run_step_id'];
+const GENERATION_SELECT = ['id', 'user_id', 'is_public', 'template_run_id', 'template_run_step_id', 'remix_recipe_mode'];
 
 /** A caller with an account, and a guest identity (`isGuestUser`). */
 const REGISTERED = { callerIsGuest: false };
@@ -35,6 +36,7 @@ const PUBLIC_SOURCE = {
   is_public: true,
   template_run_id: null,
   template_run_step_id: null,
+  remix_recipe_mode: null,
 };
 
 /** Its post as the feed shows it, the start tests' own row: public, live and visible. */
@@ -46,6 +48,8 @@ const PUBLISHED_RECIPE = {
   post_id: EXPOSED_POST.id,
   owner_user_id: PUBLIC_SOURCE.user_id,
   status: 'published',
+  access_mode: 'paid',
+  retired_at: null,
   allow_remix: true,
 };
 
@@ -75,12 +79,15 @@ function createSupabaseMock({
   generation = PUBLIC_SOURCE,
   linkedProfiles = [],
   failingReads = {},
+  boughtPaid = false,
   ...remixRows
 }: Omit<RemixSourceRowOptions, 'profiles'> & {
   generation?: Row | null;
   /** Guest profiles and the account each was linked into (`merged_into_user_id`). */
   linkedProfiles?: Array<{ id: string; mergedIntoUserId: string }>;
   failingReads?: Partial<Record<string, { message: string }>>;
+  /** What `remix_source_bought_paid` answers: whether the caller paid for the source post's recipe. */
+  boughtPaid?: boolean | 'fails';
 } = {}) {
   const stored = createStoredRows({
     generations: generation ? [generation] : [],
@@ -95,8 +102,16 @@ function createSupabaseMock({
     return error ? { ...query, select: (columns: string) => failRead(query.select(columns), error) } : query;
   };
 
+  const rpcCalls: Array<{ name: string; args: unknown }> = [];
+  const rpc = async (name: string, args: unknown) => {
+    rpcCalls.push({ name, args });
+    if (name !== 'remix_source_bought_paid') return { data: null, error: { message: `unknown function ${name}` } };
+    return boughtPaid === 'fails' ? { data: null, error: { message: 'timeout' } } : { data: boughtPaid, error: null };
+  };
+
   return {
-    supabase: { from } as unknown as SupabaseClient,
+    supabase: { from, rpc } as unknown as SupabaseClient,
+    rpcCalls,
     /** The tables read, in order. */
     tables: () => stored.reads.map(({ table }) => table),
     reads: stored.reads,
@@ -353,22 +368,58 @@ describe('remix credit', () => {
     expect(tables()).toEqual(['generations']);
   });
 
-  // The bookkeeping must not cost the caller their run: a check that cannot be
-  // made credits no remix, is logged, and the run starts. The log must carry the
-  // failure each case injects, so another error on the way cannot stand in for it.
+  // A check that cannot be made keeps the link and starts the run: the link also
+  // carries the run's remix terms, and crediting a remix by mistake costs less
+  // than a version of a paid recipe going out free (plan review, 2026-11-05).
+  // The log carries the failure each case injects.
   it.each([
-    ['posts', {}, 'failed_to_check_remix_access_for_source_generation'],
-    // Remix counts a block check it cannot make as a block, and logs that itself.
-    ['user_blocks', {}, 'failed_to_verify_block_state_before_remix_access'],
-    ['post_resource_bundles', {}, 'failed_to_check_remix_access_for_source_generation'],
-    ['post_resource_bundle_purchases', { recipes: [PUBLISHED_RECIPE] }, 'failed_to_check_remix_access_for_source_generation'],
-  ])('records no remix, and starts the run, when its %s read fails', async (table, rows, event) => {
+    ['posts', {}],
+    ['post_resource_bundles', {}],
+    ['post_resource_bundle_purchases', { recipes: [PUBLISHED_RECIPE] }],
+  ])('keeps the remix, and starts the run, when its %s read fails', async (table, rows) => {
     const timeout = { message: 'timeout' };
     const { supabase, tables } = createSupabaseMock({ ...rows, failingReads: { [table]: timeout } });
 
-    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBeNull();
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBe(SOURCE_ID);
     expect(tables()).toContain(table);
     expect(logBackendErrorMock).toHaveBeenCalledTimes(1);
-    expect(logBackendErrorMock).toHaveBeenCalledWith(event, { error: timeout });
+    expect(logBackendErrorMock).toHaveBeenCalledWith('failed_to_check_remix_access_for_source_generation', { error: timeout });
+  });
+
+  // Remix counts a block check it cannot make as a block, and logs that itself.
+  it('records no remix when its block check fails, which counts as a block', async () => {
+    const timeout = { message: 'timeout' };
+    const { supabase } = createSupabaseMock({ failingReads: { user_blocks: timeout } });
+
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED)).resolves.toBeNull();
+    expect(logBackendErrorMock).toHaveBeenCalledWith('failed_to_verify_block_state_before_remix_access', { error: timeout });
+  });
+
+  // Someone who paid for the post's recipe has its prompt in their creator: when
+  // they can no longer remix the post, the run does not start from it rather
+  // than start free (plan review, 2026-11-05).
+  it('refuses the start of a remix whose paid recipe the caller bought but can no longer remix', async () => {
+    const { supabase, rpcCalls } = createSupabaseMock({
+      blocks: [{ blocker_user_id: 'user-1', blocked_user_id: 'other-user' }],
+      boughtPaid: true,
+    });
+
+    const refusal = await resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(SourceGenerationValidationError);
+    expect(refusal).toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
+    expect(rpcCalls).toEqual([{
+      name: 'remix_source_bought_paid',
+      args: { p_user_id: 'user-1', p_source_generation_id: SOURCE_ID },
+    }]);
+  });
+
+  it('fails the start when it cannot tell whether the caller bought the recipe', async () => {
+    const { supabase } = createSupabaseMock({
+      blocks: [{ blocker_user_id: 'user-1', blocked_user_id: 'other-user' }],
+      boughtPaid: 'fails',
+    });
+
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED))
+      .rejects.toMatchObject({ status: 500 });
   });
 });

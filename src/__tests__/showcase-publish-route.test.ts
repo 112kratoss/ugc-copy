@@ -277,6 +277,13 @@ vi.mock('@/lib/source-tools-server', () => ({
   listSourceToolsCatalog: () => Promise.resolve(sourceToolCatalog),
 }));
 
+// No creation here remixed anyone's post; the service's own tests hold the
+// remix terms (showcase-publish-service.test.ts, "a remix's recipe terms").
+vi.mock('@/lib/remix-recipe-terms', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/remix-recipe-terms')>();
+  return { ...actual, loadRemixRecipeTerms: vi.fn(async () => actual.NO_REMIX_RECIPE_TERMS) };
+});
+
 function expectPrivateNoStoreTraceHeaders(response: Response, requestId: string) {
   expect(response.headers.get('Cache-Control')).toBe('private, no-store');
   expect(response.headers.get('x-request-id')).toBe(requestId);

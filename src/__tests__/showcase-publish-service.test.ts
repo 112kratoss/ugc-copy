@@ -17,6 +17,12 @@ vi.mock('@/lib/backend-logger', () => ({
 vi.mock('@/lib/post-source-tools-server', () => ({
   replacePostSourceTools: vi.fn(async () => undefined),
 }));
+// A creation here remixed nobody's post unless a case says so: the cases about
+// a remix's terms pass a reader of their own.
+vi.mock('@/lib/remix-recipe-terms', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/remix-recipe-terms')>();
+  return { ...actual, loadRemixRecipeTerms: vi.fn(async () => actual.NO_REMIX_RECIPE_TERMS) };
+});
 
 import {
   getCanonicalGenerationShowcaseAssetPath,
@@ -27,8 +33,15 @@ import {
 import { PUBLIC_UGC_SAFETY_ERROR } from '@/lib/public-ugc-safety';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import type { PostResourceBundleInput, PostResourceItem } from '@/lib/post-resource-bundles';
+import { REMIX_RECIPE_TERMS_UNREADABLE_ERROR } from '@/lib/remix-recipe-terms';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import {
+  REMIX_RECIPE_MUST_BE_PAID,
+  REMIX_RECIPE_MUST_BE_PAID_CODE,
+  REMIX_RECIPE_STAYS_FREE,
+  REMIX_RECIPE_STAYS_FREE_CODE,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /** The linked-identity lookup: the guest ids merged into the caller's account. */
 function linkedProfilesQuery(linkedGuestIds: string[]) {
@@ -2758,5 +2771,159 @@ describe('the Made with row of a published creation', () => {
       'failed_to_save_generation_post_source_tools',
       { error: expect.objectContaining({ message: 'connection reset' }) },
     );
+  });
+});
+
+// A remix's recipe keeps the terms of the post it remixed (owner, 2026-11-05):
+// paid stays paid, at a price its creator sets, and free stays free.
+describe('a remix\'s recipe terms', () => {
+  const generation = {
+    id: 'gen-remix',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/remix.jpg',
+    showcase_asset_path: null,
+    title: 'Lantern remix',
+    description: null,
+    prompt: 'A lantern at dusk, warmer.',
+  };
+  const recipe = (accessMode: 'none' | 'free' | 'paid') => ({
+    accessMode,
+    summary: 'The setup behind this remix.',
+    previewText: 'Prompt and settings for the lantern remix.',
+    ...(accessMode === 'paid' ? { priceUsdCents: 10 } : {}),
+    resources: { promptText: 'A lantern at dusk, warmer.', attachments: [], allowRemix: false },
+  });
+  const terms = (mode: 'free' | 'paid' | null) => vi.fn(async () => ({
+    mode,
+    bundleId: mode ? 'bundle-original' : null,
+    originGenerationId: mode ? 'gen-original' : null,
+  }));
+  const publish = (
+    accessMode: 'none' | 'free' | 'paid',
+    loadRemixRecipeTerms: ShowcasePublishServiceDependencies['loadRemixRecipeTerms'],
+    visibility: 'public' | 'private' = 'public',
+  ) => {
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => {
+      throw new Error('stopped after the checks');
+    });
+    const run = publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: { generationId: 'gen-remix', visibility, title: 'Lantern remix', resourceBundle: recipe(accessMode) },
+      userId: 'user-1',
+      dependencies: {
+        validatePostResourceBundleInput: vi.fn(() => null),
+        // Stops a public post that kept its terms right after them, so a case
+        // reads only whether the terms let it through.
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => 'quality checked'),
+        loadRemixRecipeTerms,
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+    return { run, publishGenerationPostWithResourceBundleAtomically };
+  };
+
+  it.each(['free', 'none'] as const)('refuses a remix of a paid recipe going public with a %s recipe', async (accessMode) => {
+    const { run, publishGenerationPostWithResourceBundleAtomically } = publish(accessMode, terms('paid'));
+
+    const refusal = mobileApiContract.endpoints.publishGeneration.errors.remixRecipeMustBePaid;
+    expect(await run).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(refusal.response).toEqual({ error: REMIX_RECIPE_MUST_BE_PAID, code: REMIX_RECIPE_MUST_BE_PAID_CODE, field: 'resourceBundle' });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it('refuses to sell a remix of a free recipe', async () => {
+    const { run } = publish('paid', terms('free'));
+
+    const refusal = mobileApiContract.endpoints.publishGeneration.errors.remixRecipeStaysFree;
+    expect(await run).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(refusal.response).toEqual({ error: REMIX_RECIPE_STAYS_FREE, code: REMIX_RECIPE_STAYS_FREE_CODE, field: 'resourceBundle' });
+  });
+
+  it.each([
+    ['paid', 'paid'],
+    ['free', 'free'],
+    ['free', 'none'],
+    [null, 'paid'],
+    [null, 'none'],
+  ] as const)('lets a %s remix go public with a %s recipe', async (mode, accessMode) => {
+    const loadRemixRecipeTerms = terms(mode);
+    const { run } = publish(accessMode, loadRemixRecipeTerms);
+
+    expect(await run).toMatchObject({ ok: false, status: 400, body: { error: 'quality checked' } });
+    expect(loadRemixRecipeTerms).toHaveBeenCalledWith(expect.anything(), 'gen-remix');
+  });
+
+  it('holds a private post to nothing yet: its recipe is a draft until it goes public', async () => {
+    const loadRemixRecipeTerms = terms('paid');
+    await publish('free', loadRemixRecipeTerms, 'private').run.catch(() => undefined);
+
+    expect(loadRemixRecipeTerms).not.toHaveBeenCalled();
+  });
+
+  it('refuses rather than guess when the terms cannot be read', async () => {
+    const { run, publishGenerationPostWithResourceBundleAtomically } = publish(
+      'free',
+      vi.fn(async () => { throw new Error('connection reset'); }),
+    );
+
+    expect(await run).toEqual({ ok: false, status: 500, body: { error: REMIX_RECIPE_TERMS_UNREADABLE_ERROR } });
+    expect(publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['paid', null],
+    [null, 'A lantern at dusk, warmer.'],
+  ] as const)('shows the prompt on the post for a %s remix only where its terms allow', async (mode, shown) => {
+    const publishGenerationPostWithResourceBundleAtomically = vi.fn(async () => {
+      throw new Error('stopped after the checks');
+    });
+    await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      // Private, so nothing holds the post to its terms yet: only the prompt rule acts.
+      body: { generationId: 'gen-remix', visibility: 'private', title: 'Lantern remix', exposePromptPublic: true },
+      userId: 'user-1',
+      dependencies: {
+        loadRemixRecipeTerms: terms(mode),
+        ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
+          outputUrl: mediaGeneration.outputUrl,
+          createdLocation: null,
+        })),
+        listSourceToolsCatalog: vi.fn(async () => [
+          { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+        ]),
+        publishGenerationPostWithResourceBundleAtomically,
+      },
+    });
+
+    expect(publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ prompt: shown }),
+    }));
+  });
+
+  it('holds a visibility change to the stored recipe it republishes', async () => {
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock(generation).client,
+      body: { generationId: 'gen-remix', visibility: 'public' },
+      userId: 'user-1',
+      dependencies: {
+        loadExistingGenerationPostContent: vi.fn(async () => ({
+          title: 'Lantern remix',
+          description: null,
+          prompt: null,
+          body: null,
+          category: 'image',
+          resourceBundle: recipe('free'),
+        })),
+        getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+        loadRemixRecipeTerms: terms('paid'),
+        publishGenerationPostWithResourceBundleAtomically: vi.fn(),
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 400, body: { code: REMIX_RECIPE_MUST_BE_PAID_CODE } });
   });
 });

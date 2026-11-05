@@ -1969,6 +1969,7 @@ describe('a run started from someone else’s post', () => {
     is_public: true,
     template_run_id: null,
     template_run_step_id: null,
+    remix_recipe_mode: null,
     // What the start's own replay lookup selects.
     prediction_id: 'creator-task',
     status: 'succeeded',
@@ -2002,6 +2003,8 @@ describe('a run started from someone else’s post', () => {
       claim_generation_start_request: () => 'claimed',
       try_acquire_backend_job_lock: () => true,
       release_backend_job_lock: () => true,
+      // Nobody here paid for the source's recipe, so a refused remix starts an ordinary run.
+      remix_source_bought_paid: () => false,
     });
     const startCatalog = vi.fn(async () => ({
       predictionId: 'provider-task',
