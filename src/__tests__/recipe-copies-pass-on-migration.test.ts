@@ -113,6 +113,19 @@ describe('recipe copies pass on with their source migration', () => {
     expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.remix_terms_for(uuid, uuid) TO service_role;');
   });
 
+  // The run start refuses a holder's refused remix on paid terms (the hub, 2026-11-06, from the owner's
+  // "B's recipe must be paid").
+  it('tells the run start who holds the source recipe on paid terms, a free claim of one paid now included', () => {
+    const body = functionBody('remix_source_held_paid');
+    expect(body).toContain('SELECT public.remix_source_bought_paid(p_user_id, p_source_generation_id)');
+    expect(body).toContain('AND purchase.buyer_user_id IN (SELECT public.linked_account_ids(p_user_id))');
+    expect(body).toContain('AND purchase.moderation_retracted_at IS NULL');
+    expect(body).toContain("b.access_mode = 'paid'");
+    expect(body).toContain("AND live.access_mode = 'paid'");
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.remix_source_held_paid(uuid, uuid) FROM PUBLIC, anon, authenticated;');
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.remix_source_held_paid(uuid, uuid) TO service_role;');
+  });
+
   it('lets only the server ask any of it', () => {
     for (const signature of [
       'recipe_copy_source_withheld_at(text, integer)',

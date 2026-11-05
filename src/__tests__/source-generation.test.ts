@@ -86,7 +86,7 @@ function createSupabaseMock({
   /** Guest profiles and the account each was linked into (`merged_into_user_id`). */
   linkedProfiles?: Array<{ id: string; mergedIntoUserId: string }>;
   failingReads?: Partial<Record<string, { message: string }>>;
-  /** What `remix_source_bought_paid` answers: whether the caller paid for the source post's recipe. */
+  /** What `remix_source_held_paid` answers: whether the caller holds the source post's recipe on paid terms. */
   boughtPaid?: boolean | 'fails';
 } = {}) {
   const stored = createStoredRows({
@@ -105,7 +105,7 @@ function createSupabaseMock({
   const rpcCalls: Array<{ name: string; args: unknown }> = [];
   const rpc = async (name: string, args: unknown) => {
     rpcCalls.push({ name, args });
-    if (name !== 'remix_source_bought_paid') return { data: null, error: { message: `unknown function ${name}` } };
+    if (name !== 'remix_source_held_paid') return { data: null, error: { message: `unknown function ${name}` } };
     return boughtPaid === 'fails' ? { data: null, error: { message: 'timeout' } } : { data: boughtPaid, error: null };
   };
 
@@ -427,9 +427,21 @@ describe('remix credit', () => {
     expect(refusal).toBeInstanceOf(SourceGenerationValidationError);
     expect(refusal).toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
     expect(rpcCalls).toEqual([{
-      name: 'remix_source_bought_paid',
+      name: 'remix_source_held_paid',
       args: { p_user_id: 'user-1', p_source_generation_id: SOURCE_ID },
     }]);
+  });
+
+  // The hub, 2026-11-06, from the owner's "B's recipe must be paid": someone who claimed the recipe free
+  // while it was free holds it on paid terms once it is paid, and a refused remix of theirs is refused too.
+  it('refuses the start of a refused remix by a free claimer of a recipe that is paid now', async () => {
+    const { supabase } = createSupabaseMock({
+      blocks: [{ blocker_user_id: 'other-user', blocked_user_id: 'user-1' }],
+      boughtPaid: true,
+    });
+
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED))
+      .rejects.toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
   });
 
   it('fails the start when it cannot tell whether the caller bought the recipe', async () => {

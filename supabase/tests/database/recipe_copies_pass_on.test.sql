@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(48);
+select plan(51);
 
 insert into auth.users(id, email, aud, role, created_at, is_anonymous, raw_app_meta_data, raw_user_meta_data)
 values
@@ -252,6 +252,13 @@ select is(
   (select remix_recipe_mode || ':' || coalesce(remix_recipe_bundle_id::text, 'none') from public.generations where id = 'ad120010-1000-4000-8000-0000000000de'),
   'free:ad120030-1000-4000-8000-00000000000a',
   'a remix by someone who never held the recipe keeps phase 1''s terms');
+-- The run start's refusal reads the same: a free claimer of a recipe paid now holds it on paid terms.
+select ok(public.remix_source_held_paid('ad120005-1000-4000-8000-000000000005', 'ad120010-1000-4000-8000-00000000000b'),
+  'a free claim of a recipe now paid holds it on paid terms');
+select ok(not public.remix_source_bought_paid('ad120005-1000-4000-8000-000000000005', 'ad120010-1000-4000-8000-00000000000b'),
+  'though the claimer paid nothing');
+select ok(not public.remix_source_held_paid('ad120004-1000-4000-8000-000000000004', 'ad120010-1000-4000-8000-00000000000a'),
+  'someone who never held the recipe holds nothing on paid terms');
 
 -- ─── What the table holds ───────────────────────────────────────────────────
 
