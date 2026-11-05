@@ -693,9 +693,9 @@ describe('input slots for a remix given none of the run’s inputs', () => {
       mocks.resolveRemixAccess.mockResolvedValue({ ...UNLOCKED_ACCESS, recipeEntitled: true });
       const kept = { ...BOUGHT, url: null, metadata: { ...BOUGHT.metadata, seedanceAsset: { assetId: 'asset-kept-bought', assetType: 'Image', status: 'active' } } };
       mocks.generation = {
-        ...mocks.generation,
+        ...mocks.generation!,
         workflow_settings: {
-          ...(mocks.generation.workflow_settings as Record<string, unknown>),
+          ...(mocks.generation!.workflow_settings as Record<string, unknown>),
           seedanceAssets: { images: [
             { assetId: 'asset-product', assetType: 'Image', status: 'active', sourceUrl: 'https://project.supabase.co/storage/v1/object/sign/uploads/creator-1/1730000000000-product.png?token=prep' },
             { assetId: 'asset-kept-bought', assetType: 'Image', status: 'active', sourceUrl: kept.storagePath },

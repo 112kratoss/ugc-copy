@@ -4299,7 +4299,7 @@ describe('CreateVideoClient Kling video elements', () => {
         return `${limits.images > 0 ? 'images' : '-'} ${limits.videos > 0 && modelId !== 'kling-3.0-video' ? 'clips' : '-'} ${limits.audios > 0 ? 'tracks' : '-'}`;
       };
 
-      expect(videoModelIds.filter((modelId) => takes(modelId) === '- - -').sort()).toEqual(['hailuo-2.3', 'kling-3.0-turbo', 'kling-3.0-video']);
+      expect(videoModelIds.filter((modelId) => takes(modelId) === '- - -').sort()).toEqual(['hailuo-2.3', 'kling-3.0-turbo', 'kling-3.0-video', 'pixverse-v6-max']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images - -').length).toBeGreaterThan(2);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips -')).toEqual(['gemini-omni-video', 'gemini-omni-1.1-flash']);
       expect(videoModelIds.filter((modelId) => takes(modelId) === 'images clips tracks').length).toBeGreaterThan(2);
@@ -4540,6 +4540,26 @@ describe('CreateVideoClient Kling video elements', () => {
         target: { files: [picture('start')] },
       });
       await waitFor(() => expect(canvasAsksFor()).toBe(ASKS_FOR_PROMPT));
+    });
+
+    it.each([
+      { side: 'Frames', asks: 'Add a start frame and write a prompt, then Generate.' },
+      { side: 'References', asks: 'Add a reference picture and write a prompt, then Generate.' },
+    ] as const)('stops a Vidu Q4 run on $side with no picture before anything is sent', async ({ side, asks }) => {
+      // Vidu Q4 has no text-only run: a start frame or a reference picture (review of #705).
+      saveInTheBrowser({});
+      render(<CreateVideoClient prefill={{ model: 'vidu-q4' }} />);
+      await restored();
+      await chooseInputs(side);
+      expect(await screen.findByText(asks)).toBeInTheDocument();
+
+      fireEvent.change(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/), {
+        target: { value: 'A chef plates a dish under warm kitchen light.' },
+      });
+      fireEvent.click(generateButton());
+
+      expect(await screen.findByText('Vidu Q4 needs a start frame or a reference picture.')).toBeInTheDocument();
+      expect(postedRun()).toBeUndefined();
     });
 
     it.each(['kling-3.0-turbo', 'hailuo-2.3'] as const)('makes a frames run on %s while two saved images are on standby', async (modelId) => {

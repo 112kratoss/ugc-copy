@@ -412,7 +412,32 @@ const VIDEO_INPUT_LIMITS: Record<VideoModelId, VideoInputLimits> = {
   // pixverse-v6 (2026-10-08): image-to-video takes one start frame, transition a frame
   // pair, reference-to-video up to 7 named image_references.
   'pixverse-v6': { images: 7, videos: 0, audios: 0, startFrame: true, endFrame: true },
+  // pixverse-v6-max (2026-11-05): text-to-video, and image-to-video's one start frame; no
+  // transition or reference endpoint.
+  'pixverse-v6-max': { images: 0, videos: 0, audios: 0, startFrame: true, endFrame: false },
+  // kling-4.0 (2026-11-05): keyframe-to-video's first and last frame, or reference-to-video's
+  // 10 image_urls. Its clips, elements, voices and middle keyframes are not offered
+  // (docs/model-api-references/kling-4-0.md).
+  'kling-4.0': { images: 10, videos: 0, audios: 0, startFrame: true, endFrame: true },
+  // vidu-q4 (2026-11-05): image-to-video's start frame (required: there is no text-only run)
+  // or reference-to-video's 1–15 pictures. Its MP3-only reference audio is not offered.
+  'vidu-q4': { images: 15, videos: 0, audios: 0, startFrame: true, endFrame: false },
 };
+
+/**
+ * Video models with no run from text alone: Hailuo 2.3 animates a start image, and Vidu Q4
+ * needs a start frame or, on its references side, at least one picture. Their slots publish
+ * a minimum of one, which the quote enforces and both creators read as "required".
+ */
+const VIDEO_MODELS_NEEDING_AN_IMAGE: ReadonlySet<VideoModelId> = new Set(['hailuo-2.3', 'vidu-q4']);
+
+/**
+ * Video models offered on the web only: the installed apps' AI-data question
+ * (ugc-mobile/lib/ai-data-consent.ts) does not yet name their maker, so the published release
+ * keeps them off mobile until an app update that names it is in people's hands on both
+ * platforms, as PixVerse V6 was kept in October 2026. Vidu Q4 is ShengShu's.
+ */
+const WEB_ONLY_VIDEO_MODEL_IDS: ReadonlySet<VideoModelId> = new Set(['vidu-q4']);
 
 /**
  * Exported so the start service reads the same clip/audio caps the descriptor
@@ -482,7 +507,7 @@ function videoInputModes(
       kind: 'image',
       role: 'startFrame',
       label: 'Start frame',
-      min: modelId === 'hailuo-2.3' ? 1 : 0,
+      min: VIDEO_MODELS_NEEDING_AN_IMAGE.has(modelId) ? 1 : 0,
       max: 1,
     });
   }
@@ -518,7 +543,8 @@ function videoInputModes(
       kind: 'image',
       role: 'reference',
       label: 'Reference images',
-      min: 0,
+      // A references run with no picture has no endpoint where the model takes no text alone.
+      min: VIDEO_MODELS_NEEDING_AN_IMAGE.has(modelId) ? 1 : 0,
       max: limits.images,
       supportsNaming: true,
       // Kling O3 accepts 7 reference images but names at most 3 of them as subjects.
@@ -763,6 +789,7 @@ function videoDescriptors(): GenerationModelDescriptor[] {
       badge: [
         'grok-imagine-video', 'kling-3.0-turbo', 'seedance-2-mini', 'wan-2.7', 'hailuo-2.3',
         'gemini-omni-1.1-flash', 'wan-3.0', 'wan-3.0-prime', 'grok-imagine-video-1.5', 'pixverse-v6',
+        'pixverse-v6-max', 'kling-4.0', 'vidu-q4',
       ].includes(model.id) ? 'New' : null,
       recommended: model.id === DEFAULT_MODEL_IDS.video,
       sortOrder: index * 10,
@@ -787,10 +814,9 @@ function videoDescriptors(): GenerationModelDescriptor[] {
       },
       // A model whose maker the installed apps do not yet name in the AI-data question
       // (ugc-mobile/lib/ai-data-consent.ts) stays off mobile in the published release until
-      // an app update that names it is in users' hands on both platforms. PixVerse V6's
-      // update shipped in code on 2026-10-08; release pixverse-mobile-20261008, which turns
-      // it on for mobile, is held until then (docs/model-api-references/pixverse-v6.md).
-      availability: { web: true, mobile: true },
+      // an app update that names it is in users' hands on both platforms
+      // (WEB_ONLY_VIDEO_MODEL_IDS). PixVerse V6 went that way in October 2026.
+      availability: { web: true, mobile: !WEB_ONLY_VIDEO_MODEL_IDS.has(model.id) },
       inputModes: videoInputModes(model.id, limits),
       inputConstraints: videoInputConstraints(model.id),
     };

@@ -36,11 +36,14 @@ const KIE_IMAGE_LIMITS: Record<string, Array<[string, number] | [string, number,
   'grok-imagine-video-1-5-preview': [['image_urls', 20]],
   'pixverse-v6/image-to-video': [['image_urls', 20]],
   'pixverse-v6/transition': [['first_frame_image_url', 20], ['last_frame_image_url', 20]],
+  'pixverse-v6-max/image-to-video': [['image_urls', 20]],
   'wan/3-0-video': [['first_frame_url', 20], ['last_frame_url', 20], ['reference_image_urls', 20]],
   'wan/3-0-video-prime': [['first_frame_url', 20], ['last_frame_url', 20], ['reference_image_urls', 20]],
   'nano-banana-2': [['image_input', 30]],
   'nano-banana-2-lite': [['image_urls', 30]],
   'nano-banana-pro': [['image_input', 30]],
+  'nano-banana-2-1': [['image_input', 30]],
+  'flux-3/klein-edit-image': [['image_urls', 30]],
   'seedream/5-pro-image-to-image': [['image_urls', 30]],
   'seedream/5-lite-image-to-image': [['image_urls', 30]],
   'seedream/5-flash-image-to-image': [['image_urls', 30]],
@@ -55,6 +58,7 @@ const KIE_IMAGE_LIMITS: Record<string, Array<[string, number] | [string, number,
   'qwen2-1/image-to-image': [['image_urls', 30]],
   'kling-3.0-omni/image-to-video': [['image_urls', 50]],
   'kling-3.0-omni/reference-to-video': [['image_urls', 50]],
+  'vidu-q4/image-to-video': [['image_url', 50]],
 };
 
 /**
@@ -79,6 +83,11 @@ const NO_DOCUMENTED_IMAGE_LIMIT = new Set([
   'google/imagen4',
   'google/imagen4-fast',
   'google/imagen4-ultra',
+  // Read 2026-11-05: Kling 4.0's pictures have a pixel range (300–65536 a side) and no file
+  // size, its frames none at all; Vidu Q4's reference pictures name none.
+  'kling-4.0/reference-to-video',
+  'kling-4.0/keyframe-to-video',
+  'vidu-q4/reference-to-video',
 ]);
 
 function measured(images: ProviderRequestImage[], sizes: Array<number | null>) {
