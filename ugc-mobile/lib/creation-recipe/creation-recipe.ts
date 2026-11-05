@@ -324,3 +324,44 @@ export function remixRecipeRefusal(
     ? { error: REMIX_RECIPE_MUST_BE_PAID, code: REMIX_RECIPE_MUST_BE_PAID_CODE }
     : { error: REMIX_RECIPE_STAYS_FREE, code: REMIX_RECIPE_STAYS_FREE_CODE };
 }
+
+// ─── Posting defaults (remix plan, phase 2; owner, 2026-11-05) ───────────────
+
+/**
+ * The recipe a creation's new post starts on: free, holding the exact prompt and
+ * the creation's references (the creator's own uploads included), with Remix
+ * allowed. A creation's post has no "without recipe"; an upload's and a text
+ * post's keep it, and start on it.
+ */
+export const CREATION_RECIPE_STARTING_ACCESS = 'free' as const;
+
+/** The price a paid recipe starts at, in credits (it started at 900). */
+export const DEFAULT_PAID_RECIPE_PRICE_CREDITS = 10;
+
+/** Under the files a creation's recipe takes, each of which has a remove button. */
+export const CREATION_RECIPE_FILES_LINE = 'Anyone who gets this recipe gets these files.';
+
+/** Under the paid choice: what a buyer may do (the plan's assumption 12, the seller's consent). */
+export const PAID_RECIPE_RESALE_LINE = 'Anyone who unlocks it can remix it and sell their version at their own price.';
+
+/** The "Allow remixes" switch, on by default, which stops new remixes of this post only. */
+export const ALLOW_REMIXES_LABEL = 'Allow remixes';
+export const ALLOW_REMIXES_DETAIL = 'People can remix this post. Turning it off stops new remixes; the recipe can still be claimed or bought.';
+
+/** What the server answers a new post of a creation sent with no recipe, from a composer that offers none. */
+export const CREATION_RECIPE_REQUIRED = 'A creation’s post shares its recipe. Choose Free or Paid.';
+export const CREATION_RECIPE_REQUIRED_CODE = 'CREATION_RECIPE_REQUIRED';
+
+/**
+ * The recipe choice a remix is held to (`remixRecipeAllows`), drawn locked with
+ * its reason: a remix of a paid recipe is paid, at a price its creator sets, and
+ * a remix of a free one stays free. Null where the creation remixed no one's
+ * post, and the creator chooses.
+ */
+export function remixRecipeLock(
+  mode: RemixRecipeMode | null | undefined,
+): { accessMode: RemixRecipeMode; reason: string } | null {
+  if (mode === 'paid') return { accessMode: 'paid', reason: REMIX_RECIPE_MUST_BE_PAID };
+  if (mode === 'free') return { accessMode: 'free', reason: REMIX_RECIPE_STAYS_FREE };
+  return null;
+}

@@ -1,6 +1,14 @@
 import { readCreationTitleSource, type CreationTitleSource } from '@/lib/creation-post-title';
 import type { GenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { isPostResourceKind } from '@/lib/post-resource-bundles';
+// Which saved inputs the recipe takes, and a remix's terms, as both composers read them.
+import {
+  isRemixRecipeMode,
+  recipeCopyableInputs,
+  type CreationInputLike,
+  type GenerationReference,
+  type RemixRecipeMode,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /**
  * What publishing a creation starts from, read from the owner's library entry as Studio reads
@@ -12,6 +20,10 @@ export type CreationPublishDetails = {
   title: string;
   paywallPrefill: GenerationPaywallPrefill | null;
   creation: CreationTitleSource | null;
+  /** The saved inputs the recipe takes (`recipeCopyable`), each of which the form can remove. */
+  inputs: GenerationReference[];
+  /** The terms the run carries as a remix (`remix_recipe_mode`); null for none. */
+  remixRecipeMode: RemixRecipeMode | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,6 +67,10 @@ function readCreationPublishDetails(generationId: string, payload: unknown): Cre
     // Read as the composer reads it, which "More options" opens on the same creation.
     paywallPrefill: readGenerationPaywallPrefill(generation.paywallPrefill),
     creation: readCreationTitleSource(generation),
+    inputs: recipeCopyableInputs(Array.isArray(generation.input_media)
+      ? (generation.input_media as unknown[]).filter((item): item is CreationInputLike => isRecord(item))
+      : []),
+    remixRecipeMode: isRemixRecipeMode(generation.remix_recipe_mode) ? generation.remix_recipe_mode : null,
   };
 }
 

@@ -104,6 +104,8 @@ export interface PostRow {
   source_tool_slug: string | null;
   review_status?: string | null;
   generation_id: string | null;
+  /** The post's own "Allow remixes" (owner, 2026-11-05); absent from a legacy read, which allows them. */
+  remixes_allowed?: boolean | null;
 }
 
 interface LegacyPostRow {
@@ -206,7 +208,7 @@ async function fetchPostRows(
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed')
     .eq('visibility', 'public')
     .is('archived_at', null);
 
@@ -248,7 +250,7 @@ async function fetchPostRows(
 
   const result = await query.range(offset, offset + limit - 1);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
     if (category === 'text') {
       return [];
     }
@@ -313,12 +315,12 @@ async function fetchPostRowsByIds(
 
   const result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id')
+    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed')
     .in('id', postIds)
     .eq('visibility', 'public')
     .is('archived_at', null);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
     const legacyResult = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
@@ -819,6 +821,7 @@ export async function resolvePostRowsToFeedItems(
         postFormat: post.post_format,
         category: post.category,
         creationMode: post.creation_mode,
+        remixesAllowed: post.remixes_allowed,
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         templateResult: generationInfo?.templateResult === true,
         resourceBundle: asset
@@ -1798,7 +1801,7 @@ export async function getShowcaseFeedItemById(options: {
   const adminSupabase = createServiceClient();
   let result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility')
+    .select('id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, remixes_allowed')
     .eq('id', postId)
     // Unlisted means "anyone with the link": the web post page reads it, and
     // the app receives the same share links, so the by-id read does too.
@@ -1806,7 +1809,7 @@ export async function getShowcaseFeedItemById(options: {
     .is('archived_at', null)
     .maybeSingle();
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
     result = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id, visibility')
@@ -1828,6 +1831,7 @@ export async function getShowcaseFeedItemById(options: {
           source_tool_slug: slugifySourceTool((result.data as LegacyPostRow).source_tool),
           review_status: 'visible',
           visibility: (result.data as { visibility?: string | null }).visibility ?? 'public',
+          remixes_allowed: null,
         },
       };
     }

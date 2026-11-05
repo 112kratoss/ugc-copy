@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { useEffect, useId, useRef, useState } from 'react';
-import { ArrowRight, Check, CircleAlert, Download, Globe, Loader2 } from 'lucide-react';
+import { ArrowRight, Check, CircleAlert, Download, Film, Globe, Image as ImageIcon, Loader2, Lock, Music, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import PostCommentAvatar from '@/components/PostCommentAvatar';
@@ -18,6 +18,14 @@ import { buildCreatorProfilePath, getCreatorDisplayName } from '@/lib/profile';
 import type { GenerationShareSourceSurface } from '@/lib/share';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { openCreditTopUp } from '@/lib/credit-top-up';
+// The posting defaults and their words, one copy with both composers (remix plan, phase 2).
+import {
+  ALLOW_REMIXES_DETAIL,
+  ALLOW_REMIXES_LABEL,
+  CREATION_RECIPE_FILES_LINE,
+  PAID_RECIPE_RESALE_LINE,
+  type GenerationReference,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /**
  * Publishing on the canvas (the artboards Result and Posted, owner 2026-10-28): when a run is
@@ -531,38 +539,93 @@ export function ownUploadsWords(count: number, kinds: Partial<Record<'image' | '
 }
 
 /**
- * What a shared recipe holds, under its switch (the artboard Result): the prompt where the
- * creation saved one (a motion run saves none, and is never told it shares one), the original's
- * references where a remix brought some, and that the creator's own uploads stay out until they
- * add them (owner, 2026-10-29), or go with it once added. Not the settings, which the post shows
+ * What a creation's recipe holds, under its heading (the artboard Result; owner, 2026-11-05: a
+ * creation's post always carries its recipe, free unless the run remixed a paid one): the exact
+ * prompt where the creation saved one (a motion run saves none, and is never told it shares one),
+ * the files left in it, and its remix where allowed. Not the settings, which the post shows
  * everyone (owner, 2026-11-03).
  */
-export function describeSharedRecipe({ hasPrompt = true, otherReferenceCount, ownUploads, addsOwnUploads }: {
+export function describeCreationRecipe({ accessMode, priceCredits, hasPrompt = true, fileCount, allowRemixes }: {
+  accessMode: 'free' | 'paid';
+  priceCredits: number;
   /** The creation saved a prompt. */
   hasPrompt?: boolean;
-  otherReferenceCount: number;
-  /** "2 photos"; null where the creation holds none of the creator's own. */
-  ownUploads: string | null;
-  addsOwnUploads: boolean;
+  fileCount: number;
+  allowRemixes: boolean;
 }): string {
-  const shared = hasPrompt && otherReferenceCount > 0
-    ? 'The prompt and the original’s references'
-    : hasPrompt
-      ? 'The prompt'
-      : otherReferenceCount > 0
-        ? 'The original’s references'
-        : null;
-  const holds = shared ? `${shared}, free, so others can remix it.` : null;
-  if (!ownUploads) return holds ?? 'Its remix, free, so others can make their own.';
-  const single = ownUploads.startsWith('1 ');
-  if (addsOwnUploads) {
-    return holds
-      ? `${holds} Your ${ownUploads} ${single ? 'goes' : 'go'} with it, and remixes get ${single ? 'it' : 'them'}.`
-      : `Your ${ownUploads}, free, so others can remix it.`;
-  }
-  return holds
-    ? `${holds} Your ${ownUploads} ${single ? 'stays' : 'stay'} out unless you add ${single ? 'it' : 'them'}.`
-    : `It saved no prompt, so the recipe holds nothing until you add your ${ownUploads}.`;
+  const files = fileCount > 0 ? `${fileCount} ${fileCount === 1 ? 'file' : 'files'}` : null;
+  const parts = [hasPrompt ? 'The exact prompt' : null, files].filter((part): part is string => Boolean(part));
+  const holds = parts.length === 0
+    ? 'Its remix'
+    : parts.length === 1
+      ? parts[0]!.charAt(0).toUpperCase() + parts[0]!.slice(1)
+      : `${parts[0]} and ${parts[1]}`;
+  const price = accessMode === 'paid' ? `, for ${creditsWords(priceCredits)}` : ', free';
+  return `${holds}${price}${allowRemixes ? ', so others can remix it.' : '.'}`;
+}
+
+/**
+ * The files a creation's recipe takes (owner, 2026-11-05: the creator's own uploads included), each
+ * as a thumbnail with a remove button, and the line that says where they go.
+ */
+function CreatorRecipeFiles({ inputs, removedCount, disabled, onRemove, onRestoreAll }: {
+  inputs: readonly GenerationReference[];
+  removedCount: number;
+  disabled: boolean;
+  onRemove: (inputId: string) => void;
+  onRestoreAll: () => void;
+}) {
+  if (inputs.length === 0 && removedCount === 0) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {inputs.length > 0 ? (
+        <ul aria-label="Files in the recipe" className="flex flex-wrap gap-2">
+          {inputs.map((input) => (
+            <li key={input.id} className="relative">
+              <div
+                title={input.label}
+                className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-ui-lg border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] text-[var(--ui-text-muted)]"
+              >
+                {input.mediaKind === 'image' && input.url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={input.url} alt={input.label} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                ) : input.mediaKind === 'video' ? (
+                  <Film aria-hidden className="h-5 w-5" />
+                ) : input.mediaKind === 'audio' ? (
+                  <Music aria-hidden className="h-5 w-5" />
+                ) : (
+                  <ImageIcon aria-hidden className="h-5 w-5" />
+                )}
+              </div>
+              {/* The press area is 32px over the thumbnail's corner; the mark inside is smaller. */}
+              <button
+                type="button"
+                aria-label={`Remove ${input.label} from the recipe`}
+                disabled={disabled}
+                onClick={() => onRemove(input.id)}
+                className="ui-focus-ring absolute -right-2 -top-2 flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-60"
+              >
+                <span className="flex h-5 w-5 items-center justify-center rounded-full border border-[var(--ui-border-strong)] bg-[var(--ui-surface-1)] text-[var(--ui-text-primary)]">
+                  <X aria-hidden className="h-3 w-3" />
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="text-xs leading-5 text-[var(--ui-text-muted)]">
+        {inputs.length > 0 ? CREATION_RECIPE_FILES_LINE : 'No files go with this recipe.'}
+        {removedCount > 0 ? (
+          <>
+            {' '}
+            <button type="button" disabled={disabled} onClick={onRestoreAll} className={CREATOR_NOTE_LINK_CLASS}>
+              {removedCount === 1 ? 'Put the removed file back' : `Put the ${removedCount} removed files back`}
+            </button>
+          </>
+        ) : null}
+      </p>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -751,10 +814,10 @@ export function CreatorPublishPanel({
     defaultTitle: details?.title ?? '',
     creation: details?.creation ?? null,
     paywallPrefill: details?.paywallPrefill ?? null,
+    inputs: details?.inputs,
+    // A remix keeps its original recipe's terms: paid stays paid, free stays free (owner, 2026-11-05).
+    remixRecipeMode: details?.remixRecipeMode ?? null,
     remixOfTitle: original?.title ?? null,
-    // A remix of a recipe someone sells starts with this one off; the creator can still share it.
-    startingRecipe: remix.recipeStartsShared ? 'free' : 'none',
-    leavesOwnUploadsOut: true,
     onPublished,
   });
   // One answer for the form's credit and Posted's, which follows it.
@@ -885,34 +948,49 @@ export function CreatorPublishPanel({
 
         <CreatorPostingAs draft={draft} accessToken={accessToken} idPrefix={`${id}-identity`} />
 
-        {draft.hasAutoUnlock ? (
-          <div className="flex flex-col gap-3">
-            <CreatorFormSwitch
-              id={`${id}-recipe`}
-              label="Share the recipe"
-              description={describeSharedRecipe({
-                hasPrompt: draft.hasPrompt,
-                otherReferenceCount: draft.otherReferenceCount,
-                ownUploads: draft.ownUploadCount > 0 ? ownUploadsWords(draft.ownUploadCount, draft.ownUploadKindCounts) : null,
-                addsOwnUploads: draft.addsOwnUploads,
-              })}
-              checked={recipeShared}
+        {draft.recipeAccess !== 'none' ? (
+          <section aria-labelledby={`${id}-recipe-heading`} className="flex flex-col gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 id={`${id}-recipe-heading`} className="text-sm font-semibold text-[var(--ui-text-primary)]">
+                  {draft.recipeAccess === 'paid' ? 'Paid recipe' : 'Free recipe'}
+                </h4>
+                {draft.recipeLock ? <Lock aria-hidden className="h-3.5 w-3.5 text-[var(--ui-text-muted)]" /> : null}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
+                {describeCreationRecipe({
+                  accessMode: draft.recipeAccess,
+                  priceCredits: draft.paidPriceCredits,
+                  hasPrompt: draft.hasPrompt,
+                  fileCount: draft.includedInputs.length,
+                  allowRemixes: draft.allowRemixes,
+                })}
+              </p>
+              {draft.recipeLock ? (
+                <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">{draft.recipeLock.reason}</p>
+              ) : null}
+              {draft.recipeAccess === 'paid' ? (
+                <p className="mt-1 text-xs leading-5 text-[var(--ui-text-muted)]">
+                  {PAID_RECIPE_RESALE_LINE} Another price is in More options.
+                </p>
+              ) : null}
+            </div>
+            <CreatorRecipeFiles
+              inputs={draft.includedInputs}
+              removedCount={draft.inputs.length - draft.includedInputs.length}
               disabled={isPublishing}
-              onChange={(on) => draft.setRecipeAccess(on ? 'free' : 'none')}
+              onRemove={(inputId) => draft.setInputIncluded(inputId, false)}
+              onRestoreAll={() => draft.inputs.forEach((input) => draft.setInputIncluded(input.id, true))}
             />
-            {recipeShared && draft.ownUploadCount > 0 ? (
-              <label className="flex min-h-12 items-center gap-3 rounded-ui-lg bg-[var(--ui-surface-2)] px-3 text-sm text-[var(--ui-text-secondary)]">
-                <input
-                  type="checkbox"
-                  checked={draft.addsOwnUploads}
-                  disabled={isPublishing}
-                  onChange={(event) => draft.setAddsOwnUploads(event.target.checked)}
-                  className="h-4 w-4 accent-[var(--ui-primary)]"
-                />
-                Add my {ownUploadsWords(draft.ownUploadCount, draft.ownUploadKindCounts)}
-              </label>
-            ) : null}
-          </div>
+            <CreatorFormSwitch
+              id={`${id}-remixes`}
+              label={ALLOW_REMIXES_LABEL}
+              description={ALLOW_REMIXES_DETAIL}
+              checked={draft.allowRemixes}
+              disabled={isPublishing}
+              onChange={draft.setAllowRemixes}
+            />
+          </section>
         ) : detailsRead ? (
           <p className="text-xs leading-5 text-[var(--ui-text-muted)]">Publish the media now; you can add a recipe from the post later.</p>
         ) : null}

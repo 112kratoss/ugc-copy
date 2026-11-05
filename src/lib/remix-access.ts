@@ -43,6 +43,8 @@ export type RemixAccessPost = {
   visibility: string | null;
   archived_at: string | null;
   review_status: string | null;
+  /** The post's own "Allow remixes" (owner, 2026-11-05); null on a read from before the column. */
+  remixes_allowed?: boolean | null;
 };
 
 /**
@@ -94,7 +96,7 @@ export type RemixAccessDependencies = {
 };
 
 const REMIX_POST_SELECT =
-  'id, user_id, generation_id, category, post_format, source_kind, visibility, archived_at, review_status';
+  'id, user_id, generation_id, category, post_format, source_kind, visibility, archived_at, review_status, remixes_allowed';
 
 const NOT_FOUND = { allowed: false, reason: 'not_found' } as const;
 const TEMPLATE_RESULT = { allowed: false, reason: 'template_result' } as const;
@@ -294,11 +296,15 @@ export async function resolveRemixAccess({
     ? await hasPurchasedBundle(adminSupabase, bundle.id, viewerUserId)
     : false;
 
+  // Its creator's "Allow remixes" (owner, 2026-11-05) closes new remixes of this post to everyone
+  // but its creator, who restores their own as the owner above; its recipe can still be claimed or
+  // bought. A remix of a remix keeps its own post's switch.
   const { capability } = resolvePostRemixCapability({
     generationId: post.generation_id,
     postFormat: post.post_format,
     category: post.category,
     sourceKind: post.source_kind,
+    remixesAllowed: post.remixes_allowed,
     resourceBundle: bundle
       ? { viewerCanAccess: viewerHasPurchased, allowRemix: true, items: [] }
       : null,

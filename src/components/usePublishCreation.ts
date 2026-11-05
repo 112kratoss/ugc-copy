@@ -24,6 +24,14 @@ import {
   type PostResourceBundleInput,
   type PostResourceKind,
 } from '@/lib/post-resource-bundles';
+// The posting defaults both composers and this form share (remix plan, phase 2; owner, 2026-11-05).
+import {
+  CREATION_RECIPE_STARTING_ACCESS,
+  DEFAULT_PAID_RECIPE_PRICE_CREDITS,
+  remixRecipeLock,
+  type GenerationReference,
+  type RemixRecipeMode,
+} from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /**
  * The creators' publish form on the canvas (the artboard Result): the draft (title and its
@@ -36,8 +44,12 @@ import {
 /** A post is public or private (decision 12, 2026-10-17); the server answers no other. */
 export type PostVisibility = 'public' | 'private';
 type ProfileLoadState = 'idle' | 'loading' | 'ready' | 'error';
-/** The form shares a recipe free, or none; a price is the composer's (More options). */
-type CreationRecipeAccess = 'none' | 'free';
+/**
+ * The recipe the form posts (owner, 2026-11-05: a creation's post always carries one): free, or
+ * paid at the starting price where the run remixed a paid recipe, whose terms it keeps; none only
+ * for a creation with nothing to share. Another price is the composer's (More options).
+ */
+type CreationRecipeAccess = 'none' | 'free' | 'paid';
 
 /** What a publish answers, as the page that asked keeps it. */
 export type PublishedCreation = {
@@ -51,6 +63,7 @@ export type PublishedCreation = {
 };
 
 const RESOURCE_KIND_ORDER: PostResourceKind[] = ['prompt', 'workflow', 'files', 'notes', 'remix'];
+const NO_INPUTS: readonly GenerationReference[] = [];
 
 function normalizeOptionalText(value: string): string | undefined {
   const trimmed = value.trim();
@@ -81,22 +94,6 @@ function getAutoUnlockKinds(prefill: GenerationPaywallPrefill | null | undefined
   return RESOURCE_KIND_ORDER.filter((kind) => kinds.has(kind));
 }
 
-/**
- * The prefill as a recipe holds it without the creator's own uploads: their references gone
- * from its files, and with any of them in the creation, the remix's hand-over too, which would
- * give them all away (owner, 2026-10-29).
- */
-function withoutOwnUploads(prefill: GenerationPaywallPrefill, ownCount: number): GenerationPaywallPrefill {
-  const referenceCount = Math.max(0, Math.round(prefill.referenceCount ?? 0) - ownCount);
-  const allowRemix = prefill.allowRemix && ownCount === 0;
-  return {
-    ...prefill,
-    referenceCount,
-    allowRemix,
-    resourceKinds: prefill.resourceKinds.filter((kind) => (kind !== 'files' || referenceCount > 0) && (kind !== 'remix' || allowRemix)),
-  };
-}
-
 /** "prompt, files and notes": the kinds in words, the last joined with "and". */
 function listAutoUnlockKinds(kinds: PostResourceKind[]): string {
   const labels = kinds.map((kind) => getPostResourceKindLabel(kind).toLowerCase());
@@ -124,20 +121,29 @@ function buildAutoUnlockPreview(kinds: PostResourceKind[]): string {
   return `Unlock the saved ${listAutoUnlockKinds(kinds)} used to create this result.`;
 }
 
-/** The free recipe packed from what the creation saved: its prompt, its references and its remix. */
-function buildAutoResourceBundle(prefill: GenerationPaywallPrefill): PostResourceBundleInput {
+/**
+ * The recipe packed from what the creation saved: its prompt, its references and its remix, free or
+ * at the starting price. `handsOverInputs` is the creation's inputs handed to a remix as they are
+ * (`allowRemix`), which a recipe the creator took any file out of never does: a remix then restores
+ * the copies the recipe holds, and nothing they removed.
+ */
+function buildAutoResourceBundle(
+  prefill: GenerationPaywallPrefill,
+  accessMode: 'free' | 'paid',
+  handsOverInputs: boolean,
+): PostResourceBundleInput {
   const kinds = getAutoUnlockKinds(prefill);
 
   return {
-    accessMode: 'free',
+    accessMode,
     summary: buildAutoUnlockSummary(kinds),
     previewText: buildAutoUnlockPreview(kinds),
-    priceUsdCents: 0,
+    priceUsdCents: accessMode === 'paid' ? DEFAULT_PAID_RECIPE_PRICE_CREDITS : 0,
     resources: {
       promptText: prefill.promptText?.trim() || null,
       workflowShareUrl: null,
       attachments: [],
-      allowRemix: prefill.allowRemix,
+      allowRemix: handsOverInputs,
     },
   };
 }
@@ -154,20 +160,15 @@ export interface UsePublishCreationOptions {
    */
   creation?: CreationTitleSource | null;
   paywallPrefill?: GenerationPaywallPrefill | null;
+  /**
+   * The creation's saved inputs the recipe takes (`recipeCopyableInputs`), the creator's own uploads
+   * included (owner, 2026-11-05), each drawn with a remove button.
+   */
+  inputs?: readonly GenerationReference[];
+  /** The terms the run carries as a remix (`remix_recipe_mode`): its recipe is held to them. */
+  remixRecipeMode?: RemixRecipeMode | null;
   /** The title of the post a remix was made from: an untitled remix starts from it ("intense (remix)"). */
   remixOfTitle?: string | null;
-  /**
-   * The recipe a fresh draft starts with where the creation has one to offer: none unless
-   * asked, for the creator to opt in; the creators' form asks for a free one (owner,
-   * 2026-10-28). Until the creator picks one themselves, a prefill arriving late sets it too.
-   */
-  startingRecipe?: 'none' | 'free';
-  /**
-   * The recipe leaves the creator's own uploads out until they add them (the creators' form,
-   * owner 2026-10-29): only the references a remix brought from its original go in, and with
-   * any of their own in the creation none is handed to a remix. Otherwise it shares them all.
-   */
-  leavesOwnUploadsOut?: boolean;
   onPublished?: (payload: PublishedCreation) => void;
 }
 
@@ -178,16 +179,18 @@ export function usePublishCreation({
   defaultTitle = '',
   creation = null,
   paywallPrefill = null,
+  inputs = NO_INPUTS,
+  remixRecipeMode = null,
   remixOfTitle = null,
-  startingRecipe = 'none',
-  leavesOwnUploadsOut = false,
   onPublished,
 }: UsePublishCreationOptions) {
   const [isNsfw, setIsNsfw] = useState(false);
   // What the creator typed; null until they do, while the title is the starting one below.
   const [titleEdit, setTitleEdit] = useState<string | null>(null);
-  // The recipe the creator picked; null until they do, while it is the starting one below.
-  const [recipeChoice, setRecipeChoice] = useState<CreationRecipeAccess | null>(null);
+  // The saved inputs the creator took out of the recipe, by id.
+  const [removedInputIds, setRemovedInputIds] = useState<ReadonlySet<string>>(() => new Set());
+  // "Allow remixes" (owner, 2026-11-05), on by default.
+  const [allowRemixes, setAllowRemixesState] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [needsProfileRepair, setNeedsProfileRepair] = useState(false);
@@ -201,32 +204,34 @@ export function usePublishCreation({
   const identity = identityEdits ?? getInitialPublicIdentity(profile, user);
   // Set by `publish` alone, for as long as its request runs: a second press is refused.
   const isPublishingRef = useRef(false);
-  const [addsOwnUploads, setAddsOwnUploadsState] = useState(false);
-  const allReferenceCount = Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0));
-  // Not worked out (an older answer): every reference is the creator's own.
-  const ownUploadCount = leavesOwnUploadsOut
-    ? Math.min(allReferenceCount, Math.max(0, Math.round(paywallPrefill?.ownReferenceCount ?? allReferenceCount)))
-    : 0;
-  const sharesOwnUploads = !leavesOwnUploadsOut || addsOwnUploads;
-  // The recipe without the creator's own uploads, and then, with any of them in the creation,
-  // without the remix's hand-over, which would give them all away.
-  const prefillWithoutOwn = paywallPrefill && leavesOwnUploadsOut ? withoutOwnUploads(paywallPrefill, ownUploadCount) : paywallPrefill;
-  // What the recipe holds as it stands.
-  const sharedPrefill = sharesOwnUploads ? paywallPrefill : prefillWithoutOwn;
+  // The files the recipe takes as it stands: the saved inputs but those the creator removed.
+  const includedInputs = inputs.filter((input) => !removedInputIds.has(input.id));
+  const removedInputs = inputs.filter((input) => removedInputIds.has(input.id));
+  // What the recipe holds as it stands: its files counted as the inputs left in it, and its remix
+  // as the switch says (each creation post's recipe comes with its Remix since 2026-10-27).
+  const sharedPrefill: GenerationPaywallPrefill | null = paywallPrefill
+    ? {
+      ...paywallPrefill,
+      referenceCount: inputs.length > 0 ? includedInputs.length : paywallPrefill.referenceCount,
+      allowRemix: allowRemixes,
+      resourceKinds: paywallPrefill.resourceKinds.filter((kind) => (
+        (kind !== 'files' || (inputs.length > 0 ? includedInputs.length > 0 : (paywallPrefill.referenceCount ?? 0) > 0))
+        && (kind !== 'remix' || allowRemixes)
+      )),
+    }
+    : null;
   const autoUnlockKinds = getAutoUnlockKinds(sharedPrefill);
-  // The switch is offered where anything could go, the creator's own uploads included.
+  // Anything to share at all: a prompt, a saved input, a remix.
   const hasAutoUnlock = Boolean(paywallPrefill) && getAutoUnlockKinds(paywallPrefill).length > 0;
-  const generationReferenceCount = Math.max(0, Math.round(sharedPrefill?.referenceCount ?? 0));
-  const hasGenerationReferences = generationReferenceCount > 0;
-  const otherReferenceCount = allReferenceCount - ownUploadCount;
-  // A recipe starts on only where it holds something without the creator's own uploads.
-  const startingRecipeAccess: CreationRecipeAccess = hasAutoUnlock && getAutoUnlockKinds(prefillWithoutOwn).length > 0
-    ? startingRecipe
+  const hasGenerationReferences = inputs.length > 0
+    ? includedInputs.length > 0
+    : Math.max(0, Math.round(paywallPrefill?.referenceCount ?? 0)) > 0;
+  // A creation's post always carries its recipe: free, or paid where the run remixed a paid recipe
+  // (whose terms it keeps, at the starting price); none only for a creation with nothing to share.
+  const lock = remixRecipeLock(remixRecipeMode);
+  const recipeAccess: CreationRecipeAccess = hasAutoUnlock
+    ? lock?.accessMode ?? CREATION_RECIPE_STARTING_ACCESS
     : 'none';
-  // The creation's details and the original's answer can arrive after the draft started (the
-  // creators read them once a run is done), so the recipe and the title are derived, not copied
-  // into state: the switch, the title and a press agree in every render.
-  const recipeAccess = recipeChoice ?? startingRecipeAccess;
   // A paid recipe keeps the prompt out of the title; a free one does not (owner, 2026-10-29).
   const promptPrivate = recipeKeepsPromptPrivate(recipeAccess);
   const titleSuggestion = getCreationPostTitleSuggestion(defaultTitle, creation, promptPrivate, remixOfTitle);
@@ -257,13 +262,13 @@ export function usePublishCreation({
     // defaults: the title and the recipe go back to the starting ones.
     setIsNsfw(false);
     setTitleEdit(null);
-    setRecipeChoice(null);
     setIsPublishing(false);
     setFormError(null);
     setNeedsProfileRepair(false);
     setIdentityErrors({});
     setIdentityEdits(null);
-    setAddsOwnUploadsState(false);
+    setRemovedInputIds(new Set());
+    setAllowRemixesState(true);
   }, [generationId, active]);
 
   // The profile is the account's: read when the draft opens and for another account, not
@@ -321,23 +326,33 @@ export function usePublishCreation({
     setTitleEdit(value);
   };
 
-  const setRecipeAccess = (next: CreationRecipeAccess) => {
-    // An untouched title follows the recipe by itself (`startingTitle`); a typed one is swapped
-    // only where it is the prompt's opening or a kind title (a paid recipe keeps the prompt private).
-    if (titleEdit !== null) {
-      setTitleEdit(followCreationTitleSuggestion({
-        title: titleEdit,
-        source: creation,
-        wasPrivate: promptPrivate,
-        isPrivate: recipeKeepsPromptPrivate(next),
-      }));
-    }
-    setRecipeChoice(next);
+  // An untouched title follows the recipe by itself (`startingTitle`); a typed one is swapped
+  // only where it is the prompt's opening or a kind title, when a late answer turns the recipe paid.
+  const typedTitleFollowsRecipe = useRef(promptPrivate);
+  useEffect(() => {
+    if (typedTitleFollowsRecipe.current === promptPrivate) return;
+    const wasPrivate = typedTitleFollowsRecipe.current;
+    typedTitleFollowsRecipe.current = promptPrivate;
+    setTitleEdit((typed) => (typed === null ? typed : followCreationTitleSuggestion({
+      title: typed,
+      source: creation,
+      wasPrivate,
+      isPrivate: promptPrivate,
+    })));
+  }, [promptPrivate, creation]);
+
+  /** Takes a saved input out of the recipe, or puts it back. */
+  const setInputIncluded = (inputId: string, included: boolean) => {
+    setRemovedInputIds((current) => {
+      const next = new Set(current);
+      if (included) next.delete(inputId); else next.add(inputId);
+      return next;
+    });
     setFormError(null);
   };
 
-  const setAddsOwnUploads = (next: boolean) => {
-    setAddsOwnUploadsState(next);
+  const setAllowRemixes = (next: boolean) => {
+    setAllowRemixesState(next);
     setFormError(null);
   };
 
@@ -371,13 +386,18 @@ export function usePublishCreation({
     let resourceBundle: PostResourceBundleInput = { accessMode: 'none' };
     if (recipeAccess !== 'none') {
       if (!sharedPrefill || autoUnlockKinds.length === 0) {
-        setFormError(leavesOwnUploadsOut && !addsOwnUploads && ownUploadCount > 0
-          ? 'Without your own uploads this recipe holds nothing yet. Add them, or turn the recipe off.'
+        setFormError(removedInputs.length > 0
+          ? 'This recipe holds nothing now. Put a file back, or allow remixes.'
           : 'This creation has no saved prompt or references to make a recipe from yet.');
         return false;
       }
 
-      resourceBundle = buildAutoResourceBundle(sharedPrefill);
+      // The creation's inputs go to a remix as they are only where the creator removed none.
+      resourceBundle = buildAutoResourceBundle(
+        sharedPrefill,
+        recipeAccess,
+        Boolean(paywallPrefill?.allowRemix) && removedInputs.length === 0,
+      );
     }
 
     isPublishingRef.current = true;
@@ -404,7 +424,8 @@ export function usePublishCreation({
         title?: string;
         shareInputMediaForRemix: boolean;
         includeGenerationReferences?: boolean;
-        leaveOutOwnGenerationReferences?: boolean;
+        leaveOutGenerationReferenceIds?: string[];
+        allowRemixes: boolean;
         resourceBundle: PostResourceBundleInput;
       } = {
         generationId,
@@ -412,16 +433,17 @@ export function usePublishCreation({
         visibility: 'public',
         title: normalizeOptionalText(publishTitle),
         shareInputMediaForRemix: false,
+        // Sent every time: the server reads it as a form that offers no post without a recipe.
+        allowRemixes,
         resourceBundle,
       };
 
       if (hasGenerationReferences && resourceBundle.accessMode !== 'none') {
         requestBody.includeGenerationReferences = true;
       }
-      // The server holds the same line: only the original's references, and no hand-over
-      // where any of the creator's own are in the creation.
-      if (!sharesOwnUploads && resourceBundle.accessMode !== 'none') {
-        requestBody.leaveOutOwnGenerationReferences = true;
+      // The server copies none of these, whatever else asks.
+      if (removedInputs.length > 0 && resourceBundle.accessMode !== 'none') {
+        requestBody.leaveOutGenerationReferenceIds = removedInputs.map((input) => input.id);
       }
 
       const response = await fetch('/api/showcase/publish', {
@@ -483,15 +505,18 @@ export function usePublishCreation({
     setTitle,
     titleSuggestionHint,
     recipeAccess,
-    setRecipeAccess,
+    /** The terms a remix's recipe is held to, with why; null for a creation that remixed no one's. */
+    recipeLock: lock,
+    /** The price a paid recipe goes out at from here; another is the composer's. */
+    paidPriceCredits: DEFAULT_PAID_RECIPE_PRICE_CREDITS,
     hasAutoUnlock,
     /** The creation saved a prompt for the recipe to share (a motion run saves none). */
     hasPrompt: Boolean(paywallPrefill?.promptText?.trim()),
-    ownUploadCount,
-    otherReferenceCount,
-    ownUploadKindCounts: leavesOwnUploadsOut ? paywallPrefill?.ownReferenceKindCounts ?? paywallPrefill?.referenceKindCounts ?? null : null,
-    addsOwnUploads,
-    setAddsOwnUploads,
+    inputs,
+    includedInputs,
+    setInputIncluded,
+    allowRemixes,
+    setAllowRemixes,
     identity,
     identityErrors,
     setIdentity,

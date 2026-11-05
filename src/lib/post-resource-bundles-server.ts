@@ -231,6 +231,8 @@ interface LinkedPostRow extends PostMediaRow {
   remix_count?: number | null;
   share_visit_count?: number | null;
   created_at: string;
+  /** The post's own "Allow remixes" (owner, 2026-11-05); absent from a legacy read. */
+  remixes_allowed?: boolean | null;
 }
 
 interface GenerationRecipePostRow extends LinkedPostRow {
@@ -298,6 +300,8 @@ interface PostResourceBundleLinkedPost {
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
   sourceToolSlug: string | null;
+  /** The post's own "Allow remixes" (owner, 2026-11-05): false closes new remixes of it. */
+  remixesAllowed?: boolean;
   mediaUrl: string | null;
   mediaPreviewUrl: string | null;
   mediaRenditionUrl: string | null;
@@ -941,6 +945,8 @@ export async function planGenerationReferenceCopies(params: {
   ownerUserId: string;
   generationId: string;
   onlyRowIds?: ReadonlySet<string>;
+  /** Rows the creator took out of the recipe with its remove buttons (remix plan, phase 2). */
+  exceptRowIds?: ReadonlySet<string>;
   heldItems?: readonly Pick<PostResourceItem, 'id' | 'storagePath' | 'contentType' | 'sizeBytes'>[];
   dependencies?: {
     loadRecipePassOnFolder?: typeof loadRecipePassOnFolder;
@@ -959,7 +965,7 @@ export async function planGenerationReferenceCopies(params: {
   }
 
   const rows = ((data ?? []) as GenerationInputMediaRow[])
-    .filter((row) => !params.onlyRowIds || params.onlyRowIds.has(row.id));
+    .filter((row) => (!params.onlyRowIds || params.onlyRowIds.has(row.id)) && !params.exceptRowIds?.has(row.id));
   // The linked guests are asked for only when a row is not the publisher's own,
   // or reads as a recipe file under the publisher alone: the copyable rule then
   // judges it by the set the owner's library read offers it by, so what the
@@ -1274,6 +1280,8 @@ export async function prepareCreationRecipeBundle(params: {
   mayShareCreation: boolean;
   addsCreationPrompt: boolean;
   onlyRowIds?: ReadonlySet<string>;
+  /** Saved inputs the creator removed from the recipe: never copied, whatever else asks. */
+  exceptRowIds?: ReadonlySet<string>;
   /** The recipe's items as stored, whose copies need no second one. */
   storedItems?: readonly PostResourceItem[];
   mediaKeys?: Iterable<string> | null;
@@ -1313,6 +1321,7 @@ export async function prepareCreationRecipeBundle(params: {
         ownerUserId: params.ownerUserId,
         generationId: params.creation.id,
         ...(params.onlyRowIds ? { onlyRowIds: params.onlyRowIds } : {}),
+        ...(params.exceptRowIds && params.exceptRowIds.size > 0 ? { exceptRowIds: params.exceptRowIds } : {}),
         // A copy is held only where the recipe as stored names it (`heldItemsForReferenceCopies`).
         heldItems: heldItemsForReferenceCopies({
           sentItems,
@@ -2261,6 +2270,7 @@ async function loadLinkedPostMap(
           'save_count',
           'remix_count',
           'share_visit_count',
+          'remixes_allowed',
         ].filter(Boolean).join(', '),
       )
       .in('id', uniquePostIds);
@@ -2438,6 +2448,7 @@ async function loadLinkedPostMap(
         sourceKind: normalizeShowcaseSourceKind(row.source_kind),
         sourceTool: row.source_tool,
         sourceToolSlug: row.source_tool_slug ?? slugifySourceTool(row.source_tool),
+        ...(row.remixes_allowed === false ? { remixesAllowed: false } : {}),
         mediaUrl,
         mediaPreviewUrl: coverMedia?.previewUrl ?? null,
         mediaRenditionUrl: coverMedia?.renditionUrl ?? null,
@@ -2593,6 +2604,7 @@ async function hydrateRecipes(
         postFormat: post?.postFormat ?? null,
         category: post?.category ?? null,
         sourceKind: post?.sourceKind ?? null,
+        remixesAllowed: post?.remixesAllowed,
         resourceBundle: {
           viewerCanAccess: scope === 'owner',
           allowRemix,
@@ -3699,6 +3711,7 @@ export async function getPostResourceBundleDetailByPostId(
     postFormat: hydrated.post?.postFormat ?? null,
     category: hydrated.post?.category ?? null,
     sourceKind: hydrated.post?.sourceKind ?? null,
+    remixesAllowed: hydrated.post?.remixesAllowed,
     resourceBundle: {
       viewerCanAccess,
       allowRemix: hydrated.allowRemix,

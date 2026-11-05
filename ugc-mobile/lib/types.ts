@@ -354,6 +354,12 @@ export interface GenerationListItem {
   description?: string | null;
   prompt?: string | null;
   input_media?: GenerationInputMediaItem[];
+  /**
+   * The terms the run carries as a remix (`generations.remix_recipe_mode`): its post's recipe is
+   * paid if this is 'paid' and stays free if 'free' (remix plan; owner, 2026-11-05). Null for a
+   * creation that remixed no one's post.
+   */
+  remix_recipe_mode?: 'free' | 'paid' | null;
   linked_post_id?: string | null;
   linked_post_title?: string | null;
   linked_post_visibility?: string | null;

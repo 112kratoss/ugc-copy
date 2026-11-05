@@ -13,6 +13,7 @@ import {
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner } from '@/lib/generation-input-origin';
 import { loadRecipePassOnFolders } from '@/lib/recipe-pass-on';
+import { isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
@@ -54,6 +55,8 @@ type GenerationRow = {
   source_unavailable_at?: string | null;
   /** The recipe this run remixed (20261105123244), whose files its recipe passes on. */
   remix_recipe_bundle_id?: string | null;
+  /** That recipe's terms when the run started: its post's recipe is held to them (free stays free, paid stays paid). */
+  remix_recipe_mode?: string | null;
   /** Written by the failure settlement once it has given the held cost back. */
   refunded?: boolean | null;
   error_message?: string | null;
@@ -492,7 +495,7 @@ async function fetchOwnerGenerations({
   // level, and this one outgrew what the checker can represent (TS2590).
   const columns: string = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at, remix_recipe_bundle_id`;
+    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at, remix_recipe_bundle_id, remix_recipe_mode`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -885,6 +888,8 @@ export async function listOwnerGenerationsForRoute({
         input_media: inputMedia,
         paywallPrefill,
       }),
+      // The composers lock a remix's recipe to the terms it carries (remix plan, phase 2).
+      remix_recipe_mode: isRemixRecipeMode(generation.remix_recipe_mode) ? generation.remix_recipe_mode : null,
       linked_post_id: linkedPost?.id ?? null,
       linked_post_title: linkedPost?.title ?? null,
       linked_post_visibility: linkedPost?.visibility ?? null,

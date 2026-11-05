@@ -37,6 +37,8 @@ function toEditablePostDraft(post: NonNullable<Awaited<ReturnType<typeof getOwne
     hasPaidOrders: post.hasPaidOrders,
     resourceBundleBuyerCount: post.resourceBundleBuyerCount ?? 0,
     resourceBundleEverUnlocked: post.resourceBundleEverUnlocked === true,
+    remixesAllowed: post.remixesAllowed,
+    remixRecipeMode: post.remixRecipeMode,
   };
 }
 

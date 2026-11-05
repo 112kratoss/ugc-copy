@@ -257,6 +257,7 @@
                 "recipeCopyable": true
               }
             ],
+            "remix_recipe_mode": null,
             "linked_post_id": "post-1",
             "linked_post_title": "Launch frame",
             "linked_post_visibility": "public",

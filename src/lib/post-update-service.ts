@@ -253,7 +253,21 @@ export type PostUpdateRequestBody = {
   resourceBundle?: unknown;
   /** True copies the creation's saved inputs into the recipe sent, as its publish does. */
   includeGenerationReferences?: unknown;
+  /** Saved inputs the creator took out of the recipe with its remove buttons (remix plan, phase 2). */
+  leaveOutGenerationReferenceIds?: unknown;
+  /** The post's "Allow remixes" (owner, 2026-11-05): written only when sent. */
+  allowRemixes?: unknown;
 };
+
+/** How many removed inputs a save may name: more than a creation keeps. */
+const MAX_LEFT_OUT_GENERATION_REFERENCES = 64;
+
+function readLeftOutGenerationReferenceIds(value: unknown): Set<string> | null {
+  if (value === undefined || value === null) return new Set();
+  if (!Array.isArray(value) || value.length > MAX_LEFT_OUT_GENERATION_REFERENCES) return null;
+  const ids = value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id.length <= 64);
+  return ids.length === value.length ? new Set(ids) : null;
+}
 
 /** What a post's creation gives its recipe: its exact prompt, and whether it may share its saved inputs. */
 type CreationRecipeSource = {
@@ -1465,12 +1479,24 @@ export async function updateOwnerPostForRoute({
     // reference items in. Those are re-derived on every read, so drop them
     // before validation instead of failing the file-ownership checks on their
     // generation_inputs paths.
-    const { bundle: submittedResourceBundle, error: resourceBundleError } = parseBundleInput(
+    const { bundle: parsedResourceBundle, error: resourceBundleError } = parseBundleInput(
       stripDerivedGenerationReferenceItems(body.resourceBundle),
     );
     if (resourceBundleError) {
       return { ok: false, status: 400, body: { error: resourceBundleError } };
     }
+    if (body.allowRemixes !== undefined && typeof body.allowRemixes !== 'boolean') {
+      return { ok: false, status: 400, body: { error: 'allowRemixes must be a boolean.' } };
+    }
+    const leftOutReferenceIds = readLeftOutGenerationReferenceIds(body.leaveOutGenerationReferenceIds);
+    if (!leftOutReferenceIds) {
+      return { ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } };
+    }
+    // A recipe the creator took inputs out of hands none of the creation's inputs to a remix (the
+    // hand-over gives every input, the removed ones too): a remix restores its copies instead.
+    const submittedResourceBundle = leftOutReferenceIds.size > 0 && parsedResourceBundle?.resources?.allowRemix
+      ? { ...parsedResourceBundle, resources: { ...parsedResourceBundle.resources, allowRemix: false } }
+      : parsedResourceBundle;
     // A creation's recipe, as the publish makes it (#677's review): its exact
     // prompt where it has no prompt item of its own, and the saved inputs the
     // creator asked for, planned with no byte moved yet. Then the recipe, those
@@ -1489,6 +1515,7 @@ export async function updateOwnerPostForRoute({
         ? { id: post.generation_id, prompt: creationRecipeSource.prompt }
         : null,
       includeReferences: body.includeGenerationReferences === true,
+      ...(leftOutReferenceIds.size > 0 ? { exceptRowIds: leftOutReferenceIds } : {}),
       mayShareCreation: creationMaySharePostInputs(creationRecipeSource),
       // A recipe people have or had gains no prompt from here (#677's
       // re-reviews): an older composer sends the recipe back on every save, a
@@ -1709,6 +1736,8 @@ export async function updateOwnerPostForRoute({
       is_nsfw: nextIsNsfw,
       visibility: nextVisibility,
       category: nextCategory,
+      // Written only when sent (remix plan, phase 2): an older composer's save keeps the post's own.
+      ...(typeof body.allowRemixes === 'boolean' ? { remixes_allowed: body.allowRemixes } : {}),
     };
 
     if (Object.prototype.hasOwnProperty.call(body, 'title') || titleReplacedForRecipe) {

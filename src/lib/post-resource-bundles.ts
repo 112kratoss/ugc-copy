@@ -216,6 +216,11 @@ export interface PostRemixResolutionInput {
   sourceKind: string | null | undefined;
   /** The post's creation is a template's result (`template-result.ts`), whose recipe is the template's. */
   templateResult?: boolean;
+  /**
+   * The post's own "Allow remixes" (`posts.remixes_allowed`; owner, 2026-11-05): false stops new
+   * remixes of this post only. Left out, the post allows them, as every post did before.
+   */
+  remixesAllowed?: boolean | null;
   resourceBundle?: {
     viewerCanAccess?: boolean | null;
     allowRemix?: boolean | null;
@@ -1664,6 +1669,15 @@ export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   capability: PostRemixCapability;
   target: PostRemixTarget;
 } {
+  // Its creator turned remixes off (remix plan, phase 2): no Remix, whoever asks. Its recipe can
+  // still be claimed or bought, and remixes made before stay.
+  if (input.remixesAllowed === false) {
+    return {
+      capability: 'none',
+      target: null,
+    };
+  }
+
   const resourceBundle = input.resourceBundle ?? null;
   const items = normalizePostResourceRemixDescriptors(resourceBundle?.items ?? []);
   const bundleRequiresUnlock = Boolean(resourceBundle && !resourceBundle.viewerCanAccess);

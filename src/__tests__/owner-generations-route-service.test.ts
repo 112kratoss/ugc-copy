@@ -50,6 +50,7 @@ function libraryRow(overrides: Record<string, unknown>): Record<string, unknown>
     playback_rendition_status: 'pending',
     source_unavailable_at: null,
     remix_recipe_bundle_id: null,
+    remix_recipe_mode: null,
     ...overrides,
   };
 }
