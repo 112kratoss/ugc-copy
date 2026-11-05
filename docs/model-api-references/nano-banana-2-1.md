@@ -47,3 +47,9 @@ pages), not a dated offer: no "limited-time", "until" or "% off" wording. The pa
 App id `nano-banana-2.1` (the provider's dashes become the app's dot, as `qwen-image-2.1`),
 maker Google, Nano Banana 2's adapter config (`NANO_BANANA_ADAPTER_CONFIG`), every Nano Banana 2
 option, Enhance aliased to `nano-banana-2` (identical body and prompt grammar).
+
+## Paid run (2026-11-05)
+
+The app's text body (`aspect_ratio: 1:1`, `resolution: 1K`, `output_format: jpg`) ran once: task
+`10f7de3370a5afe8f915fee6bd09d603` succeeded in 50 s, charged 4 credits (`creditsConsumed`, the
+price above) and delivered a 1024×1024 JPEG from `tempfile.aiquickdraw.com` (`archive/kie-models-2026-11-05/probe-results.txt`).

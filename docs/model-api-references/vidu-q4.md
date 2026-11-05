@@ -69,3 +69,17 @@ does not name ShengShu, so the descriptor publishes `availability.mobile: false`
 update that names it (and raises `AI_DATA_CONSENT_VERSION`) is in people's hands, as PixVerse V6
 went in October. A start frame (required in Frames) or 1–15 reference pictures; aspect ratio
 sent only with references. Its own enhancer playbook.
+
+## Paid runs (2026-11-05)
+
+The app's bodies at 540p, 3 s, ran once per id; each charged 21.6 credits (`creditsConsumed`,
+7.2 × 3, the price above, with audio or without):
+
+- `vidu-q4/image-to-video`, a 3:2 picture as `image_url`, `audio: true`: task
+  `c318e4908c52e5b1132b0b9c8cecd17f`, 101 s, an 884×586, 3.04 s MP4 with an AAC track.
+- `vidu-q4/reference-to-video`, 16:9, one picture in `reference_image_urls`, `audio: false`, and
+  the legend prompt the app sends (`compilePromptWithElements`, so it carries `@scene` and the
+  word "@handle"): task `cdceddcdbfd5cd25af3ac276abaaebb7`, 147 s, a 960×528, 3.04 s MP4 with no
+  audio track. Vidu accepted it: an `@` that names nothing is not refused, as it is by Kling 4.0.
+
+Both from `tempfile.aiquickdraw.com` (`archive/kie-models-2026-11-05/probe-results.txt`).

@@ -61,3 +61,15 @@ PixVerse V6's page carries at 20 %; there is no dated offer.
 App id `pixverse-v6-max`, provider `pixverse` (the PixVerse branch picks the Max ids), maker
 PixVerse (already named in both the policy and the app's AI-data question), text or one start
 frame, the sound toggle, Enhance aliased to `pixverse-v6`.
+
+## Paid runs (2026-11-05)
+
+The app's bodies at 360p, 1 s, ran once per id; each charge (`creditsConsumed`) is the price above:
+
+- `pixverse-v6-max/text-to-video`, 16:9, `generate_audio_switch: false`: task
+  `9457e7253d51c56405dab3a158805bc4`, 47 s, 4.8 credits, a 640×360, 1.04 s MP4 with no audio track.
+- `pixverse-v6-max/image-to-video`, a 3:2 picture in `image_urls`, `generate_audio_switch: true`:
+  task `f29a42a3dca7440a863bcc1a42c29e66`, 52 s, 7.2 credits, a 640×432, 1.04 s MP4 with an AAC
+  track (the picture's shape sets the ratio).
+
+Both from `tempfile.aiquickdraw.com` (`archive/kie-models-2026-11-05/probe-results.txt`).

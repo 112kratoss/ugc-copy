@@ -22,6 +22,10 @@ balance did not move). Raw copies: `UGC copy/archive/kie-models-2026-11-05/evide
 | **Kling 4.0** (10-22) | `kling-4.0` | `kling-4.0/reference-to-video`, `kling-4.0/keyframe-to-video` | 28.5 / 42.5 per s (720p / 1080p) | `kling-4-0.md` |
 | **Vidu Q4** (10-12) | `vidu-q4` | `vidu-q4/image-to-video`, `vidu-q4/reference-to-video` | 7.2 / 15.2 / 19.2 / 30.4 / 62.4 per s (540p–4k) | `vidu-q4.md` |
 
+One paid run per endpoint (2026-11-05, on the owner's word) charged exactly the listed price
+(`creditsConsumed`) and delivered the asked length, size and audio; each evidence file records
+its tasks.
+
 What each leaves out, and why:
 
 - **Kling 4.0**: reference clips (Kie bills a clip run `rate × (output + max(output, input))`, which

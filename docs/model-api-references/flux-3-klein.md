@@ -59,3 +59,14 @@ Flash's 3.24 is charged 4.
 
 App id `flux-3-klein`, maker Black Forest Labs, declarative `kie-task-v1` adapter (aspect ratio,
 resolution, `image_urls` choosing the edit endpoint), its own enhancer playbook.
+
+## Paid runs (2026-11-05)
+
+The app's bodies (`output_format: jpeg`, `enhance_prompt: true`, `nsfw_checker: true`, 1K) ran
+once per id; each charged 1.6 credits (`creditsConsumed`, the price above; the app charges 2):
+
+- `flux-3/klein-text-to-image`, 1:1: task `a683d16f718f9d521ac43cb5ac4cf00a`, 14 s, a 1024×1024 JPEG.
+- `flux-3/klein-edit-image`, 3:2 with one picture in `image_urls`: task
+  `553c6aecfca363cafd5d6f7c12953886`, 22 s, a 1248×832 JPEG.
+
+Both from `tempfile.aiquickdraw.com` (`archive/kie-models-2026-11-05/probe-results.txt`).

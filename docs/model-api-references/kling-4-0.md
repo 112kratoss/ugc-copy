@@ -93,3 +93,16 @@ and an optional end frame (keyframe endpoint); or up to 10 reference pictures (r
 endpoint), whose @handles are rewritten to `@image_N` in the order the pictures are sent. Every
 other `@` in a prompt is refused before anything is held, since Kie rejects an undeclared mention.
 No sound toggle: the model always generates audio. Its own enhancer playbook.
+
+## Paid runs (2026-11-05)
+
+The app's bodies at 720p, 3 s, ran once per id; each charged 85.5 credits (`creditsConsumed`,
+28.5 × 3, the price above):
+
+- `kling-4.0/reference-to-video`, 16:9, one picture in `image_urls` and a prompt naming it
+  `@image_1`: task `98e09ceec5ef49b511381d6e0790dc45`, 81 s, a 1280×720, 3.04 s MP4.
+- `kling-4.0/keyframe-to-video`, the same 3:2 picture as first and last frame: task
+  `21b4794a9f6eb9274466088b962b95e7`, 197 s, a 1164×772, 3.04 s MP4 (the frames set the ratio).
+
+Both carry an AAC track with no audio field sent (the always-on audio above), from
+`tempfile.aiquickdraw.com` (`archive/kie-models-2026-11-05/probe-results.txt`).
