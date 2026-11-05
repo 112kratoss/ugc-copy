@@ -1,15 +1,34 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Send } from 'lucide-react';
 
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
+
+type ContactFields = { name: string; email: string; subject: string; message: string };
+
+const EMPTY_FORM: ContactFields = { name: '', email: '', subject: 'general', message: '' };
+
 export function ContactForm() {
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    subject: 'general',
-    message: '',
-  });
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  // From the latest state, not this render's: the hand-overs below run one after another in one
+  // commit, and a spread of this render's `formData` would undo the one before.
+  const setField = (field: keyof ContactFields) => (value: string) => {
+    setFormData((current) => ({ ...current, [field]: value }));
+  };
+  // The page is prerendered, so a visitor can fill the form in before its script runs, and
+  // hydration does not read the fields back: Send posted an empty form (2026-11-05;
+  // tests/e2e/contact-typed-before-script.spec.ts). The message takes only typed text, as the
+  // creators' prompts do.
+  const nameRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+  const subjectRef = useRef<HTMLSelectElement>(null);
+  const messageRef = useRef<HTMLTextAreaElement>(null);
+  useFieldValueBeforeHydration(nameRef, { drawn: EMPTY_FORM.name, onValue: setField('name') });
+  useFieldValueBeforeHydration(emailRef, { drawn: EMPTY_FORM.email, onValue: setField('email') });
+  useFieldValueBeforeHydration(subjectRef, { drawn: EMPTY_FORM.subject, onValue: setField('subject') });
+  useTypedBeforeHydration(messageRef, { drawn: EMPTY_FORM.message, enabled: true, onTyped: setField('message') });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +72,7 @@ export function ContactForm() {
           type="button"
           onClick={() => {
             setSubmitted(false);
-            setFormData({ name: '', email: '', subject: 'general', message: '' });
+            setFormData(EMPTY_FORM);
           }}
           className="ui-focus-ring mt-6 min-h-12 rounded-full px-4 font-bold text-[var(--ui-primary)] hover:bg-[var(--ui-primary-soft)]"
         >
@@ -75,11 +94,12 @@ export function ContactForm() {
         </label>
         <input
           type="text"
+          ref={nameRef}
           id="name"
           required
           autoComplete="name"
           value={formData.name}
-          onChange={(event) => setFormData({ ...formData, name: event.target.value })}
+          onChange={(event) => setField('name')(event.target.value)}
           className="ui-focus-ring min-h-12 w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 outline-none transition focus:border-[var(--ui-focus)]"
           placeholder="John Doe"
         />
@@ -91,11 +111,12 @@ export function ContactForm() {
         </label>
         <input
           type="email"
+          ref={emailRef}
           id="email"
           required
           autoComplete="email"
           value={formData.email}
-          onChange={(event) => setFormData({ ...formData, email: event.target.value })}
+          onChange={(event) => setField('email')(event.target.value)}
           className="ui-focus-ring min-h-12 w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 outline-none transition focus:border-[var(--ui-focus)]"
           placeholder="john@example.com"
         />
@@ -106,9 +127,10 @@ export function ContactForm() {
           Subject
         </label>
         <select
+          ref={subjectRef}
           id="subject"
           value={formData.subject}
-          onChange={(event) => setFormData({ ...formData, subject: event.target.value })}
+          onChange={(event) => setField('subject')(event.target.value)}
           className="ui-focus-ring min-h-12 w-full rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 outline-none transition focus:border-[var(--ui-focus)]"
         >
           <option value="general">General Inquiry</option>
@@ -124,11 +146,12 @@ export function ContactForm() {
           Message
         </label>
         <textarea
+          ref={messageRef}
           id="message"
           required
           rows={5}
           value={formData.message}
-          onChange={(event) => setFormData({ ...formData, message: event.target.value })}
+          onChange={(event) => setField('message')(event.target.value)}
           className="ui-focus-ring w-full resize-none rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 py-3 outline-none transition focus:border-[var(--ui-focus)]"
           placeholder="How can we help you?"
         />

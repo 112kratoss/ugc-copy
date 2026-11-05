@@ -15,7 +15,8 @@ import { useLayoutEffect, useRef, type RefObject } from 'react';
  * (2026-11-01). React's own fix, a change event replayed once hydration commits
  * (`enableHydrationChangeEvent`), ships only in its experimental build
  * (`use-typed-before-hydration.test.tsx` fails once Next's own build carries it, and then this
- * hook can go too).
+ * hook can go too). A select loses its choice the same way: hydration leaves the option chosen
+ * before the script alone, and the select's next commit chooses the state's (/contact's subject).
  *
  * So, once, as the page mounts: a value that is no longer what the server drew is handed to
  * `onValue`, the page's own change handler, as that change event would have been. A layout
@@ -31,7 +32,7 @@ import { useLayoutEffect, useRef, type RefObject } from 'react';
  * tab's. A textarea needs that hook anyway, as its hydration writes the server's text back.
  */
 export function useFieldValueBeforeHydration(
-  fieldRef: RefObject<HTMLInputElement | null>,
+  fieldRef: RefObject<HTMLInputElement | HTMLSelectElement | null>,
   {
     drawn,
     onValue,
