@@ -2862,7 +2862,10 @@ describe('mobile external post composer', () => {
       expect(removeButtons).toHaveLength(2);
       renderer.act(() => removeButtons[1].props.onPress());
       expect(collectText(tree.root)).toContain('Put the removed file back');
+      expect(collectText(tree.root)).toContain('Remix comes with this recipe: people who unlock it can remix your post.');
       renderer.act(() => toggle(tree, 'Allow remixes').props.onValueChange(false));
+      // Switched off, the recipe promises no Remix.
+      expect(collectText(tree.root)).not.toContain('Remix comes with this recipe: people who unlock it can remix your post.');
 
       authState.api.publishGeneration.mockResolvedValueOnce({ success: true, postId: 'post-new-creation', visibility: 'public' });
       await renderer.act(async () => {

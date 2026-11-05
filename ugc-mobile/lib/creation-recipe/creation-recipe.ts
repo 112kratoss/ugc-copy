@@ -257,13 +257,14 @@ export const CREATION_INPUTS_INCLUDED = 'Saved inputs included in this recipe.';
 export const CREATION_INPUTS_INCLUDED_DETAIL = 'They are listed with the items below.';
 
 /**
- * The switch's line: what ticking it does, given how many of the inputs the
- * recipe holds already, and what leaving one out does: a remix gets an empty
- * box in its place (#678, `lib/remix-input-slots/`).
+ * The switch's line: what it does, given how many of the inputs the recipe
+ * holds already, and what leaving one out does: a remix gets an empty box in
+ * its place (#678, `lib/remix-input-slots/`). On by default since the remix
+ * plan's phase 2 (owner, 2026-11-05), the creator's own uploads included.
  */
 export function describeCreationInputsSwitch(included: number, offered: number): string {
   if (included <= 0) {
-    return 'Attach the saved inputs above as reusable references. Off unless you choose it: inputs can be personal, and a remix gets an empty box for each one left out.';
+    return 'Hands the saved inputs above to anyone who gets the recipe, as reusable references. Turn it off or remove one, and a remix gets an empty box for each one left out.';
   }
   return `${included} of ${offered} are in this recipe already. Attach the rest as reusable references; a remix gets an empty box for each one left out.`;
 }

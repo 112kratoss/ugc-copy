@@ -767,6 +767,8 @@ export function getRecipeRemovalConfirmation(input: {
    * are open to everyone (S1), which the question says (review of #567).
    */
   reopensPost?: boolean;
+  /** The post's own "Allow remixes" (owner, 2026-11-05): off, taking the recipe off opens no Remix. */
+  remixesAllowed?: boolean;
 }): RecipeRemovalConfirmation | null {
   if (input.nextAccessMode !== 'none') return null;
   if (input.loadedAccessMode !== 'free' && input.loadedAccessMode !== 'paid') return null;
@@ -778,9 +780,11 @@ export function getRecipeRemovalConfirmation(input: {
   const kept = buyers > 0
     ? ` The ${buyers} ${buyers === 1 ? 'person who has it keeps' : 'people who have it keep'} their copy; it comes off sale.`
     : '';
-  const reopened = input.reopensPost
-    ? ' The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.'
-    : '';
+  const reopened = !input.reopensPost
+    ? ''
+    : input.remixesAllowed === false
+      ? ' The post’s prompt will be open to everyone again, as on any post without a recipe.'
+      : ' The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.';
   return {
     title: 'Remove this recipe?',
     message: `${deleted}${kept}${reopened}`,

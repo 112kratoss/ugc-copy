@@ -775,7 +775,7 @@ function PostResourcesPage({
             {/* Remix comes with any recipe on a post made from a creation (recipe audit S1): the
                 "Allow direct remix" switch it replaces left Remix, and the prompt it hands over, free
                 when it was off. */}
-            {draft.mode === 'creation' ? (
+            {draft.mode === 'creation' && draftAllowsRemixes(draft) ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 2 }}>
                 <Repeat2 size={appTheme.icon.sm} color={theme.colors.workflow} />
                 <AppText variant="caption" color="muted" style={{ flex: 1 }}>
@@ -3910,8 +3910,8 @@ function NewPostComposer() {
           loadedItemCount: hydratePostComposerResourceCards(loadedRecipe).length,
           buyerCount: recipeBuyerCount,
           nextAccessMode,
-          // The same condition as the "Remix comes with this recipe" line above.
           reopensPost: draft.mode === 'creation',
+          remixesAllowed: draftAllowsRemixes(draft),
         })
       : null;
   };

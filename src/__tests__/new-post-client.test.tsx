@@ -5618,6 +5618,9 @@ describe('NewPostClient', () => {
 
       expect(screen.getByRole('radio', { name: /free recipe/i })).toBeChecked();
       expect(screen.queryByRole('radio', { name: /no recipe/i })).not.toBeInTheDocument();
+      // The checklist no longer calls its recipe optional.
+      expect(screen.getByText('Recipe added')).toBeInTheDocument();
+      expect(screen.queryByText('Recipe optional')).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole('radio', { name: /paid recipe/i }));
       expect(screen.getByText(/Anyone who unlocks it can remix it and sell their version at their own price\./)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('radio', { name: /free recipe/i }));
@@ -5625,8 +5628,11 @@ describe('NewPostClient', () => {
       const inputs = screen.getByRole('list', { name: 'Saved inputs' });
       fireEvent.click(within(inputs).getByRole('button', { name: 'Remove My face from the recipe' }));
       expect(within(screen.getByRole('list', { name: 'Saved inputs' })).queryByRole('img', { name: 'My face' })).not.toBeInTheDocument();
+      expect(screen.getByText('Remix comes with this recipe: people who unlock it can remix your post.')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('checkbox', { name: /allow remixes/i }));
       expect(screen.getByRole('checkbox', { name: /allow remixes/i })).not.toBeChecked();
+      // Switched off, the recipe promises no Remix.
+      expect(screen.queryByText('Remix comes with this recipe: people who unlock it can remix your post.')).not.toBeInTheDocument();
 
       fireEvent.change(screen.getByLabelText(/recipe preview, required/i), {
         target: { value: 'The exact prompt and the product reference behind this still.' },

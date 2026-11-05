@@ -864,7 +864,7 @@ describe('post new view model', () => {
     // draws an empty box for an input it is not given, the switch says so.
     it('says what leaving the inputs out does, with none in the recipe and with some', () => {
       expect(describeCreationInputsSwitch(0, 2)).toBe(
-        'Attach the saved inputs above as reusable references. Off unless you choose it: inputs can be personal, and a remix gets an empty box for each one left out.',
+        'Hands the saved inputs above to anyone who gets the recipe, as reusable references. Turn it off or remove one, and a remix gets an empty box for each one left out.',
       );
       expect(describeCreationInputsSwitch(1, 2)).toBe(
         '1 of 2 are in this recipe already. Attach the rest as reusable references; a remix gets an empty box for each one left out.',

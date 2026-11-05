@@ -158,7 +158,13 @@ const LEAVE_WITH_UNSAVED_CHANGES: ConfirmationRequest = {
  * 2026-10-27): the server deletes it with its files, or retires it when
  * people have it. The app's composer asks the same.
  */
-function getRecipeRemovalQuestion(itemCount: number, buyerCount: number, reopensPost: boolean): ConfirmationRequest {
+function getRecipeRemovalQuestion(
+  itemCount: number,
+  buyerCount: number,
+  reopensPost: boolean,
+  /** The post's own "Allow remixes" (owner, 2026-11-05): off, taking the recipe off opens no Remix. */
+  remixesAllowed = true,
+): ConfirmationRequest {
   const items = itemCount > 0
     ? `Its ${itemCount} ${itemCount === 1 ? 'item' : 'items'} and files will be deleted.`
     : 'It will be deleted.';
@@ -170,9 +176,11 @@ function getRecipeRemovalQuestion(itemCount: number, buyerCount: number, reopens
   // A creation post without a recipe shows its prompt and lets anyone remix
   // (S1): taking the recipe off puts the post back that way, said here rather
   // than found out (review of #567, 2026-10-28).
-  const reopened = reopensPost
-    ? ' The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.'
-    : '';
+  const reopened = !reopensPost
+    ? ''
+    : remixesAllowed
+      ? ' The post’s prompt and Remix will be open to everyone again, as on any post without a recipe.'
+      : ' The post’s prompt will be open to everyone again, as on any post without a recipe.';
   return {
     title: 'Remove this recipe?',
     message: `${items}${buyers}${reopened}`,
@@ -1455,8 +1463,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         },
     ...(proofMode === 'text' ? [] : [{ label: 'Story optional', complete: true }]),
     {
-      label: 'Recipe optional',
-      complete: resourceAccessMode === 'none' || hasResourceContent || includesCreationReferences,
+      // A creation's new post always carries its recipe (owner, 2026-11-05).
+      label: isNewCreationPost ? 'Recipe added' : 'Recipe optional',
+      complete: (!isNewCreationPost && resourceAccessMode === 'none') || hasResourceContent || includesCreationReferences,
     },
     ...(needsPublicIdentity
       ? [{ label: 'Name and handle', complete: Object.keys(validatePublicIdentity(identity, composerProfile?.username)).length === 0 }]
@@ -2781,7 +2790,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     }
     const asksRemoval = isEditMode && storedRecipe.accessMode !== 'none';
     if (asksRemoval) {
-      const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix));
+      const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix, !offersAllowRemixes || allowRemixes));
       if (!removes) {
         return;
       }
@@ -2953,7 +2962,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     // H2 (2026-10-27): an edit's save that takes the recipe off deletes it and
     // its files (or retires it, when people have it), so it asks first.
     if (isEditMode && storedRecipe.accessMode !== 'none' && accessModeForSubmit === 'none' && !removalAnswered) {
-      const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix));
+      const removes = await askToConfirm(getRecipeRemovalQuestion(storedRecipe.itemCount, recipeBuyerCount, recipeIncludesRemix, !offersAllowRemixes || allowRemixes));
       if (!removes) {
         return;
       }
@@ -4306,7 +4315,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                       previewError={resourcePreviewError}
                       creationReferenceCount={includesCreationReferences ? offeredCreationInputs.length - creationInputsInRecipe : 0}
                       lockedCardIds={lockedResourceCardIds}
-                      includesRemix={recipeIncludesRemix}
+                      includesRemix={recipeIncludesRemix && (!offersAllowRemixes || allowRemixes)}
                       buyerCount={recipeBuyerCount}
                       onAddCard={openResourceTypePicker}
                       onEditCard={editResourceCard}
