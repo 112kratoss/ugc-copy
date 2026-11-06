@@ -55,6 +55,8 @@ type PostRow = {
   description?: string | null;
   creation_mode?: 'motion' | null;
   is_nsfw?: boolean;
+  /** The post's own "Allow remixes" (20261105152921); left out, it allows them. */
+  remixes_allowed?: boolean | null;
 };
 
 type GenerationModelRow = {
@@ -2077,6 +2079,65 @@ describe('showcase feed', () => {
       ['open-remix', true, false],
       ['locked-remix', false, true],
     ]);
+  });
+
+  // The review of phase 2, finding 3: a post whose creator turned "Allow remixes" off still sold Remix
+  // on its card (the chips, the reel's line), and the Remix filter listed it, while the remix was
+  // refused. Its recipe still sells, with no Remix in it, whatever a Remix link among its items says.
+  it('sells no Remix with the recipe of a post whose creator turned remixes off, and leaves it out of the Remix filter', async () => {
+    const promptItem = { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'The exact prompt.' };
+    postsState = [
+      createPostRow({ id: 'closed-creation', created_at: '2026-03-20T10:04:00.000Z', generation_id: 'gen-closed', source_kind: 'magicbooklet', remixes_allowed: false }),
+      createPostRow({ id: 'closed-link', created_at: '2026-03-20T10:03:00.000Z', remixes_allowed: false }),
+      createPostRow({ id: 'open-creation', created_at: '2026-03-20T10:02:00.000Z', generation_id: 'gen-open', source_kind: 'magicbooklet' }),
+    ];
+    generationModelsState = [];
+    const recipe = (postId: string, overrides: Partial<ResourceBundleRow>): ResourceBundleRow => ({
+      id: `bundle-${postId}`,
+      post_id: postId,
+      title: 'Remix kit',
+      access_mode: 'paid',
+      price_usd_cents: 900,
+      preview_text: 'Start from this creation.',
+      resource_items: [promptItem],
+      // As the summaries report a published creation recipe: its Remix comes with it.
+      allow_remix: true,
+      status: 'published',
+      ...overrides,
+    });
+    resourceBundlesState = [
+      recipe('closed-creation', {}),
+      // Remix from a Remix link among its items, not from a creation.
+      recipe('closed-link', {
+        allow_remix: false,
+        resource_items: [promptItem, { id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' }],
+      }),
+      recipe('open-creation', {}),
+    ];
+
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+    const page = await getShowcaseFeedPage({ category: 'media', sort: 'recent', offset: 0, limit: 12, bypassCache: true });
+    const items = new Map(page.items.map((item) => [item.id, item]));
+
+    for (const id of ['closed-creation', 'closed-link']) {
+      const item = items.get(id);
+      expect(item?.asset, id).toMatchObject({ allowRemix: false, resourceKinds: ['prompt'] });
+      expect(item?.asset?.lockedPreview, id).toMatchObject({ resourceKinds: ['prompt'], hasRemix: false });
+      expect(item, id).toMatchObject({ canRemix: false, remixCapability: 'none' });
+    }
+    // The link is still in the recipe; its Remix is not.
+    expect(items.get('closed-link')?.asset?.itemCounts).toEqual({ prompt: 1, remix_link: 1 });
+    expect(items.get('open-creation')?.asset).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'remix'] });
+
+    const remixable = await getShowcaseFeedPage({
+      category: 'media',
+      sort: 'recent',
+      offset: 0,
+      limit: 12,
+      resource: 'remix',
+      bypassCache: true,
+    });
+    expect(remixable.items.map((item) => item.id)).toEqual(['open-creation']);
   });
 
   it('sorts top sales across all candidate posts before slicing', async () => {

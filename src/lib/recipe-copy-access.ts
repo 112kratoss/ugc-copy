@@ -3,8 +3,6 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logBackendError } from '@/lib/backend-logger';
 import { heldRecipeFileOf, type GenerationInputOriginSource } from '@/lib/generation-input-origin';
 import { parseGenerationReferenceCopyPath, RECIPE_FILES_BUCKET } from '@/lib/recipe-file-paths';
-// The rule the composers and the server's saves read: a creation an operator removed or its creator archived.
-import { creationMayShareRecipe } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 /**
  * Whether a viewer may use a recipe's file now (owner, 2026-11-04): a buyer's use of the files of a
@@ -17,8 +15,13 @@ import { creationMayShareRecipe } from '../../ugc-mobile/lib/creation-recipe/cre
  *   (`recipe_files_readable_by`): their own; anyone else's only through a purchase that is not
  *   retracted, whose recipe as it stands or bought version still lists the file; and a copy of a
  *   creation's input only while that creation is neither removed nor archived.
- * - `loadWithheldCopyCreations`: which creations' copies are withheld now, for the reads that settle
- *   the unlock themselves (the recipe's own reads, the remix restore, the run start's import).
+ * - `loadWithheldCopies`: which copies are withheld now (`recipe_copies_withheld`), for the reads that
+ *   settle the unlock themselves (the recipe's own reads, the remix restore, the run start's import).
+ *
+ * A remix's recipe passes on the copies of the recipe it remixed (remix plan, phase 1b): such a copy sits
+ * under the remix's creation, and is also withheld once the file it came from is closed to its holder
+ * (that file's creation removed or archived, a refund or a retracted purchase), down the chain. The
+ * database holds where each came from (`recipe_copy_sources`), so both readers ask it there.
  *
  * Nothing is deleted for an archive: un-archiving the creation serves its copies again.
  */
@@ -31,31 +34,27 @@ export function recipeCopyCreationId(path: string | null | undefined): string | 
 }
 
 /**
- * The creations among these copies' that are off public view now (`creationMayShareRecipe`): removed
- * by an operator or archived by their creator. A creation deleted outright is not among them, as its
- * post keeps serving it (`posts.deleted_generation_id`). Throws when the read fails: a caller withholds
- * everything rather than take a failure for "all shareable".
+ * Those of these copies withheld from everyone but their publisher now, as given
+ * (`recipe_copies_withheld`): their creation is off public view (`creationMayShareRecipe`'s two marks,
+ * an operator's removal or its creator's archive), or a copy a remix's recipe passed on stands on a
+ * file closed to its holder. A creation deleted outright withholds nothing, as its post keeps serving
+ * it (`posts.deleted_generation_id`). Throws when the read fails: a caller withholds everything rather
+ * than take a failure for "all shareable".
  */
-export async function loadWithheldCopyCreations(
+export async function loadWithheldCopies(
   adminSupabase: SupabaseClient,
   paths: Iterable<string | null | undefined>,
 ): Promise<Set<string>> {
-  const ids = [...new Set([...paths].map(recipeCopyCreationId).filter((id): id is string => Boolean(id)))];
-  if (ids.length === 0) return new Set();
-  const { data, error } = await adminSupabase
-    .from('generations')
-    .select('id, archived_at, moderation_removed_at')
-    .in('id', ids);
+  const copies = [...new Set([...paths].filter((path): path is string => Boolean(recipeCopyCreationId(path))))];
+  if (copies.length === 0) return new Set();
+  const { data, error } = await adminSupabase.rpc('recipe_copies_withheld', { p_paths: copies });
   if (error) throw error;
-  return new Set(((data ?? []) as Array<{ id: string; archived_at: string | null; moderation_removed_at: string | null }>)
-    .filter((creation) => !creationMayShareRecipe(creation))
-    .map((creation) => creation.id));
+  return new Set(Array.isArray(data) ? (data as unknown[]).filter((path): path is string => typeof path === 'string') : []);
 }
 
-/** Whether a path is a copy of one of these withheld creations' inputs. */
+/** Whether a path is one of these withheld copies (`loadWithheldCopies`), as it was given. */
 export function isWithheldCopy(path: string | null | undefined, withheld: ReadonlySet<string>): boolean {
-  const creationId = recipeCopyCreationId(path);
-  return Boolean(creationId && withheld.has(creationId));
+  return Boolean(path && withheld.has(path));
 }
 
 /**
@@ -135,7 +134,7 @@ export async function withholdCopiesOfCreationsOffView(
   if (!paths.some((path) => recipeCopyCreationId(path))) return;
   let withheld: ReadonlySet<string> | null = null;
   try {
-    withheld = await loadWithheldCopyCreations(adminSupabase, paths);
+    withheld = await loadWithheldCopies(adminSupabase, paths);
   } catch (error) {
     logBackendError('recipe_copy_creation_state_read_failed', { error });
   }

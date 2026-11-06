@@ -252,18 +252,92 @@ export function countCreationInputsInRecipe(
   return inputs.filter((input) => storagePaths.some((path) => isCreationReferenceCopyOf(path, generationId, input.id))).length;
 }
 
+/**
+ * Whether a creation's recipe has anything of the creation's to hold: its exact
+ * prompt, or a saved input the creator has not removed. Remix comes with a
+ * recipe but is no item of it, so a creation with no prompt and every input
+ * removed has nothing to share: its post falls back to No recipe, and its
+ * composer sends no "Allow remixes" (#711's review). A template result, and a
+ * creation off public view, are each composer's own to rule out first.
+ */
+export function creationRecipeHasItems(
+  prompt: string | null | undefined,
+  inputs: readonly Pick<GenerationReference, 'id'>[],
+  removedInputIds: ReadonlySet<string> = new Set(),
+): boolean {
+  return Boolean(trimmed(prompt)) || inputs.some((input) => !removedInputIds.has(input.id));
+}
+
+/**
+ * The saved inputs an edit opens with taken out of the recipe (#711's review):
+ * those the stored recipe holds no copy of, so a file the creator removed is not
+ * offered back unasked. A recipe that still hands the creation's inputs over as
+ * they are (`allowRemix`, stored before the remix plan's phase 2) holds every one
+ * of them that way, and opens with none taken out.
+ */
+export function creationInputsLeftOutOfRecipe(
+  inputs: readonly Pick<GenerationReference, 'id'>[],
+  storagePaths: readonly (string | null | undefined)[],
+  generationId: string | null | undefined,
+  handsInputsOver: boolean,
+): string[] {
+  if (handsInputsOver) return [];
+  return inputs
+    .filter((input) => !storagePaths.some((path) => isCreationReferenceCopyOf(path, generationId, input.id)))
+    .map((input) => input.id);
+}
+
+/** What `withoutCreationInputCopy` reads of a composer's card; both composers' cards carry more. */
+export interface CreationRecipeCardLike {
+  textContent: string;
+  externalUrl: string;
+  attachments: readonly { storagePath?: string | null }[];
+}
+
+/**
+ * The cards without the copy of one saved input (`isCreationReferenceCopyOf`):
+ * taking an input out of the recipe takes the copy an earlier save made of it
+ * too, or everyone who gets the recipe keeps getting the file (#711's review).
+ * A card the copy leaves with nothing in it goes as well. The same array where
+ * no card holds such a copy.
+ */
+export function withoutCreationInputCopy<T extends CreationRecipeCardLike>(
+  cards: readonly T[],
+  generationId: string | null | undefined,
+  inputId: string,
+): T[] {
+  let changed = false;
+  const kept = cards.flatMap((card) => {
+    const attachments = card.attachments.filter((attachment) => !isCreationReferenceCopyOf(attachment.storagePath, generationId, inputId));
+    if (attachments.length === card.attachments.length) return [card];
+    changed = true;
+    const empty = attachments.length === 0 && !card.textContent.trim() && !card.externalUrl.trim();
+    return empty ? [] : [{ ...card, attachments } as T];
+  });
+  return changed ? kept : (cards as T[]);
+}
+
+/** Said where every saved input of a creation with no prompt was removed, beside the way to put them back. */
+export const CREATION_INPUTS_ALL_REMOVED = 'Every saved input is out of the recipe, so this post goes out without one.';
+
+/** The way to put the inputs the creator removed back into the recipe, by how many there are. */
+export function describePutRemovedInputsBack(count: number): string {
+  return count === 1 ? 'Put the removed file back' : `Put the ${count} removed files back`;
+}
+
 /** "From this creation" once every saved input it offers is in the recipe. */
 export const CREATION_INPUTS_INCLUDED = 'Saved inputs included in this recipe.';
 export const CREATION_INPUTS_INCLUDED_DETAIL = 'They are listed with the items below.';
 
 /**
- * The switch's line: what ticking it does, given how many of the inputs the
- * recipe holds already, and what leaving one out does: a remix gets an empty
- * box in its place (#678, `lib/remix-input-slots/`).
+ * The switch's line: what it does, given how many of the inputs the recipe
+ * holds already, and what leaving one out does: a remix gets an empty box in
+ * its place (#678, `lib/remix-input-slots/`). On by default since the remix
+ * plan's phase 2 (owner, 2026-11-05), the creator's own uploads included.
  */
 export function describeCreationInputsSwitch(included: number, offered: number): string {
   if (included <= 0) {
-    return 'Attach the saved inputs above as reusable references. Off unless you choose it: inputs can be personal, and a remix gets an empty box for each one left out.';
+    return 'Hands the saved inputs above to anyone who gets the recipe, as reusable references. Turn it off or remove one, and a remix gets an empty box for each one left out.';
   }
   return `${included} of ${offered} are in this recipe already. Attach the rest as reusable references; a remix gets an empty box for each one left out.`;
 }
@@ -314,6 +388,15 @@ export function remixRecipeAllows(
   return true;
 }
 
+/**
+ * Whether a creation's post goes out with a recipe whatever the recipe holds: a
+ * remix of a paid recipe, whose public post may hold only a paid one. Any other
+ * creation with nothing to share falls back to No recipe (#711's review).
+ */
+export function remixRecipeRequired(mode: RemixRecipeMode | null | undefined): boolean {
+  return !remixRecipeAllows(mode, 'none');
+}
+
 /** The refusal for a recipe that breaks the run's terms, or null where it keeps them. */
 export function remixRecipeRefusal(
   mode: RemixRecipeMode | null | undefined,
@@ -323,4 +406,114 @@ export function remixRecipeRefusal(
   return mode === 'paid'
     ? { error: REMIX_RECIPE_MUST_BE_PAID, code: REMIX_RECIPE_MUST_BE_PAID_CODE }
     : { error: REMIX_RECIPE_STAYS_FREE, code: REMIX_RECIPE_STAYS_FREE_CODE };
+}
+
+// ─── Posting defaults (remix plan, phase 2; owner, 2026-11-05) ───────────────
+
+/**
+ * The recipe a creation's new post starts on: free, holding the exact prompt and
+ * the creation's references (the creator's own uploads included), with Remix
+ * allowed. A creation's post has no "without recipe"; an upload's and a text
+ * post's keep it, and start on it.
+ */
+export const CREATION_RECIPE_STARTING_ACCESS = 'free' as const;
+
+/** The price a paid recipe starts at, in credits (it started at 900). */
+export const DEFAULT_PAID_RECIPE_PRICE_CREDITS = 10;
+
+/** Under the files a creation's recipe takes, each of which has a remove button. */
+export const CREATION_RECIPE_FILES_LINE = 'Anyone who gets this recipe gets these files.';
+
+/** Under the paid choice: what a buyer may do (the plan's assumption 12, the seller's consent). */
+export const PAID_RECIPE_RESALE_LINE = 'Anyone who unlocks it can remix it and sell their version at their own price.';
+
+/** The "Allow remixes" switch, on by default, which stops new remixes of this post only. */
+export const ALLOW_REMIXES_LABEL = 'Allow remixes';
+export const ALLOW_REMIXES_DETAIL = 'People can remix this post. Turning it off stops new remixes; the recipe can still be claimed or bought.';
+
+/** What the server answers a new post of a creation sent with no recipe, from a composer that offers none. */
+export const CREATION_RECIPE_REQUIRED = 'A creation’s post shares its recipe. Choose Free or Paid.';
+export const CREATION_RECIPE_REQUIRED_CODE = 'CREATION_RECIPE_REQUIRED';
+
+/**
+ * The recipe choice a remix is held to (`remixRecipeAllows`), drawn locked with
+ * its reason: a remix of a paid recipe is paid, at a price its creator sets, and
+ * a remix of a free one stays free. Null where the creation remixed no one's
+ * post, and the creator chooses.
+ */
+export function remixRecipeLock(
+  mode: RemixRecipeMode | null | undefined,
+): { accessMode: RemixRecipeMode; reason: string } | null {
+  if (mode === 'paid') return { accessMode: 'paid', reason: REMIX_RECIPE_MUST_BE_PAID };
+  if (mode === 'free') return { accessMode: 'free', reason: REMIX_RECIPE_STAYS_FREE };
+  return null;
+}
+
+// ─── A recipe the creator sells already (owner, 2026-11-06) ──────────────────
+
+/**
+ * The recipe on the creator's own post that a creation came from: a remix of
+ * that post, or a run again from its creation. Its terms are the creator's own,
+ * so they lock nothing (a run of one's own records none, `remix_recipe_mode`),
+ * but a paid one sets where the new post's recipe starts ("Start Paid, can
+ * switch").
+ */
+export interface OwnSourceRecipe {
+  accessMode: 'free' | 'paid';
+  /** Its price, in credits (`price_usd_cents` stores the count). */
+  priceCredits: number;
+}
+
+/**
+ * The key of a creation in `/api/generations` that carries it, in
+ * `linked_post_bundle`'s shape (`{ accessMode, status, priceUsdCents }`): the
+ * bundle of the post of the run's source creation (`source_generation_id`),
+ * where that creation is the caller's own; null where there is none.
+ */
+export const OWN_SOURCE_RECIPE_KEY = 'own_source_post_bundle';
+
+/**
+ * A creation's `own_source_post_bundle`, read defensively: null where the
+ * server says there is none or sends something unreadable, undefined where it
+ * sends no such key (a server from before 2026-11-06).
+ */
+export function readOwnSourceRecipe(generation: unknown): OwnSourceRecipe | null | undefined {
+  if (!generation || typeof generation !== 'object' || !(OWN_SOURCE_RECIPE_KEY in generation)) return undefined;
+  const bundle = (generation as Record<string, unknown>)[OWN_SOURCE_RECIPE_KEY];
+  if (!bundle || typeof bundle !== 'object') return null;
+  const { accessMode, priceUsdCents } = bundle as { accessMode?: unknown; priceUsdCents?: unknown };
+  if (accessMode !== 'free' && accessMode !== 'paid') return null;
+  const priceCredits = typeof priceUsdCents === 'number' && Number.isFinite(priceUsdCents) ? Math.round(priceUsdCents) : 0;
+  return { accessMode, priceCredits };
+}
+
+/**
+ * A price a paid recipe may go out at, as the server holds it
+ * (`POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS`, `POST_RESOURCE_PRICE_INCREMENT_USD_CENTS`):
+ * at least 10 credits, in steps of 10.
+ */
+function isPaidRecipePrice(credits: number): boolean {
+  return Number.isInteger(credits) && credits >= 10 && credits % 10 === 0;
+}
+
+/**
+ * Where a creation's new post's recipe starts, and at what price (owner,
+ * 2026-11-05 and 2026-11-06): a remix of someone else's recipe is held to that
+ * recipe's terms (`remixRecipeLock`); a creation from the creator's own post
+ * whose recipe is paid starts Paid at that recipe's price, and they may still
+ * choose Free, the prompt being theirs, so nothing is locked; any other starts
+ * Free. A paid start takes the own post's price where it is one a recipe can
+ * go out at, else the starting price.
+ */
+export function creationRecipeStart(
+  mode: RemixRecipeMode | null | undefined,
+  ownSource: OwnSourceRecipe | null | undefined,
+): { accessMode: 'free' | 'paid'; priceCredits: number; locked: boolean } {
+  const lock = remixRecipeLock(mode);
+  const ownPaid = ownSource?.accessMode === 'paid' ? ownSource : null;
+  return {
+    accessMode: lock?.accessMode ?? (ownPaid ? 'paid' : CREATION_RECIPE_STARTING_ACCESS),
+    priceCredits: ownPaid && isPaidRecipePrice(ownPaid.priceCredits) ? ownPaid.priceCredits : DEFAULT_PAID_RECIPE_PRICE_CREDITS,
+    locked: Boolean(lock),
+  };
 }

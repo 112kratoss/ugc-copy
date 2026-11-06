@@ -103,6 +103,23 @@ export function recipeFileCopyOf(input: GenerationInputOriginSource, ownerIds: R
 }
 
 /**
+ * Whether a recipe-file input passes on into its creation's own recipe (remix plan, phase 1b; owner,
+ * 2026-11-05: a remix's recipe holds what its run used): a copy of the recipe the run remixed, which
+ * sits in that recipe's copies' folder (`recipePassOnFolder`), and never a file of any other recipe the
+ * run used, whose box opens empty. Matched by the folder rather than the recipe's items, so a revision
+ * of that recipe changes nothing. Whether its holder may still read it is asked apart, of the database.
+ */
+export function passesOnRecipeFile(
+  input: GenerationInputOriginSource,
+  ownerIds: ReadonlySet<string>,
+  passOnFolder: string | null | undefined,
+): boolean {
+  if (!passOnFolder || !isRecipeFileInput(input, ownerIds)) return false;
+  const copy = recipeFileCopyOf(input, ownerIds);
+  return Boolean(copy?.startsWith(passOnFolder) && !copy.slice(passOnFolder.length).includes('/'));
+}
+
+/**
  * The recipe file a held input stands for, as `post_resource_files/<seller>/<path>`, for a read of it
  * (`recipe_file_readable_by`): the copy it was imported from (`recipeFileCopyOf`), or else the seller's
  * file its sources name, a recipe's own upload included. `''` for an input marked as a recipe file whose

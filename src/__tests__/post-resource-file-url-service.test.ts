@@ -418,6 +418,64 @@ describe('createPostResourceFileReadUrlForRoute', () => {
     });
   });
 
+  // Remix plan, phase 1b: a seller's recipe passed on a file of the recipe their creation remixed. The
+  // copy is in their own folder, yet theirs only while that file is: after a refund, a retracted
+  // purchase or that creation's removal or archive, the copy stays in their recipe, unsigned.
+  describe('a seller’s copy of a file their recipe passed on', () => {
+    const OWN_COPY = 'user-1/generation-references/gen-1/00-reference-image-row-own.png';
+    const PASSED_COPY = 'user-1/generation-references/gen-1/01-reference-image-row-passed.png';
+    const sellerDetail = () => ({
+      viewerCanAccess: true,
+      viewerIsOwner: true,
+      seller: { id: 'user-1' },
+      resources: {
+        attachments: [],
+        items: [
+          { title: 'Own', storagePath: OWN_COPY, contentType: 'image/png' },
+          { title: 'Passed on', storagePath: PASSED_COPY, contentType: 'image/png' },
+          { title: 'Guide', storagePath: 'user-1/resources/guide.pdf', contentType: 'application/pdf' },
+        ],
+      },
+    }) as unknown as PostResourceBundleDetail;
+
+    async function sign(readable: (paths: string[]) => Promise<Set<string>>, viewer: { isOwner: boolean } = { isOwner: true }) {
+      const client = createClient({ signedUrlFor });
+      const readableRecipeFiles = vi.fn(async (_viewer: string, paths: string[]) => readable(paths));
+      const result = await createPostResourceFileReadUrlForRoute({
+        body: { storagePaths: [OWN_COPY, PASSED_COPY, 'user-1/resources/guide.pdf'] },
+        client: client.client,
+        countryCode: null,
+        getDetailByPostId: vi.fn(async () => ({ ...sellerDetail(), viewerIsOwner: viewer.isOwner })),
+        readableRecipeFiles,
+        postId: 'post-1',
+        rateLimitKey: 'user-1',
+        viewerUserId: 'user-1',
+      });
+      return { result, readableRecipeFiles };
+    }
+
+    it('signs the seller’s copies they may still read, and every file that is no copy', async () => {
+      const { result, readableRecipeFiles } = await sign(async () => new Set([`post_resource_files/${OWN_COPY}`]));
+
+      expect(readableRecipeFiles).toHaveBeenCalledWith('user-1', [`post_resource_files/${OWN_COPY}`, `post_resource_files/${PASSED_COPY}`]);
+      expect(result.ok && 'files' in result.body && result.body.files.map((file) => file.storagePath))
+        .toEqual([OWN_COPY, 'user-1/resources/guide.pdf']);
+    });
+
+    // #708's max review: "not on this unlock" read as for good; a failed read says to try again.
+    it('signs none of the seller’s copies when that read fails, and says to try again', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const { result } = await sign(async () => { throw new Error('statement timeout'); });
+
+      expect(result).toEqual({ ok: false, status: 500, body: { error: 'Could not open this recipe’s files right now. Try again.' } });
+    });
+
+    it('asks nothing for a buyer, whose recipe read already left out what is withheld', async () => {
+      const { readableRecipeFiles } = await sign(async () => new Set(), { isOwner: false });
+      expect(readableRecipeFiles).not.toHaveBeenCalled();
+    });
+  });
+
   it('saves a download under its title with the extension of its content type', async () => {
     const client = createClient();
     const getDetailByPostId = vi.fn(async () => createBatchDetail());

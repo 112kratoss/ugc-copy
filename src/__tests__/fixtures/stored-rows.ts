@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { embeddedTable, postgrestSelect, selectFields } from './postgrest-select';
+import { recipeCopiesWithheldOver, type CreationMarks } from './recipe-copies-withheld';
 
 type Row = Record<string, unknown>;
 type Call = (args: Row) => unknown;
@@ -9,6 +10,17 @@ type Call = (args: Row) => unknown;
 const LIBRARY_FILTER = 'and(template_run_id.is.null,template_run_step_id.is.null),studio_visible.eq.true';
 
 const FAILURE = Symbol('database error');
+
+/**
+ * Columns added with a default since the fixtures were written, as Postgres answers them for a row
+ * that never set one: the default. A row that sets one keeps its own.
+ */
+const COLUMN_DEFAULTS: Record<string, Row> = {
+  // 20261105152921: the post's own "Allow remixes", on for every post.
+  posts: { remixes_allowed: true },
+  // A run's source creation: null for a run that remixed or re-ran nothing.
+  generations: { source_generation_id: null },
+};
 
 /**
  * What a function in `calls` returns, or a table holds, to fail the way
@@ -134,7 +146,8 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
         },
       });
     }
-    const known = rowsOf(table)[0];
+    const firstRow = rowsOf(table)[0];
+    const known = firstRow ? { ...COLUMN_DEFAULTS[table], ...firstRow } : undefined;
     // The column a field reads: `alias:column->path` reads `column`. An embedded table is no column
     // of this one: a row answers it from its own list under the table's name, or with none.
     const columnOf = (field: string) => field.slice(field.indexOf(':') + 1).split('->')[0]!;
@@ -145,9 +158,10 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
     reads.push({ table, columns: asked });
 
     const { filters, matching } = filtered(table);
-    const answer = () => matching().map((row) => (
-      asked.includes('*') ? { ...row } : postgrestSelect(row, columns)
-    ));
+    const answer = () => matching().map((row) => {
+      const withDefaults = { ...COLUMN_DEFAULTS[table], ...row };
+      return asked.includes('*') ? withDefaults : postgrestSelect(withDefaults, columns);
+    });
 
     return Object.assign(filters, {
       async single() {
@@ -175,6 +189,15 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
     });
   }
 
+  // `recipe_copies_withheld` over the stored creations' two marks, where a test names no answer of its
+  // own: a copy a remix's recipe passed on is held to where it came from too, which pgTAP proves.
+  function withheldCopiesOfStoredCreations(args: Row) {
+    const creations = tables.generations;
+    if (isFailure(creations)) return creations;
+    const paths = Array.isArray(args.p_paths) ? args.p_paths.filter((path): path is string => typeof path === 'string') : [];
+    return recipeCopiesWithheldOver((creations ?? []) as CreationMarks[])(paths);
+  }
+
   const client = {
     from(table: string) {
       return {
@@ -183,7 +206,7 @@ export function createStoredRows(tables: Record<string, Row[] | Failure>, calls:
       };
     },
     async rpc(name: string, args: Row = {}) {
-      const call = calls[name];
+      const call = calls[name] ?? (name === 'recipe_copies_withheld' && tables.generations ? withheldCopiesOfStoredCreations : undefined);
       if (!call) throw new Error(`Unexpected call: ${name}`);
       called.push(name);
       const answer = await call(args);

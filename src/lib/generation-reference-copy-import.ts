@@ -4,9 +4,9 @@ import { isGuestUser } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 import { isRecipeFileInput, recipeFileCopyOf } from '@/lib/generation-input-origin';
 import { isAlreadyExistsStorageError, type SharedInputMediaImportResult } from '@/lib/generation-input-media-import';
-import { isUserRelationshipBlocked } from '@/lib/moderation-service';
 import { loadGenerationRecipeReferenceCopies } from '@/lib/post-resource-bundles-server';
 import { recordRecipeImportUse } from '@/lib/recipe-import-use';
+import { loadRecipeCopySource, ownRecipeCopyPath } from '@/lib/recipe-pass-on';
 import {
   type GenerationReferenceCopyParts,
   isRecipeImportSource,
@@ -49,19 +49,21 @@ export function createRecipeCopyReads(): RecipeCopyReads {
 
 export interface GenerationReferenceCopyImportDependencies {
   createServiceClient?: typeof createServiceClient;
-  isUserRelationshipBlocked?: typeof isUserRelationshipBlocked;
   loadGenerationRecipeReferenceCopies?: typeof loadGenerationRecipeReferenceCopies;
+  loadRecipeCopySource?: typeof loadRecipeCopySource;
 }
 
 /**
  * Whether the viewer may reuse the copies the recipe on this creation's post holds, read now, and
  * which: entitlement to reuse, not to read. The remix source's own gate (`resolveRemixAccess`) first,
- * as `/api/remix-source` asks it, after refusing a guest anyone else's creation as that route does:
- * the post shows the creation (public, not archived, visible to moderation, its creator's own), the
- * generation is still public, it is no template's result, and neither has blocked the other. A post
- * deleted since (its tombstone takes the generation private) refuses too. Then the recipe's copies,
- * read on from what the gate read (`loadGenerationRecipeReferenceCopies`): the recipe as it stands and
- * the version the viewer bought, a retired one included, and none once a refund took the purchase.
+ * asked for a reuse, after refusing a guest anyone else's creation as `/api/remix-source` does: the
+ * post shows the creation (public, not archived, visible to moderation, its creator's own), the
+ * generation is still public and it is no template's result. A post deleted since (its tombstone
+ * takes the generation private) refuses too. Neither the post's "Allow remixes" (owner, 2026-11-05)
+ * nor a block (owner, 2026-11-06) is asked: they end new remixes and what a buyer can see or buy,
+ * not the files they bought. Then the recipe's copies, read on from what the gate read
+ * (`loadGenerationRecipeReferenceCopies`): the recipe as it stands and the version the viewer bought,
+ * a retired one included, and none once a refund took the purchase.
  */
 async function readRecipeCopyAccess(
   adminSupabase: SupabaseClient,
@@ -89,14 +91,7 @@ async function readRecipeCopyAccess(
     if (viewer.error) throw viewer.error;
     if (!viewer.data.user || isGuestUser(viewer.data.user)) return { outcome: 'not-eligible' };
 
-    const access = await resolveRemixAccess({
-      adminSupabase,
-      viewerUserId,
-      generation,
-      dependencies: {
-        isUserRelationshipBlocked: dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
-      },
-    });
+    const access = await resolveRemixAccess({ adminSupabase, viewerUserId, generation, purpose: 'reuse' });
     // The owner's run reads their own files; a post with no recipe holds no copies.
     if (!access.allowed || access.basis === 'owner' || !access.recipe) return { outcome: 'not-eligible' };
 
@@ -187,8 +182,9 @@ export async function checkRecipeCopyReuse(params: {
  * caller's folder, `generation_inputs/<caller>/recipe-imports/<seller>/<generation>/<file>`,
  * once their right to reuse it is read again now (`readRecipeCopyAccess`): the
  * file must be among the copies the version of the recipe they bought holds. A
- * refund, a block, or a post taken down or deleted since the remix ends it; a
- * recipe its seller retired stays its buyers', as their files do. The run's
+ * refund, or a post taken down or deleted since the remix, ends it; a recipe its
+ * seller retired stays its buyers', as their files do, and so do they after the
+ * post's "Allow remixes" goes off or a block (owner, 2026-11-05, 2026-11-06). The run's
  * input keeps the mark of a recipe file (`isRecipeFileInput`), so it is never
  * handed on from the caller's creation.
  *
@@ -246,8 +242,8 @@ const IMPORT_FOLDERS = new Set(['remix-imports', RECIPE_IMPORT_FOLDER]);
  * A recipe file the caller already holds, used again: the seller's copy itself, a run start's import of
  * one (`recipeImportPath`, in anyone's folder), or a kept input of the caller's own marked as one
  * (`isRecipeFileInput`, whose `recipeFile` names its copy). Each is checked as the copy it stands for is
- * and imported again (`importGenerationReferenceCopy`): signed as the caller's own file, a refund or a
- * block since the remix ended nothing (2026-11-03 re-review). Null for anything else, which a start
+ * and imported again (`importGenerationReferenceCopy`): signed as the caller's own file, a refund since
+ * the remix ended nothing (2026-11-03 re-review). Null for anything else, which a start
  * resolves as it always has; an import of another creator's shared input is the shared import's.
  *
  * Answers as the import does. A run's kept input whose row cannot be read answers `failed`, retryably
@@ -279,6 +275,13 @@ export async function reuseRecipeFile(params: {
  * `failed` (retryable), never the caller's own: since 20261103232019 storage itself refuses them a
  * kept recipe file they no longer hold, so taken for theirs, it was signed with the service role and
  * a Seedance asset made of it recorded as their own file for good (2026-11-04 review).
+ *
+ * A copy in the caller's own recipe files is theirs, unless their recipe passed it on from the recipe
+ * their creation remixed (remix plan, phase 1b): it stands for the file it came from
+ * (`recipe_copy_sources`), and is reused as that file is, through their unlock, read again now. Taken
+ * for their own file, a new run of theirs held it unmarked for good, and that run's recipe handed it
+ * on with no record of where it came from (phase 1b's review). A read of that record that fails is
+ * `failed`.
  */
 export async function findHeldRecipeCopy(params: {
   source: string;
@@ -288,6 +291,19 @@ export async function findHeldRecipeCopy(params: {
   const own = new Set([params.viewerUserId]);
   const copySource = recipeCopyOfSource(params.source, own);
   if (copySource) return { outcome: 'copy', copySource };
+  const ownCopy = ownRecipeCopyPath(params.source, params.viewerUserId);
+  if (ownCopy) {
+    try {
+      const passedOn = await (params.dependencies?.loadRecipeCopySource ?? loadRecipeCopySource)(
+        (params.dependencies?.createServiceClient ?? createServiceClient)(),
+        ownCopy,
+      );
+      return passedOn ? { outcome: 'copy', copySource: passedOn.sourceFile } : null;
+    } catch (error) {
+      logBackendError('failed_to_read_recipe_copy_source_for_reuse', { error });
+      return { outcome: 'failed' };
+    }
+  }
   // An import whose path names no copy is none a start made: never the caller's own file either.
   if (isRecipeImportSource(params.source)) return { outcome: 'not-eligible' };
   const kept = getUserOwnedStoredMediaLocation(params.source, params.viewerUserId, { allowedBuckets: [GENERATION_INPUTS_BUCKET] });

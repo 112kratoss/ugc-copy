@@ -37,6 +37,8 @@ import { REMIX_RECIPE_TERMS_UNREADABLE_ERROR } from '@/lib/remix-recipe-terms';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
+  CREATION_RECIPE_REQUIRED,
+  CREATION_RECIPE_REQUIRED_CODE,
   REMIX_RECIPE_MUST_BE_PAID,
   REMIX_RECIPE_MUST_BE_PAID_CODE,
   REMIX_RECIPE_STAYS_FREE,
@@ -2402,7 +2404,7 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
   } as PostResourceItem;
   const plannedReference = { item: referenceItem, source: { bucket: 'generation_inputs', filePath: 'user-1/gen-remix/dojo.png' } };
 
-  async function publish(body: Record<string, unknown>, origins: { byRowId: Map<string, 'own' | 'others'>; hasOwn: boolean }) {
+  async function publish(body: Record<string, unknown>, origins: { byRowId: Map<string, 'own' | 'others' | 'recipe'>; hasOwn: boolean }) {
     const dependencies = {
       ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
         outputUrl: mediaGeneration.outputUrl,
@@ -2450,6 +2452,20 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
     }));
     expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: false }) }),
+    }));
+  });
+
+  // Remix plan, phase 1b: the files of the recipe the run remixed go on with the original's
+  // references; the plan takes only those of that recipe the creator may still read.
+  it('hands the plan the run’s recipe files beside the original’s references, and never the creator’s own', async () => {
+    const { result, dependencies } = await publish(
+      { includeGenerationReferences: true, leaveOutOwnGenerationReferences: true, resourceBundle: recipe(false) },
+      { byRowId: new Map<string, 'own' | 'others' | 'recipe'>([['row-original', 'others'], ['row-recipe', 'recipe'], ['row-own', 'own']]), hasOwn: true },
+    );
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+      onlyRowIds: new Set(['row-original', 'row-recipe']),
     }));
   });
 
@@ -3059,5 +3075,123 @@ describe('a remix\'s recipe terms', () => {
     });
 
     expect(result).toMatchObject({ ok: false, status: 400, body: { code: REMIX_RECIPE_MUST_BE_PAID_CODE } });
+  });
+});
+
+// Remix plan, phase 2 (owner, 2026-11-05): a creation's post always carries its recipe, with "Allow
+// remixes" on by default and the files the creator removed left out.
+describe('a creation’s new post and its posting defaults', () => {
+  const generation = {
+    id: 'gen-new',
+    user_id: 'user-1',
+    status: 'succeeded',
+    model: 'nano-banana-2',
+    category: 'image',
+    creation_mode: null,
+    output_url: 'generated_images/user-1/lantern.jpg',
+    showcase_asset_path: null,
+    title: null,
+    description: null,
+    prompt: 'A lantern at dusk, warm rim light.',
+  };
+  const recipe = (accessMode: 'none' | 'free', allowRemix = false): PostResourceBundleInput => (accessMode === 'none'
+    ? { accessMode: 'none' }
+    : {
+      accessMode,
+      summary: 'Prompt from this creation',
+      previewText: 'Unlock the saved prompt used to create this result.',
+      priceUsdCents: 0,
+      resources: { promptText: 'A lantern at dusk, warm rim light.', notesMarkdown: null, workflowShareUrl: null, attachments: [], allowRemix },
+    });
+
+  async function publish(body: Record<string, unknown>, options: { generation?: Record<string, unknown>; storedPost?: Record<string, unknown> | null } = {}) {
+    const dependencies = {
+      ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({ outputUrl: mediaGeneration.outputUrl, createdLocation: null })),
+      listSourceToolsCatalog: vi.fn(async () => [
+        { slug: 'magicbooklet', label: 'magicbooklet', models: [], supportedMediaKinds: ['image' as const, 'video' as const] },
+      ]),
+      validatePostResourceBundleInput: vi.fn(() => null),
+      getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+      loadRemixRecipeTerms: vi.fn(async () => ({ mode: null, bundleId: null, originGenerationId: null })),
+      planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [] })),
+      publishGenerationPostWithResourceBundleAtomically: vi.fn(async () => ({
+        postId: 'post-new',
+        visibility: 'public' as const,
+        bundleId: 'bundle-new',
+        bundleStatus: 'published' as const,
+      })),
+      ensureGenerationPostCoverMedia: vi.fn(async () => ({ outcome: 'created' as const, error: null })),
+      requestPostEmbedding: vi.fn(async () => undefined),
+    } satisfies Partial<ShowcasePublishServiceDependencies>;
+    const result = await publishGenerationToShowcaseForRoute({
+      adminSupabase: createAdminClientMock({ ...generation, ...options.generation }, null, options.storedPost ? { storedPost: options.storedPost } : {}).client,
+      body: { generationId: 'gen-new', visibility: 'public', title: 'Lantern at dusk', ...body },
+      userId: 'user-1',
+      dependencies,
+    });
+    return { result, dependencies };
+  }
+
+  it('refuses a creation’s new post with no recipe from a composer that offers none, in the words the fixture pins', async () => {
+    const { result, dependencies } = await publish({ allowRemixes: true, resourceBundle: recipe('none') });
+
+    const refusal = mobileApiContract.endpoints.publishGeneration.errors.creationRecipeRequired;
+    expect(result).toEqual({ ok: false, status: refusal.status, body: refusal.response });
+    expect(refusal.response).toEqual({ error: CREATION_RECIPE_REQUIRED, code: CREATION_RECIPE_REQUIRED_CODE, field: 'resourceBundle' });
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an installed app from before, which sends no switch', {}, {}],
+    ['a creation that already has its post', { allowRemixes: true }, { storedPost: { id: 'post-old', is_nsfw: false } }],
+    ['a creation with no prompt to share', { allowRemixes: true }, { generation: { prompt: '' } }],
+    ['a creation its creator archived', { allowRemixes: true }, { generation: { archived_at: '2026-11-05T00:00:00.000Z' } }],
+  ] as const)('posts without a recipe for %s', async (_, body, options) => {
+    const { result, dependencies } = await publish({ ...body, resourceBundle: recipe('none') }, options);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalled();
+  });
+
+  it('writes "Allow remixes" to the post when it is sent, and leaves the post’s own when it is not', async () => {
+    const off = await publish({ allowRemixes: false, resourceBundle: recipe('free') });
+    expect(off.dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.objectContaining({ remixes_allowed: false }),
+    }));
+
+    const older = await publish({ resourceBundle: recipe('free') });
+    expect(older.dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      post: expect.not.objectContaining({ remixes_allowed: expect.anything() }),
+    }));
+  });
+
+  it('refuses an "Allow remixes" that is no switch', async () => {
+    const { result } = await publish({ allowRemixes: 'yes', resourceBundle: recipe('free') });
+    expect(result).toEqual({ ok: false, status: 400, body: { error: 'allowRemixes must be a boolean.' } });
+  });
+
+  it('copies none of the files the creator removed, and then hands no input over', async () => {
+    const { result, dependencies } = await publish({
+      allowRemixes: true,
+      includeGenerationReferences: true,
+      leaveOutGenerationReferenceIds: ['row-face'],
+      resourceBundle: recipe('free', true),
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+      exceptRowIds: new Set(['row-face']),
+    }));
+    // The hand-over would give a remix every input, the removed one too.
+    expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
+      bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: false }) }),
+    }));
+  });
+
+  it('refuses removed inputs named wrongly', async () => {
+    for (const leaveOutGenerationReferenceIds of ['row-face', [42], Array.from({ length: 65 }, (_, index) => `row-${index}`)]) {
+      const { result } = await publish({ allowRemixes: true, leaveOutGenerationReferenceIds, resourceBundle: recipe('free') });
+      expect(result).toEqual({ ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } });
+    }
   });
 });

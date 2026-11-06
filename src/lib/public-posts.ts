@@ -68,6 +68,8 @@ type PublicPostRow = {
   body: string | null;
   category: ShowcaseItemCategory;
   creation_mode?: 'motion' | null;
+  /** The post's own "Allow remixes" (owner, 2026-11-05). */
+  remixes_allowed?: boolean | null;
   save_count: number | null;
   remix_count: number | null;
   share_count: number | null;
@@ -146,7 +148,7 @@ async function fetchPublicPostRow(
 
   const result = await adminSupabase
     .from('posts')
-    .select(`id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
@@ -496,6 +498,7 @@ export async function getPublicPostDetail(
     postFormat: row.post_format,
     category: row.category,
     creationMode: row.creation_mode,
+    remixesAllowed: row.remixes_allowed,
     sourceKind: normalizeShowcaseSourceKind(row.source_kind),
     templateResult: generation?.templateResult === true,
     resourceBundle: resourceBundle

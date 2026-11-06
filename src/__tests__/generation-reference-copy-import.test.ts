@@ -1,8 +1,10 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-rows';
 import { createRecipeCopyReads, importGenerationReferenceCopy, reuseRecipeFile } from '@/lib/generation-reference-copy-import';
 import { buildGenerationReferenceCopyPath } from '@/lib/post-resource-bundles-server';
+import { resolveRemixAccess } from '@/lib/remix-access';
 
 // Owner, 2026-11-03: a remix of an unlocked recipe restores the inputs the
 // recipe holds copies of. Those copies are the seller's files, so a run start
@@ -80,7 +82,8 @@ function setUp(options: {
   /** The version the viewer bought, where it is no longer the recipe's latest. */
   purchasedRevision?: { resource_items: unknown[] } | null;
   revisionError?: boolean;
-  blocked?: boolean;
+  /** Who blocked whom (`user_blocks`), as the remix gate would read it if it asked. */
+  blocks?: Array<{ blocker_user_id: string; blocked_user_id: string }>;
   viewer?: { id: string; is_anonymous: boolean } | null;
   copyError?: StorageError | null;
   signError?: { message: string } | null;
@@ -97,6 +100,7 @@ function setUp(options: {
       { id: OTHER_GENERATION_ROW, generation_id: OTHER_GENERATION },
     ],
     profiles: [{ id: 'nobody', merged_into_user_id: null }],
+    user_blocks: options.blocks ?? [],
     ...options.tables,
   }, {
     get_purchased_post_resource_bundle_revision: () => (options.revisionError
@@ -120,19 +124,17 @@ function setUp(options: {
   const viewer = options.viewer === undefined ? { id: VIEWER, is_anonymous: false } : options.viewer;
   const getUserById = vi.fn(async () => ({ data: { user: viewer }, error: null }));
   const client = { from, rpc: stored.client.rpc, storage: { from: storageFrom }, auth: { admin: { getUserById } } };
-  const isUserRelationshipBlocked = vi.fn(async () => options.blocked === true);
 
   return {
     dependencies: {
       createServiceClient: (() => client) as never,
-      isUserRelationshipBlocked: isUserRelationshipBlocked as never,
     },
+    client: client as unknown as SupabaseClient,
     from,
     storageFrom,
     copy,
     createSignedUrl,
     getUserById,
-    isUserRelationshipBlocked,
     called: stored.called,
   };
 }
@@ -157,8 +159,9 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
       storagePath: `generation_inputs/${DESTINATION}`,
       signedUrl: `https://project.supabase.co/storage/v1/object/sign/generation_inputs/${DESTINATION}?token=copy`,
     });
-    // The remix gate, asked again: the post read, the block asked about its creator.
-    expect(stub.isUserRelationshipBlocked).toHaveBeenCalledWith(expect.objectContaining({ firstUserId: VIEWER, secondUserId: SELLER }));
+    // The remix gate, asked again for a reuse: the post read, and no block asked (owner, 2026-11-06).
+    expect(readsOf(stub, 'posts')).toBe(1);
+    expect(readsOf(stub, 'user_blocks')).toBe(0);
     // Copied, not read through: from the recipe files into the caller's generation inputs.
     expect(stub.storageFrom).toHaveBeenCalledWith('post_resource_files');
     expect(stub.copy).toHaveBeenCalledTimes(1);
@@ -221,10 +224,27 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
     expect(stub.createSignedUrl).not.toHaveBeenCalled();
   });
 
+  // The review of phase 2, finding 1: the post's "Allow remixes" off stops new remixes only, and the
+  // files a buyer got stay usable in their own runs (owner, 2026-11-05). A block ends what the buyer
+  // can see or buy, not what they bought (owner, 2026-11-06). The new remix stays refused.
+  it.each([
+    ['the post’s Allow remixes went off', { tables: { posts: [{ ...EXPOSED_POST, remixes_allowed: false }] } }],
+    ['the seller blocked the buyer', { blocks: [{ blocker_user_id: SELLER, blocked_user_id: VIEWER }] }],
+    ['the buyer blocked the seller', { blocks: [{ blocker_user_id: VIEWER, blocked_user_id: SELLER }] }],
+  ])('imports a copy the buyer holds after %s, and refuses them a new remix', async (_, options) => {
+    const stub = setUp(options as Parameters<typeof setUp>[0]);
+
+    await expect(importAs(VIEWER, SOURCE, stub)).resolves.toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DESTINATION}` });
+    expect(stub.copy).toHaveBeenCalledWith(COPY, DESTINATION, { destinationBucket: 'generation_inputs' });
+    expect(readsOf(stub, 'user_blocks')).toBe(0);
+    // The remix entry points ask the same gate for a new remix, which the same rows refuse.
+    await expect(resolveRemixAccess({ adminSupabase: stub.client, viewerUserId: VIEWER, generation: PUBLIC_GENERATION }))
+      .resolves.toEqual({ allowed: false, reason: 'not_found' });
+  });
+
   // Entitlement to read is not entitlement to reuse (2026-11-03 review): a saved remix, or a request
   // made by hand, imported the copy at Generate after any of these, which `/api/remix-source` refuses.
   it.each([
-    ['the seller blocked the buyer, or the buyer the seller', { blocked: true }],
     ['the post is archived', { tables: { posts: [{ ...EXPOSED_POST, archived_at: '2026-11-03T00:00:00Z' }] } }],
     ['the post is private', { tables: { posts: [{ ...EXPOSED_POST, visibility: 'private' }] } }],
     ['the post is taken down', { tables: { posts: [{ ...EXPOSED_POST, review_status: 'hidden' }] } }],
@@ -364,7 +384,7 @@ describe('importing a recipe’s copy of a creation’s input into a run', () =>
 
 // 2026-11-03 re-review: a file the caller already holds that is a recipe file (the start's import of a
 // copy, or a kept input of theirs marked as one) was signed as their own, with no unlock read, so a
-// refund or a block ended nothing. Each is checked as the copy it stands for is, and imported again.
+// refund ended nothing. Each is checked as the copy it stands for is, and imported again.
 describe('reusing a recipe file the caller already holds', () => {
   const KEPT = `generation_inputs/${VIEWER}/d1b2c3d4-0000-4000-8000-000000000009/00-reference_image.png`;
 
@@ -379,6 +399,17 @@ describe('reusing a recipe file the caller already holds', () => {
     expect(stub.copy).toHaveBeenCalledWith(COPY, DESTINATION, { destinationBucket: 'generation_inputs' });
     // Read again now: the gate, the recipe and the creation's rows.
     expect(readsOf(stub, 'posts')).toBe(1);
+  });
+
+  // What the Seedance prepare and a start's reuse of a held file ask (owner, 2026-11-05 and 2026-11-06).
+  it.each([
+    ['the post’s Allow remixes went off', { tables: { posts: [{ ...EXPOSED_POST, remixes_allowed: false }] } }],
+    ['the seller blocked the buyer', { blocks: [{ blocker_user_id: SELLER, blocked_user_id: VIEWER }] }],
+  ])('reuses the start’s import of a copy after %s', async (_, options) => {
+    const stub = setUp(options as Parameters<typeof setUp>[0]);
+
+    await expect(reuse(`generation_inputs/${DESTINATION}`, stub)).resolves.toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DESTINATION}` });
+    expect(readsOf(stub, 'user_blocks')).toBe(0);
   });
 
   it.each([
@@ -462,5 +493,35 @@ describe('reusing a recipe file the caller already holds', () => {
 
   it('answers the seller’s copy itself as the start’s import does', async () => {
     await expect(reuse(SOURCE, setUp())).resolves.toMatchObject({ outcome: 'imported' });
+  });
+
+  // Phase 1b's review: the caller's recipe passed on a file of the recipe their creation remixed. The
+  // copy sits in their own recipe files, yet it is the seller's file: reused as their own, a new run
+  // held it unmarked for good and that run's recipe handed it on. It is reused as its source is.
+  describe('a copy in the caller’s own recipe files that their recipe passed on', () => {
+    const OWN_COPY = `post_resource_files/${VIEWER}/generation-references/d1b2c3d4-0000-4000-8000-00000000000a/00-reference-image-row-b.png`;
+    const lineage = (sourceFile = SOURCE) => [{ copy_path: OWN_COPY, source_file: sourceFile, holder_user_id: VIEWER }];
+
+    it('imports the file it came from, through the caller’s unlock, read again now', async () => {
+      const stub = setUp({ tables: { recipe_copy_sources: lineage() } });
+      await expect(reuse(OWN_COPY, stub)).resolves.toMatchObject({ outcome: 'imported', storagePath: `generation_inputs/${DESTINATION}` });
+      expect(stub.copy).toHaveBeenCalledWith(COPY, DESTINATION, { destinationBucket: 'generation_inputs' });
+    });
+
+    it('refuses it once that unlock is gone', async () => {
+      const stub = setUp({ tables: { recipe_copy_sources: lineage(), post_resource_bundle_purchases: [] } });
+      await expect(reuse(OWN_COPY, stub)).resolves.toEqual({ outcome: 'not-eligible' });
+      expect(stub.copy).not.toHaveBeenCalled();
+    });
+
+    it('leaves a copy that was never passed on to the start, as the caller’s own file', async () => {
+      await expect(reuse(OWN_COPY, setUp({ tables: { recipe_copy_sources: [] } }))).resolves.toBeNull();
+    });
+
+    it('fails retryably when where it came from cannot be read', async () => {
+      const unreadable = setUp({ tables: { recipe_copy_sources: databaseError('57014', 'canceling statement due to statement timeout') } });
+      await expect(reuse(OWN_COPY, unreadable)).resolves.toEqual({ outcome: 'failed' });
+      expect(unreadable.copy).not.toHaveBeenCalled();
+    });
   });
 });

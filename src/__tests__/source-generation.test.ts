@@ -86,7 +86,7 @@ function createSupabaseMock({
   /** Guest profiles and the account each was linked into (`merged_into_user_id`). */
   linkedProfiles?: Array<{ id: string; mergedIntoUserId: string }>;
   failingReads?: Partial<Record<string, { message: string }>>;
-  /** What `remix_source_bought_paid` answers: whether the caller paid for the source post's recipe. */
+  /** What `remix_source_held_paid` answers: whether the caller holds the source post's recipe on paid terms. */
   boughtPaid?: boolean | 'fails';
 } = {}) {
   const stored = createStoredRows({
@@ -105,7 +105,7 @@ function createSupabaseMock({
   const rpcCalls: Array<{ name: string; args: unknown }> = [];
   const rpc = async (name: string, args: unknown) => {
     rpcCalls.push({ name, args });
-    if (name !== 'remix_source_bought_paid') return { data: null, error: { message: `unknown function ${name}` } };
+    if (name !== 'remix_source_held_paid') return { data: null, error: { message: `unknown function ${name}` } };
     return boughtPaid === 'fails' ? { data: null, error: { message: 'timeout' } } : { data: boughtPaid, error: null };
   };
 
@@ -304,6 +304,41 @@ describe('remix credit', () => {
     await expectNoRemixByRule(createSupabaseMock({ blocks: [block] }).supabase);
   });
 
+  // The post's "Allow remixes" off stops new remixes (owner, 2026-11-05): a start is credited with
+  // none, and a buyer of its paid recipe starts no run from it, as after a block. The files their
+  // recipe holds stay theirs in a new creation (`generation-reference-copy-import.ts`).
+  it('records no remix of a post whose creator turned remixes off', async () => {
+    await expectNoRemixByRule(createSupabaseMock({ posts: [{ ...EXPOSED_POST, remixes_allowed: false }] }).supabase);
+  });
+
+  it('refuses the start of a paid remix of such a post for the caller who bought its recipe', async () => {
+    const { supabase } = createSupabaseMock({
+      posts: [{ ...EXPOSED_POST, remixes_allowed: false }],
+      recipes: [PUBLISHED_RECIPE],
+      purchases: [{ id: 'purchase-1', bundle_id: PUBLISHED_RECIPE.id, buyer_user_id: 'user-1' }],
+      boughtPaid: true,
+    });
+
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED))
+      .rejects.toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
+  });
+
+  // The hub, 2026-11-06, from the owner's "B's recipe must be paid": a free claim of a recipe that is
+  // paid now holds it on paid terms (`remix_source_held_paid`), so with remixes off its start is
+  // refused too, never started unlinked and free.
+  it('refuses the start of a remix of such a post for a free claimer of its recipe, now paid', async () => {
+    const { supabase, rpcCalls } = createSupabaseMock({
+      posts: [{ ...EXPOSED_POST, remixes_allowed: false }],
+      recipes: [PUBLISHED_RECIPE],
+      purchases: [{ id: 'purchase-1', bundle_id: PUBLISHED_RECIPE.id, buyer_user_id: 'user-1', price_usd_cents: 0 }],
+      boughtPaid: true,
+    });
+
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED))
+      .rejects.toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
+    expect(rpcCalls.map((call) => call.name)).toEqual(['remix_source_held_paid']);
+  });
+
   it('records no remix for a caller who has not unlocked the post’s published recipe', async () => {
     await expectNoRemixByRule(createSupabaseMock({
       recipes: [PUBLISHED_RECIPE],
@@ -408,9 +443,21 @@ describe('remix credit', () => {
     expect(refusal).toBeInstanceOf(SourceGenerationValidationError);
     expect(refusal).toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
     expect(rpcCalls).toEqual([{
-      name: 'remix_source_bought_paid',
+      name: 'remix_source_held_paid',
       args: { p_user_id: 'user-1', p_source_generation_id: SOURCE_ID },
     }]);
+  });
+
+  // The hub, 2026-11-06, from the owner's "B's recipe must be paid": someone who claimed the recipe free
+  // while it was free holds it on paid terms once it is paid, and a refused remix of theirs is refused too.
+  it('refuses the start of a refused remix by a free claimer of a recipe that is paid now', async () => {
+    const { supabase } = createSupabaseMock({
+      blocks: [{ blocker_user_id: 'other-user', blocked_user_id: 'user-1' }],
+      boughtPaid: true,
+    });
+
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED))
+      .rejects.toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
   });
 
   it('fails the start when it cannot tell whether the caller bought the recipe', async () => {

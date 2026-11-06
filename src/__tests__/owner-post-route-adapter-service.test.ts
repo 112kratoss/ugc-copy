@@ -39,6 +39,8 @@ const ownerPostFixture = {
   bundle: null,
   resourceBundleInput: { accessMode: 'none' },
   hasPaidOrders: false,
+  remixesAllowed: true,
+  remixRecipeMode: null,
 } satisfies OwnerPostDetail;
 
 function createContext(postId = 'post-1') {

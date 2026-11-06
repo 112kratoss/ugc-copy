@@ -1820,6 +1820,10 @@ export function createApiClient({
           resourceBundleBuyerCount?: number;
           /** Whether anyone has had the post's recipe, a retired one included: it gains no exact prompt. */
           resourceBundleEverUnlocked?: boolean;
+          /** The post's "Allow remixes" (owner, 2026-11-05); absent from servers before, read as on. */
+          remixesAllowed?: boolean;
+          /** The terms its creation carries as a remix, which lock its recipe to paid or free. */
+          remixRecipeMode?: 'free' | 'paid' | null;
         };
       }>(`/api/posts/${postId}`),
     updatePost: (postId: string, body: Record<string, unknown>) =>

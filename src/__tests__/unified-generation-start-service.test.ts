@@ -2004,7 +2004,7 @@ describe('a run started from someone else’s post', () => {
       try_acquire_backend_job_lock: () => true,
       release_backend_job_lock: () => true,
       // Nobody here paid for the source's recipe, so a refused remix starts an ordinary run.
-      remix_source_bought_paid: () => false,
+      remix_source_held_paid: () => false,
     });
     const startCatalog = vi.fn(async () => ({
       predictionId: 'provider-task',
