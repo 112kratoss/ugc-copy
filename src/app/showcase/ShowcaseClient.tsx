@@ -7,6 +7,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Loader2, Heart, Image as ImageIcon, Video, Layers, TrendingUp, ShoppingBag, BookText, BadgeDollarSign, SlidersHorizontal, X, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/components/AuthProvider';
 import CreatorIdentity from '@/components/CreatorIdentity';
+import RemixCreditLine from '@/app/showcase/RemixCreditLine';
+import { itemsWithoutBlockedRemixCredits } from '../../../ugc-mobile/lib/remix-credit/remix-credit';
 import NewPostsPill, { newPostsScrollBehavior } from '@/components/NewPostsPill';
 import PublicShareButton from '@/components/PublicShareButton';
 import SkeletonLoader from '@/components/SkeletonLoader';
@@ -630,6 +632,9 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
                     </span>
                 </div>
 
+                {/* A remix credits what it remixed (owner, 2026-11-05), carried by the card. */}
+                <RemixCreditLine credit={item.remixCredit} compact />
+
                 <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0 flex-1">
                         <CreatorIdentity creator={item.creator} compact prefetch={false} />
@@ -945,8 +950,12 @@ export default function ShowcaseClient({
             return;
         }
 
+        // The page's own first page first: a lane change runs this before the
+        // lane's rows are reset, and the ask is cut at its item limit, so the
+        // posts (and the people their credits name) of the lane now drawn come
+        // before the ones it replaces.
         const drawnItems = [...new Map(
-            [...feedItemsForEventsRef.current, ...initialFeed.items].map((item) => [item.id, item])
+            [...initialFeed.items, ...feedItemsForEventsRef.current].map((item) => [item.id, item])
         ).values()];
         const controller = new AbortController();
         void fetchShowcaseViewerExclusions({
@@ -960,6 +969,8 @@ export default function ShowcaseClient({
 
             rememberViewerExclusionsForVisit(userId, exclusions);
             exclusions.blockedCreatorIds.forEach((id) => sessionHiddenCreatorIdsRef.current.add(id));
+            // A remix credit names nobody a block stands between and the viewer.
+            const blockedCreditPeople = new Set(exclusions.blockedCreatorIds);
             if (initialSort === DEFAULT_SHOWCASE_SORT) {
                 exclusions.hiddenCreatorIds.forEach((id) => sessionHiddenCreatorIdsRef.current.add(id));
                 exclusions.hiddenPostIds.forEach((id) => sessionHiddenPostIdsRef.current.add(id));
@@ -970,7 +981,8 @@ export default function ShowcaseClient({
                     item.id === openItemId
                     || !isSessionHiddenItem(item, sessionHiddenPostIdsRef.current, sessionHiddenCreatorIdsRef.current)
                 ));
-                return visibleItems.length === latestItems.length ? latestItems : visibleItems;
+                const keptItems = visibleItems.length === latestItems.length ? latestItems : visibleItems;
+                return itemsWithoutBlockedRemixCredits(keptItems, (id) => blockedCreditPeople.has(id));
             });
         });
 
@@ -2098,9 +2110,11 @@ export default function ShowcaseClient({
         if (outcome.status === 'done') {
             sessionHiddenCreatorIdsRef.current.add(creatorId);
             removeAfterSafetyAction((candidate) => candidate.creator.id === creatorId);
+            // Their name leaves the credits of the posts that stay (owner, 2026-11-05).
+            setItems((latestItems) => itemsWithoutBlockedRemixCredits(latestItems, (id) => id === creatorId));
         }
         showSafetyOutcome(outcome);
-    }, [clearFeedbackNotice, removeAfterSafetyAction, requireAccount, showSafetyOutcome, userId]);
+    }, [clearFeedbackNotice, removeAfterSafetyAction, requireAccount, setItems, showSafetyOutcome, userId]);
 
     // "New posts" (D2): For you only, Recent has its own order to come back to
     // and Saved, Remixed and Sales are not ordered by time; and only without a

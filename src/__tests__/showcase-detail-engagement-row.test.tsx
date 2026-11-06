@@ -83,7 +83,9 @@ describe('ShowcaseDetailEngagementRow', () => {
   it('renders the verbs with compact counts and the comment anchor', () => {
     render(<ShowcaseDetailEngagementRow {...rowProps()} />);
 
-    expect(screen.getByRole('button', { name: /remix · 2/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remix' })).toBeInTheDocument();
+    // The count is its own button, which opens the remixes posted from the post.
+    expect(screen.getByRole('button', { name: '2 remixes' })).toHaveAttribute('aria-haspopup', 'dialog');
     expect(screen.getByRole('button', { name: /save shared creation/i })).toHaveTextContent('4');
     expect(screen.getByRole('link', { name: /comment/i })).toHaveAttribute('href', '#comments');
     expect(screen.getByTitle('9 visits')).toBeInTheDocument();
@@ -184,7 +186,7 @@ describe('ShowcaseDetailEngagementRow', () => {
     expect(remix).toHaveAttribute('href', '#recipe');
     expect(remix).toHaveTextContent('Remix · 900 credits');
     expect(remix.querySelector('[data-remix-lock]')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: /remix/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remix' })).toBeNull();
   });
 
   it('says a free recipe brings the remix with it', () => {
@@ -199,7 +201,7 @@ describe('ShowcaseDetailEngagementRow', () => {
   it('keeps the open Remix for a viewer who may remix', () => {
     render(<ShowcaseDetailEngagementRow {...rowProps({ canRemix: true, recipeRemix: null })} />);
 
-    expect(screen.getByRole('button', { name: /remix/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remix' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /remix/i })).toBeNull();
   });
 

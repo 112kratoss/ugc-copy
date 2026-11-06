@@ -243,6 +243,9 @@ const PUBLIC_ROUTES = [
   // token leaves out what that viewer blocked, hid or reported in the feed.
   '/api/home/shelf',
   '/api/showcase/posts/[postId]',
+  // A post's posted remixes, opened from its remix count. A token only leaves
+  // out whom its viewer is blocked with and keys the rate limit on them.
+  '/api/showcase/posts/[postId]/remixes',
   // Which live post an id names (an old link's generation id included), for
   // the app when the read above answers 404. A token only keys the by-id
   // read's rate limit on its caller; every caller gets the same answer.

@@ -26,6 +26,12 @@ import {
     getShowcaseItemMediaItems,
 } from '@/lib/showcase';
 import { isTextOnlyPost } from '@/lib/post-feed-presentation';
+import {
+    REMIX_CREDIT_CARD_TITLE_MAX_LENGTH,
+    remixCreditLabel,
+    remixCreditSegments,
+    type RemixCredit,
+} from '../../../ugc-mobile/lib/remix-credit/remix-credit';
 
 // The page's props, passed on to the full client whole.
 export type ShowcaseBootstrapClientProps = ShowcaseClientProps;
@@ -183,12 +189,44 @@ function BootstrapCard({
                             {item.creator.name}
                         </span>
                     )}
+                    {item.remixCredit ? <BootstrapRemixCredit credit={item.remixCredit} /> : null}
                 </div>
                 <span className="shrink-0 text-[10px] font-bold uppercase tracking-[0.14em] text-zinc-500">
                     {item.category}
                 </span>
             </div>
         </article>
+    );
+}
+
+/**
+ * A remix's credit on the shell's card (owner, 2026-11-05), in the full card's
+ * words (`ugc-mobile/lib/remix-credit`) with this shell's native links.
+ */
+function BootstrapRemixCredit({ credit }: { credit: RemixCredit }) {
+    return (
+        <p
+            data-testid="remix-credit"
+            title={remixCreditLabel(credit)}
+            className="mt-0.5 line-clamp-2 max-w-full text-[11px] leading-4 text-zinc-400"
+        >
+            {remixCreditSegments(credit, { titleMaxLength: REMIX_CREDIT_CARD_TITLE_MAX_LENGTH }).map((segment, index) => (
+                segment.kind === 'text' ? (
+                    <span key={index}>{segment.text}</span>
+                ) : (
+                    <a
+                        key={index}
+                        href={segment.kind === 'post'
+                            ? `/showcase/${encodeURIComponent(segment.postId)}`
+                            : `/creators/${encodeURIComponent(segment.username)}`}
+                        data-showcase-static-link="true"
+                        className="ui-focus-ring rounded-lg font-semibold text-zinc-200 hover:text-white"
+                    >
+                        {segment.text}
+                    </a>
+                )
+            ))}
+        </p>
     );
 }
 

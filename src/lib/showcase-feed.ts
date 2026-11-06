@@ -69,6 +69,14 @@ import { SHOWCASE_FEED_CACHE_TAG } from '@/lib/showcase-feed-cache';
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { loadBlockedCreatorIds } from '@/lib/moderation-service';
 import {
+  POST_REMIX_CREDIT_COLUMNS,
+  loadRemixCreditParents,
+  postRemixCredit,
+  postRemixCreditUserIds,
+  remixCreditCreator,
+} from '@/lib/post-remix-credit';
+import { itemWithoutBlockedRemixCredit, remixCreditUserIds } from '../../ugc-mobile/lib/remix-credit/remix-credit';
+import {
   SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS,
   SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS,
   shouldCacheIdentitylessForYouBootstrap,
@@ -106,6 +114,10 @@ export interface PostRow {
   generation_id: string | null;
   /** The post's own "Allow remixes" (owner, 2026-11-05); absent from a legacy read, which allows them. */
   remixes_allowed?: boolean | null;
+  /** Whom a remix post credits (`post-remix-credit.ts`); the legacy reads leave them out. */
+  remix_parent_post_id?: string | null;
+  remix_parent_user_id?: string | null;
+  remix_origin_user_id?: string | null;
 }
 
 interface LegacyPostRow {
@@ -208,7 +220,7 @@ async function fetchPostRows(
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed')
+    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('visibility', 'public')
     .is('archived_at', null);
 
@@ -315,7 +327,7 @@ async function fetchPostRowsByIds(
 
   const result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed')
+    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .in('id', postIds)
     .eq('visibility', 'public')
     .is('archived_at', null);
@@ -670,7 +682,11 @@ export async function resolvePostRowsToFeedItems(
     });
   }
 
-  const userIds = Array.from(new Set(rowsToHydrate.map((row) => row.user_id).filter(Boolean))) as string[];
+  // A remix post's credit names people too (`post-remix-credit.ts`): read in the same profile query.
+  const userIds = Array.from(new Set([
+    ...rowsToHydrate.map((row) => row.user_id),
+    ...postRemixCreditUserIds(rowsToHydrate),
+  ].filter(Boolean))) as string[];
   const generationIds = Array.from(new Set(rowsToHydrate.map((row) => row.generation_id).filter(Boolean))) as string[];
 
   const loadProfiles = async () => {
@@ -767,6 +783,7 @@ export async function resolvePostRowsToFeedItems(
     sourceToolsMap,
     generationInfoMap,
     nsfwIds,
+    remixCreditParents,
   ] = await Promise.all([
     timed('hydrate_profiles', loadProfiles),
     assetHydrationPromise,
@@ -775,7 +792,11 @@ export async function resolvePostRowsToFeedItems(
     timed('hydrate_generations', () => loadGenerationInfo(mediaItemsPromise)),
     // Needs only the ids, so it runs beside the reads above, not after them.
     loadNsfwPostIds(adminSupabase, postIds),
+    // The posts remixed, beside the rest: their ids are on the rows. No query
+    // at all for a batch with no remix in it.
+    loadRemixCreditParents(adminSupabase, rowsToHydrate),
   ]);
+  const remixCreditCreatorOf = (userId: string) => remixCreditCreator(profilesMap[userId]);
 
   const resolvedItems = await Promise.all(
     rowsToHydrate.map(async (post): Promise<ShowcaseFeedItem | null> => {
@@ -822,6 +843,10 @@ export async function resolvePostRowsToFeedItems(
         { postFormat: post.post_format, generationId: post.generation_id },
         generationInfo?.generationSetup,
       );
+
+      // Built for everyone: a caller that knows the viewer leaves out anyone
+      // blocked either way (attachViewerStateToFeed).
+      const remixCredit = postRemixCredit(post, remixCreditParents, remixCreditCreatorOf);
 
       const remix = resolvePostRemixCapability({
         generationId: post.generation_id,
@@ -884,6 +909,7 @@ export async function resolvePostRowsToFeedItems(
         remixCapability: remix.capability,
         remixTarget: remix.target,
         ...(generationSetup ? { generationSetup } : {}),
+        ...(remixCredit ? { remixCredit } : {}),
       };
       return nsfwIds.has(post.id) && !revealedNsfwIds.has(post.id) ? coverNsfwContent(item) : item;
     })
@@ -1612,18 +1638,30 @@ export async function getShowcaseFeedPage(options: {
     measurePhase('pricing', () => attachLocalizedAssetPrices(baseFeed, options.countryCode)),
     measurePhase('viewer_state', () => attachViewerStateToFeed(baseFeed, viewerUserId, adminSupabase)),
   ]);
+  return sanitizeShowcaseFeedPage(mergePricedAndViewerFeed(pricedFeed, viewerFeed));
+}
+
+/**
+ * The two passes over one neutral page, run side by side, as one page: the
+ * viewer pass's items in the priced pass's order, each with its priced recipe
+ * (the pricing pass changes nothing else). The viewer pass's item is taken
+ * whole, so what it took out stays out: an item it left out, and a field it
+ * removed, as it removes a credit naming someone blocked.
+ */
+export function mergePricedAndViewerFeed(
+  pricedFeed: ShowcaseFeedPage,
+  viewerFeed: ShowcaseFeedPage,
+): ShowcaseFeedPage {
   const viewerItemById = new Map(viewerFeed.items.map((item) => [item.id, item]));
-  const hydratedFeed = {
+  return {
     ...pricedFeed,
     items: pricedFeed.items.flatMap((pricedItem) => {
       const viewerItem = viewerItemById.get(pricedItem.id);
       return viewerItem
-        ? [{ ...pricedItem, ...viewerItem, asset: mergeViewerAssetState(pricedItem.asset, viewerItem.asset) }]
+        ? [{ ...viewerItem, asset: mergeViewerAssetState(pricedItem.asset, viewerItem.asset) }]
         : [];
     }),
   };
-
-  return sanitizeShowcaseFeedPage(hydratedFeed);
 }
 
 /**
@@ -1719,8 +1757,9 @@ export async function attachViewerStateToFeed(
     try {
       return await loadBlockedCreatorIds({
         adminSupabase,
+        // The people a remix credit names are asked about in the same read.
         creatorIds: feed.items
-          .map((item) => item.creator.id)
+          .flatMap((item) => [item.creator.id, ...remixCreditUserIds(item.remixCredit)])
           .filter((id): id is string => Boolean(id)),
         viewerUserId,
       });
@@ -1752,7 +1791,9 @@ export async function attachViewerStateToFeed(
 
   return {
     ...feed,
-    items: viewerSafeItems.map((item) => {
+    items: viewerSafeItems.map((viewerItem) => {
+      // A credit names nobody with a block between them and the viewer, either way.
+      const item = itemWithoutBlockedRemixCredit(viewerItem, (userId) => blockedCreatorIds.has(userId));
       if (item.isNsfw && !item.nsfwRevealed) return { ...item, isSaved: savedIdSet.has(item.id) };
       // A creator opens their own recipe even when its summary could not be
       // read (no asset, Remix locked); a buyer is known by the recipe's id.
@@ -1808,7 +1849,7 @@ export async function getShowcaseFeedItemById(options: {
   const adminSupabase = createServiceClient();
   let result = await adminSupabase
     .from('posts')
-    .select('id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, remixes_allowed')
+    .select(`id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('id', postId)
     // Unlisted means "anyone with the link": the web post page reads it, and
     // the app receives the same share links, so the by-id read does too.
@@ -1839,6 +1880,9 @@ export async function getShowcaseFeedItemById(options: {
           review_status: 'visible',
           visibility: (result.data as { visibility?: string | null }).visibility ?? 'public',
           remixes_allowed: null,
+          remix_parent_post_id: null,
+          remix_parent_user_id: null,
+          remix_origin_user_id: null,
         },
       };
     }

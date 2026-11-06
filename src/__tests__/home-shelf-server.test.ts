@@ -8,6 +8,7 @@ const loadReferralProgramTermsMock = vi.fn();
 const loadPublishedGenerationModelCatalogMock = vi.fn();
 const quotePublishedGenerationModelMock = vi.fn();
 const loadViewerRelationsMock = vi.fn();
+const loadBlockedCreatorIdsMock = vi.fn();
 const unstableCacheOptions = vi.hoisted(() => [] as Array<{ tags?: string[] }>);
 const tableResults = new Map<string, unknown>();
 const tableReads: string[] = [];
@@ -30,6 +31,10 @@ vi.mock('@/lib/referral-route-service', () => ({
 
 vi.mock('@/lib/showcase-feed-personalization', () => ({
   loadViewerRelations: (options: unknown) => loadViewerRelationsMock(options),
+}));
+
+vi.mock('@/lib/moderation-service', () => ({
+  loadBlockedCreatorIds: (options: unknown) => loadBlockedCreatorIdsMock(options),
 }));
 
 vi.mock('@/lib/generation-model-catalog-store', () => ({
@@ -359,6 +364,8 @@ describe('loadHomeShelf', () => {
     loadReferralProgramTermsMock.mockResolvedValue({ inviterPercent: 5, inviteeFirstPurchasePercent: 5, attributionWindowDays: 30 });
     loadViewerRelationsMock.mockReset();
     loadViewerRelationsMock.mockResolvedValue(relations());
+    loadBlockedCreatorIdsMock.mockReset();
+    loadBlockedCreatorIdsMock.mockResolvedValue(new Set());
     tableResults.clear();
     tableReads.length = 0;
     tableResults.set('generations', { data: [generation('a'), generation('b'), generation('c')], error: null });
@@ -410,6 +417,49 @@ describe('loadHomeShelf', () => {
     expect(creations.every((creation) => creation.kind === 'creation' && creation.post.id === creation.id)).toBe(true);
     expect(loadReferralProgramTermsMock).not.toHaveBeenCalled();
     expect(tableReads).not.toContain('posts');
+  });
+
+  // The shelf's posts are one build for everyone, so their remix credits name
+  // everyone (owner, 2026-11-05): for a member, nobody a block stands between.
+  describe('the remix credits its posts carry', () => {
+    const credited = (id: string, parentCreatorId: string, originId: string) => ({
+      ...post(id),
+      remixCredit: {
+        parent: { postId: `parent-of-${id}`, title: 'Sunset beach', creator: { id: parentCreatorId, username: `u-${parentCreatorId}` } },
+        original: { id: originId, username: `u-${originId}` },
+      },
+    }) as ShowcaseFeedItem;
+
+    beforeEach(() => {
+      getShowcaseFeedItemsByPostIdsMock.mockResolvedValue([credited('a', 'maya', 'cora'), post('b'), post('c')]);
+    });
+
+    it('asks about the people they name and leaves out the one blocked', async () => {
+      loadBlockedCreatorIdsMock.mockResolvedValue(new Set(['maya']));
+      const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
+
+      const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false });
+      const first = items.find((item) => item.id === 'a') as { post: ShowcaseFeedItem };
+
+      expect(loadBlockedCreatorIdsMock).toHaveBeenCalledWith(expect.objectContaining({ viewerUserId: 'user-2', creatorIds: ['maya', 'cora'] }));
+      expect(first.post.remixCredit).toEqual({ parent: null, original: { id: 'cora', username: 'u-cora' } });
+    });
+
+    it('leaves the credits out when it cannot ask, rather than risk a name', async () => {
+      loadBlockedCreatorIdsMock.mockRejectedValue(new Error('user_blocks unavailable'));
+      const { loadHomeShelfForApi } = await import('@/lib/home-shelf-server');
+
+      const items = await loadHomeShelfForApi({ viewerUserId: 'user-2', isAnonymous: false });
+      const first = items.find((item) => item.id === 'a') as { post: ShowcaseFeedItem };
+
+      expect(first.post).not.toHaveProperty('remixCredit');
+    });
+
+    it('asks nothing for a signed-out reader, who gets no full posts', async () => {
+      const { loadHomeShelf } = await import('@/lib/home-shelf-server');
+      await loadHomeShelf();
+      expect(loadBlockedCreatorIdsMock).not.toHaveBeenCalled();
+    });
   });
 
   it('asks a member with no public post to post, then to invite', async () => {

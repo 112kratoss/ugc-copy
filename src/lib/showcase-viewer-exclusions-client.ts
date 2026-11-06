@@ -1,4 +1,5 @@
 import { SHOWCASE_VIEWER_EXCLUSIONS_MAX_ITEMS } from '@/lib/showcase';
+import { remixCreditUserIds, type RemixCredit } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 
 /**
  * What the viewer's own feed leaves out among the posts a page has drawn
@@ -25,11 +26,14 @@ export async function fetchShowcaseViewerExclusions({
   accessToken,
   signal,
 }: {
-  items: Array<{ id: string; creator: { id?: string | null } }>;
+  /** With their remix credits, whose people are asked about too: blocks only. */
+  items: Array<{ id: string; creator: { id?: string | null }; remixCredit?: RemixCredit | null }>;
   accessToken: string;
   signal?: AbortSignal;
 }): Promise<ShowcaseViewerExclusions | null> {
   if (items.length === 0) return null;
+  const askedItems = items.slice(0, SHOWCASE_VIEWER_EXCLUSIONS_MAX_ITEMS);
+  const creditCreatorIds = [...new Set(askedItems.flatMap((item) => remixCreditUserIds(item.remixCredit)))];
 
   try {
     const response = await fetch('/api/showcase/viewer-exclusions', {
@@ -39,10 +43,11 @@ export async function fetchShowcaseViewerExclusions({
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        items: items.slice(0, SHOWCASE_VIEWER_EXCLUSIONS_MAX_ITEMS).map((item) => ({
+        items: askedItems.map((item) => ({
           postId: item.id,
           creatorId: item.creator.id ?? null,
         })),
+        ...(creditCreatorIds.length > 0 ? { creditCreatorIds } : {}),
       }),
       signal,
     });

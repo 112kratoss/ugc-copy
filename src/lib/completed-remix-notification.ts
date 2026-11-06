@@ -3,6 +3,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import { logBackendError } from '@/lib/backend-logger';
 import { buildMobileNotificationDeepLink, createMobileNotification } from '@/lib/mobile-notifications';
+import { isUserRelationshipBlocked } from '@/lib/moderation-service';
+import { isPostOpenToEveryone } from '@/lib/post-remix-credit';
+import { loadProfileHandle } from '@/lib/profile-server';
 import { recordAuthoritativeFeedEvent } from '@/lib/showcase-feed-events-service';
 
 /**
@@ -12,21 +15,53 @@ import { recordAuthoritativeFeedEvent } from '@/lib/showcase-feed-events-service
  */
 export const COMPLETED_REMIX_DELIVERY_LOOKBACK_HOURS = 48;
 
+/**
+ * A remix's two alerts to the creator of the post remixed (owner, 2026-11-05),
+ * by the remixer's handle:
+ *   finished  "@maya remixed your post", opening her page: her creation is
+ *             hers alone until she posts it;
+ *   posted    "@maya posted a remix of your post", opening her post.
+ * With no handle to name, "Someone …", opening the post remixed. The database
+ * turns the named words into those after a block, either way round, or the
+ * remixer's account deletion (`unnamed_remix_alert_words`, 20261105175342), so
+ * the two change together.
+ */
+export function remixAlertWords(
+  event: 'finished' | 'posted',
+  params: { remixerHandle: string | null; remixedPostId: string; remixPostId?: string | null },
+) {
+  const remixedPost = buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: params.remixedPostId });
+  const handle = params.remixerHandle;
+  if (event === 'finished') {
+    return {
+      title: handle ? `@${handle} remixed your post` : 'Someone remixed your post',
+      body: 'They finished a new creation from it.',
+      deepLink: handle ? buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: handle }) : remixedPost,
+    };
+  }
+  return {
+    title: handle ? `@${handle} posted a remix of your post` : 'Someone posted a remix of your post',
+    body: 'Their version is public now.',
+    deepLink: handle && params.remixPostId
+      ? buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: params.remixPostId })
+      : remixedPost,
+  };
+}
+
 async function notifyRemixedCreator(
   supabase: SupabaseClient,
   remix: { generation_id: string; post_id: string; actor_user_id: string },
   creatorUserId: string,
 ) {
   try {
+    const remixerHandle = await loadProfileHandle(supabase, remix.actor_user_id);
     await createMobileNotification({
       adminSupabase: supabase,
       userId: creatorUserId,
       actorUserId: remix.actor_user_id,
       type: 'post_remixed',
       category: 'social',
-      title: 'Someone remixed your post',
-      body: 'They finished a new creation from it.',
-      deepLink: buildMobileNotificationDeepLink({ kind: 'showcasePost', postId: remix.post_id }),
+      ...remixAlertWords('finished', { remixerHandle, remixedPostId: remix.post_id }),
       objectType: 'post',
       objectId: remix.post_id,
       dedupeKey: `completed-remix:${remix.generation_id}`,
@@ -43,14 +78,15 @@ async function notifyRemixedCreator(
  * in a single indexed lookup: the ledger row exists only once the trigger has
  * attributed a finished output to a public source post, which means the
  * ordinary generation — the overwhelming majority, no lineage at all — pays for
- * one empty read and nothing else.
+ * one empty read and nothing else. A remix then reads its remixer's handle, for
+ * the alert's name.
  *
  * Whether the remixer may be credited was settled when the run started: the
  * start keeps its source only where Remix would hand them the recipe
  * (`source-generation.ts`), so a pair blocked by then has no row here. A block
  * made while the run is in flight is not asked about here: the settlement has
- * written the row and raised the count by then, and the alert names nobody
- * (its owner cannot read the actor, 20261019091221).
+ * written the row and raised the count by then, and the database stores the
+ * alert without the remixer's name or page (20261105175342).
  *
  * The same row is v4's server-written `remix_complete` feed event: the remixer
  * finished a creation from the original. It is written beside the notification,
@@ -84,5 +120,80 @@ export async function notifyCompletedRemix(supabase: SupabaseClient, predictionI
     ]);
   } catch (error) {
     logBackendError('failed_to_notify_completed_remix', { error });
+  }
+}
+
+type PostedRemixRow = {
+  id: string;
+  user_id: string | null;
+  generation_id: string | null;
+  deleted_generation_id: string | null;
+  visibility: string | null;
+  review_status: string | null;
+  archived_at: string | null;
+  tombstoned_at: string | null;
+  remix_parent_post_id: string | null;
+  remix_parent_user_id: string | null;
+};
+
+
+/**
+ * A remix posted where everyone can see it tells the creator of the post it
+ * remixed, once per creation (its dedupe key, which outlives the creation's
+ * deletion: a post taken down and posted again, or made private and public
+ * again, is not news twice). Only a post anyone can open is news: one archived,
+ * taken down or held by moderation would send them to a page that isn't there,
+ * and use up the one alert it may send. Whom to tell is
+ * the post's own credit (posts.remix_parent_post_id and remix_parent_user_id,
+ * 20261105175340), never anything a request sends. Nobody hears of their own
+ * remix, of a remix of a post since deleted, or of one across a block, either
+ * way round; a block made later takes the name out in the database.
+ *
+ * Called once a publish or an edit has made the post public, behind the answer
+ * where the route can (`sendDeferrableNotification`). Never throws: the post is
+ * committed whatever becomes of its alert.
+ */
+export async function notifyPostedRemix(adminSupabase: SupabaseClient, params: { postId: string }) {
+  try {
+    const { data, error } = await adminSupabase
+      .from('posts')
+      .select('id, user_id, generation_id, deleted_generation_id, visibility, review_status, archived_at, tombstoned_at, remix_parent_post_id, remix_parent_user_id')
+      .eq('id', params.postId)
+      .maybeSingle();
+    if (error) throw error;
+    const post = data as PostedRemixRow | null;
+    if (!post?.user_id || !isPostOpenToEveryone(post) || !post.remix_parent_post_id || !post.remix_parent_user_id) return;
+    const creatorUserId = post.remix_parent_user_id;
+    if (await isOwnOrLinkedAccountId(adminSupabase, creatorUserId, post.user_id)) return;
+
+    const [remixedPost, blocked, remixerHandle] = await Promise.all([
+      adminSupabase.from('posts').select('id, tombstoned_at').eq('id', post.remix_parent_post_id).maybeSingle(),
+      isUserRelationshipBlocked({ adminSupabase, firstUserId: creatorUserId, secondUserId: post.user_id }),
+      loadProfileHandle(adminSupabase, post.user_id),
+    ]);
+    if (remixedPost.error) throw remixedPost.error;
+    // A post remixed that its creator deleted (gone, or kept for its buyers alone) is no news to them.
+    const remixed = remixedPost.data as { id: string; tombstoned_at: string | null } | null;
+    if (!remixed || remixed.tombstoned_at || blocked) return;
+
+    await createMobileNotification({
+      adminSupabase,
+      userId: creatorUserId,
+      actorUserId: post.user_id,
+      type: 'post_remixed',
+      category: 'social',
+      ...remixAlertWords('posted', {
+        remixerHandle,
+        remixedPostId: post.remix_parent_post_id,
+        remixPostId: post.id,
+      }),
+      objectType: 'post',
+      objectId: post.remix_parent_post_id,
+      // The creation, also once it is deleted (posts.deleted_generation_id), so
+      // the key a post was first told under is the one it keeps.
+      dedupeKey: `posted-remix:${post.generation_id ?? post.deleted_generation_id ?? post.id}`,
+    });
+  } catch (error) {
+    logBackendError('failed_to_notify_posted_remix', { error });
   }
 }

@@ -6,6 +6,8 @@ import { Fragment } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { ArrowRight, CheckCircle2, Clock3, Expand, Loader2, Play, RefreshCw, SlidersHorizontal, Sparkles, SquareDashed, X } from 'lucide-react';
 import clsx from 'clsx';
+import type { RemixSourcePost } from '@/lib/remix-source';
+import { remixingNotice } from '../../ugc-mobile/lib/remix-credit/remix-credit';
 import { REMIX_INPUT_SLOTS_NOTICE_LABEL } from '../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 
 import {
@@ -194,6 +196,7 @@ function StudioNoticeCard({
   icon: Icon,
   lead,
   label,
+  labelStyle = 'kicker',
   description,
   action,
   onDismiss,
@@ -203,6 +206,8 @@ function StudioNoticeCard({
   /** Drawn in the icon's place: the remix notice's picture of the original. */
   lead?: ReactNode;
   label: string;
+  /** `heading` for a label that names someone or something, which capitals would garble. */
+  labelStyle?: 'kicker' | 'heading';
   description: string;
   action?: ReactNode;
   onDismiss?: () => void;
@@ -220,7 +225,11 @@ function StudioNoticeCard({
             </div>
           )}
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-[var(--ui-primary-strong)]">
+            <div
+              className={labelStyle === 'heading'
+                ? 'text-sm font-semibold text-zinc-100 [overflow-wrap:anywhere]'
+                : 'text-xs font-semibold uppercase tracking-[0.22em] text-[var(--ui-primary-strong)]'}
+            >
               {label}
             </div>
             <p className="mt-1 text-sm text-zinc-300">{description}</p>
@@ -286,21 +295,30 @@ function StudioRemixOriginalThumb({ mediaType, src, onOpen }: StudioRemixOrigina
 export function StudioRemixNotice({
   label = 'Remixing Community Creation',
   description,
+  source = null,
   original,
   action,
 }: {
   label?: string;
   description: string;
+  /**
+   * The post being remixed (`RemixSourceBundle.sourcePost`): the notice names
+   * it and its creator, and says they will hear of the remix (owner,
+   * 2026-11-05). None for a remix of one's own creation.
+   */
+  source?: RemixSourcePost | null;
   /** The source result, when the remix restored one: it takes the icon's place and opens the original. */
   original?: StudioRemixOriginal | null;
   action?: ReactNode;
 }) {
+  const naming = remixingNotice(source ? { username: source.creatorUsername, title: source.title } : null);
   return (
     <StudioNoticeCard
       icon={Sparkles}
       lead={original ? <StudioRemixOriginalThumb {...original} /> : undefined}
-      label={label}
-      description={description}
+      label={naming?.label ?? label}
+      labelStyle={naming ? 'heading' : 'kicker'}
+      description={naming ? `${naming.line} ${description}` : description}
       action={action}
     />
   );

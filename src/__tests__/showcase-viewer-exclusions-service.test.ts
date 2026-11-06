@@ -180,6 +180,32 @@ describe('showcase viewer exclusions', () => {
     expect(queries.map((query) => query.table)).toEqual(['feed_user_post_feedback']);
   });
 
+  // A remix credit names people a block may stand between (owner, 2026-11-05):
+  // asked about blocks beside the posts' creators, never about feed preferences.
+  it('asks about the people remix credits name, for blocks only', async () => {
+    const { client, queries } = createClient({
+      viewerBlocks: [{ blocked_user_id: CREATOR_B }],
+      creatorFeedback: [],
+    });
+
+    const result = await getShowcaseViewerExclusionsForRoute({
+      adminSupabase: client,
+      viewerUserId: VIEWER,
+      items: [{ postId: post(1), creatorId: CREATOR_A }],
+      creditCreatorIds: [CREATOR_B, CREATOR_C, VIEWER],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      body: { blockedCreatorIds: [CREATOR_B], hiddenCreatorIds: [], hiddenPostIds: [] },
+    });
+    const filtersOf = (table: string) => queries.filter((query) => query.table === table).map((query) => query.filters);
+    for (const filters of filtersOf('user_blocks')) {
+      expect(filters[1]).toMatchObject({ method: 'in', value: [CREATOR_A, CREATOR_B, CREATOR_C] });
+    }
+    expect(filtersOf('feed_user_creator_feedback')[0][2]).toEqual({ method: 'in', column: 'creator_user_id', value: [CREATOR_A] });
+  });
+
   it('reads nothing when it is asked about nothing', async () => {
     const { client, queries } = createClient({});
 

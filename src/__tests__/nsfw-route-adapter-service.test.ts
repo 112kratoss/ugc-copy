@@ -59,3 +59,20 @@ it('binds a reveal to the authenticated viewer, serves private uncached detail',
   expect(response.headers.get('Cache-Control')).toBe('private, no-store');
   expect((await response.json()).expiresInSeconds).toBe(600);
 });
+// The detail's remix credit is the post page's, the same for everyone; the item's
+// is the viewer's (owner, 2026-11-05: nobody a block stands between is named).
+it("gives the revealed detail the viewer's remix credit, not everyone's", async () => {
+  const everyones = {
+    parent: { postId: 'post-b', title: 'Sunset, again', creator: { id: 'maya', username: 'maya' } },
+    original: { id: 'cora', username: 'cora' },
+  };
+  const viewers = { parent: null, original: { id: 'cora', username: 'cora' } };
+  state.detail.mockResolvedValue({ id: postId, nsfwRevealed: true, remixCredit: everyones });
+  state.item.mockResolvedValue({ id: postId, nsfwRevealed: true, remixCredit: viewers });
+  const reveal = () => revealNsfwPostResponse(new Request(`https://app.test/api/posts/${postId}/reveal`, { method: 'POST', headers: { Origin: 'https://app.test' } }), context);
+
+  expect((await (await reveal()).json()).detail.remixCredit).toEqual(viewers);
+
+  state.item.mockResolvedValue({ id: postId, nsfwRevealed: true });
+  expect((await (await reveal()).json()).detail).not.toHaveProperty('remixCredit');
+});

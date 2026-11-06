@@ -20,6 +20,24 @@ describe('creator studio notices', () => {
     expect(modelNotice).not.toHaveTextContent('Remixing Community Creation');
   });
 
+  // Owner, 2026-11-05: the remixer is told whose post they are remixing, and
+  // that its creator hears of the remix. A remix of one's own names no one.
+  it('names the post remixed and its creator, and says they will hear of it', () => {
+    render(
+      <StudioRemixNotice
+        description={'Settings pre-filled from "Sunset beach".'}
+        source={{ id: 'post-a', title: 'Sunset beach', creatorUsername: 'cora' }}
+      />
+    );
+
+    const notice = screen.getByText(/Settings pre-filled from/).closest('section');
+    expect(notice).toHaveTextContent('Remixing @cora’s “Sunset beach”');
+    expect(notice).toHaveTextContent('When your remix is done, @cora is told you made it. Settings pre-filled from "Sunset beach".');
+    expect(notice).not.toHaveTextContent('Remixing Community Creation');
+    // A name keeps its own capitals.
+    expect(screen.getByText('Remixing @cora’s “Sunset beach”')).not.toHaveClass('uppercase');
+  });
+
   it('draws the original in the remix notice and opens it from the picture', () => {
     const onOpen = vi.fn();
     const description = 'Settings pre-filled from "Neon city".';

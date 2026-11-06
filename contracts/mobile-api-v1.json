@@ -1236,6 +1236,173 @@
             "remixTarget": null,
             "generationSetup": []
           }
+        },
+        "remix": {
+          "success": true,
+          "item": {
+            "id": "post-remix-1",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "model": "Nano Banana 2.0",
+            "title": "Launch frame, at night",
+            "prompt": "",
+            "body": "",
+            "description": "",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 0,
+            "remixCount": 0,
+            "commentCount": 0,
+            "createdAt": "2026-11-05T06:00:00.000Z",
+            "creator": {
+              "id": "user-2",
+              "username": "maya",
+              "name": "Maya",
+              "avatar": null
+            },
+            "isSaved": false,
+            "generationId": "generation-remix-1",
+            "asset": null,
+            "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ],
+            "remixCredit": {
+              "parent": {
+                "postId": "post-1",
+                "title": "Launch frame",
+                "creator": {
+                  "id": "user-1",
+                  "username": "creator"
+                }
+              },
+              "original": null
+            }
+          }
+        },
+        "remixOfRemix": {
+          "success": true,
+          "item": {
+            "id": "post-remix-2",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "model": "Nano Banana 2.0",
+            "title": "Launch frame, at dawn",
+            "prompt": "",
+            "body": "",
+            "description": "",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 0,
+            "remixCount": 0,
+            "commentCount": 0,
+            "createdAt": "2026-11-05T06:00:00.000Z",
+            "creator": {
+              "id": "user-3",
+              "username": "lee",
+              "name": "Lee",
+              "avatar": null
+            },
+            "isSaved": false,
+            "generationId": "generation-remix-2",
+            "asset": null,
+            "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ],
+            "remixCredit": {
+              "parent": {
+                "postId": "post-remix-1",
+                "title": "Launch frame, at night",
+                "creator": {
+                  "id": "user-2",
+                  "username": "maya"
+                }
+              },
+              "original": {
+                "id": "user-1",
+                "username": "creator"
+              }
+            }
+          }
+        },
+        "remixOfRemovedPost": {
+          "success": true,
+          "item": {
+            "id": "post-remix-3",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "model": "Nano Banana 2.0",
+            "title": "Launch frame, at noon",
+            "prompt": "",
+            "body": "",
+            "description": "",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 0,
+            "remixCount": 0,
+            "commentCount": 0,
+            "createdAt": "2026-11-05T06:00:00.000Z",
+            "creator": {
+              "id": "user-3",
+              "username": "lee",
+              "name": "Lee",
+              "avatar": null
+            },
+            "isSaved": false,
+            "generationId": "generation-remix-3",
+            "asset": null,
+            "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ],
+            "remixCredit": {
+              "parent": null,
+              "original": {
+                "id": "user-1",
+                "username": "creator"
+              }
+            }
+          }
         }
       }
     },
@@ -1250,6 +1417,88 @@
       "response": {
         "success": true,
         "postId": "post-1"
+      },
+      "errors": {
+        "notFound": {
+          "status": 404,
+          "response": {
+            "error": "Post not found."
+          }
+        }
+      }
+    },
+    "listPostRemixes": {
+      "method": "GET",
+      "path": "/api/showcase/posts/:postId/remixes",
+      "auth": "optional",
+      "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
+      "query": {
+        "offset": "0",
+        "limit": "24"
+      },
+      "response": {
+        "success": true,
+        "items": [
+          {
+            "id": "post-remix-1",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "model": "Nano Banana 2.0",
+            "title": "Launch frame, at night",
+            "prompt": "",
+            "body": "",
+            "description": "",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 0,
+            "remixCount": 0,
+            "commentCount": 0,
+            "createdAt": "2026-11-05T06:00:00.000Z",
+            "creator": {
+              "id": "user-2",
+              "username": "maya",
+              "name": "Maya",
+              "avatar": null
+            },
+            "isSaved": false,
+            "generationId": "generation-remix-1",
+            "asset": null,
+            "canRemix": true,
+            "generationSetup": [
+              {
+                "label": "Aspect ratio",
+                "value": "16:9"
+              },
+              {
+                "label": "Resolution",
+                "value": "1K"
+              },
+              {
+                "label": "Output format",
+                "value": "JPG"
+              }
+            ],
+            "remixCredit": {
+              "parent": {
+                "postId": "post-1",
+                "title": "Launch frame",
+                "creator": {
+                  "id": "user-1",
+                  "username": "creator"
+                }
+              },
+              "original": null
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasMore": false,
+          "nextOffset": null,
+          "limit": 24,
+          "offset": 0
+        }
       },
       "errors": {
         "notFound": {

@@ -19,6 +19,11 @@ import {
   type ShowcaseReturnContext,
 } from '@/lib/share';
 import { fetchShowcaseViewerExclusions } from '@/lib/showcase-viewer-exclusions-client';
+import {
+  remixCreditUserIds,
+  withoutBlockedRemixCredit,
+  type RemixCredit,
+} from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
 
 import type { BundleRefreshPayload } from './PostResourceBundlePanel';
 
@@ -72,6 +77,11 @@ export interface ShowcasePostViewer {
   remix: ShowcasePostRemix;
   /** A block either way between the viewer and the creator: the post is not shown. */
   blocked: boolean;
+  /**
+   * The post's remix credit as this viewer may see it: the page's, without
+   * anyone a block stands between them and the viewer, either way.
+   */
+  remixCredit: RemixCredit | null;
   returnContext: ShowcaseReturnContext;
   deliveryId: string | null;
   /** For `ShowcaseSearchParamsReporter`. */
@@ -134,6 +144,7 @@ export function useShowcasePostViewer({
   isNsfwCovered,
   pageBundle,
   pageRemix,
+  pageRemixCredit = null,
 }: {
   postId: string;
   creatorId: string | null;
@@ -142,6 +153,8 @@ export function useShowcasePostViewer({
   isNsfwCovered: boolean;
   pageBundle: PostResourceBundleDetail | null;
   pageRemix: ShowcasePostRemix;
+  /** The remix credit the page was drawn with, for everyone. */
+  pageRemixCredit?: RemixCredit | null;
 }): ShowcasePostViewer {
   const { session, user, isLoading } = useAuth();
   const hasAuthCookie = useSupabaseAuthCookieHint();
@@ -159,6 +172,8 @@ export function useShowcasePostViewer({
   const [search, setSearch] = useState<string | null>(null);
   const [viewerBundle, setViewerBundle] = useState<ViewerBundle | null>(null);
   const [blockedFor, setBlockedFor] = useState<string | null>(null);
+  // The people the credit names that a block stands between, for the viewer it was asked for.
+  const [blockedCreditPeople, setBlockedCreditPeople] = useState<{ viewer: string; ids: string[] } | null>(null);
   const shareVisitSent = useRef(false);
 
   const ownBundle = viewerBundle && viewerBundle.viewerKey === viewerKey ? viewerBundle : null;
@@ -208,22 +223,39 @@ export function useShowcasePostViewer({
   // A block either way hides the post, as the app's by-id read does and as
   // blocking promises ("You will stop seeing their posts"). A check that could
   // not be made leaves the post as everyone sees it.
+  // The same question, in the same read, takes out of the remix credit anyone
+  // a block stands between and the viewer, as the app's reads do on the server.
+  const asksAboutCredit = remixCreditUserIds(pageRemixCredit).some((id) => id !== viewerUserId);
   useEffect(() => {
-    if (!viewerUserId || !accessToken || !creatorId || creatorId === viewerUserId) return;
+    if (!viewerUserId || !accessToken || !creatorId) return;
+    if (creatorId === viewerUserId && !asksAboutCredit) return;
     const controller = new AbortController();
     void fetchShowcaseViewerExclusions({
-      items: [{ id: postId, creator: { id: creatorId } }],
+      items: [{ id: postId, creator: { id: creatorId }, remixCredit: pageRemixCredit }],
       accessToken,
       signal: controller.signal,
     }).then((exclusions) => {
       if (controller.signal.aborted || !exclusions) return;
-      const creator = creatorId.toLowerCase();
-      if (exclusions.blockedCreatorIds.some((id) => id.toLowerCase() === creator)) {
+      const blocked = new Set(exclusions.blockedCreatorIds.map((id) => id.toLowerCase()));
+      if (creatorId !== viewerUserId && blocked.has(creatorId.toLowerCase())) {
         setBlockedFor(viewerUserId);
       }
+      setBlockedCreditPeople({
+        viewer: viewerUserId,
+        ids: remixCreditUserIds(pageRemixCredit).filter((id) => blocked.has(id.toLowerCase())),
+      });
     });
     return () => controller.abort();
-  }, [accessToken, creatorId, postId, viewerUserId]);
+  }, [accessToken, asksAboutCredit, creatorId, pageRemixCredit, postId, viewerUserId]);
+
+  const blockedCreditIds = blockedCreditPeople && blockedCreditPeople.viewer === viewerUserId
+    ? blockedCreditPeople.ids
+    : null;
+  const remixCredit = useMemo(() => (
+    blockedCreditIds?.length
+      ? withoutBlockedRemixCredit(pageRemixCredit, (id) => blockedCreditIds.includes(id), creatorId)
+      : pageRemixCredit
+  ), [blockedCreditIds, creatorId, pageRemixCredit]);
 
   // A share visit is a landing from a link that left the product: the address
   // carries `?s=<surface>`, and in-app links never do (they carry `from`). It
@@ -280,6 +312,7 @@ export function useShowcasePostViewer({
     lockedViewer,
     remix,
     blocked: Boolean(viewerUserId && blockedFor === viewerUserId),
+    remixCredit,
     returnContext,
     deliveryId,
     reportSearch: setSearch,

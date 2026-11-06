@@ -14,6 +14,7 @@ import {
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
+import RemixCreditLine from '@/app/showcase/RemixCreditLine';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { getPostFeedRecipeChip, type PostFeedCard } from '@/lib/post-feed-presentation';
 
@@ -289,6 +290,9 @@ function FeedPostCardView({
                         {card.title}
                     </Link>
                 </h3>
+
+                {/* A remix credits what it remixed (owner, 2026-11-05), carried by the card. */}
+                <RemixCreditLine credit={item.remixCredit} compact />
 
                 {card.metadataLabel ? (
                     <p className="text-xs font-bold tracking-wide text-[var(--ui-text-faint)]">

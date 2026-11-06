@@ -103,7 +103,7 @@ import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
-import type { RemixSourceBundle } from '@/lib/remix-source';
+import type { RemixSourceBundle, RemixSourcePost } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
@@ -538,6 +538,8 @@ function ImageCreator({
     const prefillAspectRatio = prefill.aspectRatio ?? null;
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
+    // The post being remixed, which the notice names with its creator (owner, 2026-11-05).
+    const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
@@ -786,6 +788,7 @@ function ImageCreator({
 
                 setRemixSourceBundle(bundle);
                 setRemixTitle(bundle.generation.title);
+                setRemixSourcePost(bundle.sourcePost ?? null);
                 if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
                     setPrompt(bundle.generation.prompt);
                 }
@@ -2241,6 +2244,7 @@ function ImageCreator({
                                 >
                                     <StudioRemixNotice
                                         description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
+                                        source={remixSourcePost}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={canUseOriginalResultAsReference ? (
                                             <StudioUseOriginalButton using={hasOriginalResultReference} onUse={handleUseOriginalResultAsReference} />

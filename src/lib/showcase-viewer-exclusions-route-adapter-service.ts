@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import {
   getShowcaseViewerExclusionsForRoute,
+  parseShowcaseViewerExclusionCreditCreatorIds,
   parseShowcaseViewerExclusionItems,
 } from '@/lib/showcase-viewer-exclusions-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
@@ -46,7 +47,8 @@ async function handleShowcaseViewerExclusionsPOST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const items = parseShowcaseViewerExclusionItems(await request.json().catch(() => null));
+    const body = await request.json().catch(() => null);
+    const items = parseShowcaseViewerExclusionItems(body);
     if (!items) {
       return NextResponse.json({ error: 'Send the posts to check as `items`.' }, { status: 400 });
     }
@@ -54,6 +56,7 @@ async function handleShowcaseViewerExclusionsPOST(
     const result = await dependencies.getShowcaseViewerExclusionsForRoute({
       adminSupabase: dependencies.createServiceClient(),
       items,
+      creditCreatorIds: parseShowcaseViewerExclusionCreditCreatorIds(body),
       viewerUserId: user.id,
     });
     return NextResponse.json(result.body, { status: result.ok ? 200 : result.status });

@@ -3,7 +3,7 @@ import { isGuestUser } from '@/lib/account-identity';
 import 'server-only';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders, getApiRequestId } from '@/lib/api-cache';
 import {
@@ -99,6 +99,8 @@ async function handleShowcasePublishPOST(
       body: requestBody as ShowcasePublishRequestBody,
       dependencies: {
         fetchWithProviderTimeout: dependencies.fetchWithProviderTimeout,
+        // A public remix's alert goes out once the answer has.
+        runAfterResponse: (task) => after(task),
       },
       userId: auth.userId,
     });

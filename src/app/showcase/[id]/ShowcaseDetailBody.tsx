@@ -20,6 +20,8 @@ import {
 import type { PublicPostDetail } from '@/lib/public-posts';
 import { isAppSourceToolLabel } from '@/lib/source-tools';
 
+import RemixCreditLine from '@/app/showcase/RemixCreditLine';
+
 import PostGenerationSetupLine from './PostGenerationSetupLine';
 import PostRelativeTime from './PostRelativeTime';
 import PostResourceBundlePanel from './PostResourceBundlePanel';
@@ -122,6 +124,7 @@ export default function ShowcaseDetailBody({
       remixCapability: detail.remixCapability,
       remixTarget: detail.remixTarget,
     },
+    pageRemixCredit: detail.remixCredit ?? null,
   });
   // For the owner, the visibility they just saved here: the cached page may not have caught up.
   const { bundle, lockedViewer, viewerIsOwner, deliveryId, returnContext, visibility } = viewer;
@@ -324,6 +327,12 @@ export default function ShowcaseDetailBody({
                     </span>
                   )}
                 </div>
+
+                {/*
+                  * A remix credits what it remixed, automatically (owner, 2026-11-05):
+                  * part of the attribution, so it stays under the NSFW cover too.
+                  */}
+                <RemixCreditLine credit={viewer.remixCredit} className="mt-3" />
 
                 {/*
                   * The creation's settings under Made with: a standard detail everyone sees

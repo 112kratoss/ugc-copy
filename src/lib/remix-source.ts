@@ -86,6 +86,20 @@ export interface RemixSourceBundle {
   inputSlots?: RemixInputSlot[];
   workflowSettings: Record<string, unknown>;
   restoreIssues: string[];
+  /**
+   * The post being remixed, as the remix's creator names it (owner,
+   * 2026-11-05: "Remixing @A’s “title”", and that A will hear of it,
+   * `remixingNotice` in ugc-mobile/lib/remix-credit). Absent for a remix of the
+   * caller's own creation, which tells no one, and when its creator has no
+   * handle to name or could not be read.
+   */
+  sourcePost?: RemixSourcePost;
+}
+
+export interface RemixSourcePost {
+  id: string;
+  title: string;
+  creatorUsername: string;
 }
 
 /**

@@ -416,6 +416,13 @@ export const SHOWCASE_POST_DETAIL_READ_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// A post's remixes list, opened from its remix count: a page at a time.
+export const SHOWCASE_POST_REMIXES_READ_RATE_LIMIT = {
+  scope: 'showcase-post-remixes:read',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 // The app reads the shelf once per visit to Home and on a pull to refresh.
 export const HOME_SHELF_READ_RATE_LIMIT = {
   scope: 'home-shelf:read',

@@ -99,6 +99,7 @@ vi.mock('@/app/showcase/ShowcaseReelViewer', () => ({
         {openItem && onReportUser ? <button type="button" onClick={() => void onReportUser(openItem)}>Report user</button> : null}
         {openItem && onBlockUser ? <button type="button" onClick={() => void onBlockUser(openItem)}>Block user</button> : null}
         {openItem && onToggleSave ? <button type="button" onClick={() => void onToggleSave(openItem.id)}>Save post</button> : null}
+        <span data-testid="reel-credit">{openItem?.remixCredit ? JSON.stringify(openItem.remixCredit) : ''}</span>
       </div>
     ) : null;
   },
@@ -852,6 +853,75 @@ describe('CreatorContentTabs', () => {
 
   // Saved state: the save hook looks up the first page alone; every later
   // page and a linked post carry the viewer's `isSaved` from the API.
+  // The first page is drawn by the server the same for everyone, so a remix
+  // credit on it can name someone this viewer is blocked with (owner,
+  // 2026-11-05: never across a block, either way). The page asks about the
+  // people its credits name; later pages come from the server without them.
+  describe('the remix credits on the first page', () => {
+    const credited: ShowcaseFeedItem = {
+      ...items[0],
+      remixCredit: {
+        parent: { postId: 'post-b', title: 'Sunset, again', creator: { id: 'user-maya', username: 'maya' } },
+        original: { id: 'user-cora', username: 'cora' },
+      },
+    };
+    const pageWithCredit: CreatorProfilePageData = { ...initialData, items: [credited, items[1]] };
+    const answer = (blockedCreatorIds: string[]) => {
+      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+        void init;
+        return url === '/api/showcase/viewer-exclusions'
+          ? { ok: true, status: 200, json: async () => ({ blockedCreatorIds, hiddenCreatorIds: [], hiddenPostIds: [] }) }
+          : { ok: true, status: 200, json: async () => ({ success: true, savedIds: [] }) };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      return {
+        asked: () => fetchMock.mock.calls.filter(([url]) => url === '/api/showcase/viewer-exclusions'),
+      };
+    };
+    const openReel = () => {
+      fireEvent.click(screen.getAllByRole('button', { name: /campaign frame/i })[0]);
+      return screen.findByRole('dialog', { name: /creator immersive viewer/i });
+    };
+
+    it('asks about the people they name and leaves the one blocked out of the reel', async () => {
+      authState.session = { access_token: 'viewer-token' };
+      authState.user = { id: 'viewer-1' };
+      const requests = answer(['user-maya']);
+      render(<CreatorContentTabs initialData={pageWithCredit} profilePath="/creators/creator-name" />);
+
+      await waitFor(() => expect(requests.asked()).toHaveLength(1));
+      const [, init] = requests.asked()[0];
+      expect(init?.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer viewer-token' }));
+      expect(JSON.parse(String(init?.body))).toEqual({
+        items: [{ postId: 'item-1', creatorId: 'creator-1' }],
+        creditCreatorIds: ['user-maya', 'user-cora'],
+      });
+      const reel = await openReel();
+      await waitFor(() => expect(within(reel).getByTestId('reel-credit')).toHaveTextContent(
+        JSON.stringify({ parent: null, original: { id: 'user-cora', username: 'cora' } }),
+      ));
+    });
+
+    it('asks nothing for a signed-out reader, and keeps the credit whole', async () => {
+      const requests = answer(['user-maya']);
+      render(<CreatorContentTabs initialData={pageWithCredit} profilePath="/creators/creator-name" />);
+
+      const reel = await openReel();
+      expect(within(reel).getByTestId('reel-credit')).toHaveTextContent(JSON.stringify(credited.remixCredit));
+      expect(requests.asked()).toHaveLength(0);
+    });
+
+    it('asks nothing for a page with no remix on it', async () => {
+      authState.session = { access_token: 'viewer-token' };
+      authState.user = { id: 'viewer-1' };
+      const requests = answer([]);
+      render(<CreatorContentTabs initialData={initialData} profilePath="/creators/creator-name" />);
+
+      await openReel();
+      expect(requests.asked()).toHaveLength(0);
+    });
+  });
+
   describe('saved posts past the first page', () => {
     const signIn = () => {
       authState.session = { access_token: 'viewer-token' };

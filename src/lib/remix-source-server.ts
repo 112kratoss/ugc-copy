@@ -1,4 +1,5 @@
 import 'server-only';
+import { remixCreditParentTitle } from '@/lib/post-remix-credit';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendError } from '@/lib/backend-logger';
 
@@ -35,6 +36,7 @@ import {
   type RemixResolvedAsset,
   type RemixResolvedImageElement,
   type RemixSourceBundle,
+  type RemixSourcePost,
   type RemixSourceResult,
 } from '@/lib/remix-source';
 import { isRecipeFileInput } from '@/lib/generation-input-origin';
@@ -50,6 +52,7 @@ import {
   parseCanonicalStorageObjectPath,
 } from '@/lib/storage-ownership';
 import type { ShowcaseItemCategory } from '@/lib/showcase';
+import { loadProfileHandle } from '@/lib/profile-server';
 import type { TemplateRunLink } from '@/lib/template-result';
 
 type RemixSourceGenerationRow = TemplateRunLink & {
@@ -254,6 +257,29 @@ async function fetchGenerationById(
   return generation;
 }
 
+/**
+ * The post a remix names in its creator: its title and its creator's handle.
+ * Null when its creator has no handle to name.
+ */
+async function loadRemixSourcePost(
+  adminSupabase: ReturnType<typeof createServiceClient>,
+  post: { id: string; user_id: string | null },
+): Promise<RemixSourcePost | null> {
+  if (!post.user_id) return null;
+  const [titleRead, creatorUsername] = await Promise.all([
+    adminSupabase.from('posts').select('title, body, post_format, is_nsfw').eq('id', post.id).maybeSingle(),
+    loadProfileHandle(adminSupabase, post.user_id),
+  ]);
+  if (!creatorUsername || titleRead.error) return null;
+  const row = titleRead.data as { title: string | null; body: string | null; post_format: string | null; is_nsfw: boolean | null } | null;
+  // Named as the post's credit names it (`remixCreditParentTitle`): its title or the start of its
+  // writing, never the prompt or a recipe's setup text, and "Mature content" under an NSFW cover.
+  const title = row
+    ? remixCreditParentTitle({ title: row.title, body: row.body, post_format: row.post_format, is_nsfw: row.is_nsfw })
+    : 'Untitled Creation';
+  return { id: post.id, title, creatorUsername };
+}
+
 export async function loadRemixSourceBundle(
   request: NextRequest,
   generationId: string,
@@ -354,6 +380,12 @@ export async function loadRemixSourceBundle(
     throw new RemixSourceError('Remix source not found', 404);
   }
   const isOwner = access.basis === 'owner';
+  // Whom the creator names (owner, 2026-11-05): the post being remixed and its
+  // creator, who hears of the remix. Read beside the rest; a remix of one's own
+  // creation names no one.
+  const sourcePostRead = !isOwner && access.post
+    ? loadRemixSourcePost(adminSupabase, access.post).catch(() => null)
+    : Promise.resolve(null);
 
   const category = normalizeCategory(typedGeneration.category, typedGeneration.model);
   if (!category) {
@@ -611,9 +643,10 @@ export async function loadRemixSourceBundle(
     };
   };
 
-  const [resultUrl, resultSeconds] = await Promise.all([
+  const [resultUrl, resultSeconds, sourcePost] = await Promise.all([
     resolveGenerationResultUrl(adminSupabase, typedGeneration),
     resultSecondsRead,
+    sourcePostRead,
   ]);
   const result: RemixSourceResult | null = {
     mediaType: resultMediaType,
@@ -644,6 +677,7 @@ export async function loadRemixSourceBundle(
     ...(inputSlots.length > 0 ? { inputSlots } : {}),
     workflowSettings: effectiveWorkflowSettings,
     restoreIssues,
+    ...(sourcePost ? { sourcePost } : {}),
   };
 
   if (restoredInputMedia.length > 0) {

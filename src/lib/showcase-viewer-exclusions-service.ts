@@ -37,6 +37,24 @@ function normalizeUuid(value: unknown): string | null {
   return typeof value === 'string' && UUID_PATTERN.test(value.trim()) ? value.trim().toLowerCase() : null;
 }
 
+/**
+ * The people a page's remix credits name (`ugc-mobile/lib/remix-credit`),
+ * asked about beside the posts' creators: blocks only, since a credit is no
+ * one's post to hide. Each once, ids that are ids, as many as a page of credits
+ * names; anything else is left out.
+ */
+export function parseShowcaseViewerExclusionCreditCreatorIds(body: unknown): string[] {
+  const rawIds = body && typeof body === 'object' ? (body as { creditCreatorIds?: unknown }).creditCreatorIds : null;
+  if (!Array.isArray(rawIds)) return [];
+  const ids = new Set<string>();
+  for (const rawId of rawIds) {
+    if (ids.size >= SHOWCASE_VIEWER_EXCLUSIONS_MAX_ITEMS * 2) break;
+    const id = normalizeUuid(rawId);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
 /** The posts asked about, each once, with ids that are ids. `null` when the body is not a list of them. */
 export function parseShowcaseViewerExclusionItems(body: unknown): ShowcaseViewerExclusionItem[] | null {
   const rawItems = body && typeof body === 'object' ? (body as { items?: unknown }).items : null;
@@ -56,10 +74,13 @@ export function parseShowcaseViewerExclusionItems(body: unknown): ShowcaseViewer
 export async function getShowcaseViewerExclusionsForRoute({
   adminSupabase,
   items,
+  creditCreatorIds = [],
   viewerUserId,
 }: {
   adminSupabase: SupabaseClient;
   items: ShowcaseViewerExclusionItem[];
+  /** People the page's remix credits name: asked about blocks only. */
+  creditCreatorIds?: string[];
   viewerUserId: string;
 }): Promise<ShowcaseViewerExclusionsRouteResult> {
   if (items.length === 0) {
@@ -70,11 +91,15 @@ export async function getShowcaseViewerExclusionsForRoute({
   const creatorIds = [...new Set(
     items.map((item) => item.creatorId).filter((id): id is string => Boolean(id) && id !== viewerUserId),
   )];
+  const blockCheckedIds = [...new Set([
+    ...creatorIds,
+    ...creditCreatorIds.filter((id) => id !== viewerUserId),
+  ])];
 
   // The same three reads the feed itself makes for a viewer (`showcase-feed.ts`,
   // `showcase-feed-personalization.ts`), over the posts asked about.
   const [blockedCreatorIds, postFeedback, creatorFeedback] = await Promise.all([
-    loadBlockedCreatorIds({ adminSupabase, creatorIds, viewerUserId }),
+    loadBlockedCreatorIds({ adminSupabase, creatorIds: blockCheckedIds, viewerUserId }),
     adminSupabase
       .from('feed_user_post_feedback')
       .select('post_id')
@@ -97,10 +122,11 @@ export async function getShowcaseViewerExclusionsForRoute({
   // Only what was asked about goes back, whatever a query returns.
   const askedPostIds = new Set(postIds);
   const askedCreatorIds = new Set(creatorIds);
+  const askedBlockIds = new Set(blockCheckedIds);
   return {
     ok: true,
     body: {
-      blockedCreatorIds: [...blockedCreatorIds].filter((id) => askedCreatorIds.has(id)).sort(),
+      blockedCreatorIds: [...blockedCreatorIds].filter((id) => askedBlockIds.has(id)).sort(),
       hiddenCreatorIds: [...new Set((creatorFeedback.data ?? []).map((row) => String(row.creator_user_id)))]
         .filter((id) => askedCreatorIds.has(id))
         .sort(),

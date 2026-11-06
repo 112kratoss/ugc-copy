@@ -71,6 +71,8 @@ import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
 import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import { notifyPostedRemix } from '@/lib/completed-remix-notification';
+import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
 import { isTemplateResultGeneration, shownGenerationModel } from '@/lib/template-result';
 import {
   getRemixRecipeTermsRefusalBody,
@@ -195,6 +197,12 @@ export type ShowcasePublishServiceDependencies = {
   requestPostEmbedding: typeof requestPostEmbedding;
   /** The free or paid terms the creation's run carries as a remix. */
   loadRemixRecipeTerms: typeof loadRemixRecipeTerms;
+  /** Tells the creator of the post a public remix credits (owner, 2026-11-05). */
+  notifyPostedRemix: typeof notifyPostedRemix;
+  /** The visibility of the post the creation already has, null for none. */
+  loadGenerationPostVisibility: typeof loadGenerationPostVisibility;
+  /** Where the route sends work that need not hold its answer (Next's `after`). */
+  runAfterResponse?: RunAfterResponse;
 };
 
 export type ShowcasePublishServiceResult =
@@ -264,6 +272,9 @@ function resolveDependencies(
     replacePostSourceTools: dependencies?.replacePostSourceTools ?? replacePostSourceTools,
     requestPostEmbedding: dependencies?.requestPostEmbedding ?? requestPostEmbedding,
     loadRemixRecipeTerms: dependencies?.loadRemixRecipeTerms ?? loadRemixRecipeTerms,
+    notifyPostedRemix: dependencies?.notifyPostedRemix ?? notifyPostedRemix,
+    loadGenerationPostVisibility: dependencies?.loadGenerationPostVisibility ?? loadGenerationPostVisibility,
+    runAfterResponse: dependencies?.runAfterResponse,
   };
 }
 
@@ -462,6 +473,26 @@ type StoredRecipeTextRow = Pick<
   StoredGenerationBundleRow,
   'access_mode' | 'summary' | 'preview_text' | 'prompt_text' | 'notes_markdown' | 'attachments' | 'resource_sections' | 'resource_items'
 >;
+
+/** How the post a creation already has stands (its visibility), null for none. */
+async function loadGenerationPostVisibility({
+  generationId,
+  ownerUserId,
+  supabase,
+}: {
+  generationId: string;
+  ownerUserId: string;
+  supabase: SupabaseClient;
+}): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('posts')
+    .select('visibility')
+    .eq('generation_id', generationId)
+    .eq('user_id', ownerUserId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as { visibility?: string | null } | null)?.visibility ?? null;
+}
 
 /**
  * The content a visibility-only request must carry forward. The post row is
@@ -796,6 +827,26 @@ export async function publishGenerationToShowcaseForRoute({
     } catch (error) {
       logBackendError('failed_to_load_remix_recipe_terms_for_publish', { error });
       return { ok: false, status: 500, body: { error: REMIX_RECIPE_TERMS_UNREADABLE_ERROR } };
+    }
+  }
+  // "@B posted a remix of your post" is news when the remix goes public, not at
+  // every republish of a public one: a remix public before that alert existed
+  // has no dedupe record to stop it arriving weeks late. So a public publish
+  // asks how its post stood before, and a read that fails sends no alert rather
+  // than a late one. Whether the creation is a remix is the alert's to say, from
+  // the post's own credit: a creation can carry a credit and no remix terms (one
+  // whose source was deleted before those terms were recorded).
+  let remixGoesPublic = false;
+  if (effectiveVisibility === 'public') {
+    try {
+      const visibilityBefore = await resolvedDependencies.loadGenerationPostVisibility({
+        generationId,
+        ownerUserId: userId,
+        supabase: adminSupabase,
+      });
+      remixGoesPublic = visibilityBefore !== 'public';
+    } catch (error) {
+      logBackendError('failed_to_load_post_visibility_for_remix_alert', { error });
     }
   }
   // A version of someone's paid recipe never shows its prompt on the post, at
@@ -1277,6 +1328,17 @@ export async function publishGenerationToShowcaseForRoute({
   }
 
   invalidateShowcaseFeedCache();
+
+  // A remix posted where everyone can see it tells the creator of the post it
+  // remixed, by the remixer's name, behind the answer: when it goes public, and
+  // once per creation besides.
+  if (remixGoesPublic && postId) {
+    const publishedPostId = postId;
+    await sendDeferrableNotification(
+      resolvedDependencies.runAfterResponse,
+      () => resolvedDependencies.notifyPostedRemix(adminSupabase, { postId: publishedPostId }),
+    );
+  }
 
   // Feed v4: embed the public post now rather than at the next embeddings run,
   // so it is clustered and checked for near-duplicates within minutes.

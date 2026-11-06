@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 
 import CreatorIdentity from '@/components/CreatorIdentity';
+import RemixCreditLine from '@/app/showcase/RemixCreditLine';
 import PublicShareButton from '@/components/PublicShareButton';
 import TextPostPreviewCard from '@/components/TextPostPreviewCard';
 import { useAuth } from '@/components/AuthProvider';
@@ -1956,6 +1957,8 @@ export default function ShowcaseReelViewer({
                 <h2 className="mt-5 text-2xl font-semibold tracking-tight text-white">
                   {item.title}
                 </h2>
+                {/* A remix credits what it remixed (owner, 2026-11-05), from the card itself. */}
+                <RemixCreditLine credit={item.remixCredit} className="mt-2" />
 
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
                   <span className="inline-flex items-center gap-1.5">

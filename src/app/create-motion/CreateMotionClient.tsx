@@ -66,7 +66,7 @@ import { CreatorDoneLayout, CreatorDownloadButton, CreatorPostedNext, CreatorPub
 import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus, creatorCanvasTitle } from '@/lib/creator-canvas-phase';
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
-import type { RemixMediaAssetDescriptor, RemixSourceBundle } from '@/lib/remix-source';
+import type { RemixMediaAssetDescriptor, RemixSourceBundle, RemixSourcePost } from '@/lib/remix-source';
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
@@ -419,6 +419,8 @@ function MotionCreator({
     const prefillModel = prefill.model ?? null;
     const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
+    // The post being remixed, which the notice names with its creator (owner, 2026-11-05).
+    const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
@@ -669,6 +671,7 @@ function MotionCreator({
 
                 setRemixSourceBundle(bundle);
                 setRemixTitle(bundle.generation.title);
+                setRemixSourcePost(bundle.sourcePost ?? null);
                 if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
                     setPrompt(bundle.generation.prompt);
                 }
@@ -1818,6 +1821,7 @@ function MotionCreator({
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
                                         description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
+                                        source={remixSourcePost}
                                         original={remixVideoUrl ? {
                                             mediaType: 'video',
                                             src: remixVideoUrl,

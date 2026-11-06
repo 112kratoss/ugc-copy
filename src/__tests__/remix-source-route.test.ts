@@ -268,17 +268,25 @@ function createAdminClientMock() {
                   error: null,
                 };
               },
-              async eq(column: string, value: unknown) {
+              eq(column: string, value: unknown) {
+                // The handle of the post's creator, which a remix's creator names (`sourcePost`).
+                if (column === 'id') {
+                  return {
+                    async maybeSingle() {
+                      return { data: value === 'creator-1' ? { username: 'creator' } : null, error: null };
+                    },
+                  };
+                }
                 if (column !== 'merged_into_user_id') {
                   throw new Error(`Unexpected profiles filter column: ${column}`);
                 }
 
-                return {
+                return Promise.resolve({
                   data: linkedProfileRows
                     .filter((row) => row.merged_into_user_id === value)
                     .map((row) => ({ id: row.id })),
                   error: null,
-                };
+                });
               },
             };
           },
@@ -846,6 +854,8 @@ describe('/api/remix-source route', () => {
     // Where the creator's upload was staged stays theirs (owner, 2026-10-29).
     expect(data.workflowSettings.startFrame).toBeUndefined();
     expect(JSON.stringify(data)).not.toContain('old-start');
+    // The remix names the post it remixes and its creator, who hears of it (owner, 2026-11-05).
+    expect(data.sourcePost).toEqual({ id: 'post-video-shared-1', title: 'Public post', creatorUsername: 'creator' });
   });
 
   it('allows the owner to restore motion remix inputs from a private creation', async () => {
@@ -887,6 +897,8 @@ describe('/api/remix-source route', () => {
     expect(data.inputs.motion.referenceVideo).toMatchObject({
       url: 'https://signed.example.com/uploads/user-1/reference.mp4',
     });
+    // A remix of one's own creation tells no one, so it names no one.
+    expect(data).not.toHaveProperty('sourcePost');
   });
 
   it('returns partial remix data when a saved source asset is missing', async () => {
