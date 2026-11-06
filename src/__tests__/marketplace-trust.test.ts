@@ -122,7 +122,7 @@ describe('the title a recipe needs', () => {
     expect(RECIPE_TITLE_TOO_SHORT_REFUSAL).not.toMatch(/Improve this recipe/);
     expect(RECIPE_TITLE_TOO_SHORT_REFUSAL.startsWith(RECIPE_TITLE_TOO_SHORT_HINT)).toBe(true);
     // The listing checklist keeps naming the rule, from the same number.
-    expect(assessMarketplaceListingQuality(listing('Cat')).issues[0]).toEqual({
+    expect(assessMarketplaceListingQuality(listing('Ox')).issues[0]).toEqual({
       code: 'missing_title',
       field: 'title',
       message: `Add a clear listing title with at least ${RECIPE_TITLE_MIN_LENGTH} characters.`,
@@ -151,10 +151,12 @@ describe('the title a recipe needs', () => {
   });
 
   it('says the hint for the recipes and titles the rule refuses, and no other', () => {
-    expect(isTitleTooShortForRecipe('Cat', 'free')).toBe(true);
-    expect(isTitleTooShortForRecipe('Cat', 'paid')).toBe(true);
-    expect(isTitleTooShortForRecipe('  Cat  ', 'free')).toBe(true);
-    expect(isTitleTooShortForRecipe('Cat', 'none')).toBe(false);
+    // Owner, 2026-11-05: 3 characters, no longer 6.
+    expect(isTitleTooShortForRecipe('Ox', 'free')).toBe(true);
+    expect(isTitleTooShortForRecipe('Ox', 'paid')).toBe(true);
+    expect(isTitleTooShortForRecipe('  Ox  ', 'free')).toBe(true);
+    expect(isTitleTooShortForRecipe('Ox', 'none')).toBe(false);
+    expect(isTitleTooShortForRecipe('Cat', 'free')).toBe(false);
     expect(isTitleTooShortForRecipe(words.slice(0, RECIPE_TITLE_MIN_LENGTH), 'paid')).toBe(false);
     // An empty title is asked for on its own, and the server lists a post
     // saved without one under "Recipe".
@@ -164,14 +166,14 @@ describe('the title a recipe needs', () => {
 
   // #677's re-review: "Cat 🐱" is six UTF-16 units and five characters. Both
   // checks counted six and let it through, and the database, counting
-  // characters, refused it with a 500.
+  // characters, refused it with a 500. At 3 characters, "O🐱" is the case.
   it('counts a title in characters, as the database does, in both checks', () => {
-    expect(countTitleCharacters('Cat 🐱')).toBe(5);
-    expect('Cat 🐱'.length).toBe(6);
-    expect(isTitleTooShortForRecipe('Cat 🐱', 'free')).toBe(true);
-    expect(getMarketplaceQualityError(listing('Cat 🐱'))).toBe(RECIPE_TITLE_TOO_SHORT_REFUSAL);
-    expect(isTitleTooShortForRecipe('Cats 🐱', 'free')).toBe(false);
-    expect(getMarketplaceQualityError(listing('Cats 🐱'))).toBeNull();
+    expect(countTitleCharacters('O🐱')).toBe(2);
+    expect('O🐱'.length).toBe(3);
+    expect(isTitleTooShortForRecipe('O🐱', 'free')).toBe(true);
+    expect(getMarketplaceQualityError(listing('O🐱'))).toBe(RECIPE_TITLE_TOO_SHORT_REFUSAL);
+    expect(isTitleTooShortForRecipe('Ox🐱', 'free')).toBe(false);
+    expect(getMarketplaceQualityError(listing('Ox🐱'))).toBeNull();
   });
 
   it('knows the database’s refusal of the same rule, and only that one', () => {

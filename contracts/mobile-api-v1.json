@@ -257,6 +257,8 @@
                 "recipeCopyable": true
               }
             ],
+            "remix_recipe_mode": null,
+            "own_source_post_bundle": null,
             "linked_post_id": "post-1",
             "linked_post_title": "Launch frame",
             "linked_post_visibility": "public",
@@ -1757,7 +1759,7 @@
         "recipeTitleTooShort": {
           "status": 400,
           "response": {
-            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "error": "A recipe needs a title of at least 3 characters. Make the title longer.",
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }
@@ -1775,6 +1777,14 @@
           "response": {
             "error": "This creation remixes a free recipe, so its recipe stays free.",
             "code": "REMIX_RECIPE_STAYS_FREE",
+            "field": "resourceBundle"
+          }
+        },
+        "creationRecipeRequired": {
+          "status": 400,
+          "response": {
+            "error": "A creation’s post shares its recipe. Choose Free or Paid.",
+            "code": "CREATION_RECIPE_REQUIRED",
             "field": "resourceBundle"
           }
         }
@@ -1798,7 +1808,7 @@
         "recipeTitleTooShort": {
           "status": 400,
           "response": {
-            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "error": "A recipe needs a title of at least 3 characters. Make the title longer.",
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }
@@ -2371,6 +2381,8 @@
           "hasPaidOrders": false,
           "resourceBundleBuyerCount": 0,
           "resourceBundleEverUnlocked": false,
+          "remixesAllowed": true,
+          "remixRecipeMode": null,
           "archivedAt": null,
           "tombstonedAt": null,
           "generationId": "generation-1",
@@ -2445,7 +2457,7 @@
         "recipeTitleTooShort": {
           "status": 400,
           "response": {
-            "error": "A recipe needs a title of at least 6 characters. Make the title longer, or post without the recipe.",
+            "error": "A recipe needs a title of at least 3 characters. Make the title longer.",
             "field": "title",
             "code": "RECIPE_TITLE_TOO_SHORT"
           }

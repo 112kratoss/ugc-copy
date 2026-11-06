@@ -171,6 +171,8 @@ describe('loadRemixSourceBundle access', () => {
         remix_recipe_mode: null,
       },
     }));
+    // A new remix, which the post's "Allow remixes" and a block refuse: never a run's reuse.
+    expect(mocks.resolveRemixAccess.mock.calls[0]?.[0]).not.toHaveProperty('purpose', 'reuse');
     expect(mocks.loadGenerationInputMediaMap).not.toHaveBeenCalled();
     expect(mocks.loadGenerationRecipeRemixInputMediaByPostId).not.toHaveBeenCalled();
   });

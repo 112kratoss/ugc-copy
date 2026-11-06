@@ -2827,7 +2827,9 @@ describe('CreateImageClient generation pipeline', () => {
     const form = await screen.findByRole('form', { name: 'Post it to the feed' });
     await waitFor(() => expect(within(form).getByRole('textbox', { name: 'Title' })).toHaveValue('Lighthouse study'));
     // On by default where the creation has a recipe to share (owner, 2026-10-28).
-    expect(within(form).getByRole('switch', { name: 'Share the recipe' })).toHaveAttribute('aria-checked', 'true');
+    // A creation's post always carries its recipe, free, with remixes allowed (owner, 2026-11-05).
+    expect(within(form).getByRole('heading', { name: 'Free recipe' })).toBeInTheDocument();
+    expect(within(form).getByRole('switch', { name: 'Allow remixes' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByRole('button', { name: /Publish & share/ })).toBeNull();
     const creationRead = fetchMock.mock.calls.find(([url]) => String(url).startsWith('/api/generations?'));
     expect(String(creationRead?.[0])).toContain('id=gen-new');

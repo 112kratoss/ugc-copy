@@ -355,6 +355,18 @@ export interface GenerationListItem {
   description?: string | null;
   prompt?: string | null;
   input_media?: GenerationInputMediaItem[];
+  /**
+   * The terms the run carries as a remix (`generations.remix_recipe_mode`): its post's recipe is
+   * paid if this is 'paid' and stays free if 'free' (remix plan; owner, 2026-11-05). Null for a
+   * creation that remixed no one's post.
+   */
+  remix_recipe_mode?: 'free' | 'paid' | null;
+  /**
+   * The recipe of the creator's own post this run remixed, where it has one (owner, 2026-11-06: a
+   * remix of your own paid post starts Paid at its price, and may switch); null otherwise. Read by
+   * `readOwnSourceRecipe`; absent from the summary list.
+   */
+  own_source_post_bundle?: { accessMode: 'none' | 'free' | 'paid'; status: string; priceUsdCents: number | null } | null;
   linked_post_id?: string | null;
   linked_post_title?: string | null;
   linked_post_visibility?: string | null;

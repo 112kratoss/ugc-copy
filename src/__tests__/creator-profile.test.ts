@@ -801,6 +801,18 @@ describe('creator profile data loader', () => {
     expect(data?.items[0].sourceToolSlug).toBe('runway');
   });
 
+  // The review of phase 2 (owner, 2026-11-05): a post whose creator turned "Allow remixes" off
+  // offers no Remix from its creator's page either.
+  it('offers no Remix on a post whose creator turned remixes off', async () => {
+    const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
+    const open = await getCreatorProfilePageData('Creator-Name');
+    expect(open?.items[0]).toMatchObject({ canRemix: true });
+
+    (postsState[0] as Record<string, unknown>).remixes_allowed = false;
+    const closed = await getCreatorProfilePageData('Creator-Name');
+    expect(closed?.items[0]).toMatchObject({ canRemix: false, remixCapability: 'none' });
+  });
+
   it('normalizes legacy app-owned source kinds to magicbooklet', async () => {
     const { getCreatorProfilePageData } = await import('@/lib/creator-profile');
 

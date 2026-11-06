@@ -1306,7 +1306,8 @@ describe('CreateMotionClient start', () => {
 
     const form = await screen.findByRole('form', { name: 'Post it to the feed' });
     await waitFor(() => expect(within(form).getByRole('textbox', { name: 'Title' })).toHaveValue('Rooftop dance'));
-    expect(within(form).getByRole('switch', { name: 'Share the recipe' })).toBeInTheDocument();
+    // A creation's post always carries its recipe (owner, 2026-11-05).
+    expect(within(form).getByRole('heading', { name: 'Free recipe' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Publish & share/ })).toBeNull();
     const lookup = fetchMock.mock.calls.find(([input]) => String(input).startsWith('/api/generations?'));
     expect(String(lookup?.[0])).toContain('id=generation-1');

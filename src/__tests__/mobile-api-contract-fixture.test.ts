@@ -1047,6 +1047,15 @@ describe('shared mobile API v1 contract fixture', () => {
     expect(post.resourceBundleEverUnlocked).toBe(post.bundle.salesCount + post.bundle.freeUnlockCount > 0);
   });
 
+  // Remix plan, phase 2 (owner, 2026-11-05): the app's edit page reads the post's own "Allow
+  // remixes" and, for a remix's post, the terms that lock Free or Paid.
+  it('documents the owner post fields the edit page opens the remix switch and terms on', () => {
+    const post = mobileApiContract.endpoints.getOwnerPost.response.post;
+
+    expect(post.remixesAllowed).toBe(true);
+    expect(post).toHaveProperty('remixRecipeMode', null);
+  });
+
   // The unified start carries the price its quote showed (`expectedCostCredits`). The
   // start prices the run again and charges its own price up to that one; above it, or
   // for a price that is no whole number of credits, it answers in the fixture's words

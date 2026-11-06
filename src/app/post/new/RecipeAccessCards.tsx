@@ -6,6 +6,7 @@ import { Check, CircleMinus, Lock, Sparkles, type LucideIcon } from 'lucide-reac
 
 import { getAccentClasses, type UiAccent } from '@/components/DesignSystem';
 import type { PostResourceBundleAccessMode } from '@/lib/post-resource-bundles';
+import { remixRecipeAllows } from '../../../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 // The app's choice, as its composer offers it (ugc-mobile/app/post/new.tsx):
 // Free and Paid first, each with what it is for, so a creator sees that a
@@ -30,27 +31,43 @@ export const RECIPE_ACCESS_CHOICES: ReadonlyArray<{
  */
 export default function RecipeAccessCards({
   value,
+  choices,
+  lockedTo = null,
+  lockReason = null,
   disabled = false,
   onChange,
 }: {
   value: PostResourceBundleAccessMode;
+  /** The modes offered, in the cards' order; all three when left out (a creation's new post has no No recipe). */
+  choices?: readonly PostResourceBundleAccessMode[];
+  /**
+   * A remix's recipe keeps its original's terms (owner, 2026-11-05): each choice those terms do not
+   * allow takes nothing (`remixRecipeAllows`), and `lockReason` says why under the cards. A remix of
+   * a paid recipe allows neither Free nor No recipe, which the server refuses on a public post; one
+   * of a free recipe allows both (#711's review).
+   */
+  lockedTo?: 'free' | 'paid' | null;
+  lockReason?: string | null;
   /** The cards show the mode and take nothing (a form that cannot change it). */
   disabled?: boolean;
   onChange: (mode: PostResourceBundleAccessMode) => void;
 }) {
   // One group: what makes the arrow keys move between the cards.
   const name = useId();
+  const reasonId = useId();
+  const offered = RECIPE_ACCESS_CHOICES.filter((choice) => !choices || choices.includes(choice.value));
   return (
     // Three columns once the group itself is wide enough for them (the
     // sidebar arrives at 768px, where the window's breakpoint still says
     // three), one column below that.
-    <fieldset className="@container mt-4">
+    <fieldset className="@container mt-4" aria-describedby={lockReason ? reasonId : undefined}>
       <legend className="sr-only">Recipe access</legend>
-      <div className="grid gap-3 @xl:grid-cols-3">
-        {RECIPE_ACCESS_CHOICES.map((choice) => {
+      <div className={clsx('grid gap-3', offered.length === 3 ? '@xl:grid-cols-3' : '@md:grid-cols-2')}>
+        {offered.map((choice) => {
           const checked = choice.value === value;
           const accent = getAccentClasses(choice.accent);
           const Icon = choice.icon;
+          const cardDisabled = disabled || Boolean(lockedTo && !remixRecipeAllows(lockedTo, choice.value));
           return (
             <label
               key={choice.value}
@@ -64,9 +81,9 @@ export default function RecipeAccessCards({
                   ? accent.selected
                   : clsx(
                     'border-[var(--ui-border-subtle)] bg-[var(--ui-surface-inset)]',
-                    !disabled && 'hover:bg-[var(--ui-surface-3)]',
+                    !cardDisabled && 'hover:bg-[var(--ui-surface-3)]',
                   ),
-                disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+                cardDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
               )}
             >
               <input
@@ -74,7 +91,7 @@ export default function RecipeAccessCards({
                 name={name}
                 value={choice.value}
                 checked={checked}
-                disabled={disabled}
+                disabled={cardDisabled}
                 onChange={() => onChange(choice.value)}
                 // Enter chooses the card, as the Free/Paid pills it replaces
                 // did. Left to the browser, Enter on a radio submits the form:
@@ -83,7 +100,7 @@ export default function RecipeAccessCards({
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter') return;
                   event.preventDefault();
-                  if (!checked && !disabled) onChange(choice.value);
+                  if (!checked && !cardDisabled) onChange(choice.value);
                 }}
                 className="sr-only"
               />
@@ -101,6 +118,12 @@ export default function RecipeAccessCards({
           );
         })}
       </div>
+      {lockReason ? (
+        <p id={reasonId} className="mt-3 flex items-start gap-2 text-xs leading-5 text-[var(--ui-text-muted)]">
+          <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          {lockReason}
+        </p>
+      ) : null}
     </fieldset>
   );
 }

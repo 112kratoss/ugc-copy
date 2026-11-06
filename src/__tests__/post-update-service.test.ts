@@ -1714,6 +1714,142 @@ describe('updateOwnerPostForRoute', () => {
         });
       });
 
+      // Remix plan, phase 2 (owner, 2026-11-05): the creator can take files out of the recipe, and a
+      // recipe missing some hands none of the creation's inputs over (the hand-over gives them all).
+      it('copies none of the inputs the creator removed, and then hands no input over', async () => {
+        const { result, dependencies, written } = await save({
+          includeGenerationReferences: true,
+          leaveOutGenerationReferenceIds: ['input-2'],
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        });
+
+        expect(result).toMatchObject({ ok: true });
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+          exceptRowIds: new Set(['input-2']),
+        }));
+        expect(written?.resources?.allowRemix).toBe(false);
+      });
+
+      it('keeps a recipe’s hand-over when no input was removed', async () => {
+        const { dependencies, written } = await save({
+          includeGenerationReferences: true,
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        }, { bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft', allow_remix: true } });
+
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.not.objectContaining({
+          exceptRowIds: expect.anything(),
+        }));
+        expect(written?.resources?.allowRemix).toBe(true);
+      });
+
+      // The review of phase 2, finding 2: a save that dropped a copy stored the hand-over off, and the
+      // next save from the same page (a typo fix), a second tab or an installed app sent the switch it
+      // read when it opened, which stored it on again: every input, the removed one too, went to buyers.
+      it('never turns a creation recipe’s stored hand-over back on', async () => {
+        const handOver = { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } };
+        const storedOff = await save({ resourceBundle: handOver }, {
+          bundle: { id: 'bundle-1', access_mode: 'free', status: 'published', allow_remix: false, resource_items: [promptItem] },
+        });
+        expect(storedOff.result).toMatchObject({ ok: true });
+        expect(storedOff.written?.resources?.allowRemix).toBe(false);
+
+        // A recipe it took down while people had it is the same row, taken up again.
+        const retiredOff = await save({ resourceBundle: handOver }, {
+          bundle: { id: 'bundle-1', access_mode: 'free', status: 'draft', allow_remix: false, retired_at: '2026-11-05T00:00:00.000Z' },
+        });
+        expect(retiredOff.written?.resources?.allowRemix).toBe(false);
+
+        // The post's first recipe, and one stored with the hand-over on, keep what was sent.
+        const first = await save({ resourceBundle: handOver }, { bundle: null });
+        expect(first.written?.resources?.allowRemix).toBe(true);
+        const storedOn = await save({ resourceBundle: handOver }, {
+          bundle: { id: 'bundle-1', access_mode: 'free', status: 'published', allow_remix: true, resource_items: [promptItem] },
+        });
+        expect(storedOn.written?.resources?.allowRemix).toBe(true);
+      });
+
+      // The review of phase 2, finding 4: the creator removed an input whose copy the recipe held, and
+      // the composer still sent the copy's card, so the recipe kept handing that file to its buyers.
+      it('takes out a sent copy of an input the creator removed', async () => {
+        const removedCopy = { ...plannedInput('input-2').item, sortOrder: 1, isPrimary: false };
+        const keptCopy = { ...plannedInput('input-1').item, sortOrder: 2, isPrimary: false };
+        const items = [promptItem, removedCopy, keptCopy];
+        const { result, written } = await save({
+          leaveOutGenerationReferenceIds: ['input-2'],
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: false, items } },
+        }, { bundle: { id: 'bundle-1', access_mode: 'free', status: 'published', allow_remix: false, resource_items: items } });
+
+        expect(result).toMatchObject({ ok: true });
+        expect((written?.resources?.items ?? []).map((item) => item.id)).toEqual(['recipe-prompt', 'reference-input-1']);
+      });
+
+      // The review of phase 2: an editor deletes a copied file's item (an older one too, which names no
+      // removed input); the live hand-over would give that file back to every remix.
+      it('hands no input over once a save drops a copy of one the stored recipe held', async () => {
+        const copyItem = { ...plannedInput().item, title: 'Product' };
+        const stored = {
+          id: 'bundle-1',
+          access_mode: 'free',
+          status: 'published',
+          allow_remix: true,
+          resource_items: [promptItem, copyItem],
+        };
+        const dropped = await save({
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        }, { bundle: stored });
+        expect(dropped.result).toMatchObject({ ok: true });
+        expect(dropped.written?.resources?.allowRemix).toBe(false);
+
+        const kept = await save({
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem, copyItem] } },
+        }, { bundle: stored });
+        expect(kept.result).toMatchObject({ ok: true });
+        expect(kept.written?.resources?.allowRemix).toBe(true);
+      });
+
+      // The re-review of the max review's fixes: an older recipe handed every input over live; removing
+      // one on an edit turns that off, so the inputs still in are copied, never dropped from the recipe.
+      it('copies the inputs still in when removing one ends an older recipe’s live hand-over', async () => {
+        const stored = {
+          id: 'bundle-1',
+          access_mode: 'free',
+          status: 'published',
+          allow_remix: true,
+          resource_items: [promptItem],
+        };
+        const dependencies = referenceDependencies({
+          planGenerationReferenceCopies: vi.fn(async () => ({ ok: true as const, references: [plannedInput('input-2', 'Kept')] })),
+          copyPlannedGenerationReferences: vi.fn(async () => copiedAll(['input-2'])),
+        });
+        const { result, written } = await save({
+          leaveOutGenerationReferenceIds: ['input-1'],
+          resourceBundle: { ...recipe('free'), resources: { allowRemix: true, items: [promptItem] } },
+        }, { bundle: stored, dependencies });
+
+        expect(result).toMatchObject({ ok: true });
+        expect(written?.resources?.allowRemix).toBe(false);
+        expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+          exceptRowIds: new Set(['input-1']),
+        }));
+        expect((written?.resources?.items ?? []).map((item) => item.id)).toContain('reference-input-2');
+      });
+
+      it('writes "Allow remixes" only when it is sent, and refuses one that is no switch', async () => {
+        const off = await save({ allowRemixes: false, resourceBundle: recipe('free') });
+        expect(vi.mocked(off.dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].patch)
+          .toMatchObject({ remixes_allowed: false });
+
+        const older = await save({ resourceBundle: recipe('free') });
+        expect(vi.mocked(older.dependencies.updatePostWithResourceBundleAtomically).mock.calls[0]?.[0].patch)
+          .not.toHaveProperty('remixes_allowed');
+
+        const wrong = await save({ allowRemixes: 1, resourceBundle: recipe('free') });
+        expect(wrong.result).toEqual({ ok: false, status: 400, body: { error: 'allowRemixes must be a boolean.' } });
+
+        const wrongIds = await save({ leaveOutGenerationReferenceIds: 'input-2', resourceBundle: recipe('free') });
+        expect(wrongIds.result).toEqual({ ok: false, status: 400, body: { error: 'leaveOutGenerationReferenceIds must list saved input ids.' } });
+      });
+
       // The app reads these fields by the shared contract's example.
       it('answers with what the shared contract documents of a creation’s recipe', async () => {
         const { result } = await save({ includeGenerationReferences: true, resourceBundle: recipe('free') });

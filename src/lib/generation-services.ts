@@ -1453,8 +1453,9 @@ export async function resolveGenerationMediaSource(
 
   // A recipe file the caller holds (a bought recipe's copy, a start's import of one, or a kept input
   // of theirs marked as one) is theirs to use only while the unlock still says so: each use reads it
-  // again and imports the copy anew (`reuseRecipeFile`). Signed as their own file, a refund or a
-  // block since the remix ended nothing (2026-11-03 re-review).
+  // again and imports the copy anew (`reuseRecipeFile`). Signed as their own file, a refund since the
+  // remix ended nothing (2026-11-03 re-review). A block since does not end it (owner, 2026-11-06: what
+  // was bought stays usable), nor does its post's "Allow remixes" off.
   const recipeFile = await reuseRecipeFile({ source, viewerUserId: userId, reads: options.recipeCopyReads });
   if (recipeFile?.outcome === 'imported') return recipeFile.signedUrl;
   // Retryable, and said of the recipe: only a recipe file gets here, never a creator's own upload whose

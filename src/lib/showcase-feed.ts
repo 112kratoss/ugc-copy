@@ -112,6 +112,8 @@ export interface PostRow {
   source_tool_slug: string | null;
   review_status?: string | null;
   generation_id: string | null;
+  /** The post's own "Allow remixes" (owner, 2026-11-05); absent from a legacy read, which allows them. */
+  remixes_allowed?: boolean | null;
   /** Whom a remix post credits (`post-remix-credit.ts`); the legacy reads leave them out. */
   remix_parent_post_id?: string | null;
   remix_parent_user_id?: string | null;
@@ -218,7 +220,7 @@ async function fetchPostRows(
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('posts')
-    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('visibility', 'public')
     .is('archived_at', null);
 
@@ -260,7 +262,7 @@ async function fetchPostRows(
 
   const result = await query.range(offset, offset + limit - 1);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
     if (category === 'text') {
       return [];
     }
@@ -325,12 +327,12 @@ async function fetchPostRowsByIds(
 
   const result = await adminSupabase
     .from('posts')
-    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .in('id', postIds)
     .eq('visibility', 'public')
     .is('archived_at', null);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
     const legacyResult = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
@@ -609,9 +611,12 @@ export async function addCreationReferenceCountsToFeedItems(
   items: ShowcaseFeedItem[],
   adminSupabase: ReturnType<typeof createServiceClient>,
 ): Promise<ShowcaseFeedItem[]> {
-  // Only a creation recipe whose creator may share the inputs can gain any.
+  // Only a creation recipe can gain any, and the read asks only of one whose
+  // creator shares the inputs (the stored switch). Not the summary's
+  // `allowRemix`, which a post whose "Allow remixes" is off reports false while
+  // its unlock still hands those inputs over.
   const postIds = items.flatMap((item) => (
-    item.generationId && item.asset?.allowRemix && item.asset.lockedPreview ? [item.id] : []
+    item.generationId && item.asset?.lockedPreview ? [item.id] : []
   ));
   if (postIds.length === 0) {
     return items;
@@ -759,8 +764,12 @@ export async function resolvePostRowsToFeedItems(
   const postIds = rowsToHydrate.map((row) => row.id);
   // What recipes store: what an unlock adds from a creation's inputs is
   // counted on the page a caller serves (addCreationReferenceCountsToFeedItems).
+  // A post whose creator turned "Allow remixes" off sells no Remix with its
+  // recipe (the review of phase 2): its card's chips, its reel line and the
+  // Remix filter leave it out, as the marketplace does.
+  const remixesClosedPostIds = new Set(rowsToHydrate.flatMap((row) => (row.remixes_allowed === false ? [row.id] : [])));
   const assetHydrationPromise = timed('hydrate_bundles', () =>
-    getMarketplaceAssetSummaryHydration(postIds, adminSupabase));
+    getMarketplaceAssetSummaryHydration(postIds, adminSupabase, { remixesClosedPostIds }));
   // Every read still starts together. Only the preview signing inside
   // `loadGenerationInfo` waits on the media rows, because only it needs to
   // know which covers already have a poster of their own — this function runs
@@ -844,6 +853,7 @@ export async function resolvePostRowsToFeedItems(
         postFormat: post.post_format,
         category: post.category,
         creationMode: post.creation_mode,
+        remixesAllowed: post.remixes_allowed,
         sourceKind: normalizeShowcaseSourceKind(post.source_kind),
         templateResult: generationInfo?.templateResult === true,
         resourceBundle: asset
@@ -1839,7 +1849,7 @@ export async function getShowcaseFeedItemById(options: {
   const adminSupabase = createServiceClient();
   let result = await adminSupabase
     .from('posts')
-    .select(`id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('id', postId)
     // Unlisted means "anyone with the link": the web post page reads it, and
     // the app receives the same share links, so the by-id read does too.
@@ -1847,7 +1857,7 @@ export async function getShowcaseFeedItemById(options: {
     .is('archived_at', null)
     .maybeSingle();
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
     result = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id, visibility')
@@ -1869,6 +1879,7 @@ export async function getShowcaseFeedItemById(options: {
           source_tool_slug: slugifySourceTool((result.data as LegacyPostRow).source_tool),
           review_status: 'visible',
           visibility: (result.data as { visibility?: string | null }).visibility ?? 'public',
+          remixes_allowed: null,
           remix_parent_post_id: null,
           remix_parent_user_id: null,
           remix_origin_user_id: null,

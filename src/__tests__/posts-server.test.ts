@@ -251,6 +251,31 @@ describe('posts-server marketplace summaries', () => {
     expect(assetMap.get('post-1')?.lockedPreview?.hasRemix).toBe(true);
   });
 
+  // The review of phase 2, finding 3: the summaries call reports Remix for every published creation
+  // recipe and knows nothing of the post's own "Allow remixes", so a feed card still sold Remix with
+  // the recipe of a post whose creator turned remixes off. Its caller names those posts.
+  it('sums up the recipe of a post whose creator turned remixes off with no Remix in it', async () => {
+    const prompt = { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'A neon portrait.' };
+    resourceBundlesState = [
+      { ...resourceBundlesState[0], resource_items: [prompt, { id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' }] },
+      // From before items: the summary reads its stored switch as an item of its own, "Remix access".
+      { ...resourceBundlesState[0], id: 'asset-legacy', post_id: 'post-3' },
+      { ...resourceBundlesState[0], id: 'asset-open', post_id: 'post-4', resource_items: [prompt] },
+    ];
+    const { getMarketplaceAssetSummaryHydration } = await import('@/lib/posts-server');
+
+    const { assetMap } = await getMarketplaceAssetSummaryHydration(['post-1', 'post-3', 'post-4'], undefined, {
+      remixesClosedPostIds: new Set(['post-1', 'post-3']),
+    });
+
+    expect(assetMap.get('post-1')).toMatchObject({ allowRemix: false, resourceKinds: ['prompt'], itemCounts: { prompt: 1, remix_link: 1 } });
+    expect(assetMap.get('post-1')?.lockedPreview).toMatchObject({ resourceKinds: ['prompt'], hasRemix: false });
+    expect(assetMap.get('post-3')).toMatchObject({ allowRemix: false, resourceKinds: [], itemCounts: {} });
+    expect(assetMap.get('post-3')?.lockedPreview?.itemPreviews).toEqual([]);
+    // A post that allows remixes keeps its Remix.
+    expect(assetMap.get('post-4')).toMatchObject({ allowRemix: true, resourceKinds: ['prompt', 'remix'] });
+  });
+
   // Every public read of a post serves this summary, so its locked preview is
   // the teaser from the start: a read that forgets to sanitize (saved media
   // did, until 2026-10-30) has nothing of the recipe to hand out.

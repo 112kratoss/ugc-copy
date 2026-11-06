@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createStoredRows } from '@/__tests__/fixtures/stored-rows';
+import { createStoredRows, databaseError } from '@/__tests__/fixtures/stored-rows';
 import {
   listOwnerGenerationsForRoute,
   OwnerGenerationsQueryError,
@@ -50,6 +50,7 @@ function libraryRow(overrides: Record<string, unknown>): Record<string, unknown>
     playback_rendition_status: 'pending',
     source_unavailable_at: null,
     remix_recipe_bundle_id: null,
+    remix_recipe_mode: null,
     ...overrides,
   };
 }
@@ -1083,6 +1084,57 @@ describe('listOwnerGenerationsForRoute', () => {
       expect(generation.paywallPrefill).toMatchObject({ referenceCount: 2 });
       // The run's remixed recipe is read for the folder, and never shown.
       expect(generation).not.toHaveProperty('remix_recipe_bundle_id');
+    });
+
+    // The owner, 2026-11-06 ("Start Paid, can switch"): a remix of the caller's own post carries that
+    // post's recipe terms, which the composers start from; a remix of anyone else's carries none.
+    it('carries the recipe of the caller’s own post a run remixed, and none for another creator’s', async () => {
+      const OTHER = '11111111-1111-4111-8111-111111111111';
+      const stored = createStoredRows({
+        profiles,
+        generations: [
+          libraryRow({ id: 'gen-own-remix', source_generation_id: 'gen-own-original' }),
+          libraryRow({ id: 'gen-other-remix', source_generation_id: 'gen-other-original' }),
+        ],
+        posts: [
+          { id: 'post-own', generation_id: 'gen-own-original', title: 'Mine', visibility: 'public', archived_at: null, user_id: OWNER },
+          { id: 'post-other', generation_id: 'gen-other-original', title: 'Theirs', visibility: 'public', archived_at: null, user_id: OTHER },
+        ],
+        post_resource_bundles: [
+          { post_id: 'post-own', access_mode: 'paid', status: 'published', price_usd_cents: 40 },
+          { post_id: 'post-other', access_mode: 'paid', status: 'published', price_usd_cents: 90 },
+        ],
+      });
+
+      const payload = await listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase: () => stored.client,
+        searchParams: new URLSearchParams('includeArchived=true&limit=10'),
+      });
+      const byId = new Map((payload.generations as Array<Record<string, unknown>>).map((item) => [item.id, item]));
+
+      expect(byId.get('gen-own-remix')?.own_source_post_bundle).toEqual({ accessMode: 'paid', status: 'published', priceUsdCents: 40 });
+      expect(byId.get('gen-other-remix')?.own_source_post_bundle).toBeNull();
+      expect(byId.get('gen-own-remix')).not.toHaveProperty('source_generation_id');
+    });
+
+    // The re-review: read as "no paid post", a failed read would start a remix of the caller's own paid
+    // post Free, and one press would give the paid prompt away. The page fails for a retry instead.
+    it('fails the page when the recipe of the caller’s own original cannot be read', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const stored = createStoredRows({
+        profiles,
+        generations: [libraryRow({ id: 'gen-own-remix', source_generation_id: 'gen-own-original' })],
+        posts: databaseError('57014', 'canceling statement due to statement timeout'),
+      });
+
+      await expect(listOwnerGenerationsForRoute({
+        userId: OWNER,
+        supabase: stored.client,
+        getAdminSupabase: () => stored.client,
+        searchParams: new URLSearchParams('includeArchived=true&limit=10'),
+      })).rejects.toBeTruthy();
     });
 
     // #708's max review: a passed-on file whose link failed to sign was never checked, so it is not offered.

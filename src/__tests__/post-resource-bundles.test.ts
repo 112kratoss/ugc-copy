@@ -17,6 +17,9 @@ import {
   resolveRecipeAllowRemix,
   sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
+  withoutRecipeRemix,
+  withoutRemixInLockedPreview,
+  withoutRemixKind,
   type PostResourceBundleInput,
 } from '@/lib/post-resource-bundles';
 
@@ -629,6 +632,43 @@ describe('a creation post’s recipe includes its Remix', () => {
       .toEqual(['prompt', 'remix']);
     expect(buildPostResourceBundleLockedPreview({ items: promptItems, allowRemix: false }).resourceKinds)
       .toEqual(['prompt']);
+  });
+
+  // The review of phase 2, findings 3 and 13: a post whose creator turned "Allow remixes" off sells no
+  // Remix with its recipe, whichever of its stored switch, a Remix link or a Remix access item said so.
+  it('reads the recipe of a post with remixes off with no Remix, its Remix link still counted', () => {
+    const sections = [{
+      id: 'links',
+      title: 'Links',
+      kind: 'other' as const,
+      description: null,
+      sortOrder: 0,
+      publicTitle: 'Remix it',
+      resourceType: 'remix_link' as const,
+    }];
+    const items = normalizePostResourceItems([
+      { type: 'prompt', title: 'Exact generation prompt', textContent: 'A neon portrait with rim light.' },
+      { type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix', sectionId: 'links' },
+      { type: 'remix_access', title: 'Remix access' },
+    ], { sections });
+    const preview = buildPostResourceBundleLockedPreview({ items, allowRemix: true, sections });
+    expect(preview).toMatchObject({ resourceKinds: ['prompt', 'remix'], hasRemix: true });
+
+    const closed = withoutRemixInLockedPreview(preview);
+
+    expect(closed).toMatchObject({
+      resourceKinds: ['prompt'],
+      hasRemix: false,
+      itemCounts: { prompt: 1, remix_link: 1 },
+    });
+    expect(closed.itemCounts).not.toHaveProperty('remix_access');
+    expect(closed.itemPreviews.map((item) => item.type)).toEqual(['prompt', 'remix_link']);
+    expect(closed.cardPreviews?.map((card) => card.hasRemix)).toEqual([false]);
+    expect(withoutRemixKind(['prompt', 'files', 'remix'])).toEqual(['prompt', 'files']);
+    expect(withoutRecipeRemix({ allowRemix: true, resourceKinds: ['prompt', 'remix'], itemCounts: preview.itemCounts, lockedPreview: preview }))
+      .toEqual({ allowRemix: false, resourceKinds: ['prompt'], itemCounts: { prompt: 1, remix_link: 1 }, lockedPreview: closed });
+    // A summary without counts or a preview gains none.
+    expect(withoutRecipeRemix({ allowRemix: true })).toEqual({ allowRemix: false });
   });
 });
 

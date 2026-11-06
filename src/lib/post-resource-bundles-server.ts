@@ -52,6 +52,7 @@ import {
   resolveRecipeAllowRemix,
   sanitizePostResourceBundleLockedPreview,
   validatePostResourceBundleInput,
+  withoutRecipeRemix,
 } from '@/lib/post-resource-bundles';
 import {
   assessMarketplaceListingQuality,
@@ -102,6 +103,7 @@ import {
   creationReferenceCopyPath,
   creationReferenceItemId,
   creationReferencePathSegment,
+  isCreationReferenceCopyOf,
   isLockedCreationPromptItem,
   needsCreationPromptItem,
 } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
@@ -231,6 +233,8 @@ interface LinkedPostRow extends PostMediaRow {
   remix_count?: number | null;
   share_visit_count?: number | null;
   created_at: string;
+  /** The post's own "Allow remixes" (owner, 2026-11-05); absent from a legacy read. */
+  remixes_allowed?: boolean | null;
 }
 
 interface GenerationRecipePostRow extends LinkedPostRow {
@@ -298,6 +302,8 @@ interface PostResourceBundleLinkedPost {
   sourceKind: ShowcaseSourceKind;
   sourceTool: string | null;
   sourceToolSlug: string | null;
+  /** The post's own "Allow remixes" (owner, 2026-11-05): false closes new remixes of it. */
+  remixesAllowed?: boolean;
   mediaUrl: string | null;
   mediaPreviewUrl: string | null;
   mediaRenditionUrl: string | null;
@@ -741,6 +747,55 @@ export function withoutLockedCreationPromptItem(
   return { ...bundle, resources: { ...bundle.resources, items: settled } };
 }
 
+/** How many removed inputs a save may name: more than a creation keeps. */
+const MAX_LEFT_OUT_GENERATION_REFERENCES = 64;
+
+/** The refusal of a save that names its removed inputs wrongly (`readLeftOutGenerationReferenceIds`). */
+export const LEFT_OUT_GENERATION_REFERENCES_ERROR = 'leaveOutGenerationReferenceIds must list saved input ids.';
+
+/**
+ * The saved inputs a publish or an edit says the creator took out of the creation's recipe with its
+ * remove buttons (`leaveOutGenerationReferenceIds`, remix plan, phase 2): none when it names none,
+ * and null, which the save refuses, when it sends anything but a list of at most 64 ids, each a
+ * non-empty string of at most 64 characters.
+ */
+export function readLeftOutGenerationReferenceIds(value: unknown): Set<string> | null {
+  if (value === undefined || value === null) return new Set();
+  if (!Array.isArray(value) || value.length > MAX_LEFT_OUT_GENERATION_REFERENCES) return null;
+  const ids = value.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id.length <= 64);
+  return ids.length === value.length ? new Set(ids) : null;
+}
+
+/**
+ * The recipe without its copies of these saved inputs of its creation (`isCreationReferenceCopyOf`,
+ * the rule both composers read): the inputs the creator removed (the review of phase 2). A composer
+ * that still shows a removed input's copy card, or an older one, sends the copy back, and the
+ * recipe kept handing that file to its buyers. A recipe whose first item went keeps a first one. The
+ * same recipe when it holds none of them.
+ */
+function withoutCopiesOfRemovedInputs(
+  bundle: PostResourceBundleInput,
+  generationId: string,
+  removedInputIds: ReadonlySet<string>,
+): PostResourceBundleInput {
+  const items = bundle.resources?.items;
+  if (!Array.isArray(items)) {
+    return bundle;
+  }
+  const kept = items.filter((item) => !(
+    item
+    && typeof item === 'object'
+    && [...removedInputIds].some((inputId) => isCreationReferenceCopyOf(item.storagePath, generationId, inputId))
+  ));
+  if (kept.length === items.length) {
+    return bundle;
+  }
+  const settled = kept.length > 0 && !kept.some((item) => item?.isPrimary)
+    ? kept.map((item, index) => (index === 0 ? { ...item, isPrimary: true } : item))
+    : kept;
+  return { ...bundle, resources: { ...bundle.resources, items: settled } };
+}
+
 export function withCreationPromptItem(
   bundle: PostResourceBundleInput | null,
   prompt: string | null | undefined,
@@ -941,6 +996,8 @@ export async function planGenerationReferenceCopies(params: {
   ownerUserId: string;
   generationId: string;
   onlyRowIds?: ReadonlySet<string>;
+  /** Rows the creator took out of the recipe with its remove buttons (remix plan, phase 2). */
+  exceptRowIds?: ReadonlySet<string>;
   heldItems?: readonly Pick<PostResourceItem, 'id' | 'storagePath' | 'contentType' | 'sizeBytes'>[];
   dependencies?: {
     loadRecipePassOnFolder?: typeof loadRecipePassOnFolder;
@@ -959,7 +1016,7 @@ export async function planGenerationReferenceCopies(params: {
   }
 
   const rows = ((data ?? []) as GenerationInputMediaRow[])
-    .filter((row) => !params.onlyRowIds || params.onlyRowIds.has(row.id));
+    .filter((row) => (!params.onlyRowIds || params.onlyRowIds.has(row.id)) && !params.exceptRowIds?.has(row.id));
   // The linked guests are asked for only when a row is not the publisher's own,
   // or reads as a recipe file under the publisher alone: the copyable rule then
   // judges it by the set the owner's library read offers it by, so what the
@@ -1279,6 +1336,11 @@ export async function prepareCreationRecipeBundle(params: {
   mayShareCreation: boolean;
   addsCreationPrompt: boolean;
   onlyRowIds?: ReadonlySet<string>;
+  /**
+   * Saved inputs the creator removed from the recipe (`readLeftOutGenerationReferenceIds`): never
+   * copied, whatever else asks, and a copy of one the recipe was sent with is taken out of it.
+   */
+  exceptRowIds?: ReadonlySet<string>;
   /** The recipe's items as stored, whose copies need no second one. */
   storedItems?: readonly PostResourceItem[];
   mediaKeys?: Iterable<string> | null;
@@ -1295,6 +1357,10 @@ export async function prepareCreationRecipeBundle(params: {
   let bundle = params.bundle;
 
   if (params.creation && bundle && bundle.accessMode !== 'none') {
+    // A removed input leaves the recipe whole: its copy too, whichever composer sent it.
+    if (params.exceptRowIds && params.exceptRowIds.size > 0) {
+      bundle = withoutCopiesOfRemovedInputs(bundle, params.creation.id, params.exceptRowIds);
+    }
     if (!params.mayShareCreation) {
       // Nothing of a creation off public view, a locked card a composer sent
       // for it included (#677's re-review).
@@ -1318,6 +1384,7 @@ export async function prepareCreationRecipeBundle(params: {
         ownerUserId: params.ownerUserId,
         generationId: params.creation.id,
         ...(params.onlyRowIds ? { onlyRowIds: params.onlyRowIds } : {}),
+        ...(params.exceptRowIds && params.exceptRowIds.size > 0 ? { exceptRowIds: params.exceptRowIds } : {}),
         // A copy is held only where the recipe as stored names it (`heldItemsForReferenceCopies`).
         heldItems: heldItemsForReferenceCopies({
           sentItems,
@@ -2266,6 +2333,7 @@ async function loadLinkedPostMap(
           'save_count',
           'remix_count',
           'share_visit_count',
+          'remixes_allowed',
         ].filter(Boolean).join(', '),
       )
       .in('id', uniquePostIds);
@@ -2443,6 +2511,7 @@ async function loadLinkedPostMap(
         sourceKind: normalizeShowcaseSourceKind(row.source_kind),
         sourceTool: row.source_tool,
         sourceToolSlug: row.source_tool_slug ?? slugifySourceTool(row.source_tool),
+        ...(row.remixes_allowed === false ? { remixesAllowed: false } : {}),
         mediaUrl,
         mediaPreviewUrl: coverMedia?.previewUrl ?? null,
         mediaRenditionUrl: coverMedia?.renditionUrl ?? null,
@@ -2586,6 +2655,7 @@ async function hydrateRecipes(
         storedAllowRemix: row.allow_remix,
         status: row.status,
         generationId: post?.generationId ?? null,
+        remixesAllowed: post?.remixesAllowed,
       });
       const normalizedResources = { ...(storedResourcesByBundleId.get(row.id) ?? normalizeResources(row)), allowRemix };
       const updatedAt = contentUpdatedAtMap.get(row.id) ?? row.updated_at;
@@ -2598,6 +2668,7 @@ async function hydrateRecipes(
         postFormat: post?.postFormat ?? null,
         category: post?.category ?? null,
         sourceKind: post?.sourceKind ?? null,
+        remixesAllowed: post?.remixesAllowed,
         resourceBundle: {
           viewerCanAccess: scope === 'owner',
           allowRemix,
@@ -2605,7 +2676,7 @@ async function hydrateRecipes(
         },
       });
 
-      const item = withCreationReferenceCounts({
+      const counted = withCreationReferenceCounts({
         id: row.id,
         postId: row.post_id,
         legacyAssetId: row.legacy_asset_id,
@@ -2628,6 +2699,10 @@ async function hydrateRecipes(
         remixCapability: remix.capability,
         remixTarget: remix.target,
       }, creationReferenceCounts.get(row.post_id));
+      // A post whose creator turned "Allow remixes" off sells no Remix with its recipe (the review of
+      // phase 2), whatever a Remix link or access among its items says: its kinds and its teaser say
+      // none, as the marketplace's listing and search do (20261105152921).
+      const item = post?.remixesAllowed === false ? withoutRecipeRemix(counted) : counted;
 
       return { item, storedPost: read?.post ?? null };
     })
@@ -3704,6 +3779,7 @@ export async function getPostResourceBundleDetailByPostId(
     postFormat: hydrated.post?.postFormat ?? null,
     category: hydrated.post?.category ?? null,
     sourceKind: hydrated.post?.sourceKind ?? null,
+    remixesAllowed: hydrated.post?.remixesAllowed,
     resourceBundle: {
       viewerCanAccess,
       allowRemix: hydrated.allowRemix,

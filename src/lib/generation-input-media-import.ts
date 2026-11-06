@@ -146,54 +146,62 @@ export async function importSharedGenerationInputMedia(params: {
       return { outcome: 'not-eligible' };
     }
 
-    // Mirrors the remix gate's block check, which asks about the post's owner
-    // (for a guest's creation, the account, not the guest id in the path): a
-    // check that errors open is not a gate.
-    let blocked = true;
-    try {
-      blocked = await (params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked)({
-        adminSupabase,
-        firstUserId: params.viewerUserId,
-        secondUserId: await loadCreatorAccountId(adminSupabase, ownerUserId),
-      });
-    } catch (error) {
-      logBackendError('failed_to_verify_block_state_before_shared_input_import', { error });
-    }
-    if (blocked) return { outcome: 'not-eligible' };
-
     // Free sharing first, decided as the remix routes decide it, because the
     // generation's flags are not the whole answer. Remixing someone else's
     // creation takes an account (/api/remix-source refuses a guest and
     // /api/showcase/remix admits none), while a generation start admits
-    // guests. Then `resolveRemixAccess`: the post must show the creation now,
-    // no recipe on it may be locked to this viewer, and it must not be a
-    // template's result. Ownership and the block were settled above, so the
-    // gate is given those answers rather than reading them again. A read that
-    // fails here fails the import instead of allowing it. Then the paid recipe
-    // entitlement via a post that links this generation — that loader
-    // re-checks purchase, allowRemix, and eligibility.
+    // guests. Then `resolveRemixAccess`, asked for a reuse of an input the
+    // remix handed the viewer: the post must show the creation now, no recipe
+    // on it may be locked to this viewer, and it must not be a template's
+    // result; the post's "Allow remixes" off since stops no reuse (owner,
+    // 2026-11-05). Ownership was settled above, so the gate is given that
+    // answer rather than reading it again. A read that fails here fails the
+    // import instead of allowing it. Then the paid recipe entitlement via a
+    // post that links this generation — that loader re-checks purchase,
+    // allowRemix, and eligibility.
     let authorized = false;
     if (generation.is_public === true && generation.share_input_media_for_remix === true) {
+      // What the creator shares with everyone ends with a block between the
+      // two, and what the viewer bought does not (owner, 2026-11-06: "blocking
+      // means no more post of A can be visible or can be purchased to B, but
+      // already bought posts won't be affected"): the block refuses this path
+      // alone, and a recipe the viewer bought still hands its inputs over,
+      // below. Asked as the remix gate asks it, about the post's owner (for a
+      // guest's creation, the account, not the guest id in the path): a check
+      // that errors open is not a gate.
+      let blocked = true;
       try {
-        const viewer = await adminSupabase.auth.admin.getUserById(params.viewerUserId);
-        if (viewer.error) throw viewer.error;
-        if (!viewer.data.user || isGuestUser(viewer.data.user)) return { outcome: 'not-eligible' };
-
-        const access = await resolveRemixAccess({
+        blocked = await (params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked)({
           adminSupabase,
-          viewerUserId: params.viewerUserId,
-          generation,
-          dependencies: {
-            isOwnOrLinkedAccountId: async () => false,
-            isUserRelationshipBlocked: async () => false,
-          },
+          firstUserId: params.viewerUserId,
+          secondUserId: await loadCreatorAccountId(adminSupabase, ownerUserId),
         });
-        authorized = access.allowed && access.includeSharedInputMedia;
       } catch (error) {
-        logBackendError('failed_to_resolve_remix_access_for_shared_input_import', { error });
-        return { outcome: 'failed' };
+        logBackendError('failed_to_verify_block_state_before_shared_input_import', { error });
+      }
+      if (!blocked) {
+        try {
+          const viewer = await adminSupabase.auth.admin.getUserById(params.viewerUserId);
+          if (viewer.error) throw viewer.error;
+          if (!viewer.data.user || isGuestUser(viewer.data.user)) return { outcome: 'not-eligible' };
+
+          const access = await resolveRemixAccess({
+            adminSupabase,
+            viewerUserId: params.viewerUserId,
+            generation,
+            purpose: 'reuse',
+            dependencies: { isOwnOrLinkedAccountId: async () => false },
+          });
+          authorized = access.allowed && access.includeSharedInputMedia;
+        } catch (error) {
+          logBackendError('failed_to_resolve_remix_access_for_shared_input_import', { error });
+          return { outcome: 'failed' };
+        }
       }
     }
+    // A recipe the viewer bought whose creator hands its creation's inputs over
+    // (the stored switch): theirs to use whatever block came since, so no block
+    // is asked here.
     if (!authorized) {
       const postsResult = await adminSupabase
         .from('posts')
@@ -350,9 +358,11 @@ async function loadRemixResultGeneration(
  * as a reference, and neither form of it is under the caller's `<userId>/…`
  * prefix, so every generation start refused it as someone else's media. When
  * the submitted file is exactly the result the remix source hands out, and the
- * viewer may remix the creation right now (`resolveRemixAccess`, the gate the
- * remix source applies: an account for anyone else's creation, the post
- * showing it, no block, no recipe locked to them, not a template's result),
+ * viewer may still reuse what that remix handed them (`resolveRemixAccess`, the
+ * gate the remix source applies, asked for a reuse: an account for anyone
+ * else's creation, the post showing it, no recipe locked to them, not a
+ * template's result; the post's "Allow remixes" off or a block since stops no
+ * reuse, owner 2026-11-05 and 2026-11-06),
  * answer a link to it built here from the checked location: the showcase
  * copy's public link, or a signed link to the private output, which the remix
  * source hands this viewer too. Nothing is copied: the run keeps its own copy
@@ -399,12 +409,27 @@ export async function resolveRemixResultMedia(params: {
       adminSupabase,
       viewerUserId: params.viewerUserId,
       generation,
-      dependencies: {
-        isOwnOrLinkedAccountId: async () => ownedByViewer,
-        isUserRelationshipBlocked: params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked,
-      },
+      purpose: 'reuse',
+      dependencies: { isOwnOrLinkedAccountId: async () => ownedByViewer },
     });
     if (!access.allowed) return { outcome: 'not-eligible' };
+    // The result is never the viewer's to hold: each run reads the creator's file again. What they
+    // bought stays theirs after a block, and anything else ends with one (owner, 2026-11-06: "no more
+    // post of A can be visible ... to B, but already bought posts won't be affected"; the re-review).
+    // A check that errors refuses.
+    if (!ownedByViewer && access.basis !== 'unlocked' && access.basis !== 'owner') {
+      let blocked = true;
+      try {
+        blocked = await (params.dependencies?.isUserRelationshipBlocked ?? isUserRelationshipBlocked)({
+          adminSupabase,
+          firstUserId: params.viewerUserId,
+          secondUserId: await loadCreatorAccountId(adminSupabase, generation.user_id),
+        });
+      } catch (error) {
+        logBackendError('failed_to_verify_block_state_before_remix_result', { error });
+      }
+      if (blocked) return { outcome: 'not-eligible' };
+    }
   } catch (error) {
     logBackendError('failed_to_resolve_remix_access_for_remix_result', { error });
     return { outcome: 'failed' };
