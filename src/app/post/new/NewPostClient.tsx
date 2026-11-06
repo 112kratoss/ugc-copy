@@ -72,6 +72,8 @@ import { forgetCreationsWorkspaceCache } from '@/lib/creations-workspace-cache';
 import { pushToast } from '@/components/feedback-state';
 import { trackProductEvent } from '@/lib/product-analytics';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
+import { TYPED_INPUT_PROPS } from '@/lib/typed-before-hydration';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import {
   normalizePostResourceItems,
   normalizePostResourceBundleAccessMode,
@@ -1094,6 +1096,13 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     initialBundle.summary?.trim() || initialBundle.previewText?.trim() || resourcePreviewSuggestion
   ).slice(0, RECIPE_PREVIEW_MAX_LENGTH));
   const [resourcePriceTokens, setResourcePriceTokens] = useState(() => requestedPriceTokens ?? getInitialPriceTokens(initialBundle));
+  // Whether the creator has set the price, before the page's script ran or since: a creation's
+  // start price, which arrives with the creation, then leaves theirs standing.
+  const priceChosenRef = useRef(false);
+  const choosePriceTokens = (value: string) => {
+    priceChosenRef.current = true;
+    setResourcePriceTokens(value);
+  };
   const [editingResourceCard, setEditingResourceCard] = useState<PostComposerResourceCardDraft | null>(null);
   const [isChoosingResourceType, setIsChoosingResourceType] = useState(false);
   const [didApplyGenerationPaywallPrefill, setDidApplyGenerationPaywallPrefill] = useState(false);
@@ -1155,6 +1164,19 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const savedPanelRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const recipeTitleHintId = useId();
+  // The server draws the form, so a creator can type into it before the page's script runs,
+  // and hydration does not read the fields back: the title's counter said 0, the next render
+  // wrote the drawn text over the title, the post text and the price, and Publish or Save sent
+  // what the server had drawn (2026-11-06; tests/e2e/post-composer-typed-before-script.spec.ts).
+  // Typed text only, as the creators take their prompts: the post keeps these, and text a
+  // browser puts back when it restores the form can be a stale tab's. Typing wins over what
+  // the page fills in later: a creation's suggested title fills only an empty one, and its
+  // start price only a price the creator has not set (`priceChosenRef`).
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  useTypedBeforeHydration(titleInputRef, { drawn: title, enabled: true, onTyped: setTitle });
+  useTypedBeforeHydration(bodyTextareaRef, { drawn: body, enabled: true, onTyped: setBody });
+  useTypedBeforeHydration(priceInputRef, { drawn: resourcePriceTokens, enabled: true, onTyped: choosePriceTokens });
 
   // One object URL per picked file, kept until the file leaves the list. The
   // URLs were rebuilt for every file on every change (a reorder, an upload
@@ -1817,7 +1839,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         } else if (startMode) {
           setResourceAccessMode(startMode);
         }
-        if (startPrice) {
+        if (startPrice && !priceChosenRef.current) {
           setResourcePriceTokens(startPrice);
         }
         if (removesAtStart) {
@@ -3984,6 +4006,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     </span>
                   </div>
                   <input
+                    ref={titleInputRef}
+                    {...TYPED_INPUT_PROPS}
                     value={title}
                     onChange={(event) => {
                       setTitle(event.target.value);
@@ -4238,6 +4262,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     </span>
                   </div>
                   <textarea
+                    ref={bodyTextareaRef}
                     value={body}
                     onChange={(event) => {
                       setBody(event.target.value);
@@ -4355,6 +4380,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                           <div className="relative inline-flex items-center">
                             <input
                               ref={priceInputRef}
+                              {...TYPED_INPUT_PROPS}
                               type="number"
                               inputMode="numeric"
                               min={POST_RESOURCE_MIN_PAID_PRICE_USD_CENTS}
@@ -4364,7 +4390,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                               placeholder={String(DEFAULT_PRICE_TOKENS)}
                               value={resourcePriceTokens}
                               onChange={(event) => {
-                                setResourcePriceTokens(event.target.value);
+                                choosePriceTokens(event.target.value);
                                 resetFeedback();
                               }}
                               className="w-28 rounded-full border border-white/10 bg-white/[0.03] pl-3 pr-16 py-1 text-center text-xs font-semibold text-white outline-none focus:border-emerald-300/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"

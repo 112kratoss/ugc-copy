@@ -16,7 +16,9 @@
 // (fixtures/post-with-recipe.json), and an image post made from a creation, with no recipe, by
 // another creator of its own (fixtures/creation-post.json). And one post editor's: an image post of
 // the E2E user's with one picture and no recipe (fixtures/post-composer-saved-twice.json). And
-// Pricing's referral terms: no active program, which Pricing drew from the failed read too.
+// Pricing's referral terms: no active program, which Pricing drew from the failed read too. And the
+// E2E user's recipe sales page, /marketplace/sell: two free recipes on text posts of theirs
+// (fixtures/seller-recipes.json), with no unlock orders and no deleted posts.
 // A page added here brings each of its reads, matched by method, path and the filters that name
 // its own rows: a whole table answered with no rows would change what every other page draws.
 //
@@ -42,6 +44,15 @@ const ownPost = require('../fixtures/post-composer-saved-twice.json');
 // shows under Made with (getPublicPostDetail, src/lib/public-posts.ts).
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const creationPost = require('../fixtures/creation-post.json');
+// The E2E user's two free recipes, each on a text post of theirs: the older one unlocked five times,
+// the newer one never. Recipe sales, /marketplace/sell, reads them in
+// getSellerPostResourceBundleDashboard (src/lib/post-resource-bundles-server.ts).
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const sellerRecipes = require('../fixtures/seller-recipes.json');
+// In the order the page asks for them: its recipes' posts as its read lists the recipes, newest
+// first, and the posts' covers as that read answers (the fixture's posts are in the same order).
+const sellerPostIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.post_id).join(',')})`;
+const sellerBundleIds = `in.(${sellerRecipes.bundles.map((bundle) => bundle.id).join(',')})`;
 
 const HOST = 'example.supabase.co';
 
@@ -214,6 +225,41 @@ const READS = [
     methods: ['GET'],
     path: '/rest/v1/referral_programs',
     filters: { status: 'eq.active' },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // getSellerPostResourceBundleDashboard: the seller's recipes, newest first.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundles',
+    filters: { owner_user_id: `eq.${sellerRecipes.bundles[0].owner_user_id}`, order: 'created_at.desc' },
+    answer: () => json(sellerRecipes.bundles, { 'content-range': `0-${sellerRecipes.bundles.length - 1}/${sellerRecipes.bundles.length}` }),
+  },
+  {
+    // hydrateBundleRows: their posts (loadLinkedPostMap)...
+    methods: ['GET'],
+    path: '/rest/v1/posts',
+    filters: { id: sellerPostIds },
+    answer: () => json(sellerRecipes.posts, { 'content-range': `0-${sellerRecipes.posts.length - 1}/${sellerRecipes.posts.length}` }),
+  },
+  {
+    // ...whose covers a text post has none of (loadPostMediaItemsMap).
+    methods: ['GET'],
+    path: '/rest/v1/post_media',
+    filters: { post_id: sellerPostIds },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // loadSellerRecentUnlocks: no paid orders, in either of its two reads (sales and free opens).
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundle_orders',
+    filters: { bundle_id: sellerBundleIds, status: 'eq.paid' },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
+    // loadSellerDeletedSnapshots: no deleted post had a recipe.
+    methods: ['GET'],
+    path: '/rest/v1/post_deletion_audits',
+    filters: { owner_user_id: `eq.${sellerRecipes.bundles[0].owner_user_id}`, bundle_access_mode: 'not.is.null' },
     answer: () => json([], { 'content-range': '*/0' }),
   },
 ];

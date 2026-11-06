@@ -1,9 +1,11 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
+
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 /**
  * Marks a contact enquiry dealt with, or reopens one.
@@ -21,6 +23,11 @@ export function ContactTriageControls({
 }) {
   const router = useRouter();
   const [note, setNote] = useState('');
+  // The queue is drawn on the server, and a note typed (in an enquiry opened) before the page's
+  // script ran never reached this state: "Mark handled" sent an empty note (2026-11-06). A handled
+  // enquiry draws no note field, and the hook then finds none.
+  const noteRef = useRef<HTMLInputElement>(null);
+  useFieldValueBeforeHydration(noteRef, { drawn: '', onValue: setNote });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +81,7 @@ export function ContactTriageControls({
       <label className="min-w-[220px] flex-1">
         <span className="sr-only">What was done (optional)</span>
         <input
+          ref={noteRef}
           type="text"
           value={note}
           onChange={(event) => setNote(event.target.value)}

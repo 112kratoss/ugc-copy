@@ -8,6 +8,7 @@ import { ChevronDown, CircleAlert, Copy, PencilLine, Plus } from 'lucide-react';
 
 import { Button, IconButton, StatusCallout, Surface, Text, getAccentClasses, type UiAccent } from '@/components/DesignSystem';
 import { buildShowcaseDetailPath, buildShowcaseDetailUrl } from '@/lib/share';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 import SellerRecipeCover from './SellerRecipeCover';
 import {
@@ -76,6 +77,16 @@ export default function SellerRecipeList({ recipes }: { recipes: SellerRecipe[] 
   const listRef = useRef<HTMLUListElement | null>(null);
   const notLiveChip = useRef<HTMLButtonElement | null>(null);
   const copyTimer = useRef<number | null>(null);
+  const sortRef = useRef<HTMLSelectElement | null>(null);
+
+  // A sort picked in the server's HTML before this page's script ran, where no React heard it.
+  useFieldValueBeforeHydration(sortRef, {
+    drawn: sort,
+    onValue: (value) => {
+      const picked = SELLER_RECIPE_SORTS.find((option) => option.value === value);
+      if (picked) setSort(picked.value);
+    },
+  });
 
   const liveCount = filterSellerRecipes(recipes, 'live').length;
   const counts: Record<SellerRecipeFilter, number> = {
@@ -132,6 +143,7 @@ export default function SellerRecipeList({ recipes }: { recipes: SellerRecipe[] 
         <label className="relative ml-auto sm:ml-0">
           <span className="sr-only">Sort recipes</span>
           <select
+            ref={sortRef}
             value={sort}
             onChange={(event) => setSort(event.target.value as SellerRecipeSort)}
             className={clsx(CHIP, CHIP_IDLE, 'cursor-pointer appearance-none pr-8')}

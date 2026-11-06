@@ -1,10 +1,11 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { BadgeCheck, Ban } from 'lucide-react';
 
 import { Text } from '@/components/DesignSystem';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 type PayoutAction = 'mark_paid' | 'reject';
 
@@ -12,6 +13,12 @@ export function PayoutActions({ requestId, amountUsd }: { requestId: string; amo
   const router = useRouter();
   const [note, setNote] = useState('');
   const [reference, setReference] = useState('');
+  // The queue is drawn on the server, and what was typed before the page's script ran never
+  // reached this state: "Mark paid" sent no reference while the box showed the UTR (2026-11-06).
+  const referenceRef = useRef<HTMLInputElement>(null);
+  const noteRef = useRef<HTMLInputElement>(null);
+  useFieldValueBeforeHydration(referenceRef, { drawn: '', onValue: setReference });
+  useFieldValueBeforeHydration(noteRef, { drawn: '', onValue: setNote });
   const [pending, setPending] = useState<PayoutAction | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,6 +56,7 @@ export function PayoutActions({ requestId, amountUsd }: { requestId: string; amo
     <div className="mt-3 space-y-2">
       <div className="grid gap-2 sm:grid-cols-2">
         <input
+          ref={referenceRef}
           type="text"
           value={reference}
           onChange={(event) => setReference(event.target.value)}
@@ -57,6 +65,7 @@ export function PayoutActions({ requestId, amountUsd }: { requestId: string; amo
           aria-label="Payout reference"
         />
         <input
+          ref={noteRef}
           type="text"
           value={note}
           onChange={(event) => setNote(event.target.value)}

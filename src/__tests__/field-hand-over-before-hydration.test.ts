@@ -25,49 +25,64 @@ const projectRoot = process.cwd();
 const UNTYPED_INPUTS = new Set(['hidden', 'radio', 'checkbox', 'file', 'submit', 'button', 'reset', 'image', 'range', 'color']);
 const HAND_OVER = /\buse(FieldValue|Typed)BeforeHydration\(/g;
 
-// Files that drew more controlled fields than they hand over when this check was written, not yet
-// looked at. Each one leaves this list for hook calls or a reason of its own; none joins it.
-const NOT_YET_CHECKED = 'not yet checked (2026-11-05)';
-
+// Each reason was checked on 2026-11-06, when the 36 files left unchecked on 2026-11-05 were gone
+// through: the eleven that drew fields in the server's HTML now hand them over
+// (the `*-before-script.spec.ts` specs in tests/e2e/; the admin console's, by a throwaway probe).
 const NO_HAND_OVER: Record<string, string> = {
-  'src/app/admin/(console)/content/PostModerationControls.tsx': NOT_YET_CHECKED,
-  'src/app/admin/(console)/moderation/ModerationActions.tsx': NOT_YET_CHECKED,
-  'src/app/admin/(console)/payouts/PayoutActions.tsx': NOT_YET_CHECKED,
-  'src/app/admin/(console)/system/ContactTriageControls.tsx': NOT_YET_CHECKED,
-  'src/app/admin/(console)/users/[userId]/CreditAdjustmentForm.tsx': NOT_YET_CHECKED,
-  'src/app/admin/(console)/users/[userId]/GenerationModerationControls.tsx': NOT_YET_CHECKED,
-  'src/app/admin/(console)/users/[userId]/UserSanctionForm.tsx': NOT_YET_CHECKED,
-  'src/app/auth/reset-password/page.tsx': NOT_YET_CHECKED,
-  // Its prompt is handed over; its other three fields are not yet checked.
-  'src/app/create-video/CreateVideoClient.tsx': NOT_YET_CHECKED,
-  'src/app/create-workflow/WorkflowCanvasChrome.tsx': NOT_YET_CHECKED,
-  'src/app/create-workflow/WorkflowCanvasPanels.tsx': NOT_YET_CHECKED,
-  'src/app/create-workflow/WorkflowCanvasShareActions.tsx': NOT_YET_CHECKED,
-  'src/app/create-workflow/WorkflowLibraryClient.tsx': NOT_YET_CHECKED,
-  'src/app/create-workflow/WorkflowNodeEditors.tsx': NOT_YET_CHECKED,
-  'src/app/create-workflow/WorkflowPlannerDrawer.tsx': NOT_YET_CHECKED,
-  'src/app/create-workflow/WorkflowTemplatePublishDrawer.tsx': NOT_YET_CHECKED,
-  'src/app/creations/CreatorProfileCard.tsx': NOT_YET_CHECKED,
-  'src/app/delete-account/SignedInAccountDeletion.tsx': NOT_YET_CHECKED,
-  'src/app/invite/InviteClient.tsx': NOT_YET_CHECKED,
-  'src/app/marketplace/MarketplaceBrowser.tsx': NOT_YET_CHECKED,
-  'src/app/marketplace/MarketplaceToolFilter.tsx': NOT_YET_CHECKED,
-  'src/app/marketplace/sell/PayoutPanel.tsx': NOT_YET_CHECKED,
-  'src/app/marketplace/sell/SellerRecipeList.tsx': NOT_YET_CHECKED,
-  'src/app/post/new/CreatableCombobox.tsx': NOT_YET_CHECKED,
-  'src/app/post/new/NewPostClient.tsx': NOT_YET_CHECKED,
-  'src/app/post/new/ResourceCardEditorDialog.tsx': NOT_YET_CHECKED,
-  'src/app/post/new/ResourceCardsSection.tsx': NOT_YET_CHECKED,
-  'src/app/pricing/PricingClient.tsx': NOT_YET_CHECKED,
-  'src/app/showcase/ShowcaseClient.tsx': NOT_YET_CHECKED,
-  'src/app/showcase/[id]/ReportPostButton.tsx': NOT_YET_CHECKED,
-  'src/components/CatalogAdditionalControls.tsx': NOT_YET_CHECKED,
-  'src/components/CreatorColumn.tsx': NOT_YET_CHECKED,
-  'src/components/CreatorPublish.tsx': NOT_YET_CHECKED,
-  'src/components/PostComments.tsx': NOT_YET_CHECKED,
-  'src/components/PublicIdentityFields.tsx': NOT_YET_CHECKED,
-  'src/components/StudioModelPicker.tsx': NOT_YET_CHECKED,
-  'src/components/templates/TemplateDetailClient.tsx': NOT_YET_CHECKED,
+  'src/app/admin/(console)/content/PostModerationControls.tsx':
+    'Its reason box opens on a click of Hide, Restore or Take down.',
+  'src/app/admin/(console)/users/[userId]/GenerationModerationControls.tsx':
+    'Its reason box opens on a click of Remove or Restore.',
+  'src/app/auth/reset-password/page.tsx':
+    'The new-password fields draw once the client has read the recovery session; the server draws the check’s spinner.',
+  // Its prompt and Gemini Omni's two ID fields (one <input> in a map, two calls) are handed over.
+  'src/app/create-video/CreateVideoClient.tsx':
+    'A Kling subject’s name draws once the visitor adds a subject, and shot prompts once multi-shot is on, which no model opens on.',
+  'src/app/create-workflow/WorkflowCanvasChrome.tsx':
+    'The workflow canvas loads with `ssr: false` (CreateWorkflowEntry).',
+  'src/app/create-workflow/WorkflowCanvasPanels.tsx':
+    'The workflow canvas loads with `ssr: false` (CreateWorkflowEntry).',
+  'src/app/create-workflow/WorkflowCanvasShareActions.tsx':
+    'The workflow canvas loads with `ssr: false` (CreateWorkflowEntry); these fields sit in its share and import popovers.',
+  'src/app/create-workflow/WorkflowLibraryClient.tsx':
+    'The workflow library loads with `ssr: false` (CreateWorkflowEntry).',
+  'src/app/create-workflow/WorkflowNodeEditors.tsx':
+    'The workflow canvas’s inspector, loaded with `ssr: false` (CreateWorkflowEntry).',
+  'src/app/create-workflow/WorkflowPlannerDrawer.tsx':
+    'A drawer of the workflow canvas, loaded with `ssr: false` (CreateWorkflowEntry).',
+  'src/app/create-workflow/WorkflowTemplatePublishDrawer.tsx':
+    'A drawer of the workflow canvas, loaded with `ssr: false` (CreateWorkflowEntry).',
+  'src/app/creations/CreatorProfileCard.tsx':
+    'Its form is the Edit profile dialog, which a click opens after a profile read (ProfileActions); DeferredCreatorProfileCard loads it with `ssr: false`.',
+  'src/app/delete-account/SignedInAccountDeletion.tsx':
+    'Draws nothing until the client’s auth listener has a session.',
+  'src/app/invite/InviteClient.tsx':
+    'Its one field is read-only and draws once the client has read the referral summary.',
+  'src/app/marketplace/MarketplaceBrowser.tsx':
+    'Loaded by MarketplaceBootstrap’s import() after a Load more click or a scroll.',
+  'src/app/marketplace/MarketplaceToolFilter.tsx':
+    'Its search draws only once enhanced on the client (useSyncExternalStore, false on the server).',
+  'src/app/marketplace/sell/PayoutPanel.tsx':
+    'Its request form draws after the client’s payouts read and a click.',
+  'src/app/post/new/CreatableCombobox.tsx':
+    'Drawn only in the composer’s Made with panel, which a click opens.',
+  'src/app/post/new/ResourceCardEditorDialog.tsx':
+    'A dialog that a recipe card’s click opens.',
+  'src/app/showcase/ShowcaseClient.tsx':
+    'Loaded by ShowcaseBootstrapClient’s import() in the browser.',
+  'src/app/showcase/[id]/ReportPostButton.tsx': 'Its report form opens on a click.',
+  'src/components/CatalogAdditionalControls.tsx':
+    'Drawn in a creator’s settings sheet, which the settings chip opens, and in the `ssr: false` workflow inspector.',
+  'src/components/CreatorColumn.tsx':
+    'A reference tile’s name; every creator’s references start empty and fill on the client.',
+  'src/components/CreatorPublish.tsx':
+    'The publish panel draws once a run has finished on the client.',
+  'src/components/PostComments.tsx':
+    'The composer draws for a signed-in user, whom the post page’s server render never has; the report form opens on a click.',
+  'src/components/StudioModelPicker.tsx':
+    'Its search draws in the model list, which the model chip opens.',
+  'src/components/templates/TemplateDetailClient.tsx':
+    'Its report form opens on a click, after the client’s template read.',
 };
 
 function listTsxFiles(folder: string): string[] {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ArrowRight, Check, Crown, Gift, History, Loader2, Sparkles, Wallet, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -11,6 +11,7 @@ import { PRICING_CURRENCY, PRICING_PLANS, type PricingPlanId } from "@/lib/prici
 import { pricingReturnLabel } from "@/lib/pricing-return";
 import { CREDIT_CHECKOUT_STATUS_COPY, useCreditPackCheckout } from "@/components/useCreditPackCheckout";
 import { supabase } from "@/lib/supabase";
+import { useFieldValueBeforeHydration } from "@/lib/use-field-value-before-hydration";
 import { buildSoftwareApplicationSchema, siteConfig } from "@/lib/seo";
 import {
     convertFromUsd,
@@ -199,6 +200,32 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
     const [fxStatus, setFxStatus] = useState<'idle' | 'loading' | 'ready' | 'unavailable'>('idle');
     const [balance, setBalance] = useState<number | null>(null);
     const router = useRouter();
+    const currencySelectRef = useRef<HTMLSelectElement>(null);
+    // A currency picked before this page's script ran, which no saved or inferred default replaces.
+    const pickedBeforeHydrationRef = useRef(false);
+
+    const chooseCurrency = (value: string) => {
+        if (!isSupportedCurrency(value)) {
+            return;
+        }
+
+        setSelectedCurrency(value);
+        window.localStorage.setItem(CURRENCY_STORAGE_KEY, value);
+        LEGACY_CURRENCY_STORAGE_KEYS.forEach((key) => {
+            window.localStorage.removeItem(key);
+        });
+    };
+
+    // Picked in the server's HTML before the script ran, where no React heard it: the visitor's
+    // choice, kept as one made after it is.
+    useFieldValueBeforeHydration(currencySelectRef, {
+        drawn: selectedCurrency,
+        onValue: (value) => {
+            if (!isSupportedCurrency(value)) return;
+            pickedBeforeHydrationRef.current = true;
+            chooseCurrency(value);
+        },
+    });
 
     useEffect(() => {
         // The session is local; getUser() went to the network, and a click
@@ -234,10 +261,11 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
     }, [userId]);
 
     useEffect(() => {
-        const storedCurrency = getStoredCurrencyPreference();
-
-        // Browser storage and locale are available only after the server-safe first render.
-        setSelectedCurrency(storedCurrency ?? inferDefaultCurrency(initialCountryCode));
+        // Browser storage and locale are available only after the server-safe first render. A
+        // currency picked before then (handed over above, in this same commit) stands.
+        if (!pickedBeforeHydrationRef.current) {
+            setSelectedCurrency(getStoredCurrencyPreference() ?? inferDefaultCurrency(initialCountryCode));
+        }
 
         const fetchFx = async () => {
             try {
@@ -335,20 +363,10 @@ export function PricingClient({ initialCountryCode = null, referralProgram = nul
                         </label>
                         <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-200">
                             <select
+                                ref={currencySelectRef}
                                 id="pricing-currency"
                                 value={selectedCurrency}
-                                onChange={(event) => {
-                                    const value = event.target.value;
-                                    if (!isSupportedCurrency(value)) {
-                                        return;
-                                    }
-
-                                    setSelectedCurrency(value);
-                                    window.localStorage.setItem(CURRENCY_STORAGE_KEY, value);
-                                    LEGACY_CURRENCY_STORAGE_KEYS.forEach((key) => {
-                                        window.localStorage.removeItem(key);
-                                    });
-                                }}
+                                onChange={(event) => chooseCurrency(event.target.value)}
                                 className="bg-transparent text-zinc-100 outline-none"
                             >
                                 {currencyOptions.map((option) => (

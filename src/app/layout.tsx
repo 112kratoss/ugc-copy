@@ -95,9 +95,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning data-build-id={buildId}>
       <body className={`${geistSans.variable} antialiased`}>
         {/*
-          Ahead of every field the page draws: text typed into a textarea before
-          the page's script runs stays on the field, for the creators to take in
-          as they mount (`useTypedBeforeHydration`). A raw script, as
+          Ahead of every field the page draws: text typed into a textarea, or an
+          input marked for it, before the page's script runs stays on the field,
+          for the page to take in as it mounts (`useTypedBeforeHydration`). A raw script, as
           next/script's beforeInteractive runs inline code only once Next's own
           code has loaded. Only a full load draws it: a client navigation never
           builds the root layout again, so React never makes it in the browser.

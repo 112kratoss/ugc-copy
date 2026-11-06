@@ -7,7 +7,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
-import { TYPED_BEFORE_HYDRATION_CAPTURE, typedText } from '@/lib/typed-before-hydration';
+import { TYPED_BEFORE_HYDRATION_CAPTURE, TYPED_INPUT_PROPS, typedText } from '@/lib/typed-before-hydration';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 
 /**
@@ -83,7 +83,7 @@ const mounted: Array<{ root: Root; container: HTMLElement }> = [];
 const recoverableErrors: unknown[] = [];
 
 /** Text typed into the server's HTML: an input event, which the root layout's capture hears. */
-function typeInto(field: HTMLTextAreaElement, text: string) {
+function typeInto(field: HTMLTextAreaElement | HTMLInputElement, text: string) {
   field.value = text;
   field.dispatchEvent(new Event('input', { bubbles: true }));
 }
@@ -284,6 +284,79 @@ describe('a prompt typed before the page’s script ran', () => {
   });
 });
 
+/**
+ * A title the server draws in an input, as the post composer draws its title and price
+ * (2026-11-06; tests/e2e/post-composer-typed-before-script.spec.ts).
+ */
+function TitleBox({ drawn = '', enabled = true, onTyped }: { drawn?: string; enabled?: boolean; onTyped?: (value: string) => void }) {
+  const [title, setTitle] = useState(drawn);
+  const [renders, setRenders] = useState(0);
+  const fieldRef = useRef<HTMLInputElement>(null);
+  const handleTitleChange = (value: string) => {
+    onTyped?.(value);
+    setTitle(value);
+  };
+  useTypedBeforeHydration(fieldRef, { drawn: title, enabled, onTyped: handleTitleChange });
+  return (
+    <div>
+      <input aria-label="Title" ref={fieldRef} {...TYPED_INPUT_PROPS} value={title} onChange={(event) => handleTitleChange(event.target.value)} />
+      <span data-testid="count">{title.length}</span>
+      <button type="button" onClick={() => setRenders((count) => count + 1)}>
+        Render {renders}
+      </button>
+    </div>
+  );
+}
+
+async function hydrateTitleAfterTyping(props: Parameters<typeof TitleBox>[0], type: (field: HTMLInputElement) => void) {
+  const container = document.createElement('div');
+  container.innerHTML = renderToString(<TitleBox {...props} />);
+  document.body.appendChild(container);
+  type(container.querySelector('input')!);
+  let root!: Root;
+  await act(async () => {
+    root = hydrateRoot(container, <TitleBox {...props} />, { onRecoverableError: (error) => recoverableErrors.push(error) });
+  });
+  mounted.push({ root, container });
+  return container;
+}
+
+const titleField = (container: HTMLElement) => container.querySelector('input')!;
+const SAVED_TITLE = 'A post saved more than once';
+
+describe('a title typed into an input before the page’s script ran', () => {
+  it('stays on screen while the state keeps what the server drew, until the next render writes it over', async () => {
+    const container = await hydrateTitleAfterTyping({ enabled: false, drawn: SAVED_TITLE }, (input) => typeInto(input, 'Retitled'));
+    expect(titleField(container).value).toBe('Retitled');
+    expect(count(container)).toBe(String(SAVED_TITLE.length));
+
+    await renderAgain(container);
+
+    expect(titleField(container).value).toBe(SAVED_TITLE);
+  });
+
+  it('is handed to the page, over the title the server drew, and stays', async () => {
+    const onTyped = vi.fn();
+    const container = await hydrateTitleAfterTyping({ drawn: SAVED_TITLE, onTyped }, (input) => typeInto(input, 'Retitled'));
+    await renderAgain(container);
+
+    expect(onTyped).toHaveBeenCalledTimes(1);
+    expect(titleField(container).value).toBe('Retitled');
+    expect(count(container)).toBe('8');
+  });
+
+  it('leaves a title a browser put back with no input event to the page', async () => {
+    const onTyped = vi.fn();
+    const container = await hydrateTitleAfterTyping({ drawn: SAVED_TITLE, onTyped }, (input) => {
+      input.value = 'A title from a stale tab';
+    });
+    await renderAgain(container);
+
+    expect(onTyped).not.toHaveBeenCalled();
+    expect(titleField(container).value).toBe(SAVED_TITLE);
+  });
+});
+
 describe('the capture the root layout runs', () => {
   it('keeps a textarea’s typed text on the field, and nothing for a field never typed into', () => {
     const typed = document.createElement('textarea');
@@ -298,5 +371,27 @@ describe('the capture the root layout runs', () => {
     expect(typedText(untouched)).toBeUndefined();
     typed.remove();
     untouched.remove();
+  });
+
+  it('keeps a marked input’s typed text too, and no other input’s', () => {
+    const title = document.createElement('input');
+    title.setAttribute(Object.keys(TYPED_INPUT_PROPS)[0], '');
+    const email = document.createElement('input');
+    email.type = 'email';
+    // A password a "Show password" button turned into a text field: no page reads it as typed.
+    const shownPassword = document.createElement('input');
+    shownPassword.type = 'password';
+    document.body.append(title, email, shownPassword);
+    shownPassword.type = 'text';
+    typeInto(title, 'Product demo with soft window light');
+    typeInto(email, 'early@example.com');
+    typeInto(shownPassword, 'a password');
+
+    expect(typedText(title)).toBe('Product demo with soft window light');
+    expect(typedText(email)).toBeUndefined();
+    expect(typedText(shownPassword)).toBeUndefined();
+    title.remove();
+    email.remove();
+    shownPassword.remove();
   });
 });
