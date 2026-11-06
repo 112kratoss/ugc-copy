@@ -8172,6 +8172,33 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(remixPromptBox()).toHaveValue('Two figures face off in a dim hall.');
       });
 
+      // 2026-11-06 review: a multi-shot original on a form the creator set to one shot while it loaded
+      // left the prompt empty: its shots went to the shot cards the form no longer shows, and its words
+      // nowhere. The words follow the form's shot mode, as a pick after the answer would.
+      it('fills the prompt with the original’s words where the creator set one shot while a multi-shot original loads', async () => {
+        const shots = [
+          { id: 'shot-1', prompt: 'Two figures face off in a dim hall.', duration: 5 },
+          { id: 'shot-2', prompt: 'They circle once, then strike.', duration: 5 },
+        ];
+        const original = remixOf({ model: 'kling-3.0-video', isMultiShot: true, multiPrompts: shots });
+        let release: () => void = () => undefined;
+        stubRemix(
+          // A multi-shot run is saved under the prompt of its first shot.
+          { ...original, generation: { ...original.generation, model: 'kling-3.0-video', prompt: shots[0].prompt } },
+          { hold: new Promise<void>((resolve) => { release = resolve; }) },
+        );
+        render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+        fireEvent.click(screen.getByRole('radio', { name: 'Multi-shot' }));
+        fireEvent.click(screen.getByRole('radio', { name: 'Single shot' }));
+        await act(async () => release());
+
+        expect(await screen.findByText('Settings pre-filled from "intense".')).toBeInTheDocument();
+        expect(screen.getByRole('radio', { name: 'Single shot' })).toHaveAttribute('aria-checked', 'true');
+        expect(remixPromptBox()).toHaveValue(shots[0].prompt);
+      });
+
       it('opens on its original while the balance covers it', async () => {
         stubRemix(remixOf({ duration: 5 }));
         render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);

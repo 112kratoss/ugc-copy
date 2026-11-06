@@ -2632,9 +2632,11 @@ function VideoCreator({
             setSound(formSettings.sound);
             setFixedLens(formSettings.fixedLens);
 
-            // Words and shots the creator typed stay; the original's fill a form left as it opened.
-            if (originalShots) {
-                if (!multiPrompts.some((shot) => shot.prompt.trim())) {
+            // Words and shots the creator typed stay; the original's fill a form left as it opened, in the
+            // form's shot mode: a form the creator set to one shot takes the original's words (a multi-shot
+            // run is saved under its first shot's), as a pick after the answer would.
+            if (formSettings.isMultiShot) {
+                if (originalShots && !multiPrompts.some((shot) => shot.prompt.trim())) {
                     setMultiPrompts(originalShots.map((shot, index) => ({
                         id: shot.id || `${index + 1}`,
                         prompt: shot.prompt,
