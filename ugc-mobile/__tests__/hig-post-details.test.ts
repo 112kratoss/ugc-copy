@@ -79,9 +79,9 @@ describe('reading order on the text post', () => {
    * z-order rather than by being drawn last.
    */
   it('puts the back control ahead of the pager it floats over', () => {
-    expect(postRoute.indexOf('{onDetailsPage ? null : <BackControl')).toBeGreaterThan(-1);
-    expect(postRoute.indexOf('{onDetailsPage ? null : <BackControl'))
-      .toBeLessThan(postRoute.indexOf('<FlatList\n'));
+    expect(postRoute.indexOf('<BackControl topInset')).toBeGreaterThan(-1);
+    expect(postRoute.indexOf('<BackControl topInset'))
+      .toBeLessThan(postRoute.indexOf('<Animated.FlatList\n'));
   });
 
   it('keeps it painted over the pager', () => {

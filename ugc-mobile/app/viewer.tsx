@@ -9,7 +9,7 @@ import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -62,6 +62,7 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
+import { viewerNativeBackOptions } from '@/lib/viewer-native-back';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
@@ -300,6 +301,14 @@ function ImmersivePreviewViewer() {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const audioMuted = useViewerAudioMuted();
+  const toggleMuteFromBar = useCallback(() => {
+    haptic.select();
+    toggleViewerAudioMuted();
+  }, []);
+  // iOS: the navigation bar's own Back, which UIKit pops at once. Only with a
+  // screen to go back to: a reel opened first (a link) keeps its own Back,
+  // which replaces it with Explore.
+  const [nativeBack] = useState(() => Platform.OS === 'ios' && router.canGoBack());
   useEffect(() => {
     void hydrateViewerAudioMuted();
   }, []);
@@ -324,6 +333,13 @@ function ImmersivePreviewViewer() {
   // The Undo offered after Not interested or Hide; one at a time (`dismissRecommendation`).
   const [undoNotice, setUndoNotice] = useState<FeedUndoNoticeModel | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
+  // How far the slide on screen has slid its chrome towards Details (ImmersiveSlide).
+  const [activeChromeShift, setActiveChromeShift] = useState<Animated.AnimatedInterpolation<number> | null>(null);
+  // The post whose swipe has left its media page for Details, if any: the
+  // navigation bar's Back and Mute go as it starts, as the rest of the chrome
+  // slides away with the media, rather than standing over Details' header
+  // until the page settles.
+  const [leavingMediaItemId, setLeavingMediaItemId] = useState<string | null>(null);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const skipInitialRankedFeedRefreshRef = useRef(Boolean(routeFeedSessionId));
   const restoredCommentContextRef = useRef<string | null>(null);
@@ -1489,6 +1505,12 @@ function ImmersivePreviewViewer() {
         options={{
           gestureEnabled: !detailsOpenForActive,
           fullScreenGestureEnabled: false,
+          // iOS: Back and Mute are the navigation bar's own items, so Back pops
+          // at once (lib/viewer-native-back.ts).
+          ...(nativeBack ? viewerNativeBackOptions({
+            hidden: detailsOpenForActive || (activeItem != null && leavingMediaItemId === activeItem.id),
+            mute: hasImmersiveAudibleMedia(activeItem) ? { muted: audioMuted, onPress: toggleMuteFromBar } : null,
+          }) : null),
           ...(Platform.OS === 'ios' && !nativeZoomSourceId && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
         }}
       />
@@ -1625,6 +1647,8 @@ function ImmersivePreviewViewer() {
             mediaPageKey={index === activeIndex ? position?.mediaPageKey : undefined}
             onPageChange={slideHandlers.onPageChange}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
+            onActiveChromeShift={setActiveChromeShift}
+            onLeavesMedia={setLeavingMediaItemId}
             onOwnerAction={slideHandlers.onOwnerAction}
             onRecreate={slideHandlers.onRecreate}
             onSave={slideHandlers.onSave}
@@ -1658,10 +1682,15 @@ function ImmersivePreviewViewer() {
           has landed (`useMediaZoomLanded`); the shade above is part of the
           picture the flight shows. */}
       {zoom.landed && zoom.drawn ? (
-      <>
+      // They sit on the media like the rail does, and slide off with it on the
+      // way to Details instead of standing over that page's header.
+      <Animated.View
+        pointerEvents="box-none"
+        style={{ position: 'absolute', inset: 0, transform: [{ translateX: activeChromeShift ?? 0 }] }}
+      >
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
-      {detailsOpenForActive ? null : (
+      {detailsOpenForActive || nativeBack ? null : (
         <ViewerTopControl label="Go back" onPress={zoom.dismiss} topInset={topInset} side="left">
           <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
         </ViewerTopControl>
@@ -1670,14 +1699,11 @@ function ImmersivePreviewViewer() {
           controls so people can complete their task without exiting full-screen
           mode." The reel is entered from a silent grid and is the only surface
           that makes a sound, so silencing it must not mean leaving it. */}
-      {detailsOpenForActive || !hasImmersiveAudibleMedia(activeItem) ? null : (
+      {detailsOpenForActive || nativeBack || !hasImmersiveAudibleMedia(activeItem) ? null : (
         <ViewerTopControl
           label={audioMuted ? 'Unmute video' : 'Mute video'}
           selected={audioMuted}
-          onPress={() => {
-            haptic.select();
-            toggleViewerAudioMuted();
-          }}
+          onPress={toggleMuteFromBar}
           topInset={topInset}
           side="right"
         >
@@ -1688,7 +1714,7 @@ function ImmersivePreviewViewer() {
           </IconShadow>
         </ViewerTopControl>
       )}
-      </>
+      </Animated.View>
       ) : null}
       {/* Undo after Not interested or Hide. The reel has no tab bar, so it
           stands just above the safe area, over the caption, under the rail;
@@ -1940,6 +1966,9 @@ interface ImmersiveSlideHandle {
 
 // Memoised: the reel's renderItem gives a slide that did not change the same
 // props on every viewer render (see `slideHandlers`), so it skips the render.
+/** How far, in points, a swipe toward Details goes before the bar's Back and Mute leave. */
+const LEAVES_MEDIA_AFTER = 8;
+
 const ImmersiveSlide = memo(function ImmersiveSlide({
   active,
   initialSection,
@@ -1970,11 +1999,20 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   topInset,
   width,
   onHorizontalScrollToggle,
+  onActiveChromeShift,
+  onLeavesMedia,
 }: {
   active: boolean;
   initialSection?: PostDetailsSection;
   prepareVideo: boolean;
   activeSlideRef: MutableRefObject<ImmersiveSlideHandle | null>;
+  /**
+   * The slide on screen hands the reel how far its chrome has slid towards
+   * Details, so the reel's Back and sound controls leave with the media too.
+   */
+  onActiveChromeShift?: (shift: Animated.AnimatedInterpolation<number> | null) => void;
+  /** Told the post's id once its swipe leaves the media page for Details, and null when it is back. */
+  onLeavesMedia?: (itemId: string | null) => void;
   /**
    * For a slide beside the one on screen: laid out means mounted and drawn,
    * which a reel growing out of a tile waits for before it is uncovered.
@@ -2064,6 +2102,53 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   // more never flashes the media page before its first layout.
   const [initialHorizontalOffset] = useState(() => ({ x: currentHorizontalIndex * width, y: 0 }));
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
+  // The rail, caption and counter belong to the media, not to the screen: on
+  // the way to Details they leave with the last media page, under the finger,
+  // and come back with it. Between media pages of a carousel they stay put.
+  // The scroll position is followed on the native side, so the chrome moves in
+  // the same frame as the page it sits on.
+  const [horizontalScrollX] = useState(() => new Animated.Value(initialHorizontalOffset.x, { useNativeDriver: true }));
+  const detailsPageIndex = pages.findIndex((page) => page.type === 'details');
+  const chromeShift = useMemo(() => (detailsPageIndex > 0
+    ? horizontalScrollX.interpolate({
+      inputRange: [(detailsPageIndex - 1) * width, detailsPageIndex * width],
+      outputRange: [0, -width],
+      extrapolate: 'clamp',
+    })
+    : null), [detailsPageIndex, horizontalScrollX, width]);
+  const onHorizontalScroll = useMemo(() => Animated.event(
+    [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
+    {
+      useNativeDriver: true,
+      listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const offset = event.nativeEvent.contentOffset.x;
+        const page = Math.round(offset / width);
+        setDraggedPageIndex(Math.max(0, Math.min(pages.length - 1, page)));
+        if (detailsPageIndex > 0) {
+          const leaving = offset > (detailsPageIndex - 1) * width + LEAVES_MEDIA_AFTER;
+          if (leaving !== leavesMediaRef.current) {
+            leavesMediaRef.current = leaving;
+            if (activeRef.current) onLeavesMediaRef.current?.(leaving ? item.id : null);
+          }
+        }
+      },
+    },
+  ), [detailsPageIndex, horizontalScrollX, item.id, pages.length, width]);
+  const leavesMediaRef = useRef(false);
+  const activeRef = useRef(active);
+  const onLeavesMediaRef = useRef(onLeavesMedia);
+  useEffect(() => {
+    activeRef.current = active;
+    onLeavesMediaRef.current = onLeavesMedia;
+  });
+  // A slide that becomes the active one says where its own swipe stands.
+  useEffect(() => {
+    if (active) onLeavesMediaRef.current?.(leavesMediaRef.current ? item.id : null);
+  }, [active, item.id]);
+  useEffect(() => {
+    if (!active) return;
+    onActiveChromeShift?.(chromeShift);
+  }, [active, chromeShift, onActiveChromeShift]);
   // Details pauses the remembered media page without discarding its frame.
   const preparedMediaIndex = currentPageIsDetails
     ? Math.max(0, pages.findIndex((page) => slidePageKey(page) === mediaPageKey))
@@ -2132,7 +2217,18 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   // without (alternated runs, 2026-09-24).
   const renderChrome = () => (zoomLanded && !chromeHidden ? (
     <View pointerEvents="box-none" onLayout={onChromeLayout} style={{ position: 'absolute', inset: 0 }}>
-      {renderOverlays()}
+      {chromeShift ? (
+        <Animated.View
+          pointerEvents="box-none"
+          // Moved off the screen while Details is up, so out of reach of a
+          // screen reader as well as of a finger.
+          accessibilityElementsHidden={currentPageIsDetails}
+          importantForAccessibility={currentPageIsDetails ? 'no-hide-descendants' : 'auto'}
+          style={{ position: 'absolute', inset: 0, transform: [{ translateX: chromeShift }] }}
+        >
+          {renderOverlays()}
+        </Animated.View>
+      ) : renderOverlays()}
       <DoubleTapSaveHeart
         opacity={doubleTapHeart.opacity}
         palette={doubleTapHeart.palette}
@@ -2143,7 +2239,9 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   ) : null);
 
   const renderOverlays = () => {
-    if (currentPageIsDetails) {
+    // With a Details page the chrome stays mounted there, slid off with the
+    // media, so a swipe back brings it in with the page rather than after it.
+    if (currentPageIsDetails && !chromeShift) {
       return null;
     }
 
@@ -2212,7 +2310,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
 
   return (
     <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
-      <FlatList
+      <Animated.FlatList
         ref={horizontalRef}
         data={pages}
         decelerationRate="fast"
@@ -2224,10 +2322,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         contentOffset={initialHorizontalOffset}
         keyExtractor={slidePageKey}
         maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
-        onScroll={(event) => {
-          const page = Math.round(event.nativeEvent.contentOffset.x / width);
-          setDraggedPageIndex(Math.max(0, Math.min(pages.length - 1, page)));
-        }}
+        onScroll={onHorizontalScroll}
         onScrollBeginDrag={() => onHorizontalScrollToggle?.(true)}
         onScrollEndDrag={() => onHorizontalScrollToggle?.(false)}
         scrollEventThrottle={16}

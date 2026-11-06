@@ -50,9 +50,8 @@ const mocks = vi.hoisted(() => ({
   callbacksFor: { current: null as ((item: ImmersivePreviewItem) => ViewerActionCallbacks) | null },
 }));
 
-vi.mock('react-native', () => ({
-  ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
-  FlatList: React.forwardRef(function FlatList(
+vi.mock('react-native', () => {
+  const FlatList = React.forwardRef(function FlatList(
     { data, renderItem, keyExtractor, ...props }: {
       data: string[];
       renderItem: (info: { item: string; index: number }) => React.ReactNode;
@@ -69,7 +68,20 @@ vi.mock('react-native', () => ({
       props,
       data.map((page, index) => React.createElement(React.Fragment, { key: keyExtractor(page) }, renderItem({ item: page, index })))
     );
-  }),
+  });
+  // The pager's scroll drives the back arrow's slide (`backShift`); here it only has to exist.
+  class AnimatedValue {
+    interpolate() { return this; }
+  }
+  return {
+  ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  Animated: {
+    Value: AnimatedValue,
+    event: () => () => undefined,
+    FlatList,
+    View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+  },
+  FlatList,
   Keyboard: { dismiss: mocks.dismissKeyboard },
   Platform: mocks.platform,
   Pressable: ({ children, style: _style, ...props }: MockProps) => React.createElement('pressable', props, children),
@@ -78,7 +90,8 @@ vi.mock('react-native', () => ({
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
   useWindowDimensions: () => ({ width: 400, height: 800 }),
-}));
+  };
+});
 
 vi.mock('lucide-react-native', () => {
   const icon = (name: string) => (props: MockProps) => React.createElement(`${name}-icon`, props);
@@ -639,8 +652,15 @@ describe('a link to the recipe', () => {
     const tree = renderScreen();
 
     expect(detailsPage(tree)?.props).toMatchObject({ active: true, initialSection: 'resources' });
-    // The page draws its own way back, so the post's arrow steps aside.
-    expect(pressable(tree, 'Go back')).toBeUndefined();
+    // The page draws its own way back, so the post's arrow steps aside: it is
+    // off the screen with the post page, out of a finger's and VoiceOver's reach.
+    let arrowHolder = pressable(tree, 'Go back')?.parent ?? null;
+    while (arrowHolder && arrowHolder.props.accessibilityElementsHidden === undefined) arrowHolder = arrowHolder.parent;
+    expect(arrowHolder?.props).toMatchObject({
+      pointerEvents: 'none',
+      accessibilityElementsHidden: true,
+      importantForAccessibility: 'no-hide-descendants',
+    });
   });
 
   it('opens on the post as before without it', () => {

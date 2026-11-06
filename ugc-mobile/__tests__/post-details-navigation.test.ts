@@ -27,8 +27,11 @@ describe('post details navigation', () => {
 
   it('lets the page draw its own header instead of the hosts\' floating arrow', () => {
     expect(page).toContain('<DetailsHeader');
-    expect(viewer).toContain('{detailsOpenForActive ? null : (');
-    expect(textPost).toContain('{onDetailsPage ? null : <BackControl topInset={topInset} />}');
+    expect(viewer).toContain('{detailsOpenForActive || nativeBack ? null : (');
+    // iOS: the navigation bar's Back and Mute go as the swipe to Details begins.
+    expect(viewer).toContain('hidden: detailsOpenForActive || (activeItem != null && leavingMediaItemId === activeItem.id)');
+    // Off the screen with the post page, and out of reach, while Details is up.
+    expect(textPost).toContain('<BackControl topInset={topInset} shift={backShift} hidden={onDetailsPage} />');
   });
 
   it('reserves no room for the retired swipe hint', () => {
