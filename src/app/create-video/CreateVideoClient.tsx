@@ -239,6 +239,7 @@ import { openingCost, openingSetting, type CreatorOpening } from '@/lib/creator-
 import { reloadBroughtBackThisBuild, reloadForNewerBuild, useDeploymentRefresh } from '@/lib/use-deployment-refresh';
 import { useNameDrafts } from '@/lib/use-name-drafts';
 import { useTicker } from '@/lib/use-ticker';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import { useUnmountSignal } from '@/lib/use-unmount-signal';
 import { isUploadCancelledError, UploadCancelledError } from '@/lib/upload-queue';
@@ -1319,6 +1320,12 @@ function VideoCreator({
     const [characterIds, setCharacterIds] = useState<string[]>([]);
     const [preparedAudioIdDraft, setPreparedAudioIdDraft] = useState('');
     const [characterIdDraft, setCharacterIdDraft] = useState('');
+    const preparedAudioIdFieldRef = useRef<HTMLInputElement>(null);
+    const characterIdFieldRef = useRef<HTMLInputElement>(null);
+    // Gemini Omni's ID fields, drawn by the server when the link names the model: an ID pasted
+    // before this page's script ran, where no React heard it, is the one Enter and Add take.
+    useFieldValueBeforeHydration(preparedAudioIdFieldRef, { drawn: preparedAudioIdDraft, onValue: setPreparedAudioIdDraft });
+    useFieldValueBeforeHydration(characterIdFieldRef, { drawn: characterIdDraft, onValue: setCharacterIdDraft });
     const [klingVideoElements, setKlingVideoElements] = useState<KlingVideoElementDraft[]>([]);
     const [klingSubjects, setKlingSubjects] = useState<KlingSubjectDraft[]>([]);
     const klingSubjectsRef = useRef<KlingSubjectDraft[]>([]);
@@ -6376,8 +6383,8 @@ function VideoCreator({
                                         </p>
                                         <div className="space-y-4">
                                             {([
-                                                { kind: 'audio' as const, label: 'Voice IDs', value: preparedAudioIdDraft, setValue: setPreparedAudioIdDraft, items: preparedAudioIds },
-                                                { kind: 'character' as const, label: 'Character IDs', value: characterIdDraft, setValue: setCharacterIdDraft, items: characterIds },
+                                                { kind: 'audio' as const, label: 'Voice IDs', value: preparedAudioIdDraft, setValue: setPreparedAudioIdDraft, fieldRef: preparedAudioIdFieldRef, items: preparedAudioIds },
+                                                { kind: 'character' as const, label: 'Character IDs', value: characterIdDraft, setValue: setCharacterIdDraft, fieldRef: characterIdFieldRef, items: characterIds },
                                             ]).map((group) => (
                                                 <div key={group.kind} className="space-y-2">
                                                     <div className="flex items-center justify-between gap-3">
@@ -6386,6 +6393,7 @@ function VideoCreator({
                                                     </div>
                                                     <div className="flex gap-2">
                                                         <input
+                                                            ref={group.fieldRef}
                                                             aria-label={`Gemini Omni ${group.kind} ID`}
                                                             value={group.value}
                                                             onChange={(event) => group.setValue(event.target.value)}
