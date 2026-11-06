@@ -1788,8 +1788,8 @@ export function useMediaZoomStage({
     // from where it sits down into its tile, and the reel goes from under it at
     // once. A video keeps its own close for now: its poster in the layer would
     // stand in for the frame it was showing.
-    // Android's own flight only, so far: on iOS the reel leaves under UIKit's
-    // zoom, which a pop cannot be asked to skip from here.
+    // Android's own flight only, so far: on iOS the pop still ran UIKit's zoom
+    // over the layer, even under a custom animation (simulator, 2026-11-07).
     const pictureOnly = !nativeZoom && Boolean(pictureRef.current) && !activeVideoUrlRef.current && !reducedMotion && Boolean(origin);
     if (nativeZoom) {
       // UIKit shrinks the reel into the tile registered for the post on screen;
@@ -1858,6 +1858,12 @@ export function useMediaZoomStage({
       // standing over it until it lets go.
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
+      // A picture closing alone starts where it sits, whatever the last flight
+      // left behind.
+      if (alone) {
+        flightTime.set(1);
+        flightProgress.set(1);
+      }
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         whenDisplayed: () => {
           // A video's window waited out of sight for its first frame.
