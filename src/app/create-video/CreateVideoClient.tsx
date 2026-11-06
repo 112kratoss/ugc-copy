@@ -5913,7 +5913,7 @@ function VideoCreator({
                                     <StudioRemixNotice
                                         description={getRemixNoticeDescription(remixTitle, remixWarning)}
                                         source={remixSourcePost}
-                                        onRetry={remixRead.failureWarning ? remixRead.retry : undefined}
+                                        onRetry={remixRead.canRetry ? remixRead.retry : undefined}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={offersOriginalResult ? (
                                             <StudioUseOriginalButton using={usingOriginalResult} pending={isAddingOriginal} onUse={() => void addOriginalResultAsReferenceVideo()} />

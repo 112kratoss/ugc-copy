@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { RemixSourceBundle } from '@/lib/remix-source';
 import { REMIX_RESTORE_WARNING } from '@/lib/remix-source-client';
@@ -226,6 +226,7 @@ describe('useRemixSourceRead', () => {
 
       await waitFor(() => expect(result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
       expect(result.current.loading).toBe(false);
+      expect(result.current.canRetry).toBe(true);
       expect(taken).toEqual([]);
 
       // A renewed token reads nothing: main's token-driven re-read put the original over the
@@ -233,6 +234,35 @@ describe('useRemixSourceRead', () => {
       rerender({ pageToken: 'renewed-token', formAccount: 'user-1' });
       await settle();
       expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // A refusal of the remix itself answers the same again: Try again would only say it twice
+    // (2026-11-06 review). The warning stays.
+    it.each([
+      ['a 403', { status: 403, body: { error: 'Forbidden' } }],
+      ['a 404', { status: 404, body: { error: 'Not found' } }],
+    ])('is said with no Try again after %s, which a later read would answer the same', async (_case, failure) => {
+      const fetchMock = stubSource({ failures: [failure as Answer] });
+      const { result } = renderRead();
+
+      await waitFor(() => expect(result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
+      expect(result.current.canRetry).toBe(false);
+      act(() => result.current.retry());
+      await settle();
+      expect(result.current.loading).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    // In the browser's console too, as each creator's own read said it before the hook (2026-11-06 review).
+    it('says the failure in the browser’s console', async () => {
+      const failure = new TypeError('Failed to fetch');
+      stubSource({ failures: [failure] });
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      onTestFinished(() => consoleError.mockRestore());
+      const { result } = renderRead();
+
+      await waitFor(() => expect(result.current.failureWarning).toBe(REMIX_RESTORE_WARNING));
+      expect(consoleError).toHaveBeenCalledWith('Error fetching remix:', failure);
     });
 
     it('reads once more on Try again, under the form’s account, and puts that answer on the form', async () => {

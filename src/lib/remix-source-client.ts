@@ -178,9 +178,10 @@ export async function fetchRemixSource(
     headers: { Authorization: `Bearer ${accessToken}` },
     ...(signal ? { signal } : {}),
   });
-  const data = await response.json() as RemixSourceBundle & { error?: string } | null;
+  const data = await response.json().catch(() => null) as RemixSourceBundle & { error?: string } | null;
   if (!response.ok || !data) {
-    throw new Error(data?.error || 'Failed to load remix data');
+    // With its status, which tells a refusal of the remix from one a later read can get past.
+    throw Object.assign(new Error(data?.error || 'Failed to load remix data'), { status: response.status });
   }
   return data;
 }

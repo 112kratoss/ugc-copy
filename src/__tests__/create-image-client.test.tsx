@@ -2369,6 +2369,16 @@ describe('CreateImageClient generation pipeline', () => {
         .toEqual(['Bearer test-token', 'Bearer renewed-token']);
     });
 
+    // A refusal of the remix itself answers the same again (2026-11-06 review): it is said, with no Try again.
+    it('says a remix it may not read with no Try again', async () => {
+      const fetchMock = installFetch({ remixBundle: HARBOUR_REMIX, remixFailures: [{ status: 404, body: { error: 'Not found' } }] });
+      render(remixPage());
+
+      expect(await screen.findByText(/Some source media could not be restored automatically/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+      expect(remixReads(fetchMock)).toHaveLength(1);
+    });
+
     // The words are read against the prompt as the first read began, so words typed after the failure
     // are the creator's too, and so is a model picked then.
     it('keeps words typed and a model picked after the failure through Try again’s answer', async () => {

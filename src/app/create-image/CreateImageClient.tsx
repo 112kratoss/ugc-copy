@@ -2244,7 +2244,7 @@ function ImageCreator({
                                     <StudioRemixNotice
                                         description={getRemixNoticeDescription(remixTitle, remixWarning)}
                                         source={remixSourcePost}
-                                        onRetry={remixRead.failureWarning ? remixRead.retry : undefined}
+                                        onRetry={remixRead.canRetry ? remixRead.retry : undefined}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={canUseOriginalResultAsReference ? (
                                             <StudioUseOriginalButton using={hasOriginalResultReference} pending={isAddingOriginal} onUse={() => void handleUseOriginalResultAsReference()} />

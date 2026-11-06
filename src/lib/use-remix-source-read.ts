@@ -29,15 +29,29 @@ export type RemixEditsBeforeAnswer<Field extends string> = {
 export type RemixSourceRead<Field extends string> = {
   /** A read is out: the notice slot holds its placeholder, so the form never looks finished before it is. */
   loading: boolean;
-  /** `REMIX_RESTORE_WARNING` while the form's last read has failed, with Try again (`retry`) beside it. */
+  /** `REMIX_RESTORE_WARNING` while the form's last read has failed, with Try again (`retry`) beside it where `canRetry`. */
   failureWarning: string | null;
-  /** Try again, after a failed read: one more read under the form's account. Nothing otherwise. */
+  /** The last read failed in a way a later one can get past (`remixReadMaySucceedLater`): Try again is offered. */
+  canRetry: boolean;
+  /** Try again, after a failed read that `canRetry`: one more read under the form's account. Nothing otherwise. */
   retry: () => void;
   /** The creator set this field by hand: an answer still to land leaves it as they set it. */
   noteEdit: (field: Field) => void;
 };
 
-type ReadState = { attempt: number; status: 'loading' | 'failed' | 'done' };
+type ReadState = { attempt: number; status: 'loading' | 'failed' | 'done'; retryable?: boolean };
+
+/**
+ * Whether a failed read of a remix can answer later, which is when Try again is offered: the network,
+ * a timeout, a 429, a 5xx, a session refused (renewed since, or signed in again), and an answer the
+ * form could not take. A 403, a 404 or any other refusal of the remix itself answers the same again
+ * (2026-11-06 review), so the notice says the warning alone.
+ */
+export function remixReadMaySucceedLater(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== 'number') return true;
+  return status < 400 || status === 401 || status === 408 || status === 429 || status >= 500;
+}
 
 /** Whom a remix page reads its remix as. */
 export type RemixReader = {
@@ -84,7 +98,8 @@ export async function readRemixSource(
  *   never fills the form under Strict Mode, which unmounts the first run before the read is back.
  * - **A failed read** (a 5xx, a 429, the network, a revoked session, or an answer the form could not
  *   take) is final until the creator asks again (`retry`): the token-driven re-read that #664 ended
- *   put the original over their work, up to an hour later.
+ *   put the original over their work, up to an hour later. A refusal of the remix itself (a 403, a
+ *   404) is final: no Try again (`canRetry`), as a later read would answer the same.
  *
  * `onSource` puts the source on the form, each creator its own way, with what the creator changed
  * before the answer landed (`RemixEditsBeforeAnswer`), and runs once, for the read that answers.
@@ -133,20 +148,25 @@ export function useRemixSourceRead<Field extends string>({
 
     void (async () => {
       let answered = false;
+      let retryable = false;
       try {
         const bundle = await readRemixSource({ id: remixId, postId: remixPostId }, { formAccount, pageToken });
         if (isGone()) return;
         takeSource(bundle, promptAtFirstRead);
         answered = true;
-      } catch {
-        // Said on the notice, with Try again; a source read halfway is read again whole.
+      } catch (error) {
+        // Said on the notice, with Try again where a later read can get past it (a source read halfway
+        // is read again whole), and in the browser's console, as each creator's own read said it.
+        // eslint-disable-next-line no-console -- a browser hook: the structured logger is the server's
+        console.error('Error fetching remix:', error);
+        retryable = remixReadMaySucceedLater(error);
       }
-      if (!isGone()) setRead((current) => ({ ...current, status: answered ? 'done' : 'failed' }));
+      if (!isGone()) setRead((current) => ({ ...current, status: answered ? 'done' : 'failed', retryable }));
     })();
   }, [formAccount, pageToken, promptRef, read.attempt, remixId, remixPostId, unmountSignal]);
 
   const retry = useCallback(() => {
-    setRead((current) => (current.status === 'failed' ? { attempt: current.attempt + 1, status: 'loading' } : current));
+    setRead((current) => (current.status === 'failed' && current.retryable ? { attempt: current.attempt + 1, status: 'loading' } : current));
   }, []);
 
   const noteEdit = useCallback((field: Field) => {
@@ -156,6 +176,7 @@ export function useRemixSourceRead<Field extends string>({
   return {
     loading: read.status === 'loading',
     failureWarning: read.status === 'failed' ? REMIX_RESTORE_WARNING : null,
+    canRetry: read.status === 'failed' && read.retryable === true,
     retry,
     noteEdit,
   };
