@@ -14,6 +14,9 @@ import {
   getPostResourceBundleDetailByPostId,
   type PostResourceBundleDetail,
 } from '@/lib/post-resource-bundles-server';
+import { loadReadableRecipeFiles } from '@/lib/recipe-copy-access';
+import { parseGenerationReferenceCopyPath } from '@/lib/recipe-file-paths';
+import { createServiceClient } from '@/lib/server-helpers';
 import {
   getCanonicalStoredMediaLocation,
   parseCanonicalStorageObjectPath,
@@ -65,6 +68,8 @@ type CreatePostResourceFileReadUrlParams = {
   client: PostResourceFileReadUrlClient | (() => PostResourceFileReadUrlClient);
   countryCode: string | null;
   getDetailByPostId?: typeof getPostResourceBundleDetailByPostId;
+  /** Which of these recipe files the viewer may read now (`loadReadableRecipeFiles`). */
+  readableRecipeFiles?: (viewerUserId: string, paths: string[]) => Promise<Set<string>>;
   postId: string;
   rateLimitKey: string;
   viewerUserId: string | null;
@@ -91,6 +96,8 @@ const RESOURCE_SOURCE_BUCKETS = [
 ] as const;
 const SIGNED_READ_EXPIRES_IN_SECONDS = 600;
 const NOT_ON_THIS_UNLOCK = 'Resource file not found on this unlock.';
+/** A seller's own passed-on copies could not be checked: a retry may open them. */
+const SELLER_COPIES_UNREADABLE = 'Could not open this recipe’s files right now. Try again.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -191,6 +198,7 @@ export async function createPostResourceFileReadUrlForRoute({
   client,
   countryCode,
   getDetailByPostId = getPostResourceBundleDetailByPostId,
+  readableRecipeFiles = (viewer, paths) => loadReadableRecipeFiles(createServiceClient(), viewer, paths),
   postId,
   rateLimitKey,
   viewerUserId,
@@ -223,12 +231,32 @@ export async function createPostResourceFileReadUrlForRoute({
   const resourceOwnerUserId = detail.seller?.id;
   // A path that is not on this unlock is left out of a batch's answer rather
   // than failing the paths beside it; the caller reads its absence.
-  const signableFiles = resourceOwnerUserId
+  let signableFiles = resourceOwnerUserId
     ? request.storagePaths.flatMap((storagePath) => {
       const file = findSignableFile(detail, storagePath, resourceOwnerUserId);
       return file ? [file] : [];
     })
     : [];
+  // A buyer's recipe reads leave out a copy that is withheld (`withholdCopiesOfCreationsOffView`); the
+  // seller's do not, as the copies are their own files. One of them their recipe passed on from the
+  // recipe their creation remixed is theirs only while that file is (remix plan, phase 1b): after a
+  // refund, a retracted purchase or its creation's removal or archive, it stays in their recipe unopened.
+  // A read that fails opens none of their copies, and says to try again rather than that they are not
+  // on this unlock (#708's max review).
+  const sellerCopies = detail.viewerIsOwner && viewerUserId
+    ? signableFiles.filter((file) => file.location.bucket === RESOURCE_FILES_BUCKET && parseGenerationReferenceCopyPath(file.location.filePath))
+    : [];
+  if (sellerCopies.length > 0) {
+    let readable: Set<string>;
+    try {
+      readable = await readableRecipeFiles(viewerUserId!, sellerCopies.map((file) => `${RESOURCE_FILES_BUCKET}/${file.location.filePath}`));
+    } catch (error) {
+      logBackendError('post_resource_seller_copy_access_read_failed', { error });
+      return { ok: false, status: 500, body: { error: SELLER_COPIES_UNREADABLE } };
+    }
+    const closed = new Set(sellerCopies.filter((file) => !readable.has(`${RESOURCE_FILES_BUCKET}/${file.location.filePath}`)));
+    signableFiles = signableFiles.filter((file) => !closed.has(file));
+  }
   if (signableFiles.length === 0) {
     return {
       ok: false,

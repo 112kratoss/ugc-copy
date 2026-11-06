@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { recipeCopiesWithheldOver, type CreationMarks } from './fixtures/recipe-copies-withheld';
 
 const gateState = vi.hoisted(() => ({
   rateLimitAllowed: true,
@@ -186,7 +187,14 @@ function adminFromTables() {
 
 function createAdminClientMock() {
   return {
-    rpc: vi.fn(async (fn: string) => {
+    rpc: vi.fn(async (fn: string, args?: { p_paths?: string[] }) => {
+      // Which of a recipe's copies are withheld now (`loadWithheldCopies`), from their creations' marks.
+      if (fn === 'recipe_copies_withheld') {
+        return {
+          data: recipeCopiesWithheldOver([...generationRows.values()].flat() as CreationMarks[])(args?.p_paths ?? []),
+          error: null,
+        };
+      }
       if (fn !== 'check_backend_rate_limit') return { data: null, error: null };
       return {
         data: {
@@ -329,7 +337,6 @@ function createAdminClientMock() {
       return {
         select() {
           return {
-            // The state of the creations a recipe's copies are of (`loadWithheldCopyCreations`).
             async in(column: string, values: unknown[]) {
               if (column !== 'id') {
                 throw new Error(`Unexpected filter column: ${column}`);
@@ -717,6 +724,70 @@ describe('/api/remix-source route', () => {
     // The creator's own kept files are neither signed nor named, nor where the upload was staged.
     expect(JSON.stringify(data)).not.toMatch(/generation-inputs|generation_inputs|my-passport|uploads\/|source-9/);
     expect(data.restoreIssues).toEqual([]);
+  });
+
+  // Remix plan, phase 1b (owner, 2026-11-05: a remix's recipe holds what its run used). The creator's
+  // run remixed another recipe and used its files; their recipe passed one of them on, so C, who
+  // unlocked it, gets that file from its copy, and an empty slot for the file of a recipe it did not
+  // pass on. (A recipe that hands the inputs over too: remix-source-server.test.ts.)
+  it('restores a passed-on file of the recipe the run remixed from its copy', async () => {
+    const PASSED_ROW = '6f1c2d3e-4a5b-4c6d-8e7f-00000000001a';
+    const KEPT_BACK_ROW = '6f1c2d3e-4a5b-4c6d-8e7f-00000000001b';
+    const PASSED_COPY = `creator-1/generation-references/source-1/00-reference-image-${PASSED_ROW}.png`;
+    const ORIGINAL_COPY = 'post_resource_files/seller-a/generation-references/original-a/00-reference-image-row-a.png';
+    currentUserId = 'user-2';
+    generationRows.set('source-1', createPublicSource({
+      share_input_media_for_remix: false,
+      prompt: 'Place @hero beside @logo.',
+    }));
+    postRows.set('post-1', createExposedPost('source-1', { id: 'post-1' }));
+    bundleRows.set('post-1', {
+      id: 'bundle-1',
+      post_id: 'post-1',
+      owner_user_id: 'creator-1',
+      status: 'published',
+      allow_remix: false,
+      resource_items: [
+        { id: 'prompt', type: 'prompt', title: 'Prompt', textContent: 'Place @hero beside @logo.' },
+        { id: `reference-${PASSED_ROW}`, type: 'reference_image', title: 'Hero', storagePath: PASSED_COPY },
+      ],
+      resource_sections: [],
+    });
+    purchaseRows = [{ id: 'purchase-1', bundle_id: 'bundle-1', buyer_user_id: 'user-2' }];
+    const recipeFileRow = (id: string, sortOrder: number, handle: string, recipeFile: string) => ({
+      id,
+      generation_id: 'source-1',
+      user_id: 'creator-1',
+      media_type: 'image' as const,
+      role: 'reference_image',
+      label: handle.slice(1),
+      storage_path: `generation_inputs/creator-1/source-1/0${sortOrder}-reference_image.png`,
+      source_generation_id: null,
+      sort_order: sortOrder,
+      metadata: { handle, displayName: handle.slice(1), sourceKind: 'recipe-file', recipeFile },
+    });
+    inputMediaRows = [
+      recipeFileRow(PASSED_ROW, 0, '@hero', ORIGINAL_COPY),
+      // A file of another recipe the run used: never passed on, so no copy.
+      recipeFileRow(KEPT_BACK_ROW, 1, '@logo', 'post_resource_files/seller-z/generation-references/original-z/00-reference-image-row-z.png'),
+    ];
+
+    const { GET } = await import('@/app/api/remix-source/route');
+    const response = await GET(createRouteRequest('http://localhost/api/remix-source?id=source-1&postId=post-1'));
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.inputs.image.elements).toEqual([expect.objectContaining({
+      id: PASSED_ROW,
+      handle: '@hero',
+      storagePath: `post_resource_files/${PASSED_COPY}`,
+      url: `https://signed.example.com/post-resource-files/${PASSED_COPY}?expires=3600`,
+    })]);
+    expect(data.inputSlots).toEqual([
+      expect.objectContaining({ kind: 'image', role: 'reference_image', handle: '@logo' }),
+    ]);
+    // Neither the creator's kept files nor the recipes their run used are named.
+    expect(JSON.stringify(data)).not.toMatch(/generation-inputs|generation_inputs|seller-a|seller-z/);
   });
 
   it("restores a shared run's kept copy for a public remixer, without the rows or where the upload was staged", async () => {

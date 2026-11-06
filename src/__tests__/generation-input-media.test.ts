@@ -786,6 +786,25 @@ describe('a kept input made from a recipe file the holder may no longer read', (
     });
   });
 
+  // Remix plan, phase 1b: the file came through the recipe the run remixed, so the buyer's own recipe
+  // takes it, but only while it is linked: the copy asks the same of the database.
+  it('offers it to the holder’s recipe while it is linked, and not once it is withheld', async () => {
+    const { loadGenerationInputMediaMap } = await import('@/lib/generation-input-media');
+    const copyable = async (readable: string[]) => {
+      const result = await loadGenerationInputMediaMap({
+        supabase: client(readable).supabase as never,
+        generationIds: ['gen-1'],
+        urlMode: 'signed',
+        recipeCopyableFor: ['buyer-1'],
+        recipePassOnFolders: new Map([['gen-1', `post_resource_files/${SELLER}/generation-references/${CREATION}/`]]),
+      });
+      return Object.fromEntries((result.get('gen-1') ?? []).map((item) => [item.id, item.recipeCopyable]));
+    };
+
+    expect(await copyable([COPY])).toEqual({ 'from-recipe': true, own: true });
+    expect(await copyable([])).toEqual({ 'from-recipe': false, own: true });
+  });
+
   it('withholds an older run’s link to a run start’s import of a copy the holder no longer has', async () => {
     const { buildLegacyGenerationInputMedia } = await import('@/lib/generation-input-media');
     const IMPORT = `generation_inputs/buyer-1/recipe-imports/${SELLER}/${CREATION}/00-reference-image-row-1.png`;

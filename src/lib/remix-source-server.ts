@@ -38,8 +38,12 @@ import {
   type RemixSourceResult,
 } from '@/lib/remix-source';
 import { isRecipeFileInput } from '@/lib/generation-input-origin';
-import { loadGenerationRecipeRemixInputsByPostId } from '@/lib/post-resource-bundles-server';
-import { holdBackFromRemix, remixInputSlotsOf, remixSlotWords, resolveWithheldRemixInputs } from '@/lib/remix-input-slots-server';
+import {
+  loadGenerationRecipeReferenceCopies,
+  loadGenerationRecipeRemixInputsByPostId,
+  type GenerationReferenceCopy,
+} from '@/lib/post-resource-bundles-server';
+import { holdBackFromRemix, remixInputSlotsOf, remixSlotWords, resolveWithheldRemixInputs, WITHHELD_INPUTS_RESTORE_ISSUE } from '@/lib/remix-input-slots-server';
 import { createServiceClient, createUserClient, resolveOwnedStoredMediaUrl } from '@/lib/server-helpers';
 import {
   getUserOwnedStoredMediaLocation,
@@ -433,11 +437,42 @@ export async function loadRemixSourceBundle(
   // A subject that would be left with fewer pictures than a subject takes is held back whole, for its slot.
   const creatorIds = new Set(typedGeneration.user_id ? [typedGeneration.user_id] : []);
   const recipeFileIds = new Set(recipeInputs.recipeFiles.map((item) => item.id));
+  // ...unless it came through the recipe the creator's run remixed and their recipe passed it on (remix
+  // plan, phase 1b; owner, 2026-11-05: a remix's recipe holds what its run used): a remix that unlocked
+  // that recipe restores it from the recipe's copy, as long as the copy is served. Whichever way the
+  // inputs come (shared by the creator, or handed over by the recipe), only someone who unlocked the
+  // recipe gets them (`loadGenerationRecipeReferenceCopies` reads no copy for anyone else). Only the
+  // files that came through the run's own remixed recipe are asked about, and a read that fails leaves
+  // them as slots with a restore issue rather than failing the remix (#708's max review).
+  const runRecipeFiles = isOwner
+    ? []
+    : readsRunInputs
+      ? inputMedia.filter((item) => isRecipeFileInput(item, creatorIds))
+      : recipeInputs.recipeFiles;
+  let passedOnUnread = false;
+  const passedOnCopies = access.recipe && runRecipeFiles.length > 0
+    ? await loadGenerationRecipeReferenceCopies({
+        adminSupabase,
+        recipe: access.recipe,
+        generationId: typedGeneration.id,
+        viewerUserId: user.id,
+        inputRowIds: runRecipeFiles.map((item) => item.id),
+      }).catch((error: unknown) => {
+        // Those files stay slots, and the remix is told its inputs could not all be read.
+        logBackendError('remix_source_passed_on_copies_unread', { error });
+        passedOnUnread = true;
+        return new Map<string, GenerationReferenceCopy>();
+      })
+    : new Map<string, GenerationReferenceCopy>();
   const handOver = isOwner
     ? { handedOn: inputMedia, heldBack: [] }
     : readsRunInputs
-      ? holdBackFromRemix(inputMedia, (item) => isRecipeFileInput(item, creatorIds), slotTool)
-      : holdBackFromRemix([...recipeInputs.inputMedia, ...recipeInputs.recipeFiles], (item) => recipeFileIds.has(item.id), slotTool);
+      ? holdBackFromRemix(inputMedia, (item) => isRecipeFileInput(item, creatorIds) && !passedOnCopies.has(item.id), slotTool)
+      : holdBackFromRemix(
+        [...recipeInputs.inputMedia, ...recipeInputs.recipeFiles],
+        (item) => recipeFileIds.has(item.id) && !passedOnCopies.has(item.id),
+        slotTool,
+      );
   const keptInputMedia = handOver.handedOn;
   // Never with a link: a held-back input only names its slot.
   const heldBackRecipeFiles = handOver.heldBack.map((item) => ({ ...item, url: null }));
@@ -447,12 +482,17 @@ export async function loadRemixSourceBundle(
     // with the input it was prepared from and in their places among them, which is how a restore pairs
     // them. An asset id runs the file it was prepared from (2026-11-04 re-review): none goes with a
     // held-back file, an input never kept, or a recipe file, nor to a recipe that hands over no input.
+    // A file restored from the recipe's copy takes no asset of the creator's: it was prepared from the
+    // creator's own kept file, theirs alone (phase 1b's review). The remix prepares its own. It keeps
+    // its place with a null, as a restore pairs assets by position (#708's max review).
     const handedOverIds = new Set(keptInputMedia.map((item) => item.id));
+    const passedOnIds = new Set(keptInputMedia.filter((item) => isRecipeFileInput(item, creatorIds)).map((item) => item.id));
     const prepared = preparedSeedanceAssetIdsFor(
       workflowSettings.seedanceAssets,
       [...keptInputMedia, ...heldBackRecipeFiles],
       handedOverIds,
       creatorIds,
+      passedOnIds,
     );
     if (prepared) effectiveWorkflowSettings = { ...effectiveWorkflowSettings, seedanceAssets: prepared };
   }
@@ -460,9 +500,16 @@ export async function loadRemixSourceBundle(
   // what a restore reads (`toRemixerInputMedia`), or to the recipe's copy of it.
   const restoredInputMedia = isOwner
     ? keptInputMedia
-    : [...keptInputMedia.map(toRemixerInputMedia), ...(withheldInputs?.restoredFromCopies ?? [])];
+    : [
+      ...keptInputMedia.map((item) => {
+        const copy = passedOnCopies.get(item.id);
+        return copy ? { ...toRemixerInputMedia(item), storagePath: copy.storagePath, url: copy.url } : toRemixerInputMedia(item);
+      }),
+      ...(withheldInputs?.restoredFromCopies ?? []),
+    ];
 
   const restoreIssues: string[] = withheldInputs?.restoreIssue ? [withheldInputs.restoreIssue] : [];
+  if (passedOnUnread && !restoreIssues.includes(WITHHELD_INPUTS_RESTORE_ISSUE)) restoreIssues.push(WITHHELD_INPUTS_RESTORE_ISSUE);
   // Keeping inputs fails one item at a time, so the kept rows can hold less
   // than the recipe used. Say so: otherwise a remix restores the kept part as
   // if it were the whole recipe. Read without signing anything.
