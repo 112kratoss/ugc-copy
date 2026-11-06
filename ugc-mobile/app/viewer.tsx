@@ -1,7 +1,7 @@
 import { useDecodedImageAspectRatio } from '@/lib/use-decoded-image-aspect-ratio';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams, useNavigation } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
@@ -165,7 +165,7 @@ import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profi
 import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 import { createViewerTopControls, ViewerTopControlsContext } from '@/lib/viewer-top-controls';
-import { useScreenLeaving } from '@/lib/use-screen-leaving';
+import { listenToTransition, useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
@@ -234,8 +234,8 @@ const ViewerLeavingContext = createContext(false);
 /** The reel's black. */
 const REEL_GROUND = '#000';
 /**
- * What the reel draws behind its media: its black, or clear once a close into
- * a tile has begun on iOS (`groundClear` in the screen).
+ * What the reel draws behind its media: its black, or clear (`groundClear` in
+ * the screen) so that a close into a tile shrinks the picture alone.
  */
 const ViewerGroundContext = createContext<string>(REEL_GROUND);
 
@@ -656,14 +656,45 @@ function ImmersivePreviewViewer() {
   // picture. The black around a picture that does not fill the screen shrank
   // with it as a dark panel, cut to the tile's shape only at the end (owner,
   // 2026-11-07: "a shadow appearing around the pic and that then shrinks"). So
-  // a reel zoomed out of a tile is clear behind its media once it has landed,
-  // and the picture alone shrinks back into the tile, as Photos does. At rest
-  // that looks the same: the navigator's backdrop behind the reel is black
-  // (lib/reel-backdrop.ts), and at the start of a close the veil over the
-  // screen beneath is still black. Cleared only as a close began, the first
-  // frame of the shrink still carried the panel. A reel pushed without a zoom
-  // fades in over the screen beneath, so it keeps its black.
-  const groundClear = Platform.OS === 'ios' && Boolean(nativeZoomSourceId) && (zoom.landed || leaving);
+  // a reel zoomed out of a tile is clear behind its media while it is the
+  // screen in front and its push has finished, and through its own close: the
+  // picture alone shrinks back into the tile, as Photos does, while its chrome
+  // fades (`MediaZoomChrome`). At rest that looks the same, the navigator's
+  // backdrop behind the reel being black (lib/reel-backdrop.ts). It stays black
+  // while it grows (the screen beneath shows only once the push is over), while
+  // a page pushed over it covers it or is popped off it (the backdrop is let go
+  // of while covered), under Reduce Motion (no zoom runs), and when pushed
+  // without a zoom, which fades in over the screen beneath.
+  const reelNavigation = useNavigation();
+  const [pushLanded, setPushLanded] = useState(false);
+  // This reel's own close under way, as against a page pushed over it: both
+  // start a transition that closes it, and only its own begins while it is
+  // still the focused route. Focus is gone from the first frame of either.
+  const [closingSelf, setClosingSelf] = useState(false);
+  useEffect(() => {
+    const unsubscribers = [
+      listenToTransition(reelNavigation, 'transitionStart', (event) => {
+        if (event.data?.closing === true) {
+          if ((reelNavigation as unknown as { isFocused: () => boolean }).isFocused()) setClosingSelf(true);
+        } else if (event.data?.closing === false) {
+          setClosingSelf(false);
+        }
+      }),
+      listenToTransition(reelNavigation, 'transitionEnd', (event) => {
+        if (event.data?.closing === false) setPushLanded(true);
+      }),
+      listenToTransition(reelNavigation, 'gestureCancel', () => setClosingSelf(false)),
+    ];
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  }, [reelNavigation]);
+  const groundClear = Platform.OS === 'ios'
+    ? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (pushLanded && isFocused))
+    // Android shrinks the reel itself (components/media-zoom.tsx), window and
+    // all, in about three frames: too fast for a re-render to clear it as the
+    // shrink begins (filmed on the Pixel 9a emulator). So it is always clear
+    // there: the stage's own ground is the reel's black at rest, and it fades
+    // as a shrink runs, inside the window and out of it alike.
+    : true;
   const ground = groundClear ? 'transparent' : REEL_GROUND;
   // A zoom into the reel lands in steps, each a frame or two of the UI thread
   // rather than one long hold — traced on an S24, doing it all at once held one
@@ -1539,12 +1570,12 @@ function ImmersivePreviewViewer() {
           // iOS: Back and Mute are the navigation bar's own items, so Back pops
           // at once (lib/viewer-native-back.ts).
           ...(nativeBack ? viewerNativeBackOptions({
+            // Gone as a close begins, as the rest of the chrome fades: UIKit
+            // drew the bar black over the top of the shrinking reel.
             hidden: detailsOpenForActive || (activeItem != null && leavingMediaItemId === activeItem.id),
             mute: hasImmersiveAudibleMedia(activeItem) ? { muted: audioMuted, onPress: toggleMuteFromBar } : null,
           }) : null),
           ...(Platform.OS === 'ios' && !nativeZoomSourceId && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
-          // The screen's own ground, the outermost of the reel's (see `groundClear`).
-          ...(groundClear ? { contentStyle: { backgroundColor: 'transparent' } } : null),
         }}
       />
       <FlatList

@@ -380,14 +380,20 @@ function RootLayoutNav() {
                     beneath the whole way. A card, not a modal: a modal here would
                     turn every screen pushed after it into a sheet
                     (native-stack's `getModalRouteKeys`) and lose the edge-swipe
-                    back. Opaque, so the zoom never shows the system background
-                    through a reel still building its first slide. */}
+                    back. The reel draws its own black ground from its first
+                    render, so the zoom never shows the system background through
+                    a reel still building its first slide. */}
                 <Stack.Screen
                   name="viewer"
                   options={({ route }) => ({
                     headerShown: false,
                     presentation: Platform.OS === 'android' ? 'transparentModal' : 'card',
-                    contentStyle: { backgroundColor: Platform.OS === 'android' ? 'transparent' : mediaColors.mediaGround },
+                    // Clear on both platforms: the reel draws its own black from
+                    // its first render, and on iOS clears it behind its media so
+                    // that a zoom close shrinks the picture alone (`groundClear`
+                    // in app/viewer.tsx). A native screen did not take a new
+                    // background once mounted, so this one never changes.
+                    contentStyle: { backgroundColor: 'transparent' },
                     animation: reducedMotion ? 'none' : viewerAnimation(route.params),
                     animationDuration: 250,
                   })}
