@@ -6,6 +6,7 @@ import { quoteGenerationModel } from '@/lib/generation-model-catalog';
 import {
   createTemplateVersionSnapshotGraph,
   getIncomingEdges,
+  getResolvedWorkflowImageReferences,
   inspectWorkflowNodeCapabilities,
   normalizeNodeData,
   normalizeWorkflowGraph,
@@ -32,17 +33,13 @@ export function createTemplateSnapshotHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-/** An image step's inputs, by the edges that reach it. */
-function inputCountsForNode(graph: WorkflowCanvasGraph, node: WorkflowCanvasNode) {
-  let images = 0;
-  let videos = 0;
-  let audios = 0;
-  for (const edge of getIncomingEdges(graph, node.id)) {
-    if (edge.targetHandle === 'image-reference') images += 1;
-    if (edge.targetHandle === 'reference-video') videos += 1;
-    if (edge.targetHandle === 'reference-audio') audios += 1;
-  }
-  return { images, videos, audios };
+/**
+ * An image step's inputs, read as the runner sends them and the canvas prices them: its
+ * connected reference pictures and its own older elements. An image step takes no clips or
+ * tracks.
+ */
+function imageStepInputCounts(graph: WorkflowCanvasGraph, node: WorkflowCanvasNode) {
+  return { images: getResolvedWorkflowImageReferences(graph, node.id).length, videos: 0, audios: 0 };
 }
 
 function quoteNode(
@@ -61,7 +58,7 @@ function quoteNode(
         outputFormat: data.outputFormat,
         googleSearch: data.googleSearch,
       },
-      inputCounts: inputCountsForNode(graph, node),
+      inputCounts: imageStepInputCounts(graph, node),
       catalogRevision,
     }).costCredits;
   }

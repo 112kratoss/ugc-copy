@@ -12,7 +12,7 @@ import {
   startVoiceoverGeneration,
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
-import { getVideoReferenceSupport, IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
 import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
@@ -89,7 +89,7 @@ import {
 import { generationModelConditionMatches, type GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
-import { workflowVideoStepQuoteFacts } from '@/lib/workflow-video-step-quote';
+import { workflowVideoStepQuoteFacts, workflowVideoStepSendsReferenceMedia } from '@/lib/workflow-video-step-quote';
 import { catalogMotionInputSlots } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 export interface WorkflowRunExecutionResult {
@@ -1085,8 +1085,8 @@ export async function executeWorkflowRunnableNode(params: {
     // The canvas connects clips and tracks to every model whose limits take
     // them (getVideoReferenceSupport) and the start sends them as links, so a
     // step sends each one it is shown with. Kling's clips go as named elements.
-    const referenceSupport = getVideoReferenceSupport(data.model);
-    const sendsReferenceMedia = !isKlingVideoModel && referenceSupport.videos + referenceSupport.audios > 0;
+    // The canvas price and a template's price decide with the same rule.
+    const sendsReferenceMedia = workflowVideoStepSendsReferenceMedia(data.model);
     const elementPayload = isSeedance2Family
       ? getSeedanceReferenceCollections(graph, node.id)
       : {
@@ -1205,6 +1205,9 @@ export async function executeWorkflowRunnableNode(params: {
       klingVideoElements,
       startImageUrl: inputs.startFrameUrl,
       endImageUrl: inputs.endFrameUrl,
+      // The mode the step was quoted in: Wan 2.7 and Grok Imagine Video 1.5 keep a start
+      // frame beside their references only in a references run.
+      referenceMode,
       mode: data.mode,
       aspectRatio: data.aspectRatio,
       sound: data.sound,

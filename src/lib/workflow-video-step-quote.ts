@@ -58,20 +58,29 @@ export function workflowVideoStepQuoteFacts(inputs: WorkflowVideoStepInputs): Wo
 }
 
 /**
- * The reference clips and tracks a video step sends: every one the canvas connects, for a
- * model whose limits take them (the runner reads the same table). Kling 3.0's clips are its
- * named elements instead (`workflowVideoStepInputsFromGraph`).
+ * Whether a video step sends its reference clips and tracks: every one connected, once the
+ * model's limits take either kind (`getVideoReferenceSupport`). The runner decides with this
+ * too, so the canvas price and a template's price count what the run sends: a track left
+ * connected to a model that takes clips alone is sent, and refused by the quote, on all three.
+ * Kling 3.0's clips go as named elements instead (`workflowVideoStepInputsFromGraph`).
  */
+export function workflowVideoStepSendsReferenceMedia(model: VideoGenerateNodeData['model']): boolean {
+  if (model === 'kling-3.0-video') return false;
+  const support = getVideoReferenceSupport(model);
+  return support.videos + support.audios > 0;
+}
+
+/** The reference clips and tracks a video step sends, by the edges that reach it. */
 export function workflowVideoStepReferenceMedia(
   graph: WorkflowCanvasGraph,
   node: WorkflowCanvasNode,
   data: VideoGenerateNodeData,
 ) {
-  const support = data.model === 'kling-3.0-video' ? { videos: 0, audios: 0 } : getVideoReferenceSupport(data.model);
+  if (!workflowVideoStepSendsReferenceMedia(data.model)) return { clipEdges: [], trackEdges: [] };
   const incoming = getIncomingEdges(graph, node.id);
   return {
-    clipEdges: support.videos > 0 ? incoming.filter((edge) => edge.targetHandle === 'reference-video') : [],
-    trackEdges: support.audios > 0 ? incoming.filter((edge) => edge.targetHandle === 'reference-audio') : [],
+    clipEdges: incoming.filter((edge) => edge.targetHandle === 'reference-video'),
+    trackEdges: incoming.filter((edge) => edge.targetHandle === 'reference-audio'),
   };
 }
 
@@ -85,8 +94,9 @@ export function workflowVideoStepInputsFromGraph(
   graph: WorkflowCanvasGraph,
   node: WorkflowCanvasNode,
   data: VideoGenerateNodeData,
+  media: ReturnType<typeof workflowVideoStepReferenceMedia> = workflowVideoStepReferenceMedia(graph, node, data),
 ): WorkflowVideoStepInputs {
-  const { clipEdges, trackEdges } = workflowVideoStepReferenceMedia(graph, node, data);
+  const { clipEdges, trackEdges } = media;
   return {
     referencePictures: getResolvedWorkflowImageReferences(graph, node.id).length,
     startFrame: countIncomingEdgesForTargetHandle(graph, node.id, 'start-frame') > 0,

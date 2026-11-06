@@ -1271,17 +1271,30 @@ describe('workflow-runner recovery', () => {
     const codeCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
     const codeOperations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
     const quoteAsCreated = quoteGenerationModelMock.getMockImplementation()!;
+    // The release loader and the probe go back to what they were before each test here, not
+    // to their first implementations: a later test leans on the release an earlier one left.
+    let loadBefore = loadGenerationModelOperationByRevisionMock.getMockImplementation();
+    let probeBefore = probeMediaDurationSecondsMock.getMockImplementation();
 
     beforeEach(() => {
-      // The code catalog stands in for the step's release.
+      loadBefore = loadGenerationModelOperationByRevisionMock.getMockImplementation();
+      probeBefore = probeMediaDurationSecondsMock.getMockImplementation();
+      // The code catalog stands in for the step's release, for its quote and for the limits
+      // a step that sends tracks measures them against.
       quoteGenerationModelMock.mockImplementation((input) => quoteGenerationModel(
         { ...(input as GenerationModelQuoteInput), catalogRevision: null },
         { catalog: codeCatalog, operations: codeOperations },
       ));
+      loadGenerationModelOperationByRevisionMock.mockImplementation(async (...args: unknown[]) => {
+        const { modelId } = args[0] as { modelId: string };
+        return { catalog: codeCatalog, operation: codeOperations.get(modelId), releaseId: null };
+      });
     });
 
     afterEach(() => {
       quoteGenerationModelMock.mockImplementation(quoteAsCreated);
+      if (loadBefore) loadGenerationModelOperationByRevisionMock.mockImplementation(loadBefore);
+      if (probeBefore) probeMediaDurationSecondsMock.mockImplementation(probeBefore);
     });
 
     /** A video step given a prompt and an uploaded picture on each frame input named. */
@@ -1336,9 +1349,102 @@ describe('workflow-runner recovery', () => {
         startImageUrl: 'https://cdn.example.com/frame-1.png',
         endImageUrl: null,
         references: [],
+        referenceMode: 'frames',
         quotedCostCredits: price,
       }));
     });
+
+    type StepHandle = 'start-frame' | 'end-frame' | 'image-reference' | 'reference-audio';
+
+    /** A video step given a prompt and an uploaded file on each input named. */
+    async function runStepWith(model: VideoGenerateNodeData['model'], handles: StepHandle[]) {
+      probeMediaDurationSecondsMock.mockImplementation(async () => 5);
+      const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
+      const sources = handles.map((handle, index) => {
+        const position = { x: 40, y: 200 + index * 160 };
+        if (handle === 'reference-audio') {
+          const track = createWorkflowNode('audio-input', position);
+          return { ...track, data: { ...(track.data as AudioInputNodeData), audioUrl: `https://cdn.example.com/track-${index + 1}.mp3` } };
+        }
+        const picture = createWorkflowNode('image-input', position);
+        return { ...picture, data: { ...(picture.data as ImageInputNodeData), imageUrl: `https://cdn.example.com/picture-${index + 1}.png` } };
+      });
+      const step = createWorkflowNode('video-generate', { x: 320, y: 40 });
+      const graph = normalizeWorkflowGraph({
+        nodes: [
+          { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'The camera pushes in slowly.' } },
+          ...sources,
+          { ...step, data: { ...(step.data as VideoGenerateNodeData), model } },
+        ],
+        edges: [
+          createCanvasEdge(prompt.id, 'text', step.id, 'prompt'),
+          ...sources.map((source, index) => createCanvasEdge(
+            source.id,
+            handles[index] === 'reference-audio' ? 'audio' : 'image',
+            step.id,
+            handles[index]!,
+          )),
+        ],
+      });
+      const node = graph.nodes.find((candidate) => candidate.id === step.id)!;
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      return {
+        graph,
+        node,
+        run: () => executeWorkflowRunnableNode({
+          supabase: {} as never,
+          userId: 'user-1',
+          graph,
+          node,
+          catalogRevision: 'catalog-rev-1',
+          clientRequestKeyHash: 'f'.repeat(64),
+        }),
+      };
+    }
+
+    // Wan 2.7 and Grok Imagine Video 1.5 keep a start frame beside their references only in a
+    // references run: started in the frames mode, such a step was refused on every run.
+    it('starts a Wan 2.7 step with a start frame and reference pictures in the references mode it was quoted in', async () => {
+      const step = await runStepWith('wan-2.7', ['start-frame', 'image-reference', 'image-reference']);
+
+      await expect(step.run()).resolves.toMatchObject({ status: 'processing' });
+      expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+        settings: expect.objectContaining({ referenceMode: 'elements' }),
+        inputCounts: { images: 2, videos: 0, audios: 0 },
+      }));
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'wan-2.7',
+        startImageUrl: 'https://cdn.example.com/picture-1.png',
+        references: [expect.anything(), expect.anything()],
+        referenceMode: 'elements',
+      }));
+    });
+
+    // The canvas and a template price a step from its connections; the runner holds the quote of
+    // what it sends. The two must read one step alike, or a price shown is not the price held.
+    it.each([
+      { model: 'vidu-q4', handles: ['start-frame'] },
+      { model: 'kling-3.0-video', handles: ['start-frame', 'end-frame'] },
+      { model: 'wan-2.7', handles: ['start-frame', 'image-reference', 'image-reference'] },
+      { model: 'gemini-omni-video', handles: Array<StepHandle>(5).fill('image-reference') },
+      { model: 'gemini-omni-video', handles: ['image-reference', 'reference-audio'] },
+    ] as Array<{ model: VideoGenerateNodeData['model']; handles: StepHandle[] }>)(
+      'reads a $model step with $handles as the canvas prices it',
+      async ({ model, handles }) => {
+        const step = await runStepWith(model, handles);
+        const { planWorkflowStepPrice } = await import('@/app/create-workflow/useWorkflowRunPrices');
+        const plan = planWorkflowStepPrice(step.graph, step.node);
+        if (plan.kind !== 'quote') throw new Error(`the canvas has no price: ${plan.kind}`);
+
+        // A step its quote refuses is refused here too; the quote is asked either way.
+        await step.run().catch(() => undefined);
+
+        expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
+        const held = quoteGenerationModelMock.mock.calls[0][0] as GenerationModelQuoteInput;
+        expect({ mode: held.settings?.referenceMode, counts: held.inputCounts })
+          .toEqual({ mode: plan.input.settings?.referenceMode, counts: plan.input.inputCounts });
+      },
+    );
 
     it('asks the quote about the frames the start sends, in the mode it sends them', async () => {
       const step = await runFrameStep('kling-3.0-video', ['start-frame', 'end-frame']);

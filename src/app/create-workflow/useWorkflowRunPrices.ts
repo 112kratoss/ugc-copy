@@ -98,7 +98,8 @@ export function planWorkflowStepPrice(graph: WorkflowCanvasGraph, node: Workflow
 
   if (node.type === 'video-generate') {
     const data = normalizeNodeData('video-generate', node.data as Partial<WorkflowNodeData>) as VideoGenerateNodeData;
-    const { clipEdges } = workflowVideoStepReferenceMedia(graph, node, data);
+    const media = workflowVideoStepReferenceMedia(graph, node, data);
+    const { clipEdges } = media;
     // A clip is charged for its measured length, so the price is an estimate
     // from the length the canvas knows, and none at all without one.
     const clipSeconds = clipEdges.map((edge) => expectedClipSeconds(graph, edge));
@@ -106,7 +107,9 @@ export function planWorkflowStepPrice(graph: WorkflowCanvasGraph, node: Workflow
       return { kind: 'unavailable', reason: 'A step with a reference clip is priced by the clip’s length, which is not known yet.' };
     }
     // The mode and pictures the runner quotes the step's run with, its frames among them.
-    const { referenceMode, inputCounts } = workflowVideoStepQuoteFacts(workflowVideoStepInputsFromGraph(graph, node, data));
+    const { referenceMode, inputCounts } = workflowVideoStepQuoteFacts(
+      workflowVideoStepInputsFromGraph(graph, node, data, media),
+    );
     return {
       kind: 'quote',
       approximate: clipEdges.length > 0,

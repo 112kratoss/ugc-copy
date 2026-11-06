@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { planWorkflowStepPrice } from '@/app/create-workflow/useWorkflowRunPrices';
+import { buildGenerationModelCatalog, quoteGenerationModel } from '@/lib/generation-model-catalog';
+import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import {
   createCanvasEdge,
   createWorkflowNode,
   normalizeWorkflowGraph,
+  type AudioInputNodeData,
   type ImageInputNodeData,
+  type TextInputNodeData,
   type VideoGenerateNodeData,
   type VideoInputNodeData,
   type WorkflowCanvasNode,
@@ -14,6 +19,42 @@ import {
   workflowVideoStepQuoteFacts,
   type WorkflowVideoStepInputs,
 } from '@/lib/workflow-video-step-quote';
+
+type StepHandle = 'start-frame' | 'end-frame' | 'reference-image' | 'image-reference' | 'element-image' | 'reference-video' | 'reference-audio';
+
+/** A video step of the model, with an uploaded file on each input named. */
+function graphWith(model: VideoGenerateNodeData['model'], handles: StepHandle[]) {
+  const prompt = createWorkflowNode('text-input', { x: 0, y: -160 });
+  const step = createWorkflowNode('video-generate', { x: 400, y: 0 });
+  const sources = handles.map((handle, index) => {
+    const kind = handle === 'reference-video' ? 'video-input' : handle === 'reference-audio' ? 'audio-input' : 'image-input';
+    const node = createWorkflowNode(kind, { x: 0, y: index * 160 });
+    if (kind === 'video-input') {
+      return { ...node, data: { ...(node.data as VideoInputNodeData), videoUrl: `https://cdn.example.com/clip-${index}.mp4` } };
+    }
+    if (kind === 'audio-input') {
+      return { ...node, data: { ...(node.data as AudioInputNodeData), audioUrl: `https://cdn.example.com/track-${index}.mp3` } };
+    }
+    return { ...node, data: { ...(node.data as ImageInputNodeData), imageUrl: `https://cdn.example.com/picture-${index}.png` } };
+  }) as WorkflowCanvasNode[];
+  const graph = normalizeWorkflowGraph({
+    nodes: [
+      { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'The camera pushes in slowly.' } },
+      ...sources,
+      { ...step, data: { ...(step.data as VideoGenerateNodeData), model } },
+    ],
+    edges: [
+      createCanvasEdge(prompt.id, 'text', step.id, 'prompt'),
+      ...handles.map((handle, index) => createCanvasEdge(
+        sources[index]!.id,
+        handle === 'reference-video' ? 'video' : handle === 'reference-audio' ? 'audio' : 'image',
+        step.id,
+        handle,
+      )),
+    ],
+  });
+  return { graph, node: graph.nodes.find((candidate) => candidate.id === step.id)! };
+}
 
 const NONE: WorkflowVideoStepInputs = {
   referencePictures: 0,
@@ -66,26 +107,8 @@ describe('workflowVideoStepQuoteFacts', () => {
 });
 
 describe('workflowVideoStepInputsFromGraph', () => {
-  /** A video step of the model, with an uploaded file on each input named. */
-  function stepWith(model: VideoGenerateNodeData['model'], handles: Array<'start-frame' | 'end-frame' | 'reference-image' | 'element-image' | 'reference-video'>) {
-    const step = createWorkflowNode('video-generate', { x: 400, y: 0 });
-    const sources = handles.map((handle, index) => {
-      const kind = handle === 'reference-video' ? 'video-input' : 'image-input';
-      const node = createWorkflowNode(kind, { x: 0, y: index * 160 });
-      return kind === 'video-input'
-        ? { ...node, data: { ...(node.data as VideoInputNodeData), videoUrl: `https://cdn.example.com/clip-${index}.mp4` } }
-        : { ...node, data: { ...(node.data as ImageInputNodeData), imageUrl: `https://cdn.example.com/picture-${index}.png` } };
-    }) as WorkflowCanvasNode[];
-    const graph = normalizeWorkflowGraph({
-      nodes: [...sources, { ...step, data: { ...(step.data as VideoGenerateNodeData), model } }],
-      edges: handles.map((handle, index) => createCanvasEdge(
-        sources[index]!.id,
-        handle === 'reference-video' ? 'video' : 'image',
-        step.id,
-        handle,
-      )),
-    });
-    const node = graph.nodes.find((candidate) => candidate.id === step.id)!;
+  function stepWith(model: VideoGenerateNodeData['model'], handles: StepHandle[]) {
+    const { graph, node } = graphWith(model, handles);
     return workflowVideoStepInputsFromGraph(graph, node, node.data as VideoGenerateNodeData);
   }
 
@@ -106,5 +129,55 @@ describe('workflowVideoStepInputsFromGraph', () => {
       startFrame: true,
       videoElements: 1,
     });
+  });
+
+  // The runner sends every clip and track once a model's limits take either kind
+  // (workflowVideoStepSendsReferenceMedia), so the prices count each one it sends.
+  it('counts every clip and track the run sends, a track left on a model that takes clips alone among them', () => {
+    expect(stepWith('gemini-omni-video', ['image-reference', 'reference-audio'])).toEqual({
+      ...NONE,
+      referencePictures: 1,
+      referenceTracks: 1,
+    });
+    expect(stepWith('grok-imagine-video', ['start-frame', 'reference-video'])).toEqual({ ...NONE, startFrame: true });
+  });
+});
+
+// The canvas's price for a step, on the code catalog: what the claims about accepted and refused
+// steps rest on.
+describe('the canvas price of a video step', () => {
+  const catalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
+  const operations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+
+  function canvasCredits(model: VideoGenerateNodeData['model'], handles: StepHandle[]) {
+    const { graph, node } = graphWith(model, handles);
+    const plan = planWorkflowStepPrice(graph, node);
+    if (plan.kind !== 'quote') throw new Error(`no quote: ${plan.kind}`);
+    return quoteGenerationModel({ ...plan.input, catalogRevision: null }, { catalog, operations }).costCredits;
+  }
+
+  it('prices Gemini Omni Video with three to seven reference pictures as a references run, at the price of two', () => {
+    const two = canvasCredits('gemini-omni-video', ['image-reference', 'image-reference']);
+    expect(two).toBeGreaterThan(0);
+    expect(canvasCredits('gemini-omni-video', Array<StepHandle>(3).fill('image-reference'))).toBe(two);
+    expect(canvasCredits('gemini-omni-video', Array<StepHandle>(7).fill('image-reference'))).toBe(two);
+    expect(() => canvasCredits('gemini-omni-video', Array<StepHandle>(8).fill('image-reference'))).toThrow();
+  });
+
+  it.each(['kling-3.0-video', 'kling-3.0-turbo', 'hailuo-2.3', 'pixverse-v6-max'] as const)(
+    'refuses reference pictures on %s at the quote, as its start does',
+    (model) => {
+      expect(() => canvasCredits(model, ['image-reference'])).toThrow();
+    },
+  );
+
+  it('refuses a track left on a model that takes clips alone, as its run is refused', () => {
+    expect(canvasCredits('gemini-omni-video', ['image-reference'])).toBeGreaterThan(0);
+    expect(() => canvasCredits('gemini-omni-video', ['image-reference', 'reference-audio'])).toThrow();
+  });
+
+  it('prices Vidu Q4 and Hailuo 2.3 steps that have a start frame alone', () => {
+    expect(canvasCredits('vidu-q4', ['start-frame'])).toBeGreaterThan(0);
+    expect(canvasCredits('hailuo-2.3', ['start-frame'])).toBeGreaterThan(0);
   });
 });
