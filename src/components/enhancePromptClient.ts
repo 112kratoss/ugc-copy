@@ -19,7 +19,8 @@ export interface PromptEnhancementRequest {
  * it, and an ask under its token would be a new paid press charged to it, its answer applied to the
  * earlier account's form. Without one, the press is the account the first ask finds. Once `signal`
  * is aborted (the button went with its form, shot or node) no ask goes out; one already sent is
- * left to finish.
+ * left to finish. A press stopped after an ask that got no answer ends in a `PromptEnhancementError`
+ * whose `settlesBy` says when the server is done with it.
  */
 export interface PromptEnhancementPress {
   account?: string | null;
@@ -65,14 +66,21 @@ export const PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT = 1;
 const STILL_RUNNING_CODE = 'AI_USAGE_IN_PROGRESS';
 const LOST_ANSWER_MESSAGE = 'Could not get the enhanced prompt. Check your connection and try again.';
 const OTHER_ACCOUNT_MESSAGE = 'Another account signed in, so Enhance stopped.';
+const STOPPED_MESSAGE = 'Enhance stopped before its answer came back.';
 
 export class PromptEnhancementError extends Error {
   remainingCredits?: number;
+  /**
+   * For a press its signal stopped while the server may still be working on it: the time (ms since
+   * the epoch) by which the server is done with its key, and has charged or refunded it.
+   */
+  settlesBy?: number;
 
-  constructor(message: string, options?: { remainingCredits?: number }) {
+  constructor(message: string, options?: { remainingCredits?: number; settlesBy?: number }) {
     super(message);
     this.name = 'PromptEnhancementError';
     this.remainingCredits = options?.remainingCredits;
+    this.settlesBy = options?.settlesBy;
   }
 }
 
@@ -121,12 +129,22 @@ export async function requestPromptEnhancement(
   let pressedFor = account;
   let connectionFailures = 0;
   let timeouts = 0;
+  // When the last ask went out. Every ask under the key ended without an answer by the time the
+  // loop runs again, so the server may still be working on one, but on none past the wait from
+  // when it was sent: a press stopped then says so, for its balance to be read again after.
+  let lastAskAt: number | null = null;
+  const stopIfAborted = () => {
+    if (signal?.aborted && lastAskAt !== null) {
+      throw new PromptEnhancementError(STOPPED_MESSAGE, { settlesBy: lastAskAt + PROMPT_ENHANCE_WAIT_MS });
+    }
+    signal?.throwIfAborted();
+  };
 
   for (;;) {
-    signal?.throwIfAborted();
+    stopIfAborted();
     // Read for each ask, so a session the press's account refreshed meanwhile still carries it.
     const { data: { session } } = await supabase.auth.getSession();
-    signal?.throwIfAborted();
+    stopIfAborted();
     if (!session) {
       throw new PromptEnhancementError('Please log in to enhance prompts');
     }
@@ -135,6 +153,7 @@ export async function requestPromptEnhancement(
       throw new PromptEnhancementError(OTHER_ACCOUNT_MESSAGE);
     }
 
+    lastAskAt = Date.now();
     const ask = await askOnce(request, key, session.access_token);
     if (ask.outcome === 'answered') return ask.result;
     if (ask.outcome === 'still-running') {

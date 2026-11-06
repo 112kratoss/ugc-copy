@@ -314,8 +314,33 @@ describe('one press, one key', () => {
     it('sends nothing when the signal is aborted before the first ask', async () => {
       const asks = stubAsks([answer('Never asked for')]);
 
-      await expect(requestPromptEnhancement(poster, { signal: AbortSignal.abort() })).rejects.toBeInstanceOf(Error);
+      const error = await requestPromptEnhancement(poster, { signal: AbortSignal.abort() }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      // Nothing was sent, so nothing is left running for a balance to wait on.
+      expect((error as PromptEnhancementError).settlesBy).toBeUndefined();
       expect(asks).toHaveLength(0);
+    });
+
+    // The server may still charge or refund a press it was working on when the button went: the
+    // ending says by when it is done with the key, for the balance to be read again then.
+    it.each([
+      { left: 'still running', step: () => refusal(errors.stillRunning) },
+      { left: 'with its connection dropped', step: () => dropped() },
+    ])('says by when a press left $left is settled', async ({ step }) => {
+      vi.useFakeTimers();
+      const asks = stubAsks([dropped(), step(), answer('Never asked for')]);
+      const gone = new AbortController();
+
+      const pressed = requestPromptEnhancement(poster, { signal: gone.signal }).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs);
+      const lastAskAt = Date.now();
+      await vi.advanceTimersByTimeAsync(1);
+      gone.abort();
+
+      const error = await pressed;
+      expect(error).toBeInstanceOf(PromptEnhancementError);
+      expect((error as PromptEnhancementError).settlesBy).toBe(lastAskAt + clientWait.timeoutMs);
+      expect(asks).toHaveLength(2);
     });
   });
 });

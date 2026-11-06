@@ -126,7 +126,8 @@ export default function EnhancePromptButton({
 
     // A press that ends after its button has gone may still have been paid for, or refunded. The
     // balance it brings is the pressing account's, which need not hold the session any more, so
-    // whoever does reads their own (a plain event, unlike the figure `updateCredits` sends).
+    // whoever does reads their own (a plain event, unlike the figure `updateCredits` sends). No ask
+    // goes with it, so it can charge nothing.
     const readBalanceAgain = () => {
         window.dispatchEvent(new Event('credits_updated'));
     };
@@ -180,6 +181,10 @@ export default function EnhancePromptButton({
         } catch (err) {
             if (gone.aborted) {
                 readBalanceAgain();
+                // Left running on the server: its charge or refund lands later, so read once more then.
+                if (err instanceof PromptEnhancementError && err.settlesBy !== undefined) {
+                    window.setTimeout(readBalanceAgain, Math.max(0, err.settlesBy - Date.now()));
+                }
                 return;
             }
             console.error('Enhance prompt error:', err);
