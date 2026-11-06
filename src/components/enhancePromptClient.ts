@@ -97,9 +97,14 @@ function createPressKey(): string {
   return `enhance:${random}`;
 }
 
-// Ends early when the signal is aborted, for the loop to stop at once.
+// Ends early when the signal is aborted, for the loop to stop at once. A signal aborted while an
+// ask was out fires no 'abort' again, so it ends at once.
 function wait(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
     const done = () => {
       clearTimeout(timeoutId);
       signal?.removeEventListener('abort', done);
@@ -140,30 +145,39 @@ export async function requestPromptEnhancement(
     signal?.throwIfAborted();
   };
 
-  for (;;) {
-    stopIfAborted();
-    // Read for each ask, so a session the press's account refreshed meanwhile still carries it.
-    const { data: { session } } = await supabase.auth.getSession();
-    stopIfAborted();
-    if (!session) {
-      throw new PromptEnhancementError('Please log in to enhance prompts');
-    }
-    pressedFor ??= session.user.id;
-    if (session.user.id !== pressedFor) {
-      throw new PromptEnhancementError(OTHER_ACCOUNT_MESSAGE);
-    }
+  try {
+    for (;;) {
+      stopIfAborted();
+      // Read for each ask, so a session the press's account refreshed meanwhile still carries it.
+      const { data: { session } } = await supabase.auth.getSession();
+      stopIfAborted();
+      if (!session) {
+        throw new PromptEnhancementError('Please log in to enhance prompts');
+      }
+      pressedFor ??= session.user.id;
+      if (session.user.id !== pressedFor) {
+        throw new PromptEnhancementError(OTHER_ACCOUNT_MESSAGE);
+      }
 
-    lastAskAt = Date.now();
-    const ask = await askOnce(request, key, session.access_token);
-    if (ask.outcome === 'answered') return ask.result;
-    if (ask.outcome === 'still-running') {
-      if (Date.now() - firstAskAt >= PROMPT_ENHANCE_WAIT_MS) throw ask.error;
-    } else if (ask.outcome === 'timed-out') {
-      if (++timeouts > PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT) throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
-    } else if (++connectionFailures > PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE) {
-      throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
+      lastAskAt = Date.now();
+      const ask = await askOnce(request, key, session.access_token);
+      if (ask.outcome === 'answered') return ask.result;
+      if (ask.outcome === 'still-running') {
+        if (Date.now() - firstAskAt >= PROMPT_ENHANCE_WAIT_MS) throw ask.error;
+      } else if (ask.outcome === 'timed-out') {
+        if (++timeouts > PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT) throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
+      } else if (++connectionFailures > PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE) {
+        throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
+      }
+      await wait(PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS, signal);
     }
-    await wait(PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS, signal);
+  } catch (error) {
+    // Stopped while an ask was out, and ended by its outcome (a last dropped connection, a 429, a
+    // still-running at the wait's end): an earlier ask may still be running on the server all the same.
+    if (signal?.aborted && lastAskAt !== null && error instanceof PromptEnhancementError) {
+      error.settlesBy ??= lastAskAt + PROMPT_ENHANCE_WAIT_MS;
+    }
+    throw error;
   }
 }
 

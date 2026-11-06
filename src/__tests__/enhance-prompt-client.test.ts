@@ -342,5 +342,44 @@ describe('one press, one key', () => {
       expect((error as PromptEnhancementError).settlesBy).toBe(lastAskAt + clientWait.timeoutMs);
       expect(asks).toHaveLength(2);
     });
+
+    // Stopped while an ask is out: that ask's outcome may end the press, while an earlier ask still
+    // runs on the server. It ends at once, without the delay, and still says by when.
+    it.each([
+      { left: 'still running', before: [] as Step[], last: () => refusal(errors.stillRunning) as Response | Error },
+      { left: 'on its last dropped connection', before: [dropped(), dropped()], last: () => dropped() },
+      { left: 'on a rate limit', before: [dropped()], last: () => refusal({ status: 429, response: { error: 'Too many prompt enhancements. Try again shortly.' } }) },
+    ])('says by when a press stopped while an ask was out is settled ($left)', async ({ before, last }) => {
+      vi.useFakeTimers();
+      const asks = stubAsks([...before, 'hang']);
+      const fetchMock = vi.mocked(fetch);
+      let send: (step: Response | Error) => void = () => undefined;
+      fetchMock.mockImplementation(((original) => (input: RequestInfo | URL, init?: RequestInit) => {
+        if (asks.length < before.length) return original(input, init);
+        asks.push({ key: null, signal: null });
+        return new Promise<Response>((resolve, reject) => {
+          send = (step) => (step instanceof Error ? reject(step) : resolve(step));
+        });
+      })(fetchMock.getMockImplementation()!));
+      const gone = new AbortController();
+
+      let ended = false;
+      const pressed = requestPromptEnhancement(poster, { signal: gone.signal }).catch((error: unknown) => error)
+        .finally(() => { ended = true; });
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs * before.length);
+      expect(asks).toHaveLength(before.length + 1);
+      const lastAskAt = Date.now();
+      gone.abort();
+      await vi.advanceTimersByTimeAsync(1);
+      send(last());
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(ended).toBe(true);
+      const error = await pressed;
+      expect(error).toBeInstanceOf(PromptEnhancementError);
+      expect((error as PromptEnhancementError).settlesBy).toBe(lastAskAt + clientWait.timeoutMs);
+      await vi.advanceTimersByTimeAsync(askAgain.delayMs * 3);
+      expect(asks).toHaveLength(before.length + 1);
+    });
   });
 });
