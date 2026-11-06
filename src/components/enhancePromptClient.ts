@@ -19,7 +19,8 @@ export interface PromptEnhancementRequest {
  * it, and an ask under its token would be a new paid press charged to it, its answer applied to the
  * earlier account's form. Without one, the press is the account the first ask finds. Once `signal`
  * is aborted (the button went with its form, shot or node) no ask goes out; one already sent is
- * left to finish.
+ * left to finish. A press stopped after an ask that got no answer ends in a `PromptEnhancementError`
+ * whose `settlesBy` says when the server is done with it.
  */
 export interface PromptEnhancementPress {
   account?: string | null;
@@ -65,14 +66,21 @@ export const PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT = 1;
 const STILL_RUNNING_CODE = 'AI_USAGE_IN_PROGRESS';
 const LOST_ANSWER_MESSAGE = 'Could not get the enhanced prompt. Check your connection and try again.';
 const OTHER_ACCOUNT_MESSAGE = 'Another account signed in, so Enhance stopped.';
+const STOPPED_MESSAGE = 'Enhance stopped before its answer came back.';
 
 export class PromptEnhancementError extends Error {
   remainingCredits?: number;
+  /**
+   * For a press its signal stopped while the server may still be working on it: the time (ms since
+   * the epoch) by which the server is done with its key, and has charged or refunded it.
+   */
+  settlesBy?: number;
 
-  constructor(message: string, options?: { remainingCredits?: number }) {
+  constructor(message: string, options?: { remainingCredits?: number; settlesBy?: number }) {
     super(message);
     this.name = 'PromptEnhancementError';
     this.remainingCredits = options?.remainingCredits;
+    this.settlesBy = options?.settlesBy;
   }
 }
 
@@ -89,9 +97,14 @@ function createPressKey(): string {
   return `enhance:${random}`;
 }
 
-// Ends early when the signal is aborted, for the loop to stop at once.
+// Ends early when the signal is aborted, for the loop to stop at once. A signal aborted while an
+// ask was out fires no 'abort' again, so it ends at once.
 function wait(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
     const done = () => {
       clearTimeout(timeoutId);
       signal?.removeEventListener('abort', done);
@@ -121,30 +134,50 @@ export async function requestPromptEnhancement(
   let pressedFor = account;
   let connectionFailures = 0;
   let timeouts = 0;
-
-  for (;;) {
+  // When the last ask went out. Every ask under the key ended without an answer by the time the
+  // loop runs again, so the server may still be working on one, but on none past the wait from
+  // when it was sent: a press stopped then says so, for its balance to be read again after.
+  let lastAskAt: number | null = null;
+  const stopIfAborted = () => {
+    if (signal?.aborted && lastAskAt !== null) {
+      throw new PromptEnhancementError(STOPPED_MESSAGE, { settlesBy: lastAskAt + PROMPT_ENHANCE_WAIT_MS });
+    }
     signal?.throwIfAborted();
-    // Read for each ask, so a session the press's account refreshed meanwhile still carries it.
-    const { data: { session } } = await supabase.auth.getSession();
-    signal?.throwIfAborted();
-    if (!session) {
-      throw new PromptEnhancementError('Please log in to enhance prompts');
-    }
-    pressedFor ??= session.user.id;
-    if (session.user.id !== pressedFor) {
-      throw new PromptEnhancementError(OTHER_ACCOUNT_MESSAGE);
-    }
+  };
 
-    const ask = await askOnce(request, key, session.access_token);
-    if (ask.outcome === 'answered') return ask.result;
-    if (ask.outcome === 'still-running') {
-      if (Date.now() - firstAskAt >= PROMPT_ENHANCE_WAIT_MS) throw ask.error;
-    } else if (ask.outcome === 'timed-out') {
-      if (++timeouts > PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT) throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
-    } else if (++connectionFailures > PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE) {
-      throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
+  try {
+    for (;;) {
+      stopIfAborted();
+      // Read for each ask, so a session the press's account refreshed meanwhile still carries it.
+      const { data: { session } } = await supabase.auth.getSession();
+      stopIfAborted();
+      if (!session) {
+        throw new PromptEnhancementError('Please log in to enhance prompts');
+      }
+      pressedFor ??= session.user.id;
+      if (session.user.id !== pressedFor) {
+        throw new PromptEnhancementError(OTHER_ACCOUNT_MESSAGE);
+      }
+
+      lastAskAt = Date.now();
+      const ask = await askOnce(request, key, session.access_token);
+      if (ask.outcome === 'answered') return ask.result;
+      if (ask.outcome === 'still-running') {
+        if (Date.now() - firstAskAt >= PROMPT_ENHANCE_WAIT_MS) throw ask.error;
+      } else if (ask.outcome === 'timed-out') {
+        if (++timeouts > PROMPT_ENHANCE_ASKS_AFTER_TIMEOUT) throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
+      } else if (++connectionFailures > PROMPT_ENHANCE_ASKS_AFTER_CONNECTION_FAILURE) {
+        throw new PromptEnhancementError(LOST_ANSWER_MESSAGE);
+      }
+      await wait(PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS, signal);
     }
-    await wait(PROMPT_ENHANCE_ASK_AGAIN_DELAY_MS, signal);
+  } catch (error) {
+    // Stopped while an ask was out, and ended by its outcome (a last dropped connection, a 429, a
+    // still-running at the wait's end): an earlier ask may still be running on the server all the same.
+    if (signal?.aborted && lastAskAt !== null && error instanceof PromptEnhancementError) {
+      error.settlesBy ??= lastAskAt + PROMPT_ENHANCE_WAIT_MS;
+    }
+    throw error;
   }
 }
 

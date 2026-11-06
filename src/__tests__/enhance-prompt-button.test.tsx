@@ -193,6 +193,39 @@ describe('EnhancePromptButton', () => {
       expect(balanceReads[0]).not.toBeInstanceOf(CustomEvent);
     });
 
+    // A press the server was still working on when the button went is charged or refunded later:
+    // the balance is read again once the server is done with it, not only at once.
+    it('has the balance read again once a press left running is settled', async () => {
+      vi.useFakeTimers();
+      try {
+        let stop: (error: Error) => void = () => undefined;
+        vi.mocked(requestPromptEnhancement).mockReturnValueOnce(new Promise((_resolve, reject) => { stop = reject; }));
+        const balanceReads: Event[] = [];
+        const listen = (event: Event) => balanceReads.push(event);
+        window.addEventListener('credits_updated', listen);
+        const view = render(<EnhancePromptButton prompt="A red fox" onEnhanced={vi.fn()} {...shared} />);
+
+        fireEvent.click(screen.getByRole('button', { name: /^Enhance, / }));
+        view.unmount();
+        const settlesBy = Date.now() + 60_000;
+        await act(async () => { stop(Object.assign(new PromptEnhancementError('Stopped'), { settlesBy })); });
+        expect(balanceReads).toHaveLength(1);
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000 - 1); });
+        expect(balanceReads).toHaveLength(1);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        expect(balanceReads).toHaveLength(2);
+        expect(balanceReads[1]).not.toBeInstanceOf(CustomEvent);
+
+        // Once: the press is settled by then, so there is nothing more to wait for.
+        await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000); });
+        window.removeEventListener('credits_updated', listen);
+        expect(balanceReads).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     // The press goes out under the form's account only, and stops asking when the button goes.
     it('presses for its account, under a signal that ends with the button', async () => {
       answerLater();
