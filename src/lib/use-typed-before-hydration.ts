@@ -21,10 +21,12 @@ import { typedText } from '@/lib/typed-before-hydration';
  * (`typed-before-hydration.ts`), where it is no longer what the server drew, is handed to
  * `onTyped`, the page's own change handler, as that input event would have been. A layout
  * effect, so the page holds the text before anything its mount effects wait on (a saved
- * draft's read) comes back, and they take it as the visitor's edit.
+ * draft's read) comes back, and they take it as the visitor's edit. An input the page keeps
+ * takes it the same way (the post composer's title and price, 2026-11-06): an input's
+ * hydration leaves the typed text on screen, and the field's next render writes it over.
  */
 export function useTypedBeforeHydration(
-  fieldRef: RefObject<HTMLTextAreaElement | null>,
+  fieldRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>,
   {
     drawn,
     enabled,

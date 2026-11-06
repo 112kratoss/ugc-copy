@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 
 import {
   BookOpen,
@@ -26,6 +26,7 @@ import {
   type PostComposerResourceCardDraft,
   type PostComposerResourceCardType,
 } from '@/lib/post-composer-resource-cards';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 
 export const RECIPE_PREVIEW_MAX_LENGTH = 180;
 
@@ -226,6 +227,17 @@ export default function ResourceCardsSection({
   const rowCount = cards.length + (creationReferenceCount > 0 ? 1 : 0);
   const previewHelpId = useId();
   const previewErrorId = useId();
+  // The composer opens with a recipe from its server render, so a creator can write the preview
+  // before the page's script runs; hydration does not read it back, and the next render wrote the
+  // drawn text over it (2026-11-06; tests/e2e/post-composer-typed-before-script.spec.ts). Typed
+  // text only, as the composer takes its title and post text. Here, where the field is drawn,
+  // and handed to the composer's own handler.
+  const previewTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  useTypedBeforeHydration(previewTextareaRef, {
+    drawn: previewText,
+    enabled: true,
+    onTyped: (typed) => onPreviewTextChange(typed.slice(0, RECIPE_PREVIEW_MAX_LENGTH)),
+  });
 
   return (
     <div className="space-y-5">
@@ -301,6 +313,7 @@ export default function ResourceCardsSection({
           </span>
         </div>
         <textarea
+          ref={previewTextareaRef}
           value={previewText}
           onChange={(event) => onPreviewTextChange(event.target.value.slice(0, RECIPE_PREVIEW_MAX_LENGTH))}
           maxLength={RECIPE_PREVIEW_MAX_LENGTH}

@@ -72,6 +72,7 @@ import { forgetCreationsWorkspaceCache } from '@/lib/creations-workspace-cache';
 import { pushToast } from '@/components/feedback-state';
 import { trackProductEvent } from '@/lib/product-analytics';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 import {
   normalizePostResourceItems,
   normalizePostResourceBundleAccessMode,
@@ -1155,6 +1156,18 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const savedPanelRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const recipeTitleHintId = useId();
+  // The server draws the form, so a creator can type into it before the page's script runs,
+  // and hydration does not read the fields back: the title's counter said 0, the next render
+  // wrote the drawn text over the title, the post text and the price, and Publish or Save sent
+  // what the server had drawn (2026-11-06; tests/e2e/post-composer-typed-before-script.spec.ts).
+  // Typed text only, as the creators take their prompts: the post keeps these, and text a
+  // browser puts back when it restores the form can be a stale tab's. Typing wins over what
+  // the page fills in later (a creation's suggested title fills only an empty one).
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const bodyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  useTypedBeforeHydration(titleInputRef, { drawn: title, enabled: true, onTyped: setTitle });
+  useTypedBeforeHydration(bodyTextareaRef, { drawn: body, enabled: true, onTyped: setBody });
+  useTypedBeforeHydration(priceInputRef, { drawn: resourcePriceTokens, enabled: true, onTyped: setResourcePriceTokens });
 
   // One object URL per picked file, kept until the file leaves the list. The
   // URLs were rebuilt for every file on every change (a reorder, an upload
@@ -3984,6 +3997,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     </span>
                   </div>
                   <input
+                    ref={titleInputRef}
                     value={title}
                     onChange={(event) => {
                       setTitle(event.target.value);
@@ -4238,6 +4252,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                     </span>
                   </div>
                   <textarea
+                    ref={bodyTextareaRef}
                     value={body}
                     onChange={(event) => {
                       setBody(event.target.value);
