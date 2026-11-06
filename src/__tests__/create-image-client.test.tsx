@@ -14,6 +14,7 @@ import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting as chooseAspectRatio, costShown, generateButton, openSettings } from './fixtures/creator-column-bar';
 import { outsideAct } from './fixtures/outside-act';
+import { advancePastTheHour, expectOpensObject, movePageClock, previewLink, signedStorageLink } from './fixtures/signed-storage-links';
 
 const setPersistedImageElementRecordsMock = vi.hoisted(() => vi.fn(
   async (_key: string, _elements: PersistedImageElementRecord[]): Promise<void> => {
@@ -3368,5 +3369,189 @@ describe('CreateImageClient a remix not given the creator\'s references', () => 
     fillBox(view.container, 'slot-2', myPicture());
     expect(await screen.findByDisplayValue('Reference image 2')).toBeInTheDocument();
     expect(screen.queryByText(/^The creator kept/)).toBeNull();
+  });
+});
+
+/**
+ * A remix hands its media out by storage links signed for an hour, and a form reads its remix once
+ * (#664), so a page kept open past the hour holds links storage no longer opens. Each use of one
+ * reaches the file by a link that opens; the creator's edits stay as they are.
+ */
+describe('CreateImageClient a remix kept open past its links’ hour', () => {
+  const RESULT = 'generated_images/user-1/harbour.png';
+  /** The original's post's copy, in the public showcase bucket, once it is posted. */
+  const POSTED = 'showcase_media/showcase/gen-1/harbour.png';
+  const PICTURE = 'generation_inputs/user-1/gen-1/00-reference_image.png';
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  /** An unposted run of the creator's own, as the remix source answers a read of it: by links signed as it answers. */
+  function ownRunRemix(): RemixSourceBundle {
+    return {
+      generation: { id: 'gen-1', title: 'Harbour', prompt: '@lead walks the harbour at dusk', category: 'image', model: 'nano-banana-2' },
+      result: { mediaType: 'image', url: signedStorageLink(RESULT) },
+      inputs: {
+        image: {
+          elements: [{ id: 'remix-1', displayName: 'Hero shot', handle: '@lead', url: signedStorageLink(PICTURE), storagePath: PICTURE, sourceGenerationId: null }],
+        },
+      },
+      workflowSettings: { model: 'nano-banana-2' },
+      restoreIssues: [],
+    };
+  }
+
+  beforeEach(() => {
+    getPersistedImageElementRecordsMock.mockReset();
+    getPersistedImageElementRecordsMock.mockResolvedValue([]);
+    URL.createObjectURL = vi.fn(() => 'blob:element') as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn() as typeof URL.revokeObjectURL;
+    window.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('draws the original by a link that opens when “Use as reference” is pressed past the hour, keeping the creator’s edits', async () => {
+    movePageClock();
+    installFetch({ remixBundle: () => ownRunRemix() });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    typePrompt('@lead rows across the harbour at noon');
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    // On main the new picture was drawn from the link the remix opened with, which storage refuses by now.
+    const shown = (await screen.findByAltText('Original result · Harbour')).getAttribute('src')!;
+    expectOpensObject(shown, RESULT);
+    expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
+    // The remix read again for the link puts nothing of the original back over the form.
+    expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead rows across the harbour at noon');
+  });
+
+  // The remix is read again for a link only for a picture that goes on: a press the model's limit
+  // refuses reads nothing, and says so as it did before.
+  it('refuses “Use as reference” at the model’s limit past the hour without reading the remix again', async () => {
+    movePageClock();
+    modelCatalogState.summaries = [...imageModelSummaries, { id: 'ideogram-v3', kind: 'image', displayName: 'Ideogram V3', description: 'Test one-picture image model' }];
+    const fetchMock = installFetch({ remixBundle: () => ownRunRemix() });
+    const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    // Ideogram V3 takes one picture: the restored one fills it.
+    chooseModel(view.container, 'Ideogram V3');
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    expect(await screen.findByText('This model supports up to 1 reference image.')).toBeInTheDocument();
+    expect(remixReads(fetchMock)).toHaveLength(1);
+    expect(screen.queryByAltText('Original result · Harbour')).toBeNull();
+  });
+
+  // A reference made from the original is the original: previewed past the hour after the original
+  // was posted, it shows the post's copy, as the original's own preview does. It was renewed as any
+  // other file, which the posted remix hands out no link to, and drew a link storage refuses.
+  it('shows a reference made from the original by its post’s copy past the hour, once the original is posted', async () => {
+    movePageClock();
+    let posted = false;
+    installFetch({
+      remixBundle: () => (posted
+        ? { ...ownRunRemix(), result: { mediaType: 'image', url: `https://project.supabase.co/storage/v1/object/public/${POSTED}` } }
+        : ownRunRemix()),
+    });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+    expect(await screen.findByAltText('Original result · Harbour')).toBeInTheDocument();
+
+    posted = true;
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Original result · Harbour' }));
+
+    expectOpensObject(await previewLink('Original result · Harbour'), POSTED);
+  });
+
+  // The press asks the model's limit again once the link is in, of the model the form is on by
+  // then: it asked the model the press was made on, so a picture went on past the limit of a model
+  // the creator chose while the remix was read.
+  it('adds nothing past the limit of a model chosen while the link was being read', async () => {
+    movePageClock();
+    modelCatalogState.summaries = [...imageModelSummaries, { id: 'ideogram-v3', kind: 'image', displayName: 'Ideogram V3', description: 'Test one-picture image model' }];
+    installFetch({ remixBundle: () => ownRunRemix() });
+    const view = render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    // The read for a fresh link is held until the model has changed.
+    let answerRead: () => void = () => undefined;
+    const fetchMock = installFetch({ remixBundle: () => ownRunRemix(), remixHold: new Promise<void>((resolve) => { answerRead = resolve; }) });
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+    await waitFor(() => expect(remixReads(fetchMock)).toHaveLength(1));
+    // Ideogram V3 takes one picture: the restored one fills it.
+    chooseModel(view.container, 'Ideogram V3');
+    answerRead();
+
+    // The press is over once it says either: the model's limit, or the original among the references.
+    const limit = 'This model supports up to 1 reference image.';
+    await waitFor(() => expect(screen.queryByText(limit) ?? screen.queryByAltText('Original result · Harbour')).not.toBeNull());
+    expect(screen.queryByAltText('Original result · Harbour')).toBeNull();
+    expect(screen.getByText(limit)).toBeInTheDocument();
+  });
+
+  // A press that waits on a fresh link (up to twelve seconds) says so: the button takes no second
+  // press and is busy, in the words of what it is doing. It showed nothing until the read answered.
+  it('shows “Use as reference” under way while it waits on a fresh link', async () => {
+    movePageClock();
+    installFetch({ remixBundle: () => ownRunRemix() });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+    // The read for a fresh link is held until the test answers it.
+    let answerRead: () => void = () => undefined;
+    installFetch({ remixBundle: () => ownRunRemix(), remixHold: new Promise<void>((resolve) => { answerRead = resolve; }) });
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    const underWay = await screen.findByRole('button', { name: 'Adding the original…' });
+    expect(underWay).toBeDisabled();
+    expect(underWay).toHaveAttribute('aria-busy', 'true');
+    answerRead();
+    const using = await screen.findByRole('button', { name: 'Using original result' });
+    expect(using).toBeDisabled();
+    expect(using).not.toHaveAttribute('aria-busy');
+  });
+
+  // The read for a fresh link is the form's account's: the page's session where the browser holds
+  // another account's (a sign-in in another tab). The remix source answers no other.
+  it('reads the remix for a fresh link as the form’s account, not the other account the browser holds', async () => {
+    movePageClock();
+    getSessionMock.mockResolvedValue({ data: { session: { access_token: 'token-user-2', user: { id: 'user-2' } } } });
+    const fetchMock = installFetch({ remixBundle: (authorization) => (authorization === 'Bearer test-token' ? ownRunRemix() : null) });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    expect(await screen.findByAltText('Hero shot')).toBeInTheDocument();
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference' }));
+
+    expectOpensObject((await screen.findByAltText('Original result · Harbour')).getAttribute('src')!, RESULT);
+    expect(remixReads(fetchMock).map(([, init]) => authorizationOf(init))).toEqual(['Bearer test-token', 'Bearer test-token']);
+  });
+
+  it('shows the original past the hour by a link that opens', async () => {
+    movePageClock();
+    installFetch({ remixBundle: () => ownRunRemix() });
+    render(<CreateImageClient prefill={{ remixId: 'gen-1' }} />);
+    const original = await screen.findByRole('button', { name: /View original/ });
+
+    advancePastTheHour();
+    fireEvent.click(original);
+
+    const dialog = await screen.findByRole('dialog', { name: 'Original Creation' });
+    await waitFor(() => expect(dialog.querySelector('img')).not.toBeNull());
+    const shown = dialog.querySelector('img')!.getAttribute('src')!;
+    expectOpensObject(shown, RESULT);
   });
 });

@@ -160,6 +160,8 @@ import {
     remixSlotsInputSide,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
+import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import {
     openRemixInputSlots,
     readRemixSlotMentions,
@@ -1450,6 +1452,15 @@ function VideoCreator({
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixResult, setRemixResult] = useState<RemixSourceResult | null>(null);
     const remixVideoUrl = remixResult?.mediaType === 'video' ? remixResult.url : null;
+    // The remix's links last an hour: each is renewed where it is used past that, and a link to
+    // the original as the original is now (its post's copy, once it is posted).
+    const renewRemixLink = useRemixLinkRenewal({
+        remixId,
+        remixPostId,
+        formAccount,
+        pageToken: session?.access_token ?? null,
+        originalResult: remixResult?.url ?? null,
+    });
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     // The inputs the remix was not given, as empty boxes for the remixer's own (owner, 2026-11-03):
     // beside the form, never saved, priced or sent. A box filled leaves the list.
@@ -1884,6 +1895,12 @@ function VideoCreator({
     const supportsEndFrame = affordances.frames.end;
     const activeSupportsEndFrame = supportsEndFrame && !combinesFrameWithReferences;
     const referenceVideoLimit = affordances.referenceVideos.max;
+    // The clip limit as the form has it now, for a press that waits (a fresh link, a clip's length):
+    // the creator may choose another model meanwhile.
+    const referenceVideoLimitRef = useRef(referenceVideoLimit);
+    useEffect(() => {
+        referenceVideoLimitRef.current = referenceVideoLimit;
+    }, [referenceVideoLimit]);
     const referenceAudioLimit = affordances.referenceAudios.max;
     // The clip and track panel, the checks before a run and the run itself follow the
     // limits the model publishes. Two lists of models stood here before, and MiniMax H3
@@ -3373,11 +3390,24 @@ function VideoCreator({
      * with the length its post measured, or else measured as an upload is, since the quote is
      * told each clip's length.
      */
+    // A press of "Use as reference" under way: it waits on a fresh link to the original past its hour.
+    const [isAddingOriginal, setIsAddingOriginal] = useState(false);
     const addOriginalResultAsReferenceVideo = async () => {
-        const url = remixVideoUrl;
+        const original = remixVideoUrl;
         const unwanted = () => referenceVideosRef.current.some((reference) => isRemixResultReference(reference, remixId))
-            || referenceVideosRef.current.length >= referenceVideoLimit;
-        if (!url || !remixId || unwanted()) return;
+            || referenceVideosRef.current.length >= referenceVideoLimitRef.current;
+        if (!original || !remixId || unwanted()) return;
+        // The link the remix was read with lasts an hour: past it the clip's length could not be read,
+        // and the clip came in with none. One about to lapse is renewed first.
+        let url = original;
+        if (isSignedMediaUrlExpiring(original)) {
+            setIsAddingOriginal(true);
+            try {
+                url = await renewRemixLink(original);
+            } finally {
+                setIsAddingOriginal(false);
+            }
+        }
         const seeds = await readPickSeeds((async () => keptReferenceSeeds([{
             kind: 'video',
             url,
@@ -3386,7 +3416,8 @@ function VideoCreator({
             sourceGenerationId: remixId,
             durationSeconds: remixResult?.durationSeconds ?? await readVideoDurationSeconds(url) ?? undefined,
         }]))());
-        // A second press made while the clip's length was read: the first has added it by now.
+        // A second press made while the clip's length was read (the first has added it by now), or
+        // a model chosen meanwhile that takes no more clips.
         if (!seeds || unwanted()) return;
         await appendMediaReferences('video', seeds);
     };
@@ -5843,7 +5874,7 @@ function VideoCreator({
                                         source={remixSourcePost}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={offersOriginalResult ? (
-                                            <StudioUseOriginalButton using={usingOriginalResult} onUse={() => void addOriginalResultAsReferenceVideo()} />
+                                            <StudioUseOriginalButton using={usingOriginalResult} pending={isAddingOriginal} onUse={() => void addOriginalResultAsReferenceVideo()} />
                                         ) : undefined}
                                     />
                                 </motion.div>
@@ -6667,6 +6698,7 @@ function VideoCreator({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Uploaded preview'}
                 title={uploadPreview?.title ?? 'Media Preview'}
+                renewSrc={remixId ? renewRemixLink : undefined}
             />
 
             <StudioMediaPreviewModal
@@ -6676,6 +6708,7 @@ function VideoCreator({
                 src={remixVideoUrl}
                 alt="Original creation"
                 title="Original Creation"
+                renewSrc={remixId ? renewRemixLink : undefined}
                 footer={
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>

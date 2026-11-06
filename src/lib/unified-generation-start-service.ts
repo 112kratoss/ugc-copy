@@ -30,7 +30,6 @@ import {
 import type { ReferenceMediaDescriptor } from '@/lib/generation-input-media';
 import type { GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
-import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
   generationCostChangedError,
   GenerationServiceError,
@@ -507,10 +506,7 @@ export async function resolveBillableInputDurations({
 
     verified.push({ index, slot: asset.slot, durationSeconds: measured });
     resolvedSources.set(asset.url, source);
-    // A motion run's adapter sends its clip as given (startMotionGeneration resolves nothing), so it is
-    // given the link resolved here: the file measured is then the one the provider fetches, and a link
-    // the client kept past its hour (a remix's original, signed when the remix opened) is not sent on.
-    return { ...asset, ...(request.kind === 'motion' ? { url: source } : {}), durationSeconds: measured };
+    return { ...asset, durationSeconds: measured };
   }));
   verified.sort((first, second) => first.index - second.index);
 
@@ -686,7 +682,7 @@ export async function dispatchCatalogGenerationAdapter({
   dependencies: Required<Pick<
     UnifiedGenerationDependencies,
     'startCatalog' | 'startImage' | 'startVideo' | 'startMotion'
-  >> & Pick<UnifiedGenerationDependencies, 'resolveInputSource'>;
+  >>;
 }) {
   const normalized = quote.normalizedSettings;
   if (operation.adapterKey === 'kie-task-v1') {
@@ -877,15 +873,6 @@ export async function dispatchCatalogGenerationAdapter({
         { inputs: 'Required motion inputs are missing.' },
       );
     }
-    // Its clip was resolved to be measured; a character restored from a recipe's copy is imported
-    // now, with the unlock read again, before the provider is sent it (`resolveRecipeFileReference`).
-    const characterImageUrl = await resolveRecipeFileReference(
-      supabase,
-      character.url,
-      userId,
-      { resolved: resolvedMediaSources, recipeCopyReads },
-      dependencies.resolveInputSource,
-    );
     return dependencies.startMotion({
       supabase,
       creditSupabase: adminSupabase,
@@ -893,8 +880,23 @@ export async function dispatchCatalogGenerationAdapter({
       clientRequestKeyHash,
       model: request.modelId as MotionModelId,
       prompt: request.prompt,
-      characterImageUrl,
+      // As sent, which the start resolves, the clip by the link its measuring resolved it to.
+      characterImageUrl: character.url,
       referenceVideoUrl: reference.url,
+      // What each one is, so the run keeps it as that: a remix's restored input names its creator's
+      // file, and stays theirs in the run's recipe whatever copy the start sends.
+      characterImage: {
+        kind: 'image',
+        label: character.label ?? null,
+        storagePath: character.storagePath ?? null,
+        sourceGenerationId: character.sourceGenerationId ?? null,
+      },
+      referenceVideo: {
+        kind: 'video',
+        label: reference.label ?? null,
+        storagePath: reference.storagePath ?? null,
+        sourceGenerationId: reference.sourceGenerationId ?? null,
+      },
       duration: Number(normalized.duration ?? 1),
       // A motion run's performance is always measured before it is priced (resolveBillableInputDurations).
       referenceVideoSeconds: reference.durationSeconds ?? null,
@@ -904,6 +906,8 @@ export async function dispatchCatalogGenerationAdapter({
       operationalConfig: operation,
       catalogRevision: quote.catalogRevision,
       sourceGenerationId,
+      resolvedMediaSources,
+      recipeCopyReads,
     });
   }
 
@@ -1025,7 +1029,6 @@ export async function startUnifiedGenerationForRoute(
           startImage: dependencies.startImage ?? startImageGeneration,
           startVideo: dependencies.startVideo ?? startVideoGeneration,
           startMotion: dependencies.startMotion ?? startMotionGeneration,
-          resolveInputSource,
         },
       });
     },

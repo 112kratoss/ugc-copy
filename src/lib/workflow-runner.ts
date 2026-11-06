@@ -14,7 +14,6 @@ import {
 } from '@/lib/generation-services';
 import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
-import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
   GENERATION_SUBMISSION_PENDING_MESSAGE,
   getHeldProviderSubmissionGenerationId,
@@ -364,7 +363,8 @@ function templateMediaSourceOptions(templateContext?: TemplateGenerationContext)
  * A motion step's reference clip, measured: `billableSeconds` is its length in whole
  * seconds, which the output runs for and POST /api/generations prices too, and
  * `measuredSeconds` the length itself, which the start holds to Kie's 3 s floor (a
- * 2.4 s clip rounds up to 3). Null when the clip cannot be read, or is not an HTTPS object.
+ * 2.4 s clip rounds up to 3), and `source` the link it was measured from, which the
+ * start sends. Null when the clip cannot be read, or is not an HTTPS object.
  */
 async function measureMotionReferenceSeconds(params: {
   supabase: SupabaseClient;
@@ -1252,14 +1252,6 @@ export async function executeWorkflowRunnableNode(params: {
       return buildBlockedError('The reference clip’s length could not be verified.');
     }
     const duration = clip.billableSeconds;
-    // Sent as given, but where it can be a recipe file: checked against the unlock and imported first,
-    // as every other start does (`resolveRecipeFileReference`).
-    const characterImageUrlToSend = await resolveRecipeFileReference(
-      supabase,
-      characterImageUrl,
-      userId,
-      { ...templateMediaSourceOptions(templateContext), recipeCopyReads },
-    );
 
     const quote = await quoteRunnableNode({
       kind: 'motion',
@@ -1277,9 +1269,14 @@ export async function executeWorkflowRunnableNode(params: {
       userId,
       prompt,
       model: data.model,
-      // The clip as resolved to measure it: the file measured is the one the provider fetches.
-      referenceVideoUrl: clip.source,
-      characterImageUrl: characterImageUrlToSend,
+      // As the canvas holds them, which the start resolves, within the template's assets for a
+      // template run: the clip by the link it was measured from, the picture with the reads of each
+      // unlock the clip was measured under.
+      referenceVideoUrl,
+      characterImageUrl,
+      resolvedMediaSources: new Map([[referenceVideoUrl, clip.source]]),
+      recipeCopyReads,
+      ...templateMediaSourceOptions(templateContext),
       duration,
       referenceVideoSeconds: clip.measuredSeconds,
       characterOrientation: data.characterOrientation,

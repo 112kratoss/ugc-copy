@@ -118,6 +118,8 @@ import {
     isRemixResultReference,
     withoutRemixInputSlot,
 } from '@/lib/remix-source-client';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
+import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import {
     getPersistedImageElementRecords,
     PERSISTED_MEDIA_KEYS,
@@ -542,6 +544,15 @@ function ImageCreator({
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixImageUrl, setRemixImageUrl] = useState<string | null>(null);
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
+    // The remix's links last an hour: each is renewed where it is used past that, and a link to
+    // the original as the original is now (its post's copy, once it is posted).
+    const renewRemixLink = useRemixLinkRenewal({
+        remixId,
+        remixPostId,
+        formAccount,
+        pageToken: session?.access_token ?? null,
+        originalResult: remixSourceBundle?.result?.url ?? null,
+    });
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     // The references the remix was not given, as empty boxes for the remixer's own (owner,
     // 2026-11-03): beside the form, never saved, priced or sent. A box filled leaves the list.
@@ -592,6 +603,12 @@ function ImageCreator({
         : modelCatalog.error?.message || null;
     const modelNotice = catalogProblem ?? catalogNotice;
     const model = IMAGE_MODELS[selectedModel] ?? IMAGE_MODELS['nano-banana-2'];
+    // The model's picture limit as the form has it now, for a press that waits on a fresh link: the
+    // creator may choose another model meanwhile.
+    const maxImagesRef = useRef(model.maxImages);
+    useEffect(() => {
+        maxImagesRef.current = model.maxImages;
+    }, [model.maxImages]);
     const imageModelOptions = modelCatalog.summaries.filter(item => item.kind === 'image').map(item => ({ ...(IMAGE_MODELS as unknown as Record<string, typeof IMAGE_MODELS[keyof typeof IMAGE_MODELS]>)[item.id], ...item, badge: item.badge ?? '' }));
     const normalizedModelSearchQuery = modelSearchQuery.trim().toLowerCase();
     const filteredImageModelOptions = normalizedModelSearchQuery
@@ -1106,18 +1123,38 @@ function ImageCreator({
         updateMentionState(prompt);
     };
 
-    const handleUseOriginalResultAsReference = () => {
+    // A press of "Use as reference" under way: it waits on a fresh link to the original past its hour.
+    const [isAddingOriginal, setIsAddingOriginal] = useState(false);
+    const handleUseOriginalResultAsReference = async () => {
         if (!remixSourceBundle) {
             return;
         }
-
-        if (elementRefs.current.length >= model.maxImages) {
-            setError(`This model supports up to ${model.maxImages} reference image${model.maxImages === 1 ? '' : 's'}.`);
-            return;
+        // Asked before the remix is read again for a link, so a press refused reads nothing, and
+        // again once the link is in, as the form may have changed meanwhile.
+        const refused = () => {
+            const maxImages = maxImagesRef.current;
+            if (elementRefs.current.length >= maxImages) {
+                setError(`This model supports up to ${maxImages} reference image${maxImages === 1 ? '' : 's'}.`);
+                return true;
+            }
+            return elementRefs.current.some((element) => isRemixResultReference(element, remixSourceBundle.generation.id));
+        };
+        if (refused()) return;
+        let resultUrl = remixSourceBundle.result?.url ?? null;
+        // The link the remix was read with lasts an hour: past it the picture was drawn from a link
+        // storage refuses. One about to lapse is renewed first.
+        if (resultUrl && isSignedMediaUrlExpiring(resultUrl)) {
+            setIsAddingOriginal(true);
+            try {
+                resultUrl = await renewRemixLink(resultUrl);
+            } finally {
+                setIsAddingOriginal(false);
+            }
+            if (unmountSignal.current.aborted || refused()) return;
         }
 
-        const nextElement = createRemixResultReferenceElement(remixSourceBundle);
-        if (!nextElement || elementRefs.current.some((element) => isRemixResultReference(element, remixSourceBundle.generation.id))) {
+        const nextElement = createRemixResultReferenceElement(remixSourceBundle, resultUrl);
+        if (!nextElement) {
             return;
         }
 
@@ -2247,7 +2284,7 @@ function ImageCreator({
                                         source={remixSourcePost}
                                         original={remixImageUrl ? { mediaType: 'image', src: remixImageUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={canUseOriginalResultAsReference ? (
-                                            <StudioUseOriginalButton using={hasOriginalResultReference} onUse={handleUseOriginalResultAsReference} />
+                                            <StudioUseOriginalButton using={hasOriginalResultReference} pending={isAddingOriginal} onUse={() => void handleUseOriginalResultAsReference()} />
                                         ) : undefined}
                                     />
                                 </motion.div>
@@ -2589,6 +2626,7 @@ function ImageCreator({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Reference image'}
                 title={uploadPreview?.title ?? 'Reference Preview'}
+                renewSrc={remixId ? renewRemixLink : undefined}
             />
 
             <StudioMediaPreviewModal
@@ -2615,6 +2653,7 @@ function ImageCreator({
                 src={remixImageUrl}
                 alt="Original creation"
                 title="Original Creation"
+                renewSrc={remixId ? renewRemixLink : undefined}
                 footer={
                     <div className="flex flex-col gap-2">
                         <div className="text-xs font-bold uppercase tracking-wider text-zinc-500">Prompt</div>

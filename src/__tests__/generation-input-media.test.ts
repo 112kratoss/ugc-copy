@@ -327,6 +327,20 @@ describe('an input kept from a file of someone else’s recipe', () => {
     expect((inserted[1]!.metadata as Record<string, unknown>).recipeFile).toBe(SELLER_COPY);
   });
 
+  // 2026-11-06 review: the copy an input records is the one the start imported, which the link it
+  // resolved names and whose bytes are kept, never a path the request named beside it. A request naming
+  // another copy its caller can read (one of a second recipe they unlocked) had that copy recorded over
+  // the first one's bytes, and pass-on and the copy's reads trust the record.
+  it('records the copy the start imported, whatever other copy the request named beside it', async () => {
+    const { persistGenerationInputMedia } = await import('@/lib/generation-input-media');
+    const { supabase, inserted } = persisting();
+    const ANOTHER_COPY = 'post_resource_files/seller-4/generation-references/gen-7/00-reference-image-row-3.png';
+
+    await persistGenerationInputMedia({ supabase, generationId: 'gen-1', userId: 'user-1', candidates: [candidate(ANOTHER_COPY, IMPORTED)] });
+
+    expect(inserted).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ sourceKind: 'recipe-file', recipeFile: SELLER_COPY }) })]);
+  });
+
   // Behaviour that predates recipe copies: unchanged, and nothing read for it.
   it.each([
     ['the caller’s own recipe file', 'post_resource_files/user-1/resources/guide.png', 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/user-1/resources/guide.png?token=x'],

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createRemixSourceRows } from '@/__tests__/fixtures/remix-source-rows';
 import { buildGenerationModelCatalog, CatalogError } from '@/lib/generation-model-catalog';
@@ -236,9 +236,11 @@ describe('startMotionGenerationForRoute', () => {
       userId: 'user-1',
       model: 'kling-3.0',
       prompt: 'Transfer the performance naturally.',
-      // The clip as resolved to measure it, not the caller's link, which may have run out.
-      referenceVideoUrl: resolvedReference,
+      // Each input as the caller sent it, which the start resolves, with the link the clip was
+      // measured from: the start sends that one rather than resolve the clip again.
+      referenceVideoUrl: 'https://signed.example.com/reference.mp4',
       characterImageUrl: 'https://signed.example.com/character.png',
+      resolvedMediaSources: new Map([['https://signed.example.com/reference.mp4', resolvedReference]]),
       duration: 6,
       characterOrientation: 'image',
       mode: '1080p',
@@ -389,6 +391,122 @@ describe('startMotionGenerationForRoute', () => {
     });
     expect(probeMediaDurationSecondsMock).toHaveBeenCalledTimes(which === 'probe' ? 1 : 0);
     expect(startMotionGenerationMock).not.toHaveBeenCalled();
+  });
+
+  // The motion start resolves both its inputs, as the video start does, so this route resolves the
+  // clip only, to measure it, and hands the start that link beside the clip as sent, with the reads
+  // of each unlock that measuring made (#678: a character restored from a recipe's copy shares them).
+  // It handed the start the links as resolved, which the start kept a remix's inputs by: as the
+  // remixer's copies.
+  it('resolves only the clip, to measure it, and hands the start the inputs as sent with that link', async () => {
+    startMotionGenerationMock.mockResolvedValueOnce({
+      predictionId: 'task-motion-8',
+      generationId: 'gen-motion-8',
+      remainingCredits: 500,
+      cost: 162,
+    });
+    const userClient = createClientMock();
+
+    await startMotionGenerationForRoute({
+      request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-8' } }),
+      body: motionBody({ duration: 6 }),
+      userId: 'user-1',
+      callerIsGuest: false,
+      supabase: userClient.client,
+      adminSupabase: createClientMock().client,
+    });
+
+    expect(resolveGenerationMediaSourceMock.mock.calls).toEqual([
+      [userClient.client, 'https://signed.example.com/reference.mp4', 'user-1', { recipeCopyReads: expect.any(Map) }],
+    ]);
+    expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith(resolvedReference);
+    expect(startMotionGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      supabase: userClient.client,
+      characterImageUrl: 'https://signed.example.com/character.png',
+      referenceVideoUrl: 'https://signed.example.com/reference.mp4',
+      resolvedMediaSources: new Map([['https://signed.example.com/reference.mp4', resolvedReference]]),
+    }));
+    const [{ recipeCopyReads }] = startMotionGenerationMock.mock.calls[0] as [{ recipeCopyReads?: unknown }];
+    expect(recipeCopyReads).toBe((resolveGenerationMediaSourceMock.mock.calls[0] as [unknown, string, string, { recipeCopyReads?: unknown }])[3].recipeCopyReads);
+  });
+
+  // The picture is held to what the clip is held to when it is measured: a link the provider can
+  // fetch, and a refusal that says what to do, before anything is held. This route hands the picture
+  // to the motion start, which resolves it, so these run the start itself behind the route.
+  describe('a picture the start cannot send', () => {
+    const STORAGE = 'https://project.supabase.co/storage/v1/object/sign';
+
+    // Neither picture is a recipe file: no kept row of the caller's marks one (#678's check, which
+    // reads those rows as the service). Mocked for the describe and unmocked once after it: an unmock
+    // queued after each case can race the next case's mock of the same module.
+    beforeEach(() => {
+      vi.doMock('@/lib/generation-reference-copy-import', () => ({
+        createRecipeCopyReads: () => new Map(),
+        reuseRecipeFile: vi.fn(async () => null),
+        findHeldRecipeCopy: vi.fn(async () => null),
+      }));
+    });
+    afterAll(() => {
+      vi.doUnmock('@/lib/generation-reference-copy-import');
+    });
+
+    it.each([
+      {
+        label: 'another creator’s upload that no remix shares',
+        picture: `${STORAGE}/uploads/creator-1/hero.png?token=t`,
+        signs: true,
+      },
+      {
+        label: 'the caller’s own, which storage would not sign again',
+        picture: `${STORAGE}/generation_inputs/user-1/gen-0/00-character_image.png?token=t`,
+        signs: false,
+      },
+    ])('refuses $label as a picture to add again, before anything is held', async ({ picture, signs }) => {
+      vi.stubEnv('KIE_AI_API_KEY', 'test-key');
+      vi.stubEnv('KIE_PROVIDER_WEBHOOK_SECRET', 'test-webhook-secret');
+      vi.stubEnv('KIE_WEBHOOK_HMAC_KEY', 'hmac-key');
+      vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com');
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
+      vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code');
+      vi.stubGlobal('fetch', vi.fn());
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+        vi.unstubAllGlobals();
+      });
+      // A fresh start module, which reads the provider settings stubbed above when it loads.
+      vi.resetModules();
+      const actual = await vi.importActual<typeof import('@/lib/generation-services')>('@/lib/generation-services');
+      startMotionGenerationMock.mockImplementation(actual.startMotionGeneration);
+      const { startMotionGenerationForRoute: startRoute } = await import('@/lib/motion-generation-start-service');
+      const userClient = {
+        ...createClientMock().client,
+        storage: {
+          from: vi.fn(() => ({
+            createSignedUrl: vi.fn(async (filePath: string) => (signs
+              ? { data: { signedUrl: `${STORAGE}/${filePath}?token=fresh` }, error: null }
+              : { data: null, error: { message: 'The signing service is unavailable.' } })),
+          })),
+        },
+      } as unknown as MotionGenerationStartRouteClient;
+      const adminClient = createClientMock();
+
+      const refusal = await startRoute({
+        request: new Request('http://localhost/api/generate', { headers: { 'idempotency-key': 'motion-start-11' } }),
+        body: motionBody({ characterImageUrl: picture, duration: 6 }),
+        userId: 'user-1',
+        callerIsGuest: false,
+        supabase: userClient,
+        adminSupabase: adminClient.client,
+      }).then(() => null, (error: unknown) => error);
+
+      expect(refusal).toMatchObject({
+        status: 422,
+        failureCode: 'invalid_input_media',
+        message: 'The character picture could not be used. Add your own character picture, then retry.',
+      });
+      expect(adminClient.rpc.mock.calls.map(([fn]) => fn)).not.toContain('start_generation');
+      expect(fetch).not.toHaveBeenCalled();
+    });
   });
 
   it('replays a start already accepted without reading its clip again', async () => {

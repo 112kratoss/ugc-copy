@@ -16,6 +16,7 @@ import { quoteStandIn } from './fixtures/web-quote-stand-in';
 import { priceListStandIn, pricedBy } from './fixtures/quote-prices-stand-in';
 import { chooseSetting, costShown } from './fixtures/creator-column-bar';
 import { outsideAct } from './fixtures/outside-act';
+import { advancePastTheHour, expectOpensObject, movePageClock, previewLink, signedStorageLink, storageOpens, storedObjectOf } from './fixtures/signed-storage-links';
 
 const modelCatalogState = vi.hoisted(() => ({
   missingIds: [] as string[],
@@ -2463,5 +2464,141 @@ describe('CreateMotionClient a remix not given the creator\'s inputs', () => {
     pickFile(view.container, 'motion-character-image-input', characterImage());
     expect(await screen.findByRole('button', { name: 'Replace Character image' })).toBeInTheDocument();
     expect(screen.queryByText(/^The creator kept/)).toBeNull();
+  });
+});
+
+/**
+ * A remix hands its media out by storage links signed for an hour, and a form reads its remix once
+ * (#664), so a page kept open past the hour holds links storage no longer opens. Each use of one
+ * reaches the file by a link that opens; the creator's edits stay as they are.
+ */
+describe('CreateMotionClient a remix kept open past its links’ hour', () => {
+  const RESULT = 'generated_videos/user-1/source-result.mp4';
+  const PICTURE = 'generation_inputs/user-1/generation-source/00-character_image.png';
+  const CLIP = 'generation_inputs/user-1/generation-source/01-motion_reference_video.mp4';
+  /** An unposted run of the creator's own, as the remix source answers it: each read signs its links as it answers. */
+  const ownRunRemix = {
+    generation: { id: 'generation-source', title: 'Rooftop dance', prompt: 'Dance on the roof at dusk', category: 'video', model: 'kling-2.6' },
+    get result() {
+      return { mediaType: 'video', url: signedStorageLink(RESULT) };
+    },
+    get inputs() {
+      return {
+        motion: {
+          characterImage: { kind: 'image', url: signedStorageLink(PICTURE), label: 'Character image', storagePath: PICTURE, sourceGenerationId: null },
+          referenceVideo: { kind: 'video', url: signedStorageLink(CLIP), label: 'Motion reference video', storagePath: CLIP, sourceGenerationId: null },
+        },
+      };
+    },
+    workflowSettings: { model: 'kling-2.6', mode: '1080p', characterOrientation: 'image' },
+    restoreIssues: [],
+  };
+
+  beforeEach(() => {
+    remixSourceBody = ownRunRemix;
+    // The browser reads a clip's length only by a link storage still opens.
+    vi.mocked(readVideoDurationSeconds).mockClear();
+    vi.mocked(readVideoDurationSeconds).mockImplementation(async (source) => (
+      typeof source === 'string' && !storageOpens(source) ? null : probeState.seconds
+    ));
+  });
+
+  afterEach(() => {
+    vi.mocked(readVideoDurationSeconds).mockImplementation(async () => probeState.seconds);
+  });
+
+  it('reads the original’s clip by a link that opens when “Use as reference video” is pressed past the hour, keeping the creator’s edits', async () => {
+    movePageClock();
+    const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    const prompt = screen.getByPlaceholderText(/Describe the kind of movement/);
+    fireEvent.change(prompt, { target: { value: 'Spin twice, then bow.' } });
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
+    await waitFor(() => expect(readVideoDurationSeconds).toHaveBeenCalledTimes(2));
+    await act(async () => {});
+
+    // On main the clip was read by the link the remix opened with, which storage refuses by now:
+    // the page said it could not read the clip, and Generate stayed held until a reload.
+    expect(screen.queryAllByText('We could not read the reference video. Please try another clip.')).toEqual([]);
+    expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+    // The stand-in reads a length only by a link storage opens, so the length shown says it opened.
+    const read = vi.mocked(readVideoDurationSeconds).mock.calls.at(-1)?.[0] as string;
+    expect(storedObjectOf(read)).toBe(RESULT);
+    expect(screen.getByRole('button', { name: 'Using original result' })).toBeDisabled();
+    await waitFor(() => expect(generateButton()).toBeEnabled());
+    // The remix read again for the link puts nothing of the original back over the form.
+    expect(prompt).toHaveValue('Spin twice, then bow.');
+    expect(modelChip(view.container)).toHaveTextContent('Kling 2.6');
+  });
+
+  // The press waits on a fresh link, and the creator may put a clip of their own in place meanwhile:
+  // theirs stands, and the original does not take its place once the link is in.
+  it('keeps a clip the creator put in while “Use as reference video” waited on a fresh link', async () => {
+    movePageClock();
+    const view = render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+    // The read for a fresh link is held until the creator's clip is in.
+    let answerRead: () => void = () => undefined;
+    remixSourceHold = new Promise<void>((resolve) => { answerRead = resolve; });
+    const readsBefore = remixReads().length;
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
+    await waitFor(() => expect(remixReads()).toHaveLength(readsBefore + 1));
+    pickFile(view.container, 'motion-reference-video-input', new File(['spin'], 'spin.mp4', { type: 'video/mp4' }));
+    const objectUrls = vi.mocked(URL.createObjectURL);
+    const own = await waitFor(() => {
+      const at = objectUrls.mock.calls.findIndex(([file]) => (file as File).name === 'spin.mp4');
+      expect(at).toBeGreaterThanOrEqual(0);
+      return objectUrls.mock.results[at]!.value as string;
+    });
+    await act(async () => answerRead());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview video' }));
+    expect(await previewLink('Reference Video')).toBe(own);
+    expect(screen.getByRole('button', { name: 'Use as reference video' })).toBeEnabled();
+  });
+
+  // The read for a fresh link is the form's account's: the page's session where the browser holds
+  // another account's (a sign-in in another tab), which the remix source refuses here.
+  it('reads the remix for a fresh link as the form’s account, not the other account the browser holds', async () => {
+    movePageClock();
+    sessionState.session = { access_token: 'token-user-2', user: { id: 'user-2' } };
+    refusedRemixToken = 'token-user-2';
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Use as reference video' }));
+
+    expect(await screen.findByRole('button', { name: 'Using original result' })).toBeDisabled();
+    expect(screen.getByText('Reference length: 7.3s')).toBeInTheDocument();
+    expect(remixReads().map(([, init]) => new Headers(init?.headers).get('Authorization'))).toEqual(['Bearer test-token', 'Bearer test-token']);
+  });
+
+  it('plays the original past the hour by a link that opens', async () => {
+    movePageClock();
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    const original = await screen.findByRole('button', { name: 'View original' });
+
+    advancePastTheHour();
+    fireEvent.click(original);
+
+    const shown = await previewLink('Original Creation');
+    expectOpensObject(shown, RESULT);
+  });
+
+  it('plays the restored clip past the hour by a link that opens', async () => {
+    movePageClock();
+    render(<CreateMotionClient prefill={{ remixId: 'generation-source' }} />);
+    expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
+
+    advancePastTheHour();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview video' }));
+
+    const shown = await previewLink('Reference Video');
+    expectOpensObject(shown, CLIP);
   });
 });

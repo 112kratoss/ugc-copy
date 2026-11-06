@@ -8,7 +8,7 @@ import {
   RECIPE_FILE_SOURCE_KIND,
   recipeFileCopyOf,
 } from '@/lib/generation-input-origin';
-import { RECIPE_IMPORT_FOLDER } from '@/lib/recipe-file-paths';
+import { RECIPE_IMPORT_FOLDER, recipeCopyOfSource } from '@/lib/recipe-file-paths';
 import { withholdUnreadableRecipeFileInputs } from '@/lib/recipe-copy-access';
 import {
   isValidElementHandle,
@@ -448,7 +448,12 @@ async function findRecipeFileCandidates(
   for (const candidate of candidates) {
     const sources = [candidate.sourceStoragePath, candidate.sourceUrl];
     if (sources.some((source) => isRecipeFileSource(source, own))) {
-      marked.set(candidate, recipeFileCopyOf({ metadata: { sourceStoragePath: candidate.sourceStoragePath, sourceUrl: candidate.sourceUrl } }, own));
+      // The copy the start imported, as the link it resolved names it, whose bytes are the ones kept
+      // (`loadCandidateMedia`), before any path the request named beside it: a request naming another
+      // copy its caller can read would record that copy over these bytes, which pass-on and the copy's
+      // reads trust (2026-11-06 review).
+      marked.set(candidate, recipeCopyOfSource(candidate.sourceUrl, own)
+        ?? recipeFileCopyOf({ metadata: { sourceStoragePath: candidate.sourceStoragePath, sourceUrl: candidate.sourceUrl } }, own));
       continue;
     }
     for (const source of sources) {

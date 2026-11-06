@@ -106,8 +106,15 @@ export function isRemixResultReference(
   return Boolean(generationId && reference?.sourceGenerationId === generationId && !reference.storagePath);
 }
 
-export function createRemixResultReferenceElement(bundle: RemixSourceBundle): RemixElementSeed | null {
-  if (bundle.result?.mediaType !== 'image' || !bundle.result.url) {
+/**
+ * The original's result as a reference picture, drawn and sent by `resultUrl`: the bundle's own
+ * link, or one renewed for it once that link's hour is up (`useRemixLinkRenewal`).
+ */
+export function createRemixResultReferenceElement(
+  bundle: RemixSourceBundle,
+  resultUrl: string | null = bundle.result?.url ?? null,
+): RemixElementSeed | null {
+  if (bundle.result?.mediaType !== 'image' || !resultUrl) {
     return null;
   }
 
@@ -115,8 +122,8 @@ export function createRemixResultReferenceElement(bundle: RemixSourceBundle): Re
     id: createElementId(),
     displayName: getRemixResultReferenceLabel(bundle.generation.title),
     handle: '@original_result',
-    previewUrl: bundle.result.url,
-    providerUrl: bundle.result.url,
+    previewUrl: resultUrl,
+    providerUrl: resultUrl,
     storagePath: null,
     sourceGenerationId: bundle.generation.id,
     source: 'remix',

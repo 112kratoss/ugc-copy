@@ -8,6 +8,7 @@ import {
   getRefundedStartGenerationId,
   markHeldProviderSubmission,
   markRefundedGenerationStart,
+  MOTION_CHARACTER_PICTURE_REFUSAL,
   normalizeGenerationStartFailureCode,
   PROVIDER_INPUT_REFUSED,
   PROVIDER_INPUT_REFUSED_MESSAGE,
@@ -15,6 +16,16 @@ import {
 } from '@/lib/generation-public-failure';
 
 describe('public generation failure classification', () => {
+  // A motion start's refusal of a character picture it cannot send is still an input to replace, said
+  // in its own words: read as any unreadable upload, a canvas step asked for a clear JPEG of at least
+  // 256×256 px, which is not what was wrong.
+  it('keeps the words of a motion picture its start refused, as an input to replace', () => {
+    const refusal = Object.assign(new Error(MOTION_CHARACTER_PICTURE_REFUSAL), { status: 422, failureCode: 'invalid_input_media' });
+
+    expect(getPublicGenerationStartFailure(refusal)).toEqual({ code: 'invalid_input_media', message: MOTION_CHARACTER_PICTURE_REFUSAL });
+    expect(requiresReplacementGenerationInput({ code: 'invalid_input_media', message: MOTION_CHARACTER_PICTURE_REFUSAL })).toBe(true);
+  });
+
   it.each([
     'invalid image_input',
     'Reference image is unreadable',

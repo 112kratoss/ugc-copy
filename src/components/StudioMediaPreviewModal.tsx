@@ -1,12 +1,63 @@
 'use client';
 
-import { X } from 'lucide-react';
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { Loader2, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import type { StudioMediaPreviewType } from '@/components/CreatorStudio';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 import { getFocusableElements } from '@/lib/focusable-elements';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
+
+const PREVIEW_VISUAL_CLASS = 'preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]';
+
+/**
+ * The picture or clip itself. A link with five minutes or less to live (a remix's are signed for
+ * an hour, and a new player on a lapsed one stayed blank) waits for the one `renewSrc` gives for
+ * it; any other, a blob, a public link or a fresh one, is drawn at once. Mounted for each link as
+ * the preview opens it (keyed by `src`), so each opening decides again.
+ */
+function StudioPreviewMedia({
+  mediaType,
+  src,
+  alt,
+  renewSrc,
+}: {
+  mediaType: StudioMediaPreviewType;
+  src: string;
+  alt: string;
+  renewSrc?: (src: string) => Promise<string>;
+}) {
+  // Read once, as it opens: null while a lapsing link waits for its renewal.
+  const [shown, setShown] = useState<string | null>(() => (
+    renewSrc && isSignedMediaUrlExpiring(src) ? null : src
+  ));
+  useEffect(() => {
+    if (shown !== null || !renewSrc) return;
+    let live = true;
+    renewSrc(src).then(
+      (renewed) => {
+        if (live) setShown(renewed);
+      },
+      () => {
+        if (live) setShown(src);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [renewSrc, shown, src]);
+
+  if (shown === null) {
+    return <Loader2 aria-label="Loading preview" className="h-8 w-8 animate-spin text-zinc-500" />;
+  }
+  return mediaType === 'image' ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={shown} alt={alt} className={PREVIEW_VISUAL_CLASS} />
+  ) : (
+    <InlineMediaVideo src={shown} controls autoPlay loop className={PREVIEW_VISUAL_CLASS} />
+  );
+}
 
 /**
  * A creator's picture or clip at full size. As the details viewer does, it takes the focus as
@@ -22,6 +73,7 @@ export function StudioMediaPreviewModal({
   alt,
   title,
   footer,
+  renewSrc,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -30,6 +82,8 @@ export function StudioMediaPreviewModal({
   alt: string;
   title: string;
   footer?: ReactNode;
+  /** A link to `src`'s file that opens now, asked only for a link about to lapse (a remix page's last an hour). */
+  renewSrc?: (src: string) => Promise<string>;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -108,12 +162,7 @@ export function StudioMediaPreviewModal({
         <h2 id={titleId} className="pr-10 text-lg font-bold tracking-tight text-white sm:pr-12 sm:text-xl">{title}</h2>
 
         <div className="preview-modal-media flex min-h-[220px] shrink-0 items-center justify-center overflow-hidden rounded-ui-xl border border-white/5 bg-black/50 sm:min-h-[320px] sm:flex-1">
-          {mediaType === 'image' ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={src} alt={alt} className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
-          ) : (
-            <InlineMediaVideo src={src} controls autoPlay loop className="preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]" />
-          )}
+          <StudioPreviewMedia key={src} mediaType={mediaType} src={src} alt={alt} renewSrc={renewSrc} />
         </div>
 
         {footer ? (

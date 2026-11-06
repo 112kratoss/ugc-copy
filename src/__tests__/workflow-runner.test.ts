@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   type ApprovalGateNodeData,
@@ -727,36 +727,35 @@ describe('workflow-runner recovery', () => {
       expect(startMotionGeneration).not.toHaveBeenCalled();
     });
 
-    // A step's motion start sends its inputs as given (2026-11-03 re-review): a character restored from
-    // a recipe's copy reached the provider with no unlock read, and the clip measured was not the link sent.
-    it('imports a character that may be a recipe file, and starts on the links it resolved', async () => {
+    // A step's motion start sent its inputs as given (2026-11-03 re-review): a character restored from
+    // a recipe's copy reached the provider with no unlock read, and the clip measured was not the link
+    // sent. The start resolves both now, importing such a copy and refusing one whose unlock is gone
+    // before anything is held (generation-services.test.ts): the step hands it the character as the
+    // canvas holds it, the clip with the link it measured, and the reads of each unlock that measuring made.
+    it('hands the start a character that may be a recipe file as given, with the unlock reads its clip was measured under', async () => {
       const copy = 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png?token=old';
-      const imported = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-character-image-row-1.png?token=fresh';
       const measured = 'https://signed.example.com/reference.mp4?token=measured';
       resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => (
-        url === copy ? imported : url === 'https://cdn.example.com/reference.mp4' ? measured : url
+        url === 'https://cdn.example.com/reference.mp4' ? measured : url
       ));
+      onTestFinished(() => {
+        resolveGenerationMediaSourceMock.mockReset().mockImplementation(async (_client: unknown, url: string) => (
+          url.startsWith('https://') ? url : `https://signed.example.com/${encodeURIComponent(url)}`
+        ));
+      });
 
       const { startMotionGeneration } = await runMotionStep(undefined, copy);
 
-      expect(resolveGenerationMediaSourceMock).toHaveBeenCalledWith({ role: 'runner' }, copy, 'user-1', expect.objectContaining({ recipeCopyReads: expect.any(Map) }));
-      expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: imported, referenceVideoUrl: measured }));
-      resolveGenerationMediaSourceMock.mockReset().mockImplementation(async (_client: unknown, url: string) => (
-        url.startsWith('https://') ? url : `https://signed.example.com/${encodeURIComponent(url)}`
-      ));
-    });
-
-    it('refuses the step when a recipe file’s unlock is gone, before anything is quoted', async () => {
-      const copy = 'post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png';
-      resolveGenerationMediaSourceMock.mockImplementation(async (_client: unknown, url: string) => {
-        if (url === copy) throw new Error('Media references must belong to the authenticated user.');
-        return url;
-      });
-
-      await expect(runMotionStep(undefined, copy)).rejects.toThrow('Media references must belong to the authenticated user.');
-      resolveGenerationMediaSourceMock.mockReset().mockImplementation(async (_client: unknown, url: string) => (
-        url.startsWith('https://') ? url : `https://signed.example.com/${encodeURIComponent(url)}`
-      ));
+      expect(resolveGenerationMediaSourceMock.mock.calls.map(([, url]) => url)).toEqual(['https://cdn.example.com/reference.mp4']);
+      const clipReads = (resolveGenerationMediaSourceMock.mock.calls[0] as [unknown, string, string, { recipeCopyReads?: unknown }])[3].recipeCopyReads;
+      expect(clipReads).toBeInstanceOf(Map);
+      expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({
+        characterImageUrl: copy,
+        referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+        resolvedMediaSources: new Map([['https://cdn.example.com/reference.mp4', measured]]),
+      }));
+      const [{ recipeCopyReads }] = vi.mocked(startMotionGeneration).mock.calls[0] as unknown as [{ recipeCopyReads?: unknown }];
+      expect(recipeCopyReads).toBe(clipReads);
     });
 
     it('sends a character that can be no recipe file as it was given', async () => {
@@ -775,6 +774,25 @@ describe('workflow-runner recovery', () => {
         'user-1',
         { templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' }, recipeCopyReads: expect.any(Map) },
       );
+    });
+
+    // The motion start resolves the step's inputs, as POST /api/generations' does: handed the link the
+    // clip was measured from, it sends that, and it signs the picture again from the object it names,
+    // within the template's assets for a template run. The step handed it the links the canvas held,
+    // which it sent on as they were: a run of a workflow saved more than an hour before failed on Kie
+    // after its credits were held, and was refunded.
+    it('hands the start the link its clip was measured from, and its template’s assets to resolve the picture in', async () => {
+      resolveGenerationMediaSourceMock.mockImplementationOnce(async (_client: unknown, url: string) => `${url}?token=measured`);
+
+      const { startMotionGeneration } = await runMotionStep({ runId: 'run-1', stepId: 'step-1', templateId: 'template-1', templateVersionId: 'version-1' });
+
+      expect(startMotionGeneration).toHaveBeenCalledWith(expect.objectContaining({
+        supabase: { role: 'runner' },
+        referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+        characterImageUrl: 'https://cdn.example.com/character.png',
+        resolvedMediaSources: new Map([['https://cdn.example.com/reference.mp4', 'https://cdn.example.com/reference.mp4?token=measured']]),
+        templateAssetScope: { templateId: 'template-1', templateVersionId: 'version-1' },
+      }));
     });
   });
 
@@ -1590,6 +1608,29 @@ describe('workflow-runner recovery', () => {
       error_message: expect.stringContaining('busy'),
     });
     expect(state.run.status).toBe('processing');
+  });
+
+  // A motion start refuses a character picture it cannot send before anything is held, in words that
+  // say what to do; the step showed the words for an unreadable upload instead. The step's own start
+  // here stands in for it: the step's failure is read from the refusal alone.
+  it('ends a step whose start refuses its character picture with the picture’s own words', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    const { MOTION_CHARACTER_PICTURE_REFUSAL } = await import('@/lib/generation-public-failure');
+    startVideoGenerationMock.mockRejectedValueOnce({ status: 422, failureCode: 'invalid_input_media', message: MOTION_CHARACTER_PICTURE_REFUSAL });
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
+      status: 'failed',
+      generation_id: null,
+      error_message: MOTION_CHARACTER_PICTURE_REFUSAL,
+    });
   });
 
   it.each([true, false])('links an ambiguous submission without duplicating work (marker confirmed: %s)', async (confirmed) => {

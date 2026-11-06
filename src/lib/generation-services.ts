@@ -81,6 +81,7 @@ import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
+  MOTION_CHARACTER_PICTURE_REFUSAL,
   getRefundedStartGenerationId,
   markGenerationStartInProgress,
   markGenerationStartRefusal,
@@ -4110,6 +4111,32 @@ export async function startVideoGeneration(params: {
   }
 }
 
+/**
+ * A motion run's character picture as its provider is to fetch it, refused before anything is
+ * held, in words that say what to do, where it cannot be sent, as the measuring that prices a run
+ * refuses its clip: one the caller may not send (another creator's that no remix shares with them,
+ * an upload that expired), or one that resolves to no HTTPS object (the media proxy's relative
+ * link, where storage would not sign the caller's own file again). A failure of the service to
+ * prepare it keeps its own words, as a retry may get past it.
+ */
+async function resolveMotionCharacterImage(
+  supabase: SupabaseClient,
+  url: string,
+  userId: string,
+  options: GenerationMediaSourceOptions,
+): Promise<string> {
+  const refusal = () => new GenerationServiceError(MOTION_CHARACTER_PICTURE_REFUSAL, 422, 'invalid_input_media');
+  let source: string;
+  try {
+    source = await resolveGenerationMediaSource(supabase, url, userId, options);
+  } catch (error) {
+    if (error instanceof GenerationServiceError && error.status < 500) throw refusal();
+    throw error;
+  }
+  if (!/^https:\/\//i.test(source)) throw refusal();
+  return source;
+}
+
 export async function startMotionGeneration(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
@@ -4117,7 +4144,9 @@ export async function startMotionGeneration(params: {
   clientRequestKeyHash?: string | null;
   prompt: string;
   model: MotionModelId;
+  /** The reference clip as the caller sent it: the start resolves it (`resolvedMediaSources`). */
   referenceVideoUrl: string;
+  /** The character picture as the caller sent it: the start resolves it. */
   characterImageUrl: string;
   /** Whole seconds: the reference clip's length rounded up, which the run is priced at. */
   duration: number;
@@ -4126,14 +4155,22 @@ export async function startMotionGeneration(params: {
   characterOrientation?: 'video' | 'image';
   mode?: '720p' | '1080p';
   sourceGenerationId?: string | null;
+  /** What the caller knows about each input: its label, the stored file it names, the creation it came from. */
   characterImage?: RemixMediaAssetDescriptor | null;
   referenceVideo?: RemixMediaAssetDescriptor | null;
   quotedCostCredits?: number;
   operationalConfig?: GenerationModelOperationalConfig;
   catalogRevision?: string;
+  /** Links the start resolved already, by reference (`GenerationMediaSourceOptions.resolved`): the clip, measured to price the run. */
+  resolvedMediaSources?: ReadonlyMap<string, string>;
+  /** A template run's own assets, which its inputs may name (`GenerationMediaSourceOptions.templateAssetScope`). */
+  templateAssetScope?: GenerationMediaSourceOptions['templateAssetScope'];
+  /** The start's reads of its caller's unlocks (`GenerationMediaSourceOptions.recipeCopyReads`), which the clip's measuring shares. */
+  recipeCopyReads?: RecipeCopyReads;
 }): Promise<GenerationStartResult> {
   requireKieGenerationConfiguration();
   const {
+    supabase,
     creditSupabase,
     userId,
     clientRequestKeyHash = null,
@@ -4151,6 +4188,8 @@ export async function startMotionGeneration(params: {
     quotedCostCredits,
     operationalConfig,
     catalogRevision,
+    resolvedMediaSources,
+    templateAssetScope,
   } = params;
 
   if (!referenceVideoUrl || !characterImageUrl) {
@@ -4160,11 +4199,6 @@ export async function startMotionGeneration(params: {
   // only the length is held, to the provider's own motion cap.
   assertPromptWithinLimit(prompt, { maxLength: MOTION_PROMPT_MAX_LENGTH });
   assertGenerationPromptsAllowed([prompt], { userId, model });
-
-  // Motion inputs are forwarded to the provider as-is, so gate their sources
-  // the same way as the resolved reference URLs elsewhere in this module.
-  assertAllowedGenerationMediaSource(characterImageUrl);
-  assertAllowedGenerationMediaSource(referenceVideoUrl);
 
   const selectedModel = MOTION_MODELS[model];
   if (!selectedModel) {
@@ -4193,8 +4227,25 @@ export async function startMotionGeneration(params: {
 
   const computedCost = getMotionCost(model, mode, duration);
   const cost = resolveQuotedGenerationCost(computedCost, quotedCostCredits);
+  // Both inputs go to the provider resolved, as every start sends its inputs, and before the hold:
+  // a link the client kept past its hour (a remix's, signed when the remix was read) is signed
+  // again from the object it names, another creator's kept input a remix restored is copied in
+  // for the caller under the remix gate, and a recipe file (a bought recipe's copy, or a kept input
+  // of the caller's own marked as one) is imported again once its unlock is read again
+  // (`reuseRecipeFile`), with the reads the caller's measuring of the clip made. The clip comes
+  // resolved from the measuring that priced the run (`resolvedMediaSources`), which takes an HTTPS
+  // object only.
+  const mediaSourceOptions: GenerationMediaSourceOptions = {
+    templateAssetScope,
+    resolved: resolvedMediaSources,
+    recipeCopyReads: params.recipeCopyReads ?? createRecipeCopyReads(),
+  };
+  const [characterImageSource, referenceVideoSource] = await Promise.all([
+    resolveMotionCharacterImage(supabase, characterImageUrl, userId, mediaSourceOptions),
+    resolveGenerationMediaSource(supabase, referenceVideoUrl, userId, mediaSourceOptions),
+  ]);
   // The character image as the task below sends it; Kie fetches it only after the hold.
-  await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: model, request: { model: providerModelId, input: { input_urls: [characterImageUrl] } } });
+  await logProviderImageSizesOverLimit({ supabase: creditSupabase, userId, modelId: model, request: { model: providerModelId, input: { input_urls: [characterImageSource] } } });
   let generationId: string | null = null;
   let predictionId: string | null = null;
   try {
@@ -4234,14 +4285,18 @@ export async function startMotionGeneration(params: {
       model: providerModelId,
       input: {
         prompt: prompt.trim() || 'The character follows the reference performance naturally.',
-        input_urls: [characterImageUrl],
-        video_urls: [referenceVideoUrl],
+        input_urls: [characterImageSource],
+        video_urls: [referenceVideoSource],
         character_orientation: characterOrientation,
         mode,
       },
     }, undefined, { generationId, modelId: model });
     await markGenerationProviderStarted(creditSupabase, generationId, predictionId);
 
+    // Each input is kept from the link sent to the provider, and known by the file the caller named,
+    // as the video start keeps its clips (collectReferenceMediaCandidates): with no stored path given,
+    // the input as sent. A remix's restored input names its creator's file, so it stays theirs in
+    // the run's recipe (generationInputOrigin), never the copy made for the caller.
     await persistGenerationInputMedia({
       supabase: creditSupabase,
       generationId,
@@ -4251,8 +4306,8 @@ export async function startMotionGeneration(params: {
           mediaType: 'image',
           role: 'character_image',
           label: characterImage?.label ?? 'Character image',
-          sourceUrl: characterImageUrl,
-          sourceStoragePath: characterImage?.storagePath ?? null,
+          sourceUrl: characterImageSource,
+          sourceStoragePath: characterImage?.storagePath ?? characterImageUrl,
           sourceGenerationId: characterImage?.sourceGenerationId ?? null,
           sortOrder: 0,
         },
@@ -4260,8 +4315,8 @@ export async function startMotionGeneration(params: {
           mediaType: 'video',
           role: 'motion_reference_video',
           label: referenceVideo?.label ?? 'Motion reference video',
-          sourceUrl: referenceVideoUrl,
-          sourceStoragePath: referenceVideo?.storagePath ?? null,
+          sourceUrl: referenceVideoSource,
+          sourceStoragePath: referenceVideo?.storagePath ?? referenceVideoUrl,
           sourceGenerationId: referenceVideo?.sourceGenerationId ?? null,
           sortOrder: 1,
         },

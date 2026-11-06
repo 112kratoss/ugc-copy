@@ -84,6 +84,8 @@ import {
     type RemixInputSlot,
     type RemixInputSlotRole,
 } from '../../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
+import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
+import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
     getPersistedFile,
@@ -337,6 +339,11 @@ function MotionCreator({
     const [referenceVideo, setReferenceVideo] = useState<string | null>(null);
     const [referenceVideoFile, setReferenceVideoFile] = useState<File | null>(null);
     const [referenceVideoDescriptor, setReferenceVideoDescriptor] = useState<RemixMediaAssetDescriptor | null>(null);
+    // The clip on the form, for a press that waits on a renewed link: a clip changed meanwhile stands.
+    const referenceVideoRef = useRef(referenceVideo);
+    useEffect(() => {
+        referenceVideoRef.current = referenceVideo;
+    }, [referenceVideo]);
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -423,6 +430,15 @@ function MotionCreator({
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
     const [remixVideoUrl, setRemixVideoUrl] = useState<string | null>(null);
     const [remixSourceBundle, setRemixSourceBundle] = useState<RemixSourceBundle | null>(null);
+    // The remix's links last an hour: each is renewed where it is used past that, and a link to
+    // the original as the original is now (its post's copy, once it is posted).
+    const renewRemixLink = useRemixLinkRenewal({
+        remixId,
+        remixPostId,
+        formAccount,
+        pageToken: session?.access_token ?? null,
+        originalResult: remixSourceBundle?.result?.url ?? null,
+    });
     const [remixRestoreWarning, setRemixRestoreWarning] = useState<string | null>(null);
     // The character and the clip the remix was not given, as empty boxes for the remixer's own
     // (owner, 2026-11-03): beside the form, never saved, priced or sent. A box filled, by a file or
@@ -716,12 +732,29 @@ function MotionCreator({
         void fetchRemixData();
     }, [formAccount, remixId, remixPostId, session?.access_token, unmountSignal]);
 
-    const handleUseOriginalResultAsReferenceVideo = () => {
+    // A press of "Use as reference video" under way: it waits on a fresh link to the original past its hour.
+    const [isAddingOriginal, setIsAddingOriginal] = useState(false);
+    const handleUseOriginalResultAsReferenceVideo = async () => {
         if (remixSourceBundle?.result?.mediaType !== 'video' || !remixSourceBundle.result.url) {
             return;
         }
+        const sourceGenerationId = remixSourceBundle.generation.id;
+        const { durationSeconds } = remixSourceBundle.result;
+        let url = remixSourceBundle.result.url;
+        // The link the remix was read with lasts an hour: past it the clip's length could not be
+        // read, and Generate stayed held until a reload. One about to lapse is renewed first.
+        if (isSignedMediaUrlExpiring(url)) {
+            const clipAtPress = referenceVideoRef.current;
+            setIsAddingOriginal(true);
+            try {
+                url = await renewRemixLink(url);
+            } finally {
+                setIsAddingOriginal(false);
+            }
+            // Gone, or another clip put in its place meanwhile: the creator's choice stands.
+            if (unmountSignal.current.aborted || referenceVideoRef.current !== clipAtPress) return;
+        }
 
-        const { url, durationSeconds } = remixSourceBundle.result;
         knownClipLengthRef.current = typeof durationSeconds === 'number' ? { url, seconds: durationSeconds } : null;
         setReferenceVideoFile(null);
         setReferenceVideo(url);
@@ -729,7 +762,7 @@ function MotionCreator({
             kind: 'video',
             label: 'Original result video',
             storagePath: null,
-            sourceGenerationId: remixSourceBundle.generation.id,
+            sourceGenerationId,
         });
         setDuration(0);
         setVideoError(null);
@@ -1830,10 +1863,10 @@ function MotionCreator({
                                         action={canUseOriginalResultAsReferenceVideo ? (
                                             <StudioUseOriginalButton
                                                 using={isUsingOriginalResultAsReferenceVideo}
-                                                onUse={handleUseOriginalResultAsReferenceVideo}
+                                                pending={isAddingOriginal}
+                                                onUse={() => void handleUseOriginalResultAsReferenceVideo()}
                                                 label="Use as reference video"
                                                 icon={Play}
-                                                tone="coral"
                                             />
                                         ) : undefined}
                                     />
@@ -2092,6 +2125,7 @@ function MotionCreator({
                 src={uploadPreview?.src ?? null}
                 alt={uploadPreview?.alt ?? 'Uploaded preview'}
                 title={uploadPreview?.title ?? 'Media Preview'}
+                renewSrc={remixId ? renewRemixLink : undefined}
             />
 
         </div>
