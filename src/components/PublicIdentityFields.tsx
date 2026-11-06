@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import { UserRound } from 'lucide-react';
 
 import { Surface, Text } from '@/components/DesignSystem';
@@ -10,6 +11,7 @@ import {
   type PublicIdentityDraft,
   type PublicIdentityErrors,
 } from '@/lib/public-identity';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 
 interface PublicIdentityFieldsProps {
   idPrefix: string;
@@ -53,6 +55,28 @@ export default function PublicIdentityFields({
 }: PublicIdentityFieldsProps) {
   const nameId = `${idPrefix}-display-name`;
   const handleId = `${idPrefix}-handle`;
+  // The post composer's server render draws these fields for an account without a handle or name,
+  // and a name or handle typed there before the page's script ran never reached the composer: the
+  // next render wrote the suggested ones back, and Publish claimed the suggested handle
+  // (2026-11-06). Both hand-overs run in one commit, so the second builds on the first's draft,
+  // not on this render's `value`. Elsewhere these fields are drawn on the client, and find nothing.
+  const nameRef = useRef<HTMLInputElement>(null);
+  const handleRef = useRef<HTMLInputElement>(null);
+  const handedOverRef = useRef<PublicIdentityDraft | null>(null);
+  const handOver = (edit: Partial<PublicIdentityDraft>) => {
+    handedOverRef.current = { ...(handedOverRef.current ?? value), ...edit };
+    onChange(handedOverRef.current);
+  };
+  useTypedBeforeHydration(nameRef, {
+    drawn: value.displayName,
+    enabled: true,
+    onTyped: (typed) => handOver({ displayName: typed }),
+  });
+  useTypedBeforeHydration(handleRef, {
+    drawn: value.username,
+    enabled: true,
+    onTyped: (typed) => handOver({ username: normalizeHandleInput(typed) }),
+  });
   const availability = useHandleAvailability(value, { accessToken, savedUsername });
   // A verdict from the form or the save comes first; then the server's word as
   // it is typed; else the rule, so the line under the field always says something.
@@ -80,6 +104,7 @@ export default function PublicIdentityFields({
         </label>
         <div className={FIELD_FRAME}>
           <input
+            ref={nameRef}
             id={nameId}
             type="text"
             value={value.displayName}
@@ -107,6 +132,7 @@ export default function PublicIdentityFields({
         <div className={`${FIELD_FRAME} flex items-center`}>
           <span className="pl-3 text-sm text-[var(--ui-text-faint)]" aria-hidden="true">@</span>
           <input
+            ref={handleRef}
             id={handleId}
             type="text"
             value={value.username}
