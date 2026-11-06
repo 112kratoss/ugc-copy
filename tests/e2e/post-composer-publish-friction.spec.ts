@@ -115,8 +115,10 @@ test.describe('post composer: fewer reasons to stop before posting', () => {
     await expect(page.getByText('Suggested. A paid recipe keeps your prompt off the post.')).toBeVisible();
     await title.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath('suggested-title-with-recipe.png') });
-    await page.getByText('No recipe', { exact: true }).click();
-    await expect(page.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+    // A creation's post always carries its recipe (owner, 2026-11-05): No recipe is no choice.
+    await expect(page.getByRole('radio', { name: /no recipe/i })).toHaveCount(0);
+    await page.getByText('Free recipe', { exact: true }).click();
+    await expect(page.getByRole('radio', { name: /free recipe/i })).toBeChecked();
     await expect(title).toHaveValue('Product still lit like a window display');
 
     // A ready profile is asked nothing.

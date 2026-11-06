@@ -13,6 +13,7 @@ import {
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
 import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner } from '@/lib/generation-input-origin';
 import { loadRecipePassOnFolders } from '@/lib/recipe-pass-on';
+import { isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import { classifyVisualMedia } from '@/lib/media-contract';
 import { getAudioGenerationKind, isAudioModel } from '@/lib/models';
 import { buildVisualMediaDescriptor, type MediaPreviewStatus, type VisualMediaDescriptor } from '@/lib/media-descriptor';
@@ -54,6 +55,10 @@ type GenerationRow = {
   source_unavailable_at?: string | null;
   /** The recipe this run remixed (20261105123244), whose files its recipe passes on. */
   remix_recipe_bundle_id?: string | null;
+  /** The creation this run remixed or re-ran, read for its post's recipe when that post is the caller's own. */
+  source_generation_id?: string | null;
+  /** That recipe's terms when the run started: its post's recipe is held to them (free stays free, paid stays paid). */
+  remix_recipe_mode?: string | null;
   /** Written by the failure settlement once it has given the held cost back. */
   refunded?: boolean | null;
   error_message?: string | null;
@@ -182,6 +187,8 @@ export function projectGenerationForStudio(
   delete projected.template_run_step_id;
   // Read for the pass-on folder (remix plan, phase 1b), never shown (#708's max review).
   delete projected.remix_recipe_bundle_id;
+  // Read for the recipe of the caller's own post it remixed (`own_source_post_bundle`), never shown.
+  delete projected.source_generation_id;
   delete projected.studio_visible;
   delete projected.user_id;
   delete projected.preview_width;
@@ -429,6 +436,42 @@ async function loadLinkedPostBundleMap(params: {
 }
 
 /**
+ * The recipe of each of the caller's own posts these runs came from, by source creation (owner,
+ * 2026-11-06: a remix of your own paid post starts Paid at its price). Unlike the linked posts', a
+ * read that fails throws, so the page fails for a retry: read as "no paid post", the composers would
+ * start such a remix Free and one press would give the paid prompt away (the re-review of the max
+ * review's fixes).
+ */
+async function loadOwnSourcePostBundles(params: {
+  supabase: OwnerGenerationsRouteClient;
+  sourceGenerationIds: string[];
+  ownerUserIds: string[];
+}): Promise<Map<string, LinkedPostBundle | null>> {
+  const bundles = new Map<string, LinkedPostBundle | null>();
+  if (params.sourceGenerationIds.length === 0) return bundles;
+  const { data: posts, error: postError } = await params.supabase
+    .from('posts')
+    .select('id, generation_id')
+    .in('generation_id', params.sourceGenerationIds)
+    .in('user_id', params.ownerUserIds);
+  if (postError) throw postError;
+  const postRows = ((posts ?? []) as Array<{ id: string; generation_id: string | null }>).filter((post) => post.generation_id);
+  if (postRows.length === 0) return bundles;
+  const { data, error } = await params.supabase
+    .from('post_resource_bundles')
+    .select('post_id, access_mode, status, price_usd_cents')
+    .in('post_id', postRows.map((post) => post.id));
+  if (error) throw error;
+  const byPost = new Map(((data ?? []) as LinkedPostBundleRow[]).map((row) => [row.post_id, {
+    accessMode: row.access_mode,
+    status: row.status,
+    priceUsdCents: row.price_usd_cents,
+  }] as const));
+  for (const post of postRows) bundles.set(post.generation_id!, byPost.get(post.id) ?? null);
+  return bundles;
+}
+
+/**
  * Why a failed creation failed, as its settlement stored it: the provider's
  * reason already rewritten for the creator (`provider-failure-messages.ts`),
  * or the public start-failure copy. The creator's own status poll returns the
@@ -494,7 +537,7 @@ async function fetchOwnerGenerations({
   // level, and this one outgrew what the checker can represent (TS2590).
   const columns: string = statusOnly
     ? statusColumns
-    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at, remix_recipe_bundle_id`;
+    : `${baseColumns}, preview_url, display_url, preview_thumbhash, preview_status, preview_width, preview_height, creation_mode, playback_rendition_path, playback_rendition_source, playback_rendition_status, source_unavailable_at, remix_recipe_bundle_id, remix_recipe_mode, source_generation_id`;
 
   // `in` over the linked set, not `eq` on the caller. Anything made before the
   // person registered still carries its guest UUID — the financial tables
@@ -729,7 +772,14 @@ export async function listOwnerGenerationsForRoute({
     : loadRecipePassOnFolders(adminSupabase, generations
       .filter((generation) => ordinaryGenerationIdSet.has(generation.id) && generation.remix_recipe_bundle_id)
       .map((generation) => ({ id: generation.id, remixRecipeBundleId: generation.remix_recipe_bundle_id })));
-  const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls] = await Promise.all([
+  // A remix of the caller's own post starts its recipe on that post's terms, Paid at its price where
+  // it sells one, which the creator may still change (owner, 2026-11-06: "Start Paid, can switch"):
+  // the post whose creation the run came from, only where it is the caller's own (any linked identity).
+  const ownSourceIds = summaryOnly
+    ? []
+    : [...new Set(generations.flatMap((generation) => (generation.source_generation_id ? [generation.source_generation_id] : [])))];
+  const ownSourceBundlesPromise = loadOwnSourcePostBundles({ supabase: adminSupabase, sourceGenerationIds: ownSourceIds, ownerUserIds });
+  const [linkedPostMap, linkedPostBundleMap, inputMediaMap, resolvedMediaUrls, ownSourceBundles] = await Promise.all([
     linkedPostMapPromise,
     linkedPostMapPromise.then((linkedPosts) => loadLinkedPostBundleMap({
       supabase: adminSupabase,
@@ -751,6 +801,7 @@ export async function listOwnerGenerationsForRoute({
       outputUrls: collectOwnerMediaUrlCandidates(generations, summaryOnly),
       ownerUserIds,
     }),
+    ownSourceBundlesPromise,
   ]);
 
   // Whose each input is (`generationInputOrigin`): the recipe's prefill counts the creator's
@@ -885,11 +936,19 @@ export async function listOwnerGenerationsForRoute({
         input_media: inputMedia,
         paywallPrefill,
       }),
+      // The composers lock a remix's recipe to the terms it carries (remix plan, phase 2).
+      remix_recipe_mode: isRemixRecipeMode(generation.remix_recipe_mode) ? generation.remix_recipe_mode : null,
       linked_post_id: linkedPost?.id ?? null,
       linked_post_title: linkedPost?.title ?? null,
       linked_post_visibility: linkedPost?.visibility ?? null,
       linked_post_archived_at: linkedPost?.archived_at ?? null,
       linked_post_bundle: linkedPost ? linkedPostBundleMap.get(linkedPost.id) ?? null : null,
+      // The recipe of the caller's own post this run remixed (`readOwnSourceRecipe`), with the inputs.
+      ...(summaryOnly ? {} : {
+        own_source_post_bundle: generation.source_generation_id
+          ? ownSourceBundles.get(generation.source_generation_id) ?? null
+          : null,
+      }),
       // A failed card shows what came back and why in place of a cost it did not keep.
       refunded: generation.refunded === true,
       error_message: readFailureReason(generation),

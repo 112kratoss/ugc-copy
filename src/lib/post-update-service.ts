@@ -30,9 +30,11 @@ import {
   copyPlannedGenerationReferences,
   GENERATION_REFERENCES_NOT_COPIED_ERROR,
   getMarketplaceQualityErrorForPostBundle,
+  LEFT_OUT_GENERATION_REFERENCES_ERROR,
   planGenerationReferenceCopies,
   prepareCreationRecipeBundle,
   readAddedRecipeItems,
+  readLeftOutGenerationReferenceIds,
   updatePostWithResourceBundleAtomically,
   type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
@@ -106,7 +108,7 @@ import {
 } from '@/lib/storage-ownership';
 import { storedMediaOwnerId } from '@/lib/generation-input-origin';
 import { getRemixRecipeTermsRefusalBody } from '@/lib/remix-recipe-terms';
-import { isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
+import { isCreationReferenceCopyPath, isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
 
@@ -253,6 +255,10 @@ export type PostUpdateRequestBody = {
   resourceBundle?: unknown;
   /** True copies the creation's saved inputs into the recipe sent, as its publish does. */
   includeGenerationReferences?: unknown;
+  /** Saved inputs the creator took out of the recipe with its remove buttons (remix plan, phase 2). */
+  leaveOutGenerationReferenceIds?: unknown;
+  /** The post's "Allow remixes" (owner, 2026-11-05): written only when sent. */
+  allowRemixes?: unknown;
 };
 
 /** What a post's creation gives its recipe: its exact prompt, and whether it may share its saved inputs. */
@@ -1465,12 +1471,50 @@ export async function updateOwnerPostForRoute({
     // reference items in. Those are re-derived on every read, so drop them
     // before validation instead of failing the file-ownership checks on their
     // generation_inputs paths.
-    const { bundle: submittedResourceBundle, error: resourceBundleError } = parseBundleInput(
+    const { bundle: parsedResourceBundle, error: resourceBundleError } = parseBundleInput(
       stripDerivedGenerationReferenceItems(body.resourceBundle),
     );
     if (resourceBundleError) {
       return { ok: false, status: 400, body: { error: resourceBundleError } };
     }
+    if (body.allowRemixes !== undefined && typeof body.allowRemixes !== 'boolean') {
+      return { ok: false, status: 400, body: { error: 'allowRemixes must be a boolean.' } };
+    }
+    const leftOutReferenceIds = readLeftOutGenerationReferenceIds(body.leaveOutGenerationReferenceIds);
+    if (!leftOutReferenceIds) {
+      return { ok: false, status: 400, body: { error: LEFT_OUT_GENERATION_REFERENCES_ERROR } };
+    }
+    // An edit never turns the hand-over back on (the review of phase 2, finding 2): a creation's
+    // recipe stored without it lost it to a removed input (below) or to the old own-uploads rule,
+    // while an editor open since before that save, a second tab or an installed app sends the
+    // switch it read when it opened. Raised again, every input of the creation, the removed ones
+    // too, would go to each buyer's unlock and into every remix they make.
+    const storedWithoutHandOver = Boolean(post.generation_id && existingBundle && existingBundle.allow_remix !== true);
+    // A copy of one of the creation's inputs that the stored recipe holds and this save leaves out
+    // (the review of phase 2): the creator removed that file, as an older composer does too by
+    // deleting its item, and the live hand-over would put it back for every remix.
+    const dropsStoredInputCopy = (() => {
+      if (!post.generation_id || !liveBundle || !parsedResourceBundle?.resources?.allowRemix) return false;
+      const kept = new Set(
+        normalizePostResourceItems(parsedResourceBundle.resources.items, parsedResourceBundle.resources)
+          .flatMap((item) => (item.storagePath ? [item.storagePath] : [])),
+      );
+      return normalizePostResourceItems(liveBundle.resource_items, buildStoredBundleForQualityCheck(liveBundle).resources)
+        .some((item) => isCreationReferenceCopyPath(item.storagePath, post.generation_id) && !kept.has(item.storagePath!));
+    })();
+    // A recipe the creator took inputs out of hands none of the creation's inputs to a remix (the
+    // hand-over gives every input, the removed ones too): a remix restores its copies instead.
+    const submittedResourceBundle = (storedWithoutHandOver || leftOutReferenceIds.size > 0 || dropsStoredInputCopy)
+      && parsedResourceBundle?.resources?.allowRemix
+      ? { ...parsedResourceBundle, resources: { ...parsedResourceBundle.resources, allowRemix: false } }
+      : parsedResourceBundle;
+    // The stored recipe handed every input over live, and this save turns that off (an input removed):
+    // the inputs still in it are copied into the recipe instead, so neither its buyers nor future ones
+    // lose them (the re-review of the max review's fixes).
+    const turnsHandOverOff = Boolean(post.generation_id)
+      && existingBundle?.allow_remix === true
+      && Boolean(parsedResourceBundle?.resources?.allowRemix)
+      && submittedResourceBundle?.resources?.allowRemix === false;
     // A creation's recipe, as the publish makes it (#677's review): its exact
     // prompt where it has no prompt item of its own, and the saved inputs the
     // creator asked for, planned with no byte moved yet. Then the recipe, those
@@ -1488,7 +1532,8 @@ export async function updateOwnerPostForRoute({
       creation: post.generation_id && creationRecipeSource
         ? { id: post.generation_id, prompt: creationRecipeSource.prompt }
         : null,
-      includeReferences: body.includeGenerationReferences === true,
+      includeReferences: body.includeGenerationReferences === true || turnsHandOverOff,
+      ...(leftOutReferenceIds.size > 0 ? { exceptRowIds: leftOutReferenceIds } : {}),
       mayShareCreation: creationMaySharePostInputs(creationRecipeSource),
       // A recipe people have or had gains no prompt from here (#677's
       // re-reviews): an older composer sends the recipe back on every save, a
@@ -1709,6 +1754,8 @@ export async function updateOwnerPostForRoute({
       is_nsfw: nextIsNsfw,
       visibility: nextVisibility,
       category: nextCategory,
+      // Written only when sent (remix plan, phase 2): an older composer's save keeps the post's own.
+      ...(typeof body.allowRemixes === 'boolean' ? { remixes_allowed: body.allowRemixes } : {}),
     };
 
     if (Object.prototype.hasOwnProperty.call(body, 'title') || titleReplacedForRecipe) {

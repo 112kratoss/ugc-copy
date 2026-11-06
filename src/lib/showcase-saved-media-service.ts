@@ -172,7 +172,7 @@ export async function getSavedMediaFeedForRoute({
   const { data: postRows, error: postError } = await adminSupabase
     .from('posts')
     .select(
-      'id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility'
+      'id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, remixes_allowed'
     )
     .in(saveSource === 'post' ? 'id' : 'generation_id', lookupIds)
     .in('visibility', ['public', 'unlisted'])

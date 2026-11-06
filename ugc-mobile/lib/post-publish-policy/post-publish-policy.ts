@@ -184,9 +184,11 @@ export function getPublicPostQualityError(input: {
  * holds the same number, pinned by `src/__tests__/marketplace-trust.test.ts`).
  * A post without a recipe follows the post's own title rules. Owner,
  * 2026-11-03: the rule stays, and both composers say it plainly, by the title
- * before Publish and with "Post without recipe" when it refuses.
+ * before Publish. Owner, 2026-11-05 (remix plan, phase 2): 3 characters, no
+ * longer 6, since a creation's post always carries a recipe now and "Post
+ * without recipe" is offered only for uploads and text posts.
  */
-export const RECIPE_TITLE_MIN_LENGTH = 6;
+export const RECIPE_TITLE_MIN_LENGTH = 3;
 
 /** The code the routes answer a refusal by that rule with, beside `field: 'title'`. */
 export const RECIPE_TITLE_TOO_SHORT_CODE = 'RECIPE_TITLE_TOO_SHORT';
@@ -194,8 +196,12 @@ export const RECIPE_TITLE_TOO_SHORT_CODE = 'RECIPE_TITLE_TOO_SHORT';
 /** The hint by the title while the recipe is Free or Paid and the title is shorter than that. */
 export const RECIPE_TITLE_TOO_SHORT_HINT = `A recipe needs a title of at least ${RECIPE_TITLE_MIN_LENGTH} characters.`;
 
-/** What a publish or a save refused by that rule says, in place of the listing rule's own words. */
-export const RECIPE_TITLE_TOO_SHORT_REFUSAL = `${RECIPE_TITLE_TOO_SHORT_HINT} Make the title longer, or post without the recipe.`;
+/**
+ * What a publish or a save refused by that rule says, in place of the listing rule's own words. A
+ * creation's post has no "without the recipe" since 2026-11-05, so the words name only the title; a
+ * composer that still offers "Post without recipe" (an upload's, a text post's) draws it beside them.
+ */
+export const RECIPE_TITLE_TOO_SHORT_REFUSAL = `${RECIPE_TITLE_TOO_SHORT_HINT} Make the title longer.`;
 
 /**
  * A title's length as the database's `length()` counts it: in characters

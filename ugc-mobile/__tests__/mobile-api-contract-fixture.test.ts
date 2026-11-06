@@ -10,7 +10,12 @@ import {
   type SaveShowcasePostOptions,
 } from '../lib/api-client';
 import { isCreationLibraryMember } from '../lib/creation-library';
-import { recipeCopyableInputs, remixRecipeRefusal } from '../lib/creation-recipe/creation-recipe';
+import {
+  CREATION_RECIPE_REQUIRED,
+  CREATION_RECIPE_REQUIRED_CODE,
+  recipeCopyableInputs,
+  remixRecipeRefusal,
+} from '../lib/creation-recipe/creation-recipe';
 import { isRecipeTitleTooShortRefusal } from '../lib/post-new-view-model';
 import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
@@ -207,6 +212,27 @@ it('hands the composer the remix terms refusals, in the shared words', async () 
       expect(error).toMatchObject({ status: 400, message: refusal.response.error, code: refusal.response.code });
     }
   }
+});
+
+// Remix plan, phase 2 (owner, 2026-11-05): a creation's post always carries its recipe. The
+// composer offers no "No recipe" for one, and the server refuses it under a code the app reads,
+// in the shared module's words.
+it('hands the composer the refusal of a creation’s post with no recipe, in the shared words', async () => {
+  const refusal = mobileApiContract.endpoints.publishGeneration.errors.creationRecipeRequired;
+  expect(refusal.response).toEqual({ error: CREATION_RECIPE_REQUIRED, code: CREATION_RECIPE_REQUIRED_CODE, field: 'resourceBundle' });
+  const api = createApiClient({
+    baseUrl: 'https://magicbooklet.test',
+    getAccessToken: async () => 'token-1',
+    fetcher: vi.fn(async () => jsonResponse(refusal.response, refusal.status)) as unknown as typeof fetch,
+  });
+  const error = await api.publishGeneration({ generationId: 'generation-1', visibility: 'public' }).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error).toMatchObject({ status: 400, message: CREATION_RECIPE_REQUIRED, code: CREATION_RECIPE_REQUIRED_CODE });
+});
+
+it('reads the owner post’s "Allow remixes" and remix terms as the fixture documents them', async () => {
+  const { post } = await clientForEndpoint('getOwnerPost').getOwnerPost('post-1');
+  expect(post).toMatchObject({ remixesAllowed: true, remixRecipeMode: null });
 });
 
 it('preserves private generation playback without replacing the original download URL', async () => {

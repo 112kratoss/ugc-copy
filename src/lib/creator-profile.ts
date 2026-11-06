@@ -196,6 +196,7 @@ function normalizeCreatorPostRow(
     review_status: row.review_status === 'visible' || row.review_status === 'flagged' || row.review_status === 'hidden'
       ? row.review_status
       : null,
+    remixes_allowed: typeof row.remixes_allowed === 'boolean' ? row.remixes_allowed : null,
   };
 }
 
@@ -215,6 +216,8 @@ async function fetchCreatorPostRows({
   let includeSourceToolSlug = true;
   const includeReviewStatus = true;
   let includeTextColumns = mode === 'page';
+  // The post's own "Allow remixes" (owner, 2026-11-05), which closes the card's Remix.
+  let includeRemixesAllowed = mode === 'page';
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const columns = mode === 'page'
@@ -235,6 +238,7 @@ async function fetchCreatorPostRows({
           'source_tool',
           includeSourceToolSlug ? 'source_tool_slug' : null,
           includeReviewStatus ? 'review_status' : null,
+          includeRemixesAllowed ? 'remixes_allowed' : null,
         ]
       : [
           'id',
@@ -284,6 +288,11 @@ async function fetchCreatorPostRows({
     }
     if (includeTextColumns && isMissingPostTextColumnsError(result.error)) {
       includeTextColumns = false;
+      shouldRetry = true;
+    }
+    // A database from before the column: every post allows remixes, as they all did.
+    if (includeRemixesAllowed && result.error?.code === '42703' && /remixes_allowed/.test(`${result.error.message ?? ''}`)) {
+      includeRemixesAllowed = false;
       shouldRetry = true;
     }
     if (shouldRetry) continue;

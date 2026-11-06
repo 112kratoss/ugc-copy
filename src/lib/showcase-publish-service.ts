@@ -16,14 +16,18 @@ import {
   copyPlannedGenerationReferences,
   GENERATION_REFERENCES_NOT_COPIED_ERROR,
   getMarketplaceQualityErrorForPostBundle,
+  LEFT_OUT_GENERATION_REFERENCES_ERROR,
   loadGenerationInputOrigins,
   planGenerationReferenceCopies,
   prepareCreationRecipeBundle,
   publishGenerationPostWithResourceBundleAtomically,
   readAddedRecipeItems,
+  readLeftOutGenerationReferenceIds,
   type CopiedGenerationReferences,
 } from '@/lib/post-resource-bundles-server';
 import { creationMaySharePostInputs } from '@/lib/generation-input-media';
+// The composers' words for a creation's post sent with no recipe (remix plan, phase 2).
+import { CREATION_RECIPE_REQUIRED, CREATION_RECIPE_REQUIRED_CODE } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import {
   BODY_MAX_LENGTH,
   TITLE_MAX_LENGTH,
@@ -151,6 +155,16 @@ export type ShowcasePublishRequestBody = {
    * where the creation holds any of their own, none is handed to a remix (`allowRemix` off).
    */
   leaveOutOwnGenerationReferences?: boolean;
+  /**
+   * The saved inputs the creator took out of the recipe with its remove buttons (remix plan,
+   * phase 2): never copied, and none of the creation's inputs is then handed to a remix.
+   */
+  leaveOutGenerationReferenceIds?: string[];
+  /**
+   * The post's "Allow remixes" (owner, 2026-11-05), on by default. A composer that sends it offers
+   * no post of a creation without a recipe, and is held to that (`CREATION_RECIPE_REQUIRED`).
+   */
+  allowRemixes?: boolean;
   resourceBundle?: PostResourceBundleInput | null;
 };
 
@@ -661,7 +675,23 @@ export async function publishGenerationToShowcaseForRoute({
     : stripDerivedGenerationReferenceItems(requestBody.resourceBundle ?? null);
   const requestedAccessMode = requestedResourceBundle?.accessMode ?? 'none';
   const shouldIncludeGenerationReferences = requestBody.includeGenerationReferences === true;
+  if (requestBody.allowRemixes !== undefined && typeof requestBody.allowRemixes !== 'boolean') {
+    return { ok: false, status: 400, body: { error: 'allowRemixes must be a boolean.' } };
+  }
+  const leftOutReferenceIds = readLeftOutGenerationReferenceIds(requestBody.leaveOutGenerationReferenceIds);
+  if (!leftOutReferenceIds) {
+    return { ok: false, status: 400, body: { error: LEFT_OUT_GENERATION_REFERENCES_ERROR } };
+  }
   let effectiveResourceBundle: PostResourceBundleInput | null = requestedResourceBundle;
+  // A recipe the creator took inputs out of hands none of the creation's inputs to a remix: the
+  // hand-over (`allowRemix`) gives every input, the removed ones too. A remix restores the copies
+  // the recipe holds instead.
+  if (leftOutReferenceIds.size > 0 && effectiveResourceBundle?.resources?.allowRemix) {
+    effectiveResourceBundle = {
+      ...effectiveResourceBundle,
+      resources: { ...effectiveResourceBundle.resources, allowRemix: false },
+    };
+  }
   const effectiveHasResourceBundlePayload = hasRequestedResourceBundlePayload;
   // Whose each input is, where the recipe leaves the creator's own out: a remix hands every
   // input of a recipe whose switch is on to whoever opens it, so with any of their own among
@@ -716,6 +746,7 @@ export async function publishGenerationToShowcaseForRoute({
         ...(inputOrigins
           ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin !== 'own' ? [rowId] : []))) }
           : {}),
+        ...(leftOutReferenceIds.size > 0 ? { exceptRowIds: leftOutReferenceIds } : {}),
         mediaKeys: ['media-1'],
         dependencies: {
           planGenerationReferenceCopies: resolvedDependencies.planGenerationReferenceCopies,
@@ -971,6 +1002,26 @@ export async function publishGenerationToShowcaseForRoute({
   }
   const existingRating = await adminSupabase.from('posts').select('id, is_nsfw').eq('generation_id', generationId).eq('user_id', userId).maybeSingle();
   if (existingRating.error) throw existingRating.error;
+  // A creation's new post carries its recipe (owner, 2026-11-05; remix plan, phase 2): a composer
+  // that sends "Allow remixes" offers no post of a creation without one, and is held to it here.
+  // An installed app from before sends no switch and still posts without a recipe until its
+  // update reaches it; a post already there (Studio's visibility change, a post made before) keeps
+  // what it has, and a creation with nothing to share, no prompt or off public view, is not asked.
+  if (
+    isComposeSubmission
+    && !isCanonicalTemplateResult
+    && typeof requestBody.allowRemixes === 'boolean'
+    && requestedAccessMode === 'none'
+    && !existingRating.data
+    && creationMaySharePostInputs(generation)
+    && Boolean(generation.prompt?.trim())
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      body: { error: CREATION_RECIPE_REQUIRED, code: CREATION_RECIPE_REQUIRED_CODE, field: 'resourceBundle' },
+    };
+  }
   const isNsfw = requestBody.isNsfw ?? existingRating.data?.is_nsfw ?? existingPost?.is_nsfw ?? false;
   if (isNsfw && existingRating.data) await secureNsfwPostMedia(adminSupabase, existingRating.data.id, userId);
   const updatePayload: { is_public: boolean; [key: string]: unknown } = {
@@ -1074,6 +1125,10 @@ export async function publishGenerationToShowcaseForRoute({
     creation_mode: generation.creation_mode ?? (generation.category === 'motion' ? 'motion' : null),
     showcase_asset_path: nextShowcaseAssetPath,
     output_url: nextOutputUrl,
+    // Written only when sent: a visibility change and an older composer leave the post's own.
+    ...(typeof requestBody.allowRemixes === 'boolean' && !isCanonicalTemplateResult
+      ? { remixes_allowed: requestBody.allowRemixes }
+      : {}),
   };
 
   // The creation's saved inputs are copied last: every check has passed, and

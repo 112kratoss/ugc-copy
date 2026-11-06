@@ -20,8 +20,9 @@ import { createServiceClient } from '@/lib/server-helpers';
  * - prepared from a file of the preparer's own: usable by anyone, as before (a creator's shared
  *   inputs hand their asset ids to remixers, owner 2026-10-29);
  * - prepared from a recipe file: only by its preparer, and only while the copy is theirs to reuse
- *   now (`checkRecipeCopyReuse`: the remix gate, the version they bought holding it, its creation
- *   neither removed nor archived). A refund, a block or an archive ends it; nobody else ever runs it;
+ *   now (`checkRecipeCopyReuse`: the reuse gate, the version they bought holding it, its creation
+ *   neither removed nor archived). A refund or an archive ends it, a block since does not (owner,
+ *   2026-11-06: what was bought stays usable); nobody else ever runs it;
  * - prepared before the table existed: the migration recorded every id a run had used, under the first
  *   account that ran it. An id still on no record (prepared and kept in a draft or a workflow, never
  *   run) is recorded by the first start that sends it beside its file, as that file reads for the

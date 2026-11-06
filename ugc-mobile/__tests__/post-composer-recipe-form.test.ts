@@ -364,6 +364,13 @@ describe('removing a recipe is confirmed (A-F2)', () => {
     expect(getRecipeRemovalConfirmation({ loadedAccessMode: 'free', loadedItemCount: 1, buyerCount: 0, nextAccessMode: 'none', reopensPost: false })?.message)
       .toBe('Its 1 item and files will be deleted.');
   });
+
+  // The post's own "Allow remixes" off (owner, 2026-11-05): taking the recipe off opens its prompt, not Remix.
+  it('promises no Remix where the post’s creator turned remixes off', () => {
+    expect(getRecipeRemovalConfirmation({
+      loadedAccessMode: 'free', loadedItemCount: 1, buyerCount: 0, nextAccessMode: 'none', reopensPost: true, remixesAllowed: false,
+    })?.message).toBe('Its 1 item and files will be deleted. The post’s prompt will be open to everyone again, as on any post without a recipe.');
+  });
 });
 
 describe('the item picker (S8)', () => {

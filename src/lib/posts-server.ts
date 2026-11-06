@@ -15,6 +15,7 @@ import {
   normalizePostResourceItems,
   normalizePostResourceSections,
   sanitizePostResourceBundleLockedPreview,
+  withoutRecipeRemix,
   type PostResourceBundleResources,
 } from '@/lib/post-resource-bundles';
 import {
@@ -692,7 +693,35 @@ async function getLegacyMarketplaceAssetSummaryHydration(
 
 export async function getMarketplaceAssetSummaryHydration(
   postIds: string[],
-  adminSupabase = createServiceClient()
+  adminSupabase = createServiceClient(),
+  options: {
+    /**
+     * The posts among `postIds` whose creator turned "Allow remixes" off (`posts.remixes_allowed`,
+     * owner 2026-11-05), which the summaries do not know (the RPC reports `allow_remix` for every
+     * published creation recipe): each one's recipe is summed up with no Remix in its kinds, its
+     * switch or its teaser (the review of phase 2), as the marketplace lists it.
+     */
+    remixesClosedPostIds?: ReadonlySet<string>;
+  } = {},
+): Promise<MarketplaceAssetSummaryHydration> {
+  const hydration = await readMarketplaceAssetSummaryHydration(postIds, adminSupabase);
+  const closed = options.remixesClosedPostIds;
+  if (!closed || closed.size === 0) {
+    return hydration;
+  }
+
+  return {
+    ...hydration,
+    assetMap: new Map([...hydration.assetMap].map(([postId, asset]) => [
+      postId,
+      closed.has(postId) ? withoutRecipeRemix(asset) : asset,
+    ])),
+  };
+}
+
+async function readMarketplaceAssetSummaryHydration(
+  postIds: string[],
+  adminSupabase: SupabaseClient,
 ): Promise<MarketplaceAssetSummaryHydration> {
   if (postIds.length === 0) {
     return { assetMap: new Map(), unreadRecipePostIds: new Set() };

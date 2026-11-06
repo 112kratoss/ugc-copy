@@ -1257,6 +1257,44 @@ describe('post resource bundle server access', () => {
     });
   });
 
+  // The review of phase 2, finding 13: a post whose creator turned "Allow remixes" off still named
+  // Remix among its recipe's kinds where a Remix link or a Remix access item was among its items, or
+  // where its stored switch was on.
+  describe('a recipe on a post whose creator turned remixes off', () => {
+    const PROMPT = { id: 'prompt-1', type: 'prompt', title: 'Prompt', textContent: 'Public prompt text' };
+
+    it.each([
+      ['its creation', []],
+      ['a Remix link among its items', [{ id: 'link-1', type: 'remix_link', title: 'Remix link', externalUrl: 'https://example.com/remix' }]],
+      ['a Remix access item', [{ id: 'access-1', type: 'remix_access', title: 'Remix access' }]],
+    ])('names no Remix from %s, to its buyer, to anyone else or to its owner', async (_label, items) => {
+      postRow = { ...(postRow as Record<string, unknown>), remixes_allowed: false };
+      bundleRow = { ...(bundleRow as BundleRow), allow_remix: true, resource_items: [PROMPT, ...items] };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      for (const [viewerUserId, purchased] of [['viewer-1', false], ['viewer-1', true], ['owner-1', false]] as const) {
+        viewerHasPurchased = purchased;
+        const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId });
+        const who = `${viewerUserId}${purchased ? ' (bought it)' : ''}`;
+        expect(detail?.allowRemix, who).toBe(false);
+        // The stored hand-over still gives the creation's inputs with the unlock: Files, not Remix.
+        expect(detail?.resourceKinds, who).toEqual(['prompt', 'files']);
+        expect(detail?.lockedPreview, who).toMatchObject({ resourceKinds: ['prompt', 'files'], hasRemix: false });
+        expect(detail?.remixCapability, who).toBe('none');
+      }
+    });
+
+    it('names its Remix again once the switch is back on', async () => {
+      bundleRow = { ...(bundleRow as BundleRow), resource_items: [PROMPT] };
+      const { getPostResourceBundleDetailByPostId } = await import('@/lib/post-resource-bundles-server');
+
+      const detail = await getPostResourceBundleDetailByPostId('post-1', { viewerUserId: 'viewer-1' });
+
+      expect(detail?.resourceKinds).toEqual(['prompt', 'remix']);
+      expect(detail?.remixCapability).toBe('unlock_required');
+    });
+  });
+
   // Recipe audit S-F8: "Include creation references" stores copies of the
   // creation's inputs as `reference-<input id>` items, and a remix-included
   // recipe merged the same inputs again at read time.
@@ -3690,6 +3728,58 @@ describe('generation references packaged for a publish', () => {
       });
       expect(prepared.ok && prepared.bundle?.resources?.items).toEqual([expect.objectContaining({ id: 'reference-ref-1' })]);
       expect(planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({ ownerUserId: 'user-1', generationId: 'gen-1' }));
+    });
+
+    // The review of phase 2, finding 4: the recipe held copies of inputs A and B, the creator removed A,
+    // and the composer still sent A's copy card, so its buyers kept getting the file. Both saves
+    // prepare here, so a removed input's copy is taken out once for the publish and the edit.
+    it('takes out a sent copy of an input the creator removed, keeping the rest of the recipe', async () => {
+      const { prepareCreationRecipeBundle } = await import('@/lib/post-resource-bundles-server');
+      const copyOf = (rowId: string, sortOrder: number) => ({
+        ...plannedInput.item,
+        id: `reference-${rowId}`,
+        storagePath: `user-1/generation-references/gen-1/0${sortOrder}-reference-image-${rowId}.png`,
+        sortOrder,
+        isPrimary: sortOrder === 0,
+      });
+      const planGenerationReferenceCopies = vi.fn(async () => ({ ok: true as const, references: [] }));
+      const sent = { ...withNote, resources: { ...withNote.resources, items: [copyOf('row-a', 0), copyOf('row-b', 1), { ...note, sortOrder: 2, isPrimary: false }] } };
+
+      const prepared = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: sent,
+        creation: { id: 'gen-1', prompt: null },
+        includeReferences: true,
+        exceptRowIds: new Set(['row-a']),
+        mayShareCreation: true,
+        addsCreationPrompt: true,
+        storedItems: sent.resources.items,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies },
+      });
+
+      expect(prepared.ok && prepared.bundle?.resources?.items?.map((item) => [item.id, item.isPrimary])).toEqual([
+        // The first item went, so the next is first.
+        ['reference-row-b', true],
+        ['notes', false],
+      ]);
+      expect(planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({ exceptRowIds: new Set(['row-a']) }));
+
+      // No input removed: the same recipe.
+      const untouched = await prepareCreationRecipeBundle({
+        supabase: {} as never,
+        ownerUserId: 'user-1',
+        bundle: sent,
+        creation: { id: 'gen-1', prompt: null },
+        includeReferences: false,
+        mayShareCreation: true,
+        addsCreationPrompt: false,
+        storedItems: sent.resources.items,
+        mediaKeys: ['media-1'],
+        dependencies: { planGenerationReferenceCopies },
+      });
+      expect(untouched.ok && untouched.bundle).toBe(sent);
     });
 
     it('adds the exact prompt and the inputs together', async () => {

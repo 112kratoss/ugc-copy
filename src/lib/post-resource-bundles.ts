@@ -216,6 +216,11 @@ export interface PostRemixResolutionInput {
   sourceKind: string | null | undefined;
   /** The post's creation is a template's result (`template-result.ts`), whose recipe is the template's. */
   templateResult?: boolean;
+  /**
+   * The post's own "Allow remixes" (`posts.remixes_allowed`; owner, 2026-11-05): false stops new
+   * remixes of this post only. Left out, the post allows them, as every post did before.
+   */
+  remixesAllowed?: boolean | null;
   resourceBundle?: {
     viewerCanAccess?: boolean | null;
     allowRemix?: boolean | null;
@@ -1645,14 +1650,20 @@ function resolveResourceRemixDescriptorTarget(items: PostResourceRemixDescriptor
  * includes it, whatever the stored `allow_remix` says: the composers' "Allow
  * direct remix" switch is gone, and `resolvePostRemixCapability` gates such a
  * post's Remix at the unlock. Read-time only; nothing stored changes, and a
- * stored `true` stays true.
+ * stored `true` stays true. A post whose creator turned "Allow remixes" off
+ * (`posts.remixes_allowed`, owner 2026-11-05) offers no Remix with its recipe,
+ * so none is listed, filtered on or sold with it.
  */
 export function resolveRecipeAllowRemix(input: {
   storedAllowRemix: boolean | null | undefined;
   status: string | null | undefined;
   generationId: string | null | undefined;
   templateResult?: boolean;
+  remixesAllowed?: boolean | null;
 }): boolean {
+  if (input.remixesAllowed === false) {
+    return false;
+  }
   if (input.storedAllowRemix === true) {
     return true;
   }
@@ -1663,10 +1674,67 @@ export function resolveRecipeAllowRemix(input: {
     && input.templateResult !== true;
 }
 
+/**
+ * A recipe's kinds on a post whose creator turned "Allow remixes" off (`posts.remixes_allowed`, owner
+ * 2026-11-05): no Remix, whatever its stored switch, its creation or a Remix link among its items says
+ * (the review of phase 2), as the marketplace's listing and search read it (20261105152921).
+ */
+export function withoutRemixKind(kinds: readonly PostResourceKind[]): PostResourceKind[] {
+  return kinds.filter((kind) => kind !== 'remix');
+}
+
+/** Counts without "remix access", the mark of a Remix that comes with the recipe: no item of the creator's. */
+function withoutRemixAccessCount(counts: PostResourceItemCounts): PostResourceItemCounts {
+  return Object.fromEntries(
+    Object.entries(counts).filter(([type]) => type !== 'remix_access'),
+  ) as PostResourceItemCounts;
+}
+
+/**
+ * A recipe's locked preview on such a post: no Remix in its kinds, its flag or a card's "Remix
+ * included", and no "remix access" among what it counts. A Remix link stays counted: the creator's
+ * link is still in the recipe.
+ */
+export function withoutRemixInLockedPreview(preview: PostResourceBundleLockedPreview): PostResourceBundleLockedPreview {
+  return {
+    ...preview,
+    resourceKinds: withoutRemixKind(preview.resourceKinds),
+    itemCounts: withoutRemixAccessCount(preview.itemCounts),
+    itemPreviews: preview.itemPreviews.filter((item) => item.type !== 'remix_access'),
+    ...(preview.cardPreviews ? { cardPreviews: preview.cardPreviews.map((card) => ({ ...card, hasRemix: false })) } : {}),
+    hasRemix: false,
+  };
+}
+
+/** A recipe's summary on such a post (a feed card's `asset`, a listed recipe): no Remix in any of it. */
+export function withoutRecipeRemix<T extends {
+  allowRemix: boolean;
+  resourceKinds?: PostResourceKind[];
+  itemCounts?: PostResourceItemCounts;
+  lockedPreview?: PostResourceBundleLockedPreview;
+}>(recipe: T): T {
+  return {
+    ...recipe,
+    allowRemix: false,
+    ...(recipe.resourceKinds ? { resourceKinds: withoutRemixKind(recipe.resourceKinds) } : {}),
+    ...(recipe.itemCounts ? { itemCounts: withoutRemixAccessCount(recipe.itemCounts) } : {}),
+    ...(recipe.lockedPreview ? { lockedPreview: withoutRemixInLockedPreview(recipe.lockedPreview) } : {}),
+  };
+}
+
 export function resolvePostRemixCapability(input: PostRemixResolutionInput): {
   capability: PostRemixCapability;
   target: PostRemixTarget;
 } {
+  // Its creator turned remixes off (remix plan, phase 2): no Remix, whoever asks. Its recipe can
+  // still be claimed or bought, and remixes made before stay.
+  if (input.remixesAllowed === false) {
+    return {
+      capability: 'none',
+      target: null,
+    };
+  }
+
   const resourceBundle = input.resourceBundle ?? null;
   const items = normalizePostResourceRemixDescriptors(resourceBundle?.items ?? []);
   const bundleRequiresUnlock = Boolean(resourceBundle && !resourceBundle.viewerCanAccess);
