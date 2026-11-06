@@ -1,4 +1,4 @@
-import { FlashList, type ViewToken } from '@shopify/flash-list';
+import { FlashList, type FlashListRef, type ViewToken } from '@shopify/flash-list';
 import { useIsFocused } from '@react-navigation/native';
 import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { GlassView, isGlassEffectAPIAvailable, isLiquidGlassAvailable } from 'expo-glass-effect';
@@ -43,6 +43,7 @@ import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import { removeShowcaseFeedItems, removeShowcaseFeedItemsFromInfiniteData } from '@/lib/showcase-feed-events';
 import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
+import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
@@ -113,6 +114,11 @@ export function CreatorProfileScreen({
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const previousFocusRef = useRef(isFocused);
+  // A block made from a screen pushed over this one (a post's page) turns the
+  // cached grid into the one "You blocked" page; without this the page came
+  // back scrolled past the end of it, drawn empty (Android).
+  const listRef = useRef<FlashListRef<CreatorListItem>>(null);
+  const keepScrollWithinContent = useScrollWithinContent(listRef, isFocused);
   const insets = useSafeAreaInsets();
   const topInset = resolvedTopInset(insets.top);
   // Where UIKit's zoom runs, the page draws its own bar; see `CreatorTopBar`.
@@ -619,12 +625,14 @@ export function CreatorProfileScreen({
       {ownBar ? <CreatorTopBar topInset={topInset} /> : null}
       <FlashList
         keyboardShouldPersistTaps="never"
+        ref={listRef}
         data={listItems}
         drawDistance={900}
         extraData={`${activeTab}:${activeVideoItemId ?? ''}:${isFocused}`}
         getItemType={(item) => item.kind}
         keyExtractor={(item) => item.key}
         numColumns={2}
+        onContentSizeChange={keepScrollWithinContent}
         onEndReached={requestNextPage}
         onEndReachedThreshold={0.35}
         onRefresh={handleRefresh}

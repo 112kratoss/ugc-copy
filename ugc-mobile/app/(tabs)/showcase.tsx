@@ -118,6 +118,7 @@ import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
+import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 
 type FeedFilterId = MobileShowcaseFeedFilterId;
 
@@ -263,6 +264,10 @@ export default function ShowcaseScreen() {
   const gridLayout = useMemo(() => getShowcaseGridLayout(width), [width]);
   const feedRef = useRef<FlashListRef<ShowcaseMasonryCard>>(null);
   useScrollToTop(feedRef);
+  // A block or hide made from a screen pushed over Explore takes posts out of
+  // its lane; at the end of the grid it came back scrolled past what was left,
+  // drawn empty (Android).
+  const keepScrollWithinContent = useScrollWithinContent(feedRef, isFocused);
   const routeFilterId = resolveMobileShowcaseFeedFilterId(routeParams.filter);
   const routeTool = normalizeShowcaseToolFilter(routeParams.tool);
   const [activeFilterId, setActiveFilterId] = useState<FeedFilterId>(routeFilterId);
@@ -942,6 +947,7 @@ export default function ShowcaseScreen() {
         onMomentumScrollBegin={() => dispatchActivation({ type: 'momentumBegin' })}
         onMomentumScrollEnd={() => dispatchActivation({ type: 'momentumEnd' })}
         onScroll={trackListOffset}
+        onContentSizeChange={keepScrollWithinContent}
         getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         // FlashList's default keeps whichever post is first on screen in place
