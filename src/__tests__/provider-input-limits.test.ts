@@ -8,6 +8,7 @@ import {
   providerPromptViolation,
   providerReferenceTrackFormats,
   referenceMediaLengthViolation,
+  referenceTrackLinkExtension,
   referenceTrackNeedsConversion,
 } from '@/lib/provider-input-limits';
 
@@ -180,6 +181,29 @@ describe('provider input limits', () => {
       expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/take.wav?token=voice.m4a')).toBe(false);
       expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/tracks/42')).toBe(true);
       expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/take.WAV')).toBe(true);
+    });
+
+    it('reads a link’s extension as written, from its path alone', () => {
+      expect(referenceTrackLinkExtension(signed('voice-memo.m4a'))).toBe('m4a');
+      expect(referenceTrackLinkExtension('https://cdn.example.com/voice.m4a?name=take.wav#beat.mp3')).toBe('m4a');
+      expect(referenceTrackLinkExtension('http://127.0.0.1:54321/storage/v1/object/sign/uploads/u/take.wav?token=t')).toBe('wav');
+      // Kie reads the extension exactly: the case is kept.
+      expect(referenceTrackLinkExtension('https://cdn.example.com/BEAT.MP3')).toBe('MP3');
+      expect(referenceTrackLinkExtension('https://cdn.example.com/beat.tar.mp3')).toBe('mp3');
+      // A dot in a folder is not the file's.
+      expect(referenceTrackLinkExtension('https://cdn.example.com/v1.2/tracks/42')).toBe('');
+      expect(referenceTrackLinkExtension('https://cdn.example.com/tracks/42?ext=.mp3')).toBe('');
+      expect(referenceTrackLinkExtension('https://cdn.example.com/')).toBe('');
+      expect(referenceTrackLinkExtension('https://cdn.example.com/beat.')).toBe('');
+    });
+
+    it('reads no extension from what is no link the provider fetches', () => {
+      expect(referenceTrackLinkExtension('asset-audio-1')).toBeNull();
+      expect(referenceTrackLinkExtension('asset://asset-audio-1.mp3')).toBeNull();
+      expect(referenceTrackLinkExtension('file:///tmp/beat.mp3')).toBeNull();
+      expect(referenceTrackLinkExtension('data:audio/mpeg;base64,AAAA')).toBeNull();
+      expect(referenceTrackLinkExtension('not a link.mp3')).toBeNull();
+      expect(referenceTrackLinkExtension('')).toBeNull();
     });
 
     it('sends a prepared provider asset as it is, and converts nothing for a model that sends no track', () => {

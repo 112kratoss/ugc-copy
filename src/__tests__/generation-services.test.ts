@@ -8,6 +8,7 @@ import {
 import { GENERATION_PROMPT_MAX_LENGTH, MOTION_PROMPT_MAX_LENGTH } from '../../ugc-mobile/lib/model-catalog/protocol';
 import type { BackendLogRecord } from '@/lib/backend-logger';
 import { sanitizeWorkflowSettingsForRemix } from '@/lib/generation-input-media';
+import { referenceTrackLinkExtension } from '@/lib/provider-input-limits';
 import type { VideoModelId } from '@/lib/models';
 import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 
@@ -43,8 +44,8 @@ const seedanceProvenanceMocks = vi.hoisted(() => ({
 vi.mock('@/lib/seedance-asset-provenance', () => seedanceProvenanceMocks);
 
 // A track's conversion and its copy are reference-track-conversion.test.ts's, run with ffmpeg.
-// Here the conversion answers the track's name as bytes, and the copy a link in the run's folder,
-// unless a test refuses them.
+// Here a track goes as it is unless a test says otherwise; below, the conversion answers the
+// track's name as bytes, and the copy a link in the run's folder, unless a test refuses them.
 const storedTrackLink = (generationId: string, index: number) =>
   `https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/${generationId}/provider-tracks/${String(index).padStart(2, '0')}.wav?token=s`;
 const trackConversionMocks = vi.hoisted(() => ({
@@ -53,7 +54,7 @@ const trackConversionMocks = vi.hoisted(() => ({
       super(message);
     }
   },
-  convertReferenceTrack: vi.fn(),
+  convertReferenceTrackIfRefused: vi.fn<(params: { link: string; formats: readonly string[] }) => Promise<Buffer | null>>(async () => null),
   storeConvertedReferenceTrack: vi.fn(),
   removeConvertedReferenceTracks: vi.fn(),
 }));
@@ -6943,12 +6944,21 @@ describe('generation services', () => {
     const VOICE_MEMO = 'https://cdn.example.com/voice-memo.m4a';
     const VOICE_MEMO_TRACK = { kind: 'audio' as const, label: 'Voice Memo', storagePath: 'uploads/user-1/voice-memo.m4a', sourceGenerationId: null };
 
+    // AAC behind an extension Kie takes: Kie fetches it, cannot decode it, and fails the run after the hold.
+    const AAC_NAMED_MP3 = 'https://cdn.example.com/beat-from-messages.mp3';
+    const REALLY_AAC = new Set([AAC_NAMED_MP3]);
+
     const storedTrackPath = (generationId: string, index: number) => `user-1/${generationId}/provider-tracks/${String(index).padStart(2, '0')}.wav`;
 
     beforeEach(() => {
-      const { convertReferenceTrack, storeConvertedReferenceTrack, removeConvertedReferenceTracks } = trackConversionMocks;
-      convertReferenceTrack.mockReset();
-      convertReferenceTrack.mockImplementation(async ({ link }: { link: string }) => Buffer.from(`wav of ${link}`));
+      const { convertReferenceTrackIfRefused, storeConvertedReferenceTrack, removeConvertedReferenceTracks } = trackConversionMocks;
+      convertReferenceTrackIfRefused.mockReset();
+      // As the module decides: a track goes as it is when its extension is one the provider takes
+      // and its bytes are that container; anything else answers its WAV.
+      convertReferenceTrackIfRefused.mockImplementation(async ({ link, formats }) => {
+        const extension = referenceTrackLinkExtension(link);
+        return extension && formats.includes(extension) && !REALLY_AAC.has(link) ? null : Buffer.from(`wav of ${link}`);
+      });
       storeConvertedReferenceTrack.mockReset();
       storeConvertedReferenceTrack.mockImplementation(async ({ generationId, index, onStored }: {
         generationId: string; index: number; onStored: (filePath: string) => void;
@@ -7011,8 +7021,8 @@ describe('generation services', () => {
       });
       const result = await start;
 
-      const { convertReferenceTrack, storeConvertedReferenceTrack } = trackConversionMocks;
-      expect(convertReferenceTrack.mock.calls).toEqual([[expect.objectContaining({ userId: 'user-1', link: VOICE_MEMO })]]);
+      const { convertReferenceTrackIfRefused, storeConvertedReferenceTrack } = trackConversionMocks;
+      expect(convertReferenceTrackIfRefused.mock.calls).toEqual([[expect.objectContaining({ userId: 'user-1', link: VOICE_MEMO })]]);
       expect(storeConvertedReferenceTrack.mock.calls).toEqual([[expect.objectContaining({
         userId: 'user-1', generationId: result.generationId, index: 0, wav: Buffer.from(`wav of ${VOICE_MEMO}`),
       })]]);
@@ -7021,7 +7031,7 @@ describe('generation services', () => {
       const hold = rpcCalls.findIndex((call) => call.fn === 'start_generation');
       expect(hold).toBeGreaterThanOrEqual(0);
       const holdOrder = vi.mocked(supabase.rpc).mock.invocationCallOrder[hold];
-      expect(convertReferenceTrack.mock.invocationCallOrder[0]).toBeLessThan(holdOrder);
+      expect(convertReferenceTrackIfRefused.mock.invocationCallOrder[0]).toBeLessThan(holdOrder);
       expect(storeConvertedReferenceTrack.mock.invocationCallOrder[0]).toBeGreaterThan(holdOrder);
       expect(storeConvertedReferenceTrack.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(fetch).mock.invocationCallOrder[0]);
 
@@ -7035,15 +7045,45 @@ describe('generation services', () => {
       });
     });
 
-    it('sends a WAV or MP3 track as it is, converting nothing', async () => {
+    it('sends a WAV or MP3 track that really is one as it is, reading a track sent twice once', async () => {
       const bodies = recordKieBodies();
-      const tracks = ['https://cdn.example.com/take-1.wav', 'https://cdn.example.com/beat.mp3'];
+      const tracks = ['https://cdn.example.com/take-1.wav', 'https://cdn.example.com/beat.mp3', 'https://cdn.example.com/beat.mp3'];
       const { start } = await startWithTracks('wan-3.0', tracks);
       await start;
 
-      expect(trackConversionMocks.convertReferenceTrack).not.toHaveBeenCalled();
+      // Each track is read, as its bytes may not be what its link says, and goes as it is.
+      expect(trackConversionMocks.convertReferenceTrackIfRefused.mock.calls.map(([call]) => call.link)).toEqual(tracks.slice(0, 2));
       expect(trackConversionMocks.storeConvertedReferenceTrack).not.toHaveBeenCalled();
       expect(bodies[0].input.reference_audio_urls).toEqual(tracks);
+    });
+
+    it('converts AAC behind an .mp3 link before the hold and sends Kie the stored WAV copy', async () => {
+      const bodies = recordKieBodies();
+      const take = 'https://cdn.example.com/take-1.wav';
+      const { start, supabase, rpcCalls } = await startWithTracks('wan-3.0', [take, AAC_NAMED_MP3]);
+      const result = await start;
+
+      const { convertReferenceTrackIfRefused, storeConvertedReferenceTrack } = trackConversionMocks;
+      expect(convertReferenceTrackIfRefused.mock.calls.map(([call]) => call.link)).toEqual([take, AAC_NAMED_MP3]);
+      expect(storeConvertedReferenceTrack.mock.calls).toEqual([[expect.objectContaining({
+        generationId: result.generationId, index: 0, wav: Buffer.from(`wav of ${AAC_NAMED_MP3}`),
+      })]]);
+      const holdOrder = vi.mocked(supabase.rpc).mock.invocationCallOrder[rpcCalls.findIndex((call) => call.fn === 'start_generation')];
+      expect(Math.max(...convertReferenceTrackIfRefused.mock.invocationCallOrder)).toBeLessThan(holdOrder);
+      expect(bodies[0].input.reference_audio_urls).toEqual([take, storedTrackLink(result.generationId!, 0)]);
+    });
+
+    it.each([
+      ['seedance-2-5', ['wav', 'mp3', 'aac', 'ogg']],
+      ['wan-2.7', ['wav', 'mp3']],
+    ] as Array<[VideoModelId, string[]]>)('asks about each %s track with the formats its provider takes', async (model, formats) => {
+      recordKieBodies();
+      const { start } = await startWithTracks(model, ['https://cdn.example.com/beat.mp3']);
+      await start;
+
+      expect(trackConversionMocks.convertReferenceTrackIfRefused.mock.calls).toEqual([[expect.objectContaining({
+        userId: 'user-1', link: 'https://cdn.example.com/beat.mp3', formats,
+      })]]);
     });
 
     it('sends Seedance 2.5 its AAC and OGG tracks as they are, and converts the .m4a and a track sent twice once', async () => {
@@ -7053,7 +7093,7 @@ describe('generation services', () => {
       const { start } = await startWithTracks('seedance-2-5', [aac, VOICE_MEMO, ogg, VOICE_MEMO]);
       const result = await start;
 
-      expect(trackConversionMocks.convertReferenceTrack.mock.calls.map(([call]) => call.link)).toEqual([VOICE_MEMO]);
+      expect(trackConversionMocks.convertReferenceTrackIfRefused.mock.calls.map(([call]) => call.link)).toEqual([aac, VOICE_MEMO, ogg]);
       expect(trackConversionMocks.storeConvertedReferenceTrack).toHaveBeenCalledTimes(1);
       const copy = storedTrackLink(result.generationId!, 0);
       expect(bodies[0].input.reference_audio_urls).toEqual([aac, copy, ogg, copy]);
@@ -7071,15 +7111,15 @@ describe('generation services', () => {
       });
       await start;
 
-      expect(trackConversionMocks.convertReferenceTrack).not.toHaveBeenCalled();
+      expect(trackConversionMocks.convertReferenceTrackIfRefused).not.toHaveBeenCalled();
       expect(bodies[0].input.reference_audio_urls).toEqual(['asset-voice-1']);
     });
 
     it('refuses the start before any hold when a track cannot be converted, in words a canvas step says too', async () => {
       const { GenerationServiceError } = await import('@/lib/generation-services');
       const { getProviderInputRefusal, PROVIDER_INPUT_REFUSED } = await import('@/lib/generation-public-failure');
-      const { convertReferenceTrack, ReferenceTrackUnreadableError } = trackConversionMocks;
-      convertReferenceTrack.mockRejectedValue(new ReferenceTrackUnreadableError('Invalid data found when processing input'));
+      const { convertReferenceTrackIfRefused, ReferenceTrackUnreadableError } = trackConversionMocks;
+      convertReferenceTrackIfRefused.mockRejectedValue(new ReferenceTrackUnreadableError('Invalid data found when processing input'));
 
       const named = await startWithTracks('wan-3.0', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
       const words = 'We could not convert Voice Memo for Wan 3.0. Add it again as an MP3 or WAV file. No credits were used.';
@@ -7104,8 +7144,8 @@ describe('generation services', () => {
 
     it('tells the creator a track is too long rather than to add it again in another format', async () => {
       const { PROVIDER_INPUT_REFUSED } = await import('@/lib/generation-public-failure');
-      const { convertReferenceTrack, ReferenceTrackUnreadableError } = trackConversionMocks;
-      convertReferenceTrack.mockRejectedValue(new ReferenceTrackUnreadableError('The track is longer than any model takes.', true));
+      const { convertReferenceTrackIfRefused, ReferenceTrackUnreadableError } = trackConversionMocks;
+      convertReferenceTrackIfRefused.mockRejectedValue(new ReferenceTrackUnreadableError('The track is longer than any model takes.', true));
 
       const { start, rpcCalls } = await startWithTracks('wan-2.7', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
       await expect(start).rejects.toMatchObject({
@@ -7119,7 +7159,7 @@ describe('generation services', () => {
     it('answers a conversion that failed for another reason as worth retrying, still before any hold', async () => {
       const { GenerationServiceError } = await import('@/lib/generation-services');
       const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-      trackConversionMocks.convertReferenceTrack.mockRejectedValue(new Error('The track could not be read from storage: timeout'));
+      trackConversionMocks.convertReferenceTrackIfRefused.mockRejectedValue(new Error('The track could not be read from storage: timeout'));
 
       const { start, rpcCalls } = await startWithTracks('minimax-h3', [VOICE_MEMO], { referenceAudios: [VOICE_MEMO_TRACK] });
       // A definitive code: both creators read an uncoded 5xx as a run that may have started.

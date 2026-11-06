@@ -11,3 +11,11 @@ export const PROVIDER_TRACKS_FOLDER = 'provider-tracks';
 export function providerTrackFolder(userId: string, generationId: string): string {
   return `${userId}/${generationId}/${PROVIDER_TRACKS_FOLDER}`;
 }
+
+/**
+ * Where Seedance's Prepare keeps a track it converted for Kie's asset library
+ * (reference-track-conversion: `storeSeedanceAssetTrack`):
+ * `generation_inputs/<userId>/seedance-asset-tracks/`. No run owns it, and Kie
+ * needs it only while it makes the asset.
+ */
+export const SEEDANCE_ASSET_TRACKS_FOLDER = 'seedance-asset-tracks';

@@ -256,6 +256,8 @@ const nextConfig: NextConfig = {
     "/api/generations": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts/*": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    // Seedance's Prepare converts an audio track Seedance would not take to WAV with ffmpeg.
+    "/api/seedance-assets": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/showcase/publish": [...FFMPEG_TRACE, ...SHARP_TRACE],
     // Template publish derives the catalog poster frame from the demo video.
     "/api/templates/*/publish": [...FFMPEG_TRACE, ...SHARP_TRACE],

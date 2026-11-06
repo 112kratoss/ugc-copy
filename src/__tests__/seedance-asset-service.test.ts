@@ -1,7 +1,41 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createSeedanceAssetForRoute, getSeedanceAssetForRoute } from '@/lib/seedance-asset-service';
+
+// The conversion reaches ffmpeg and storage: here it answers what each case needs.
+const trackConversion = vi.hoisted(() => {
+  class ReferenceTrackUnreadableError extends Error {
+    constructor(message: string, readonly tooLong = false) {
+      super(message);
+      this.name = 'ReferenceTrackUnreadableError';
+    }
+  }
+  return {
+    ReferenceTrackUnreadableError,
+    convertReferenceTrackIfRefused: vi.fn<(params: {
+      supabase: unknown;
+      userId: string;
+      link: string;
+      formats: readonly string[];
+    }) => Promise<Buffer | null>>(async () => null),
+    storeSeedanceAssetTrack: vi.fn<(params: {
+      supabase: unknown;
+      userId: string;
+      wav: Buffer;
+    }) => Promise<string>>(async () => ''),
+  };
+});
+vi.mock('@/lib/reference-track-conversion', () => trackConversion);
+vi.mock('@/lib/backend-logger', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/backend-logger')>(),
+  logBackendError: vi.fn(),
+}));
+
+beforeEach(() => {
+  trackConversion.convertReferenceTrackIfRefused.mockReset().mockResolvedValue(null);
+  trackConversion.storeSeedanceAssetTrack.mockReset().mockResolvedValue('');
+});
 
 function createAdminSupabaseMock(options: { recordError?: { code?: string; message: string } } = {}) {
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
@@ -216,6 +250,107 @@ describe('createSeedanceAssetForRoute from a recipe file', () => {
       userId: 'user-1',
     })).resolves.toMatchObject({ ok: false, status, body: { error } });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+// Seedance 2 takes only WAV and MP3 tracks: an iPhone `.m4a`, an AAC or Ogg file, or one whose
+// extension lies about its bytes is converted before Kie is handed it, as the video start does.
+describe('createSeedanceAssetForRoute for an audio track', () => {
+  const M4A = 'uploads/user-1/1730000000000-voice-memo.m4a';
+  const M4A_SIGNED = 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/1730000000000-voice-memo.m4a?token=mine';
+  const WAV_SIGNED = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/seedance-asset-tracks/abc.wav?token=copy';
+  const created = () => vi.fn(async () => ({ ok: true, json: async () => ({ code: 200, data: { assetId: 'asset-voice', status: 'processing' } }) } as Response));
+
+  async function prepare(url: string, signed: string, fetcher = created(), assetType = 'Audio') {
+    const admin = createAdminSupabaseMock();
+    const result = await createSeedanceAssetForRoute({
+      adminSupabase: admin.client,
+      apiKey: 'test-key',
+      body: { url, assetType },
+      fetcher,
+      resolveStoredMediaUrl: vi.fn(async () => signed),
+      userId: 'user-1',
+    });
+    return { admin, fetcher, result };
+  }
+
+  it('sends Kie the stored WAV copy of an .m4a, not the .m4a', async () => {
+    const wav = Buffer.from('RIFF....WAVE');
+    trackConversion.convertReferenceTrackIfRefused.mockResolvedValue(wav);
+    trackConversion.storeSeedanceAssetTrack.mockResolvedValue(WAV_SIGNED);
+
+    const { admin, fetcher, result } = await prepare(M4A, M4A_SIGNED);
+
+    expect(fetcher).toHaveBeenCalledWith('https://api.kie.ai/api/v1/playground/createAsset', expect.objectContaining({
+      body: JSON.stringify({ assetType: 'Audio', url: WAV_SIGNED }),
+    }));
+    expect(trackConversion.convertReferenceTrackIfRefused).toHaveBeenCalledWith({
+      supabase: admin.client,
+      userId: 'user-1',
+      link: M4A_SIGNED,
+      formats: ['wav', 'mp3'],
+    });
+    expect(trackConversion.storeSeedanceAssetTrack).toHaveBeenCalledWith({ supabase: admin.client, userId: 'user-1', wav });
+    // The creator keeps their own file's link, and the asset is recorded as the file they named.
+    expect(result).toMatchObject({ ok: true, body: { assetId: 'asset-voice', assetType: 'Audio', sourceUrl: M4A_SIGNED } });
+    expect(admin.records).toEqual([expect.objectContaining({ asset_id: 'asset-voice', source: M4A, recipe_file: null })]);
+  });
+
+  it('sends a track Seedance takes as it is, storing nothing', async () => {
+    const mp3 = 'uploads/user-1/1730000000000-song.mp3';
+    const mp3Signed = 'https://project.supabase.co/storage/v1/object/sign/uploads/user-1/1730000000000-song.mp3?token=mine';
+
+    const { admin, fetcher, result } = await prepare(mp3, mp3Signed);
+
+    expect(trackConversion.convertReferenceTrackIfRefused).toHaveBeenCalledWith(expect.objectContaining({ link: mp3Signed }));
+    expect(trackConversion.storeSeedanceAssetTrack).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledWith('https://api.kie.ai/api/v1/playground/createAsset', expect.objectContaining({
+      body: JSON.stringify({ assetType: 'Audio', url: mp3Signed }),
+    }));
+    expect(result).toMatchObject({ ok: true, body: { sourceUrl: mp3Signed } });
+    expect(admin.records).toEqual([expect.objectContaining({ source: mp3 })]);
+  });
+
+  it.each([
+    ['a track it cannot convert', false, 'We could not convert this track for Seedance. Add it again as an MP3 or WAV file.'],
+    ['a track too long', true, 'This track is too long for Seedance. Use a shorter track.'],
+  ])('refuses %s before asking Kie', async (_, tooLong, error) => {
+    trackConversion.convertReferenceTrackIfRefused.mockRejectedValue(
+      new trackConversion.ReferenceTrackUnreadableError('unreadable', tooLong),
+    );
+
+    const { admin, fetcher, result } = await prepare(M4A, M4A_SIGNED);
+
+    expect(result).toEqual({ ok: false, status: 400, body: { error } });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(trackConversion.storeSeedanceAssetTrack).not.toHaveBeenCalled();
+    expect(admin.records).toEqual([]);
+  });
+
+  it.each([
+    ['the conversion', () => trackConversion.convertReferenceTrackIfRefused.mockRejectedValue(new Error('ffmpeg could not start'))],
+    ['storing the copy', () => {
+      trackConversion.convertReferenceTrackIfRefused.mockResolvedValue(Buffer.from('RIFF'));
+      trackConversion.storeSeedanceAssetTrack.mockRejectedValue(new Error('The converted track could not be stored'));
+    }],
+  ])('fails retryably when %s fails for a reason not the track’s', async (_, arrange) => {
+    arrange();
+    const { logBackendError } = await import('@/lib/backend-logger');
+
+    const { fetcher, result } = await prepare(M4A, M4A_SIGNED);
+
+    expect(result).toEqual({ ok: false, status: 500, body: { error: 'We could not prepare your audio track. Try again in a moment.' } });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(logBackendError).toHaveBeenCalledWith('seedance_asset_track_conversion_failed', expect.objectContaining({ error: expect.any(Error) }));
+  });
+
+  it.each(['Video', 'Image'])('never converts a %s', async (assetType) => {
+    const { fetcher } = await prepare('uploads/user-1/reference.mp4', 'https://signed.example.com/uploads/user-1/reference.mp4', created(), assetType);
+
+    expect(trackConversion.convertReferenceTrackIfRefused).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledWith('https://api.kie.ai/api/v1/playground/createAsset', expect.objectContaining({
+      body: JSON.stringify({ assetType, url: 'https://signed.example.com/uploads/user-1/reference.mp4' }),
+    }));
   });
 });
 
