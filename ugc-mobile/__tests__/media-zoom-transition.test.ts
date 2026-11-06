@@ -668,3 +668,49 @@ describe('the reel uncovered', () => {
     expect(UNCOVERED.uncovered()).toBe(true);
   });
 });
+
+describe('computeZoomFrame, picture alone (owner, 2026-11-07: "can\'t it be just the media only?")', () => {
+  const screen = { width: 400, height: 900 };
+  const tile = { x: 210, y: 300, width: 180, height: 240 };
+  const geometry = { screen, tile, tileRadius: 16, aspectRatio: 1, pictureOnly: true };
+  // A square picture on a 400 × 900 screen sits at 0, 250, 400 × 400.
+  const media = { x: 0, y: 250, width: 400, height: 400 };
+
+  it('opens onto the picture\'s own rectangle, not the screen', () => {
+    const frame = computeZoomFrame(geometry, 1);
+    expect(frame.clip).toEqual(media);
+    expect(frame.scale).toBe(1);
+    // The page starts at the window's corner, so it moves up by the picture's
+    // own offset for the picture to fill the window.
+    expect(frame.translateX).toBeCloseTo(-media.x, 6);
+    expect(frame.translateY).toBeCloseTo(-media.y, 6);
+  });
+
+  it('closes onto the tile, the picture covering it', () => {
+    const frame = computeZoomFrame(geometry, 0);
+    expect(frame.clip).toEqual(tile);
+    expect(frame.radius).toBe(16);
+    expect(media.width * frame.scale).toBeGreaterThanOrEqual(tile.width - 1e-6);
+    expect(media.height * frame.scale).toBeGreaterThanOrEqual(tile.height - 1e-6);
+  });
+
+  it('keeps the picture covering the window, centred on it, at every step, so nothing round it shows', () => {
+    for (const progress of [0, 0.1, 0.25, 0.5, 0.75, 0.9, 1]) {
+      const { clip, scale, translateX, translateY } = computeZoomFrame(geometry, progress);
+      // Where the picture's centre lands inside the window: the page scales about its own centre.
+      const centreX = screen.width / 2 + scale * (media.x + media.width / 2 - screen.width / 2) + translateX;
+      const centreY = screen.height / 2 + scale * (media.y + media.height / 2 - screen.height / 2) + translateY;
+      expect(centreX).toBeCloseTo(clip.width / 2, 6);
+      expect(centreY).toBeCloseTo(clip.height / 2, 6);
+      expect(media.width * scale).toBeGreaterThanOrEqual(clip.width - 1e-6);
+      expect(media.height * scale).toBeGreaterThanOrEqual(clip.height - 1e-6);
+    }
+  });
+
+  it('leaves the whole-screen window as it was', () => {
+    const whole = computeZoomFrame({ ...geometry, pictureOnly: false }, 1);
+    expect(whole.clip).toEqual({ x: 0, y: 0, width: 400, height: 900 });
+    expect(whole.translateX).toBeCloseTo(0, 6);
+    expect(whole.translateY).toBeCloseTo(0, 6);
+  });
+});

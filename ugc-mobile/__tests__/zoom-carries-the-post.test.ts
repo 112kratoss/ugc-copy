@@ -36,8 +36,9 @@ describe('a post grows out of its tile whole', () => {
   it('carries the post out of the tile and back down into it', () => {
     const zoom = read('components/media-zoom.tsx');
     // A live close shrinks the reel itself, which has chrome of its own; the
-    // layer draws the post only for the close that shrinks its picture.
-    expect(zoom).toContain('const post = live ? null : postRef.current;');
+    // layer draws the post only for the close that shrinks its picture before
+    // the hand-off, and never for a picture closing alone.
+    expect(zoom).toContain('const post = live || alone ? null : postRef.current;');
     // The shade is part of the post now, so the flight draws only one of them.
     expect(zoom).toContain('carriesPost ? null : (');
   });

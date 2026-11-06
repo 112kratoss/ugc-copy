@@ -629,6 +629,13 @@ export interface ZoomGeometry {
   tileRadius: number;
   /** width / height of the media on screen, so the flight lands on the picture. */
   aspectRatio: number | null;
+  /**
+   * The window ends on the picture's own rectangle rather than the screen: a
+   * close that carries the picture alone, with nothing of the reel round it,
+   * from where it sits on screen down into its tile (owner, 2026-11-07: "can't
+   * it be just the media only?").
+   */
+  pictureOnly?: boolean;
 }
 
 export interface ZoomFrame {
@@ -659,24 +666,33 @@ export function computeZoomFrame(geometry: ZoomGeometry, progress: number): Zoom
   'worklet';
   const { screen, tile } = geometry;
   const media = mediaRectInScreen(screen, geometry.aspectRatio);
-  const from = tile ?? { x: 0, y: 0, width: screen.width, height: screen.height };
+  const whole = { x: 0, y: 0, width: screen.width, height: screen.height };
+  // Picture alone: the window is never bigger than the picture, and the
+  // picture, scaling from covering the tile to its own size as the window goes
+  // from the tile to its rectangle, covers the window at every step (both
+  // change linearly, and cover at both ends), so nothing round it is ever seen.
+  const to = geometry.pictureOnly ? media : whole;
+  const from = tile ?? to;
   const startScale = tile ? coverScale(from, media) : 1;
 
-  const width = lerp(from.width, screen.width, progress);
-  const height = lerp(from.height, screen.height, progress);
+  const width = lerp(from.width, to.width, progress);
+  const height = lerp(from.height, to.height, progress);
+  const x = lerp(from.x, to.x, progress);
+  const y = lerp(from.y, to.y, progress);
 
+  const scale = lerp(startScale, 1, progress);
+  // The page keeps its full-screen size inside the window, scaled about its
+  // own centre, with the picture's centre on the window's. A window onto the
+  // whole screen centres the page itself; one onto the picture alone centres
+  // the picture, wherever it sits on the page.
+  const anchorX = geometry.pictureOnly ? media.x + media.width / 2 : screen.width / 2;
+  const anchorY = geometry.pictureOnly ? media.y + media.height / 2 : screen.height / 2;
   return {
-    clip: {
-      x: lerp(from.x, 0, progress),
-      y: lerp(from.y, 0, progress),
-      width,
-      height,
-    },
+    clip: { x, y, width, height },
     radius: lerp(tile ? geometry.tileRadius : 0, 0, progress),
-    scale: lerp(startScale, 1, progress),
-    // The page keeps its full-screen size inside the window, centred on it.
-    translateX: width / 2 - screen.width / 2,
-    translateY: height / 2 - screen.height / 2,
+    scale,
+    translateX: width / 2 - screen.width / 2 - scale * (anchorX - screen.width / 2),
+    translateY: height / 2 - screen.height / 2 - scale * (anchorY - screen.height / 2),
   };
 }
 

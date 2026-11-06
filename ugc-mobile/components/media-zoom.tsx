@@ -1784,6 +1784,13 @@ export function useMediaZoomStage({
     setTimeout(leave, DISMISS_SAFETY_MS + RETURN_DRAWN_DEADLINE_MS);
     // The screen beneath is drawn again from the close's first frame.
     setZoomUnderlayHidden(false);
+    // A picture closes alone (`ZoomGeometry.pictureOnly`): the layer carries it
+    // from where it sits down into its tile, and the reel goes from under it at
+    // once. A video keeps its own close for now: its poster in the layer would
+    // stand in for the frame it was showing.
+    // Android's own flight only, so far: on iOS the reel leaves under UIKit's
+    // zoom, which a pop cannot be asked to skip from here.
+    const pictureOnly = !nativeZoom && Boolean(pictureRef.current) && !activeVideoUrlRef.current && !reducedMotion && Boolean(origin);
     if (nativeZoom) {
       // UIKit shrinks the reel into the tile registered for the post on screen;
       // the pop is all the reel does (and hands a lent player back as it begins).
@@ -1818,12 +1825,14 @@ export function useMediaZoomStage({
         plainLeave();
         return;
       }
-      const live = !beforeHandoff;
+      const alone = pictureOnly && !beforeHandoff;
+      const live = !beforeHandoff && !alone;
       const geometry: ZoomGeometry = {
         screen: screenRef.current,
         tile: rect,
         tileRadius: handle.radius,
         aspectRatio: aspectRef.current ?? handle.aspectRatio ?? rect.width / rect.height,
+        pictureOnly: alone,
       };
       // What shrinks when the reel cannot: what the reader was looking at, or
       // the tile's own picture when the reel was never uncovered.
@@ -1843,7 +1852,7 @@ export function useMediaZoomStage({
       // The post shrinks whole: the layer draws its rail and caption over the
       // picture and fades them out as the window comes down. A live close has
       // the reel's own chrome to fade instead (`chromeStyle`).
-      const post = live ? null : postRef.current;
+      const post = live || alone ? null : postRef.current;
       // A video the tile will not take back is not what the tile goes on to
       // show, so the reel dissolves into the tile as it lands rather than
       // standing over it until it lets go.
@@ -2162,7 +2171,14 @@ export function MediaZoomFlightLayer({
   // The bands stay out of a video's window while it is still the tile: the
   // tile shows through that window until the layer's video has drawn.
   const bandStyle = useAnimatedStyle(() => ({
-    opacity: stillCarriesVideo.value && flightProgress.value <= 0 ? 0 : 1,
+    opacity: flightGeometry.value.pictureOnly || (stillCarriesVideo.value && flightProgress.value <= 0) ? 0 : 1,
+  }));
+  // A close of the picture alone (`ZoomGeometry.pictureOnly`) leaves the reel
+  // at once; the reel's black stays behind the picture and thins out as it
+  // goes down into its tile, so the feed comes back round it rather than all
+  // at once.
+  const pictureOnlyDimStyle = useAnimatedStyle(() => ({
+    opacity: flightGeometry.value.pictureOnly ? flightProgress.value * stillOpacity.value : 0,
   }));
   // Nor does the poster drawn under the finger show in it, for the frame or two
   // before React swaps it for the video's view: the tile has moved on from it.
@@ -2195,7 +2211,7 @@ export function MediaZoomFlightLayer({
     // of the player may not have drawn yet, and the tile under it — exactly the
     // same rectangle then — is still showing that video. The black ground is
     // needed only once the window outgrows the tile.
-    backgroundColor: stillCarriesVideo.value && flightProgress.value <= 0 ? 'transparent' : '#000',
+    backgroundColor: flightGeometry.value.pictureOnly || (stillCarriesVideo.value && flightProgress.value <= 0) ? 'transparent' : '#000',
   }));
 
   const pageStyle = useAnimatedStyle(() => ({
@@ -2210,6 +2226,9 @@ export function MediaZoomFlightLayer({
   // before any tile is tapped; it draws nothing until one is.
   return (
     <View ref={layerRef} pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={measureLayer}>
+      {still?.geometry.pictureOnly ? (
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, pictureOnlyDimStyle]} />
+      ) : null}
       {still ? (
         // The window is the reel's frame, black ground included: a picture
         // that does not fill the screen leaves the same bands here that the
