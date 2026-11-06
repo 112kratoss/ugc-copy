@@ -187,6 +187,30 @@ export function assignSubjectHandles<T extends { displayName?: string | null; ha
   return assignElementHandles(subjects, [], SUBJECT_STAND_INS);
 }
 
+/**
+ * A remix's references beside the creator's own, in that order on the card (`restored`, then `own`),
+ * with the @handle each is to keep. Where the creator's words stay (`ownWordsStay`: they typed while
+ * the remix loaded), their own references keep the handles those words name and a restored one that
+ * shares a handle gives way, as a reference added after the answer would be named past the original's:
+ * the defaults are alike on both sides (`@element_1`), and the first holder keeps a handle, so the
+ * creator's words pointed at the original's reference (2026-11-06 review). Where the original's words
+ * come back, its references keep the handles they name. `assign` is the card's own rule
+ * (`assignElementHandles`, `assignSubjectHandles`); only the handles it gives are taken.
+ */
+export function remixReferencesBesideOwn<T extends { displayName?: string | null; handle?: string | null }>(
+  restored: readonly T[],
+  own: readonly T[],
+  ownWordsStay: boolean,
+  assign: (items: T[]) => Array<T & { handle: string }> = assignElementHandles,
+): T[] {
+  if (!ownWordsStay || own.length === 0 || restored.length === 0) return [...restored, ...own];
+  const handles = assign([...own, ...restored]).map((item) => item.handle);
+  return [
+    ...restored.map((item, index) => ({ ...item, handle: handles[own.length + index] })),
+    ...own.map((item, index) => ({ ...item, handle: handles[index] })),
+  ];
+}
+
 /** Every handle any of a run's words mention (its prompt and each shot's), once each. */
 export function extractMentionedHandles(words: readonly unknown[]): string[] {
   return Array.from(new Set(words.flatMap((text) => extractPromptHandles(typeof text === 'string' ? text : ''))));

@@ -143,13 +143,13 @@ import {
 } from '../../../ugc-mobile/lib/model-catalog/provider-prompt-limits';
 import PromptLengthCounter from '@/components/PromptLengthCounter';
 import { useAuth } from '@/components/AuthProvider';
-import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourceBundle, RemixSourcePost, RemixSourceResult } from '@/lib/remix-source';
-import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
+import type { RemixMediaAssetDescriptor, RemixResolvedAsset, RemixSourcePost, RemixSourceResult } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRemixElementSeeds,
     getRemixNoticeDescription,
     getRemixReferenceCapWarning,
+    getRemixRoomWarning,
     joinRemixRestoreWarnings,
     REMIX_RESTORE_WARNING,
     createRestoredRemixAssetState,
@@ -162,6 +162,7 @@ import {
 } from '@/lib/remix-source-client';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
+import { useRemixSourceRead } from '@/lib/use-remix-source-read';
 import {
     openRemixInputSlots,
     readRemixSlotMentions,
@@ -216,6 +217,7 @@ import {
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
+    remixReferencesBesideOwn,
     replacePromptHandles,
     type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -620,6 +622,9 @@ interface UploadPreviewState {
     alt: string;
     title: string;
 }
+
+/** What a creator can set by hand while a remix loads, which its answer then leaves as they set it. */
+type VideoRemixField = 'model' | 'mode' | 'aspectRatio' | 'resolution' | 'duration' | 'sound' | 'fixedLens' | 'isMultiShot' | 'inputSide';
 
 interface VideoWorkflowSettings {
     model?: VideoModelId;
@@ -1446,7 +1451,6 @@ function VideoCreator({
         replaceEnd: number;
     } | null>(null);
 
-    const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     // The post being remixed, which the notice names with its creator (owner, 2026-11-05).
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
@@ -2575,339 +2579,393 @@ function VideoCreator({
         ? `This model supports ${videoElementSupport.maxElements} reference image${videoElementSupport.maxElements === 1 ? '' : 's'}. Your references are preserved; remove extras or choose another model.`
         : null;
 
-    // A remix is read once for this form: the effect runs again for a renewed session token (Supabase
-    // renews it about hourly) and for a session back from a lapse. Reading it again put the original's
-    // model and settings back over the creator's, and a read still out was read twice, the second
-    // putting the original's prompt over words typed meanwhile. Another account's form is drawn anew
-    // (`useCreatorForm`) and reads it for itself.
-    const remixReadStartedRef = useRef(false);
-    useEffect(() => {
-        if (!remixId || remixReadStartedRef.current) return;
-        if (!session?.access_token) return;
-        remixReadStartedRef.current = true;
+    // The remix's original, read once for this form (`useRemixSourceRead`), and put on the form with
+    // what the creator did while it loaded kept: words and shots they typed, a model or setting they
+    // picked by hand, the frames they added, and the references they added, beside which the
+    // original's of each kind fill the room the form's model has left.
+    const remixRead = useRemixSourceRead<VideoRemixField>({
+        remixId,
+        remixPostId,
+        pageToken: session?.access_token ?? null,
+        formAccount,
+        promptRef,
+        onSource: (bundle, edits) => {
+            setRemixTitle(bundle.generation.title);
+            setRemixSourcePost(bundle.sourcePost ?? null);
+            // The original whole, with the clip's length its post measured (#665).
+            setRemixResult(bundle.result);
+            setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
 
-        // The answer is the form's while it is on the page, whichever run of this effect is the
-        // latest: development's Strict Mode mounts it twice over the one read.
-        const isCancelled = () => unmountSignal.current.aborted;
-        const promptWhenRemixStarted = promptRef.current;
-        const pageToken = session.access_token;
+            const settings = bundle.workflowSettings as VideoWorkflowSettings | null;
+            const originalModelId: VideoModelId =
+                settings?.model && settings.model in VIDEO_MODELS
+                    ? settings.model
+                    : 'kling-3.0-video';
+            const originalIsMultiShot = Boolean(settings?.isMultiShot);
+            const originalMode =
+                settings?.mode ||
+                VIDEO_MODELS[originalModelId].modeOptions[0]?.value ||
+                '';
+            const originalShots = originalIsMultiShot && settings?.multiPrompts?.length ? settings.multiPrompts : null;
 
-        const fetchRemixData = async () => {
-            try {
-                // The browser's own session where it is the form's account, renewed as it nears its
-                // end: Back can draw the page again from Next's cache with the session it was first
-                // drawn with, expired since, and the one read would be refused.
-                const { data: { session: browserSession } } = await supabase.auth.getSession();
-                const accessToken = browserSession?.user.id === formAccount ? browserSession.access_token : pageToken;
-                const remixSourceParams = new URLSearchParams({ id: remixId });
-                if (remixPostId) {
-                    remixSourceParams.set('postId', remixPostId);
-                }
+            // The original's model and settings, whatever the balance (#649), but for each the creator
+            // picked by hand meanwhile. A model of their own takes the original's settings as a pick
+            // made after the answer would: where it offers them, else their nearest.
+            const ownOr = <T,>(field: VideoRemixField, own: T, original: T): T => (edits.byHand(field) ? own : original);
+            const formModelId = ownOr<VideoModelId>('model', selectedModel, originalModelId);
+            const settingsByField: VideoFormSettings = {
+                mode: ownOr('mode', mode, originalMode),
+                aspectRatio: ownOr('aspectRatio', aspectRatio, settings?.aspectRatio || aspectRatio),
+                resolution: ownOr('resolution', resolution, settings?.resolution || resolution),
+                duration: ownOr('duration', singleDuration, !originalShots && settings?.duration ? settings.duration : singleDuration),
+                sound: ownOr('sound', sound, settings?.sound ?? sound),
+                fixedLens: ownOr('fixedLens', fixedLens, settings?.fixedLens ?? fixedLens),
+                isMultiShot: ownOr('isMultiShot', isMultiShot, originalIsMultiShot),
+            };
+            const formSettings = formModelId === originalModelId ? settingsByField : fitVideoFormToModel(formModelId, settingsByField);
+            setSelectedModel(formModelId);
+            setIsMultiShot(formSettings.isMultiShot);
+            setMode(formSettings.mode);
+            setAspectRatio(formSettings.aspectRatio);
+            setResolution(formSettings.resolution);
+            setSingleDuration(formSettings.duration);
+            setSound(formSettings.sound);
+            setFixedLens(formSettings.fixedLens);
 
-                const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
-                    headers: {
-                        Authorization: `Bearer ${accessToken}`,
-                    },
-                });
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Failed to load remix data');
-                }
-
-                const bundle = data as RemixSourceBundle;
-                if (isCancelled()) {
-                    return;
-                }
-
-                setRemixTitle(bundle.generation.title);
-                setRemixSourcePost(bundle.sourcePost ?? null);
-                setRemixResult(bundle.result);
-                setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
-
-                const settings = bundle.workflowSettings as VideoWorkflowSettings | null;
-                const nextModelId =
-                    settings?.model && settings.model in VIDEO_MODELS
-                        ? settings.model
-                        : 'kling-3.0-video';
-                const nextIsMultiShot = Boolean(settings?.isMultiShot);
-                const nextMode =
-                    settings?.mode ||
-                    VIDEO_MODELS[nextModelId].modeOptions[0]?.value ||
-                    '';
-
-                setSelectedModel(nextModelId);
-                setIsMultiShot(nextIsMultiShot);
-
-                if (nextIsMultiShot && settings?.multiPrompts?.length) {
-                    setMultiPrompts(settings.multiPrompts.map((shot, index) => ({
+            // Words and shots the creator typed stay; the original's fill a form left as it opened, in the
+            // form's shot mode: a form the creator set to one shot takes the original's words (a multi-shot
+            // run is saved under its first shot's), as a pick after the answer would.
+            if (formSettings.isMultiShot) {
+                if (originalShots && !multiPrompts.some((shot) => shot.prompt.trim())) {
+                    setMultiPrompts(originalShots.map((shot, index) => ({
                         id: shot.id || `${index + 1}`,
                         prompt: shot.prompt,
                         duration: shot.duration,
                     })));
-                } else {
-                    if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
-                        setPrompt(bundle.generation.prompt);
-                    }
-                    if (settings?.duration) setSingleDuration(settings.duration);
                 }
+            } else if (!edits.prompt) {
+                setPrompt(bundle.generation.prompt);
+            }
 
-                if (settings?.aspectRatio) setAspectRatio(settings.aspectRatio);
-                if (settings?.sound !== undefined) setSound(settings.sound);
-                if (settings?.resolution) setResolution(settings.resolution);
-                if (settings?.fixedLens !== undefined) setFixedLens(settings.fixedLens);
-                setPreparedAudioIds(settings?.preparedAudioIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? []);
-                setCharacterIds(settings?.characterIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? []);
-                setMode(nextMode);
+            // The creator's words stay where they typed while it loaded (their shots on a multi-shot form,
+            // else their prompt): their own references then keep the handles those words name.
+            const ownWordsStay = formSettings.isMultiShot ? multiPrompts.some((shot) => shot.prompt.trim()) : edits.prompt;
 
-                const restoredVideoInputs = bundle.inputs.video;
-                const restoredSeedanceAssets = settings?.seedanceAssets ?? null;
-                const slots = readRemixInputSlots(bundle);
-                setRemixSlots(slots);
-                setRemixSlotsNoticeDismissed(false);
-                // The inputs open on the original's side; what comes back holds them there too. Where
-                // the remix was not given them, they open where its empty boxes are: References for
-                // a picture, clip or track, Frames for a frame alone.
+            // What the creator added of each kind stays: a remix form holds nothing of anyone else's
+            // before its answer. The original's fill the room the form's model leaves beside it, and
+            // the notice says how many came back.
+            const formModelName = VIDEO_MODELS[formModelId].displayName;
+            const formAffordances = getVideoInputAffordances(
+                (VIDEO_MODELS[formModelId] as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
+                formModelId,
+                { mode: formSettings.mode, isMultiShot: formSettings.isMultiShot },
+            );
+            const roomWarnings: string[] = [];
+            const besideOwn = <T,>(original: T[], own: readonly unknown[], limit: number, noun: string): T[] => {
+                if (own.length === 0) return original;
+                const kept = original.slice(0, Math.max(0, limit - own.length));
+                const warning = getRemixRoomWarning({ modelName: formModelName, limit, noun, usable: original.length, restored: kept.length, added: own.length });
+                if (warning) roomWarnings.push(warning);
+                return kept;
+            };
+            const ownPictures = elementsRef.current.filter((element) => element.source === 'upload');
+            const ownClips = referenceVideosRef.current.filter((reference) => reference.source === 'upload');
+            const ownTracks = referenceAudiosRef.current.filter((reference) => reference.source === 'upload');
+            const ownKlingClips = klingVideoElementsRef.current.filter((element) => element.source === 'upload');
+            const ownSubjects = klingSubjectsRef.current;
+            const ownIds = <T extends string>(original: T[], own: T[]) => [
+                ...original.filter((id) => !own.includes(id)).slice(0, Math.max(0, 3 - own.length)),
+                ...own,
+            ];
+            setPreparedAudioIds(ownIds(settings?.preparedAudioIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? [], preparedAudioIds));
+            setCharacterIds(ownIds(settings?.characterIds?.filter((value) => typeof value === 'string' && value.trim()).slice(0, 3) ?? [], characterIds));
+
+            const restoredVideoInputs = bundle.inputs.video;
+            const restoredSeedanceAssets = settings?.seedanceAssets ?? null;
+            const slots = readRemixInputSlots(bundle);
+            setRemixSlots(slots);
+            setRemixSlotsNoticeDismissed(false);
+            // A frame the creator added while it loaded is their pick of side, as picking Frames by hand
+            // is (2026-11-06 review), where references beside it would leave it out of the run: it holds
+            // the Frames side, and the original's references, which would take the side, stay out.
+            const formSides = videoInputSides(formAffordances, { isMultiShot: formSettings.isMultiShot });
+            const ownFramesHoldTheSide = Boolean(formSides.frames && formSides.references) && (
+                (Boolean(startImageFile) && Boolean(formSides.frames?.start) && !formSides.references?.keepsStart)
+                || (Boolean(endImageFile) && Boolean(formSides.frames?.end))
+            );
+            let originalReferencesLeftOut = 0;
+            const originalUnlessFramesHold = <T,>(original: T[]): T[] => {
+                if (!ownFramesHoldTheSide) return original;
+                originalReferencesLeftOut += original.length;
+                return [];
+            };
+            // The inputs open on the original's side, or the one the creator picked; what comes back
+            // holds them to its own side too. Where the remix was not given them, they open where its
+            // empty boxes are: References for a picture, clip or track, Frames for a frame alone.
+            if (ownFramesHoldTheSide) {
+                setPickedInputSide('frames');
+            } else if (!edits.byHand('inputSide')) {
                 setPickedInputSide(
-                    remixSlotsInputSide(slots, { clipsBesideSides: nextModelId === 'kling-3.0-video' })
+                    remixSlotsInputSide(slots, { clipsBesideSides: formModelId === 'kling-3.0-video' })
                     ?? (restoredVideoInputs?.referenceMode === 'elements' ? 'references' : 'frames'),
                 );
+            }
 
-                // Kling O3's named subjects come back under the handles the prompt
-                // was written with. A picture is sent again as the file the run
-                // kept: the server reads who may use that file from its path.
-                setKlingSubjects(assignSubjectHandles((restoredVideoInputs?.subjects ?? []).map((subject) => ({
-                    id: `subject-${crypto.randomUUID()}`,
-                    displayName: subject.displayName,
-                    handle: subject.handle,
-                    images: subject.images.flatMap((image) => image.url ? [{
-                        id: `subject-image-${crypto.randomUUID()}`,
-                        // No file of the creator's own: the card draws the kept one.
-                        file: null,
-                        previewUrl: '',
-                        remoteUrl: image.url,
-                        storagePath: image.storagePath ?? null,
-                    }] : []),
-                }))));
+            // Kling O3's named subjects come back under the handles the prompt
+            // was written with. A picture is sent again as the file the run
+            // kept: the server reads who may use that file from its path.
+            const originalSubjects = (restoredVideoInputs?.subjects ?? []).map((subject) => ({
+                id: `subject-${crypto.randomUUID()}`,
+                displayName: subject.displayName,
+                handle: subject.handle,
+                images: subject.images.flatMap((image) => image.url ? [{
+                    id: `subject-image-${crypto.randomUUID()}`,
+                    // No file of the creator's own: the card draws the kept one.
+                    file: null,
+                    previewUrl: '',
+                    remoteUrl: image.url,
+                    storagePath: image.storagePath ?? null,
+                }] : []),
+            }));
+            setKlingSubjects(assignSubjectHandles(remixReferencesBesideOwn<KlingSubjectDraft>(
+                besideOwn(originalSubjects, ownSubjects, formAffordances.subjects.maxNamed, 'named subject'),
+                ownSubjects,
+                ownWordsStay,
+                assignSubjectHandles,
+            )));
 
-                // How many references the restored model takes: its catalog descriptor
-                // once the catalog has reached the registry, the fallback tables before,
-                // read the way referenceMediaLimits reads its clip and track limits.
-                const restoredElementSupport = getVideoInputAffordances(
-                    (VIDEO_MODELS[nextModelId] as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
-                    nextModelId,
-                    { mode: nextMode, isMultiShot: nextIsMultiShot },
-                ).elements;
+            // How many references the restored model takes: its catalog descriptor
+            // once the catalog has reached the registry, the fallback tables before,
+            // read the way referenceMediaLimits reads its clip and track limits.
+            const restoredElementSupport = getVideoInputAffordances(
+                (VIDEO_MODELS[originalModelId] as { catalogDescriptor?: GenerationModelDescriptor }).catalogDescriptor,
+                originalModelId,
+                { mode: originalMode, isMultiShot: originalIsMultiShot },
+            ).elements;
 
-                // A model whose cap fell since the run gets its first references back, and says
-                // so. A multi-shot run takes none by design, so it says nothing.
-                const capWarning = nextIsMultiShot ? null : getRemixReferenceCapWarning(
+            // A model whose cap fell since the run gets its first references back, and says
+            // so. A multi-shot run takes none by design, so it says nothing. Beside the creator's
+            // own pictures the room they leave is said instead.
+            const capWarning = originalIsMultiShot || ownPictures.length > 0 ? null : getRemixReferenceCapWarning(
+                restoredVideoInputs?.elements ?? [],
+                restoredElementSupport.maxTotal,
+                VIDEO_MODELS[originalModelId].displayName,
+            );
+            if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
+            const commitPictures = (originalPictures: VideoElementSeed[]) => commitElements(hydrateVideoElements(remixReferencesBesideOwn<VideoElementSeed>(
+                besideOwn(originalUnlessFramesHold(originalPictures), ownPictures, formAffordances.elements.maxTotal, 'reference image'),
+                ownPictures,
+                ownWordsStay,
+            )));
+            const commitClips = (originalClips: SeedanceMediaReferenceSeed[]) => commitReferenceVideos([
+                ...hydrateSeedanceMediaReferences('Video', besideOwn(originalUnlessFramesHold(originalClips), ownClips, formAffordances.referenceVideos.max, 'reference clip')),
+                ...ownClips,
+            ]);
+            const commitTracks = (originalTracks: SeedanceMediaReferenceSeed[]) => commitReferenceAudios([
+                ...hydrateSeedanceMediaReferences('Audio', besideOwn(originalUnlessFramesHold(originalTracks), ownTracks, formAffordances.referenceAudios.max, 'reference track')),
+                ...ownTracks,
+            ]);
+
+            // The run's frames come back as its frames, but where the Seedance 2 family's
+            // restore below takes them for its pictures or leaves them out.
+            const restoredStartFrame = createRestoredRemixAssetState(restoredVideoInputs?.startFrame ?? null);
+            const restoredEndFrame = createRestoredRemixAssetState(restoredVideoInputs?.endFrame ?? null);
+            let restoresFrames = true;
+            if (isSeedance2VideoModelId(originalModelId)) {
+                const restoredElements = restoredVideoInputs?.elements ?? [];
+                const restoredSeeds = createRemixElementSeeds(
+                    restoredElements,
+                    restoredElementSupport.maxTotal
+                ).map((seed) => ({
+                    ...seed,
+                    file: null,
+                    // The saved assets follow the run's references, one that could not come
+                    // back included, so each pairs by its place among them (as a draft's do).
+                    seedanceAsset: restoredSeedanceAssets?.images?.[
+                        restoredElements.findIndex((element) => element.id === seed.id)
+                    ] ?? undefined,
+                }));
+
+                // A references run of the family kept its pictures as frames before the
+                // family took frames (2026-04-04): those come back as its references. A
+                // frames run gets its frames back as frames, and runs as one again. A run
+                // that brings pictures back is a references run, and frames recorded beside
+                // them (an old run's prepared assets come back as pictures) stay out.
+                const framesWereReferences = restoredSeeds.length === 0
+                    && restoredVideoInputs?.referenceMode === 'elements';
+                restoresFrames = restoredSeeds.length === 0 && !framesWereReferences;
+                const legacyFrameSeeds = framesWereReferences
+                    ? [restoredStartFrame, restoredEndFrame]
+                        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+                        .map((item, index) => ({
+                            displayName: `Image reference ${index + 1}`,
+                            file: null,
+                            previewUrl: item.url,
+                            providerUrl: item.url,
+                            storagePath: item.descriptor.storagePath ?? null,
+                            source: 'remix' as const,
+                            sourceGenerationId: item.descriptor.sourceGenerationId ?? null,
+                            seedanceAsset: restoredSeedanceAssets?.images?.[index] ?? undefined,
+                        }))
+                    : [];
+
+                commitPictures([...restoredSeeds, ...legacyFrameSeeds]);
+                const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
+                const restoredReferenceAudios = restoredVideoInputs?.referenceAudios ?? [];
+                let unrestorableReferences = 0;
+                const referenceVideoSeeds = restoredReferenceVideos.length > 0
+                    ? restoredReferenceVideos
+                        .flatMap((item, index) => item.url ? [{
+                            displayName: item.label ?? `Video reference ${index + 1}`,
+                            file: null,
+                            previewUrl: item.url,
+                            providerUrl: item.url,
+                            storagePath: item.storagePath ?? null,
+                            source: 'remix' as const,
+                            sourceGenerationId: item.sourceGenerationId ?? null,
+                            // The quote refuses a clip with no length, and only a
+                            // fresh upload is measured here.
+                            durationSeconds: item.durationSeconds ?? null,
+                            seedanceAsset: restoredSeedanceAssets?.videos?.[index] ?? undefined,
+                        }] : [])
+                    : (settings?.referenceVideoUrls ?? []).flatMap((value, index) => {
+                        // An older run kept a prepared clip's asset id in its list. The
+                        // link it was prepared from is the one that can be measured, and
+                        // a clip with neither cannot run: it is left out, and the notice says so.
+                        const asset = restoredSeedanceAssets?.videos?.[index];
+                        const url = measurableRemixLink(value, asset);
+                        if (!url) unrestorableReferences += 1;
+                        return url ? [{
+                            displayName: `Video reference ${index + 1}`,
+                            file: null,
+                            previewUrl: url,
+                            providerUrl: url,
+                            source: 'remix' as const,
+                            seedanceAsset: asset ?? undefined,
+                        }] : [];
+                    });
+                const referenceAudioSeeds = restoredReferenceAudios.length > 0
+                    ? restoredReferenceAudios
+                        .flatMap((item, index) => item.url ? [{
+                            displayName: item.label ?? `Audio reference ${index + 1}`,
+                            file: null,
+                            previewUrl: item.url,
+                            providerUrl: item.url,
+                            storagePath: item.storagePath ?? null,
+                            source: 'remix' as const,
+                            sourceGenerationId: item.sourceGenerationId ?? null,
+                            durationSeconds: item.durationSeconds ?? null,
+                            seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
+                        }] : [])
+                    : (settings?.referenceAudioUrls ?? []).flatMap((value, index) => {
+                        const asset = restoredSeedanceAssets?.audios?.[index];
+                        const url = measurableRemixLink(value, asset);
+                        if (!url) unrestorableReferences += 1;
+                        return url ? [{
+                            displayName: `Audio reference ${index + 1}`,
+                            file: null,
+                            previewUrl: '',
+                            providerUrl: url,
+                            source: 'remix' as const,
+                            seedanceAsset: asset ?? undefined,
+                        }] : [];
+                    });
+                commitClips(referenceVideoSeeds);
+                commitTracks(referenceAudioSeeds);
+                // The family takes no Kling video element: the creator's own stay, on standby.
+                commitKlingVideoElements(ownKlingClips);
+                if (unrestorableReferences > 0) {
+                    // Said beside a cap notice too, and once if the bundle already said it.
+                    setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, REMIX_RESTORE_WARNING));
+                }
+            } else {
+                // A run on any other model gets its references back too. Its
+                // image references come back under the handles the prompt
+                // mentions them by, as many as the model takes. A multi-shot run
+                // gets none: the page shows no reference card there and sends
+                // none. (The descriptor leaves Kling O3 on in multi-shot for its
+                // named subjects.)
+                commitPictures(createRemixElementSeeds(
                     restoredVideoInputs?.elements ?? [],
-                    restoredElementSupport.maxTotal,
-                    VIDEO_MODELS[nextModelId].displayName,
-                );
-                if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
+                    originalIsMultiShot ? 0 : restoredElementSupport.maxTotal
+                ).map((seed) => ({ ...seed, file: null })));
+                // Its clips and tracks come back where the model has a slot for
+                // them. Kling 3.0's clips are its video elements, restored below.
+                const mediaLimits = referenceMediaLimits(originalModelId);
+                commitClips(mediaLimits.videos > 0 ? keptReferenceSeeds(restoredVideoInputs?.referenceVideos) : []);
+                commitTracks(mediaLimits.audios > 0 ? keptReferenceSeeds(restoredVideoInputs?.referenceAudios) : []);
+                const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
+                const storedKlingVideoElements = Array.isArray(settings?.klingVideoElements)
+                    ? settings.klingVideoElements
+                    : [];
+                const klingVideoSeeds = originalModelId === 'kling-3.0-video'
+                    ? (storedKlingVideoElements.length > 0
+                        ? storedKlingVideoElements.flatMap((element, index) => {
+                            const restoredReference = restoredReferenceVideos[index] ?? null;
+                            const url = restoredReference?.url || element.url || null;
+                            if (!url) return [];
 
-                // The run's frames come back as its frames, but where the Seedance 2 family's
-                // restore below takes them for its pictures or leaves them out.
-                const restoredStartFrame = createRestoredRemixAssetState(restoredVideoInputs?.startFrame ?? null);
-                const restoredEndFrame = createRestoredRemixAssetState(restoredVideoInputs?.endFrame ?? null);
-                let restoresFrames = true;
-                if (isSeedance2VideoModelId(nextModelId)) {
-                    const restoredElements = restoredVideoInputs?.elements ?? [];
-                    const restoredSeeds = createRemixElementSeeds(
-                        restoredElements,
-                        restoredElementSupport.maxTotal
-                    ).map((seed) => ({
-                        ...seed,
-                        file: null,
-                        // The saved assets follow the run's references, one that could not come
-                        // back included, so each pairs by its place among them (as a draft's do).
-                        seedanceAsset: restoredSeedanceAssets?.images?.[
-                            restoredElements.findIndex((element) => element.id === seed.id)
-                        ] ?? undefined,
-                    }));
-
-                    // A references run of the family kept its pictures as frames before the
-                    // family took frames (2026-04-04): those come back as its references. A
-                    // frames run gets its frames back as frames, and runs as one again. A run
-                    // that brings pictures back is a references run, and frames recorded beside
-                    // them (an old run's prepared assets come back as pictures) stay out.
-                    const framesWereReferences = restoredSeeds.length === 0
-                        && restoredVideoInputs?.referenceMode === 'elements';
-                    restoresFrames = restoredSeeds.length === 0 && !framesWereReferences;
-                    const legacyFrameSeeds = framesWereReferences
-                        ? [restoredStartFrame, restoredEndFrame]
-                            .filter((item): item is NonNullable<typeof item> => Boolean(item))
-                            .map((item, index) => ({
-                                displayName: `Image reference ${index + 1}`,
-                                file: null,
-                                previewUrl: item.url,
-                                providerUrl: item.url,
-                                storagePath: item.descriptor.storagePath ?? null,
-                                source: 'remix' as const,
-                                sourceGenerationId: item.descriptor.sourceGenerationId ?? null,
-                                seedanceAsset: restoredSeedanceAssets?.images?.[index] ?? undefined,
-                            }))
-                        : [];
-
-                    commitElements(hydrateVideoElements([...restoredSeeds, ...legacyFrameSeeds]));
-                    const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
-                    const restoredReferenceAudios = restoredVideoInputs?.referenceAudios ?? [];
-                    let unrestorableReferences = 0;
-                    const referenceVideoSeeds = restoredReferenceVideos.length > 0
-                        ? restoredReferenceVideos
-                            .flatMap((item, index) => item.url ? [{
-                                displayName: item.label ?? `Video reference ${index + 1}`,
-                                file: null,
-                                previewUrl: item.url,
-                                providerUrl: item.url,
-                                storagePath: item.storagePath ?? null,
-                                source: 'remix' as const,
-                                sourceGenerationId: item.sourceGenerationId ?? null,
-                                // The quote refuses a clip with no length, and only a
-                                // fresh upload is measured here.
-                                durationSeconds: item.durationSeconds ?? null,
-                                seedanceAsset: restoredSeedanceAssets?.videos?.[index] ?? undefined,
-                            }] : [])
-                        : (settings?.referenceVideoUrls ?? []).flatMap((value, index) => {
-                            // An older run kept a prepared clip's asset id in its list. The
-                            // link it was prepared from is the one that can be measured, and
-                            // a clip with neither cannot run: it is left out, and the notice says so.
-                            const asset = restoredSeedanceAssets?.videos?.[index];
-                            const url = measurableRemixLink(value, asset);
-                            if (!url) unrestorableReferences += 1;
-                            return url ? [{
-                                displayName: `Video reference ${index + 1}`,
+                            return [{
+                                id: element.id ?? null,
+                                displayName: element.displayName ?? restoredReference?.label ?? `Video element ${index + 1}`,
+                                handle: element.handle ?? null,
                                 file: null,
                                 previewUrl: url,
                                 providerUrl: url,
+                                storagePath: element.storagePath ?? restoredReference?.storagePath ?? null,
                                 source: 'remix' as const,
-                                seedanceAsset: asset ?? undefined,
-                            }] : [];
-                        });
-                    const referenceAudioSeeds = restoredReferenceAudios.length > 0
-                        ? restoredReferenceAudios
-                            .flatMap((item, index) => item.url ? [{
-                                displayName: item.label ?? `Audio reference ${index + 1}`,
-                                file: null,
-                                previewUrl: item.url,
-                                providerUrl: item.url,
-                                storagePath: item.storagePath ?? null,
-                                source: 'remix' as const,
-                                sourceGenerationId: item.sourceGenerationId ?? null,
-                                durationSeconds: item.durationSeconds ?? null,
-                                seedanceAsset: restoredSeedanceAssets?.audios?.[index] ?? undefined,
-                            }] : [])
-                        : (settings?.referenceAudioUrls ?? []).flatMap((value, index) => {
-                            const asset = restoredSeedanceAssets?.audios?.[index];
-                            const url = measurableRemixLink(value, asset);
-                            if (!url) unrestorableReferences += 1;
-                            return url ? [{
-                                displayName: `Audio reference ${index + 1}`,
-                                file: null,
-                                previewUrl: '',
-                                providerUrl: url,
-                                source: 'remix' as const,
-                                seedanceAsset: asset ?? undefined,
-                            }] : [];
-                        });
-	                    commitReferenceVideos(hydrateSeedanceMediaReferences('Video', referenceVideoSeeds));
-	                    commitReferenceAudios(hydrateSeedanceMediaReferences('Audio', referenceAudioSeeds));
-	                    commitKlingVideoElements([]);
-	                    if (unrestorableReferences > 0) {
-	                        // Said beside a cap notice too, and once if the bundle already said it.
-	                        setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, REMIX_RESTORE_WARNING));
-	                    }
-                } else {
-                    // A run on any other model gets its references back too. Its
-                    // image references come back under the handles the prompt
-                    // mentions them by, as many as the model takes. A multi-shot run
-                    // gets none: the page shows no reference card there and sends
-                    // none. (The descriptor leaves Kling O3 on in multi-shot for its
-                    // named subjects.)
-                    commitElements(hydrateVideoElements(createRemixElementSeeds(
-                        restoredVideoInputs?.elements ?? [],
-                        nextIsMultiShot ? 0 : restoredElementSupport.maxTotal
-                    ).map((seed) => ({ ...seed, file: null }))));
-                    // Its clips and tracks come back where the model has a slot for
-                    // them. Kling 3.0's clips are its video elements, restored below.
-                    const mediaLimits = referenceMediaLimits(nextModelId);
-                    commitReferenceVideos(mediaLimits.videos > 0
-                        ? hydrateSeedanceMediaReferences('Video', keptReferenceSeeds(restoredVideoInputs?.referenceVideos))
-                        : []);
-                    commitReferenceAudios(mediaLimits.audios > 0
-                        ? hydrateSeedanceMediaReferences('Audio', keptReferenceSeeds(restoredVideoInputs?.referenceAudios))
-                        : []);
-	                    const restoredReferenceVideos = restoredVideoInputs?.referenceVideos ?? [];
-	                    const storedKlingVideoElements = Array.isArray(settings?.klingVideoElements)
-	                        ? settings.klingVideoElements
-	                        : [];
-	                    const klingVideoSeeds = nextModelId === 'kling-3.0-video'
-	                        ? (storedKlingVideoElements.length > 0
-	                            ? storedKlingVideoElements.flatMap((element, index) => {
-	                                const restoredReference = restoredReferenceVideos[index] ?? null;
-	                                const url = restoredReference?.url || element.url || null;
-	                                if (!url) return [];
+                                sourceGenerationId: element.sourceGenerationId ?? restoredReference?.sourceGenerationId ?? null,
+                            }];
+                        })
+                        : restoredReferenceVideos.flatMap((item, index) => item.url ? [{
+                            displayName: item.label ?? `Video element ${index + 1}`,
+                            // The handle the prompt mentions the clip by: one rebuilt
+                            // from its name and place misses it once a clip was taken away.
+                            handle: item.handle ?? null,
+                            file: null,
+                            previewUrl: item.url,
+                            providerUrl: item.url,
+                            storagePath: item.storagePath ?? null,
+                            source: 'remix' as const,
+                            sourceGenerationId: item.sourceGenerationId ?? null,
+                        }] : []))
+                    : [];
+                // A run kept before clips had handles hands its clips back with none,
+                // while its words still name the source's: the words the page may show
+                // (the source's, or the creator's own if they typed during the load).
+                const restoredMentions = extractMentionedHandles([
+                    bundle.generation.prompt,
+                    promptRef.current,
+                    ...(Array.isArray(settings?.multiPrompts) ? settings.multiPrompts : []).map((shot) => shot?.prompt),
+                ]);
+                commitKlingVideoElements(hydrateKlingVideoElements(remixReferencesBesideOwn<KlingVideoElementSeed>(
+                    besideOwn(klingVideoSeeds, ownKlingClips, KLING_VIDEO_ELEMENT_LIMIT, 'video element'),
+                    ownKlingClips,
+                    ownWordsStay,
+                ), restoredMentions));
+            }
+            for (const warning of roomWarnings) {
+                setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, warning));
+            }
+            // The original's references the creator's frames kept out are said as media not brought back.
+            if (originalReferencesLeftOut > 0) {
+                setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, REMIX_RESTORE_WARNING));
+            }
 
-	                                return [{
-	                                    id: element.id ?? null,
-	                                    displayName: element.displayName ?? restoredReference?.label ?? `Video element ${index + 1}`,
-	                                    handle: element.handle ?? null,
-	                                    file: null,
-	                                    previewUrl: url,
-	                                    providerUrl: url,
-	                                    storagePath: element.storagePath ?? restoredReference?.storagePath ?? null,
-	                                    source: 'remix' as const,
-	                                    sourceGenerationId: element.sourceGenerationId ?? restoredReference?.sourceGenerationId ?? null,
-	                                }];
-	                            })
-	                            : restoredReferenceVideos.flatMap((item, index) => item.url ? [{
-	                                displayName: item.label ?? `Video element ${index + 1}`,
-	                                // The handle the prompt mentions the clip by: one rebuilt
-	                                // from its name and place misses it once a clip was taken away.
-	                                handle: item.handle ?? null,
-	                                file: null,
-	                                previewUrl: item.url,
-	                                providerUrl: item.url,
-	                                storagePath: item.storagePath ?? null,
-	                                source: 'remix' as const,
-	                                sourceGenerationId: item.sourceGenerationId ?? null,
-	                            }] : []))
-	                        : [];
-	                    // A run kept before clips had handles hands its clips back with none,
-	                    // while its words still name the source's: the words the page may show
-	                    // (the source's, or the creator's own if they typed during the load).
-	                    const restoredMentions = extractMentionedHandles([
-	                        bundle.generation.prompt,
-	                        promptRef.current,
-	                        ...(Array.isArray(settings?.multiPrompts) ? settings.multiPrompts : []).map((shot) => shot?.prompt),
-	                    ]);
-	                    commitKlingVideoElements(hydrateKlingVideoElements(klingVideoSeeds, restoredMentions));
-                }
-
-                const keptStartFrame = restoresFrames ? restoredStartFrame : null;
-                const keptEndFrame = restoresFrames ? restoredEndFrame : null;
-                setStartImageFile(null);
+            // A frame the creator added holds its slot, as a frame added after the answer would;
+            // the original's fills one they left empty.
+            const keptStartFrame = restoresFrames ? restoredStartFrame : null;
+            const keptEndFrame = restoresFrames ? restoredEndFrame : null;
+            if (!startImageFile) {
                 setStartImageUrl(keptStartFrame?.url ?? null);
                 setStartFrameDescriptor(keptStartFrame?.descriptor ?? null);
-                setEndImageFile(null);
+            }
+            if (!endImageFile) {
                 setEndImageUrl(keptEndFrame?.url ?? null);
                 setEndFrameDescriptor(keptEndFrame?.descriptor ?? null);
-            } catch (fetchError) {
-                console.error('Error fetching remix:', fetchError);
-                if (!isCancelled()) {
-                    setRemixRestoreWarning(REMIX_RESTORE_WARNING);
-                }
-            } finally {
-                if (!isCancelled()) {
-                    setIsRemixLoading(false);
-                }
             }
-        };
-
-        void fetchRemixData();
-    }, [formAccount, remixId, remixPostId, session?.access_token, unmountSignal]);
+        },
+    });
 
     useEffect(() => {
         // What the browser held before media was saved per account belongs to nobody in
@@ -3607,6 +3665,7 @@ function VideoCreator({
             promptHandles: extractPromptHandles(prompt),
         });
         if (!plan.question) {
+            remixRead.noteEdit('inputSide');
             setPickedInputSide(to);
             return;
         }
@@ -3621,6 +3680,7 @@ function VideoCreator({
         });
         focusInputSwitch();
         if (!confirmed) return;
+        remixRead.noteEdit('inputSide');
         await (plan.to === 'references' ? moveFramesToReferences(plan) : movePicturesToFrames(plan));
     };
 
@@ -4762,6 +4822,8 @@ function VideoCreator({
     // A model picked from the list opens on this run's settings where it offers them, the
     // run its row priced (owner, 2026-10-28): it used to open on its first options.
     const handleSelectModel = (modelId: VideoModelId) => {
+        // The creator's pick: a remix's original still loading leaves it.
+        remixRead.noteEdit('model');
         switchModel(modelId, modelRuns.get(modelId)?.settings ?? fitVideoFormToModel(modelId, pageForm));
         setIsModelDropdownOpen(false);
         setModelSearchQuery('');
@@ -5396,6 +5458,8 @@ function VideoCreator({
             : referenceAudios.map((reference) => ({ kind: 'audio' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceAudio(reference.id) }))),
     ];
 
+    // A read that failed, said with Try again; else what the restore could not bring back.
+    const remixWarning = remixRead.failureWarning ?? remixRestoreWarning;
     // A remix's own clip as a reference, where the model takes clips and has room for it, or holds it already.
     const usingOriginalResult = referenceVideos.some((reference) => isRemixResultReference(reference, remixId));
     const offersOriginalResult = Boolean(remixId && remixVideoUrl) && referenceVideoLimit > 0
@@ -5626,6 +5690,11 @@ function VideoCreator({
     )));
     const sliderPrice = optionPrice('duration', currentDuration);
 
+    // A setting the creator chooses is theirs: a remix's original still loading leaves it.
+    const chosenByHand = <T,>(field: VideoRemixField, set: (value: T) => void) => (value: T) => {
+        remixRead.noteEdit(field);
+        set(value);
+    };
     const settingsPanel = (
         <div className="space-y-5">
             {videoModel.modeOptions.length > 0 ? (
@@ -5634,7 +5703,7 @@ function VideoCreator({
                     options={videoModel.modeOptions.map((option) => option.value)}
                     optionLabel={(value) => videoModel.modeOptions.find((option) => option.value === value)?.label ?? value}
                     value={currentMode}
-                    onChange={setMode}
+                    onChange={chosenByHand('mode', setMode)}
                     columns={videoModel.modeOptions.length === 2 ? 2 : 1}
                     accent="video"
                     optionPrice={(value) => optionPrice('mode', value)}
@@ -5649,7 +5718,7 @@ function VideoCreator({
                     options={lengthOptions.map(String)}
                     optionLabel={(value) => `${value}s`}
                     value={String(currentDuration)}
-                    onChange={(value) => setSingleDuration(Number(value))}
+                    onChange={chosenByHand('duration', (value: string) => setSingleDuration(Number(value)))}
                     columns={lengthOptions.length <= 3 ? choiceColumns(lengthOptions.length) : lengthOptions.length <= 12 ? 4 : 5}
                     accent="video"
                     optionPrice={(value) => optionPrice('duration', Number(value))}
@@ -5674,7 +5743,10 @@ function VideoCreator({
                         max={singleShotDurationRange.max}
                         step="1"
                         value={currentDuration}
-                        onChange={(event) => setSingleDuration(Number(event.target.value))}
+                        onChange={(event) => {
+                            remixRead.noteEdit('duration');
+                            setSingleDuration(Number(event.target.value));
+                        }}
                         className={`ui-focus-ring w-full ${videoAccent.control}`}
                     />
                     <div className="mt-1 flex justify-between text-xs tabular-nums text-[var(--ui-text-faint)]">
@@ -5694,7 +5766,7 @@ function VideoCreator({
                     label="Resolution"
                     options={videoModel.resolutions as readonly string[]}
                     value={currentResolution}
-                    onChange={setResolution}
+                    onChange={chosenByHand('resolution', setResolution)}
                     columns={choiceColumns(videoModel.resolutions.length)}
                     accent="video"
                     optionPrice={(value) => optionPrice('resolution', value)}
@@ -5706,7 +5778,7 @@ function VideoCreator({
                 hint={sameRatioPrice ? 'Same price for each' : undefined}
                 options={videoModel.aspectRatios as readonly string[]}
                 value={currentAspectRatio}
-                onChange={setAspectRatio}
+                onChange={chosenByHand('aspectRatio', setAspectRatio)}
                 columns={choiceColumns(videoModel.aspectRatios.length)}
                 accent="video"
                 optionMark={aspectRatioMark}
@@ -5718,7 +5790,7 @@ function VideoCreator({
                     label="Fixed lens"
                     description="Keeps the camera still for the whole shot."
                     checked={currentFixedLens}
-                    onChange={setFixedLens}
+                    onChange={chosenByHand('fixedLens', setFixedLens)}
                     accent="video"
                 />
             ) : null}
@@ -5728,7 +5800,7 @@ function VideoCreator({
                     label="Generated sound"
                     description={soundPriceWords}
                     checked={currentSound}
-                    onChange={setSound}
+                    onChange={chosenByHand('sound', setSound)}
                     accent="video"
                 />
             ) : null}
@@ -5858,7 +5930,7 @@ function VideoCreator({
                         {showsEmptyCanvas && canvasRevealKey === 0 ? <CreatorStartPostsStrip source={startPosts} tool="video" /> : null}
 
                         <AnimatePresence>
-                            {remixId && isRemixLoading && (
+                            {remixId && remixRead.loading && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 12 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -5867,11 +5939,12 @@ function VideoCreator({
                                     <StudioRemixHydrationNotice />
                                 </motion.div>
                             )}
-                            {remixId && !isRemixLoading && (
+                            {remixId && !remixRead.loading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
-                                        description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
+                                        description={getRemixNoticeDescription(remixTitle, remixWarning)}
                                         source={remixSourcePost}
+                                        onRetry={remixRead.canRetry ? remixRead.retry : undefined}
                                         original={remixVideoUrl ? { mediaType: 'video', src: remixVideoUrl, onOpen: () => setIsPreviewModalOpen(true) } : null}
                                         action={offersOriginalResult ? (
                                             <StudioUseOriginalButton using={usingOriginalResult} pending={isAddingOriginal} onUse={() => void addOriginalResultAsReferenceVideo()} />
@@ -5879,7 +5952,7 @@ function VideoCreator({
                                     />
                                 </motion.div>
                             )}
-                            {remixId && !isRemixLoading && remixSlotsNotice ? (
+                            {remixId && !remixRead.loading && remixSlotsNotice ? (
                                 <motion.div key="remix-slots-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixSlotsNotice description={remixSlotsNotice} onDismiss={() => setRemixSlotsNoticeDismissed(true)} />
                                 </motion.div>
@@ -5899,7 +5972,7 @@ function VideoCreator({
                                 ariaLabel="Shot mode"
                                 options={SHOT_MODE_OPTIONS}
                                 value={currentIsMultiShot ? 'multi' : 'single'}
-                                onChange={(value) => setIsMultiShot(value === 'multi')}
+                                onChange={chosenByHand('isMultiShot', (value: string) => setIsMultiShot(value === 'multi'))}
                             />
                         ) : null}
 

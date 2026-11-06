@@ -67,14 +67,12 @@ import { creatorCanvasFollowsRun, creatorCanvasPhase, creatorCanvasSettledStatus
 import EnhancePromptButton from '@/components/EnhancePromptButton';
 import { useAuth } from '@/components/AuthProvider';
 import type { RemixMediaAssetDescriptor, RemixSourceBundle, RemixSourcePost } from '@/lib/remix-source';
-import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
 import { buildRemixTopUpHref } from '@/lib/pricing-return';
 import {
     createRestoredRemixAssetState,
     getRemixNoticeDescription,
     getRemixRestoreWarning,
     readRemixInputSlots,
-    REMIX_RESTORE_WARNING,
     isRemixResultReference,
 } from '@/lib/remix-source-client';
 import {
@@ -86,6 +84,7 @@ import {
 } from '../../../ugc-mobile/lib/remix-input-slots/remix-input-slots';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 import { useRemixLinkRenewal } from '@/lib/use-remix-link-renewal';
+import { useRemixSourceRead } from '@/lib/use-remix-source-read';
 import type { CatalogGenerationRequestPayload } from '@/lib/generation-model-adapters';
 import {
     getPersistedFile,
@@ -155,6 +154,9 @@ import {
 import { MOTION_MODELS } from '@/lib/client-generation-models';
 
 type ModelId = keyof typeof MOTION_MODELS;
+
+/** What a creator can set by hand while a remix loads, which its answer then leaves as they set it. */
+type MotionRemixField = 'model' | 'mode' | 'characterOrientation';
 
 interface MotionWorkflowSettings {
     model?: ModelId;
@@ -424,7 +426,6 @@ function MotionCreator({
     });
     const prefillPrompt = prefill.prompt ?? null;
     const prefillModel = prefill.model ?? null;
-    const [isRemixLoading, setIsRemixLoading] = useState(!!remixId);
     const [remixTitle, setRemixTitle] = useState<string | null>(null);
     // The post being remixed, which the notice names with its creator (owner, 2026-11-05).
     const [remixSourcePost, setRemixSourcePost] = useState<RemixSourcePost | null>(null);
@@ -641,96 +642,51 @@ function MotionCreator({
         if (persistedKey) await removePersistedMedia(persistedKey);
     };
 
-    // Handle Remix Pre-fill, once for this form: the effect runs again for a renewed session token
-    // (Supabase renews it about hourly) and for a session back from a lapse, and reading the remix
-    // again put the original's prompt, model, picture and clip back over the creator's. Another
-    // account's form is drawn anew (`useCreatorForm`) and reads it for itself.
-    const remixReadStartedRef = useRef(false);
-    useEffect(() => {
-        if (!remixId || remixReadStartedRef.current) return;
-        if (!session?.access_token) return;
-        remixReadStartedRef.current = true;
+    // The remix's original, read once for this form (`useRemixSourceRead`), and put on the form with
+    // what the creator did while it loaded kept: words they typed, a model or setting they picked by
+    // hand, and the picture or clip they picked, which takes its slot as a pick after the answer would.
+    const remixRead = useRemixSourceRead<MotionRemixField>({
+        remixId,
+        remixPostId,
+        pageToken: session?.access_token ?? null,
+        formAccount,
+        promptRef,
+        onSource: (bundle, edits) => {
+            setRemixSourceBundle(bundle);
+            setRemixTitle(bundle.generation.title);
+            setRemixSourcePost(bundle.sourcePost ?? null);
+            if (!edits.prompt) setPrompt(bundle.generation.prompt);
+            setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
+            setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
+            setRemixSlots(readRemixInputSlots(bundle));
+            setRemixSlotsNoticeDismissed(false);
 
-        // The answer is the form's while it is on the page, whichever run of this effect is the
-        // latest: development's Strict Mode mounts it twice over the one read.
-        const isCancelled = () => unmountSignal.current.aborted;
-        const promptWhenRemixStarted = promptRef.current;
-        const pageToken = session.access_token;
+            // The original's model and settings, whatever the balance (#649), but for each the creator
+            // picked by hand meanwhile.
+            const settings = bundle.workflowSettings as MotionWorkflowSettings | null;
+            if (!edits.byHand('model') && settings?.model && MOTION_MODELS[settings.model]) {
+                setSelectedModel(settings.model);
+            }
+            if (!edits.byHand('mode') && settings?.mode) setMode(settings.mode);
+            if (!edits.byHand('characterOrientation') && settings?.characterOrientation) {
+                setCharacterOrientation(settings.characterOrientation);
+            }
 
-        const fetchRemixData = async () => {
-            try {
-                // The browser's own session where it is the form's account, renewed as it nears its
-                // end: Back can draw the page again from Next's cache with the session it was first
-                // drawn with, expired since, and the one read would be refused.
-                const { data: { session: browserSession } } = await supabase.auth.getSession();
-                const accessToken = browserSession?.user.id === formAccount ? browserSession.access_token : pageToken;
-                const remixSourceParams = new URLSearchParams({ id: remixId });
-                if (remixPostId) {
-                    remixSourceParams.set('postId', remixPostId);
-                }
-
-                const response = await fetch(`/api/remix-source?${remixSourceParams.toString()}`, {
-                    headers: {
-                        Authorization: `Bearer ${accessToken}`,
-                    },
-                });
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Failed to load remix data');
-                }
-
-                const bundle = data as RemixSourceBundle;
-                if (isCancelled()) {
-                    return;
-                }
-
-                setRemixSourceBundle(bundle);
-                setRemixTitle(bundle.generation.title);
-                setRemixSourcePost(bundle.sourcePost ?? null);
-                if (!hasCreatorEditedPromptDuringRemix(promptRef.current, promptWhenRemixStarted)) {
-                    setPrompt(bundle.generation.prompt);
-                }
-                setRemixVideoUrl(bundle.result?.mediaType === 'video' ? bundle.result.url : null);
-                setRemixRestoreWarning(getRemixRestoreWarning(bundle.restoreIssues));
-                setRemixSlots(readRemixInputSlots(bundle));
-                setRemixSlotsNoticeDismissed(false);
-
-                const settings = bundle.workflowSettings as MotionWorkflowSettings | null;
-                if (settings?.model && MOTION_MODELS[settings.model]) {
-                    setSelectedModel(settings.model);
-                }
-                if (settings?.mode) setMode(settings.mode);
-                if (settings?.characterOrientation) setCharacterOrientation(settings.characterOrientation);
-
-                const restoredMotionInputs = bundle.inputs.motion;
-                const restoredCharacterImage = createRestoredRemixAssetState(
-                    restoredMotionInputs?.characterImage ?? null
-                );
-                const restoredReferenceVideo = createRestoredRemixAssetState(
-                    restoredMotionInputs?.referenceVideo ?? null
-                );
-
-                setCharacterImageFile(null);
+            // A file the creator picked holds its slot: a remix form holds none of anyone else's
+            // before its answer. The original's fills a slot they left empty.
+            const restoredMotionInputs = bundle.inputs.motion;
+            if (!characterImageFile) {
+                const restoredCharacterImage = createRestoredRemixAssetState(restoredMotionInputs?.characterImage ?? null);
                 setCharacterImage(restoredCharacterImage?.url ?? null);
                 setCharacterImageDescriptor(restoredCharacterImage?.descriptor ?? null);
-                setReferenceVideoFile(null);
+            }
+            if (!referenceVideoFile) {
+                const restoredReferenceVideo = createRestoredRemixAssetState(restoredMotionInputs?.referenceVideo ?? null);
                 setReferenceVideo(restoredReferenceVideo?.url ?? null);
                 setReferenceVideoDescriptor(restoredReferenceVideo?.descriptor ?? null);
-            } catch (err) {
-                console.error('Error fetching remix:', err);
-                if (!isCancelled()) {
-                    setRemixRestoreWarning(REMIX_RESTORE_WARNING);
-                }
-            } finally {
-                if (!isCancelled()) {
-                    setIsRemixLoading(false);
-                }
             }
-        };
-
-        void fetchRemixData();
-    }, [formAccount, remixId, remixPostId, session?.access_token, unmountSignal]);
+        },
+    });
 
     // A press of "Use as reference video" under way: it waits on a fresh link to the original past its hour.
     const [isAddingOriginal, setIsAddingOriginal] = useState(false);
@@ -1598,6 +1554,8 @@ function MotionCreator({
 
     const backgroundTiming = generationTiming ? freezeGenerationTiming(generationTiming, nowMs) : null;
     const backgroundTimingLabel = backgroundTiming ? getGenerationTimingSummaryLabel(backgroundTiming, nowMs) : null;
+    // A read that failed, said with Try again; else what the restore could not bring back.
+    const remixWarning = remixRead.failureWarning ?? remixRestoreWarning;
     const canUseOriginalResultAsReferenceVideo =
         remixSourceBundle?.result?.mediaType === 'video' && Boolean(remixSourceBundle.result.url);
     const isUsingOriginalResultAsReferenceVideo = isRemixResultReference(referenceVideoDescriptor, remixSourceBundle?.generation.id);
@@ -1682,6 +1640,11 @@ function MotionCreator({
         />
     );
 
+    // A setting the creator chooses is theirs: a remix's original still loading leaves it.
+    const chosenByHand = <T,>(field: MotionRemixField, set: (value: T) => void) => (value: T) => {
+        remixRead.noteEdit(field);
+        set(value);
+    };
     const settingsPanel = (
         <div className="space-y-5">
             <CreatorSettingChoices
@@ -1690,7 +1653,7 @@ function MotionCreator({
                 options={model.characterOrientations}
                 optionLabel={(option) => (option === 'video' ? 'Follow video' : 'Favor image')}
                 value={characterOrientation}
-                onChange={setCharacterOrientation}
+                onChange={chosenByHand('characterOrientation', setCharacterOrientation)}
                 columns={2}
                 accent="motion"
                 optionPrice={(option) => optionPrice('characterOrientation', option)}
@@ -1700,7 +1663,7 @@ function MotionCreator({
                 options={model.resolutions}
                 optionLabel={(quality) => (quality === '720p' ? 'Standard 720p' : quality === '1080p' ? 'Pro 1080p' : quality)}
                 value={mode}
-                onChange={setMode}
+                onChange={chosenByHand('mode', setMode)}
                 columns={2}
                 accent="motion"
                 optionPrice={(quality) => optionPrice('resolution', quality)}
@@ -1795,8 +1758,10 @@ function MotionCreator({
                                                 onClick={() => {
                                                     // A notice about the previous model no longer applies.
                                                     if (motionModel.id !== selectedModel) setCatalogNotice(null);
-                                                    // The creator's pick is the first pick: the catalog's default no longer replaces it.
+                                                    // The creator's pick is the first pick: the catalog's default no longer replaces it,
+                                                    // nor does a remix's original still loading.
                                                     hasResolvedInitialCatalogModel.current = true;
+                                                    remixRead.noteEdit('model');
                                                     setSelectedModel(motionModel.id as ModelId);
                                                     setIsModelDropdownOpen(false);
                                                     setModelSearchQuery('');
@@ -1841,7 +1806,7 @@ function MotionCreator({
                                     />
                                 </motion.div>
                             ) : null}
-                            {remixId && isRemixLoading && (
+                            {remixId && remixRead.loading && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 12 }}
                                     animate={{ opacity: 1, y: 0 }}
@@ -1850,11 +1815,12 @@ function MotionCreator({
                                     <StudioRemixHydrationNotice />
                                 </motion.div>
                             )}
-                            {remixId && !isRemixLoading && (
+                            {remixId && !remixRead.loading && (
                                 <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixNotice
-                                        description={getRemixNoticeDescription(remixTitle, remixRestoreWarning)}
+                                        description={getRemixNoticeDescription(remixTitle, remixWarning)}
                                         source={remixSourcePost}
+                                        onRetry={remixRead.canRetry ? remixRead.retry : undefined}
                                         original={remixVideoUrl ? {
                                             mediaType: 'video',
                                             src: remixVideoUrl,
@@ -1872,7 +1838,7 @@ function MotionCreator({
                                     />
                                 </motion.div>
                             )}
-                            {remixId && !isRemixLoading && remixSlotsNotice ? (
+                            {remixId && !remixRead.loading && remixSlotsNotice ? (
                                 <motion.div key="remix-slots-notice" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}>
                                     <StudioRemixSlotsNotice description={remixSlotsNotice} onDismiss={() => setRemixSlotsNoticeDismissed(true)} />
                                 </motion.div>

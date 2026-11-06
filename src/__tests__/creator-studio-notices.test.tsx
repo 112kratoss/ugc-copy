@@ -94,6 +94,20 @@ describe('creator studio notices', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  // A remix read that failed is final for its form until the creator asks again (`useRemixSourceRead`).
+  it('offers Try again on a remix whose read failed, and only then', () => {
+    const onRetry = vi.fn();
+    const view = render(<StudioRemixNotice description="Settings pre-filled from the original creation." onRetry={onRetry} />);
+
+    const tryAgain = screen.getByRole('button', { name: 'Try again' });
+    expect(tryAgain).toHaveClass('ui-button-secondary');
+    fireEvent.click(tryAgain);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    view.rerender(<StudioRemixNotice description={'Settings pre-filled from "Neon city".'} />);
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
+  });
+
   it('offers a dismiss button only when the model notice can be dismissed', () => {
     const onDismiss = vi.fn();
     const view = render(<StudioModelNotice description="This model is no longer available." />);
