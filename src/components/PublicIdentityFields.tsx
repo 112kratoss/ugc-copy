@@ -11,6 +11,7 @@ import {
   type PublicIdentityDraft,
   type PublicIdentityErrors,
 } from '@/lib/public-identity';
+import { TYPED_INPUT_PROPS } from '@/lib/typed-before-hydration';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 
 interface PublicIdentityFieldsProps {
@@ -105,6 +106,7 @@ export default function PublicIdentityFields({
         <div className={FIELD_FRAME}>
           <input
             ref={nameRef}
+            {...TYPED_INPUT_PROPS}
             id={nameId}
             type="text"
             value={value.displayName}
@@ -133,6 +135,7 @@ export default function PublicIdentityFields({
           <span className="pl-3 text-sm text-[var(--ui-text-faint)]" aria-hidden="true">@</span>
           <input
             ref={handleRef}
+            {...TYPED_INPUT_PROPS}
             id={handleId}
             type="text"
             value={value.username}

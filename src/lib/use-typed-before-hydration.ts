@@ -23,7 +23,8 @@ import { typedText } from '@/lib/typed-before-hydration';
  * effect, so the page holds the text before anything its mount effects wait on (a saved
  * draft's read) comes back, and they take it as the visitor's edit. An input the page keeps
  * takes it the same way (the post composer's title and price, 2026-11-06): an input's
- * hydration leaves the typed text on screen, and the field's next render writes it over.
+ * hydration leaves the typed text on screen, and the field's next render writes it over. The
+ * input carries `TYPED_INPUT_PROPS`, or the capture keeps none of its typing.
  */
 export function useTypedBeforeHydration(
   fieldRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>,

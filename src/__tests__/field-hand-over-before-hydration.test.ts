@@ -53,7 +53,7 @@ const NO_HAND_OVER: Record<string, string> = {
   'src/app/create-workflow/WorkflowTemplatePublishDrawer.tsx':
     'A drawer of the workflow canvas, loaded with `ssr: false` (CreateWorkflowEntry).',
   'src/app/creations/CreatorProfileCard.tsx':
-    'Loaded with `ssr: false` (DeferredCreatorProfileCard); its form is the Edit profile dialog.',
+    'Its form is the Edit profile dialog, which a click opens after a profile read (ProfileActions); DeferredCreatorProfileCard loads it with `ssr: false`.',
   'src/app/delete-account/SignedInAccountDeletion.tsx':
     'Draws nothing until the client’s auth listener has a session.',
   'src/app/invite/InviteClient.tsx':

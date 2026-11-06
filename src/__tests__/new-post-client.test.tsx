@@ -5404,37 +5404,41 @@ describe('NewPostClient', () => {
   });
 
   describe('from this creation', () => {
-    function enqueueCreation(overrides: Record<string, unknown> = {}) {
+    /** The creation's answer, held until `arrives` settles when given. */
+    function enqueueCreation(overrides: Record<string, unknown> = {}, arrives?: Promise<void>) {
       enqueueResponse({
         ok: true,
-        json: async () => ({
-          generations: [{
-            id: 'gen-recipe-1',
-            output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
-            category: 'image',
-            model: 'nano-banana-2',
-            title: 'Window display still',
-            description: '',
-            prompt: 'A product still lit like a window display.',
-            origin: 'creation',
-            input_media: [{
-              id: 'input-1',
-              generationId: 'gen-recipe-1',
-              mediaType: 'image',
-              role: 'reference',
-              label: 'Product',
-              url: 'https://proxy.example.com/generation_inputs/user-1/product.png',
-              storagePath: 'generation_inputs/user-1/product.png',
-              sourceGenerationId: null,
-              sortOrder: 0,
-              metadata: {},
-              // The server copies it into the recipe when asked (#677's review).
-              recipeCopyable: true,
+        json: async () => {
+          await arrives;
+          return {
+            generations: [{
+              id: 'gen-recipe-1',
+              output_url: 'https://proxy.example.com/generated_images/user-1/output.jpg',
+              category: 'image',
+              model: 'nano-banana-2',
+              title: 'Window display still',
+              description: '',
+              prompt: 'A product still lit like a window display.',
+              origin: 'creation',
+              input_media: [{
+                id: 'input-1',
+                generationId: 'gen-recipe-1',
+                mediaType: 'image',
+                role: 'reference',
+                label: 'Product',
+                url: 'https://proxy.example.com/generation_inputs/user-1/product.png',
+                storagePath: 'generation_inputs/user-1/product.png',
+                sourceGenerationId: null,
+                sortOrder: 0,
+                metadata: {},
+                // The server copies it into the recipe when asked (#677's review).
+                recipeCopyable: true,
+              }],
+              paywallPrefill: null,
+              ...overrides,
             }],
-            paywallPrefill: null,
-            ...overrides,
-          }],
-        }),
+          };
+        },
       });
     }
 
@@ -5721,6 +5725,27 @@ describe('NewPostClient', () => {
       expect(screen.getByRole('radio', { name: /free recipe/i })).toBeDisabled();
       expect(screen.getByText(REMIX_RECIPE_MUST_BE_PAID)).toBeInTheDocument();
       expect(screen.getByRole('spinbutton', { name: /price in credits/i })).toHaveValue(10);
+    });
+
+    // The before-script sweep's review (2026-11-06): the lock's start price arrives with the creation,
+    // and a price the creator set before then (typed before the page's script ran, or since) stands.
+    it('keeps a price set before a paid remix’s creation arrives', async () => {
+      searchParamsState.value = new URLSearchParams({ generationId: 'gen-recipe-1', resourceMode: 'paid' });
+      let answer = () => {};
+      enqueueCreation({ remix_recipe_mode: 'paid' }, new Promise<void>((resolve) => {
+        answer = resolve;
+      }));
+
+      render(<NewPostClient />);
+      const price = screen.getByRole('spinbutton', { name: /price in credits/i });
+      fireEvent.change(price, { target: { value: '250' } });
+      await act(async () => answer());
+      await waitFor(() => {
+        expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('Window display still');
+      });
+
+      expect(screen.getByRole('radio', { name: /paid recipe/i })).toBeChecked();
+      expect(price).toHaveValue(250);
     });
 
     it('sends no references unless asked, and offers none for a creation without saved inputs', async () => {

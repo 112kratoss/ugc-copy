@@ -7,7 +7,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { hasCreatorEditedPromptDuringRemix } from '@/lib/remix-source';
-import { TYPED_BEFORE_HYDRATION_CAPTURE, typedText } from '@/lib/typed-before-hydration';
+import { TYPED_BEFORE_HYDRATION_CAPTURE, TYPED_INPUT_PROPS, typedText } from '@/lib/typed-before-hydration';
 import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 
 /**
@@ -299,7 +299,7 @@ function TitleBox({ drawn = '', enabled = true, onTyped }: { drawn?: string; ena
   useTypedBeforeHydration(fieldRef, { drawn: title, enabled, onTyped: handleTitleChange });
   return (
     <div>
-      <input aria-label="Title" ref={fieldRef} value={title} onChange={(event) => handleTitleChange(event.target.value)} />
+      <input aria-label="Title" ref={fieldRef} {...TYPED_INPUT_PROPS} value={title} onChange={(event) => handleTitleChange(event.target.value)} />
       <span data-testid="count">{title.length}</span>
       <button type="button" onClick={() => setRenders((count) => count + 1)}>
         Render {renders}
@@ -373,17 +373,25 @@ describe('the capture the root layout runs', () => {
     untouched.remove();
   });
 
-  it('keeps an input’s typed text too, and never a password’s', () => {
+  it('keeps a marked input’s typed text too, and no other input’s', () => {
     const title = document.createElement('input');
-    const password = document.createElement('input');
-    password.type = 'password';
-    document.body.append(title, password);
+    title.setAttribute(Object.keys(TYPED_INPUT_PROPS)[0], '');
+    const email = document.createElement('input');
+    email.type = 'email';
+    // A password a "Show password" button turned into a text field: no page reads it as typed.
+    const shownPassword = document.createElement('input');
+    shownPassword.type = 'password';
+    document.body.append(title, email, shownPassword);
+    shownPassword.type = 'text';
     typeInto(title, 'Product demo with soft window light');
-    typeInto(password, 'a password');
+    typeInto(email, 'early@example.com');
+    typeInto(shownPassword, 'a password');
 
     expect(typedText(title)).toBe('Product demo with soft window light');
-    expect(typedText(password)).toBeUndefined();
+    expect(typedText(email)).toBeUndefined();
+    expect(typedText(shownPassword)).toBeUndefined();
     title.remove();
-    password.remove();
+    email.remove();
+    shownPassword.remove();
   });
 });
