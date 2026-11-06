@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { recipeCopiesWithheldOver } from './fixtures/recipe-copies-withheld';
 
 type ResourceBundleRow = {
   id: string;
@@ -37,8 +38,10 @@ let selectedColumnsState: string[] = [];
 let tableQueryErrorState: TestDatabaseError | null = null;
 /** Fails only the fallback's second read, the one that selects published details. */
 let detailQueryErrorState: TestDatabaseError | null = null;
-/** The creations a page's recipes hold copies of, with their two marks (`loadWithheldCopyCreations`). */
+/** The creations a page's recipes hold copies of, with their two marks (`recipe_copies_withheld`). */
 let generationsState: Array<{ id: string; archived_at: string | null; moderation_removed_at: string | null }> = [];
+/** How many times a test's reads asked which copies are withheld. */
+let withheldCallsState = 0;
 
 function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
   const filters: Array<(row: T) => boolean> = [];
@@ -78,7 +81,14 @@ function createThenableQuery<T extends Record<string, unknown>>(rows: T[]) {
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
-    async rpc(name: string) {
+    async rpc(name: string, args?: { p_paths?: string[] }) {
+      // Which of a page's recipe copies are withheld now (`loadWithheldCopies`), from their creations.
+      if (name === 'recipe_copies_withheld') {
+        withheldCallsState += 1;
+        return tableQueryErrorState
+          ? { data: null, error: tableQueryErrorState }
+          : { data: recipeCopiesWithheldOver(generationsState)(args?.p_paths ?? []), error: null };
+      }
       rpcCallsState.push(name);
       if (rpcErrorState) return { data: null, error: rpcErrorState };
       if (name !== 'get_public_post_resource_bundle_summaries') {
@@ -141,6 +151,7 @@ describe('posts-server marketplace summaries', () => {
     detailQueryErrorState = null;
     draftFreeUnlockCountState = null;
     generationsState = [];
+    withheldCallsState = 0;
     resourceBundlesState = [
       {
         id: 'asset-active',
@@ -198,8 +209,8 @@ describe('posts-server marketplace summaries', () => {
 
   // Owner, 2026-11-04: the feed, the reel, saved posts and the home shelf sell a recipe by this
   // summary, so it leaves out the copies of a creation now removed or archived, which no buyer gets,
-  // with one read of those creations for the whole page.
-  it('counts no copy of a creation now off public view, reading the creations once per page', async () => {
+  // with one question of the database for the whole page.
+  it('counts no copy of a creation now off public view, asking once per page', async () => {
     const CREATION = '22222222-2222-4222-8222-222222222222';
     const copy = (id: string, file: string) => ({ id, type: 'reference_image', title: 'Reference', storagePath: `user-1/generation-references/${CREATION}/${file}` });
     resourceBundlesState = [
@@ -214,11 +225,14 @@ describe('posts-server marketplace summaries', () => {
 
     generationsState = [{ id: CREATION, archived_at: '2026-11-04T00:00:00.000Z', moderation_removed_at: null }];
     tableAccessesState = [];
+    withheldCallsState = 0;
     const archived = await getMarketplaceAssetSummaryHydration(['post-1', 'post-3']);
     expect(archived.assetMap.get('post-1')?.itemCounts?.reference_image ?? 0).toBe(0);
     expect(archived.assetMap.get('post-3')?.itemCounts?.reference_image ?? 0).toBe(0);
     expect(archived.assetMap.get('post-1')?.resourceKinds).not.toContain('files');
-    expect(tableAccessesState.filter((table) => table === 'generations')).toHaveLength(1);
+    // One question of the database for the page's copies, never a read of the creations here.
+    expect(withheldCallsState).toBe(1);
+    expect(tableAccessesState.filter((table) => table === 'generations')).toHaveLength(0);
   });
 
   // Recipe audit H1 (2026-10-27): the summaries RPC answers allow_remix true

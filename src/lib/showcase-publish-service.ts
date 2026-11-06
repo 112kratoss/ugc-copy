@@ -741,8 +741,11 @@ export async function publishGenerationToShowcaseForRoute({
         includeReferences: shouldIncludeGenerationReferences && requestedAccessMode !== 'none',
         mayShareCreation: creationMaySharePostInputs(generation),
         addsCreationPrompt: !recipeHasHolders,
+        // All but the creator's own: a remix's references from its original, and the files of the
+        // recipe the run remixed, which the copy takes only where they came through that recipe and
+        // are still the creator's to read (remix plan, phase 1b; `planGenerationReferenceCopies`).
         ...(inputOrigins
-          ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin === 'others' ? [rowId] : []))) }
+          ? { onlyRowIds: new Set([...inputOrigins.byRowId].flatMap(([rowId, origin]) => (origin !== 'own' ? [rowId] : []))) }
           : {}),
         mediaKeys: ['media-1'],
         dependencies: {

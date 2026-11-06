@@ -163,6 +163,7 @@ const TELEMETRY = 'telemetry or counters: no stored paths, and too large to read
 const NO_TEXT = 'no text or JSON column';
 const UPLOAD_BOOKKEEPING = 'upload bookkeeping: read for the exclusions, never a reference';
 const RECIPE_SWEEP = "the recipe-copy sweep's own bookkeeping: its folders are excluded";
+const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names only copies, whose folders are excluded';
 
 /** Every other table, and why it is not read for references. */
 export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
@@ -203,6 +204,7 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   provider_circuit_breakers: TELEMETRY,
   provider_dependency_events: TELEMETRY,
   provider_fetch_attempt_counters: TELEMETRY,
+  recipe_copy_sources: RECIPE_COPY_SOURCES,
   recipe_file_sweep_cursors: RECIPE_SWEEP,
   recipe_file_sweep_deletions: RECIPE_SWEEP,
   recipe_import_uses: RECIPE_SWEEP,

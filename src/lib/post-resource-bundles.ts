@@ -1065,7 +1065,10 @@ function isSafePostResourceUrl(value: string | null | undefined): boolean {
 }
 
 function isSafePostResourceStoragePath(value: string | null | undefined, ownerUserId?: string | null): boolean {
-  if (!value) return false;
+  // Stored as written, but read decoded: an encoded spelling of a file would escape the rules keyed on
+  // its path, a passed-on copy's withholding among them (#708's max review). No file a save writes is
+  // named with a percent sign.
+  if (!value || value.includes('%')) return false;
   return parseCanonicalStorageObjectPath(value, {
     ...(ownerUserId ? { ownerUserId } : {}),
   }) !== null;

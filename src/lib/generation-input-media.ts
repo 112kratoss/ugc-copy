@@ -4,6 +4,7 @@ import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import {
   isRecipeFileInput,
   isRecipeFileSource,
+  passesOnRecipeFile,
   RECIPE_FILE_SOURCE_KIND,
   recipeFileCopyOf,
 } from '@/lib/generation-input-origin';
@@ -100,14 +101,24 @@ export interface GenerationInputMediaItem {
  * `ownerIds` is the publisher's linked set (`resolveLinkedAccountIds`). The
  * copy reads nothing else, so the composers offer nothing else
  * (`recipeCopyable` on the owner's library read).
+ *
+ * The one recipe file that does go in came through the recipe the run remixed
+ * (remix plan, phase 1b; owner, 2026-11-05: a remix's recipe holds what its run
+ * used): its copy sits in `passOnFolder`, that recipe's copies' folder
+ * (`loadRecipePassOnFolders`, `passesOnRecipeFile`). Whether its holder may
+ * still read it is asked apart, where the copy is planned and offered.
  */
 export function isRecipeCopyableInputRow(
   row: Pick<GenerationInputMediaRow, 'user_id' | 'storage_path' | 'metadata'>,
   ownerIds: readonly string[],
+  passOnFolder?: string | null,
 ): boolean {
-  return ownerIds.includes(row.user_id)
-    && !isRecipeFileInput({ metadata: row.metadata, storagePath: row.storage_path }, new Set(ownerIds))
-    && Boolean(getUserOwnedStoredMediaLocation(row.storage_path, row.user_id));
+  if (!ownerIds.includes(row.user_id) || !getUserOwnedStoredMediaLocation(row.storage_path, row.user_id)) {
+    return false;
+  }
+  const input = { metadata: row.metadata, storagePath: row.storage_path };
+  const ids = new Set(ownerIds);
+  return !isRecipeFileInput(input, ids) || passesOnRecipeFile(input, ids, passOnFolder);
 }
 
 /**
@@ -755,6 +766,12 @@ export async function loadGenerationInputMediaMap(params: {
    * it (`recipeCopyable`, `isRecipeCopyableInputRow`). Left out, no item says.
    */
   recipeCopyableFor?: readonly string[];
+  /**
+   * Each run's pass-on folder, by generation id (`loadRecipePassOnFolders`):
+   * the files of the recipe it remixed that its recipe takes, while their
+   * holder may still read them.
+   */
+  recipePassOnFolders?: ReadonlyMap<string, string>;
 }): Promise<Map<string, GenerationInputMediaItem[]>> {
   const generationIds = Array.from(new Set(params.generationIds.filter(Boolean)));
   const inputMap = new Map<string, GenerationInputMediaItem[]>();
@@ -799,15 +816,22 @@ export async function loadGenerationInputMediaMap(params: {
 
       const item = mapInputMediaRow(row, url, trustedStoragePath);
       if (params.recipeCopyableFor) {
-        item.recipeCopyable = isRecipeCopyableInputRow(row, params.recipeCopyableFor);
+        item.recipeCopyable = isRecipeCopyableInputRow(row, params.recipeCopyableFor, params.recipePassOnFolders?.get(row.generation_id));
       }
       return item;
     });
     // A kept input made from a recipe file is linked only while its holder may still read that file
     // (owner, 2026-11-04): a refund, a retracted purchase, or the copy's creation removed or archived.
+    // One its recipe would pass on is offered only while it is linked: the copy asks the same. One with
+    // no link at all, its signing failed, was never asked about, so it is not offered either (#708's
+    // max review); the holder check skips an input with no link.
     const withheld = params.urlMode === 'none'
       ? items
-      : await withholdUnreadableRecipeFileInputsByHolder(params.supabase, preparedRows.map(({ row }) => row.user_id), items);
+      : (await withholdUnreadableRecipeFileInputsByHolder(params.supabase, preparedRows.map(({ row }) => row.user_id), items))
+        .map((item, index) => (item.recipeCopyable && item.url === null
+          && (items[index]!.url !== null || isRecipeFileInput(item, new Set(params.recipeCopyableFor ?? [])))
+          ? { ...item, recipeCopyable: false }
+          : item));
 
     for (const item of withheld) {
       const nextItems = inputMap.get(item.generationId) ?? [];
@@ -1267,6 +1291,12 @@ export function preparedSeedanceAssetIdsFor(
   restoredIds: ReadonlySet<string>,
   /** The run's creator and the guests linked to them, whose own recipe files are their own uploads. */
   creatorIds: ReadonlySet<string>,
+  /**
+   * Restored inputs that take no asset of the creator's, each keeping its place with a null (#708's
+   * max review): a restore pairs assets by position, so one left out moved every later asset onto
+   * the wrong input. A recipe file restored from the recipe's copy is one.
+   */
+  withoutAssetIds: ReadonlySet<string> = new Set(),
 ): ReturnType<typeof readSeedanceAssetCollections> {
   const collections = readSeedanceAssetCollections(value);
   if (!collections) return null;
@@ -1291,7 +1321,7 @@ export function preparedSeedanceAssetIdsFor(
     return asset ? createSeedanceAssetMetadata({ assetId: asset.assetId, assetType: asset.assetType, status: asset.status }) : null;
   };
   const restored = (items: GenerationInputMediaItem[], assets: Array<SeedanceAssetMetadata | null>) => (
-    items.flatMap((item) => (restoredIds.has(item.id) ? [assetOf(item, assets)] : []))
+    items.flatMap((item) => (restoredIds.has(item.id) ? [withoutAssetIds.has(item.id) ? null : assetOf(item, assets)] : []))
   );
   const subset = {
     images: restored(pictures.length > 0 ? pictures : frames, collections.images),

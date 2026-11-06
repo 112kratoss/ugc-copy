@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { recipeCopiesWithheldOver } from './fixtures/recipe-copies-withheld';
 
 const { getLiveDetail, loadMediaItems } = vi.hoisted(() => ({
   getLiveDetail: vi.fn(),
@@ -111,9 +112,17 @@ function adminClient(
     return { data: [], error: null };
   };
   return {
-    rpc: vi.fn(async (name: string) => (name === 'check_backend_rate_limit'
-      ? { data: { allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0 }, error: null }
-      : { data: [projection], error: null })),
+    rpc: vi.fn(async (name: string, args?: { p_paths?: string[] }) => {
+      if (name === 'check_backend_rate_limit') {
+        return { data: { allowed: true, limit: 120, remaining: 119, retryAfterSeconds: 0 }, error: null };
+      }
+      // Which of the bought version's copies are withheld now (`loadWithheldCopies`).
+      if (name === 'recipe_copies_withheld') {
+        const creations = archivedCreations.map((id) => ({ id, archived_at: '2026-11-04T00:00:00.000Z' }));
+        return { data: recipeCopiesWithheldOver(creations)(args?.p_paths ?? []), error: null };
+      }
+      return { data: [projection], error: null };
+    }),
     from: vi.fn((table: string) => {
       let inFilter: unknown[] = [];
       const query = {

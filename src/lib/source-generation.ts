@@ -84,13 +84,15 @@ export async function resolveSourceGenerationId(
     if (callerIsGuest && !(await isOwnOrLinkedAccountId(adminSupabase, userId, data.user_id))) return null;
     if (!(await remixWouldBeAllowed(adminSupabase, userId, data))) {
       // The link also carries the run's remix terms (`record_generation_remix_terms`):
-      // a run that left it would go out free. Someone who paid for this post's
-      // recipe has its prompt in their creator, so when they can no longer remix
-      // it (a block since, the post archived, the recipe taken down) the run
-      // does not start from it rather than start as an ordinary one (owner,
-      // 2026-11-05: paid stays paid). Anyone else's refused remix still starts
-      // as an ordinary run, as before: they never had the prompt.
-      if (await boughtPaidRecipeOf(adminSupabase, userId, sourceGenerationId)) {
+      // a run that left it would go out free. Someone who holds this post's
+      // recipe on paid terms has its prompt in their creator: they paid for it,
+      // or claimed it free and it is paid now (owner, 2026-11-06: "B's recipe
+      // must be paid"). When they can no longer remix it (a block since, the post
+      // archived, the recipe taken down) the run does not start from it rather
+      // than start as an ordinary one (owner, 2026-11-05: paid stays paid).
+      // Anyone else's refused remix still starts as an ordinary run, as before:
+      // they never had the prompt.
+      if (await holdsPaidRecipeOf(adminSupabase, userId, sourceGenerationId)) {
         throw new SourceGenerationValidationError(
           REMIX_SOURCE_NO_LONGER_REMIXABLE,
           409,
@@ -128,9 +130,12 @@ async function remixWouldBeAllowed(
   }
 }
 
-/** Whether the caller, or a guest linked to them, paid for the recipe on the source's post. */
-async function boughtPaidRecipeOf(adminSupabase: SupabaseClient, userId: string, sourceGenerationId: string) {
-  const { data, error } = await adminSupabase.rpc('remix_source_bought_paid', {
+/**
+ * Whether the caller, or a guest linked to them, holds the recipe on the source's post on paid
+ * terms: paid for it, or holds it while it is paid (`remix_source_held_paid`).
+ */
+async function holdsPaidRecipeOf(adminSupabase: SupabaseClient, userId: string, sourceGenerationId: string) {
+  const { data, error } = await adminSupabase.rpc('remix_source_held_paid', {
     p_user_id: userId,
     p_source_generation_id: sourceGenerationId,
   });

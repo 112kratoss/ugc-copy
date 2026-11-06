@@ -2402,7 +2402,7 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
   } as PostResourceItem;
   const plannedReference = { item: referenceItem, source: { bucket: 'generation_inputs', filePath: 'user-1/gen-remix/dojo.png' } };
 
-  async function publish(body: Record<string, unknown>, origins: { byRowId: Map<string, 'own' | 'others'>; hasOwn: boolean }) {
+  async function publish(body: Record<string, unknown>, origins: { byRowId: Map<string, 'own' | 'others' | 'recipe'>; hasOwn: boolean }) {
     const dependencies = {
       ensureDurableGenerationMedia: vi.fn(async ({ generation: mediaGeneration }) => ({
         outputUrl: mediaGeneration.outputUrl,
@@ -2450,6 +2450,20 @@ describe('a recipe that leaves the creator’s own uploads out', () => {
     }));
     expect(dependencies.publishGenerationPostWithResourceBundleAtomically).toHaveBeenCalledWith(expect.objectContaining({
       bundle: expect.objectContaining({ resources: expect.objectContaining({ allowRemix: false }) }),
+    }));
+  });
+
+  // Remix plan, phase 1b: the files of the recipe the run remixed go on with the original's
+  // references; the plan takes only those of that recipe the creator may still read.
+  it('hands the plan the run’s recipe files beside the original’s references, and never the creator’s own', async () => {
+    const { result, dependencies } = await publish(
+      { includeGenerationReferences: true, leaveOutOwnGenerationReferences: true, resourceBundle: recipe(false) },
+      { byRowId: new Map<string, 'own' | 'others' | 'recipe'>([['row-original', 'others'], ['row-recipe', 'recipe'], ['row-own', 'own']]), hasOwn: true },
+    );
+
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    expect(dependencies.planGenerationReferenceCopies).toHaveBeenCalledWith(expect.objectContaining({
+      onlyRowIds: new Set(['row-original', 'row-recipe']),
     }));
   });
 
