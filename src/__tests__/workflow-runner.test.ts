@@ -28,6 +28,7 @@ import {
 } from '@/lib/generation-model-catalog';
 import { buildCodeGenerationModelOperations } from '@/lib/generation-model-runtime';
 import { GenerationServiceError } from '@/lib/generation-service-core';
+import { getVideoCost } from '@/lib/models';
 import { createSeedanceAssetMetadata } from '@/lib/seedance-assets';
 import { ROLLBACK_KLING_3_MOTION_MODES } from './fixtures/production-motion-descriptors';
 
@@ -596,7 +597,7 @@ describe('workflow-runner recovery', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts private template video steps without counting start/end frames as generic references', async () => {
+  it('quotes a private template video step as the frames run it starts, its two frames counted', async () => {
     const prompt = createWorkflowNode('text-input', { x: 0, y: 0 });
     const start = createWorkflowNode('image-input', { x: 0, y: 160 });
     const end = createWorkflowNode('image-input', { x: 0, y: 320 });
@@ -645,10 +646,13 @@ describe('workflow-runner recovery', () => {
       templateContext: { runId: 'run-1', stepId: 'step-1' },
     });
 
+    // Frames, not references: the start sends them as the run's first and last frame.
     expect(quoteGenerationModelMock).toHaveBeenCalledWith(expect.objectContaining({
-      inputCounts: expect.objectContaining({ images: 0 }),
+      settings: expect.objectContaining({ referenceMode: 'frames' }),
+      inputCounts: { images: 2, videos: 0, audios: 0 },
     }));
     expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+      references: [],
       startImageUrl: 'https://signed.example/start.png',
       endImageUrl: 'https://signed.example/end.png',
       persistInputMedia: false,
@@ -985,7 +989,8 @@ describe('workflow-runner recovery', () => {
         }));
       });
 
-      // Pricing and counts stay those of the kind-total quote every canvas step has had.
+      // Pricing and counts stay those of the kind-total quote every canvas step has had; the
+      // references mode it now names is the one the quote read such a step in before.
       it('quotes a step with tracks as it always has: kind totals, the clip’s length, and no slot named', async () => {
         // The code catalog stands in for the step's release.
         const realQuote = (input: GenerationModelQuoteInput) => quoteGenerationModel(
@@ -1011,6 +1016,7 @@ describe('workflow-runner recovery', () => {
             resolution: step.data.resolution,
             fixedLens: step.data.fixedLens,
             isMultiShot: step.data.isMultiShot,
+            referenceMode: 'elements',
           },
           inputCounts: { images: 0, videos: 1, audios: 2 },
           inputMetadata: { referenceVideoDurationsSeconds: [7] },
@@ -1018,6 +1024,9 @@ describe('workflow-runner recovery', () => {
         };
         expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
         expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expectedInput);
+        const settingsBefore = { ...expectedInput.settings };
+        delete settingsBefore.referenceMode;
+        expect(realQuote(expectedInput)).toEqual(realQuote({ ...expectedInput, settings: settingsBefore }));
         expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
           referenceVideoUrls: ['https://cdn.example.com/clip.mp4'],
           referenceAudioUrls: ['https://cdn.example.com/track-1.mp3', 'https://cdn.example.com/track-2.mp3'],
@@ -1251,6 +1260,206 @@ describe('workflow-runner recovery', () => {
         expect(sent).toEqual(['characterImage:image:https://cdn.example.com/character.png', 'videoReferences:video:https://cdn.example.com/reference.mp4']);
         expect(planned).toEqual(['characterImage', 'videoReferences']);
       });
+    });
+  });
+
+  // A step's quote is its credit hold, so it is asked about the run the step starts: the
+  // mode the video start routes it to and the pictures it sends, its frames among them.
+  // Vidu Q4 and Hailuo 2.3 have no run without a picture, and a quote that counted no
+  // frames refused every step of theirs that had a start frame alone.
+  describe('a video step’s frames', () => {
+    const codeCatalog = buildGenerationModelCatalog({ platform: 'web', schemaVersion: 3 });
+    const codeOperations = new Map(buildCodeGenerationModelOperations().map((entry) => [entry.modelId, entry]));
+    const quoteAsCreated = quoteGenerationModelMock.getMockImplementation()!;
+    // The release loader and the probe go back to what they were before each test here, not
+    // to their first implementations: a later test leans on the release an earlier one left.
+    let loadBefore = loadGenerationModelOperationByRevisionMock.getMockImplementation();
+    let probeBefore = probeMediaDurationSecondsMock.getMockImplementation();
+
+    beforeEach(() => {
+      loadBefore = loadGenerationModelOperationByRevisionMock.getMockImplementation();
+      probeBefore = probeMediaDurationSecondsMock.getMockImplementation();
+      // The code catalog stands in for the step's release, for its quote and for the limits
+      // a step that sends tracks measures them against.
+      quoteGenerationModelMock.mockImplementation((input) => quoteGenerationModel(
+        { ...(input as GenerationModelQuoteInput), catalogRevision: null },
+        { catalog: codeCatalog, operations: codeOperations },
+      ));
+      loadGenerationModelOperationByRevisionMock.mockImplementation(async (...args: unknown[]) => {
+        const { modelId } = args[0] as { modelId: string };
+        return { catalog: codeCatalog, operation: codeOperations.get(modelId), releaseId: null };
+      });
+    });
+
+    afterEach(() => {
+      quoteGenerationModelMock.mockImplementation(quoteAsCreated);
+      if (loadBefore) loadGenerationModelOperationByRevisionMock.mockImplementation(loadBefore);
+      if (probeBefore) probeMediaDurationSecondsMock.mockImplementation(probeBefore);
+    });
+
+    /** A video step given a prompt and an uploaded picture on each frame input named. */
+    async function runFrameStep(model: VideoGenerateNodeData['model'], frames: Array<'start-frame' | 'end-frame'>) {
+      const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
+      const pictures = frames.map((_, index) => createWorkflowNode('image-input', { x: 40, y: 200 + index * 160 }));
+      const step = createWorkflowNode('video-generate', { x: 320, y: 40 });
+      const graph = normalizeWorkflowGraph({
+        nodes: [
+          { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'The camera pushes in slowly.' } },
+          ...pictures.map((picture, index) => ({
+            ...picture,
+            data: { ...(picture.data as ImageInputNodeData), imageUrl: `https://cdn.example.com/frame-${index + 1}.png` },
+          })),
+          { ...step, data: { ...(step.data as VideoGenerateNodeData), model } },
+        ],
+        edges: [
+          createCanvasEdge(prompt.id, 'text', step.id, 'prompt'),
+          ...pictures.map((picture, index) => createCanvasEdge(picture.id, 'image', step.id, frames[index])),
+        ],
+      });
+      const node = graph.nodes.find((candidate) => candidate.id === step.id)!;
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      return {
+        data: node.data as VideoGenerateNodeData,
+        run: () => executeWorkflowRunnableNode({
+          supabase: {} as never,
+          userId: 'user-1',
+          graph,
+          node,
+          catalogRevision: 'catalog-rev-1',
+          clientRequestKeyHash: 'e'.repeat(64),
+        }),
+      };
+    }
+
+    it.each(['vidu-q4', 'hailuo-2.3'] as const)('quotes a %s step given a start frame alone, and holds the price of its run', async (model) => {
+      const step = await runFrameStep(model, ['start-frame']);
+
+      await expect(step.run()).resolves.toMatchObject({ status: 'processing', generation_id: 'gen-video' });
+      // The video start's own price for the run it sends: a picture, so an image-to-video run.
+      const price = getVideoCost(model, {
+        mode: step.data.mode,
+        sound: step.data.sound,
+        durationSeconds: step.data.duration,
+        resolution: step.data.resolution,
+        hasReferenceImage: true,
+      });
+      expect(price).toBeGreaterThan(0);
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        model,
+        startImageUrl: 'https://cdn.example.com/frame-1.png',
+        endImageUrl: null,
+        references: [],
+        referenceMode: 'frames',
+        quotedCostCredits: price,
+      }));
+    });
+
+    type StepHandle = 'start-frame' | 'end-frame' | 'image-reference' | 'reference-audio';
+
+    /** A video step given a prompt and an uploaded file on each input named. */
+    async function runStepWith(model: VideoGenerateNodeData['model'], handles: StepHandle[]) {
+      probeMediaDurationSecondsMock.mockImplementation(async () => 5);
+      const prompt = createWorkflowNode('text-input', { x: 40, y: 40 });
+      const sources = handles.map((handle, index) => {
+        const position = { x: 40, y: 200 + index * 160 };
+        if (handle === 'reference-audio') {
+          const track = createWorkflowNode('audio-input', position);
+          return { ...track, data: { ...(track.data as AudioInputNodeData), audioUrl: `https://cdn.example.com/track-${index + 1}.mp3` } };
+        }
+        const picture = createWorkflowNode('image-input', position);
+        return { ...picture, data: { ...(picture.data as ImageInputNodeData), imageUrl: `https://cdn.example.com/picture-${index + 1}.png` } };
+      });
+      const step = createWorkflowNode('video-generate', { x: 320, y: 40 });
+      const graph = normalizeWorkflowGraph({
+        nodes: [
+          { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'The camera pushes in slowly.' } },
+          ...sources,
+          { ...step, data: { ...(step.data as VideoGenerateNodeData), model } },
+        ],
+        edges: [
+          createCanvasEdge(prompt.id, 'text', step.id, 'prompt'),
+          ...sources.map((source, index) => createCanvasEdge(
+            source.id,
+            handles[index] === 'reference-audio' ? 'audio' : 'image',
+            step.id,
+            handles[index]!,
+          )),
+        ],
+      });
+      const node = graph.nodes.find((candidate) => candidate.id === step.id)!;
+      const { executeWorkflowRunnableNode } = await import('@/lib/workflow-runner');
+      return {
+        graph,
+        node,
+        run: () => executeWorkflowRunnableNode({
+          supabase: {} as never,
+          userId: 'user-1',
+          graph,
+          node,
+          catalogRevision: 'catalog-rev-1',
+          clientRequestKeyHash: 'f'.repeat(64),
+        }),
+      };
+    }
+
+    // Wan 2.7 and Grok Imagine Video 1.5 keep a start frame beside their references only in a
+    // references run: started in the frames mode, such a step was refused on every run.
+    it('starts a Wan 2.7 step with a start frame and reference pictures in the references mode it was quoted in', async () => {
+      const step = await runStepWith('wan-2.7', ['start-frame', 'image-reference', 'image-reference']);
+
+      await expect(step.run()).resolves.toMatchObject({ status: 'processing' });
+      expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+        settings: expect.objectContaining({ referenceMode: 'elements' }),
+        inputCounts: { images: 2, videos: 0, audios: 0 },
+      }));
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        model: 'wan-2.7',
+        startImageUrl: 'https://cdn.example.com/picture-1.png',
+        references: [expect.anything(), expect.anything()],
+        referenceMode: 'elements',
+      }));
+    });
+
+    // The canvas and a template price a step from its connections; the runner holds the quote of
+    // what it sends. The two must read one step alike, or a price shown is not the price held.
+    it.each([
+      { model: 'vidu-q4', handles: ['start-frame'] },
+      { model: 'kling-3.0-video', handles: ['start-frame', 'end-frame'] },
+      { model: 'wan-2.7', handles: ['start-frame', 'image-reference', 'image-reference'] },
+      { model: 'gemini-omni-video', handles: Array<StepHandle>(5).fill('image-reference') },
+      { model: 'gemini-omni-video', handles: ['image-reference', 'reference-audio'] },
+    ] as Array<{ model: VideoGenerateNodeData['model']; handles: StepHandle[] }>)(
+      'reads a $model step with $handles as the canvas prices it',
+      async ({ model, handles }) => {
+        const step = await runStepWith(model, handles);
+        const { planWorkflowStepPrice } = await import('@/app/create-workflow/useWorkflowRunPrices');
+        const plan = planWorkflowStepPrice(step.graph, step.node);
+        if (plan.kind !== 'quote') throw new Error(`the canvas has no price: ${plan.kind}`);
+
+        // A step its quote refuses is refused here too; the quote is asked either way.
+        await step.run().catch(() => undefined);
+
+        expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
+        const held = quoteGenerationModelMock.mock.calls[0][0] as GenerationModelQuoteInput;
+        expect({ mode: held.settings?.referenceMode, counts: held.inputCounts })
+          .toEqual({ mode: plan.input.settings?.referenceMode, counts: plan.input.inputCounts });
+      },
+    );
+
+    it('asks the quote about the frames the start sends, in the mode it sends them', async () => {
+      const step = await runFrameStep('kling-3.0-video', ['start-frame', 'end-frame']);
+
+      await step.run();
+
+      expect(quoteGenerationModelMock).toHaveBeenCalledTimes(1);
+      expect(quoteGenerationModelMock.mock.calls[0][0]).toEqual(expect.objectContaining({
+        settings: expect.objectContaining({ referenceMode: 'frames' }),
+        inputCounts: { images: 2, videos: 0, audios: 0 },
+      }));
+      expect(startVideoGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
+        startImageUrl: 'https://cdn.example.com/frame-1.png',
+        endImageUrl: 'https://cdn.example.com/frame-2.png',
+      }));
     });
   });
 

@@ -6,6 +6,7 @@ import { quoteGenerationModel } from '@/lib/generation-model-catalog';
 import {
   createTemplateVersionSnapshotGraph,
   getIncomingEdges,
+  getResolvedWorkflowImageReferences,
   inspectWorkflowNodeCapabilities,
   normalizeNodeData,
   normalizeWorkflowGraph,
@@ -18,6 +19,7 @@ import {
   type WorkflowCanvasGraph,
   type WorkflowCanvasNode,
 } from '@/lib/workflow-canvas';
+import { workflowVideoStepInputsFromGraph, workflowVideoStepQuoteFacts } from '@/lib/workflow-video-step-quote';
 import {
   MediaTemplateError,
   type CompiledTemplateGraph,
@@ -31,18 +33,13 @@ export function createTemplateSnapshotHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function inputCountsForNode(graph: WorkflowCanvasGraph, node: WorkflowCanvasNode) {
-  let images = 0;
-  let videos = 0;
-  let audios = 0;
-  for (const edge of getIncomingEdges(graph, node.id)) {
-    // Start/end frames have their own model capabilities and must not be
-    // counted as generic references when quoting a video model.
-    if (edge.targetHandle === 'image-reference') images += 1;
-    if (edge.targetHandle === 'reference-video') videos += 1;
-    if (edge.targetHandle === 'reference-audio') audios += 1;
-  }
-  return { images, videos, audios };
+/**
+ * An image step's inputs, read as the runner sends them and the canvas prices them: its
+ * connected reference pictures and its own older elements. An image step takes no clips or
+ * tracks.
+ */
+function imageStepInputCounts(graph: WorkflowCanvasGraph, node: WorkflowCanvasNode) {
+  return { images: getResolvedWorkflowImageReferences(graph, node.id).length, videos: 0, audios: 0 };
 }
 
 function quoteNode(
@@ -50,7 +47,6 @@ function quoteNode(
   node: WorkflowCanvasNode,
   catalogRevision: string | null,
 ): number {
-  const inputCounts = inputCountsForNode(graph, node);
   if (node.type === 'image-generate') {
     const data = normalizeNodeData('image-generate', node.data) as ImageGenerateNodeData;
     return quoteGenerationModel({
@@ -62,7 +58,7 @@ function quoteNode(
         outputFormat: data.outputFormat,
         googleSearch: data.googleSearch,
       },
-      inputCounts,
+      inputCounts: imageStepInputCounts(graph, node),
       catalogRevision,
     }).costCredits;
   }
@@ -71,6 +67,11 @@ function quoteNode(
     const duration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration)), 0)
       : data.duration;
+    // Priced as the runner quotes the step's run: in the mode its start routes it to, with
+    // its frames counted when it is a frames run (workflow-video-step-quote).
+    const { referenceMode, inputCounts } = workflowVideoStepQuoteFacts(
+      workflowVideoStepInputsFromGraph(graph, node, data),
+    );
     return quoteGenerationModel({
       kind: 'video',
       modelId: data.model,
@@ -82,6 +83,7 @@ function quoteNode(
         resolution: data.resolution,
         fixedLens: data.fixedLens,
         isMultiShot: data.isMultiShot,
+        referenceMode,
       },
       inputCounts,
       catalogRevision,

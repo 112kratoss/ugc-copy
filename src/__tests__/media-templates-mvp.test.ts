@@ -22,12 +22,15 @@ import {
   getTemplateStepDefinitions,
   validateAndCompileTemplateGraph,
 } from '@/lib/template-graph-compiler';
+import { getVideoCost } from '@/lib/models';
 import {
   createCanvasEdge,
   createTemplateReadyStarterGraph,
   createWorkflowNode,
   normalizeWorkflowGraph,
   type ImageInputNodeData,
+  type TextInputNodeData,
+  type VideoGenerateNodeData,
 } from '@/lib/workflow-canvas';
 
 function compileStarter() {
@@ -161,6 +164,60 @@ describe('graph media template MVP', () => {
     });
     expect(planned.map((step) => step.nodeId)).not.toContain(extra.id);
     expect(planned).toHaveLength(getTemplateStepDefinitions(starter.compiled!).length);
+  });
+
+  // A step's price is the hold its run takes, which the runner quotes from the pictures the
+  // start sends, frames included. Vidu Q4 and Hailuo 2.3 have no run without a picture, so a
+  // step given a start frame alone was refused its price and the template could not publish.
+  it.each(['vidu-q4', 'hailuo-2.3'] as const)('prices a %s step given a start frame alone', (model) => {
+    const photo = createWorkflowNode('image-input', { x: 0, y: 0 });
+    const prompt = createWorkflowNode('text-input', { x: 0, y: 220 });
+    const video = createWorkflowNode('video-generate', { x: 420, y: 100 });
+    const graph = normalizeWorkflowGraph({
+      nodes: [
+        {
+          ...photo,
+          data: {
+            ...(photo.data as ImageInputNodeData),
+            title: 'Photo',
+            templateInput: {
+              mode: 'consumer',
+              key: 'photo',
+              label: 'Your photo',
+              guidance: 'A clear, well-lit photo.',
+              required: true,
+            },
+          },
+        },
+        { ...prompt, data: { ...(prompt.data as TextInputNodeData), text: 'The camera pushes in slowly.' } },
+        { ...video, data: { ...(video.data as VideoGenerateNodeData), model } },
+      ],
+      edges: [
+        createCanvasEdge(prompt.id, 'text', video.id, 'prompt'),
+        createCanvasEdge(photo.id, 'image', video.id, 'start-frame'),
+      ],
+    });
+    const step = graph.nodes.find((node) => node.id === video.id)!.data as VideoGenerateNodeData;
+
+    const result = validateAndCompileTemplateGraph({
+      graph,
+      outputNodeId: video.id,
+      canvasRevision: 1,
+      catalogRevision: null,
+    });
+
+    expect(result.validation.issues).toEqual([]);
+    // The video start's own price for the run: a picture, so an image-to-video run.
+    const price = getVideoCost(model, {
+      mode: step.mode,
+      sound: step.sound,
+      durationSeconds: step.duration,
+      resolution: step.resolution,
+      hasReferenceImage: true,
+    });
+    expect(price).toBeGreaterThan(0);
+    expect(result.compiled?.nodeCosts).toEqual({ [video.id]: price });
+    expect(result.validation.estimatedTotalCredits).toBe(price);
   });
 
   it('normalizes public slots and stable listing slugs', () => {

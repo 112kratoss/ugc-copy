@@ -2144,7 +2144,12 @@ export interface WorkflowNodeDependencyState {
   message: string | null;
 }
 
-function countIncomingEdgesForTargetHandle(
+/**
+ * How many of a node's incoming edges land on the handle, each read as the node reads
+ * it: a `reference-image` edge is a video step's start frame unless the model is in the
+ * Seedance 2 family, which takes it as a reference picture.
+ */
+export function countIncomingEdgesForTargetHandle(
   graph: WorkflowCanvasGraph,
   nodeId: string,
   targetHandle: WorkflowHandleType

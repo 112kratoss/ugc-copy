@@ -12,7 +12,7 @@ import {
   startVoiceoverGeneration,
   type TemplateGenerationContext,
 } from '@/lib/generation-services';
-import { getVideoReferenceSupport, IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
+import { IMAGE_MODELS, MOTION_MODELS, VIDEO_MODELS } from '@/lib/client-generation-models';
 import { createRecipeCopyReads, type RecipeCopyReads } from '@/lib/generation-reference-copy-import';
 import { resolveRecipeFileReference } from '@/lib/recipe-file-reference';
 import {
@@ -89,6 +89,7 @@ import {
 import { generationModelConditionMatches, type GenerationModelOperationalConfig } from '@/lib/generation-model-runtime';
 import { referenceMediaLengthViolation } from '@/lib/provider-input-limits';
 import { probeMediaDurationSeconds } from '@/lib/video-rendition';
+import { workflowVideoStepQuoteFacts, workflowVideoStepSendsReferenceMedia } from '@/lib/workflow-video-step-quote';
 import { catalogMotionInputSlots } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 export interface WorkflowRunExecutionResult {
@@ -1084,8 +1085,8 @@ export async function executeWorkflowRunnableNode(params: {
     // The canvas connects clips and tracks to every model whose limits take
     // them (getVideoReferenceSupport) and the start sends them as links, so a
     // step sends each one it is shown with. Kling's clips go as named elements.
-    const referenceSupport = getVideoReferenceSupport(data.model);
-    const sendsReferenceMedia = !isKlingVideoModel && referenceSupport.videos + referenceSupport.audios > 0;
+    // The canvas price and a template's price decide with the same rule.
+    const sendsReferenceMedia = workflowVideoStepSendsReferenceMedia(data.model);
     const elementPayload = isSeedance2Family
       ? getSeedanceReferenceCollections(graph, node.id)
       : {
@@ -1155,6 +1156,17 @@ export async function executeWorkflowRunnableNode(params: {
     const quotedDuration = data.isMultiShot
       ? data.multiPrompts.reduce((total, shot) => total + Math.max(1, Math.round(shot.duration || 0)), 0)
       : data.duration;
+    // The run the start below sends, in the mode it routes it to, its frames counted when it
+    // is a frames run: the quote is the hold, and the canvas and a template's price read the
+    // step the same way (workflow-video-step-quote).
+    const { referenceMode, inputCounts } = workflowVideoStepQuoteFacts({
+      referencePictures: elementPayload.references.length,
+      startFrame: Boolean(inputs.startFrameUrl),
+      endFrame: Boolean(inputs.endFrameUrl),
+      referenceClips: elementPayload.referenceVideoUrls.length,
+      referenceTracks: elementPayload.referenceAudioUrls.length,
+      videoElements: klingVideoElements.length,
+    });
     const quoteInput: Omit<GenerationModelQuoteInput, 'catalogRevision'> = {
       kind: 'video',
       modelId: data.model,
@@ -1166,14 +1178,9 @@ export async function executeWorkflowRunnableNode(params: {
         resolution: data.resolution,
         fixedLens: data.fixedLens,
         isMultiShot: data.isMultiShot,
+        referenceMode,
       },
-      inputCounts: {
-        // Start/end frames are validated by their dedicated capabilities and
-        // are not generic image references for catalog limits or pricing.
-        images: elementPayload.references.length,
-        videos: elementPayload.referenceVideoUrls.length + klingVideoElements.length,
-        audios: elementPayload.referenceAudioUrls.length,
-      },
+      inputCounts,
       ...(referenceVideoDurationsSeconds.length > 0 ? { inputMetadata: { referenceVideoDurationsSeconds } } : {}),
     };
     const quote = await quoteRunnableNode(quoteInput);
@@ -1198,6 +1205,9 @@ export async function executeWorkflowRunnableNode(params: {
       klingVideoElements,
       startImageUrl: inputs.startFrameUrl,
       endImageUrl: inputs.endFrameUrl,
+      // The mode the step was quoted in: Wan 2.7 and Grok Imagine Video 1.5 keep a start
+      // frame beside their references only in a references run.
+      referenceMode,
       mode: data.mode,
       aspectRatio: data.aspectRatio,
       sound: data.sound,
