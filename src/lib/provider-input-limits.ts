@@ -212,22 +212,19 @@ export function providerReferenceTrackFormats(modelId: string): readonly string[
 }
 
 /**
- * Whether a track the model is sent must be converted first: its link's path ends in an
- * extension the provider does not take as written, or in none. A prepared provider asset goes
- * by its id, which is no link, and a model that sends no track converts nothing.
+ * The extension of a track link's path, as written ('' when it has none), or null when the
+ * track is no link the provider fetches: a prepared provider asset goes by its id.
  */
-export function referenceTrackNeedsConversion(modelId: string, link: string): boolean {
-  const formats = providerReferenceTrackFormats(modelId);
-  if (!formats) return false;
+export function referenceTrackLinkExtension(link: string): string | null {
   let pathname: string;
   try {
     const url = new URL(link);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
     pathname = url.pathname;
   } catch {
-    return false;
+    return null;
   }
   const fileName = pathname.slice(pathname.lastIndexOf('/') + 1);
   const dot = fileName.lastIndexOf('.');
-  return dot < 0 || !formats.includes(fileName.slice(dot + 1));
+  return dot < 0 ? '' : fileName.slice(dot + 1);
 }

@@ -149,9 +149,10 @@ import {
 } from '@/lib/generation-model-catalog';
 import {
   providerPromptViolation,
+  providerReferenceTrackFormats,
   referenceMediaLengthViolation,
   referenceMediaRole,
-  referenceTrackNeedsConversion,
+  referenceTrackLinkExtension,
   type ProviderPromptRun,
   type ReferenceMediaLength,
 } from '@/lib/provider-input-limits';
@@ -966,13 +967,16 @@ function referenceTrackNotPreparedError(modelName: string): GenerationServiceErr
 }
 
 /**
- * Converts each track of a built Kie request that is in a format the model's provider refuses
- * (provider-input-limits) to a WAV: after every check the start makes and before the hold, since
- * Kie refused such a track only after the hold and the run failed after Generate. A prepared
- * Seedance asset goes by its id, which is no link. A track that cannot be converted refuses the
- * start in words that name it, which the creators and a canvas step say as they are; a failure
- * that is not the track's is worth retrying. The copies are stored once the run is held
- * (`storeProviderTrackCopies`), so a start refused at the hold keeps nothing.
+ * Converts each track of a built Kie request that the model's provider would refuse to a WAV:
+ * one whose link's extension it does not take (provider-input-limits), or whose bytes are not
+ * the container that extension names (AAC behind `.mp3`), which only reading the track tells
+ * (`convertReferenceTrackIfRefused`). After every check the start makes and before the hold,
+ * since Kie refused such a track only after the hold and the run failed after Generate. A
+ * prepared Seedance asset goes by its id, which is no link, and is never read. A track that
+ * cannot be converted refuses the start in words that name it, which the creators and a canvas
+ * step say as they are; a failure that is not the track's is worth retrying. The copies are
+ * stored once the run is held (`storeProviderTrackCopies`), so a start refused at the hold keeps
+ * nothing.
  */
 async function convertRefusedProviderTracks(params: {
   supabase: SupabaseClient;
@@ -983,22 +987,26 @@ async function convertRefusedProviderTracks(params: {
   /** What the creator calls each of the run's tracks, in order. */
   labels: ReadonlyArray<string | null | undefined>;
 }): Promise<ConvertedProviderTrack[]> {
-  const refused = providerTrackLinks(params.input).filter(({ link }) => referenceTrackNeedsConversion(params.model, link));
-  if (refused.length === 0) return [];
+  const formats = providerReferenceTrackFormats(params.model);
+  if (!formats) return [];
+  const fetched = providerTrackLinks(params.input).filter(({ link }) => referenceTrackLinkExtension(link) !== null);
+  if (fetched.length === 0) return [];
 
-  // Loaded only by a run that converts a track: it reaches ffmpeg, and sharp beside it.
-  const { convertReferenceTrack, ReferenceTrackUnreadableError } = await import('@/lib/reference-track-conversion');
-  const copies = new Map<string, ConvertedProviderTrack>();
+  // Loaded only by a run that sends its provider a track link, each of which is read: it
+  // reaches ffmpeg, and sharp beside it.
+  const { convertReferenceTrackIfRefused, ReferenceTrackUnreadableError } = await import('@/lib/reference-track-conversion');
+  // Each link is read once: null for a track that goes as it is.
+  const copies = new Map<string, ConvertedProviderTrack | null>();
   // One at a time, as the media sweeps run ffmpeg (media-preview-repair): concurrent encoders
   // contend for the function's one or two cores.
-  for (const { link, place, track } of refused) {
-    const converted = copies.get(link);
-    if (converted) {
-      converted.places.push(place);
+  for (const { link, place, track } of fetched) {
+    if (copies.has(link)) {
+      copies.get(link)?.places.push(place);
       continue;
     }
     try {
-      copies.set(link, { wav: await convertReferenceTrack({ supabase: params.supabase, userId: params.userId, link }), places: [place] });
+      const wav = await convertReferenceTrackIfRefused({ supabase: params.supabase, userId: params.userId, link, formats });
+      copies.set(link, wav ? { wav, places: [place] } : null);
     } catch (error) {
       if (!(error instanceof ReferenceTrackUnreadableError)) {
         logBackendError('reference_track_conversion_failed', { modelId: params.model, error });
@@ -1015,7 +1023,7 @@ async function convertRefusedProviderTracks(params: {
       );
     }
   }
-  return [...copies.values()];
+  return [...copies.values()].filter((copy): copy is ConvertedProviderTrack => copy !== null);
 }
 
 /**
@@ -3812,9 +3820,9 @@ export async function startVideoGeneration(params: {
       );
     }
 
-    // A track in a format the provider refuses is converted now, every check passed and nothing
-    // held yet; its copy is stored once the run is. The recipe and the kept inputs stay the
-    // creator's own tracks.
+    // A track the provider would refuse, by its extension or its bytes, is converted now, every
+    // check passed and nothing held yet; its copy is stored once the run is. The recipe and the
+    // kept inputs stay the creator's own tracks.
     const providerInput = isRecord(body.input) ? body.input : {};
     const trackCopies = await convertRefusedProviderTracks({
       supabase: creditSupabase,

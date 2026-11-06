@@ -56,6 +56,8 @@ describe('ffmpeg serverless configuration', () => {
       '/api/cron/backend-jobs',
       '/api/cron/media-preview-repair',
       '/api/posts',
+      // Prepare converts an audio track Seedance would not take (reference-track-conversion).
+      '/api/seedance-assets',
       '/api/showcase/publish',
     ]) {
       expect(nextConfig).toContain(`"${route}": [...FFMPEG_TRACE, ...SHARP_TRACE]`);

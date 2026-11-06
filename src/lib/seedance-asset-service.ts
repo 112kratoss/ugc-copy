@@ -17,6 +17,7 @@ import {
   PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS,
 } from '@/lib/provider-fetch';
 import { reuseRecipeFile as defaultReuseRecipeFile } from '@/lib/generation-reference-copy-import';
+import { providerReferenceTrackFormats } from '@/lib/provider-input-limits';
 import { recipeCopyOfSource } from '@/lib/recipe-file-paths';
 import { recordPreparedSeedanceAsset } from '@/lib/seedance-asset-provenance';
 import { resolveOwnedStoredMediaUrl as defaultResolveStoredMediaUrl } from '@/lib/server-helpers';
@@ -51,6 +52,69 @@ export type SeedanceAssetRouteResult =
     };
 
 type ResolveStoredMediaUrl = typeof defaultResolveStoredMediaUrl;
+
+/**
+ * The models that run prepared assets (`isSeedance2VideoModelId`). An asset is prepared before
+ * the run names its model and runs on any of them, so its track is held to the formats every one
+ * takes: WAV and MP3 today (2.5 also takes AAC and Ogg, the others do not).
+ */
+const SEEDANCE_ASSET_MODEL_IDS = ['seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'seedance-2-5'] as const;
+
+function seedanceAssetTrackFormats(): readonly string[] {
+  const [first = [], ...rest] = SEEDANCE_ASSET_MODEL_IDS.map((modelId) => providerReferenceTrackFormats(modelId) ?? []);
+  return first.filter((format) => rest.every((formats) => formats.includes(format)));
+}
+
+/**
+ * The link Kie is sent for an audio asset: the creator's own when Seedance takes it as it is,
+ * judged by its extension and its bytes, or else a WAV copy kept for Kie to fetch
+ * (`storeSeedanceAssetTrack`). Answers a refusal instead when the track cannot be converted.
+ */
+async function seedanceAssetTrackLink({
+  adminSupabase,
+  resolvedUrl,
+  userId,
+}: {
+  adminSupabase: SupabaseClient;
+  resolvedUrl: string;
+  userId: string;
+}): Promise<{ ok: true; url: string } | { ok: false; result: SeedanceAssetRouteResult }> {
+  const {
+    convertReferenceTrackIfRefused,
+    ReferenceTrackUnreadableError,
+    storeSeedanceAssetTrack,
+  } = await import('@/lib/reference-track-conversion');
+  try {
+    const wav = await convertReferenceTrackIfRefused({
+      supabase: adminSupabase,
+      userId,
+      link: resolvedUrl,
+      formats: seedanceAssetTrackFormats(),
+    });
+    if (!wav) return { ok: true, url: resolvedUrl };
+    return { ok: true, url: await storeSeedanceAssetTrack({ supabase: adminSupabase, userId, wav }) };
+  } catch (error) {
+    if (error instanceof ReferenceTrackUnreadableError) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          status: 400,
+          body: {
+            error: error.tooLong
+              ? 'This track is too long for Seedance. Use a shorter track.'
+              : 'We could not convert this track for Seedance. Add it again as an MP3 or WAV file.',
+          },
+        },
+      };
+    }
+    logBackendError('seedance_asset_track_conversion_failed', { error });
+    return {
+      ok: false,
+      result: { ok: false, status: 500, body: { error: 'We could not prepare your audio track. Try again in a moment.' } },
+    };
+  }
+}
 
 function extractAssetPayloadValue<T = unknown>(value: unknown): T | null {
   if (value === null || value === undefined) {
@@ -194,6 +258,12 @@ function createProviderPayload({
   };
 }
 
+/**
+ * Seedance's Prepare: makes a Kie asset of one of the creator's own files (or their import of a
+ * recipe file their unlock still covers), records which file it runs, and answers its id. An
+ * audio track Seedance would not take is converted to WAV first and Kie is sent that copy
+ * (`seedanceAssetTrackLink`); a track that cannot be converted is refused before Kie is asked.
+ */
 export async function createSeedanceAssetForRoute({
   adminSupabase,
   apiKey,
@@ -265,6 +335,16 @@ export async function createSeedanceAssetForRoute({
         body: { error: 'Asset media must belong to the authenticated user.' },
       };
     }
+    // Seedance 2 takes WAV and MP3 tracks only: a track it would not take (an iPhone `.m4a`, AAC,
+    // Ogg, WebM, or a file whose extension lies about its bytes) is converted first, as the video
+    // start converts one. Kie is sent the copy; the creator keeps their own file's link, and the
+    // asset is recorded as that file.
+    let providerUrl = resolvedUrl;
+    if (normalizedAssetType === 'Audio') {
+      const track = await seedanceAssetTrackLink({ adminSupabase, resolvedUrl, userId });
+      if (!track.ok) return track.result;
+      providerUrl = track.url;
+    }
     const response = await fetchWithProviderTimeout('https://api.kie.ai/api/v1/playground/createAsset', {
       method: 'POST',
       headers: {
@@ -273,7 +353,7 @@ export async function createSeedanceAssetForRoute({
       },
       body: JSON.stringify({
         assetType: normalizedAssetType,
-        url: resolvedUrl,
+        url: providerUrl,
       }),
     }, PROVIDER_INTERACTIVE_REQUEST_TIMEOUT_MS, fetcher, 'KIE Seedance asset creation');
 
