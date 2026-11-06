@@ -1,11 +1,13 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { ShieldBan, ShieldCheck } from 'lucide-react';
 import clsx from 'clsx';
 
 import { Surface, Text } from '@/components/DesignSystem';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 
 /**
  * Mirrors ADMIN_SANCTION_DURATIONS on the server. Fixed choices rather than a
@@ -34,8 +36,15 @@ export function UserSanctionForm({
 }) {
   const router = useRouter();
   const fieldId = useId();
-  const [duration, setDuration] = useState('24');
+  const [duration, setDuration] = useState(DURATIONS[0].value);
   const [reason, setReason] = useState('');
+  // The page is drawn on the server, and a duration chosen or a reason typed before its script
+  // ran never reached this state: Suspend stayed disabled, and a duration changed early was sent
+  // as 24 hours (2026-11-06). A suspended account draws no duration, and the hook then finds none.
+  const durationRef = useRef<HTMLSelectElement>(null);
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
+  useFieldValueBeforeHydration(durationRef, { drawn: DURATIONS[0].value, onValue: setDuration });
+  useTypedBeforeHydration(reasonRef, { drawn: '', enabled: true, onTyped: setReason });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
@@ -137,6 +146,7 @@ export function UserSanctionForm({
               <Text as="span" variant="caption" className="uppercase tracking-[0.08em]">Duration</Text>
             </label>
             <select
+              ref={durationRef}
               id={`${fieldId}-duration`}
               value={duration}
               onChange={(event) => setDuration(event.target.value)}
@@ -156,6 +166,7 @@ export function UserSanctionForm({
             </Text>
           </label>
           <textarea
+            ref={reasonRef}
             id={`${fieldId}-reason`}
             value={reason}
             onChange={(event) => setReason(event.target.value)}

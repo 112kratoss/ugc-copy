@@ -1,12 +1,13 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { Coins } from 'lucide-react';
 import clsx from 'clsx';
 
 import { Surface, Text } from '@/components/DesignSystem';
 import { planAdminCreditAdjustmentDeltas } from '@/lib/admin-credit-adjustment-policy';
+import { useFieldValueBeforeHydration } from '@/lib/use-field-value-before-hydration';
 
 type Intent = 'goodwill' | 'refund' | 'clawback';
 
@@ -60,6 +61,13 @@ export function CreditAdjustmentForm({
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // The page is drawn on the server, and an amount or reason typed before its script ran never
+  // reached this state: the fields showed them while Review stayed disabled (2026-11-06). Nothing
+  // is confirming yet as the page mounts, so the hand-over need not reset it.
+  const amountRef = useRef<HTMLInputElement>(null);
+  const reasonRef = useRef<HTMLInputElement>(null);
+  useFieldValueBeforeHydration(amountRef, { drawn: '', onValue: setAmount });
+  useFieldValueBeforeHydration(reasonRef, { drawn: '', onValue: setReason });
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -190,6 +198,7 @@ export function CreditAdjustmentForm({
               <Text as="span" variant="label">Amount</Text>
             </label>
             <input
+              ref={amountRef}
               id={`${fieldId}-amount`}
               type="number"
               inputMode="numeric"
@@ -208,6 +217,7 @@ export function CreditAdjustmentForm({
               <Text as="span" variant="label">Reason</Text>
             </label>
             <input
+              ref={reasonRef}
               id={`${fieldId}-reason`}
               type="text"
               value={reason}

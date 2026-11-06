@@ -1,12 +1,13 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Check, ShieldOff } from 'lucide-react';
 import clsx from 'clsx';
 
 import { Text } from '@/components/DesignSystem';
 import type { SubjectReportTargetType } from '@/lib/moderation-ops';
+import { useTypedBeforeHydration } from '@/lib/use-typed-before-hydration';
 
 type PostAction = 'take_down' | 'dismiss';
 type SubjectAction = 'resolve' | 'dismiss';
@@ -106,6 +107,10 @@ function useDecision(endpoint: string) {
 export function PostReportActions({ reportId }: { reportId: string }) {
   const { pending, error, result, submit } = useDecision('/api/admin/moderation/post-reports');
   const [note, setNote] = useState('');
+  // The queue is drawn on the server, and a note typed before the page's script ran never reached
+  // this state: the box showed it while the actions stayed disabled (2026-11-06).
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  useTypedBeforeHydration(noteRef, { drawn: '', enabled: true, onTyped: setNote });
 
   function run(action: PostAction) {
     if (!note.trim()) return;
@@ -118,6 +123,7 @@ export function PostReportActions({ reportId }: { reportId: string }) {
         <Text as="span" variant="label">Resolution note (required)</Text>
       </label>
       <textarea
+        ref={noteRef}
         id={`note-${reportId}`}
         value={note}
         onChange={(event) => setNote(event.target.value)}
@@ -178,6 +184,9 @@ export function SubjectReportActions({
 }) {
   const { pending, error, result, submit } = useDecision('/api/admin/moderation/subject-reports');
   const [note, setNote] = useState('');
+  // A note typed before the page's script ran, as in PostReportActions.
+  const noteRef = useRef<HTMLTextAreaElement>(null);
+  useTypedBeforeHydration(noteRef, { drawn: '', enabled: true, onTyped: setNote });
   // Resolving a template report is itself the take-down, so the control says
   // so rather than asking for a manual action that does not exist.
   const isTemplate = targetType === 'template';
@@ -199,6 +208,7 @@ export function SubjectReportActions({
         <Text as="span" variant="label">Resolution note (required)</Text>
       </label>
       <textarea
+        ref={noteRef}
         id={`subject-note-${reportId}`}
         value={note}
         onChange={(event) => setNote(event.target.value)}
