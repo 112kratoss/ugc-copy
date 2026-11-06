@@ -2437,6 +2437,40 @@ describe('CreateImageClient generation pipeline', () => {
       expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@lead walks past @prop at dusk');
     });
 
+    // 2026-11-06 review: words the creator typed while it loaded stay, and so their own picture keeps the
+    // handle those words name. A default-named original took it (the first holder kept it, and the
+    // original's come first), so the creator's words pointed at the original's picture, and Generate
+    // spent the credits on it.
+    it('keeps the handle the creator’s words name on their own picture, beside a default-named original', async () => {
+      const original = {
+        id: 'remix-1', displayName: 'Element 1', handle: '@element_1', url: 'https://signed.example.com/theirs.png',
+        storagePath: 'generation_inputs/owner-1/gen-1/00.png', sourceGenerationId: 'gen-1',
+      };
+      let answer: () => void = () => undefined;
+      const fetchMock = installFetch({
+        starts: [startedReply()],
+        remixBundle: { ...HARBOUR_REMIX, generation: { ...HARBOUR_REMIX.generation, prompt: '@element_1 walks the harbour at dusk' }, inputs: { image: { elements: [original] } } },
+        remixHold: new Promise<void>((resolve) => { answer = resolve; }),
+      });
+      const view = render(remixPage());
+      await waitFor(() => expect(remixReads(fetchMock)).toHaveLength(1));
+
+      attachPicture(view.container, 'selfie');
+      expect(await screen.findByAltText('Element 1')).toBeInTheDocument();
+      typePrompt('@element_1 rows across the harbour at noon');
+      await act(async () => answer());
+
+      await waitFor(() => expect(screen.getAllByAltText('Element 1')).toHaveLength(2));
+      expect(screen.getByPlaceholderText(PROMPT_PLACEHOLDER)).toHaveValue('@element_1 rows across the harbour at noon');
+      const pricedImages = () => (quoteStandIn.lastRequest() as { inputCounts?: { images: number } } | null | undefined)?.inputCounts?.images;
+      await waitFor(() => expect(pricedImages()).toBe(2));
+      pressGenerate();
+      await waitFor(() => expect(startCalls(fetchMock)).toHaveLength(1));
+      const sent = startBody(startCalls(fetchMock)[0]).inputs;
+      expect(sent.find((input) => input.handle === '@element_1')).toMatchObject({ storagePath: 'uploads/user-1/selfie.png' });
+      expect(sent.find((input) => input.storagePath === original.storagePath)?.handle).not.toBe('@element_1');
+    });
+
     it('brings back as many of the original’s pictures as the model has room for beside the creator’s, and says so', async () => {
       const ten = Array.from({ length: 10 }, (_, index) => ({
         id: `remix-${index + 1}`,

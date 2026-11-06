@@ -217,6 +217,7 @@ import {
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
+    remixReferencesBesideOwn,
     replacePromptHandles,
     type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -2644,6 +2645,10 @@ function VideoCreator({
                 setPrompt(bundle.generation.prompt);
             }
 
+            // The creator's words stay where they typed while it loaded (their shots on a multi-shot form,
+            // else their prompt): their own references then keep the handles those words name.
+            const ownWordsStay = formSettings.isMultiShot ? multiPrompts.some((shot) => shot.prompt.trim()) : edits.prompt;
+
             // What the creator added of each kind stays: a remix form holds nothing of anyone else's
             // before its answer. The original's fill the room the form's model leaves beside it, and
             // the notice says how many came back.
@@ -2704,10 +2709,12 @@ function VideoCreator({
                     storagePath: image.storagePath ?? null,
                 }] : []),
             }));
-            setKlingSubjects(assignSubjectHandles([
-                ...besideOwn(originalSubjects, ownSubjects, formAffordances.subjects.maxNamed, 'named subject'),
-                ...ownSubjects,
-            ]));
+            setKlingSubjects(assignSubjectHandles(remixReferencesBesideOwn<KlingSubjectDraft>(
+                besideOwn(originalSubjects, ownSubjects, formAffordances.subjects.maxNamed, 'named subject'),
+                ownSubjects,
+                ownWordsStay,
+                assignSubjectHandles,
+            )));
 
             // How many references the restored model takes: its catalog descriptor
             // once the catalog has reached the registry, the fallback tables before,
@@ -2727,10 +2734,11 @@ function VideoCreator({
                 VIDEO_MODELS[originalModelId].displayName,
             );
             if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
-            const commitPictures = (originalPictures: VideoElementSeed[]) => commitElements(hydrateVideoElements([
-                ...besideOwn(originalPictures, ownPictures, formAffordances.elements.maxTotal, 'reference image'),
-                ...ownPictures,
-            ]));
+            const commitPictures = (originalPictures: VideoElementSeed[]) => commitElements(hydrateVideoElements(remixReferencesBesideOwn<VideoElementSeed>(
+                besideOwn(originalPictures, ownPictures, formAffordances.elements.maxTotal, 'reference image'),
+                ownPictures,
+                ownWordsStay,
+            )));
             const commitClips = (originalClips: SeedanceMediaReferenceSeed[]) => commitReferenceVideos([
                 ...hydrateSeedanceMediaReferences('Video', besideOwn(originalClips, ownClips, formAffordances.referenceVideos.max, 'reference clip')),
                 ...ownClips,
@@ -2912,10 +2920,11 @@ function VideoCreator({
                     promptRef.current,
                     ...(Array.isArray(settings?.multiPrompts) ? settings.multiPrompts : []).map((shot) => shot?.prompt),
                 ]);
-                commitKlingVideoElements(hydrateKlingVideoElements([
-                    ...besideOwn(klingVideoSeeds, ownKlingClips, KLING_VIDEO_ELEMENT_LIMIT, 'video element'),
-                    ...ownKlingClips,
-                ], restoredMentions));
+                commitKlingVideoElements(hydrateKlingVideoElements(remixReferencesBesideOwn<KlingVideoElementSeed>(
+                    besideOwn(klingVideoSeeds, ownKlingClips, KLING_VIDEO_ELEMENT_LIMIT, 'video element'),
+                    ownKlingClips,
+                    ownWordsStay,
+                ), restoredMentions));
             }
             for (const warning of roomWarnings) {
                 setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, warning));

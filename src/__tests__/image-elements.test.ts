@@ -11,6 +11,7 @@ import {
   getMentionQueryAtCaret,
   insertHandleIntoPrompt,
   isValidElementHandle,
+  remixReferencesBesideOwn,
   replacePromptHandles,
 } from '@/lib/image-elements';
 
@@ -453,5 +454,34 @@ describe('getMentionQueryAtCaret', () => {
 
     expect(insertHandleIntoPrompt(typed, '@hero_creator', 18, 18, mention))
       .toEqual({ prompt: 'A scene with @hero_creator walking', caretIndex: 26 });
+  });
+});
+
+// A remix's references beside the creator's own (2026-11-06 review): the card shows the original's
+// first; the handles go to whoever's words the form keeps.
+describe('remixReferencesBesideOwn', () => {
+  const theirs = { id: 'theirs', displayName: 'Element 1', handle: '@element_1' };
+  const mine = { id: 'mine', displayName: 'Element 1', handle: '@element_1' };
+
+  it('keeps the creator’s handle where their words stay, and names the original’s past it', () => {
+    const beside = assignElementHandles(remixReferencesBesideOwn([theirs], [mine], true));
+    expect(beside.map((item) => item.id)).toEqual(['theirs', 'mine']);
+    expect(beside.find((item) => item.id === 'mine')?.handle).toBe('@element_1');
+    expect(beside.find((item) => item.id === 'theirs')?.handle).not.toBe('@element_1');
+  });
+
+  it('keeps the original’s handle where its words come back', () => {
+    const beside = assignElementHandles(remixReferencesBesideOwn([theirs], [mine], false));
+    expect(beside.map((item) => [item.id, item.handle])).toEqual([['theirs', '@element_1'], ['mine', expect.not.stringMatching(/^@element_1$/)]]);
+  });
+
+  it('names subjects by the subjects’ own rule', () => {
+    const beside = remixReferencesBesideOwn(
+      [{ displayName: null, handle: '@subject_1' }],
+      [{ displayName: null, handle: '@subject_1' }],
+      true,
+      assignSubjectHandles,
+    );
+    expect(handles(assignSubjectHandles(beside))).toEqual(['@subject_2', '@subject_1']);
   });
 });

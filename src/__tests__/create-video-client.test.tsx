@@ -1456,6 +1456,33 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.queryByAltText('Umbrella')).toBeNull();
       });
 
+      // 2026-11-06 review: words the creator typed while it loaded stay, and so their own picture keeps
+      // the handle those words name. A default-named original took it, and the creator's words then
+      // pointed at the original's picture.
+      it('keeps the handle the creator’s words name on their own picture, beside a default-named original', async () => {
+        modelCatalogState.summaries = [{ id: 'seedance-1.5-pro', kind: 'video', displayName: 'Seedance 1.5 Pro', description: 'Test element-capable video model' }];
+        const original = { ...LEAD, displayName: 'Element 1', handle: '@element_1' };
+        let release: () => void = () => undefined;
+        const bundle = remixOf('seedance-1.5-pro', { elements: [original] });
+        stubRemix({ ...bundle, generation: { ...bundle.generation, prompt: '@element_1 walks the harbour at dusk' } }, { hold: new Promise<void>((resolve) => { release = resolve; }) });
+        const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+        chooseModel(view.container, 'Seedance 1.5 Pro');
+        await chooseInputs('References');
+        await attachPictures(view.container, [picture('own')]);
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/), { target: { value: '@element_1 rows across the harbour at noon' } });
+        await act(async () => release());
+
+        await waitFor(() => expect(screen.getAllByAltText('Element 1')).toHaveLength(2));
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedRun().prompt).toBe('@element_1 rows across the harbour at noon');
+        const sent = postedRun().inputs as Array<Record<string, unknown>>;
+        expect(sent.find((input) => input.handle === '@element_1')).toMatchObject({ url: 'https://signed.example.com/uploads/user-1/own.png' });
+        expect(sent.find((input) => input.storagePath === original.storagePath)?.handle).not.toBe('@element_1');
+      });
+
       const START = {
         kind: 'image' as const, label: 'Start frame', storagePath: `${KEPT}/00-start_frame.png`, sourceGenerationId: 'gen-1',
         url: `https://signed.example.com/${KEPT}/00-start_frame.png`,

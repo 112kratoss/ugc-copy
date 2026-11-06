@@ -137,6 +137,7 @@ import {
     findUnknownPromptHandles,
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
+    remixReferencesBesideOwn,
     replacePromptHandles,
     type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -811,7 +812,8 @@ function ImageCreator({
             if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
 
             if (restoredSeeds.length > 0) {
-                commitElements(hydrateImageElements([...restoredSeeds, ...ownPictures]));
+                // Where their words stay, their own pictures keep the handles those words name.
+                commitElements(hydrateImageElements(remixReferencesBesideOwn<ImageElementSeed>(restoredSeeds, ownPictures, edits.prompt)));
             }
         },
     });
