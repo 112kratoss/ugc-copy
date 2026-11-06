@@ -1955,6 +1955,7 @@ export function useMediaZoomStage({
  * (`MediaZoomCarriedPicture`), not here over the whole page.
  */
 export function MediaZoomStage({
+  groundClear = false,
   stage,
   screen,
   children,
@@ -1962,6 +1963,8 @@ export function MediaZoomStage({
   stage: MediaZoomStageValue;
   screen: ZoomSize;
   children: ReactNode;
+  /** iOS: clear behind the reel once a close into a tile has begun (`groundClear` in app/viewer.tsx). */
+  groundClear?: boolean;
 }) {
   return (
     // While the reel is not interactive the stage takes every touch itself, so
@@ -1978,12 +1981,12 @@ export function MediaZoomStage({
     >
       <Animated.View
         pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, stage.groundStyle]}
+        style={[StyleSheet.absoluteFill, { backgroundColor: groundClear ? 'transparent' : '#000' }, stage.groundStyle]}
       />
       <Animated.View
         collapsable={false}
         animatedProps={stage.clipProps}
-        style={[{ position: 'absolute', overflow: 'hidden', backgroundColor: '#000' }, stage.clipStyle]}
+        style={[{ position: 'absolute', overflow: 'hidden', backgroundColor: groundClear ? 'transparent' : '#000' }, stage.clipStyle]}
       >
         <Animated.View
           collapsable={false}

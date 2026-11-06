@@ -106,6 +106,8 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
+// The reel asks it whether iOS 26's glass is there (its navigation bar's Back).
+vi.mock('expo-glass-effect', () => ({ isLiquidGlassAvailable: () => false }));
 
 // The reel's own route, whose key its forced sign-in return is given under.
 const reelRoute = vi.hoisted(() => ({ key: 'viewer-route', name: 'viewer' }));

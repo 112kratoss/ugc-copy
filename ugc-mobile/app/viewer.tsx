@@ -231,6 +231,13 @@ const NEIGHBOUR_PLAYERS_DELAY_MS = 400;
 const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlaybackHandoff> | null>(null);
 /** The reel has started to go off screen (lib/use-screen-leaving.ts): its videos are silent from then on. */
 const ViewerLeavingContext = createContext(false);
+/** The reel's black. */
+const REEL_GROUND = '#000';
+/**
+ * What the reel draws behind its media: its black, or clear once a close into
+ * a tile has begun on iOS (`groundClear` in the screen).
+ */
+const ViewerGroundContext = createContext<string>(REEL_GROUND);
 
 /**
  * The reel stays dark in both schemes: it is an immersive media surface, and
@@ -645,6 +652,19 @@ function ImmersivePreviewViewer() {
     playerFor: playbackHandoff.playerFor,
     onExit: leaveViewer,
   });
+  // iOS: UIKit's zoom shrinks the whole reel into the tile, not just the
+  // picture. The black around a picture that does not fill the screen shrank
+  // with it as a dark panel, cut to the tile's shape only at the end (owner,
+  // 2026-11-07: "a shadow appearing around the pic and that then shrinks"). So
+  // a reel zoomed out of a tile is clear behind its media once it has landed,
+  // and the picture alone shrinks back into the tile, as Photos does. At rest
+  // that looks the same: the navigator's backdrop behind the reel is black
+  // (lib/reel-backdrop.ts), and at the start of a close the veil over the
+  // screen beneath is still black. Cleared only as a close began, the first
+  // frame of the shrink still carried the panel. A reel pushed without a zoom
+  // fades in over the screen beneath, so it keeps its black.
+  const groundClear = Platform.OS === 'ios' && Boolean(nativeZoomSourceId) && (zoom.landed || leaving);
+  const ground = groundClear ? 'transparent' : REEL_GROUND;
   // A zoom into the reel lands in steps, each a frame or two of the UI thread
   // rather than one long hold — traced on an S24, doing it all at once held one
   // 59 ms frame, two frames of a video still playing in the landed picture: the
@@ -1499,12 +1519,13 @@ function ImmersivePreviewViewer() {
   return (
     <ViewerPlaybackContext.Provider value={playbackHandoff}>
     <ViewerLeavingContext.Provider value={leaving}>
+    <ViewerGroundContext.Provider value={ground}>
     <ViewerActionsMenuProvider callbacksFor={actionCallbacksFor}>
     {/* The reel is drawn inside a window that grows out of the tapped tile and
         shrinks back into it, so opening a post reads as that post getting
         bigger rather than as another screen arriving. */}
-    <MediaZoomStage stage={zoom} screen={{ width, height }}>
-    <View style={{ flex: 1, backgroundColor: '#000' }}>
+    <MediaZoomStage stage={zoom} screen={{ width, height }} groundClear={groundClear}>
+    <View style={{ flex: 1, backgroundColor: ground }}>
       {/* iOS: a reel pushed out of a tile keeps the navigator's default
           animation, which is how react-native-screens leaves the pop to UIKit's
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
@@ -1522,6 +1543,8 @@ function ImmersivePreviewViewer() {
             mute: hasImmersiveAudibleMedia(activeItem) ? { muted: audioMuted, onPress: toggleMuteFromBar } : null,
           }) : null),
           ...(Platform.OS === 'ios' && !nativeZoomSourceId && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
+          // The screen's own ground, the outermost of the reel's (see `groundClear`).
+          ...(groundClear ? { contentStyle: { backgroundColor: 'transparent' } } : null),
         }}
       />
       <FlatList
@@ -1673,7 +1696,7 @@ function ImmersivePreviewViewer() {
         )}
         scrollEnabled={!overlayOpenItemId && !isHorizontalScrolling}
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: '#000' }}
+        style={{ flex: 1, backgroundColor: ground }}
         // Neighbouring slides mount on the UI thread, and a reel that is still
         // growing out of a tile cannot afford that thread: they wait for it to
         // land and for the slide's own rail to be drawn (`neighbourSlidesAllowed`),
@@ -1798,6 +1821,7 @@ function ImmersivePreviewViewer() {
     </View>
     </MediaZoomStage>
     </ViewerActionsMenuProvider>
+    </ViewerGroundContext.Provider>
     </ViewerLeavingContext.Provider>
     </ViewerPlaybackContext.Provider>
   );
@@ -2056,6 +2080,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   width: number;
   onHorizontalScrollToggle?: (scrolling: boolean) => void;
 }) {
+  const ground = useContext(ViewerGroundContext);
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
   // The chrome and the pages take closures over this item; they are made once
   // per item here, so the memoised slide hands its children stable functions.
@@ -2316,7 +2341,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   }
 
   return (
-    <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
+    <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: ground }}>
       <Animated.FlatList
         ref={horizontalRef}
         data={pages}
@@ -2377,7 +2402,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         )}
         scrollEnabled={active}
         showsHorizontalScrollIndicator={false}
-        style={{ width, height, backgroundColor: '#000' }}
+        style={{ width, height, backgroundColor: ground }}
         windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
       />
       {renderChrome()}
@@ -2595,8 +2620,9 @@ function MediaSlidePage({
   topInset: number;
   width: number;
 }) {
+  const ground = useContext(ViewerGroundContext);
   return (
-    <View style={{ width, height, backgroundColor: '#000' }}>
+    <View style={{ width, height, backgroundColor: ground }}>
       {page.type === 'details' ? (
         <PostDetailsPage
           active={active}
@@ -2757,7 +2783,11 @@ function ImmersiveMedia({
     showcaseMediaZoomPreview(mediaItem)?.url,
     mediaItem.mediaKind === 'image' ? resolveShowcaseViewerImageSource(mediaItem, failedDisplayUrl).url : null,
   );
-  const letterboxBands = mediaAspectRatio ? (
+  // Black bands around a picture that does not fill the page: none once the
+  // reel's ground has gone clear for a close, so the picture shrinks alone.
+  const ground = useContext(ViewerGroundContext);
+  const groundClear = ground !== REEL_GROUND;
+  const letterboxBands = mediaAspectRatio && !groundClear ? (
     <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} />
   ) : null;
 
@@ -2773,7 +2803,7 @@ function ImmersiveMedia({
 
   if (mediaItem.mediaKind === 'video') {
     return (
-      <View style={{ width, height, backgroundColor: mediaColors.mediaGround }}>
+      <View style={{ width, height, backgroundColor: ground }}>
         {zoomTargetRect}
         {/* This image stays mounted while players enter and leave the prepared
             range. Even a fast swipe that outruns decoding keeps a sharp poster
@@ -2783,6 +2813,8 @@ function ImmersiveMedia({
             kind="image"
             onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
+            backgroundColor={ground}
+            imageBackdrop={groundClear ? 'none' : 'solid'}
             imageBackdropContent={letterboxBands}
             cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
             thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
@@ -2830,6 +2862,8 @@ function ImmersiveMedia({
           kind="image"
           onImageDisplay={reportSlidePainted}
           url={image.url}
+          backgroundColor={ground}
+          imageBackdrop={groundClear ? 'none' : 'solid'}
           imageBackdropContent={letterboxBands}
           cacheKey={image.cacheKey}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
