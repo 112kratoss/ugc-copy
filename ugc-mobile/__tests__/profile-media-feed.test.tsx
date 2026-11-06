@@ -87,6 +87,7 @@ const listState = vi.hoisted(() => {
       pointerEvents?: string;
       accessibilityElementsHidden?: boolean;
       onLoad?: () => void;
+      onContentSizeChange?: (width: number, height: number) => void;
       onScrollBeginDrag?: () => void;
       onEndReached?: () => void;
     },
@@ -790,6 +791,25 @@ describe('opening the feed on a card', () => {
 
     await listLaidOut();
     expect(openingProgress()).toHaveLength(0);
+  });
+
+  // Review of PR #712, finding 8: the list's size report is shared with the
+  // guard that keeps a covered list within its content, and must still be a
+  // chance for the landing to try again.
+  it('asks the landing again when the list reports a new size while it seeks the card', async () => {
+    openOn('gen-3');
+    const visible = listState.handle.computeVisibleIndices;
+    // The first scroll ends short of the card.
+    listState.handle.computeVisibleIndices = () => ({ startIndex: 0, endIndex: 1 });
+    try {
+      await listLaidOut();
+      expect(listState.scrolledTo).toEqual([2]);
+
+      await act(async () => { listState.props!.onContentSizeChange!(362, 2600); });
+      expect(listState.scrolledTo).toEqual([2, 2]);
+    } finally {
+      listState.handle.computeVisibleIndices = visible;
+    }
   });
 
   it('says a post is opening on the Posts feed', () => {
