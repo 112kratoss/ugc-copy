@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   catalogRunInputFacts,
@@ -2039,17 +2039,23 @@ describe('a remix’s motion run', () => {
     }));
     // None of these inputs is a recipe file: no kept row of the remixer's marks one (#678's check,
     // which reads those rows as the service).
-    vi.doMock('@/lib/generation-reference-copy-import', async (importOriginal) => ({
-      ...await importOriginal<typeof import('@/lib/generation-reference-copy-import')>(),
+    vi.doMock('@/lib/generation-reference-copy-import', () => ({
+      createRecipeCopyReads: () => new Map(),
       reuseRecipeFile: vi.fn(async () => null),
+      findHeldRecipeCopy: vi.fn(async () => null),
     }));
   });
 
   afterEach(() => {
-    vi.doUnmock('@/lib/generation-input-media-import');
-    vi.doUnmock('@/lib/generation-reference-copy-import');
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  });
+
+  // Once, after the last test: an unmock queued after each test raced the next test's mock of the same
+  // module, and about half the runs had a test's start bound to the module itself.
+  afterAll(() => {
+    vi.doUnmock('@/lib/generation-input-media-import');
+    vi.doUnmock('@/lib/generation-reference-copy-import');
   });
 
   /**

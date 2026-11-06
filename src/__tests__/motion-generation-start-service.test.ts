@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createRemixSourceRows } from '@/__tests__/fixtures/remix-source-rows';
 import { buildGenerationModelCatalog, CatalogError } from '@/lib/generation-model-catalog';
@@ -436,6 +436,20 @@ describe('startMotionGenerationForRoute', () => {
   describe('a picture the start cannot send', () => {
     const STORAGE = 'https://project.supabase.co/storage/v1/object/sign';
 
+    // Neither picture is a recipe file: no kept row of the caller's marks one (#678's check, which
+    // reads those rows as the service). Mocked for the describe and unmocked once after it: an unmock
+    // queued after each case can race the next case's mock of the same module.
+    beforeEach(() => {
+      vi.doMock('@/lib/generation-reference-copy-import', () => ({
+        createRecipeCopyReads: () => new Map(),
+        reuseRecipeFile: vi.fn(async () => null),
+        findHeldRecipeCopy: vi.fn(async () => null),
+      }));
+    });
+    afterAll(() => {
+      vi.doUnmock('@/lib/generation-reference-copy-import');
+    });
+
     it.each([
       {
         label: 'another creator’s upload that no remix shares',
@@ -455,14 +469,7 @@ describe('startMotionGenerationForRoute', () => {
       vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
       vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code');
       vi.stubGlobal('fetch', vi.fn());
-      // Neither picture is a recipe file: no kept row of the caller's marks one (#678's check, which
-      // reads those rows as the service).
-      vi.doMock('@/lib/generation-reference-copy-import', async (importOriginal) => ({
-        ...await importOriginal<typeof import('@/lib/generation-reference-copy-import')>(),
-        reuseRecipeFile: vi.fn(async () => null),
-      }));
       onTestFinished(() => {
-        vi.doUnmock('@/lib/generation-reference-copy-import');
         vi.unstubAllEnvs();
         vi.unstubAllGlobals();
       });
