@@ -394,8 +394,10 @@ describe('startMotionGenerationForRoute', () => {
   });
 
   // The motion start resolves both its inputs, as the video start does, so this route resolves the
-  // clip only, to measure it, and hands the start that link beside the clip as sent. It handed the
-  // start the links as resolved, which the start kept a remix's inputs by: as the remixer's copies.
+  // clip only, to measure it, and hands the start that link beside the clip as sent, with the reads
+  // of each unlock that measuring made (#678: a character restored from a recipe's copy shares them).
+  // It handed the start the links as resolved, which the start kept a remix's inputs by: as the
+  // remixer's copies.
   it('resolves only the clip, to measure it, and hands the start the inputs as sent with that link', async () => {
     startMotionGenerationMock.mockResolvedValueOnce({
       predictionId: 'task-motion-8',
@@ -415,7 +417,7 @@ describe('startMotionGenerationForRoute', () => {
     });
 
     expect(resolveGenerationMediaSourceMock.mock.calls).toEqual([
-      [userClient.client, 'https://signed.example.com/reference.mp4', 'user-1'],
+      [userClient.client, 'https://signed.example.com/reference.mp4', 'user-1', { recipeCopyReads: expect.any(Map) }],
     ]);
     expect(probeMediaDurationSecondsMock).toHaveBeenCalledWith(resolvedReference);
     expect(startMotionGenerationMock).toHaveBeenCalledWith(expect.objectContaining({
@@ -424,6 +426,8 @@ describe('startMotionGenerationForRoute', () => {
       referenceVideoUrl: 'https://signed.example.com/reference.mp4',
       resolvedMediaSources: new Map([['https://signed.example.com/reference.mp4', resolvedReference]]),
     }));
+    const [{ recipeCopyReads }] = startMotionGenerationMock.mock.calls[0] as [{ recipeCopyReads?: unknown }];
+    expect(recipeCopyReads).toBe((resolveGenerationMediaSourceMock.mock.calls[0] as [unknown, string, string, { recipeCopyReads?: unknown }])[3].recipeCopyReads);
   });
 
   // The picture is held to what the clip is held to when it is measured: a link the provider can
@@ -451,7 +455,14 @@ describe('startMotionGenerationForRoute', () => {
       vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.co');
       vi.stubEnv('GENERATION_MODEL_CATALOG_SOURCE', 'code');
       vi.stubGlobal('fetch', vi.fn());
+      // Neither picture is a recipe file: no kept row of the caller's marks one (#678's check, which
+      // reads those rows as the service).
+      vi.doMock('@/lib/generation-reference-copy-import', async (importOriginal) => ({
+        ...await importOriginal<typeof import('@/lib/generation-reference-copy-import')>(),
+        reuseRecipeFile: vi.fn(async () => null),
+      }));
       onTestFinished(() => {
+        vi.doUnmock('@/lib/generation-reference-copy-import');
         vi.unstubAllEnvs();
         vi.unstubAllGlobals();
       });

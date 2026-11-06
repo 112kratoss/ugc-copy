@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   createMobileNotificationHistory,
@@ -367,7 +367,14 @@ function createSupabaseMock(initialRows: GenerationRow[] = [], options: Supabase
       }
 
       if (table === 'generation_input_media') {
+        // The caller's kept inputs a start reads to carry a recipe file's mark on to the inputs it keeps
+        // (`findRecipeFileCandidates`): none is marked here.
+        const keptInputsRead = {
+          eq: vi.fn(() => keptInputsRead),
+          in: vi.fn(async () => ({ data: [], error: null })),
+        };
         return {
+          select: vi.fn(() => keptInputsRead),
           async insert(record: Record<string, unknown>) {
             inputMediaRows.push(record);
             return { data: null, error: null };
@@ -4362,6 +4369,103 @@ describe('generation services', () => {
       message: 'We could not prepare the shared reference media. Please try again.',
     });
     expect(rpcCalls).toEqual([]);
+  });
+
+  // #678 (2026-11-03 review): a remix of a bought recipe restores the character from the seller's
+  // copy, whose link went to the provider as given, with no unlock read again, and was refused there
+  // once its hour ran out. The start imports it before the provider is sent it, with the reads of each
+  // unlock its caller made measuring the clip, which the start's own resolves share.
+  it('imports a motion run’s character restored from a recipe’s copy, with its caller’s unlock reads, before the provider is sent it', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const requests: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-motion-recipe-copy-1' } }) } as Response;
+    });
+    const copy = 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png?token=hour-old';
+    const imported = 'https://project.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-character-image-row-1.png?token=fresh';
+    recipeCopyImportMocks.reuseRecipeFile.mockClear();
+    recipeCopyImportMocks.reuseRecipeFile.mockImplementation((async ({ source }: { source: string }) => (source === copy
+      ? { outcome: 'imported', storagePath: 'generation_inputs/user-1/recipe-imports/seller-9/gen-0/00-character-image-row-1.png', signedUrl: imported }
+      : null)) as never);
+    onTestFinished(() => {
+      recipeCopyImportMocks.reuseRecipeFile.mockReset().mockResolvedValue(null);
+    });
+    const callerReads = new Map();
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-2.6',
+      characterImageUrl: copy,
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      duration: 5,
+      referenceVideoSeconds: 5,
+      recipeCopyReads: callerReads as never,
+    });
+
+    const pictureCall = recipeCopyImportMocks.reuseRecipeFile.mock.calls.find(([params]) => params.source === copy);
+    expect(pictureCall?.[0]).toMatchObject({ source: copy, viewerUserId: 'user-1' });
+    expect(pictureCall?.[0].reads).toBe(callerReads);
+    expect(rpcCalls.map((call) => call.fn)).toContain('start_generation');
+    expect(requests[0]).toMatchObject({ input: { input_urls: [imported] } });
+  });
+
+  // #678: a recipe file the caller's unlock no longer covers (a refund, a copy on no record) is refused
+  // before anything is held, in the picture's words; one the service could not prepare keeps its own,
+  // as a retry may get past it. The canvas runner refused it before quoting the step; it is refused by
+  // the start now, as every motion start's picture is, after the quote and before the hold.
+  it.each([
+    ['not-eligible', 422, 'The character picture could not be used. Add your own character picture, then retry.'],
+    ['failed', 500, 'We could not prepare a file from a recipe you unlocked. Please try again.'],
+  ] as const)('refuses a motion picture from a recipe file the unlock answers %s for, before anything is held', async (outcome, status, message) => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    recipeCopyImportMocks.reuseRecipeFile.mockImplementationOnce((async () => ({ outcome })) as never);
+    const { supabase, rpcCalls } = createSupabaseMock();
+
+    await expect(startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-2.6',
+      characterImageUrl: 'https://project.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png?token=t',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      duration: 5,
+      referenceVideoSeconds: 5,
+    })).rejects.toMatchObject({ status, message });
+    expect(rpcCalls).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // #678: a picture that names no stored file (a link elsewhere) goes to the provider as it was given.
+  it('sends a motion picture that names no stored file as it was given', async () => {
+    const { startMotionGeneration } = await import('@/lib/generation-services');
+    const requests: Array<Record<string, unknown>> = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (typeof init?.body === 'string') requests.push(JSON.parse(init.body));
+      return { ok: true, json: async () => ({ code: 200, data: { taskId: 'task-motion-elsewhere-1' } }) } as Response;
+    });
+    const { supabase } = createSupabaseMock();
+
+    await startMotionGeneration({
+      supabase,
+      creditSupabase: supabase,
+      userId: 'user-1',
+      prompt: '',
+      model: 'kling-2.6',
+      characterImageUrl: 'https://cdn.example.com/character.png',
+      referenceVideoUrl: 'https://cdn.example.com/reference.mp4',
+      duration: 5,
+      referenceVideoSeconds: 5,
+    });
+
+    expect(requests[0]).toMatchObject({
+      input: { input_urls: ['https://cdn.example.com/character.png'], video_urls: ['https://cdn.example.com/reference.mp4'] },
+    });
   });
 
   it('sends Kling single-shot generations with named video elements', async () => {

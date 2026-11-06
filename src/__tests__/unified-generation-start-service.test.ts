@@ -812,44 +812,24 @@ describe('reference lengths a caller reports', () => {
 
   // A remix of a bought recipe restores the character from the seller's copy, whose link went to the
   // provider as given: no unlock read again, and refused there once its hour ran out (2026-11-03 review).
-  it('imports a motion run’s character restored from a recipe’s copy before the provider is sent it', async () => {
+  // The motion start resolves its picture, importing such a copy (generation-services.test.ts), so the
+  // run hands it the copy as sent, with the reads of each unlock its clip was measured under. A kept
+  // input of the caller's own, and a link that names no stored file, are the start's to resolve too.
+  it('hands the motion start a character restored from a recipe’s copy as sent, with the unlock reads its clip was measured under', async () => {
     const copy = 'https://media.example.supabase.co/storage/v1/object/sign/post_resource_files/seller-9/generation-references/gen-0/00-character-image-row-1.png?token=hour-old';
-    const imported = 'https://media.example.supabase.co/storage/v1/object/sign/generation_inputs/user-1/recipe-imports/gen-0/00-character-image-row-1.png?token=fresh';
     const body = motionBody(5, 5);
     body.inputs[0] = { ...body.inputs[0], url: copy };
-    const run = start({
-      body,
-      measuredSeconds: 5,
-      operation: MOTION_OPERATION,
-      quote: durationPricedQuote,
-      resolveLink: (url) => (url === copy ? imported : url),
-    });
+    const resolveInputSource = vi.fn(async (...call: [unknown, string, string, { recipeCopyReads?: unknown }?]) => call[1]);
+    const run = start({ body, measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote, resolveInputSource });
 
     await expect(run.outcome).resolves.toMatchObject({ success: true });
-    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: imported, referenceVideoUrl: REFERENCE_URL }));
-    // The clip, resolved to be measured, and the character share the start's one read of each unlock.
-    const [clipCall, characterCall] = run.resolveInputSource.mock.calls;
-    expect([clipCall?.[1], characterCall?.[1]]).toEqual([REFERENCE_URL, copy]);
-    expect(characterCall?.[3]?.recipeCopyReads).toBeInstanceOf(Map);
-    expect(characterCall?.[3]?.recipeCopyReads).toBe(clipCall?.[3]?.recipeCopyReads);
-  });
-
-  // A kept input of the caller's own can be a recipe file a remix imported (2026-11-03 re-review): it is
-  // resolved, which checks its mark against the unlock. A link that can be no recipe file goes as given.
-  it('resolves a character that is the caller’s own kept input, and sends any other as it was given', async () => {
-    const run = start({ body: motionBody(5, 5), measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote });
-
-    await expect(run.outcome).resolves.toMatchObject({ success: true });
-    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: CHARACTER_URL }));
-    expect(run.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL, CHARACTER_URL]);
-
-    const elsewhere = 'https://cdn.example.com/character.png';
-    const body = motionBody(5, 5);
-    body.inputs[0] = { ...body.inputs[0], url: elsewhere };
-    const given = start({ body, measuredSeconds: 5, operation: MOTION_OPERATION, quote: durationPricedQuote });
-    await expect(given.outcome).resolves.toMatchObject({ success: true });
-    expect(given.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: elsewhere }));
-    expect(given.resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL]);
+    // Only the clip is resolved before the start, to be measured.
+    expect(resolveInputSource.mock.calls.map(([, url]) => url)).toEqual([REFERENCE_URL]);
+    const clipReads = resolveInputSource.mock.calls[0]?.[3]?.recipeCopyReads;
+    expect(clipReads).toBeInstanceOf(Map);
+    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ characterImageUrl: copy, referenceVideoUrl: REFERENCE_URL }));
+    const [{ recipeCopyReads }] = run.startMotion.mock.calls[0] as unknown as [{ recipeCopyReads?: unknown }];
+    expect(recipeCopyReads).toBe(clipReads);
   });
 
   // A clip goes on as it was sent, with the link it was measured from beside it (`resolvedSources`),
@@ -914,9 +894,11 @@ describe('reference lengths a caller reports', () => {
       },
       resolvedMediaSources: new Map([[REFERENCE_URL, measuredClip]]),
     }));
-    // Only the clip is resolved before the start, to be measured: the picture is the start's to resolve.
+    // Only the clip is resolved before the start, to be measured: the picture is the start's to resolve,
+    // with the reads of each unlock the clip's resolve made.
     expect(run.resolveInputSource).toHaveBeenCalledTimes(1);
-    expect(run.resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, REFERENCE_URL, 'user-1');
+    expect(run.resolveInputSource).toHaveBeenCalledWith({ label: 'user-client' }, REFERENCE_URL, 'user-1', { recipeCopyReads: expect.any(Map) });
+    expect(run.startMotion).toHaveBeenCalledWith(expect.objectContaining({ recipeCopyReads: expect.any(Map) }));
   });
 
   it('refuses a reference whose length cannot be read, or that is not an HTTPS object', async () => {
@@ -2055,10 +2037,17 @@ describe('a remix’s motion run', () => {
       }),
       resolveRemixResultMedia: vi.fn(async () => ({ outcome: 'not-eligible' })),
     }));
+    // None of these inputs is a recipe file: no kept row of the remixer's marks one (#678's check,
+    // which reads those rows as the service).
+    vi.doMock('@/lib/generation-reference-copy-import', async (importOriginal) => ({
+      ...await importOriginal<typeof import('@/lib/generation-reference-copy-import')>(),
+      reuseRecipeFile: vi.fn(async () => null),
+    }));
   });
 
   afterEach(() => {
     vi.doUnmock('@/lib/generation-input-media-import');
+    vi.doUnmock('@/lib/generation-reference-copy-import');
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
