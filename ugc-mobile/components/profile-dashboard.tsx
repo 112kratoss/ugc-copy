@@ -106,6 +106,7 @@ import {
 } from '@/lib/profile-media-query';
 import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
 import { useCreatorPayoutState } from '@/lib/use-creator-payout-state';
+import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 import { flattenShowcaseFeedPages } from '@/lib/showcase-feed-query';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
@@ -900,6 +901,10 @@ function ProfileMediaList({
   // reporting stay in one component.
   const isFocused = useIsFocused();
   const reportAmbientMedia = useTabBarAmbientFeed(isFocused);
+  // The composer and the viewer collapse these libraries to their first page
+  // while Profile is under them; without this the grid came back scrolled past
+  // the end of what was left, drawn empty.
+  const keepScrollWithinContent = useScrollWithinContent(listRef, isFocused);
   const visibleIds = useRef(new Set<string>());
   const revealItem = useCallback((itemId: string) => {
     if (visibleIds.current.has(itemId) || isLoading) return;
@@ -986,6 +991,7 @@ function ProfileMediaList({
           : isFetchNextPageError && onRetryNextPage ? <FeedLoadMoreErrorFooter onRetry={onRetryNextPage} />
             : null}
         numColumns={PROFILE_GALLERY_COLUMNS}
+        onContentSizeChange={keepScrollWithinContent}
         onEndReached={onEndReached}
         onEndReachedThreshold={0.32}
         onRefresh={onRefresh}

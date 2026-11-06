@@ -122,6 +122,7 @@ import { buildShareUrl } from '@/lib/viewer-actions';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { useActiveGenerationCount } from '@/lib/use-active-generations';
 import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib/use-new-posts-probe';
+import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 
 const LOAD_MORE_COOLDOWN_MS = 800;
 // Only the cards that can be on screen when a lane first lands rise into
@@ -158,6 +159,10 @@ export function HomeDashboard() {
   const isCompact = pageWidth < 390;
   const feedRef = useRef<FlashListRef<HomeFeedCard>>(null);
   useScrollToTop(feedRef);
+  // A block or hide made from a screen pushed over Home takes posts out of its
+  // lane; at the end of the feed it came back scrolled past what was left,
+  // drawn empty (Android).
+  const keepScrollWithinContent = useScrollWithinContent(feedRef, isFocused);
   const horizontalPadding = isCompact ? 15 : 18;
   const contentWidth = pageWidth - horizontalPadding * 2;
 
@@ -1076,6 +1081,7 @@ export function HomeDashboard() {
         getItemType={(card) => card.previewKind}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
         maintainVisibleContentPosition={{ disabled: activeChip.filters.sort !== 'recent' }}
+        onContentSizeChange={keepScrollWithinContent}
         onStartReached={requestPreviousPage}
         onStartReachedThreshold={0.25}
         onEndReached={requestNextPage}

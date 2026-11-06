@@ -77,6 +77,7 @@ import {
 import type { PostLifecycleVisibility } from '@/lib/post-lifecycle-policy';
 import { useProfileLibrarySource } from '@/lib/use-profile-library-source';
 import { useProfileMediaRevalidation } from '@/lib/use-profile-media-revalidation';
+import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 
@@ -377,6 +378,14 @@ export function ProfileMediaFeedScreen() {
   const acknowledgeListLayout = useCallback(() => {
     if (landingSeekingRef.current) setLayoutRevision((revision) => revision + 1);
   }, []);
+  // This feed reads the libraries the composer and the viewer collapse to their
+  // first page, and it is under them when they do: a size report then also
+  // brings a list left past its new end back within it (Android).
+  const keepScrollWithinContent = useScrollWithinContent(listRef, isFocused);
+  const onListContentSizeChange = useCallback((width: number, height: number) => {
+    acknowledgeListLayout();
+    keepScrollWithinContent(width, height);
+  }, [acknowledgeListLayout, keepScrollWithinContent]);
 
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
@@ -696,7 +705,7 @@ export function ProfileMediaFeedScreen() {
           setListReady(true);
           acknowledgeListLayout();
         }}
-        onContentSizeChange={acknowledgeListLayout}
+        onContentSizeChange={onListContentSizeChange}
         onScroll={Platform.OS === 'ios' ? (event) => noteLandingScroll(event.nativeEvent.contentOffset.y) : undefined}
         onScrollBeginDrag={() => {
           // The reader's own scroll outranks the landing: never yank them back.
