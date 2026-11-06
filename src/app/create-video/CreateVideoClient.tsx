@@ -2685,10 +2685,26 @@ function VideoCreator({
             const slots = readRemixInputSlots(bundle);
             setRemixSlots(slots);
             setRemixSlotsNoticeDismissed(false);
+            // A frame the creator added while it loaded is their pick of side, as picking Frames by hand
+            // is (2026-11-06 review), where references beside it would leave it out of the run: it holds
+            // the Frames side, and the original's references, which would take the side, stay out.
+            const formSides = videoInputSides(formAffordances, { isMultiShot: formSettings.isMultiShot });
+            const ownFramesHoldTheSide = Boolean(formSides.frames && formSides.references) && (
+                (Boolean(startImageFile) && Boolean(formSides.frames?.start) && !formSides.references?.keepsStart)
+                || (Boolean(endImageFile) && Boolean(formSides.frames?.end))
+            );
+            let originalReferencesLeftOut = 0;
+            const originalUnlessFramesHold = <T,>(original: T[]): T[] => {
+                if (!ownFramesHoldTheSide) return original;
+                originalReferencesLeftOut += original.length;
+                return [];
+            };
             // The inputs open on the original's side, or the one the creator picked; what comes back
             // holds them to its own side too. Where the remix was not given them, they open where its
             // empty boxes are: References for a picture, clip or track, Frames for a frame alone.
-            if (!edits.byHand('inputSide')) {
+            if (ownFramesHoldTheSide) {
+                setPickedInputSide('frames');
+            } else if (!edits.byHand('inputSide')) {
                 setPickedInputSide(
                     remixSlotsInputSide(slots, { clipsBesideSides: formModelId === 'kling-3.0-video' })
                     ?? (restoredVideoInputs?.referenceMode === 'elements' ? 'references' : 'frames'),
@@ -2737,16 +2753,16 @@ function VideoCreator({
             );
             if (capWarning) setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, capWarning));
             const commitPictures = (originalPictures: VideoElementSeed[]) => commitElements(hydrateVideoElements(remixReferencesBesideOwn<VideoElementSeed>(
-                besideOwn(originalPictures, ownPictures, formAffordances.elements.maxTotal, 'reference image'),
+                besideOwn(originalUnlessFramesHold(originalPictures), ownPictures, formAffordances.elements.maxTotal, 'reference image'),
                 ownPictures,
                 ownWordsStay,
             )));
             const commitClips = (originalClips: SeedanceMediaReferenceSeed[]) => commitReferenceVideos([
-                ...hydrateSeedanceMediaReferences('Video', besideOwn(originalClips, ownClips, formAffordances.referenceVideos.max, 'reference clip')),
+                ...hydrateSeedanceMediaReferences('Video', besideOwn(originalUnlessFramesHold(originalClips), ownClips, formAffordances.referenceVideos.max, 'reference clip')),
                 ...ownClips,
             ]);
             const commitTracks = (originalTracks: SeedanceMediaReferenceSeed[]) => commitReferenceAudios([
-                ...hydrateSeedanceMediaReferences('Audio', besideOwn(originalTracks, ownTracks, formAffordances.referenceAudios.max, 'reference track')),
+                ...hydrateSeedanceMediaReferences('Audio', besideOwn(originalUnlessFramesHold(originalTracks), ownTracks, formAffordances.referenceAudios.max, 'reference track')),
                 ...ownTracks,
             ]);
 
@@ -2930,6 +2946,10 @@ function VideoCreator({
             }
             for (const warning of roomWarnings) {
                 setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, warning));
+            }
+            // The original's references the creator's frames kept out are said as media not brought back.
+            if (originalReferencesLeftOut > 0) {
+                setRemixRestoreWarning((current) => joinRemixRestoreWarnings(current, REMIX_RESTORE_WARNING));
             }
 
             // A frame the creator added holds its slot, as a frame added after the answer would;

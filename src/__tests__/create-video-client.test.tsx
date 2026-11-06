@@ -1516,6 +1516,43 @@ describe('CreateVideoClient Kling video elements', () => {
           .toEqual([['startFrame', START.storagePath], ['endFrame', END.storagePath]]);
       });
 
+      // 2026-11-06 review: a start image the creator added while a references original loaded was kept,
+      // but the original's references took the side and left it out of the run. A frame added by hand
+      // is their pick of side, as picking Frames is: it holds the Frames side, and the original's
+      // references, which would take the side from it, stay out, as the notice says.
+      it('keeps a start image added while a references original loads, on Frames, and leaves the original’s references out', async () => {
+        modelCatalogState.summaries = [{ id: 'seedance-2-mini', kind: 'video', displayName: 'Seedance 2 Mini', description: 'Test frames-or-references video model' }];
+        let release: () => void = () => undefined;
+        const bundle = remixOf('seedance-2-mini');
+        stubRemix({ ...bundle, workflowSettings: { model: 'seedance-2-mini', referenceMode: 'elements' } }, { hold: new Promise<void>((resolve) => { release = resolve; }) });
+        const view = render(<CreateVideoClient prefill={{ remixId: 'gen-1', remixPostId: 'post-1' }} />);
+        await waitFor(() => expect(remixReads()).toHaveLength(1));
+
+        chooseModel(view.container, 'Seedance 2 Mini');
+        const startField = await waitFor(() => {
+          const found = view.container.querySelector<HTMLInputElement>('#video-start-frame-input');
+          expect(found).not.toBeNull();
+          return found!;
+        });
+        fireEvent.change(startField, { target: { files: [new File(['frame'], 'start.jpg', { type: 'image/jpeg' })] } });
+        await screen.findByAltText('Start image');
+        // Words of their own, which name none of the original's references.
+        fireEvent.change(screen.getByPlaceholderText(/^Describe the .+ scene in rich cinematic detail/), { target: { value: 'A paper boat drifts across a sunlit pond.' } });
+        await act(async () => release());
+
+        expect(await screen.findByText(/Some source media could not be restored automatically/)).toBeInTheDocument();
+        expect(screen.getByAltText('Start image').getAttribute('src')).toMatch(/^blob:start\.jpg:/);
+        expect(screen.getByRole('radio', { name: 'Frames' })).toBeChecked();
+        expect(screen.queryByAltText('Hero shot')).toBeNull();
+
+        fireEvent.click(generateButton());
+        await waitFor(() => expect(postedRun()).toBeDefined());
+        expect(postedRun().prompt).toBe('A paper boat drifts across a sunlit pond.');
+        expect(postedRun().settings.referenceMode).toBe('frames');
+        expect((postedRun().inputs as Array<Record<string, unknown>>).map((input) => [input.slot, input.url]))
+          .toEqual([['startFrame', 'https://signed.example.com/uploads/user-1/start.jpg']]);
+      });
+
       it('leaves out the frames of a run that brought its pictures back as references', async () => {
         // A references run can hold frames beside its pictures (a draft from before the switch,
         // an old run whose prepared assets come back as pictures): its frames stay out, as they
