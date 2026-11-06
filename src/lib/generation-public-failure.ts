@@ -43,6 +43,15 @@ export type ProviderInputRefusedCode = typeof PROVIDER_INPUT_REFUSED;
 export const PROVIDER_INPUT_REFUSED_MESSAGE =
   'This step could not be started because part of this run is outside what the template’s model accepts, such as a clip that is too short or too long. No credits were used for it. Retrying will not help: start a new run with different uploads to try again.';
 
+/**
+ * A motion run's character picture its start cannot send (`resolveMotionCharacterImage`): one the
+ * caller may not use, or one storage would not sign again. Said in its own words wherever the start's
+ * refusal is shown, a canvas step's included, which read it as any unreadable upload and asked for a
+ * clear JPEG of at least 256×256 px.
+ */
+export const MOTION_CHARACTER_PICTURE_REFUSAL =
+  'The character picture could not be used. Add your own character picture, then retry.';
+
 export type PublicGenerationStartFailure = Readonly<{
   code: GenerationStartFailureCode;
   message: string;
@@ -367,6 +376,11 @@ export function getPublicGenerationStartFailure(error: unknown): PublicGeneratio
       code: 'provider_unavailable',
       message: 'The generation provider is temporarily unavailable. Please retry this step shortly.',
     };
+  }
+
+  // Still an input to replace, in the words that say which and how (`MOTION_CHARACTER_PICTURE_REFUSAL`).
+  if (errorMessage(error).trim() === MOTION_CHARACTER_PICTURE_REFUSAL) {
+    return { code: 'invalid_input_media', message: MOTION_CHARACTER_PICTURE_REFUSAL };
   }
 
   if (hasInvalidInputMediaSignal(signal)) {

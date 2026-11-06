@@ -81,6 +81,7 @@ import type { GenerationStartResult } from '@/lib/generation-start-idempotency';
 import {
   GENERATION_PROMPT_BLOCKED_MESSAGE,
   getPublicGenerationStartFailure,
+  MOTION_CHARACTER_PICTURE_REFUSAL,
   getRefundedStartGenerationId,
   markGenerationStartInProgress,
   markGenerationStartRefusal,
@@ -4124,11 +4125,7 @@ async function resolveMotionCharacterImage(
   userId: string,
   options: GenerationMediaSourceOptions,
 ): Promise<string> {
-  const refusal = () => new GenerationServiceError(
-    'The character picture could not be used. Add your own character picture, then retry.',
-    422,
-    'invalid_input_media',
-  );
+  const refusal = () => new GenerationServiceError(MOTION_CHARACTER_PICTURE_REFUSAL, 422, 'invalid_input_media');
   let source: string;
   try {
     source = await resolveGenerationMediaSource(supabase, url, userId, options);

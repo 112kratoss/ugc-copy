@@ -1610,6 +1610,29 @@ describe('workflow-runner recovery', () => {
     expect(state.run.status).toBe('processing');
   });
 
+  // A motion start refuses a character picture it cannot send before anything is held, in words that
+  // say what to do; the step showed the words for an unreadable upload instead. The step's own start
+  // here stands in for it: the step's failure is read from the refusal alone.
+  it('ends a step whose start refuses its character picture with the picture’s own words', async () => {
+    const state = createQueuedWorkflowState();
+    const supabase = createSupabaseMock(state);
+    const { MOTION_CHARACTER_PICTURE_REFUSAL } = await import('@/lib/generation-public-failure');
+    startVideoGenerationMock.mockRejectedValueOnce({ status: 422, failureCode: 'invalid_input_media', message: MOTION_CHARACTER_PICTURE_REFUSAL });
+
+    const { advanceWorkflowRunOnce } = await import('@/lib/workflow-runner');
+    const run = await advanceWorkflowRunOnce({
+      supabase: supabase as never,
+      canvasId: state.run.canvas_id,
+      runId: state.run.id,
+    });
+
+    expect(run.steps?.find((step) => step.node_id === state.videoNodeId)).toMatchObject({
+      status: 'failed',
+      generation_id: null,
+      error_message: MOTION_CHARACTER_PICTURE_REFUSAL,
+    });
+  });
+
   it.each([true, false])('links an ambiguous submission without duplicating work (marker confirmed: %s)', async (confirmed) => {
     const state = createQueuedWorkflowState();
     const supabase = createSupabaseMock(state);
