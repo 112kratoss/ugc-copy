@@ -62,3 +62,15 @@ export function viewerNativeBackOptions({
       : () => [],
   };
 }
+
+/** How far, in points, a swipe toward Details goes before the bar's Back and Mute leave. */
+export const LEAVES_MEDIA_AFTER = 8;
+
+/**
+ * Whether a slide's horizontal list, at `offset`, has left its last media page
+ * for Details: the bar goes as the rest of the chrome starts to slide away with
+ * the media. A post without a Details page never leaves.
+ */
+export function leavesMediaPage(offset: number, detailsPageIndex: number, width: number) {
+  return detailsPageIndex > 0 && offset > (detailsPageIndex - 1) * width + LEAVES_MEDIA_AFTER;
+}

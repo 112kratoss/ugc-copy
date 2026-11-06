@@ -9,6 +9,7 @@ import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
@@ -62,7 +63,7 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
-import { viewerNativeBackOptions } from '@/lib/viewer-native-back';
+import { leavesMediaPage, viewerNativeBackOptions } from '@/lib/viewer-native-back';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
@@ -307,8 +308,13 @@ function ImmersivePreviewViewer() {
   }, []);
   // iOS: the navigation bar's own Back, which UIKit pops at once. Only with a
   // screen to go back to: a reel opened first (a link) keeps its own Back,
-  // which replaces it with Explore.
-  const [nativeBack] = useState(() => Platform.OS === 'ios' && router.canGoBack());
+  // which replaces it with Explore. Only with Liquid Glass too: before iOS 26
+  // the bar draws a bare chevron, where ours draws a disc that reads over any
+  // picture.
+  const [nativeBack] = useState(() => Platform.OS === 'ios' && isLiquidGlassAvailable() && router.canGoBack());
+  // The states drawn instead of the reel keep their own Back and Mute: the bar
+  // the loaded reel set up stays until it is told to go.
+  const shellHidesBar = nativeBack ? <Stack.Screen options={{ headerShown: false }} /> : null;
   useEffect(() => {
     void hydrateViewerAudioMuted();
   }, []);
@@ -1380,6 +1386,7 @@ function ImmersivePreviewViewer() {
   if (selectionMissing && !savedPosition) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        {shellHidesBar}
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             title="This isn’t available anymore"
@@ -1394,6 +1401,7 @@ function ImmersivePreviewViewer() {
   if (!items.length && sourceQuery.isLoading) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
+        {shellHidesBar}
         <ActivityIndicator accessibilityLabel="Loading preview" color={theme.colors.primary} />
       </ViewerShell>
     );
@@ -1402,6 +1410,7 @@ function ImmersivePreviewViewer() {
   if (!items.length && sourceQuery.isError) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        {shellHidesBar}
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             tone="danger"
@@ -1422,6 +1431,7 @@ function ImmersivePreviewViewer() {
     // of them can be drawn in this reel. A final state, so it offers a way on.
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        {shellHidesBar}
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             title="Nothing to show here"
@@ -1648,7 +1658,7 @@ function ImmersivePreviewViewer() {
             onPageChange={slideHandlers.onPageChange}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
             onActiveChromeShift={setActiveChromeShift}
-            onLeavesMedia={setLeavingMediaItemId}
+            onLeavesMedia={nativeBack ? setLeavingMediaItemId : undefined}
             onOwnerAction={slideHandlers.onOwnerAction}
             onRecreate={slideHandlers.onRecreate}
             onSave={slideHandlers.onSave}
@@ -1966,9 +1976,6 @@ interface ImmersiveSlideHandle {
 
 // Memoised: the reel's renderItem gives a slide that did not change the same
 // props on every viewer render (see `slideHandlers`), so it skips the render.
-/** How far, in points, a swipe toward Details goes before the bar's Back and Mute leave. */
-const LEAVES_MEDIA_AFTER = 8;
-
 const ImmersiveSlide = memo(function ImmersiveSlide({
   active,
   initialSection,
@@ -2116,6 +2123,15 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
       extrapolate: 'clamp',
     })
     : null), [detailsPageIndex, horizontalScrollX, width]);
+  // Where this slide's swipe stands against Details, for the navigation bar
+  // (lib/viewer-native-back.ts); a slide opened on Details starts there.
+  const leavesMediaRef = useRef(leavesMediaPage(initialHorizontalOffset.x, detailsPageIndex, width));
+  const activeRef = useRef(active);
+  const onLeavesMediaRef = useRef(onLeavesMedia);
+  useEffect(() => {
+    activeRef.current = active;
+    onLeavesMediaRef.current = onLeavesMedia;
+  });
   const onHorizontalScroll = useMemo(() => Animated.event(
     [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
     {
@@ -2124,23 +2140,14 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         const offset = event.nativeEvent.contentOffset.x;
         const page = Math.round(offset / width);
         setDraggedPageIndex(Math.max(0, Math.min(pages.length - 1, page)));
-        if (detailsPageIndex > 0) {
-          const leaving = offset > (detailsPageIndex - 1) * width + LEAVES_MEDIA_AFTER;
-          if (leaving !== leavesMediaRef.current) {
-            leavesMediaRef.current = leaving;
-            if (activeRef.current) onLeavesMediaRef.current?.(leaving ? item.id : null);
-          }
+        const leaving = leavesMediaPage(offset, detailsPageIndex, width);
+        if (leaving !== leavesMediaRef.current) {
+          leavesMediaRef.current = leaving;
+          if (activeRef.current) onLeavesMediaRef.current?.(leaving ? item.id : null);
         }
       },
     },
   ), [detailsPageIndex, horizontalScrollX, item.id, pages.length, width]);
-  const leavesMediaRef = useRef(false);
-  const activeRef = useRef(active);
-  const onLeavesMediaRef = useRef(onLeavesMedia);
-  useEffect(() => {
-    activeRef.current = active;
-    onLeavesMediaRef.current = onLeavesMedia;
-  });
   // A slide that becomes the active one says where its own swipe stands.
   useEffect(() => {
     if (active) onLeavesMediaRef.current?.(leavesMediaRef.current ? item.id : null);
@@ -2217,18 +2224,18 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   // without (alternated runs, 2026-09-24).
   const renderChrome = () => (zoomLanded && !chromeHidden ? (
     <View pointerEvents="box-none" onLayout={onChromeLayout} style={{ position: 'absolute', inset: 0 }}>
-      {chromeShift ? (
-        <Animated.View
-          pointerEvents="box-none"
-          // Moved off the screen while Details is up, so out of reach of a
-          // screen reader as well as of a finger.
-          accessibilityElementsHidden={currentPageIsDetails}
-          importantForAccessibility={currentPageIsDetails ? 'no-hide-descendants' : 'auto'}
-          style={{ position: 'absolute', inset: 0, transform: [{ translateX: chromeShift }] }}
-        >
-          {renderOverlays()}
-        </Animated.View>
-      ) : renderOverlays()}
+      {/* Always the same wrapper, so a post that gains or loses its Details
+          page keeps its chrome mounted. */}
+      <Animated.View
+        pointerEvents="box-none"
+        // Moved off the screen while Details is up, so out of reach of a
+        // screen reader as well as of a finger.
+        accessibilityElementsHidden={currentPageIsDetails}
+        importantForAccessibility={currentPageIsDetails ? 'no-hide-descendants' : 'auto'}
+        style={{ position: 'absolute', inset: 0, transform: [{ translateX: chromeShift ?? 0 }] }}
+      >
+        {renderOverlays()}
+      </Animated.View>
       <DoubleTapSaveHeart
         opacity={doubleTapHeart.opacity}
         palette={doubleTapHeart.palette}
