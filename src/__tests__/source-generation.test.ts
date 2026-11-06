@@ -323,6 +323,22 @@ describe('remix credit', () => {
       .rejects.toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
   });
 
+  // The hub, 2026-11-06, from the owner's "B's recipe must be paid": a free claim of a recipe that is
+  // paid now holds it on paid terms (`remix_source_held_paid`), so with remixes off its start is
+  // refused too, never started unlinked and free.
+  it('refuses the start of a remix of such a post for a free claimer of its recipe, now paid', async () => {
+    const { supabase, rpcCalls } = createSupabaseMock({
+      posts: [{ ...EXPOSED_POST, remixes_allowed: false }],
+      recipes: [PUBLISHED_RECIPE],
+      purchases: [{ id: 'purchase-1', bundle_id: PUBLISHED_RECIPE.id, buyer_user_id: 'user-1', price_usd_cents: 0 }],
+      boughtPaid: true,
+    });
+
+    await expect(resolveSourceGenerationId(supabase, 'user-1', SOURCE_ID, REGISTERED))
+      .rejects.toMatchObject({ status: 409, message: REMIX_SOURCE_NO_LONGER_REMIXABLE });
+    expect(rpcCalls.map((call) => call.name)).toEqual(['remix_source_held_paid']);
+  });
+
   it('records no remix for a caller who has not unlocked the post’s published recipe', async () => {
     await expectNoRemixByRule(createSupabaseMock({
       recipes: [PUBLISHED_RECIPE],
