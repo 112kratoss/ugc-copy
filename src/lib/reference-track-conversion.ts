@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -207,17 +207,23 @@ async function readTrackHead(filePath: string): Promise<{ head: Uint8Array; tagg
  * the provider takes the track as it is.
  *
  * Kie judges a track by its link's extension before it fetches anything, and refuses one its
- * model does not list (provider-input-limits: `referenceTrackNeedsConversion`); a run sent one
- * failed after the hold. It then decodes whatever it fetched, so a track whose extension it
- * takes but whose bytes are something else (AAC named `.mp3`, an `.m4a` renamed `.wav`) failed
- * after the hold as well: such a track is converted too, its real type read from its bytes
- * (reference-track-format). The start converts before it holds anything, so a track that
- * cannot be converted is refused at no cost to the creator, and stores the copy only once the
- * run is held (`storeConvertedReferenceTrack`), so a start that is refused keeps nothing.
- * Seedance's Prepare converts the same way and keeps its copy apart (`storeSeedanceAssetTrack`).
+ * model does not list; a run sent one failed after the hold. It then decodes whatever it
+ * fetched, so a track whose extension it takes but whose bytes are something else (AAC named
+ * `.mp3`, an `.m4a` renamed `.wav`) failed after the hold as well: such a track is converted
+ * too, its real type read from its bytes (reference-track-format). The start converts before it
+ * holds anything, so a track that cannot be converted is refused at no cost to the creator, and
+ * stores the copy only once the run is held (`storeConvertedReferenceTrack`), so a start that is
+ * refused keeps nothing. Seedance's Prepare converts the same way and keeps its copy apart
+ * (`storeSeedanceAssetTrack`).
  *
- * Throws `ReferenceTrackUnreadableError` when the track is not audio ffmpeg can convert, or is
- * too long; anything else (storage, a fetch, the encoder or the machine) is not the track's fault.
+ * A track whose extension the provider takes but that cannot be read here (a link of a host the
+ * remote import does not fetch from, a stored type it does not take, a storage error) goes as
+ * it is, as every such track went before its bytes were read: reading it only ever adds a
+ * conversion, never a refusal of a track the provider was sent before.
+ *
+ * Throws `ReferenceTrackUnreadableError` when a track that must be converted is not audio ffmpeg
+ * can convert, or is too long; anything else (storage, a fetch, the encoder or the machine) is
+ * not the track's fault.
  */
 export async function convertReferenceTrackIfRefused(params: {
   supabase: SupabaseClient;
@@ -228,14 +234,22 @@ export async function convertReferenceTrackIfRefused(params: {
   formats: readonly string[];
 }): Promise<Buffer | null> {
   const claimed = referenceTrackLinkExtension(params.link);
-  return withTrackFile(params, async (filePath, leaseFd) => {
-    if (claimed && params.formats.includes(claimed)) {
+  if (!claimed || !params.formats.includes(claimed)) return withTrackFile(params, encodeWav);
+
+  let read = false;
+  try {
+    return await withTrackFile(params, async (filePath, leaseFd) => {
       const container = referenceTrackContainer(await readTrackHead(filePath));
+      read = true;
       if (container === claimed) return null;
       logBackendWarning('reference_track_extension_mismatch', { claimed, container });
-    }
-    return encodeWav(filePath, leaseFd);
-  });
+      return encodeWav(filePath, leaseFd);
+    });
+  } catch (error) {
+    if (read) throw error;
+    logBackendWarning('reference_track_not_read', { claimed, error });
+    return null;
+  }
 }
 
 /**
@@ -271,25 +285,38 @@ export async function storeConvertedReferenceTrack(params: {
 }
 
 /**
+ * How long a Prepare copy is kept: its link lasts an hour (`SIGNED_URL_TTL_SECONDS`), after
+ * which Kie can no longer fetch it, so a copy twice that old is no use to anyone.
+ */
+const SEEDANCE_ASSET_TRACK_KEEP_MS = 2 * SIGNED_URL_TTL_SECONDS * 1000;
+/** How many of a user's copies one Prepare looks at, oldest first. */
+const SEEDANCE_ASSET_TRACK_TIDY_LIMIT = 100;
+/** A copy's name: when it was stored, in milliseconds, then a random id. */
+const SEEDANCE_ASSET_TRACK_NAME = /^(\d{13})-[0-9a-f-]{36}\.wav$/;
+
+/**
  * Keeps a track Seedance's Prepare converted (`convertReferenceTrackIfRefused`) where Kie can
  * fetch it, and answers the link it is sent: `generation_inputs/<userId>/seedance-asset-tracks/
- * <sha-256 of the WAV>.wav`, so preparing the same track again writes the same file. The asset
- * is Kie's once it is made, and the link lasts an hour, as the creator's own track's did, so
- * the copy is needed only while Kie fetches it: no row names it, and the orphan finder
- * (storage-orphans) lists it once it is a week old. Account deletion clears it with the user's
- * other folders.
+ * <milliseconds>-<uuid>.wav`. The asset is Kie's once it is made, and the link lasts an hour, as
+ * the creator's own track's did, so the copy is needed only while Kie fetches it: no row names
+ * it. Each copy stored removes the user's copies past `SEEDANCE_ASSET_TRACK_KEEP_MS`, read from
+ * their names (`tidySeedanceAssetTracks`); the orphan finder (storage-orphans) lists any left
+ * once they are a week old, and account deletion clears the folder with the user's others.
  */
 export async function storeSeedanceAssetTrack(params: {
   supabase: SupabaseClient;
   userId: string;
   wav: Buffer;
+  now?: () => number;
 }): Promise<string> {
   const { supabase } = params;
-  const digest = createHash('sha256').update(params.wav).digest('hex');
-  const filePath = `${params.userId}/${SEEDANCE_ASSET_TRACKS_FOLDER}/${digest}.wav`;
+  const now = params.now ?? Date.now;
+  const folder = `${params.userId}/${SEEDANCE_ASSET_TRACKS_FOLDER}`;
+  const fileName = `${now()}-${randomUUID()}.wav`;
+  const filePath = `${folder}/${fileName}`;
   const upload = await supabase.storage
     .from(GENERATION_INPUTS_BUCKET)
-    .upload(filePath, toStorageUploadBody(params.wav, 'audio/wav'), { contentType: 'audio/wav', upsert: true });
+    .upload(filePath, toStorageUploadBody(params.wav, 'audio/wav'), { contentType: 'audio/wav', upsert: false });
   if (upload.error) throw new Error(`The converted track could not be stored: ${upload.error.message}`);
 
   const signed = await supabase.storage
@@ -298,7 +325,39 @@ export async function storeSeedanceAssetTrack(params: {
   if (signed.error || !signed.data?.signedUrl) {
     throw new Error(`The converted track could not be signed: ${signed.error?.message ?? 'no link'}`);
   }
+  await tidySeedanceAssetTracks({ supabase, folder, keep: fileName, cutoff: now() - SEEDANCE_ASSET_TRACK_KEEP_MS });
   return signed.data.signedUrl;
+}
+
+/**
+ * Removes the user's Prepare copies stored before `cutoff`, never `keep`, the one just stored.
+ * Their names start with when they were stored, so the listing in name order is oldest first,
+ * and a name of any other shape is left alone. A failure is logged, not thrown: the copy just
+ * stored is good, and the orphan finder lists anything left.
+ */
+async function tidySeedanceAssetTracks(params: {
+  supabase: SupabaseClient;
+  folder: string;
+  keep: string;
+  cutoff: number;
+}): Promise<void> {
+  try {
+    const bucket = params.supabase.storage.from(GENERATION_INPUTS_BUCKET);
+    const { data, error } = await bucket.list(params.folder, {
+      limit: SEEDANCE_ASSET_TRACK_TIDY_LIMIT,
+      sortBy: { column: 'name', order: 'asc' },
+    });
+    if (error) throw error;
+    const stale = (data ?? []).flatMap(({ name }) => {
+      const storedAt = SEEDANCE_ASSET_TRACK_NAME.exec(name)?.[1];
+      return storedAt && name !== params.keep && Number(storedAt) < params.cutoff ? [`${params.folder}/${name}`] : [];
+    });
+    if (stale.length === 0) return;
+    const { error: removeError } = await bucket.remove(stale);
+    if (removeError) throw removeError;
+  } catch (error) {
+    logBackendWarning('seedance_asset_track_tidy_failed', { error });
+  }
 }
 
 /** Removes the copies a run stored for a provider that never took the run. A failure is logged, not thrown. */

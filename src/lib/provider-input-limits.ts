@@ -212,18 +212,6 @@ export function providerReferenceTrackFormats(modelId: string): readonly string[
 }
 
 /**
- * Whether a track the model is sent must be converted first: its link's path ends in an
- * extension the provider does not take as written, or in none. A prepared provider asset goes
- * by its id, which is no link, and a model that sends no track converts nothing.
- */
-export function referenceTrackNeedsConversion(modelId: string, link: string): boolean {
-  const formats = providerReferenceTrackFormats(modelId);
-  if (!formats) return false;
-  const extension = referenceTrackLinkExtension(link);
-  return extension !== null && !formats.includes(extension);
-}
-
-/**
  * The extension of a track link's path, as written ('' when it has none), or null when the
  * track is no link the provider fetches: a prepared provider asset goes by its id.
  */

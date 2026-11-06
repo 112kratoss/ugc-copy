@@ -9,7 +9,6 @@ import {
   providerReferenceTrackFormats,
   referenceMediaLengthViolation,
   referenceTrackLinkExtension,
-  referenceTrackNeedsConversion,
 } from '@/lib/provider-input-limits';
 
 // Kie's documented prompt caps, read 2026-10-20 for the model check-up
@@ -158,29 +157,14 @@ describe('provider input limits', () => {
       }
     });
 
-    it('converts a track whose link names a format the model’s provider refuses', () => {
+    it('lists the formats each model’s provider takes, by extension', () => {
       // wan/3-0-video refused any .m4a link by its extension alone, before fetching it, and took a
-      // .wav (zero-cost probe, 2026-11-02). Kie lists "wav, mp3" for every model but Seedance 2.5.
+      // .wav (zero-cost probe, 2026-11-02). Kie lists "wav, mp3" for every model but Seedance 2.5,
+      // which adds "aac, ogg". Anything else, an .m4a included, is converted (reference-track-conversion).
       for (const modelId of ['seedance-2', 'seedance-2-fast', 'seedance-2-mini', 'minimax-h3', 'wan-2.7', 'wan-3.0', 'wan-3.0-prime']) {
-        expect(referenceTrackNeedsConversion(modelId, signed('voice-memo.m4a')), modelId).toBe(true);
-        for (const fileName of ['beat.aac', 'beat.ogg', 'beat.webm', 'beat.opus', 'beat.flac', 'beat.mp4', 'media.bin']) {
-          expect(referenceTrackNeedsConversion(modelId, signed(fileName)), `${modelId} ${fileName}`).toBe(true);
-        }
-        expect(referenceTrackNeedsConversion(modelId, signed('take-1.wav')), modelId).toBe(false);
-        expect(referenceTrackNeedsConversion(modelId, signed('beat.mp3')), modelId).toBe(false);
+        expect(providerReferenceTrackFormats(modelId), modelId).toEqual(['wav', 'mp3']);
       }
-      // Seedance 2.5 adds "aac, ogg", and still no .m4a.
-      expect(referenceTrackNeedsConversion('seedance-2-5', signed('beat.aac'))).toBe(false);
-      expect(referenceTrackNeedsConversion('seedance-2-5', signed('beat.ogg'))).toBe(false);
-      expect(referenceTrackNeedsConversion('seedance-2-5', signed('voice-memo.m4a'))).toBe(true);
-      expect(referenceTrackNeedsConversion('seedance-2-5', signed('beat.webm'))).toBe(true);
-    });
-
-    it('reads the link’s path as Kie does: not its query, and no extension or another case is not one it takes', () => {
-      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/voice.m4a?name=take.wav')).toBe(true);
-      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/take.wav?token=voice.m4a')).toBe(false);
-      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/tracks/42')).toBe(true);
-      expect(referenceTrackNeedsConversion('wan-3.0', 'https://cdn.example.com/take.WAV')).toBe(true);
+      expect(providerReferenceTrackFormats('seedance-2-5')).toEqual(['wav', 'mp3', 'aac', 'ogg']);
     });
 
     it('reads a link’s extension as written, from its path alone', () => {
@@ -206,11 +190,9 @@ describe('provider input limits', () => {
       expect(referenceTrackLinkExtension('')).toBeNull();
     });
 
-    it('sends a prepared provider asset as it is, and converts nothing for a model that sends no track', () => {
-      expect(referenceTrackNeedsConversion('seedance-2', 'asset-audio-1')).toBe(false);
-      expect(referenceTrackNeedsConversion('seedance-2', 'asset://asset-audio-1')).toBe(false);
-      expect(referenceTrackNeedsConversion('gemini-omni-video', signed('voice-memo.m4a'))).toBe(false);
-      expect(referenceTrackNeedsConversion('kling-3.0-video', signed('voice-memo.m4a'))).toBe(false);
+    it('lists no formats for a model that sends no track', () => {
+      expect(providerReferenceTrackFormats('gemini-omni-video')).toBeUndefined();
+      expect(providerReferenceTrackFormats('kling-3.0-video')).toBeUndefined();
     });
   });
 });

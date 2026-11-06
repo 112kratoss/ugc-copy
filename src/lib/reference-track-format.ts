@@ -93,10 +93,21 @@ function isAdtsFrame(bytes: Uint8Array): boolean {
 }
 
 /**
+ * Whether an Ogg file holds Vorbis, what an `.ogg` track is unless it says otherwise: Ogg wraps
+ * Opus (a WhatsApp voice note), FLAC and Speex too. The first page's payload, after its 27-byte
+ * header and its segment table, is the stream's identification header.
+ */
+function isOggVorbis(bytes: Uint8Array): boolean {
+  if (!ascii(bytes, 0, 'OggS') || bytes.length < 27) return false;
+  const payload = 27 + bytes[26];
+  return bytes[payload] === 0x01 && ascii(bytes, payload + 1, 'vorbis');
+}
+
+/**
  * The container a track's bytes are, from `head`, its first bytes after any ID3v2 tags
  * (`tagged` when it had one), or null when they are none an extension can claim, or audio a
- * provider that names the container may not decode (a WAV that is not PCM). An `.m4a` (an
- * MPEG-4 `ftyp` box), WebM, FLAC, CAF and the rest are null.
+ * provider that names the container may not decode (a WAV that is not PCM, an Ogg that is not
+ * Vorbis). An `.m4a` (an MPEG-4 `ftyp` box), WebM, FLAC, CAF and the rest are null.
  */
 export function referenceTrackContainer({ head, tagged }: { head: Uint8Array; tagged: boolean }): ReferenceTrackContainer | null {
   if (isMp3Frame(head)) return 'mp3';
@@ -104,6 +115,6 @@ export function referenceTrackContainer({ head, tagged }: { head: Uint8Array; ta
   // ID3 tags front MPEG audio only.
   if (tagged) return null;
   if (isPcmWave(head)) return 'wav';
-  if (ascii(head, 0, 'OggS')) return 'ogg';
+  if (isOggVorbis(head)) return 'ogg';
   return null;
 }

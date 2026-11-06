@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Node's Blob, which the server streams a track from: jsdom's has no stream().
 import { spawnSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,10 +43,20 @@ async function converted(params: Parameters<typeof convertReferenceTrackIfRefuse
 /** Storage holding `objects` by bucket and path; `sizes` overrides what info() reports. */
 function storageMock(
   objects: Record<string, Uint8Array<ArrayBuffer>>,
-  options: { sizes?: Record<string, number>; infoError?: boolean; uploadError?: Record<string, unknown>; signError?: boolean } = {},
+  options: {
+    sizes?: Record<string, number>;
+    infoError?: boolean;
+    uploadError?: Record<string, unknown>;
+    signError?: boolean;
+    /** What list() answers, by folder. */
+    listed?: Record<string, string[]>;
+    listError?: boolean;
+    removeError?: boolean;
+  } = {},
 ) {
   const calls: string[] = [];
   const uploads: Array<{ bucket: string; filePath: string; body: unknown; options: Record<string, unknown> }> = [];
+  const removals: Array<{ bucket: string; paths: string[] }> = [];
   const supabase = {
     storage: {
       from: vi.fn((bucket: string) => ({
@@ -72,10 +82,22 @@ function storageMock(
           if (options.signError) return { data: null, error: { message: 'Signing failed' } };
           return { data: { signedUrl: `https://project.supabase.co/storage/v1/object/sign/${bucket}/${filePath}?token=s` }, error: null };
         }),
+        list: vi.fn(async (folder: string, listOptions: Record<string, unknown>) => {
+          calls.push(`list ${bucket}/${folder} ${JSON.stringify(listOptions)}`);
+          if (options.listError) return { data: null, error: { message: 'List failed' } };
+          // What the test names there, and what was uploaded there since.
+          const uploaded = uploads.filter((upload) => upload.bucket === bucket && upload.filePath.startsWith(`${folder}/`))
+            .map((upload) => upload.filePath.slice(folder.length + 1));
+          return { data: [...(options.listed?.[folder] ?? []), ...uploaded].map((name) => ({ name })), error: null };
+        }),
+        remove: vi.fn(async (paths: string[]) => {
+          removals.push({ bucket, paths });
+          return { data: null, error: options.removeError ? { message: 'Remove failed' } : null };
+        }),
       })),
     },
   };
-  return { supabase: supabase as unknown as SupabaseClient, calls, uploads };
+  return { supabase: supabase as unknown as SupabaseClient, calls, uploads, removals };
 }
 
 describe('convertReferenceTrackIfRefused', () => {
@@ -281,7 +303,7 @@ describe('convertReferenceTrackIfRefused', () => {
 
 describe('convertReferenceTrackIfRefused: a track whose extension the provider takes', () => {
   let directory = '';
-  const tracks: Record<'adts' | 'm4a' | 'mp3' | 'wav' | 'floatWav' | 'ogg', Uint8Array<ArrayBuffer>> = {} as never;
+  const tracks: Record<'adts' | 'm4a' | 'mp3' | 'wav' | 'floatWav' | 'ogg' | 'opus', Uint8Array<ArrayBuffer>> = {} as never;
   const encoders = spawnSync(getFfmpegPath(), ['-hide_banner', '-encoders'], { encoding: 'utf8' }).stdout ?? '';
   const hasEncoder = (encoder: string) => new RegExp(`^\\s*A\\S*\\s+${encoder}\\s`, 'm').test(encoders);
 
@@ -348,8 +370,9 @@ describe('convertReferenceTrackIfRefused: a track whose extension the provider t
     await encode('m4a', ['-c:a', 'aac', '-b:a', '64k', '-f', 'ipod']);
     await encode('wav', ['-c:a', 'pcm_s16le', '-f', 'wav']);
     await encode('floatWav', ['-c:a', 'pcm_f32le', '-f', 'wav']);
-    const oggCodec = hasEncoder('libvorbis') ? 'libvorbis' : hasEncoder('libopus') ? 'libopus' : 'flac';
-    await encode('ogg', ['-c:a', oggCodec, '-f', 'ogg']);
+    // ffmpeg's own Vorbis and Opus encoders are experimental, and in every build.
+    await encode('ogg', hasEncoder('libvorbis') ? ['-c:a', 'libvorbis', '-f', 'ogg'] : ['-c:a', 'vorbis', '-strict', '-2', '-ac', '2', '-f', 'ogg']);
+    await encode('opus', hasEncoder('libopus') ? ['-c:a', 'libopus', '-f', 'ogg'] : ['-c:a', 'opus', '-strict', '-2', '-ar', '48000', '-f', 'ogg']);
     if (hasEncoder('libmp3lame')) await encode('mp3', ['-c:a', 'libmp3lame', '-b:a', '64k', '-f', 'mp3']);
     else tracks.mp3 = handBuiltMp3();
   });
@@ -412,7 +435,7 @@ describe('convertReferenceTrackIfRefused: a track whose extension the provider t
     }
   });
 
-  it('sends an Ogg named .ogg as it is to a provider that takes Ogg, and converts it named .mp3', async () => {
+  it('sends an Ogg Vorbis named .ogg as it is to a provider that takes Ogg, and converts it named .mp3, or an Opus one', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const formats = ['wav', 'mp3', 'aac', 'ogg'];
@@ -423,10 +446,51 @@ describe('convertReferenceTrackIfRefused: a track whose extension the provider t
       await expectWav(await convertReferenceTrackIfRefused({ supabase: ogg.supabase, userId: 'user-1', link: ogg.link, formats: KIE_FORMATS }));
       const renamed = stored('beat.mp3', tracks.ogg);
       await expectWav(await convertReferenceTrackIfRefused({ supabase: renamed.supabase, userId: 'user-1', link: renamed.link, formats }));
+      // Opus in Ogg (a WhatsApp voice note) is no Ogg Vorbis: converted.
+      const voiceNote = stored('voice-note.ogg', tracks.opus);
+      await expectWav(await convertReferenceTrackIfRefused({ supabase: voiceNote.supabase, userId: 'user-1', link: voiceNote.link, formats }));
       // ADTS named .aac goes as it is where AAC is listed.
       const aac = stored('beat.aac', tracks.adts);
       await expect(withoutEncoder(() => convertReferenceTrackIfRefused({ supabase: aac.supabase, userId: 'user-1', link: aac.link, formats })))
         .resolves.toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('sends a track it cannot read as it is, as every such track went before, staging nothing more', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // The caller's own .mp3, and storage cannot find it.
+      const lost = storageMock({}, { infoError: true });
+      await expect(convertReferenceTrackIfRefused({ supabase: lost.supabase, userId: 'user-1', link: signed('beat.mp3'), formats: KIE_FORMATS }))
+        .resolves.toBeNull();
+      // A link the remote import will not fetch: a host off its list, a stored type it does not take, a busy host.
+      const { supabase } = storageMock({});
+      for (const refusal of [
+        new RemoteMediaSecurityError('Remote media host is not allowed.'),
+        new RemoteMediaSecurityError('Remote response is not valid audio media.'),
+        new RemoteMediaSecurityError('Remote media request failed with status 503.', { status: 503 }),
+      ]) {
+        stagedRemoteMedia.stageAllowlistedRemoteMedia.mockRejectedValueOnce(refusal);
+        await expect(convertReferenceTrackIfRefused({ supabase, userId: 'user-1', link: 'https://template.example.com/beat.mp3', formats: KIE_FORMATS }))
+          .resolves.toBeNull();
+      }
+      const notRead = warn.mock.calls
+        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+        .filter((record) => JSON.stringify(record).includes('reference_track_not_read'));
+      expect(notRead).toHaveLength(4);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still refuses a track it read whose bytes are not audio at all', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { supabase, link } = stored('beat.mp3', new Uint8Array(Buffer.from('not audio, just text that someone named beat.mp3\n'.repeat(40))));
+      await expect(convertReferenceTrackIfRefused({ supabase, userId: 'user-1', link, formats: KIE_FORMATS }))
+        .rejects.toBeInstanceOf(ReferenceTrackUnreadableError);
     } finally {
       warn.mockRestore();
     }
@@ -439,41 +503,77 @@ describe('convertReferenceTrackIfRefused: a track whose extension the provider t
 });
 
 describe('storeSeedanceAssetTrack', () => {
-  const wav = Buffer.from('RIFF\u0000\u0000\u0000\u0000WAVEfmt ÿþ', 'latin1');
-  const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
+  const wav = Buffer.from('RIFF\u0000\u0000\u0000\u0000WAVEfmt ', 'latin1');
+  const NOW = 1_800_000_000_000;
+  const FOLDER = 'user-1/seedance-asset-tracks';
+  const HOUR = 60 * 60 * 1000;
+  const copyName = (storedAt: number) => `${storedAt}-${randomUUID()}.wav`;
 
-  it('keeps the copy under the hash of its bytes, overwriting the same copy, and answers an hour’s link to it', async () => {
-    const { supabase, calls, uploads } = storageMock({});
+  it('keeps the copy under the time it was stored and a random id, and answers an hour’s link to it', async () => {
+    const { supabase, calls, uploads, removals } = storageMock({});
 
-    const link = await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav });
+    const link = await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav, now: () => NOW });
 
-    const filePath = `user-1/seedance-asset-tracks/${digest(wav)}.wav`;
-    expect(filePath).toMatch(/^user-1\/seedance-asset-tracks\/[0-9a-f]{64}\.wav$/);
     expect(uploads).toHaveLength(1);
     const [upload] = uploads;
-    expect(upload).toMatchObject({ bucket: 'generation_inputs', filePath });
-    expect(upload.options).toEqual({ contentType: 'audio/wav', upsert: true });
+    expect(upload.bucket).toBe('generation_inputs');
+    expect(upload.filePath).toMatch(new RegExp(`^${FOLDER}/${NOW}-[0-9a-f-]{36}\\.wav$`));
+    expect(upload.options).toEqual({ contentType: 'audio/wav', upsert: false });
     // A Node Buffer would be stored as its UTF-8 text (AGENTS.md); storage takes a Blob.
     expect(upload.body).toBeInstanceOf(Blob);
     expect(Buffer.isBuffer(upload.body)).toBe(false);
     expect((upload.body as Blob).type).toBe('audio/wav');
     expect(Buffer.from(await (upload.body as Blob).arrayBuffer())).toEqual(wav);
-    expect(calls).toEqual([`sign generation_inputs/${filePath} 3600`]);
-    expect(link).toBe(`https://project.supabase.co/storage/v1/object/sign/generation_inputs/${filePath}?token=s`);
+    expect(calls[0]).toBe(`sign generation_inputs/${upload.filePath} 3600`);
+    expect(link).toBe(`https://project.supabase.co/storage/v1/object/sign/generation_inputs/${upload.filePath}?token=s`);
+    expect(removals).toEqual([]);
   });
 
-  it('names the same bytes the same file, and other bytes or another user another', async () => {
+  it('names every copy apart, the same track prepared twice included', async () => {
     const { supabase, uploads } = storageMock({});
+    await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav, now: () => NOW });
+    await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav, now: () => NOW });
+    expect(new Set(uploads.map((upload) => upload.filePath)).size).toBe(2);
+  });
 
-    await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav });
-    await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav: Buffer.from(wav) });
-    await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav: Buffer.concat([wav, Buffer.from([0])]) });
-    await storeSeedanceAssetTrack({ supabase, userId: 'user-2', wav });
+  it('removes the user’s copies stored over two hours ago, oldest first, and nothing else', async () => {
+    const stale = [copyName(NOW - 30 * HOUR), copyName(NOW - 2 * HOUR - 1)];
+    const fresh = [copyName(NOW - 2 * HOUR), copyName(NOW - HOUR)];
+    const { supabase, calls, removals } = storageMock({}, {
+      listed: { [FOLDER]: [...stale, ...fresh, 'notes.txt', '17-short.wav', '.emptyFolderPlaceholder'] },
+    });
 
-    const paths = uploads.map((upload) => upload.filePath);
-    expect(paths[0]).toBe(paths[1]);
-    expect(new Set(paths).size).toBe(3);
-    expect(paths[3]).toBe(`user-2/seedance-asset-tracks/${digest(wav)}.wav`);
+    await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav, now: () => NOW });
+
+    expect(calls).toContain(`list generation_inputs/${FOLDER} ${JSON.stringify({ limit: 100, sortBy: { column: 'name', order: 'asc' } })}`);
+    expect(removals).toEqual([{ bucket: 'generation_inputs', paths: stale.map((name) => `${FOLDER}/${name}`) }]);
+  });
+
+  it('never removes the copy it just stored, and lists only its own user’s folder', async () => {
+    const { supabase, uploads, calls, removals } = storageMock({}, { listed: { 'user-2/seedance-asset-tracks': [copyName(NOW - 30 * HOUR)] } });
+    // The clock reads late the second time: the copy just stored, named for the first, would count as stale.
+    const times = [NOW - 3 * HOUR, NOW];
+
+    await storeSeedanceAssetTrack({ supabase, userId: 'user-1', wav, now: () => times.shift() ?? NOW });
+
+    expect(uploads).toHaveLength(1);
+    expect(calls.filter((call) => call.startsWith('list'))).toEqual([expect.stringContaining(`list generation_inputs/${FOLDER} `)]);
+    expect(removals).toEqual([]);
+  });
+
+  it('answers the link when tidying fails, logging it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const unlisted = storageMock({}, { listError: true });
+      await expect(storeSeedanceAssetTrack({ supabase: unlisted.supabase, userId: 'user-1', wav, now: () => NOW }))
+        .resolves.toMatch(/^https:\/\/project\.supabase\.co\//);
+      const unremoved = storageMock({}, { listed: { [FOLDER]: [copyName(NOW - 3 * HOUR)] }, removeError: true });
+      await expect(storeSeedanceAssetTrack({ supabase: unremoved.supabase, userId: 'user-1', wav, now: () => NOW }))
+        .resolves.toMatch(/^https:\/\/project\.supabase\.co\//);
+      expect(warn.mock.calls.filter(([line]) => String(line).includes('seedance_asset_track_tidy_failed'))).toHaveLength(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('throws when storage refuses the copy, signing nothing, or cannot sign it', async () => {

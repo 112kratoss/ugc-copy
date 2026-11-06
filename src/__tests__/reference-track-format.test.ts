@@ -207,10 +207,23 @@ describe('referenceTrackContainer', () => {
     });
   });
 
-  it('takes Ogg, but not after an ID3 tag', () => {
-    const ogg = bytes('OggS', [0, 2], new Array(22).fill(0));
-    expect(untagged(ogg)).toBe('ogg');
-    expect(referenceTrackContainer({ head: ogg, tagged: true })).toBeNull();
+  /** An Ogg page whose payload, one segment, is `payload`: a stream's identification header on the first page. */
+  function oggPage(payload: Uint8Array): Uint8Array {
+    return bytes('OggS', [0, 2], new Array(8).fill(0), le32(1), le32(0), le32(0), [1, payload.length], payload);
+  }
+
+  it('takes Ogg Vorbis, but not Opus, FLAC or Speex in Ogg, a page cut short, or Ogg after an ID3 tag', () => {
+    const vorbis = oggPage(bytes([0x01], 'vorbis', new Array(23).fill(0)));
+    expect(untagged(vorbis)).toBe('ogg');
+    expect(referenceTrackContainer({ head: vorbis, tagged: true })).toBeNull();
+    // A Vorbis setup header (type 5) is no identification header.
+    expect(untagged(oggPage(bytes([0x05], 'vorbis', new Array(23).fill(0))))).toBeNull();
+    expect(untagged(oggPage(bytes('OpusHead', [1, 2], new Array(9).fill(0))))).toBeNull();
+    expect(untagged(oggPage(bytes([0x7f], 'FLAC', new Array(46).fill(0))))).toBeNull();
+    expect(untagged(oggPage(bytes('Speex   ', new Array(72).fill(0))))).toBeNull();
+    expect(untagged(vorbis.subarray(0, 27))).toBeNull();
+    expect(untagged(vorbis.subarray(0, 30))).toBeNull();
+    expect(untagged(bytes('OggS', [0, 2], new Array(22).fill(0)))).toBeNull();
   });
 
   it('is null for an MPEG-4 `ftyp` (.m4a), WebM, FLAC, CAF, AIFF, and nothing at all', () => {
@@ -285,10 +298,14 @@ describe('referenceTrackContainer on files ffmpeg wrote', () => {
     expect(referenceTrackContainer(headOf(float))).toBeNull();
   });
 
-  it('reads Ogg as ogg', async () => {
-    const codec = hasEncoder('libvorbis') ? 'libvorbis' : hasEncoder('libopus') ? 'libopus' : 'flac';
-    const ogg = await encode('track.ogg', ['-c:a', codec, '-f', 'ogg']);
-    expect(referenceTrackContainer(headOf(ogg))).toBe('ogg');
+  it('reads Ogg Vorbis as ogg, and Opus or FLAC in Ogg as none', async () => {
+    // ffmpeg's own Vorbis and Opus encoders are experimental, and in every build.
+    const vorbis = await encode('track.ogg', hasEncoder('libvorbis') ? ['-c:a', 'libvorbis', '-f', 'ogg'] : ['-c:a', 'vorbis', '-strict', '-2', '-ac', '2', '-f', 'ogg']);
+    expect(referenceTrackContainer(headOf(vorbis))).toBe('ogg');
+    const opus = await encode('voice-note.ogg', hasEncoder('libopus') ? ['-c:a', 'libopus', '-f', 'ogg'] : ['-c:a', 'opus', '-strict', '-2', '-ar', '48000', '-f', 'ogg']);
+    expect(referenceTrackContainer(headOf(opus))).toBeNull();
+    const flac = await encode('flac.ogg', ['-c:a', 'flac', '-f', 'ogg']);
+    expect(referenceTrackContainer(headOf(flac))).toBeNull();
   });
 
   it('reads an .m4a, a FLAC and a CAF as none', async () => {
