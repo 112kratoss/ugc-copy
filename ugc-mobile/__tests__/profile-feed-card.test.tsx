@@ -13,6 +13,8 @@ import type { GenerationListItem } from '@/lib/types';
 
 type Props = { children?: React.ReactNode } & Record<string, unknown>;
 
+// A remix's credit line opens its post or creator through the router (`RemixCreditLine`).
+vi.mock('expo-router', () => ({ router: { push: vi.fn() } }));
 vi.mock('react-native', () => ({
   Text: ({ children, ...props }: Props) => React.createElement('text', props, children),
   View: ({ children, ...props }: Props) => React.createElement('view', props, children),

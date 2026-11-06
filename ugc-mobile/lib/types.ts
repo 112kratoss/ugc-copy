@@ -697,8 +697,20 @@ export interface RemixSourceResult {
   durationSeconds?: number;
 }
 
+/**
+ * The post a remix of someone else's creation starts from, and its creator's handle (servers since
+ * 2026-11-05, #707). The server sends none for the caller's own creation, which tells no one.
+ */
+export interface RemixSourcePost {
+  id: string;
+  title: string;
+  creatorUsername: string;
+}
+
 export interface RemixSourceBundle {
   generation: RemixSourceGeneration;
+  /** Whose post this remix starts from, when it is someone else's (`RemixSourcePost`). */
+  sourcePost?: RemixSourcePost;
   result: RemixSourceResult | null;
   inputs: {
     image?: {

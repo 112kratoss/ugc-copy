@@ -1,5 +1,6 @@
 import type { InfiniteData } from '@tanstack/react-query';
 
+import { itemsWithoutBlockedRemixCredits } from './remix-credit/remix-credit';
 import type { MagicbookletApiClient } from './api-client';
 import type {
   ShowcaseFeedEventRequest,
@@ -199,6 +200,37 @@ export function removeShowcaseFeedItemsFromInfiniteData(
     ...data,
     pages: data.pages.map((page) => removeShowcaseFeedItemsFromResponse(page, target) ?? page),
   };
+}
+
+/**
+ * A lane's pages with no remix credit naming `creatorId` (owner, 2026-11-05: nobody a block stands
+ * between the viewer and is named), as the server sends them at the next read. The same pages come
+ * back where no credit names them, so a block that touches no credit redraws nothing.
+ */
+export function unnameCreatorInInfiniteData(
+  data: InfiniteData<ShowcaseFeedResponse> | undefined,
+  creatorId: string
+): InfiniteData<ShowcaseFeedResponse> | undefined {
+  if (!data) return data;
+  let changed = false;
+  const pages = data.pages.map((page) => {
+    const items = itemsWithoutBlockedRemixCredits(page.items, (id) => id === creatorId);
+    if (items === page.items) return page;
+    changed = true;
+    return { ...page, items };
+  });
+  return changed ? { ...data, pages } : data;
+}
+
+/**
+ * A block, in a lane's pages: the creator's own posts go (`removeShowcaseFeedItemsFromInfiniteData`)
+ * and so does their name in everyone else's remix credits (`unnameCreatorInInfiniteData`).
+ */
+export function removeBlockedCreatorFromInfiniteData(
+  data: InfiniteData<ShowcaseFeedResponse> | undefined,
+  creatorId: string
+): InfiniteData<ShowcaseFeedResponse> | undefined {
+  return unnameCreatorInInfiniteData(removeShowcaseFeedItemsFromInfiniteData(data, { creatorId }), creatorId);
 }
 
 function matchesRemovalTarget(item: ShowcaseFeedItem, target: ShowcaseFeedRemovalTarget) {

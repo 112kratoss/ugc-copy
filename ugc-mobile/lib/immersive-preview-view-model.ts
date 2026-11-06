@@ -3,6 +3,7 @@ import type { CreatorToolId, GenerationListItem, OwnerPostListItem, PostResource
 import { withAppleZoom, type AppleZoomOpen } from './apple-zoom';
 import { getCreationAvailability, type CreationAvailability } from './creation-library';
 import { readGenerationSetup, type GenerationSetupEntry } from './generation-setup/generation-setup';
+import { readRemixCredit, withoutBlockedRemixCredit, type RemixCredit } from './remix-credit/remix-credit';
 import {
   getGenerationKind,
   getGenerationLabel,
@@ -73,6 +74,12 @@ export interface ImmersivePostDetails {
    * Details then reads the post for them (`usePostGenerationSetup`).
    */
   generationSetup?: GenerationSetupEntry[];
+  /**
+   * A remix post's credit (owner, 2026-11-05; `lib/remix-credit`), as its card
+   * carries it: the post it remixed while that post may be shown, and the
+   * chain's first creator when someone else. Unset on a post that is no remix.
+   */
+  remixCredit?: RemixCredit;
   creatorLabel: string;
   creatorAvatar: string | null;
   saveCount: number;
@@ -400,6 +407,28 @@ export function profileMediaFeedHref({
   };
 }
 
+/**
+ * The reel's items with no remix credit naming `blockedCreatorId` (owner, 2026-11-05: nobody a block stands
+ * between the viewer and is named): a block takes the creator's name out of the posts that stay. The
+ * same array comes back where no credit names them.
+ */
+export function unnameCreatorInImmersiveItems(items: ImmersivePreviewItem[], blockedCreatorId: string): ImmersivePreviewItem[] {
+  let changed = false;
+  const next = items.map((item) => {
+    const credit = item.details?.remixCredit;
+    if (!item.details || !credit) return item;
+    // An original left alone never names the post's own creator (`buildRemixCredit`).
+    const kept = withoutBlockedRemixCredit(credit, (id) => id === blockedCreatorId, item.creatorId);
+    if (kept === credit) return item;
+    changed = true;
+    const details: ImmersivePostDetails = { ...item.details };
+    if (kept) details.remixCredit = kept;
+    else delete details.remixCredit;
+    return { ...item, details };
+  });
+  return changed ? next : items;
+}
+
 export function buildImmersiveShowcaseItems(
   source: PreviewViewerSource,
   items: ShowcaseFeedItem[],
@@ -640,6 +669,7 @@ function showcaseToImmersiveItem(
   // The server takes comments on public posts only.
   const canComment = item.visibility !== 'unlisted';
   const generationSetup = readGenerationSetup(item.generationSetup);
+  const remixCredit = readRemixCredit(item.remixCredit);
 
   return {
     id: item.id,
@@ -688,6 +718,7 @@ function showcaseToImmersiveItem(
       toolLabel: item.sourceTool?.trim() || null,
       model: item.model ?? null,
       ...(generationSetup ? { generationSetup } : {}),
+      ...(remixCredit ? { remixCredit } : {}),
       creatorLabel,
       creatorAvatar: item.creator.avatar,
       saveCount: item.saveCount,

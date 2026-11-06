@@ -79,6 +79,7 @@ import {
   forgetAnonymousShowcaseFeedRemoval,
   getQualifiedImpressionKey,
   rememberAnonymousShowcaseFeedRemoval,
+  removeBlockedCreatorFromInfiniteData,
   removeShowcaseFeedItemsFromInfiniteData,
   restoreShowcaseFeedItemsToInfiniteData,
   trackFeedFeedbackRequest,
@@ -852,7 +853,7 @@ export default function ShowcaseScreen() {
         await api.blockUser(creatorId);
         queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
           { queryKey: viewerFeedQueryKey },
-          (current) => removeShowcaseFeedItemsFromInfiniteData(current, { creatorId })
+          (current) => removeBlockedCreatorFromInfiniteData(current, creatorId)
         );
         takeOffHomeShelf(queryClient, { creatorId });
         // Their cached grid becomes the server's blocked answer, as the creator

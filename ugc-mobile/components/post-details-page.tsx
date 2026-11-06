@@ -3,6 +3,9 @@ import { Copy, Crown, FileText, Lock, MessageCircle, MoreVertical, Repeat2 } fro
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 
+import { router } from 'expo-router';
+
+import { RemixCreditLine } from '@/components/remix-credit-line';
 import { ResourcePrompt } from '@/components/resource-prompt';
 import { GenerationOutputs, GenerationReferences } from '@/components/generation-references';
 import { PostResourceBundleContent, ResourceRevisionSwitch } from '@/components/post-resource-bundle-content';
@@ -26,6 +29,7 @@ import {
   getDetailsTitle,
   getResourceSectionState,
   getUnlockPriceLabel,
+  postRemixesLink,
   prepareUnlockedResourcesForDetails,
   retainedRecipeUnlock,
   shouldReadRetainedRecipe,
@@ -248,7 +252,12 @@ export function PostDetailsPage({
   // The Comments button, where the post takes comments and the page can open them. It carries
   // the count, so the line under the title leaves it out.
   const openComments = item.canComment ? onComments : undefined;
-  const meta = buildPostDetailsMeta(item, undefined, { commentsOnButton: Boolean(openComments) });
+  // The remix count opens the post's remixes (owner, 2026-11-05), so the line leaves it out.
+  const remixesLink = postRemixesLink(item);
+  const meta = buildPostDetailsMeta(item, undefined, {
+    commentsOnButton: Boolean(openComments),
+    remixesOnLink: Boolean(remixesLink),
+  });
   const canOpenCreator = Boolean(onCreatorOpen && item.creatorUsername);
   const commentCount = Math.max(0, item.commentCount ?? 0);
   // A text post derives both `prompt` and `body` from the same paragraph, so
@@ -423,10 +432,38 @@ export function PostDetailsPage({
               </Text>
             ) : null}
           </Pressable>
+          {/* A remix names what it remixed, automatically (owner, 2026-11-05). */}
+          <RemixCreditLine
+            remixCredit={details.remixCredit}
+            numberOfLines={2}
+            onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
+            onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}
+          />
           {meta.metaParts.length > 0 ? (
             <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
               {meta.metaParts.join(' · ')}
             </Text>
+          ) : null}
+          {remixesLink ? (
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel={remixesLink.label}
+              accessibilityHint="Opens the remixes posted from this post"
+              onPress={() => router.push(remixesLink.href as never)}
+              hitSlop={verticalHitSlop(appTheme.type.bodySm.lineHeight)}
+              style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+                alignSelf: 'flex-start',
+                opacity: pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              <Repeat2 size={appTheme.icon.sm} color={theme.colors.text} />
+              <Text style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>
+                {remixesLink.label}
+              </Text>
+            </Pressable>
           ) : null}
           {/* "9:16 · 1K · JPG", in the web post page's words; VoiceOver names each value. */}
           {generationSetup.entries.length > 0 ? (

@@ -8,10 +8,24 @@ import { SkeletonBone } from '@/components/skeleton';
 import { AppText, SecondaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { ONE_TIME_POST_READ } from '@/lib/one-time-post-read';
+import { remixingNotice } from '@/lib/remix-credit/remix-credit';
 import { showcasePostRemixSourceContext } from '@/lib/remix-start';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+
+/**
+ * Whose post a remix starts from, as the source's bundle says (`RemixSourceBundle.sourcePost`): sent
+ * only for someone else's post, so its creator hears of the remix. Untrusted until read here.
+ */
+export type RemixSourcePostWord = { title?: unknown; creatorUsername?: unknown };
+
+/** The bundle's word on whose post this is, or null where it gave none it can be read by. */
+export function remixSourcePostOf(bundle: { sourcePost?: RemixSourcePostWord | null } | null | undefined) {
+  const post = bundle?.sourcePost;
+  if (!post || typeof post.creatorUsername !== 'string') return null;
+  return { creatorUsername: post.creatorUsername, title: typeof post.title === 'string' ? post.title : null };
+}
 
 /** What a remix's creator is told of its source: its ids, and the row when the link brought it. */
 export type RemixSourceSeed = {
@@ -53,7 +67,16 @@ const POST_ID = /^[\w-]+$/;
  * that cannot be read leaves the plain row, and is not asked for again when the
  * app comes back to the foreground.
  */
-export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; original?: RemixOriginalAction | null }) {
+export function RemixSourceRow({
+  source,
+  original,
+  sourcePost,
+}: {
+  source: RemixSourceSeed;
+  original?: RemixOriginalAction | null;
+  /** The source bundle's word on whose post this is (`remixSourcePostOf`), once it has been read. */
+  sourcePost?: { creatorUsername: string; title: string | null } | null;
+}) {
   const theme = useAppTheme();
   const { fontScale } = useWindowDimensions();
   const { api, user } = useAuth();
@@ -93,6 +116,11 @@ export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; 
   const title = row?.title?.trim();
   const creatorLabel = row?.creatorLabel?.trim();
   const thumbnailUrl = row?.thumbnailUrl?.trim();
+  // Whose post it is and that they hear of the remix (owner, 2026-11-05), by their handle. Only the
+  // server says so (the source bundle's sourcePost): it sends none for the viewer's own creation, a
+  // guest's included, which tells no one, so a label that only looks like someone else's never
+  // names them. Until the bundle is read the row stays as it was.
+  const naming = sourcePost ? remixingNotice({ username: sourcePost.creatorUsername, title: sourcePost.title ?? title }) : null;
   return (
     <View accessibilityLabel="Remix source post" style={ROW_STYLE}>
       {thumbnailUrl && thumbnailUrl !== failedPoster ? (
@@ -104,8 +132,12 @@ export function RemixSourceRow({ source, original }: { source: RemixSourceSeed; 
         />
       ) : null}
       <View style={{ flex: 1, gap: 2 }}>
-        <Text numberOfLines={1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>{title || 'Source creation'}</Text>
-        <Text numberOfLines={1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{creatorLabel ? `By ${creatorLabel}` : 'Make your own version'}</Text>
+        <Text numberOfLines={naming ? 2 : 1} style={{ color: theme.colors.text, ...appTheme.type.bodySm, fontWeight: '700' }}>
+          {naming?.label ?? (title || 'Source creation')}
+        </Text>
+        <Text numberOfLines={naming ? 2 : 1} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>
+          {naming?.line ?? (creatorLabel ? `By ${creatorLabel}` : 'Make your own version')}
+        </Text>
       </View>
       {original ? <OriginalAsReference action={original} /> : null}
     </View>

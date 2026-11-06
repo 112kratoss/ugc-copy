@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import { router } from 'expo-router';
 import { FileText, Globe, Heart, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Repeat2, Wand2 } from 'lucide-react-native';
 import { cloneElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { ActivityIndicator, Animated, Easing, Pressable, Text, View } from 'react-native';
@@ -23,6 +24,7 @@ import {
 } from '@/lib/viewer-actions';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { renderReelIcon } from '@/components/reel-icon';
+import { RemixCreditLine } from '@/components/remix-credit-line';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
 
 /**
@@ -381,6 +383,16 @@ export function ReelSlideChrome({
             />
           ) : null}
         </View>
+        {/* A remix names what it remixed (owner, 2026-11-05), from the card itself. */}
+        <RemixCreditLine
+          remixCredit={item.details?.remixCredit}
+          tone="media"
+          // Two lines, so "Original by" is never the part cut off.
+          numberOfLines={2}
+          textStyle={REEL_TEXT_SHADOW}
+          onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
+          onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}
+        />
         {reelCaption.title || reelCaption.caption ? (
           <Pressable
             accessibilityRole="button"

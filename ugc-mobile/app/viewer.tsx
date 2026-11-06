@@ -58,8 +58,10 @@ import {
   immersiveViewerReturnPath,
   isImmersiveSelectionMissing,
   selectActiveImmersiveVideoId,
+  unnameCreatorInImmersiveItems,
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
+import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
@@ -116,6 +118,7 @@ import {
   removeShowcaseFeedItems,
   removeShowcaseFeedItemsFromInfiniteData,
   restoreShowcaseFeedItemsToInfiniteData,
+  unnameCreatorInInfiniteData,
   trackFeedFeedbackRequest,
   undoFeedFeedback,
   type ShowcaseFeedEventDetails,
@@ -1287,8 +1290,28 @@ function ImmersivePreviewViewer() {
   // person just blocked (audit 02-5).
   const takeOutBlockedCreator = (creatorId: string) => {
     const removal = removeFromReel({ creatorId });
+    unnameBlockedCreator(creatorId);
     if (removal.remaining) return;
     requestAnimationFrame(creatorBacked && creatorReel.creatorId === creatorId ? leaveToExplore : leaveViewer);
+  };
+
+  // Their name leaves the credits of the posts that stay, in the reel and the lanes behind it
+  // (owner, 2026-11-05: nobody a block stands between the viewer and is named), as the server
+  // leaves them at the next read. A block is not undone from the reel, so nothing puts it back.
+  const unnameBlockedCreator = (creatorId: string) => {
+    setSessionItems((current) => {
+      const ordered = unnameCreatorInImmersiveItems(current.ordered, creatorId);
+      return ordered === current.ordered ? current : { ...current, ordered };
+    });
+    queryClient.setQueryData<ImmersiveSourceData>(sourceQueryKey, (data) => {
+      if (!data?.showcaseItems) return data;
+      const showcaseItems = itemsWithoutBlockedRemixCredits(data.showcaseItems, (id) => id === creatorId);
+      return showcaseItems === data.showcaseItems ? data : { ...data, showcaseItems };
+    });
+    queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+      { queryKey: viewerFeedQueryKey },
+      (data) => unnameCreatorInInfiniteData(data, creatorId)
+    );
   };
 
   // A creation deleted from its ••• leaves the reel as a blocked creator's

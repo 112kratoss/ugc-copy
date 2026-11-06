@@ -1,7 +1,9 @@
 import { CheckCircle2, Lock, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react-native';
+import { router } from 'expo-router';
 import { memo, useCallback, useContext } from 'react';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { RemixCreditLine } from '@/components/remix-credit-line';
 import { NativeMenu } from '@/components/native-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
 import { FEED_CARD_MEDIA_RADIUS, feedCardMediaWidth } from '@/lib/feed-card-geometry';
@@ -20,6 +22,7 @@ import { ShareGlyph } from '@/lib/platform-glyphs';
 import { showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model';
 import type { NativeMenuModel } from '@/lib/native-menu';
+import { readRemixCredit } from '@/lib/remix-credit/remix-credit';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
 import { accentColor, appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -62,6 +65,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   const theme = useAppTheme();
   const accent = accentColor(card.accent, theme.colors);
   const hasMedia = card.previewKind !== 'text' && Boolean(card.mediaUrl);
+  // A remix's credit, read once: a card that is no remix draws no line and leaves no gap.
+  const remixCredit = readRemixCredit(card.item.remixCredit);
   // The inset media and measured zoom source keep exactly the same width.
   const mediaWidth = feedCardMediaWidth(contentWidth);
   const mediaHeight = hasMedia ? getHomeFeedMediaHeight(card, mediaWidth) : 0;
@@ -114,6 +119,14 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
       openAccessibilityLabel={`Open ${card.title}`}
       timeLabel={card.timeLabel}
       title={card.title}
+      creditLine={remixCredit ? (
+        <RemixCreditLine
+          numberOfLines={2}
+          remixCredit={remixCredit}
+          onOpenPost={(postId) => router.push(`/post/${encodeURIComponent(postId)}` as never)}
+          onOpenCreator={(username) => router.push(`/creators/${encodeURIComponent(username)}` as never)}
+        />
+      ) : null}
       body={card.bodyText ? (
         <PostTextBlock
           text={card.bodyText}
