@@ -255,6 +255,7 @@ vi.mock('@/lib/use-profile-library-source', () => ({
   }),
 }));
 vi.mock('@/lib/media-zoom-transition', () => ({
+  IOS_BACK_FLIES_PICTURE: false,
   mediaItemAspectRatio: () => null,
   mediaRectInScreen: () => ({ x: 0, y: 0, width: 390, height: 844 }),
   showcaseMediaZoomPreview: () => null,

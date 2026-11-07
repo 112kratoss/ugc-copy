@@ -79,7 +79,10 @@ function wrapperStyles(element: React.ReactElement) {
   const root = tree.root;
   return {
     outer: flatten(root.findByType('animated-view' as never).props.style),
-    inner: flatten(root.findByType('view' as never).props.style),
+    // The tile's own view: the one it measures, which UIKit's zoom is never
+    // given (two empty views beside it are, `MediaZoomSourceView`).
+    inner: flatten(root.findAll((node) => node.type === ('view' as never) && typeof node.props.onLayout === 'function')[0]?.props.style
+      ?? root.findAllByType('view' as never)[0]!.props.style),
   };
 }
 

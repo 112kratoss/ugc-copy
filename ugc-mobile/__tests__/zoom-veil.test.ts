@@ -208,7 +208,7 @@ describe('the veil under the zoom', () => {
   // round it afterwards. Filmed with no veil at all, a close showed nothing
   // through the picture, so the tabs are there to be seen as it begins; a
   // pushed page, which UIKit scales up under the shrinking reel, still waits.
-  it('brings a screen that fills the window back as Back begins, and keeps the wait for a pushed page', () => {
+  it('keeps the wait for a pushed page as Back begins', () => {
     vi.useFakeTimers();
     const uncoveredAfter = (owner: string, fillsWindow: boolean) => {
       const veil = createScreenVeil();
@@ -226,9 +226,19 @@ describe('the veil under the zoom', () => {
       return elapsed;
     };
 
-    expect(uncoveredAfter('tabs', true)).toBe(ZOOM_VEIL_RETURN_MS);
     expect(uncoveredAfter('creator page', false)).toBe(ZOOM_VEIL_LIFT_DELAY_MS + ZOOM_VEIL_LIFT_MS);
     expect(ZOOM_VEIL_RETURN_MS).toBeLessThan(ZOOM_VEIL_LIFT_DELAY_MS);
+  });
+
+  // Instagram leaves its grid lit round its post viewer (filmed on the owner's
+  // iPhone 16e, 2026-11-08); the reel's own page is black as it grows.
+  it('drops no veil on a screen that fills the window', () => {
+    const veil = createScreenVeil();
+    registerScreenVeil('tabs', veil, true);
+    expect(dropZoomVeil('tabs', TILE)).toBeNull();
+    expect(veil.cover.get()).toBe(0);
+    expect(veil.hole.get()).toBeNull();
+    expect(getZoomVeilOpacity('tabs')).toBeNull();
   });
 
   it('clears when the reel leaves React any other way', () => {

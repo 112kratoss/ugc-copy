@@ -7,7 +7,7 @@ import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
-import { useIsFocused, useRoute } from '@react-navigation/native';
+import { useIsFocused } from '@react-navigation/native';
 import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
@@ -19,7 +19,7 @@ import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomProgress, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
 import { MediaZoomCarriedPicture, MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
-import { closesPictureAlone, mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
+import { closesPictureAlone, IOS_BACK_FLIES_PICTURE, mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
@@ -165,7 +165,7 @@ import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profi
 import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 import { createViewerTopControls, ViewerTopControlsContext } from '@/lib/viewer-top-controls';
-import { listenToTransition, useScreenLeaving } from '@/lib/use-screen-leaving';
+import { useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
@@ -641,8 +641,10 @@ function ImmersivePreviewViewer() {
   // it keeps the reel's own Back: the bar's pops before the app hears of it,
   // under UIKit's zoom. A bar button of the app's own in its place took the
   // back swipe away with the system Back (simulator, 2026-11-07); hidden, the
-  // bar leaves the swipe as it was.
-  const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({
+  // bar leaves the swipe as it was. Off on iOS since 2026-11-08
+  // (`IOS_BACK_FLIES_PICTURE`): every post has the bar's own Back, and UIKit's
+  // zoom shrinks the page into the tile, as Instagram's Back does.
+  const flownBack = IOS_BACK_FLIES_PICTURE && Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({
     picture: activeMedia.picture,
     videoUrl: activeMedia.playbackUrl,
     reducedMotion,
@@ -667,58 +669,16 @@ function ImmersivePreviewViewer() {
     playerFor: playbackHandoff.playerFor,
     onExit: leaveViewer,
   });
-  // iOS: UIKit's zoom shrinks the whole reel into the tile, not just the
-  // picture. The black around a picture that does not fill the screen shrank
-  // with it as a dark panel, cut to the tile's shape only at the end (owner,
-  // 2026-11-07: "a shadow appearing around the pic and that then shrinks"). So
-  // a reel zoomed out of a tile is clear behind its media while it is the
-  // screen in front and its push has finished, and through its own close: the
-  // picture alone shrinks back into the tile, as Photos does, while its chrome
-  // fades (`MediaZoomChrome`). At rest that looks the same, the navigator's
-  // backdrop behind the reel being black (lib/reel-backdrop.ts). It stays black
-  // while it grows (the screen beneath shows only once the push is over), while
-  // a page pushed over it covers it or is popped off it (the backdrop is let go
-  // of while covered), under Reduce Motion (no zoom runs), and when pushed
-  // without a zoom, which fades in over the screen beneath.
-  const reelNavigation = useNavigation();
-  const [pushLanded, setPushLanded] = useState(false);
-  // This reel's own close under way, as against a page pushed over it: both
-  // start a transition that closes it, and only its own begins while it is
-  // still the focused route. Focus is gone from the first frame of either.
-  const [closingSelf, setClosingSelf] = useState(false);
-  // Whether a page has been pushed on top of this reel, which is still below it.
-  const { key: reelRouteKey } = useRoute();
-  const reelIsCovered = useCallback(() => {
-    const state = (reelNavigation as unknown as { getState?: () => { index: number; routes: { key: string }[] } }).getState?.();
-    if (!state) return false;
-    const at = state.routes.findIndex((route) => route.key === reelRouteKey);
-    return at >= 0 && at < state.index;
-  }, [reelNavigation, reelRouteKey]);
-  useEffect(() => {
-    const unsubscribers = [
-      listenToTransition(reelNavigation, 'transitionStart', (event) => {
-        if (event.data?.closing === true) {
-          if ((reelNavigation as unknown as { isFocused: () => boolean }).isFocused()) setClosingSelf(true);
-          // A page pushed over the reel (the reel is still in the stack, below
-          // the top): black again until that page has come off. Popped from
-          // JS, it makes the reel focused as it starts to slide away, before
-          // the navigator's backdrop is held again (lib/reel-backdrop.ts), and
-          // a reel still counted as landed went clear over the light app
-          // ground for that render.
-          else if (reelIsCovered()) setPushLanded(false);
-        } else if (event.data?.closing === false) {
-          setClosingSelf(false);
-        }
-      }),
-      listenToTransition(reelNavigation, 'transitionEnd', (event) => {
-        if (event.data?.closing === false) setPushLanded(true);
-      }),
-      listenToTransition(reelNavigation, 'gestureCancel', () => setClosingSelf(false)),
-    ];
-    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [reelIsCovered, reelNavigation]);
+  // iOS: the reel keeps its black behind its media, and UIKit's zoom grows and
+  // shrinks that page, black, buttons and all, as Instagram's does (filmed on
+  // the owner's iPhone 16e beside ours, 2026-11-08), over a feed left lit
+  // (lib/zoom-veil.ts), into and out of the tile's shape
+  // (`useAppleZoomRetarget`). Clear behind its media, as the reel was from
+  // 2026-11-07, its page showed UIKit's own ground in the bands round a picture
+  // that does not fill the screen: white in the light scheme, a black slab in
+  // the dark one.
   const groundClear = Platform.OS === 'ios'
-    ? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (pushLanded && isFocused))
+    ? false
     // Android shrinks the reel itself (components/media-zoom.tsx), window and
     // all, in about three frames: too fast for a re-render to clear it as the
     // shrink begins (filmed on the Pixel 9a emulator). So it is always clear

@@ -11,6 +11,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * pop begins. With no alignment UIKit pinned the tile's crop to the top of the
  * reel's screen, and the two pictures slid across each other as the reel shrank.
  * So a tile works the rectangle out from its laid-out size and hands it over.
+ *
+ * Each tile gives UIKit two empty views beside it (2026-11-08): one in its own
+ * shape, which the closes shrink the reel into, lined up with the picture as
+ * above, and a page-shaped one the push grows the reel out of, lined up with
+ * the whole screen, so that the zoom's first frame has no offset to get wrong
+ * (`appleZoomPageFrame`).
  */
 
 type MockProps = { children?: React.ReactNode; style?: unknown } & Record<string, unknown>;
@@ -41,7 +47,7 @@ vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true
 vi.mock('@/components/apple-zoom', () => import('../components/apple-zoom.ios'));
 
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '../components/media-zoom';
-import { appleZoomAlignmentRect, resetMediaZoomTransitions } from '../lib/media-zoom-transition';
+import { appleZoomAlignmentRect, appleZoomPageFrame, resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { rememberDecodedImageAspectRatio } from '../lib/decoded-image-aspect-ratio';
 
 const SCREEN = { width: 402, height: 874 };
@@ -72,14 +78,27 @@ function mountTile(aspectRatio: number | null) {
       </MediaZoomSurface>
     );
   });
-  const nativeSource = () => tree.root.findByType('link-zoom-transition-source' as never);
+  const sources = () => tree.root.findAllByType('link-zoom-transition-source' as never);
+  // The view in the tile's own shape, which the closes shrink the reel into.
+  const nativeSource = () => {
+    const found = sources().filter((node) => !String(node.props.identifier).endsWith('#open'));
+    expect(found).toHaveLength(1);
+    return found[0]!;
+  };
+  // The page-shaped view the push grows the reel out of.
+  const openSource = () => {
+    const found = sources().filter((node) => String(node.props.identifier).endsWith('#open'));
+    expect(found).toHaveLength(1);
+    return found[0]!;
+  };
   const layOut = (size: { width: number; height: number }) => {
-    const tileView = nativeSource().findByType('view' as never);
+    // The measured view is the tile's own, beside the views UIKit's zoom is given.
+    const tileView = tree.root.find((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function');
     renderer.act(() => {
       tileView.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, ...size } } });
     });
   };
-  return { nativeSource, layOut };
+  return { nativeSource, openSource, layOut };
 }
 
 describe('a tile under UIKit’s zoom', () => {
@@ -104,6 +123,35 @@ describe('a tile under UIKit’s zoom', () => {
     // Centred on the reel's picture, not pinned to the top of the screen.
     expect(alignment.y + alignment.height / 2).toBeCloseTo(SCREEN.height / 2, 6);
     expect(alignment.y).toBeGreaterThan(180);
+  });
+
+  it('grows the reel out of the whole page at the tile\'s scale, lined up with the whole screen', () => {
+    const { nativeSource, openSource, layOut } = mountTile(HOLI);
+    expect(openSource().props.identifier).toBe(`${nativeSource().props.identifier}#open`);
+    layOut(HOME_CARD);
+    expect(openSource().props.alignment).toEqual({ x: 0, y: 0, width: SCREEN.width, height: SCREEN.height });
+    const frame = appleZoomPageFrame(SCREEN, HOLI, HOME_CARD)!;
+    // The page view: the screen's shape, scaled to the tile, the part of its
+    // picture the tile shows over the tile.
+    const page = openSource().findByType('view' as never);
+    expect(page.props.style).toEqual({ position: 'absolute', left: frame.page.x, top: frame.page.y, width: frame.page.width, height: frame.page.height });
+    expect(frame.page.width / frame.page.height).toBeCloseTo(SCREEN.width / SCREEN.height, 6);
+    const picture = appleZoomAlignmentRect(SCREEN, HOLI, HOME_CARD)!;
+    const scale = HOME_CARD.width / picture.width;
+    expect(frame.page.x + picture.x * scale).toBeCloseTo(0, 6);
+    expect(frame.page.y + picture.y * scale).toBeCloseTo(0, 6);
+    expect(frame.tile).toEqual({ x: picture.x * scale, y: picture.y * scale, width: HOME_CARD.width, height: HOME_CARD.height });
+  });
+
+  it('gives UIKit empty views, never the tile with its media', () => {
+    const { nativeSource, openSource, layOut } = mountTile(HOLI);
+    layOut(HOME_CARD);
+    for (const source of [nativeSource(), openSource()]) {
+      const views = source.findAllByType('view' as never);
+      expect(views).toHaveLength(1);
+      expect(views[0]!.props.children).toBeUndefined();
+      expect(views[0]!.props.onLayout).toBeUndefined();
+    }
   });
 
   it('follows a tile that is laid out again at another size', () => {

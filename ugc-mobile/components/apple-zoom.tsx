@@ -11,6 +11,7 @@ export function AppleZoomSource({ children }: {
   identifier: string | null;
   aspectRatio: number | null;
   tile: ZoomSize | null;
+  pageShaped?: boolean;
   children: ReactNode;
 }) {
   return children;

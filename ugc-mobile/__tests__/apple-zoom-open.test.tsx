@@ -152,7 +152,8 @@ describe('a tile opening under the native zoom', () => {
     const open = vi.fn();
     renderer.act(() => source.capture(open));
 
-    expect(open).toHaveBeenCalledWith({ sourceId: source.appleZoomId });
+    // The push grows the reel out of the page-shaped view beside the tile (lib/apple-zoom.ts).
+    expect(open).toHaveBeenCalledWith({ sourceId: `${source.appleZoomId}#open` });
     expect(getZoomFlight()).toBeNull();
     const origin = peekPendingZoomOrigin('post-1', Date.now());
     expect(origin).toMatchObject({ itemId: 'post-1', native: true, flightId: null, rect: null });

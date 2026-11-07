@@ -10,12 +10,13 @@
  */
 import { Link, useLocalSearchParams, useNavigation } from 'expo-router';
 import { LinkZoomTransitionSource } from 'expo-router/build/link/preview/native';
-import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useWindowDimensions, View } from 'react-native';
 
 import {
   APPLE_ZOOM_SOURCE_PARAM,
   appleZoomSourceId,
+  isAppleZoomOpenSourceId,
   parseAppleZoomSourceId,
 } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
@@ -74,6 +75,7 @@ export function AppleZoomSource({
   identifier,
   aspectRatio,
   tile,
+  pageShaped = false,
   children,
 }: {
   identifier: string | null;
@@ -81,12 +83,18 @@ export function AppleZoomSource({
   aspectRatio: number | null;
   /** The tile view's size once laid out. */
   tile: ZoomSize | null;
+  /**
+   * The view inside is the reel's whole screen at the tile's scale, placed so
+   * that its picture covers the tile (`appleZoomPageFrame`), and it lines up
+   * with the whole screen rather than the picture.
+   */
+  pageShaped?: boolean;
   children: ReactNode;
 }) {
   const { width, height } = useWindowDimensions();
   const alignment = useMemo(
-    () => (tile ? appleZoomAlignmentRect({ width, height }, aspectRatio, tile) : null),
-    [aspectRatio, height, tile, width]
+    () => (!tile ? null : pageShaped ? { x: 0, y: 0, width, height } : appleZoomAlignmentRect({ width, height }, aspectRatio, tile)),
+    [aspectRatio, height, pageShaped, tile, width]
   );
   const isWithheld = useSyncExternalStore(subscribeToWithheld, () => identifier !== null && withheld.has(identifier));
   if (!identifier || !isAppleZoomAvailable()) return children;
@@ -124,7 +132,9 @@ export function AppleZoomSource({
  */
 export function AppleZoomTarget({ rect }: { rect: ZoomRect }) {
   const identifier = useAppleZoomSourceId();
-  if (!identifier) return null;
+  // While the push still carries the page-shaped view it grew out of, the
+  // zoom lines up with the whole page, as that view says itself.
+  if (!identifier || isAppleZoomOpenSourceId(identifier)) return null;
   return (
     <Link.AppleZoomTarget key={identifier}>
       <View
@@ -152,14 +162,26 @@ export function useAppleZoomSourceId(): string | null {
 export function useAppleZoomRetarget(activeItemId: string | null) {
   const navigation = useNavigation();
   const sourceId = useAppleZoomSourceId();
+  // A reel grows out of the page-shaped view beside its tile
+  // (`appleZoomOpenSourceId`) and closes into the tile's own view, which UIKit
+  // shrinks it into the shape of. It changes over once its push has landed:
+  // changed while the push runs, the source of a running zoom would move.
+  const opening = isAppleZoomOpenSourceId(sourceId);
+  const [landed, setLanded] = useState(!opening);
+  useEffect(() => {
+    if (landed) return undefined;
+    return navigation.addListener('transitionEnd' as never, ((event: { data?: { closing?: boolean } }) => {
+      if (event?.data?.closing === false) setLanded(true);
+    }) as never);
+  }, [landed, navigation]);
   useEffect(() => {
     if (!sourceId || !activeItemId) return;
     const current = parseAppleZoomSourceId(sourceId);
     if (!current) return;
     prepareAppleZoomReturn(current.surfaceId, activeItemId);
-    if (current.itemId !== activeItemId) {
+    if (landed && (opening || current.itemId !== activeItemId)) {
       navigation.setParams({ [APPLE_ZOOM_SOURCE_PARAM]: appleZoomSourceId(current.surfaceId, activeItemId) } as never);
     }
     return () => clearAppleZoomReturn(current.surfaceId, activeItemId);
-  }, [activeItemId, navigation, sourceId]);
+  }, [activeItemId, landed, navigation, opening, sourceId]);
 }

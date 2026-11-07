@@ -16,7 +16,7 @@ import {
 import { Image } from 'expo-image';
 import { useNavigation } from 'expo-router';
 import { VideoView, type VideoPlayer } from 'expo-video';
-import { Platform, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, useWindowDimensions, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -32,6 +32,7 @@ import Animated, {
 
 import {
   advanceZoomFlight,
+  appleZoomPageFrame,
   beginTileOpen,
   beginZoomFlight,
   canOpenFromTile,
@@ -47,6 +48,7 @@ import {
   getZoomFlight,
   getZoomSource,
   holdZoomPicture,
+  IOS_BACK_FLIES_PICTURE,
   isReturnableRect,
   landZoomFlight,
   markZoomFlightDisplayed,
@@ -109,7 +111,7 @@ import {
   type ZoomVeilHole,
 } from '@/lib/zoom-veil';
 import { useReducedMotion } from '@/lib/motion';
-import { appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
+import { appleZoomOpenSourceId, appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { mediaColors } from '@/lib/theme';
 import { AppleZoomSource, withholdAppleZoomSource } from '@/components/apple-zoom';
@@ -1078,7 +1080,8 @@ export function useMediaZoomSource({
         veil,
         recordedAt: Date.now(),
       });
-      open({ sourceId: appleZoomId });
+      // The reel grows out of the page-shaped view beside the tile (`MediaZoomSourceView`).
+      open({ sourceId: appleZoomOpenSourceId(appleZoomId) });
       endTileOpenWhenSettled(openSerial);
       return;
     }
@@ -1164,6 +1167,18 @@ export function MediaZoomSourceView({
     const { width, height } = event.nativeEvent.layout;
     setAppleZoomTile((current) => (current?.width === width && current.height === height ? current : { width, height }));
   }, []);
+  const zoomed = Boolean(source.appleZoomId);
+  const radius = source.radius ?? 0;
+  // The view UIKit's zoom grows the reel out of: the reel's whole screen at the
+  // tile's scale, placed so that its picture covers the tile
+  // (`appleZoomPageFrame`), so that the zoom lines up with the whole screen and
+  // its first frame has nothing to move. Until the tile has a size, the tile's
+  // own rectangle.
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
+  const pageFrame = useMemo(
+    () => (zoomed && appleZoomTile ? appleZoomPageFrame({ width: screenWidth, height: screenHeight }, source.aspectRatio, appleZoomTile) : null),
+    [appleZoomTile, screenHeight, screenWidth, source.aspectRatio, zoomed]
+  );
   return (
     // Both wrappers stay out of the layout's way: `flexBasis: 'auto'` keeps a
     // tile that sizes itself from its media (a feed card) at its own height,
@@ -1171,35 +1186,53 @@ export function MediaZoomSourceView({
     // tile, which is `flex: 1` inside a fixed cell) still fill it. Without the
     // grow those tiles collapse to nothing.
     <Animated.View collapsable={false} style={[ZOOM_SOURCE_FILL, style, source.hiddenStyle]}>
-      {/* On iOS 18 the measured view is also the one UIKit's zoom grows into the reel. */}
-      <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
-        <View
-          ref={source.ref}
-          collapsable={false}
-          onLayout={isAppleZoomAvailable() ? measureAppleZoomTile : undefined}
-          // UIKit's zoom resizes this registered view to the reel's window as
-          // it grows or shrinks, while what it holds keeps the tile's size. A
-          // ground of its own filled the rest of that window: a black panel
-          // under the picture as a close shrank it (owner, 2026-11-07). Clear,
-          // the picture alone changes size; the feed beneath is under the
-          // zoom's black veil while the reel grows, so it cannot wash the
-          // picture. Clipped to the tile's corners still.
-          style={[ZOOM_SOURCE_FILL, source.appleZoomId ? {
-            backgroundColor: 'transparent',
-            borderRadius: source.radius ?? 0,
-            borderCurve: 'continuous',
-            overflow: 'hidden',
-          } : null]}
-        >
-          <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
-            <MediaZoomTileKeyContext.Provider value={source.tileKey}>
-              <MediaZoomTileShapedContext.Provider value={Boolean(source.appleZoomId)}>
-                {children}
-              </MediaZoomTileShapedContext.Provider>
-            </MediaZoomTileKeyContext.Provider>
-          </MediaZoomVideoOfferContext.Provider>
-        </View>
-      </AppleZoomSource>
+      <View
+        ref={source.ref}
+        collapsable={false}
+        onLayout={isAppleZoomAvailable() ? measureAppleZoomTile : undefined}
+        // Clipped to the tile's corners under the zoom, as the views beside it
+        // are drawn with.
+        style={[ZOOM_SOURCE_FILL, zoomed ? { borderRadius: radius, borderCurve: 'continuous', overflow: 'hidden' } : null]}
+      >
+        <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
+          <MediaZoomTileKeyContext.Provider value={source.tileKey}>
+            <MediaZoomTileShapedContext.Provider value={zoomed}>
+              {children}
+            </MediaZoomTileShapedContext.Provider>
+          </MediaZoomTileKeyContext.Provider>
+        </MediaZoomVideoOfferContext.Provider>
+      </View>
+      {/*
+        iOS 18: UIKit's zoom (lib/apple-zoom.ts) is given two empty views
+        beside the tile, never the tile itself. It resizes the view it grows or
+        shrinks the reel with to the window, and React Native content keeps the
+        size and place Yoga gave it: given the tile, its picture dropped inside
+        its own frame as an open began, and a see-through copy of the card rode
+        over the growing reel (owner's iPhone, 2026-11-07). Empty, the views
+        draw nothing UIKit could move; the tile stays where it is under the
+        window, playing on, and UIKit's crossfade is from it to the reel and
+        back.
+      */}
+      {zoomed ? (
+        // The view a close shrinks the reel into: the tile's own rectangle and
+        // corners, lined up with the part of the picture the tile shows, so the
+        // page comes down into the tile's shape and lands on the tile itself.
+        <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
+          <View pointerEvents="none" collapsable={false} style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' }]} />
+        </AppleZoomSource>
+      ) : null}
+      {zoomed && source.appleZoomId ? (
+        // The view an open grows the reel out of (`appleZoomOpenSourceId`).
+        <AppleZoomSource identifier={appleZoomOpenSourceId(source.appleZoomId)} aspectRatio={source.aspectRatio} tile={appleZoomTile} pageShaped={pageFrame !== null}>
+          <View
+            pointerEvents="none"
+            collapsable={false}
+            style={pageFrame
+              ? { position: 'absolute', left: pageFrame.page.x, top: pageFrame.page.y, width: pageFrame.page.width, height: pageFrame.page.height }
+              : StyleSheet.absoluteFill}
+          />
+        </AppleZoomSource>
+      ) : null}
     </Animated.View>
   );
 }
@@ -1594,7 +1627,9 @@ export function useMediaZoomStage({
           return;
         }
         if (!navigation.isFocused()) return;
-        nativeCloseChrome.set(0);
+        // The rail and caption stay on the page UIKit shrinks under the finger,
+        // as Instagram keeps them (filmed 2026-11-08), and go with it into the
+        // tile in UIKit's crossfade.
         if (handedBackRef.current) return;
         gestureClose = true;
         liftZoomVeil(veil, true);
@@ -1909,7 +1944,8 @@ export function useMediaZoomStage({
     // zoom: it shrinks the reel into the tile registered for the post on
     // screen, and the pop is all the reel does (handing a lent player back as
     // it begins).
-    if (nativeZoom && !pictureOnly) {
+    // On iOS 18 the picture does not fly on its own (`IOS_BACK_FLIES_PICTURE`).
+    if (nativeZoom && (!IOS_BACK_FLIES_PICTURE || !pictureOnly)) {
       leave();
       return;
     }
@@ -1925,7 +1961,15 @@ export function useMediaZoomStage({
     // UIKit shrank it from the reel's size into its cell under the flight
     // (simulator, 2026-11-07).
     if (nativeZoom) {
-      restoreZoomSourceRef.current = withholdAppleZoomSource(appleZoomSourceId(origin.surfaceId, activeItemRef.current));
+      // Both of the tile's views: the reel closes into the tile's own view once
+      // it has landed, and into the page-shaped view it grew out of until then.
+      const tileSourceId = appleZoomSourceId(origin.surfaceId, activeItemRef.current);
+      const restoreTileSource = withholdAppleZoomSource(tileSourceId);
+      const restoreOpenSource = withholdAppleZoomSource(appleZoomOpenSourceId(tileSourceId));
+      restoreZoomSourceRef.current = () => {
+        restoreTileSource();
+        restoreOpenSource();
+      };
       setTimeout(() => restoreZoomSourceRef.current?.(), ZOOM_SOURCE_WITHHELD_MS);
     }
     // A close the picture cannot fly. On iOS that is UIKit's zoom after all,

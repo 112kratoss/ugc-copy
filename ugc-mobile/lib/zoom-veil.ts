@@ -78,6 +78,12 @@ import type { ZoomRect } from './media-zoom-transition';
  * blacked the whole screen out for that stretch before the picture appeared.
  *
  * Android and iOS before 18 open the reel another way and never veil.
+ *
+ * Since 2026-11-08 a screen that fills the window (the tabs) is not veiled at
+ * all (`dropZoomVeil`): Instagram leaves its grid lit round its post viewer as
+ * it grows and shrinks, and the reel's own page is black as it grows out of
+ * its tile now, so there is no see-through picture to cover (filmed on the
+ * owner's iPhone 16e). Pages pushed on the stack still veil.
  */
 
 /** The tapped tile's rectangle on screen and the radius its corners are drawn with. */
@@ -233,6 +239,10 @@ export function dropZoomVeil(owner: string | null, hole: ZoomVeilHole | null): Z
   if (!isAppleZoomAvailable() || !owner) return null;
   const state = screens.get(owner);
   if (!state) return null;
+  // A screen that fills the window (the tabs) stays lit round the growing
+  // reel, as Instagram leaves its grid (filmed on the owner's iPhone,
+  // 2026-11-08): the reel's own black page grows over it instead.
+  if (state.fillsWindow) return null;
   serials += 1;
   const drop: ZoomVeilDrop = { owner, serial: serials };
   state.serial = drop.serial;

@@ -659,6 +659,52 @@ export function appleZoomAlignmentRect(
   return { x: media.x, y: media.y + (media.height - height) / 2, width: media.width, height };
 }
 
+/**
+ * The reel's whole screen drawn at a tile's scale, placed so that the part of
+ * its picture the tile shows (`appleZoomAlignmentRect`) covers the tile: the
+ * view UIKit's zoom grows the reel out of on iOS 18 (`AppleZoomSource`
+ * `pageShaped`), lined up with the whole screen.
+ *
+ * Lined up with the picture instead, the zoom's first frame on an iPhone drew
+ * the tile's picture lower in its tile by as much as the picture sits below the
+ * top of the screen, scaled to the tile: 83 pt for a 179×222 Explore tile, 104 pt
+ * for a square one ("the media goes down first and then opens", owner,
+ * 2026-11-07). The simulator never showed it. A screen-shaped source has its
+ * alignment at the top left, where that first frame puts it anyway.
+ *
+ * `page` is relative to the tile's top left; `tile` is the tile's own rectangle
+ * inside the page. Null until the tile has a size.
+ */
+export function appleZoomPageFrame(
+  screen: ZoomSize,
+  aspectRatio: number | null | undefined,
+  tile: ZoomSize
+): { page: ZoomRect; tile: ZoomRect } | null {
+  const aligned = appleZoomAlignmentRect(screen, aspectRatio, tile);
+  if (!aligned || !(aligned.width > 0)) return null;
+  const scale = tile.width / aligned.width;
+  return {
+    page: { x: -aligned.x * scale, y: -aligned.y * scale, width: screen.width * scale, height: screen.height * scale },
+    tile: { x: aligned.x * scale, y: aligned.y * scale, width: tile.width, height: tile.height },
+  };
+}
+
+/**
+ * iOS 18: whether Back flies a still picture home alone into its tile
+ * (`closesPictureAlone`, owner, 2026-11-07: "can't it be just the media
+ * only?") rather than leaving the close to UIKit's zoom, as every gesture close
+ * and every video's Back is. Off since 2026-11-08: filmed on the owner's iPhone
+ * 16e beside Instagram, whose Back shrinks the whole page, black and buttons
+ * and all, into the tile from the frame after the finger lifts and lands about
+ * seven frames later over a grid lit throughout
+ * (`archive/ios-ig-transitions-2026-11-08/`), the picture alone waited four
+ * frames on black for the pop to bring the feed back and then took twelve
+ * more. With it off a picture's reel has the navigation bar's own Back, which
+ * pops at once (app/viewer.tsx), and UIKit shrinks the page into the tile's
+ * shape. Set it back to true for the picture alone; Android always flies it.
+ */
+export const IOS_BACK_FLIES_PICTURE = false;
+
 export interface ZoomGeometry {
   screen: ZoomSize;
   /** The tile to grow from or return to; null when the reel has none. */
