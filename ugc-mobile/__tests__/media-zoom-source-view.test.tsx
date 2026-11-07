@@ -63,6 +63,10 @@ const source: MediaZoomSource = {
   tileKey: 'surface\u0000post',
   appleZoomId: null,
   aspectRatio: null,
+  standIn: null,
+  standInDrawn: () => {},
+  liftedStyle: { opacity: 1 },
+  standInStyle: { opacity: 0 },
 };
 
 function flatten(style: unknown): Record<string, unknown> {
@@ -70,16 +74,19 @@ function flatten(style: unknown): Record<string, unknown> {
   return (style ?? {}) as Record<string, unknown>;
 }
 
-/** The animated wrapper (mocked as `animated-view`) and the measured one inside it. */
+/** The animated wrapper (mocked as `animated-view`), the measured one inside it, and the zoom's stand-in. */
 function wrapperStyles(element: React.ReactElement) {
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
     tree = renderer.create(element);
   });
   const root = tree.root;
+  const [outer, inner] = root.findAllByType('animated-view' as never);
+  const standIn = root.findAllByType('expo-image' as never)[0] ?? null;
   return {
-    outer: flatten(root.findByType('animated-view' as never).props.style),
-    inner: flatten(root.findByType('view' as never).props.style),
+    outer: flatten(outer.props.style),
+    inner: flatten(inner.props.style),
+    standIn: standIn ? { ...standIn.props, style: flatten(standIn.props.style) } : null,
   };
 }
 
@@ -244,6 +251,37 @@ describe('the view a tile hands to the reel', () => {
     expect(shaped('zoom|surface|post')).toEqual({ seen: true, radius: 16, overflow: 'hidden' });
     // Where the zoom does not run the tile keeps its own corners and outline.
     expect(shaped(null)).toEqual({ seen: false, radius: undefined, overflow: undefined });
+  });
+
+  // UIKit's zoom resizes the view it grows the reel out of to its window from
+  // the first frame, and a React Native view keeps what it holds where Yoga put
+  // it: the tile's picture and badge rode tile-sized in the top corner of the
+  // growing window (owner's iPhone, 2026-11-07). The registered view is an
+  // expo-image of the picture alone, whose image view follows its bounds, laid
+  // over the tile and see-through until a still tile's open lifts it.
+  it('hands UIKit a stand-in of the picture alone, over the tile and see-through at rest', () => {
+    const preview = { url: 'https://cdn.example/p.jpg', cacheKey: 'p' };
+    const { inner, standIn } = wrapperStyles(
+      <MediaZoomSourceView source={{ ...source, appleZoomId: 'zoom|surface|post', radius: 16, standIn: preview }}>
+        <TileContent />
+      </MediaZoomSourceView>
+    );
+
+    expect(standIn).toMatchObject({
+      source: { uri: preview.url, cacheKey: 'p' },
+      contentFit: 'cover',
+      pointerEvents: 'none',
+      style: { position: 'absolute', borderRadius: 16, opacity: 0 },
+    });
+    // The tile itself shows until the open lifts it.
+    expect(inner.opacity).toBe(1);
+
+    // Where the zoom does not run there is no stand-in.
+    expect(wrapperStyles(
+      <MediaZoomSourceView source={{ ...source, standIn: preview }}>
+        <TileContent />
+      </MediaZoomSourceView>
+    ).standIn).toBeNull();
   });
 
   it('hands its post to the app shell as the finger lands, to ask ahead for what the post draws', () => {

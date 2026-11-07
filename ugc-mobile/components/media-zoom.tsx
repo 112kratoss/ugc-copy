@@ -16,7 +16,7 @@ import {
 import { Image } from 'expo-image';
 import { useNavigation } from 'expo-router';
 import { VideoView, type VideoPlayer } from 'expo-video';
-import { Platform, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, View, type ImageStyle, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -28,7 +28,10 @@ import Animated, {
   useFrameCallback,
   useSharedValue,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
+
+const ZoomStandInImage = Animated.createAnimatedComponent(Image);
 
 import {
   advanceZoomFlight,
@@ -476,6 +479,31 @@ export function peekOpeningPost(itemId: string, now: number): ImmersivePreviewIt
  * and would each open the post again; an idle callback runs only once they have
  * all gone through, however long that render took.
  */
+/**
+ * The tile whose stand-in UIKit's zoom is growing (iOS; `MediaZoomSourceView`).
+ * It is put back once the reel has landed over it, when any close begins, when
+ * the reel goes, or at the deadline — a push that never happened must not leave
+ * a tile as its picture alone.
+ */
+let liftedTile: SharedValue<number> | null = null;
+const TILE_LIFT_DEADLINE_MS = 2000;
+
+function liftTile(lifted: SharedValue<number>) {
+  settleTileLift();
+  liftedTile = lifted;
+  lifted.set(1);
+  setTimeout(() => {
+    if (liftedTile === lifted) settleTileLift();
+  }, TILE_LIFT_DEADLINE_MS);
+}
+
+/** Puts the lifted tile back as it was (see `liftTile`). */
+export function settleTileLift() {
+  const lifted = liftedTile;
+  liftedTile = null;
+  lifted?.set(0);
+}
+
 function endTileOpenWhenSettled(serial: number) {
   setTimeout(() => {
     const whenIdle = globalThis.requestIdleCallback;
@@ -920,6 +948,16 @@ export interface MediaZoomSource {
   radius?: number;
   /** width / height of the media as the reel draws it, as the tile was given it. */
   aspectRatio: number | null;
+  /**
+   * The picture UIKit's zoom grows out of in place of the tile (iOS 18), and
+   * the styles that swap the two while a still tile's open is under way; see
+   * `MediaZoomSourceView`.
+   */
+  standIn: ZoomPreview | null;
+  /** The stand-in has its picture; until it does, an open leaves the tile as it is. */
+  standInDrawn: () => void;
+  liftedStyle: StyleProp<ViewStyle>;
+  standInStyle: StyleProp<ImageStyle>;
 }
 
 /**
@@ -963,6 +1001,19 @@ export function useMediaZoomSource({
   const ref = useRef<View | null>(null);
   const hidden = useSharedValue(0);
   const hiddenStyle = useAnimatedStyle(() => ({ opacity: 1 - hidden.value }));
+  // 1 while UIKit's zoom grows the reel out of this tile's stand-in (iOS);
+  // see `MediaZoomSourceView` and `liftTile`.
+  const lifted = useSharedValue(0);
+  const liftedStyle = useAnimatedStyle(() => ({ opacity: 1 - lifted.value }));
+  const standInStyle = useAnimatedStyle(() => ({ opacity: lifted.value })) as StyleProp<ImageStyle>;
+  const standInDrawnRef = useRef(false);
+  const standInUrl = preview?.url ?? null;
+  useEffect(() => {
+    standInDrawnRef.current = false;
+  }, [standInUrl]);
+  const standInDrawn = useCallback(() => {
+    standInDrawnRef.current = true;
+  }, []);
   const active = Boolean(surfaceId) && enabled && Boolean(itemId);
   // iOS 18: the tile's view is registered with UIKit's zoom under this
   // identifier (`AppleZoomSource`), and a tap sends it along in the push.
@@ -1054,6 +1105,13 @@ export function useMediaZoomSource({
         ? { player: offer.player, url: offer.url }
         : null;
       if (video) holdVideoLoan(video.player, zoomTileKey(surfaceId, itemId), video.url);
+      // A still tile hands the zoom its stand-in (`MediaZoomSourceView`): the
+      // picture alone, which UIKit stretches with the window it grows, while
+      // the tile itself is hidden so no copy of it stays behind. Only once the
+      // stand-in has its picture: an empty one left the tile blank. A tile
+      // playing a video stays as it is, under the reel growing over it: the
+      // stand-in is the clip's poster, an earlier frame than the one showing.
+      if (!video && standInDrawnRef.current) liftTile(lifted);
       // The screen goes black around this tile, under the transition that
       // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
       // reel simply appears. Fabric answers `measureInWindow` before it returns.
@@ -1135,16 +1193,30 @@ export function useMediaZoomSource({
     // Fabric answers `measureInWindow` before it returns. A host that does not
     // must never swallow the tap, so the plain open runs instead.
     start(null);
-  }, [active, appleZoomId, aspectRatio, itemId, measure, post, preview, radius, reducedMotion, surfaceId, veilOwner]);
+  }, [active, appleZoomId, aspectRatio, itemId, lifted, measure, post, preview, radius, reducedMotion, surfaceId, veilOwner]);
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 
-  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius };
+  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius, standIn: preview ?? null, standInDrawn, liftedStyle, standInStyle };
 }
 
 /**
  * Wraps the part of a tile that is the media — the rectangle the reel grows out
  * of, and the one that empties while the reel holds its content.
+ *
+ * On iOS 18 the view registered with UIKit's zoom (`AppleZoomSource`) is not the
+ * tile but a stand-in over it: the tile's picture alone, in an expo-image view.
+ * UIKit's zoom resizes its source view to the window it grows the reel in, from
+ * the first frame. A React Native view keeps what it holds at the size and
+ * place Yoga gave it, so the tile's picture and badges stayed tile-sized in the
+ * top corner of a window already larger than the tile: the picture jumped
+ * inside its own frame as the open began, and a see-through copy of the card
+ * rode over the growing reel (owner's iPhone, 2026-11-07: "i think there is an
+ * issue when opening the post"). expo-image's own image view follows its
+ * bounds (`autoresizingMask`) and fills them as the tile does, so the picture
+ * grows with the window instead. The stand-in is shown, and the tile hidden,
+ * only while a still tile's open is under way (`liftTile`); the rest of the
+ * time it is see-through, and a close lands on the tile itself, in place.
  */
 export function MediaZoomSourceView({
   source,
@@ -1164,6 +1236,8 @@ export function MediaZoomSourceView({
     const { width, height } = event.nativeEvent.layout;
     setAppleZoomTile((current) => (current?.width === width && current.height === height ? current : { width, height }));
   }, []);
+  const zoomed = Boolean(source.appleZoomId);
+  const radius = source.radius ?? 0;
   return (
     // Both wrappers stay out of the layout's way: `flexBasis: 'auto'` keeps a
     // tile that sizes itself from its media (a feed card) at its own height,
@@ -1171,35 +1245,37 @@ export function MediaZoomSourceView({
     // tile, which is `flex: 1` inside a fixed cell) still fill it. Without the
     // grow those tiles collapse to nothing.
     <Animated.View collapsable={false} style={[ZOOM_SOURCE_FILL, style, source.hiddenStyle]}>
-      {/* On iOS 18 the measured view is also the one UIKit's zoom grows into the reel. */}
-      <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
-        <View
-          ref={source.ref}
-          collapsable={false}
-          onLayout={isAppleZoomAvailable() ? measureAppleZoomTile : undefined}
-          // UIKit's zoom resizes this registered view to the reel's window as
-          // it grows or shrinks, while what it holds keeps the tile's size. A
-          // ground of its own filled the rest of that window: a black panel
-          // under the picture as a close shrank it (owner, 2026-11-07). Clear,
-          // the picture alone changes size; the feed beneath is under the
-          // zoom's black veil while the reel grows, so it cannot wash the
-          // picture. Clipped to the tile's corners still.
-          style={[ZOOM_SOURCE_FILL, source.appleZoomId ? {
-            backgroundColor: 'transparent',
-            borderRadius: source.radius ?? 0,
-            borderCurve: 'continuous',
-            overflow: 'hidden',
-          } : null]}
-        >
-          <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
-            <MediaZoomTileKeyContext.Provider value={source.tileKey}>
-              <MediaZoomTileShapedContext.Provider value={Boolean(source.appleZoomId)}>
-                {children}
-              </MediaZoomTileShapedContext.Provider>
-            </MediaZoomTileKeyContext.Provider>
-          </MediaZoomVideoOfferContext.Provider>
-        </View>
-      </AppleZoomSource>
+      <Animated.View
+        ref={source.ref as RefObject<Animated.View | null> as never}
+        collapsable={false}
+        onLayout={zoomed ? measureAppleZoomTile : undefined}
+        style={[
+          ZOOM_SOURCE_FILL,
+          zoomed ? { borderRadius: radius, borderCurve: 'continuous', overflow: 'hidden' } : null,
+          zoomed ? source.liftedStyle : null,
+        ]}
+      >
+        <MediaZoomVideoOfferContext.Provider value={source.offerVideo}>
+          <MediaZoomTileKeyContext.Provider value={source.tileKey}>
+            <MediaZoomTileShapedContext.Provider value={zoomed}>
+              {children}
+            </MediaZoomTileShapedContext.Provider>
+          </MediaZoomTileKeyContext.Provider>
+        </MediaZoomVideoOfferContext.Provider>
+      </Animated.View>
+      {zoomed ? (
+        <AppleZoomSource identifier={source.appleZoomId} aspectRatio={source.aspectRatio} tile={appleZoomTile}>
+          <ZoomStandInImage
+            pointerEvents="none"
+            accessible={false}
+            source={source.standIn ? { uri: source.standIn.url, cacheKey: source.standIn.cacheKey ?? undefined } : null}
+            contentFit="cover"
+            transition={0}
+            onLoad={source.standInDrawn}
+            style={[StyleSheet.absoluteFill, { borderRadius: radius }, source.standInStyle]}
+          />
+        </AppleZoomSource>
+      ) : null}
     </Animated.View>
   );
 }
@@ -1514,6 +1590,18 @@ export function useMediaZoomStage({
       setVideoHandoff('failed');
     }
   }, [lentVideo, nativeZoom]);
+  // Landed over the tile it grew out of, the reel covers it: the tile is put
+  // back as itself beneath (`liftTile`), as it is if the reel goes first.
+  useEffect(() => {
+    if (!nativeZoom) return;
+    const unsubscribe = listenToTransition(navigation, 'transitionEnd', (event) => {
+      if (!event.data?.closing) settleTileLift();
+    });
+    return () => {
+      unsubscribe();
+      settleTileLift();
+    };
+  }, [nativeZoom, navigation]);
   // Landed, the tile's view lets go at once, and the slide's second view of the
   // player (`MediaZoomLentVideo.landing`) a moment later.
   useEffect(() => {
@@ -1893,8 +1981,10 @@ export function useMediaZoomStage({
     // Arm recovery before asking for geometry, otherwise dismissal disables
     // interaction forever while its only safety timer waits inside the callback.
     setTimeout(leave, DISMISS_SAFETY_MS + RETURN_DRAWN_DEADLINE_MS);
-    // The screen beneath is drawn again from the close's first frame.
+    // The screen beneath is drawn again from the close's first frame, with
+    // the tile the reel grew out of back as itself (`liftTile`).
     setZoomUnderlayHidden(false);
+    settleTileLift();
     // A picture closes alone (`ZoomGeometry.pictureOnly`): the layer carries it
     // from where it sits down into its tile, and the reel goes from under it at
     // once. A video keeps its own close for now: its poster in the layer would
