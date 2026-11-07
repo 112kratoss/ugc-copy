@@ -356,6 +356,14 @@ export function releaseZoomVeil(drop: ZoomVeilDrop | null) {
 }
 
 /**
+ * Which tap's veil `owner`'s screen is drawing: the veil's view is made anew for
+ * each (components/zoom-veil.tsx).
+ */
+export function getZoomVeilSerial(owner: string): number {
+  return screens.get(owner)?.serial ?? 0;
+}
+
+/**
  * What `owner`'s veil is drawn at: null for its own `cover`, 0 while it waits
  * for a reel's transition, or that transition.
  */

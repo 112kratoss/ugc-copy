@@ -36,6 +36,8 @@ import {
   showcaseViewerMediaPicture,
   subscribeToZoomFlights,
   UNCOVERED,
+  VIDEO_TO_PICTURE_PROGRESS,
+  videoOverPictureOpacity,
   type ZoomFlightEvent,
   type ZoomGeometry,
   type ZoomRect,
@@ -774,8 +776,39 @@ describe('which closes fly the picture alone', () => {
 
   it('leaves a video, Reduce Motion, a reel with no tile and one with no picture to their own closes', () => {
     expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8' })).toBe(false);
+    // iOS flies a video's own player home alone, where its tile takes it back.
+    expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8', fliesVideo: true })).toBe(true);
+    expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8', fliesVideo: true, picture: null })).toBe(false);
+    expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8', fliesVideo: true, reducedMotion: true })).toBe(false);
     expect(closesPictureAlone({ ...base, reducedMotion: true })).toBe(false);
     expect(closesPictureAlone({ ...base, fromTile: false })).toBe(false);
     expect(closesPictureAlone({ ...base, picture: null })).toBe(false);
+  });
+});
+
+// A close flying a video into a tile that shows its poster (iOS): the clip
+// stays the clip while it travels and has given way to the poster for the
+// last frames, so it lands on what the tile goes on showing.
+describe('a video dissolving into the picture it lands on', () => {
+  const [gone, whole] = VIDEO_TO_PICTURE_PROGRESS;
+
+  it('is whole while it travels, gone for the last stretch, and fades out in between', () => {
+    // Progress runs from 1 at the screen to 0 in the tile.
+    expect(videoOverPictureOpacity(1)).toBe(1);
+    expect(videoOverPictureOpacity(whole)).toBe(1);
+    expect(videoOverPictureOpacity((gone + whole) / 2)).toBeCloseTo(0.5);
+    expect(videoOverPictureOpacity(gone)).toBe(0);
+    expect(videoOverPictureOpacity(0)).toBe(0);
+    // Never more than the video, never less than nothing.
+    expect(videoOverPictureOpacity(2)).toBe(1);
+    expect(videoOverPictureOpacity(-1)).toBe(0);
+  });
+
+  it('dissolves between about the 150th and 250th ms of the 300 ms iOS close, which runs at (1 − t)²', () => {
+    const progressAt = (ms: number) => (1 - ms / 300) ** 2;
+    expect(videoOverPictureOpacity(progressAt(140))).toBe(1);
+    expect(videoOverPictureOpacity(progressAt(200))).toBeGreaterThan(0);
+    expect(videoOverPictureOpacity(progressAt(200))).toBeLessThan(1);
+    expect(videoOverPictureOpacity(progressAt(255))).toBe(0);
   });
 });
