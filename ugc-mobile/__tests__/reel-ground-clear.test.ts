@@ -37,8 +37,12 @@ describe('a reel closing into its tile shrinks only its picture', () => {
     expect(viewer.match(/imageBackdrop=\{groundClear \? 'none' : 'solid'\}/g)).toHaveLength(2);
   });
 
-  it('iOS: the tile UIKit resizes to the window has no ground of its own', () => {
-    expect(zoom).toMatch(/source\.appleZoomId \? \{\n\s+backgroundColor: 'transparent',/);
+  // UIKit resizes its source view to the window as it grows or shrinks it. The
+  // tile is no longer that view: a stand-in of the picture alone is, whose
+  // image view follows its bounds, and the tile's own view has no ground.
+  it('iOS: the view UIKit resizes to the window is the picture alone, and the tile has no ground', () => {
+    expect(zoom).toMatch(/<AppleZoomSource [^>]*>\s*<ZoomStandInImage/);
+    expect(zoom).toContain("zoomed ? { borderRadius: radius, borderCurve: 'continuous', overflow: 'hidden' } : null,");
   });
 
   it('iOS: the chrome goes on the UI thread as the close begins, and comes back if it is let go of', () => {
