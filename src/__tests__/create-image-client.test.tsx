@@ -2630,6 +2630,12 @@ describe('CreateImageClient generation pipeline', () => {
     expect(await screen.findByText(/does not take reference images\. Your references are preserved/)).toBeInTheDocument();
     expect(screen.getByAltText('Restored product')).toBeInTheDocument();
     expect(screen.queryByText('Prompt-only model')).not.toBeInTheDocument();
+    // No add box on a model that takes none ("2 of 0" would offer what it refuses), and a drop on the card adds nothing.
+    const inputs = screen.getByRole('group', { name: 'Inputs' });
+    expect(within(inputs).queryByRole('button', { name: /^Add images/ })).not.toBeInTheDocument();
+    expect(within(inputs).getByRole('list', { name: 'Reference images' })).toBeInTheDocument();
+    fireEvent.drop(inputs, { dataTransfer: { files: [new File(['x'], 'extra.png', { type: 'image/png' })] } });
+    expect(screen.queryByAltText('Element 2')).not.toBeInTheDocument();
     expect(generateButton()).toBeDisabled();
     // Nothing is sent to a prompt-only model, so the server would not know the mention either.
     expect(screen.getByText(/^Unknown element mention/)).toBeInTheDocument();
@@ -2892,6 +2898,50 @@ describe('CreateImageClient generation pipeline', () => {
       await waitFor(() => expect(heading).toHaveFocus());
       expect(within(canvas).getByTestId('creator-canvas-chip')).toHaveTextContent(/ · 8 credits$/);
     });
+  });
+
+  it('draws its references as the video creator’s Inputs: a box that counts them, and what they are for while there are none', async () => {
+    // Ideogram V3 takes one reference image.
+    const view = render(<CreateImageClient prefill={{ model: 'ideogram-v3' }} />);
+    const inputs = screen.getByRole('group', { name: 'Inputs' });
+    const add = within(inputs).getByRole('button', { name: 'Add images, 0 of 1' });
+    expect(add).toBeEnabled();
+    // The visible line (the box carries the same words for a screen reader).
+    expect(within(inputs).getByText('Pictures of people, products or styles, used by @handle', { selector: 'p' })).toBeInTheDocument();
+
+    fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]')!, {
+      target: { files: [new File(['1'], 'first.png', { type: 'image/png' })] },
+    });
+
+    expect(await within(inputs).findByAltText('Element 1')).toBeInTheDocument();
+    // Full at the model's one: the box dims, and the strip takes the hint's place.
+    expect(within(inputs).getByRole('button', { name: 'Add images, 1 of 1' })).toBeDisabled();
+    expect(within(inputs).queryByText('Pictures of people, products or styles, used by @handle', { selector: 'p' })).not.toBeInTheDocument();
+
+    // One past the limit, dropped on the card: refused, and said inside the card.
+    fireEvent.drop(within(inputs).getByRole('heading', { name: 'Inputs' }), {
+      dataTransfer: { files: [new File(['2'], 'second.png', { type: 'image/png' })] },
+    });
+    expect(await within(inputs).findByText('This model takes up to 1 image. Remove one to add another.')).toBeInTheDocument();
+    expect(within(inputs).getAllByAltText(/^Element /)).toHaveLength(1);
+  });
+
+  it('adds a picture dropped on its box, or anywhere else on the card, once', async () => {
+    render(<CreateImageClient prefill={{}} />);
+    const inputs = screen.getByRole('group', { name: 'Inputs' });
+
+    fireEvent.drop(within(inputs).getByRole('button', { name: /^Add images, 0 of / }), {
+      dataTransfer: { files: [new File(['1'], 'first.png', { type: 'image/png' })] },
+    });
+    expect(await within(inputs).findByAltText('Element 1')).toBeInTheDocument();
+
+    // Beside the box (the card's own words): the card takes it, so the tab does not open the file.
+    fireEvent.drop(within(inputs).getByText('Type @ in the prompt, or tap a handle, to use a reference.'), {
+      dataTransfer: { files: [new File(['2'], 'second.png', { type: 'image/png' })] },
+    });
+    expect(await within(inputs).findByAltText('Element 2')).toBeInTheDocument();
+    expect(within(inputs).getAllByAltText(/^Element /)).toHaveLength(2);
+    expect(within(inputs).getByRole('button', { name: /^Add images, 2 of / })).toBeEnabled();
   });
 
   it('refuses a file the upload would refuse, by name, and says when picks pass the model’s limit', async () => {
