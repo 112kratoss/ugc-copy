@@ -458,18 +458,25 @@ export function clearHiddenZoomSources() {
  * over, so this one is kept apart from those.
  */
 export function hideZoomSourceUntilLanding(surfaceId: string | null | undefined, itemId: string | null | undefined) {
-  showZoomSourceAtLanding();
+  void showZoomSourceAtLanding();
   if (!surfaceId || !itemId) return;
   landingKey = sourceKey(surfaceId, itemId);
   sources.get(landingKey)?.setHidden(true);
 }
 
-/** The picture has landed in its tile, or will not: the tile shows again. */
-export function showZoomSourceAtLanding() {
+/**
+ * The picture has landed in its tile, or will not: the tile shows again.
+ * Returns whether a tile was shown just now: false with none held, one no
+ * longer mounted, or one the reel itself still holds hidden.
+ */
+export function showZoomSourceAtLanding(): boolean {
   const key = landingKey;
-  if (!key) return;
+  if (!key) return false;
   landingKey = null;
-  if (!hiddenKeys.has(key)) sources.get(key)?.setHidden(false);
+  const handle = sources.get(key);
+  if (!handle || hiddenKeys.has(key)) return false;
+  handle.setHidden(false);
+  return true;
 }
 
 /** Test seam: this module's state is deliberately global, so tests reset it. */
