@@ -52,6 +52,7 @@ import {
     CreatorPendingStartNotice,
     CreatorReferencePreview,
     CreatorReferenceRow,
+    CreatorReferenceStrip,
     CreatorReferenceTile,
     type CreatorReferenceKind,
     CreatorRemixSlotTile,
@@ -1938,6 +1939,41 @@ function ImageCreator({
     const emptyCanvasHint = model.maxImages > 0
         ? 'Write a prompt, add reference images if you like, then Generate.'
         : 'Write a prompt, then Generate.';
+    // The pictures' tiles: what the run holds, then the boxes a remix was not given.
+    const referenceImageTiles = [
+        ...elements.map((element) => (
+            <CreatorReferenceTile
+                key={element.id}
+                accent="image"
+                preview={(
+                    <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
+                )}
+                displayName={element.displayName}
+                nameDraft={elementNames.drafts[element.id]}
+                placeholder="Rename element"
+                onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                onNameCommit={() => void commitElementDraft(element.id)}
+                onNameCancel={() => elementNames.dropDraft(element.id)}
+                onRemove={() => void handleRemoveElement(element.id)}
+                handle={element.handle}
+                handleClassName="text-sky-300"
+                onInsert={() => handleInsertElementHandle(element.handle)}
+            />
+        )),
+        // What the remix was not given, after what it brought back.
+        ...referenceImageSlots.map((slot) => (
+            <CreatorRemixSlotTile
+                key={slot.id}
+                accent="image"
+                slotId={slot.id}
+                title={remixInputSlotTitle(slot)}
+                action={remixInputSlotAction(slot)}
+                accept="image/*"
+                handleClassName="text-sky-300"
+                onFiles={(files) => void fillReferenceImageSlot(slot, files)}
+            />
+        )),
+    ];
     // The pictures' add box (the video creator's Inputs row): how many the run holds and the model takes.
     const imageReferenceKind: CreatorReferenceKind = {
         railLabel: 'Images',
@@ -2330,52 +2366,41 @@ function ImageCreator({
                             buttons, even on a prompt-only model: the limit message asks the
                             creator to remove the extras, and this is the only place to do it. */}
                         {model.maxImages > 0 || elements.length > 0 ? (
-                            <CreatorInputsCard
-                                hint={model.maxImages > 0
-                                    ? 'Type @ in the prompt, or tap a handle, to use a reference.'
-                                    : `${model.displayName} does not take reference images. These are kept for another model; remove them to generate here.`}
+                            // The whole card takes a drop, as the references section did before the
+                            // Inputs card: a file let go beside the add box is added, not opened in the
+                            // tab over the prompt. The add box and a remix's empty box take their own
+                            // drops first (preventDefault, stopPropagation), so a file is added once;
+                            // a model that takes no pictures takes none, and the tab stays.
+                            <div
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => {
+                                    if (event.defaultPrevented) return;
+                                    event.preventDefault();
+                                    const files = Array.from(event.dataTransfer.files ?? []);
+                                    if (files.length > 0 && model.maxImages > 0) void processImageFiles(files);
+                                }}
                             >
-                                {/* The pictures' row, as the video creator's: the add box (a press picks, a drop
-                                    adds; dimmed at the model's limit), then the references beside it, or what
-                                    they are for while there are none. */}
-                                <CreatorReferenceRow accent="image" kind={imageReferenceKind} stripLabel="Reference images">
-                                    {elements.map((element) => (
-                                        <CreatorReferenceTile
-                                            key={element.id}
-                                            accent="image"
-                                            preview={(
-                                                <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
-                                            )}
-                                            displayName={element.displayName}
-                                            nameDraft={elementNames.drafts[element.id]}
-                                            placeholder="Rename element"
-                                            onNameChange={(value) => handleElementDraftChange(element.id, value)}
-                                            onNameCommit={() => void commitElementDraft(element.id)}
-                                            onNameCancel={() => elementNames.dropDraft(element.id)}
-                                            onRemove={() => void handleRemoveElement(element.id)}
-                                            handle={element.handle}
-                                            handleClassName="text-sky-300"
-                                            onInsert={() => handleInsertElementHandle(element.handle)}
-                                        />
-                                    ))}
-                                    {/* What the remix was not given, after what it brought back. */}
-                                    {referenceImageSlots.map((slot) => (
-                                        <CreatorRemixSlotTile
-                                            key={slot.id}
-                                            accent="image"
-                                            slotId={slot.id}
-                                            title={remixInputSlotTitle(slot)}
-                                            action={remixInputSlotAction(slot)}
-                                            accept="image/*"
-                                            handleClassName="text-sky-300"
-                                            onFiles={(files) => void fillReferenceImageSlot(slot, files)}
-                                        />
-                                    ))}
-                                </CreatorReferenceRow>
-                                {elementPickNotice ? (
-                                    <p role="status" className="text-sm text-amber-200">{elementPickNotice}</p>
-                                ) : null}
-                            </CreatorInputsCard>
+                                <CreatorInputsCard
+                                    hint={model.maxImages > 0
+                                        ? 'Type @ in the prompt, or tap a handle, to use a reference.'
+                                        : `${model.displayName} does not take reference images. These are kept for another model; remove them to generate here.`}
+                                >
+                                    {/* The pictures' row, as the video creator's: the add box (a press picks, a drop
+                                        adds; dimmed at the model's limit), then the references beside it, or what
+                                        they are for while there are none. A model that takes none has no box: its
+                                        kept pictures are a strip of their own, each with its Remove. */}
+                                    {model.maxImages > 0 ? (
+                                        <CreatorReferenceRow accent="image" kind={imageReferenceKind} stripLabel="Reference images">
+                                            {referenceImageTiles}
+                                        </CreatorReferenceRow>
+                                    ) : (
+                                        <CreatorReferenceStrip aria-label="Reference images">{referenceImageTiles}</CreatorReferenceStrip>
+                                    )}
+                                    {elementPickNotice ? (
+                                        <p role="status" className="text-sm text-amber-200">{elementPickNotice}</p>
+                                    ) : null}
+                                </CreatorInputsCard>
+                            </div>
                         ) : (
                             <div className="ui-card flex items-start gap-3 p-4 text-sm text-[var(--ui-text-secondary)]">
                                 <ImageIcon aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${imageAccent.mark}`} />
