@@ -1272,7 +1272,7 @@ export function MediaZoomSourceView({
             contentFit="cover"
             transition={0}
             onLoad={source.standInDrawn}
-            style={[StyleSheet.absoluteFill, { borderRadius: radius }, source.standInStyle]}
+            style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' } as ImageStyle, source.standInStyle]}
           />
         </AppleZoomSource>
       ) : null}

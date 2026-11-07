@@ -74,7 +74,8 @@ function mountTile(aspectRatio: number | null) {
   });
   const nativeSource = () => tree.root.findByType('link-zoom-transition-source' as never);
   const layOut = (size: { width: number; height: number }) => {
-    const tileView = nativeSource().findByType('view' as never);
+    // The measured view is the tile's own, beside the stand-in UIKit's zoom is given.
+    const tileView = tree.root.find((node) => typeof node.type === 'string' && typeof node.props.onLayout === 'function');
     renderer.act(() => {
       tileView.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, ...size } } });
     });
