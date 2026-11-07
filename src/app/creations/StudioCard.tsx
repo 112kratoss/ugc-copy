@@ -258,7 +258,10 @@ export default function StudioCard({
   ) : (
     <div className="grid gap-4 p-3 md:grid-cols-[180px_minmax(0,1fr)]">
       <div className="relative overflow-hidden rounded-xl border border-white/8 bg-black/60">
-        {media}
+        {/* The grid stretches this frame to the body's height, which is often
+            taller than a 4:5 tile at 180px; the media fills the frame (cropped
+            by its object-cover) instead of sitting at the top over an empty band. */}
+        <div data-studio-media-fill className="h-full [&>*]:h-full">{media}</div>
         {badge}
       </div>
       <div className="flex min-w-0 flex-col gap-4 p-1 md:p-2">
