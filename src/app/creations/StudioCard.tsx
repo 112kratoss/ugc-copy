@@ -159,7 +159,11 @@ const SURFACE_TONE_CLASS: Record<StudioCardTone, string> = {
 export interface StudioCardProps {
   density: StudioCardDensity;
   tone?: StudioCardTone;
-  /** The media tile's content: a frame, an image, a video, or a placeholder. */
+  /**
+   * The media tile's content: a frame, an image, a video, or a placeholder.
+   * Pass one element that crops itself (object-cover or a centred box): an
+   * expanded card stretches it to the row's height.
+   */
   media: ReactNode;
   /** Sits on the tile's top-left: the kind of thing this is. */
   badge?: ReactNode;
@@ -257,12 +261,17 @@ export default function StudioCard({
     </>
   ) : (
     <div className="grid gap-4 p-3 md:grid-cols-[180px_minmax(0,1fr)]">
-      <div className="relative overflow-hidden rounded-xl border border-white/8 bg-black/60">
-        {/* The grid stretches this frame to the body's height, which is often
-            taller than a 4:5 tile at 180px; the media fills the frame (cropped
-            by its object-cover) instead of sitting at the top over an empty band. */}
-        <div data-studio-media-fill className="h-full [&>*]:h-full">{media}</div>
-        {badge}
+      {/* The grid stretches this cell to the body's height, which is often
+          taller than a 4:5 tile at 180px. The frame follows it up to 1.5× the
+          column's width (a laptop row), with the media filling it (cropped by
+          its object-cover) rather than sitting at the top over an empty band;
+          a taller row (tablet widths, where the body wraps) centres the
+          capped frame instead of cropping the media to a sliver. */}
+      <div className="flex md:items-center">
+        <div className="relative w-full overflow-hidden rounded-xl border border-white/8 bg-black/60 md:h-full md:max-h-[270px]">
+          <div data-studio-media-fill className="h-full [&>*]:h-full">{media}</div>
+          {badge}
+        </div>
       </div>
       <div className="flex min-w-0 flex-col gap-4 p-1 md:p-2">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
