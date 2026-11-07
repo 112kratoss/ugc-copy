@@ -486,19 +486,24 @@ export function peekOpeningPost(itemId: string, now: number): ImmersivePreviewIt
  * a tile as its picture alone.
  */
 let liftedTile: SharedValue<number> | null = null;
-const TILE_LIFT_DEADLINE_MS = 2000;
+/**
+ * The lifted tile's deadline. Cleared with it: a deadline left over from an
+ * earlier open of the same tile put it back in the middle of the next one.
+ */
+let liftDeadline: ReturnType<typeof setTimeout> | null = null;
+export const TILE_LIFT_DEADLINE_MS = 2000;
 
-function liftTile(lifted: SharedValue<number>) {
+export function liftTile(lifted: SharedValue<number>) {
   settleTileLift();
   liftedTile = lifted;
   lifted.set(1);
-  setTimeout(() => {
-    if (liftedTile === lifted) settleTileLift();
-  }, TILE_LIFT_DEADLINE_MS);
+  liftDeadline = setTimeout(settleTileLift, TILE_LIFT_DEADLINE_MS);
 }
 
 /** Puts the lifted tile back as it was (see `liftTile`). */
 export function settleTileLift() {
+  if (liftDeadline !== null) clearTimeout(liftDeadline);
+  liftDeadline = null;
   const lifted = liftedTile;
   liftedTile = null;
   lifted?.set(0);
@@ -1006,6 +1011,10 @@ export function useMediaZoomSource({
   const lifted = useSharedValue(0);
   const liftedStyle = useAnimatedStyle(() => ({ opacity: 1 - lifted.value }));
   const standInStyle = useAnimatedStyle(() => ({ opacity: lifted.value })) as StyleProp<ImageStyle>;
+  // The stand-in loads its picture only once a finger is on the tile
+  // (`prepare`), so a long feed does not hold a second image view's picture
+  // for every tile. A tap faster than the load opens with the tile as it is.
+  const [standInArmed, setStandInArmed] = useState(false);
   const standInDrawnRef = useRef(false);
   const standInUrl = preview?.url ?? null;
   useEffect(() => {
@@ -1056,9 +1065,10 @@ export function useMediaZoomSource({
 
   const prepare = useCallback(() => {
     if (!active) return;
+    if (appleZoomId) setStandInArmed(true);
     if (post) postPreparer?.(post);
     if (LAYER_FLIGHT && preview) prepareZoomPicture(preview, aspectRatio, false, post);
-  }, [active, aspectRatio, post, preview]);
+  }, [active, appleZoomId, aspectRatio, post, preview]);
 
   // A ref, not state: the offer changes as players come and go while the feed
   // scrolls, and nothing renders from it — only a tap reads it.
@@ -1108,10 +1118,10 @@ export function useMediaZoomSource({
       // A still tile hands the zoom its stand-in (`MediaZoomSourceView`): the
       // picture alone, which UIKit stretches with the window it grows, while
       // the tile itself is hidden so no copy of it stays behind. Only once the
-      // stand-in has its picture: an empty one left the tile blank. A tile
-      // playing a video stays as it is, under the reel growing over it: the
-      // stand-in is the clip's poster, an earlier frame than the one showing.
-      if (!video && standInDrawnRef.current) liftTile(lifted);
+      // stand-in has its picture: an empty one left the tile blank. A video
+      // tile stays as it is, under the reel growing over it: the stand-in is
+      // the clip's poster, and the tile may be showing another frame of it.
+      if (!videoOfferRef.current && standInDrawnRef.current) liftTile(lifted);
       // The screen goes black around this tile, under the transition that
       // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
       // reel simply appears. Fabric answers `measureInWindow` before it returns.
@@ -1197,7 +1207,7 @@ export function useMediaZoomSource({
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 
-  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius, standIn: preview ?? null, standInDrawn, liftedStyle, standInStyle };
+  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius, standIn: standInArmed ? preview ?? null : null, standInDrawn, liftedStyle, standInStyle };
 }
 
 /**

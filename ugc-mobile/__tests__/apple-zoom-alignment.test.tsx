@@ -118,3 +118,32 @@ describe('a tile under UIKit’s zoom', () => {
     expect(nativeSource().props.alignment).toEqual({ x: 0, y: 336.5, width: 402, height: 201 });
   });
 });
+
+// The stand-in UIKit's zoom grows out of loads its picture only once a finger
+// is on the tile, so a feed holds no second picture per tile it never touched.
+describe('the stand-in under UIKit\'s zoom', () => {
+  it('has no picture until the tile is touched', () => {
+    let prepare: (() => void) | null = null;
+    const Touched = () => {
+      const source = useMediaZoomSource({ itemId: 'post-2', aspectRatio: 1, preview: PREVIEW });
+      prepare = source.prepare;
+      return (
+        <MediaZoomSourceView source={source}>
+          <></>
+        </MediaZoomSourceView>
+      );
+    };
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <MediaZoomSurface>
+          <Touched />
+        </MediaZoomSurface>
+      );
+    });
+    const standIn = () => tree.root.findByType('link-zoom-transition-source' as never).findByType('image' as never);
+    expect(standIn().props.source).toBeNull();
+    renderer.act(() => prepare?.());
+    expect(standIn().props.source).toEqual({ uri: PREVIEW.url, cacheKey: PREVIEW.cacheKey });
+  });
+});
