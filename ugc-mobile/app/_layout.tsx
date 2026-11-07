@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
+import { FirstOpenIntroHost } from '@/components/first-open-intro-host';
 import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer, noteRootScreenTransitionStart } from '@/components/media-zoom';
@@ -58,6 +59,7 @@ import { isReelBackdropShown, subscribeToReelBackdrop } from '@/lib/reel-backdro
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { useReducedMotion } from '@/lib/motion';
 import { openTappedNotification, subscribeToNotificationResponses, subscribeToNotificationsReceived } from '@/lib/notifications';
+import { isFirstOpenIntroShowing, subscribeFirstOpenIntro } from '@/lib/first-open-intro';
 import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
 import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/media-query-retention';
 import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
@@ -217,6 +219,8 @@ function RootLayoutNav() {
   const [appearanceReady, setAppearanceReady] = useState(false);
   const scheme = useResolvedColorScheme();
   const theme = themes[scheme];
+  // The first-open intro covers the app; screen readers skip what is beneath.
+  const introShowing = useSyncExternalStore(subscribeFirstOpenIntro, isFirstOpenIntroShowing, isFirstOpenIntroShowing);
   // Android's navigation bar icons follow the app's scheme; a dark surface
   // above (the reel) takes over while it is in front.
   useNavigationBarSurface(scheme);
@@ -271,7 +275,11 @@ function RootLayoutNav() {
           <SaverNoticeSync />
           <SafeAreaProvider>
             <ThemeProvider value={navigationThemeFor(theme)}>
-              <GestureHandlerRootView style={{ flex: 1 }}>
+              <GestureHandlerRootView
+                style={{ flex: 1 }}
+                accessibilityElementsHidden={introShowing}
+                importantForAccessibility={introShowing ? 'no-hide-descendants' : 'auto'}
+              >
               {/* Claims the touch that closes a native menu, so it closes the
                   menu and nothing else (`lib/native-menu-shield.ts`). */}
               <View style={{ flex: 1, backgroundColor: theme.colors.app }} {...nativeMenuTouchGuardProps}>
@@ -449,6 +457,9 @@ function RootLayoutNav() {
               drawn above everything, StartupCoordinator's cover included: the
               clip that continues the native splash, over the app until its
               first screen is on screen (lib/launch-splash.ts). */}
+          {/* Just under it: an install's first-open intro, whose ground is
+              already there as the logo lifts (components/first-open-intro-host.tsx). */}
+          <FirstOpenIntroHost />
           <LaunchSplash shellReady={shellReady} />
         </OnboardingProvider>
       </AuthProvider>
