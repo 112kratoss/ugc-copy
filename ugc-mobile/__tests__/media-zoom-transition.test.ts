@@ -633,8 +633,10 @@ describe('the register of tiles', () => {
     registerZoomSource('explore', 'post-1', handle({ setHidden: recycled }));
     expect(recycled).toHaveBeenCalledWith(true);
 
-    showZoomSourceAtLanding();
+    expect(showZoomSourceAtLanding()).toBe(true);
     expect(recycled).toHaveBeenLastCalledWith(false);
+    // Nothing held any more: the next landing shows nothing.
+    expect(showZoomSourceAtLanding()).toBe(false);
   });
 
   it('leaves a tile the reel itself still holds hidden at the landing', () => {

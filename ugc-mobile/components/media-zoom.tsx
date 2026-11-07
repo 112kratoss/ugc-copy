@@ -699,7 +699,7 @@ function finishZoomFlight(id: number) {
   if (landed.direction !== 'close') return;
   // A picture closing alone kept its tile hidden on the way down; it shows
   // under the picture now, before the picture lets go.
-  showZoomSourceAtLanding();
+  const tileShown = showZoomSourceAtLanding();
   // Landed in the tile, which is drawn underneath by now — the screen it is
   // on has been there for the whole collapse — so the picture lets go at once.
   // Left any longer it would sit over whatever floats above the tile (the tab
@@ -710,7 +710,18 @@ function finishZoomFlight(id: number) {
   // frame or two — rather than uncover a tile still waiting for its picture.
   const returned = getHeldZoomPicture()?.video?.player;
   if (!returned || !isVideoPlayerHandedBack(returned)) {
-    holdStill(null);
+    if (!tileShown) {
+      holdStill(null);
+      return;
+    }
+    // The tile shows by a shared value and the picture goes by a React
+    // commit, which do not reach the screen in a set order: let go together,
+    // the picture went first and the tile stood empty for a frame (Home and
+    // Explore on the Pixel 9a emulator). So the picture lets go two frames on.
+    const held = getHeldZoomPictureToken();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (getHeldZoomPictureToken() === held) holdStill(null);
+    }));
     return;
   }
   const token = getHeldZoomPictureToken();
