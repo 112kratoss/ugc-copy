@@ -718,9 +718,13 @@ function finishZoomFlight(id: number) {
     // commit, which do not reach the screen in a set order: let go together,
     // the picture went first and the tile stood empty for a frame (Home and
     // Explore on the Pixel 9a emulator). So the picture lets go two frames on.
+    // Only the picture this landing held, and only while no flight has
+    // started since: one that reuses the same picture keeps the token (a
+    // finger down on the same tile, a re-open that is already showing it).
     const held = getHeldZoomPictureToken();
+    const heldPicture = getHeldZoomPicture();
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      if (getHeldZoomPictureToken() === held) holdStill(null);
+      if (getHeldZoomPictureToken() === held && getHeldZoomPicture() === heldPicture && !getZoomFlight()) holdStill(null);
     }));
     return;
   }

@@ -639,13 +639,20 @@ describe('the register of tiles', () => {
     expect(showZoomSourceAtLanding()).toBe(false);
   });
 
-  it('leaves a tile the reel itself still holds hidden at the landing', () => {
+  it('leaves a tile the reel itself still holds hidden at the landing, and says it showed none', () => {
     const tile = vi.fn();
     registerZoomSource('explore', 'post-1', handle({ setHidden: tile }));
     setZoomSourceHidden('explore', 'post-1', true);
     hideZoomSourceUntilLanding('explore', 'post-1');
-    showZoomSourceAtLanding();
+    expect(showZoomSourceAtLanding()).toBe(false);
     expect(tile).toHaveBeenLastCalledWith(true);
+  });
+
+  it('says it showed no tile when the tile has unmounted meanwhile', () => {
+    const unregister = registerZoomSource('explore', 'post-1', handle());
+    hideZoomSourceUntilLanding('explore', 'post-1');
+    unregister();
+    expect(showZoomSourceAtLanding()).toBe(false);
   });
 
   it('holds one landing tile at a time', () => {

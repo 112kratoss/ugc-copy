@@ -466,13 +466,16 @@ export function hideZoomSourceUntilLanding(surfaceId: string | null | undefined,
 
 /**
  * The picture has landed in its tile, or will not: the tile shows again.
- * Returns whether there was such a tile to show.
+ * Returns whether a tile was shown just now: false with none held, one no
+ * longer mounted, or one the reel itself still holds hidden.
  */
 export function showZoomSourceAtLanding(): boolean {
   const key = landingKey;
   if (!key) return false;
   landingKey = null;
-  if (!hiddenKeys.has(key)) sources.get(key)?.setHidden(false);
+  const handle = sources.get(key);
+  if (!handle || hiddenKeys.has(key)) return false;
+  handle.setHidden(false);
   return true;
 }
 
