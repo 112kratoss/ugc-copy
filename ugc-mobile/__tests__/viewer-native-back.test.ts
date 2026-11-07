@@ -95,7 +95,7 @@ describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
 
 describe('a picture out of a tile keeps the reel\'s own Back', () => {
   it('hides the bar for it, and the bar\'s Back stands aside for the rest only', () => {
-    expect(viewer).toContain('const flownBack = Boolean(nativeZoomSourceId) && closesPictureAlone({');
+    expect(viewer).toContain('const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({');
     expect(viewer).toContain('const barBack = nativeBack && !flownBack;');
     expect(viewer).toContain('...(nativeBack && flownBack ? { headerShown: false } : null),');
     expect(viewer).toContain('...(barBack ? viewerNativeBackOptions({');

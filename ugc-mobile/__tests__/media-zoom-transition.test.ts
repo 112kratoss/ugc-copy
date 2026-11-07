@@ -30,6 +30,8 @@ import {
   reverseZoomFlightTime,
   setPendingZoomOrigin,
   setZoomSourceHidden,
+  hideZoomSourceUntilLanding,
+  showZoomSourceAtLanding,
   showcaseMediaZoomPreview,
   showcaseViewerMediaPicture,
   subscribeToZoomFlights,
@@ -615,6 +617,44 @@ describe('the register of tiles', () => {
 
     expect(first).toHaveBeenLastCalledWith(false);
     expect(second).toHaveBeenLastCalledWith(false);
+  });
+
+  it('keeps the tile a picture is closing into hidden past the reel, until it lands', () => {
+    const tile = vi.fn();
+    registerZoomSource('explore', 'post-1', handle({ setHidden: tile }));
+    hideZoomSourceUntilLanding('explore', 'post-1');
+    expect(tile).toHaveBeenLastCalledWith(true);
+
+    // The reel goes, showing every tile it held: this one stays hidden.
+    clearHiddenZoomSources();
+    expect(tile).toHaveBeenLastCalledWith(true);
+    // A cell recycled onto it meanwhile arrives hidden.
+    const recycled = vi.fn();
+    registerZoomSource('explore', 'post-1', handle({ setHidden: recycled }));
+    expect(recycled).toHaveBeenCalledWith(true);
+
+    showZoomSourceAtLanding();
+    expect(recycled).toHaveBeenLastCalledWith(false);
+  });
+
+  it('leaves a tile the reel itself still holds hidden at the landing', () => {
+    const tile = vi.fn();
+    registerZoomSource('explore', 'post-1', handle({ setHidden: tile }));
+    setZoomSourceHidden('explore', 'post-1', true);
+    hideZoomSourceUntilLanding('explore', 'post-1');
+    showZoomSourceAtLanding();
+    expect(tile).toHaveBeenLastCalledWith(true);
+  });
+
+  it('holds one landing tile at a time', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    registerZoomSource('explore', 'post-1', handle({ setHidden: first }));
+    registerZoomSource('explore', 'post-2', handle({ setHidden: second }));
+    hideZoomSourceUntilLanding('explore', 'post-1');
+    hideZoomSourceUntilLanding('explore', 'post-2');
+    expect(first).toHaveBeenLastCalledWith(false);
+    expect(second).toHaveBeenLastCalledWith(true);
   });
 
   it('does not unregister a handle that has already been replaced', () => {

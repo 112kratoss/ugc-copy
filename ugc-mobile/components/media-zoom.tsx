@@ -54,7 +54,9 @@ import {
   registerZoomSource,
   reverseZoomFlightTime,
   setPendingZoomOrigin,
+  hideZoomSourceUntilLanding,
   setZoomSourceHidden,
+  showZoomSourceAtLanding,
   subscribeToHeldZoomPicture,
   subscribeToZoomFlights,
   UNCOVERED,
@@ -172,6 +174,8 @@ const MAX_FLIGHT_STEP_MS = 34;
  * close, should the reel that took it never go.
  */
 const ZOOM_SOURCE_WITHHELD_MS = 2000;
+/** iOS: how long a picture closing alone is given to draw (see its use). */
+const IOS_CLOSE_PICTURE_DEADLINE_MS = 300;
 /**
  * The flight moves once the layer has actually drawn its picture — a frame or
  * two after being asked for it, from memory — so the first thing seen moving
@@ -575,7 +579,12 @@ function prepareZoomPicture(
  */
 function startZoomFlight(
   spec: Omit<ZoomFlight, 'id' | 'displayed'>,
-  { whenDisplayed, whenProgressed }: { whenDisplayed?: () => void; whenProgressed?: () => void } = {}
+  { whenDisplayed, whenProgressed, displayDeadlineMs }: {
+    whenDisplayed?: () => void;
+    whenProgressed?: () => void;
+    /** How long a picture is given to draw before the flight goes without it. */
+    displayDeadlineMs?: number;
+  } = {}
 ): ZoomFlight {
   const started = beginZoomFlight(spec);
   flightGeometry.set(spec.geometry);
@@ -654,7 +663,7 @@ function startZoomFlight(
   }
   onFlightDisplayed = { id: started.id, run: whenDisplayed ?? takeOffZoomFlight };
   if (alreadyShowing) markZoomFlightDisplayed(started.id);
-  else setTimeout(() => markZoomFlightDisplayed(started.id), carriesVideo ? VIDEO_TAKEOFF_DEADLINE_MS : TAKEOFF_DEADLINE_MS);
+  else setTimeout(() => markZoomFlightDisplayed(started.id), displayDeadlineMs ?? (carriesVideo ? VIDEO_TAKEOFF_DEADLINE_MS : TAKEOFF_DEADLINE_MS));
   return started;
 }
 
@@ -688,6 +697,9 @@ function finishZoomFlight(id: number) {
   if (!landed) return;
   tickerControl?.(false);
   if (landed.direction !== 'close') return;
+  // A picture closing alone kept its tile hidden on the way down; it shows
+  // under the picture now, before the picture lets go.
+  showZoomSourceAtLanding();
   // Landed in the tile, which is drawn underneath by now — the screen it is
   // on has been there for the whole collapse — so the picture lets go at once.
   // Left any longer it would sit over whatever floats above the tile (the tab
@@ -1953,6 +1965,13 @@ export function useMediaZoomStage({
       // can come back now, under cover, and be there when the reel lets go.
       clearHiddenZoomSources();
       hiddenItemRef.current = null;
+      // Except for a picture closing alone: its window starts where the picture
+      // sits and need not contain the tile, which would show beside the copy
+      // flying into it. That tile stays hidden until the picture lands.
+      if (alone) {
+        hideZoomSourceUntilLanding(origin.surfaceId, activeItemRef.current);
+        setTimeout(showZoomSourceAtLanding, ZOOM_SOURCE_WITHHELD_MS);
+      }
       // Both platforms keep the origin mounted beneath the viewer. Once the
       // hand-off has finished, shrink the live reel and pop after it lands.
       // Before hand-off, reverse the layer's still-growing tile picture.
@@ -1971,6 +1990,10 @@ export function useMediaZoomStage({
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
+        // iOS hides the reel and covers the screen once the picture is up, so
+        // going on the usual deadline before it had drawn left nothing on
+        // screen. Nothing moves there until the pop has begun anyway.
+        displayDeadlineMs: nativeZoom ? IOS_CLOSE_PICTURE_DEADLINE_MS : undefined,
         whenDisplayed: () => {
           // A video's window waited out of sight for its first frame.
           if (video) stillOpacity.set(1);

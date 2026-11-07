@@ -7,7 +7,7 @@ import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
@@ -642,7 +642,7 @@ function ImmersivePreviewViewer() {
   // under UIKit's zoom. A bar button of the app's own in its place took the
   // back swipe away with the system Back (simulator, 2026-11-07); hidden, the
   // bar leaves the swipe as it was.
-  const flownBack = Boolean(nativeZoomSourceId) && closesPictureAlone({
+  const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({
     picture: activeMedia.picture,
     videoUrl: activeMedia.playbackUrl,
     reducedMotion,
@@ -654,7 +654,9 @@ function ImmersivePreviewViewer() {
     initialItemId: initialId,
     activeItemId: activeItem?.id ?? null,
     aspectRatio: activeMedia.aspectRatio,
-    activePicture: activeMedia.picture,
+    // Nothing to fly from the end slide, which shows no media: its close
+    // shrinks the window (Android) or is UIKit's zoom (iOS), as it was.
+    activePicture: onEndSlide ? null : activeMedia.picture,
     // What a close shrinks: this post, rail and caption included.
     activePost: activeItem ?? null,
     reducedMotion,
@@ -684,11 +686,26 @@ function ImmersivePreviewViewer() {
   // start a transition that closes it, and only its own begins while it is
   // still the focused route. Focus is gone from the first frame of either.
   const [closingSelf, setClosingSelf] = useState(false);
+  // Whether a page has been pushed on top of this reel, which is still below it.
+  const { key: reelRouteKey } = useRoute();
+  const reelIsCovered = useCallback(() => {
+    const state = (reelNavigation as unknown as { getState?: () => { index: number; routes: { key: string }[] } }).getState?.();
+    if (!state) return false;
+    const at = state.routes.findIndex((route) => route.key === reelRouteKey);
+    return at >= 0 && at < state.index;
+  }, [reelNavigation, reelRouteKey]);
   useEffect(() => {
     const unsubscribers = [
       listenToTransition(reelNavigation, 'transitionStart', (event) => {
         if (event.data?.closing === true) {
           if ((reelNavigation as unknown as { isFocused: () => boolean }).isFocused()) setClosingSelf(true);
+          // A page pushed over the reel (the reel is still in the stack, below
+          // the top): black again until that page has come off. Popped from
+          // JS, it makes the reel focused as it starts to slide away, before
+          // the navigator's backdrop is held again (lib/reel-backdrop.ts), and
+          // a reel still counted as landed went clear over the light app
+          // ground for that render.
+          else if (reelIsCovered()) setPushLanded(false);
         } else if (event.data?.closing === false) {
           setClosingSelf(false);
         }
@@ -699,7 +716,7 @@ function ImmersivePreviewViewer() {
       listenToTransition(reelNavigation, 'gestureCancel', () => setClosingSelf(false)),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [reelNavigation]);
+  }, [reelIsCovered, reelNavigation]);
   const groundClear = Platform.OS === 'ios'
     ? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (pushLanded && isFocused))
     // Android shrinks the reel itself (components/media-zoom.tsx), window and

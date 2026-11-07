@@ -47,3 +47,17 @@ describe('a reel closing into its tile shrinks only its picture', () => {
     expect(zoom.match(/nativeCloseChrome\.set\(withTiming\(1, \{ duration: NATIVE_CLOSE_CHROME_MS \}\)\)/g)).toHaveLength(2);
   });
 });
+
+describe('a picture closing alone', () => {
+  it('starts where it sits: its clock is set after the flight has begun, which reverses from the progress it reads back', () => {
+    const start = zoom.indexOf("const flight = startZoomFlight({ direction: 'close'");
+    const reset = zoom.indexOf('flightTime.set(1);\n        flightProgress.set(1);');
+    expect(start).toBeGreaterThan(0);
+    expect(reset).toBeGreaterThan(start);
+  });
+
+  it('flies nothing from the end slide, which shows no media', () => {
+    expect(viewer).toContain('activePicture: onEndSlide ? null : activeMedia.picture,');
+    expect(viewer).toContain('const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({');
+  });
+});

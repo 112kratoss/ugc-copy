@@ -112,6 +112,11 @@ const MIN_RETURN_VISIBLE_FRACTION = 0.5;
 let pendingOrigin: ZoomOrigin | null = null;
 const sources = new Map<string, ZoomSourceHandle>();
 const hiddenKeys = new Set<string>();
+/**
+ * The tile a picture closing alone is flying into (`hideZoomSourceUntilLanding`):
+ * kept hidden past the reel's own going, which shows every tile it held.
+ */
+let landingKey: string | null = null;
 
 // ---------------------------------------------------------------------------
 // The flight
@@ -409,7 +414,7 @@ export function registerZoomSource(surfaceId: string, itemId: string, handle: Zo
   sources.set(key, handle);
   // A list cell recycled onto a post whose reel is open must arrive hidden, or
   // the tile would show through the moment the reader drags the reel aside.
-  handle.setHidden(hiddenKeys.has(key));
+  handle.setHidden(hiddenKeys.has(key) || key === landingKey);
   return () => {
     if (sources.get(key) === handle) sources.delete(key);
   };
@@ -439,8 +444,32 @@ export function setZoomSourceHidden(
 
 /** Shows every tile again — the reel's last word, however it left. */
 export function clearHiddenZoomSources() {
-  hiddenKeys.forEach((key) => sources.get(key)?.setHidden(false));
+  hiddenKeys.forEach((key) => {
+    if (key !== landingKey) sources.get(key)?.setHidden(false);
+  });
   hiddenKeys.clear();
+}
+
+/**
+ * Hides the tile a picture closing alone flies into until it lands
+ * (`showZoomSourceAtLanding`). That flight starts where the picture sits, so
+ * its window need not contain the tile, which showed beside the copy flying
+ * towards it. The reel's going shows every tile it held, before the flight is
+ * over, so this one is kept apart from those.
+ */
+export function hideZoomSourceUntilLanding(surfaceId: string | null | undefined, itemId: string | null | undefined) {
+  showZoomSourceAtLanding();
+  if (!surfaceId || !itemId) return;
+  landingKey = sourceKey(surfaceId, itemId);
+  sources.get(landingKey)?.setHidden(true);
+}
+
+/** The picture has landed in its tile, or will not: the tile shows again. */
+export function showZoomSourceAtLanding() {
+  const key = landingKey;
+  if (!key) return;
+  landingKey = null;
+  if (!hiddenKeys.has(key)) sources.get(key)?.setHidden(false);
 }
 
 /** Test seam: this module's state is deliberately global, so tests reset it. */
@@ -457,6 +486,7 @@ export function resetMediaZoomTransitions() {
   tileOpen = null;
   sources.clear();
   hiddenKeys.clear();
+  landingKey = null;
 }
 
 // ---------------------------------------------------------------------------
