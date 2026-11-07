@@ -38,8 +38,13 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }),
 }));
 
+import { makeMutable } from 'react-native-reanimated';
+
 import {
   MediaZoomSourceView,
+  TILE_LIFT_DEADLINE_MS,
+  liftTile,
+  settleTileLift,
   MediaZoomSurface,
   setZoomPostPreparer,
   useMediaZoomSource,
@@ -308,5 +313,52 @@ describe('the view a tile hands to the reel', () => {
     renderer.act(() => prepare?.());
 
     expect(prepared).toEqual([post]);
+  });
+});
+
+// A still tile's open shows its stand-in and hides the tile (`liftTile`); the
+// tile is put back when the reel lands or closes, or at the deadline.
+describe('a tile lifted for UIKit\'s zoom', () => {
+  it('is put back once, by whichever comes first', () => {
+    vi.useFakeTimers();
+    try {
+      const a = makeMutable(0);
+      const b = makeMutable(0);
+      liftTile(a);
+      expect(a.get()).toBe(1);
+      // Another open puts the first tile back.
+      liftTile(b);
+      expect([a.get(), b.get()]).toEqual([0, 1]);
+      settleTileLift();
+      expect(b.get()).toBe(0);
+      // Unsettled, the deadline puts it back.
+      liftTile(a);
+      vi.advanceTimersByTime(TILE_LIFT_DEADLINE_MS);
+      expect(a.get()).toBe(0);
+    } finally {
+      settleTileLift();
+      vi.useRealTimers();
+    }
+  });
+
+  // Review of #721: the deadline of an open that had already landed put the
+  // same tile back in the middle of its next open.
+  it('keeps no deadline from an earlier open of the same tile', () => {
+    vi.useFakeTimers();
+    try {
+      const tile = makeMutable(0);
+      liftTile(tile);
+      vi.advanceTimersByTime(500);
+      settleTileLift();
+      vi.advanceTimersByTime(1000);
+      liftTile(tile);
+      vi.advanceTimersByTime(TILE_LIFT_DEADLINE_MS - 1500);
+      expect(tile.get()).toBe(1);
+      vi.advanceTimersByTime(1500);
+      expect(tile.get()).toBe(0);
+    } finally {
+      settleTileLift();
+      vi.useRealTimers();
+    }
   });
 });
