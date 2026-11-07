@@ -174,8 +174,8 @@ const MAX_FLIGHT_STEP_MS = 34;
  * close, should the reel that took it never go.
  */
 const ZOOM_SOURCE_WITHHELD_MS = 2000;
-/** iOS: how long a picture closing alone is given to draw (see its use). */
-const IOS_CLOSE_PICTURE_DEADLINE_MS = 300;
+/** How long a picture closing alone is given to draw (see its use). */
+const PICTURE_CLOSE_DRAW_DEADLINE_MS = 300;
 /**
  * The flight moves once the layer has actually drawn its picture — a frame or
  * two after being asked for it, from memory — so the first thing seen moving
@@ -1990,10 +1990,12 @@ export function useMediaZoomStage({
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
-        // iOS hides the reel and covers the screen once the picture is up, so
-        // going on the usual deadline before it had drawn left nothing on
-        // screen. Nothing moves there until the pop has begun anyway.
-        displayDeadlineMs: nativeZoom ? IOS_CLOSE_PICTURE_DEADLINE_MS : undefined,
+        // A picture closing alone has the reel hidden (and on iOS the screen
+        // covered) once it is up, so going on the usual deadline before it had
+        // drawn left nothing on screen: on the Pixel 9a emulator, after a cold
+        // start, the reel went and the picture came 250 ms later, mid-flight.
+        // The reel stays up meanwhile, so waiting costs nothing to see.
+        displayDeadlineMs: alone ? PICTURE_CLOSE_DRAW_DEADLINE_MS : undefined,
         whenDisplayed: () => {
           // A video's window waited out of sight for its first frame.
           if (video) stillOpacity.set(1);
