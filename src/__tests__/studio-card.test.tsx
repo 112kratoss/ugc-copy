@@ -70,6 +70,11 @@ describe('StudioCard', () => {
     const row = screen.getByTestId('row');
     expect(row).not.toHaveClass('flex-col');
     expect(row.querySelector('.md\\:grid-cols-\\[180px_minmax\\(0\\,1fr\\)\\]')).not.toBeNull();
+    // The frame stretches to the body's height; the media fills it rather than
+    // sitting at the top over an empty band (Post Library, 2026-11-06).
+    const fill = row.querySelector('[data-studio-media-fill]');
+    expect(fill).toHaveClass('h-full', '[&>*]:h-full');
+    expect(fill).toContainElement(within(row).getByAltText('Post preview'));
     expect(within(row).getByText('Manual · Updated Jun 1')).toBeInTheDocument();
     expect(within(row).getByText('Archived')).toBeInTheDocument();
     expect(within(row).getByRole('link', { name: 'Edit post' })).toBeInTheDocument();
