@@ -19,6 +19,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
+import { FirstOpenIntroHost } from '@/components/first-open-intro-host';
 import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
 import { MediaZoomFlightLayer, noteRootScreenTransitionStart } from '@/components/media-zoom';
@@ -449,6 +450,9 @@ function RootLayoutNav() {
               drawn above everything, StartupCoordinator's cover included: the
               clip that continues the native splash, over the app until its
               first screen is on screen (lib/launch-splash.ts). */}
+          {/* Just under it: an install's first-open intro, whose ground is
+              already there as the logo lifts (components/first-open-intro-host.tsx). */}
+          <FirstOpenIntroHost />
           <LaunchSplash shellReady={shellReady} />
         </OnboardingProvider>
       </AuthProvider>
