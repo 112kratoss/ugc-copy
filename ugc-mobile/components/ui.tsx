@@ -24,6 +24,7 @@ import { Sparkles, X } from 'lucide-react-native';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import type { NativeMenuTrigger } from '@/components/native-menu-types';
 import { useDisplayFontLoaded } from '@/lib/display-font-ready';
+import { fittedWordmarkSize } from '@/lib/wordmark-fit';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { getAvatarInitial } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -179,6 +180,9 @@ export function Screen({
   );
 }
 
+/** A display role's look before its face has loaded: the system face, by name. */
+const SYSTEM_FACE: TextStyle = { fontFamily: undefined };
+
 export function AppText({
   children,
   variant = 'body',
@@ -206,6 +210,14 @@ export function AppText({
   const faceKey = textRole(variant).fontFamily
     ? (displayFontLoaded ? 'display-face' : 'system-face')
     : undefined;
+  // Until then the face is not named at all. iOS keeps every text measurement
+  // it makes, keyed by the string and its attributes, and a face that has not
+  // registered yet is measured as the system face: the name, drawn at launch,
+  // was laid out 172pt wide in the system face and kept that width once
+  // Bricolage (199pt) drew in it, so the welcome screen read "Magicboo…".
+  // Naming the face only once it has loaded makes its first measurement a
+  // true one.
+  const awaitingFace = faceKey === 'system-face';
 
   return (
     <Text
@@ -216,7 +228,7 @@ export function AppText({
       maxFontSizeMultiplier={maxFontSizeMultiplier ?? variantScaleCap(variant)}
       selectable={isSelectable}
       numberOfLines={numberOfLines}
-      style={[textRole(variant), { color: colorValue(color, theme.colors) }, style]}
+      style={[textRole(variant), awaitingFace ? SYSTEM_FACE : null, { color: colorValue(color, theme.colors) }, style]}
     >
       {children}
     </Text>
@@ -238,19 +250,49 @@ export function AppText({
  * content. The wordmark takes the display face, which is what Branding asks a
  * custom font to carry — and, being a display variant, it must never be given a
  * `fontWeight` (see `hig-type-and-contrast.test.ts`).
+ *
+ * `hero` fills the row it is given and sizes the name to fit it
+ * (`lib/wordmark-fit.ts`): at its full 30pt the name is wider than the room the
+ * welcome header leaves it on a 375pt-wide iPhone, or at a raised text size,
+ * and would read "Magicboo…". A copy
+ * nobody sees is laid out at the full size to learn the name's width with the
+ * phone's text size and the display face applied; the name drawn is scaled
+ * down by as much as the row is short, to no smaller than `compact`'s size.
  */
 export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'hero' }) {
   const theme = useAppTheme();
   const hero = size === 'hero';
+  const [rowWidth, setRowWidth] = useState(0);
+  const [naturalWidth, setNaturalWidth] = useState(0);
+  const iconSize = hero ? appTheme.icon.hero : appTheme.icon.feature;
+  const gap = hero ? appTheme.spacing.compact : 7;
+  const fullType = appTheme.type.pageTitle;
+  const fittedSize = hero
+    ? fittedWordmarkSize({
+        fullSize: fullType.fontSize,
+        minSize: appTheme.type.sectionTitle.fontSize,
+        naturalWidth,
+        availableWidth: rowWidth - iconSize - gap,
+      })
+    : fullType.fontSize;
+  const ratio = fittedSize / fullType.fontSize;
+  const fittedStyle: TextStyle = hero && ratio < 1
+    ? {
+        flexShrink: 1,
+        fontSize: fittedSize,
+        lineHeight: Math.round(fullType.lineHeight * ratio),
+        letterSpacing: fullType.letterSpacing * ratio,
+      }
+    : { flexShrink: 1 };
 
-  return (
+  const lockup = (
     <View
       accessibilityRole="header"
       accessibilityLabel="Magicbooklet"
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        gap: hero ? appTheme.spacing.compact : 7,
+        gap,
         flexShrink: 1,
         minWidth: 0,
       }}
@@ -261,10 +303,37 @@ export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'hero' })
         numberOfLines={1}
         variant={hero ? 'pageTitle' : 'sectionTitle'}
         accessibilityRole="none"
-        style={{ flexShrink: 1 }}
+        style={fittedStyle}
       >
         Magicbooklet
       </AppText>
+    </View>
+  );
+  if (!hero) return lockup;
+
+  return (
+    <View
+      onLayout={(event) => setRowWidth(event.nativeEvent.layout.width)}
+      style={{ flex: 1, minWidth: 0, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }}
+    >
+      {lockup}
+      {/* The measuring copy: out of the layout, unseen, unread, and on a strip
+          wide enough that it is never cut, so its width is the name's own. */}
+      <View
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        style={{ position: 'absolute', left: 0, top: 0, width: 2000, flexDirection: 'row', opacity: 0 }}
+      >
+        <AppText
+          selectable={false}
+          variant="pageTitle"
+          accessibilityRole="none"
+          onLayout={(event) => setNaturalWidth(event.nativeEvent.layout.width)}
+        >
+          Magicbooklet
+        </AppText>
+      </View>
     </View>
   );
 }
