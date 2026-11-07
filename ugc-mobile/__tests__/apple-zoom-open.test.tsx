@@ -1,7 +1,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { VideoPlayer } from 'expo-video';
+import type { VideoPlayer, VideoThumbnail } from 'expo-video';
 
 /**
  * A tile opening the reel under iOS's own zoom transition (lib/apple-zoom.ts):
@@ -19,11 +19,31 @@ vi.mock('react-native', () => ({
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
   useWindowDimensions: () => ({ width: 402, height: 874 }),
 }));
-vi.mock('expo-image', () => ({ Image: (props: MockProps) => React.createElement('expo-image', props) }));
+// The tile's stand-in draws whatever it is given at once, as a cached picture
+// does, and says so (`onDisplay`), unless a test holds it back.
+const standInImage = vi.hoisted(() => ({ draws: true }));
+vi.mock('expo-image', () => ({
+  Image: (props: MockProps) => {
+    const { source, onDisplay } = props as { source?: unknown; onDisplay?: () => void };
+    React.useEffect(() => {
+      if (source && standInImage.draws) onDisplay?.();
+    });
+    return React.createElement('expo-image', props);
+  },
+}));
 vi.mock('expo-video', () => ({ VideoView: (props: MockProps) => React.createElement('video-view', props) }));
 vi.mock('@/components/letterbox-bands', () => ({ LetterboxBands: (props: MockProps) => React.createElement('letterbox-bands', props) }));
 vi.mock('@/components/top-scrim', () => ({ TopScrim: (props: MockProps) => React.createElement('top-scrim', props) }));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }) }));
+vi.mock('react-native-reanimated', async () => {
+  const actual = await vi.importActual<typeof import('react-native-reanimated')>('react-native-reanimated');
+  return {
+    ...actual,
+    // One shared value for the life of the hook, as the real one is: a tile
+    // lifted at the tap is still lifted when it next renders.
+    useSharedValue: <T,>(initial: T) => React.useState(() => actual.makeMutable(initial))[0],
+  };
+});
 
 // The navigator, as the reel sees it: whatever listens for the push ending and
 // the pop beginning can be fired from the test.
@@ -62,7 +82,18 @@ function createNavigation() {
 // The zoom is available: iOS 18 on the bridgeless runtime.
 vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true }));
 
-import { MediaZoomSourceView, MediaZoomSurface, peekOpeningPost, peekOpeningPreview, STAND_IN_STILL_WAIT_MS, useMediaZoomSource, useMediaZoomStage } from '../components/media-zoom';
+import {
+  MediaZoomSourceView,
+  MediaZoomSurface,
+  peekOpeningPost,
+  peekOpeningPreview,
+  STAND_IN_POSTER_WAIT_MS,
+  STAND_IN_STILL_KEEP_MS,
+  STAND_IN_STILL_WAIT_MS,
+  TILE_LIFT_DRAWN_DEADLINE_MS,
+  useMediaZoomSource,
+  useMediaZoomStage,
+} from '../components/media-zoom';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
 import { getZoomFlight, peekPendingZoomOrigin, resetMediaZoomTransitions, subscribeToZoomFlights, type ZoomFlight } from '../lib/media-zoom-transition';
 import { useMediaZoomVideoOffer } from '../lib/media-zoom-video-offer';
@@ -92,27 +123,57 @@ import {
 const PREVIEW = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: null };
 const STREAM = 'https://example.test/clip.mp4';
 
-function fakePlayer({ still = 'none' }: { still?: 'none' | 'never' } = {}) {
-  return {
+function fakePlayer({ still = 'none' }: { still?: 'none' | 'never' | 'asked' } = {}) {
+  const asked: Array<(stills: VideoThumbnail[]) => void> = [];
+  const player = {
     pause: vi.fn(),
     release: vi.fn(),
     currentTime: 4.2,
-    // The still of the frame a playing tile shows, for its stand-in: none at
-    // all here (a test tree draws nothing), or one that never comes.
-    generateThumbnailsAsync: vi.fn(() => (still === 'never' ? new Promise(() => {}) : Promise.reject(new Error('no still in a test')))),
+    // The still of the frame a playing tile shows, for its stand-in: none to be
+    // had, one that never comes, or each one when the test answers (`stills`).
+    generateThumbnailsAsync: vi.fn(() => {
+      if (still === 'never') return new Promise(() => {});
+      if (still === 'asked') return new Promise<VideoThumbnail[]>((resolve) => asked.push(resolve));
+      return Promise.reject(new Error('no still in a test'));
+    }),
   } as unknown as VideoPlayer;
+  return Object.assign(player, { stills: asked });
 }
 
-/** Taps the tile; a playing tile waits for the still of its frame, which settles a microtask later. */
+/** A still of the frame the player was showing at `time`. */
+function fakeStill(name: string, time = 4.2) {
+  return { name, requestedTime: time } as unknown as VideoThumbnail;
+}
+
+/** Answers the player's `index`th still read, a microtask later as the native read does. */
+async function answerStill(player: ReturnType<typeof fakePlayer>, index: number, still: VideoThumbnail) {
+  await renderer.act(async () => {
+    player.stills[index]([still]);
+  });
+}
+
+/**
+ * Taps the tile and lets its open go through: the stand-in draws, a playing
+ * tile's still settles a microtask later, and the push waits for the lift to
+ * be drawn, which in a test tree only the lift's deadline reports.
+ */
 async function openTile(source: ReturnType<typeof useMediaZoomSource>, open: (zoom: unknown) => void = () => {}) {
   await renderer.act(async () => {
     source.capture(open);
+  });
+  await elapse(TILE_LIFT_DRAWN_DEADLINE_MS);
+}
+
+async function elapse(ms: number) {
+  await renderer.act(async () => {
+    vi.advanceTimersByTime(ms);
   });
 }
 
 // The screen the tiles are on, and the black it is covered in (lib/zoom-veil.ts).
 let feedVeil: ScreenVeil;
 beforeEach(() => {
+  vi.useFakeTimers();
   feedVeil = createScreenVeil();
   registerScreenVeil('feed', feedVeil);
 });
@@ -123,11 +184,13 @@ afterEach(() => {
   resetZoomVeil();
   listeners.clear();
   reelFocused = true;
+  standInImage.draws = true;
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
-function Tile({ report, player, post = null }: { report: (source: ReturnType<typeof useMediaZoomSource>) => void; player?: VideoPlayer; post?: ImmersivePreviewItem | null }) {
-  const source = useMediaZoomSource({ itemId: 'post-1', aspectRatio: 9 / 16, preview: PREVIEW, post });
+function Tile({ report, player, post = null, itemId = 'post-1' }: { report: (source: ReturnType<typeof useMediaZoomSource>) => void; player?: VideoPlayer; post?: ImmersivePreviewItem | null; itemId?: string }) {
+  const source = useMediaZoomSource({ itemId, aspectRatio: 9 / 16, preview: PREVIEW, post });
   report(source);
   return (
     <MediaZoomSourceView source={source}>
@@ -146,34 +209,53 @@ function VideoLayer({ player }: { player: VideoPlayer }) {
 function mountTile(player?: VideoPlayer, screen: string | null = 'feed') {
   let source!: ReturnType<typeof useMediaZoomSource>;
   let tree!: renderer.ReactTestRenderer;
+  const element = (itemId: string, tilePlayer = player) => (
+    <ZoomVeilOwnerContext.Provider value={screen}>
+      <MediaZoomSurface>
+        <Tile report={(value) => { source = value; }} player={tilePlayer} itemId={itemId} />
+      </MediaZoomSurface>
+    </ZoomVeilOwnerContext.Provider>
+  );
   renderer.act(() => {
-    tree = renderer.create(
-      <ZoomVeilOwnerContext.Provider value={screen}>
-        <MediaZoomSurface>
-          <Tile report={(value) => { source = value; }} player={player} />
-        </MediaZoomSurface>
-      </ZoomVeilOwnerContext.Provider>
-    );
+    tree = renderer.create(element('post-1'));
   });
-  return { source, tree };
+  return {
+    get source() {
+      return source;
+    },
+    tree,
+    /** Renders the tile again, showing `itemId` (a recycled cell) or the same post. */
+    rerender(itemId = 'post-1', tilePlayer = player) {
+      renderer.act(() => tree.update(element(itemId, tilePlayer)));
+    },
+    /** The stand-in UIKit's zoom grows out of: what it draws, and whether it is lifted over the tile. */
+    standIn() {
+      const image = tree.root.findByType('expo-image' as never);
+      const style = (image.props.style as unknown[]).flat() as Array<{ opacity?: number } | null>;
+      return { source: image.props.source as unknown, lifted: style.some((part) => part?.opacity === 1) };
+    },
+  };
 }
 
 describe('a tile opening under the native zoom', () => {
-  it('sends its identifier with the push and starts no flight', () => {
-    const { source } = mountTile();
+  it('sends its identifier with the push and starts no flight', async () => {
+    const tile = mountTile();
+    const { source } = tile;
     expect(source.appleZoomId).toMatch(/^zoom\|.+\|post-1$/);
 
     const open = vi.fn();
-    renderer.act(() => source.capture(open));
+    await openTile(source, open);
 
     expect(open).toHaveBeenCalledWith({ sourceId: source.appleZoomId });
+    // Grown out of the tile's poster, lifted over the tile.
+    tile.rerender();
+    expect(tile.standIn()).toEqual({ source: { uri: PREVIEW.url, cacheKey: PREVIEW.cacheKey }, lifted: true });
     expect(getZoomFlight()).toBeNull();
     const origin = peekPendingZoomOrigin('post-1', Date.now());
     expect(origin).toMatchObject({ itemId: 'post-1', native: true, flightId: null, rect: null });
   });
 
   it('lends a playing video and keeps it on the tile until the push has landed', async () => {
-    vi.useFakeTimers();
     const player = fakePlayer();
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
@@ -217,10 +299,10 @@ describe('a tile opening under the native zoom', () => {
     stopAccepting();
   });
 
-  it('drops the feed\'s veil at the tap, covers the feed in black under the reel\'s transition, and lifts it as the pop begins', () => {
+  it('drops the feed\'s veil at the tap, covers the feed in black under the reel\'s transition, and lifts it as the pop begins', async () => {
     const { source } = mountTile();
     expect(feedVeil.cover.get()).toBe(0);
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
     // Waiting for the reel's transition, and clear until it is bound: the
     // screen's veil switches to following only when React commits it, and a
     // cover raised at the tap showed black until then (lib/zoom-veil.ts).
@@ -246,9 +328,9 @@ describe('a tile opening under the native zoom', () => {
   // A reel whose first load outlives the zoom draws its loading or error shell,
   // which mounts no `AppleZoomProgress` and so binds no transition. Back from
   // there faded a cover still at 0 from the tap, over the lit feed.
-  it('covers the feed for Back from a reel that never bound its transition, and fades it from there', () => {
+  it('covers the feed for Back from a reel that never bound its transition, and fades it from there', async () => {
     const { source } = mountTile();
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
     renderer.act(() => {
       renderer.create(<Reel onExit={() => {}} />);
     });
@@ -260,13 +342,13 @@ describe('a tile opening under the native zoom', () => {
     set.mockRestore();
   });
 
-  it('keeps the veil on the reel\'s own transition for the reel\'s whole life, so a gesture close can follow the finger', () => {
+  it('keeps the veil on the reel\'s own transition for the reel\'s whole life, so a gesture close can follow the finger', async () => {
     // Swapping the transition for a plain number detaches its Animated graph,
     // and React Native then drops the native nodes of the transition's values:
     // re-attached later they are fresh nodes react-native-screens no longer
     // drives, frozen at "open", and a dismissal gesture ran over solid black.
     const { source } = mountTile();
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
     let stage!: ReturnType<typeof useMediaZoomStage>;
     renderer.act(() => {
       renderer.create(<Reel onExit={() => {}} report={(value) => { stage = value; }} />);
@@ -293,21 +375,20 @@ describe('a tile opening under the native zoom', () => {
     expect(feedVeil.cover.get()).toBe(1);
   });
 
-  it('drops no veil for a tile on a screen without one', () => {
+  it('drops no veil for a tile on a screen without one', async () => {
     const { source } = mountTile(undefined, null);
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
     expect(peekPendingZoomOrigin('post-1', Date.now())?.veil).toBeNull();
     expect(feedVeil.cover.get()).toBe(0);
   });
 
-  it('closes a reel opened from a page above another reel without taking the first reel\'s veil down', () => {
-    vi.useFakeTimers();
+  it('closes a reel opened from a page above another reel without taking the first reel\'s veil down', async () => {
     const creatorVeil = createScreenVeil();
     registerScreenVeil('creator', creatorVeil);
 
     // Explore → a reel, landed.
     const { source: exploreTile } = mountTile();
-    renderer.act(() => exploreTile.capture(() => {}));
+    await openTile(exploreTile);
     let firstStage!: ReturnType<typeof useMediaZoomStage>;
     renderer.act(() => {
       renderer.create(<Reel onExit={() => {}} report={(value) => { firstStage = value; }} />);
@@ -323,7 +404,7 @@ describe('a tile opening under the native zoom', () => {
 
     // A tile on the creator page opens a second reel, and Back closes it.
     const { source: creatorTile } = mountTile(undefined, 'creator');
-    renderer.act(() => creatorTile.capture(() => {}));
+    await openTile(creatorTile);
     const second = createNavigation();
     let secondReel!: renderer.ReactTestRenderer;
     let secondStage!: ReturnType<typeof useMediaZoomStage>;
@@ -419,30 +500,158 @@ describe('a tile opening under the native zoom', () => {
     stopAccepting();
   });
 
-  // A tap quicker than the still of a playing tile's frame (asked for as the
-  // finger comes down) waits for it a moment, and opens without it after that.
-  it('opens a playing tile once its still is drawn, or at the wait\'s end with the tile as it is', async () => {
-    vi.useFakeTimers();
-    const player = fakePlayer({ still: 'never' });
-    const { source } = mountTile(player);
+  // A playing tile stands in with a still of the frame it is showing, read as
+  // the finger comes down (`prepare`) and drawn by the tap.
+  it('opens a playing tile on the still of the frame it is showing', async () => {
+    const player = fakePlayer({ still: 'asked' });
+    const tile = mountTile(player);
     const open = vi.fn();
-
-    await openTile(source, open);
-    expect(open).not.toHaveBeenCalled();
+    renderer.act(() => tile.source.prepare());
     expect(player.generateThumbnailsAsync).toHaveBeenCalledWith([4.2], expect.anything());
+    const still = fakeStill('touch');
+    await answerStill(player, 0, still);
 
-    renderer.act(() => { vi.advanceTimersByTime(STAND_IN_STILL_WAIT_MS); });
-    expect(open).toHaveBeenCalledWith({ sourceId: source.appleZoomId });
+    await openTile(tile.source, open);
+
     expect(open).toHaveBeenCalledTimes(1);
-    expect(peekPendingZoomOrigin('post-1', Date.now())?.video).toEqual({ player, url: STREAM });
+    expect(player.generateThumbnailsAsync).toHaveBeenCalledTimes(1);
+    tile.rerender();
+    expect(tile.standIn()).toEqual({ source: still, lifted: true });
   });
 
-  it('opens at once when the tile has no still to wait for', async () => {
-    const player = fakePlayer();
-    const { source } = mountTile(player);
+  // Review of #723: a still drawn for an earlier touch read as ready, so a tap
+  // after a touch that turned into a scroll opened on an old frame.
+  it('never opens on a still read for an earlier touch', async () => {
+    const player = fakePlayer({ still: 'asked' });
+    const tile = mountTile(player);
     const open = vi.fn();
-    await openTile(source, open);
+    renderer.act(() => tile.source.prepare());
+    await answerStill(player, 0, fakeStill('scrolled'));
+    renderer.act(() => tile.source.prepare());
+
+    await openTile(tile.source, open);
+    expect(open).not.toHaveBeenCalled();
+
+    const still = fakeStill('tapped');
+    await answerStill(player, 1, still);
+    await elapse(TILE_LIFT_DRAWN_DEADLINE_MS);
     expect(open).toHaveBeenCalledTimes(1);
+    tile.rerender();
+    expect(tile.standIn()).toEqual({ source: still, lifted: true });
+  });
+
+  // Review of #723: reads can come back out of order.
+  it('counts only the latest read, whichever answers first', async () => {
+    const player = fakePlayer({ still: 'asked' });
+    const tile = mountTile(player);
+    const open = vi.fn();
+    renderer.act(() => tile.source.prepare());
+    renderer.act(() => tile.source.prepare());
+    await renderer.act(async () => {
+      tile.source.capture(open);
+    });
+
+    await answerStill(player, 0, fakeStill('earlier touch'));
+    await elapse(TILE_LIFT_DRAWN_DEADLINE_MS);
+    expect(open).not.toHaveBeenCalled();
+    expect(tile.standIn().source).toEqual({ uri: PREVIEW.url, cacheKey: PREVIEW.cacheKey });
+
+    const still = fakeStill('latest touch');
+    await answerStill(player, 1, still);
+    await elapse(TILE_LIFT_DRAWN_DEADLINE_MS);
+    expect(open).toHaveBeenCalledTimes(1);
+    tile.rerender();
+    expect(tile.standIn()).toEqual({ source: still, lifted: true });
+  });
+
+  it('reads the frame again for a press held while the clip played on', async () => {
+    const player = fakePlayer({ still: 'asked' });
+    const tile = mountTile(player);
+    const open = vi.fn();
+    renderer.act(() => tile.source.prepare());
+    await answerStill(player, 0, fakeStill('at the touch', 4.2));
+    (player as { currentTime: number }).currentTime = 4.8;
+
+    await openTile(tile.source, open);
+    expect(open).not.toHaveBeenCalled();
+    expect(player.generateThumbnailsAsync).toHaveBeenLastCalledWith([4.8], expect.anything());
+
+    const still = fakeStill('at the tap', 4.8);
+    await answerStill(player, 1, still);
+    await elapse(TILE_LIFT_DRAWN_DEADLINE_MS);
+    expect(open).toHaveBeenCalledTimes(1);
+    tile.rerender();
+    expect(tile.standIn().source).toBe(still);
+  });
+
+  // Review of #723: at the wait's end the open went ahead without a lift, and
+  // UIKit grew the reel out of a stand-in with nothing in it.
+  it('grows a playing tile out of its poster when the still is late, and drops the still when it comes', async () => {
+    const player = fakePlayer({ still: 'asked' });
+    const tile = mountTile(player);
+    const open = vi.fn();
+    await renderer.act(async () => {
+      tile.source.capture(open);
+    });
+    await elapse(STAND_IN_STILL_WAIT_MS);
+    expect(open).not.toHaveBeenCalled();
+    await elapse(TILE_LIFT_DRAWN_DEADLINE_MS);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(peekPendingZoomOrigin('post-1', Date.now())?.video).toEqual({ player, url: STREAM });
+
+    await answerStill(player, 0, fakeStill('late'));
+    tile.rerender();
+    expect(tile.standIn()).toEqual({ source: { uri: PREVIEW.url, cacheKey: PREVIEW.cacheKey }, lifted: true });
+  });
+
+  it('grows a playing tile out of its poster when its player gives no still', async () => {
+    const player = fakePlayer();
+    const tile = mountTile(player);
+    const open = vi.fn();
+    await openTile(tile.source, open);
+    expect(open).toHaveBeenCalledTimes(1);
+    tile.rerender();
+    expect(tile.standIn().lifted).toBe(true);
+  });
+
+  it('opens with the tile as it is when the stand-in draws nothing in time', async () => {
+    standInImage.draws = false;
+    const tile = mountTile();
+    const open = vi.fn();
+    await renderer.act(async () => {
+      tile.source.capture(open);
+    });
+    expect(open).not.toHaveBeenCalled();
+    await elapse(STAND_IN_POSTER_WAIT_MS);
+    expect(open).toHaveBeenCalledTimes(1);
+    tile.rerender();
+    expect(tile.standIn().lifted).toBe(false);
+  });
+
+  // Review of #723: a recycled cell kept the still of the post it showed before.
+  it('keeps no still in a cell recycled for another post', async () => {
+    const player = fakePlayer({ still: 'asked' });
+    const tile = mountTile(player);
+    renderer.act(() => tile.source.prepare());
+    await answerStill(player, 0, fakeStill('first post'));
+    expect(tile.standIn().source).toEqual(fakeStill('first post'));
+
+    tile.rerender('post-2', fakePlayer());
+    expect(tile.source.standInStill).toBeNull();
+    expect(tile.standIn().source).toBeNull();
+  });
+
+  // Review of #723: every touch while scrolling left a picture behind.
+  it('drops a still no tap used', async () => {
+    const player = fakePlayer({ still: 'asked' });
+    const tile = mountTile(player);
+    renderer.act(() => tile.source.prepare());
+    await answerStill(player, 0, fakeStill('unused'));
+    expect(tile.source.standInStill).not.toBeNull();
+
+    await elapse(STAND_IN_STILL_KEEP_MS);
+    expect(tile.source.standInStill).toBeNull();
+    expect(tile.standIn().source).toEqual({ uri: PREVIEW.url, cacheKey: PREVIEW.cacheKey });
   });
 
   // Owner's iPhone, 2026-11-07: "closing the video is having some ghost like
@@ -496,9 +705,44 @@ describe('a tile opening under the native zoom', () => {
     expect(getZoomFlight()).toBeNull();
   });
 
-  it('dismisses by popping alone: UIKit shrinks the reel into the registered tile', () => {
+  // Review of #723: the close flew the reel's player even when the hand-back
+  // refused it, and that player went with the reel in the middle of the flight.
+  it('keeps UIKit\'s zoom for a player the reel cannot hand back', async () => {
+    vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));
+    // A poster tile lends nothing; the reel plays a player of its own that no loan holds.
     const { source } = mountTile();
-    renderer.act(() => source.capture(() => {}));
+    const tileKey = source.tileKey!;
+    (source.ref as { current: unknown }).current = {
+      measure: (report: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void) => report(0, 0, 185, 320, 12, 196),
+      measureInWindow: () => {},
+    };
+    await openTile(source);
+    const reelPlayer = fakePlayer();
+    const flights: ZoomFlight[] = [];
+    const stop = subscribeToZoomFlights((event) => {
+      if (event.type === 'begin') flights.push(event.flight);
+    });
+    const onExit = vi.fn();
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    renderer.act(() => {
+      renderer.create(<Reel onExit={onExit} playerFor={() => reelPlayer} activePicture={PREVIEW} report={(value) => { stage = value; }} />);
+    });
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    const stopAccepting = acceptVideoReturn(tileKey, STREAM);
+
+    renderer.act(() => stage.dismiss());
+    expect(flights).toHaveLength(0);
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
+    // Popped two frames on, once the tile is UIKit's to shrink into again.
+    await elapse(40);
+    expect(onExit).toHaveBeenCalledTimes(1);
+    stop();
+    stopAccepting();
+  });
+
+  it('dismisses by popping alone: UIKit shrinks the reel into the registered tile', async () => {
+    const { source } = mountTile();
+    await openTile(source);
     const onExit = vi.fn();
     let stage!: ReturnType<typeof useMediaZoomStage>;
     renderer.act(() => {

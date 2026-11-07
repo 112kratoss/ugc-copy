@@ -36,10 +36,36 @@ const ZoomStandInImage = Animated.createAnimatedComponent(Image);
 const STAND_IN_STILL_SIZE = { maxWidth: 720, maxHeight: 720 };
 /**
  * The longest a tap on a playing tile waits for the still of its frame before
- * it opens without one. The still is asked for as the finger comes down and
- * took 8–43 ms on the simulator, so a tap of usual length rarely waits at all.
+ * its stand-in falls back to the poster. The still is asked for as the finger
+ * comes down and took 8–43 ms on the simulator, so a tap of usual length rarely
+ * waits at all.
  */
 export const STAND_IN_STILL_WAIT_MS = 150;
+/**
+ * The longest a tap waits for its stand-in to draw the poster, when it has not
+ * yet: a tile whose touch never armed it (one inside a carousel's own
+ * Pressable), or a playing tile whose still did not come in time. After that
+ * the open goes ahead with the tile as it is.
+ */
+export const STAND_IN_POSTER_WAIT_MS = 100;
+/** A still no tap used is dropped after this long, so touches while scrolling keep no pictures. */
+export const STAND_IN_STILL_KEEP_MS = 1500;
+/**
+ * A still read this far from where the player now is, in seconds, is a moment
+ * the tile has moved on from (a press held long, the clip looping), and is read
+ * again at the tap.
+ */
+const STAND_IN_STILL_STALE_S = 0.25;
+
+/** The still shows a moment `player` has moved on from (`STAND_IN_STILL_STALE_S`). */
+function stillIsStale(still: VideoThumbnail, player: VideoPlayer) {
+  try {
+    return Math.abs(player.currentTime - still.requestedTime) > STAND_IN_STILL_STALE_S;
+  } catch {
+    // A player released under the tile.
+    return true;
+  }
+}
 
 import {
   advanceZoomFlight,
@@ -503,7 +529,7 @@ let liftDeadline: ReturnType<typeof setTimeout> | null = null;
 let liftSettled: (() => void) | null = null;
 export const TILE_LIFT_DEADLINE_MS = 2000;
 /** The longest an open waits for its lifted stand-in to be drawn before it pushes anyway. */
-const TILE_LIFT_DRAWN_DEADLINE_MS = 100;
+export const TILE_LIFT_DRAWN_DEADLINE_MS = 100;
 
 /**
  * Shows the tile's stand-in over it, and calls `onLifted` once the UI thread
@@ -1078,41 +1104,75 @@ export function useMediaZoomSource({
   // source as a picture, and a player's layer came out black (simulator,
   // 2026-11-07).
   //
-  // The still is drawn into the stand-in, unseen, as soon as it is read, so a
-  // tap finds it on screen and opens without waiting; a touch that turns into
-  // a scroll costs that card one render. `readStillRef` is the last still read.
-  const readStillRef = useRef<VideoThumbnail | null>(null);
-  const stillReadingRef = useRef(false);
+  // Each touch reads a fresh still (`readStill`), drawn into the stand-in,
+  // unseen, as soon as it comes back, so a tap finds it on screen and opens
+  // without waiting; a touch that turns into a scroll costs that card one
+  // render. Only the latest read's still counts (`freshStillRef`, by
+  // `stillTokenRef`): never one from an earlier touch, one that came back after
+  // a later read, or one of another post in a recycled cell. A still no tap
+  // used is dropped after `STAND_IN_STILL_KEEP_MS`.
   const [standInStill, setStandInStillState] = useState<VideoThumbnail | null>(null);
-  // The still the stand-in is drawing, for the tap's own task: the state
-  // reaches the tap's callback only once React has rendered it.
+  // What the stand-in is drawing, for the tap's own task: the state reaches the
+  // tap's callback only once React has rendered it.
   const standInStillRef = useRef<VideoThumbnail | null>(null);
   const setStandInStill = useCallback((still: VideoThumbnail | null) => {
+    if (still === standInStillRef.current) return;
     standInStillRef.current = still;
+    // Whichever picture comes next counts as drawn only once expo-image says so.
+    standInDrawnRef.current = false;
     setStandInStillState(still);
   }, []);
+  /** The latest read's still, once it is back; null while none is. */
+  const freshStillRef = useRef<VideoThumbnail | null>(null);
+  /** The player the latest read was of. */
+  const stillPlayerRef = useRef<VideoPlayer | null>(null);
+  /** Bumped by every read and every reset: a read that is not the latest is ignored. */
+  const stillTokenRef = useRef(0);
+  const stillReadingRef = useRef(false);
   const stillDrawnRef = useRef<VideoThumbnail | null>(null);
-  // A tap waiting on the still (`capture`): told when the stand-in has drawn
-  // it, or that there will be none.
-  const stillWaiterRef = useRef<(() => void) | null>(null);
+  const stillDropRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A tap waiting for its stand-in to be drawn (`capture`): asked again
+  // whenever the stand-in draws a picture or a read comes back with none.
+  const standInWaiterRef = useRef<(() => void) | null>(null);
+  const cancelStillDrop = useCallback(() => {
+    if (stillDropRef.current) clearTimeout(stillDropRef.current);
+    stillDropRef.current = null;
+  }, []);
+  /** Forgets the latest read; with `undraw`, the stand-in goes back to the poster too. */
+  const forgetStill = useCallback((undraw: boolean) => {
+    stillTokenRef.current += 1;
+    stillReadingRef.current = false;
+    freshStillRef.current = null;
+    stillPlayerRef.current = null;
+    cancelStillDrop();
+    if (!undraw) return;
+    stillDrawnRef.current = null;
+    setStandInStill(null);
+  }, [cancelStillDrop, setStandInStill]);
   const standInDrawn = useCallback((still: VideoThumbnail | null) => {
-    if (!still) {
-      standInDrawnRef.current = true;
-      return;
-    }
-    stillDrawnRef.current = still;
-    if (still === standInStillRef.current) stillWaiterRef.current?.();
+    if (still) stillDrawnRef.current = still;
+    else if (standInStillRef.current === null) standInDrawnRef.current = true;
+    standInWaiterRef.current?.();
   }, []);
   /** Reads the still of the frame `player` is showing, for the stand-in. */
   const readStill = useCallback((player: VideoPlayer) => {
+    forgetStill(false);
+    const token = stillTokenRef.current;
     stillReadingRef.current = true;
-    readStillRef.current = null;
+    stillPlayerRef.current = player;
     const read = (still: VideoThumbnail | null) => {
+      if (stillTokenRef.current !== token) return;
       stillReadingRef.current = false;
-      readStillRef.current = still;
-      // Drawn at once, unseen, so a tap finds it on screen already.
-      if (still) setStandInStill(still);
-      else stillWaiterRef.current?.();
+      freshStillRef.current = still;
+      // None to be had: the stand-in goes back to the poster.
+      setStandInStill(still);
+      if (still) {
+        stillDropRef.current = setTimeout(() => {
+          stillDropRef.current = null;
+          if (stillTokenRef.current === token) forgetStill(true);
+        }, STAND_IN_STILL_KEEP_MS);
+      }
+      standInWaiterRef.current?.();
     };
     let reading: Promise<VideoThumbnail[]>;
     try {
@@ -1123,7 +1183,83 @@ export function useMediaZoomSource({
       return;
     }
     reading.then((stills) => read(stills[0] ?? null), () => read(null));
-  }, [setStandInStill]);
+  }, [forgetStill, setStandInStill]);
+  // A recycled cell showing another post, or a tile gone, keeps no still, and
+  // its stand-in waits for the next touch to load anything.
+  useEffect(() => () => {
+    forgetStill(true);
+    setStandInArmed(false);
+    standInDrawnRef.current = false;
+  }, [forgetStill, itemId]);
+  /**
+   * Calls `then` once the stand-in has drawn the picture an open grows out of:
+   * for a tile playing `player`, the still of the frame it is showing, read
+   * again if the one in hand is of another player or another moment; for any
+   * other tile, or a still not drawn within `STAND_IN_STILL_WAIT_MS`, the
+   * poster. `then(null)` when the stand-in drew nothing in time.
+   */
+  const whenStandInDrawn = useCallback((
+    player: VideoPlayer | null,
+    then: (drawn: 'still' | 'poster' | null) => void,
+  ) => {
+    const fresh = () => {
+      const still = freshStillRef.current;
+      return player !== null && stillPlayerRef.current === player && still !== null && !stillIsStale(still, player)
+        ? still
+        : null;
+    };
+    const stillDrawn = () => {
+      const still = fresh();
+      return still !== null && standInStillRef.current === still && stillDrawnRef.current === still;
+    };
+    const posterDrawn = () => standInStillRef.current === null && standInDrawnRef.current;
+    let phase: 'still' | 'poster' = player ? 'still' : 'poster';
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    const finish = (drawn: 'still' | 'poster' | null) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      if (standInWaiterRef.current === check) standInWaiterRef.current = null;
+      then(drawn);
+    };
+    const toPoster = () => {
+      if (done) return;
+      phase = 'poster';
+      if (timer) clearTimeout(timer);
+      // From here a still that comes late is dropped, and the stand-in draws the poster.
+      forgetStill(true);
+      if (posterDrawn()) {
+        finish('poster');
+        return;
+      }
+      timer = setTimeout(() => finish(null), STAND_IN_POSTER_WAIT_MS);
+    };
+    function check() {
+      if (done) return;
+      if (phase === 'poster') {
+        if (posterDrawn()) finish('poster');
+        return;
+      }
+      if (stillDrawn()) {
+        finish('still');
+        return;
+      }
+      // The read came back with nothing, or was forgotten (a recycled cell).
+      if (stillPlayerRef.current !== player || (!stillReadingRef.current && freshStillRef.current === null)) toPoster();
+    }
+    standInWaiterRef.current = check;
+    if (phase === 'poster') {
+      toPoster();
+      return;
+    }
+    timer = setTimeout(toPoster, STAND_IN_STILL_WAIT_MS);
+    // A still of this player that is back and current, or being read, is
+    // waited for; otherwise the tap reads one itself.
+    const coming = stillPlayerRef.current === player && (stillReadingRef.current || fresh() !== null);
+    if (!coming && player) readStill(player);
+    check();
+  }, [forgetStill, readStill]);
   const active = Boolean(surfaceId) && enabled && Boolean(itemId);
   // iOS 18: the tile's view is registered with UIKit's zoom under this
   // identifier (`AppleZoomSource`), and a tap sends it along in the push.
@@ -1170,9 +1306,8 @@ export function useMediaZoomSource({
 
   const prepare = useCallback(() => {
     if (!active) return;
-    // The frame a playing tile is showing, for its stand-in (above). A still
-    // that comes after the tap is dropped unused; one never lifted goes with
-    // the next touch.
+    // The frame a playing tile is showing, for its stand-in (above), read anew
+    // at every touch. One no tap uses is dropped (`STAND_IN_STILL_KEEP_MS`).
     const offer = appleZoomId ? videoOfferRef.current : null;
     if (offer && offer.hasFrame()) readStill(offer.player);
     if (appleZoomId) setStandInArmed(true);
@@ -1222,7 +1357,9 @@ export function useMediaZoomSource({
         ? { player: offer.player, url: offer.url }
         : null;
       if (video) holdVideoLoan(video.player, zoomTileKey(surfaceId, itemId), video.url);
-      const stillReady = () => stillDrawnRef.current !== null && stillDrawnRef.current === standInStillRef.current;
+      // A touch that never reached `prepare` (a tile inside a carousel's own
+      // Pressable) left the stand-in empty.
+      setStandInArmed(true);
       const push = (veil: ZoomVeilDrop | null) => {
         setPendingZoomOrigin({
           surfaceId,
@@ -1255,44 +1392,27 @@ export function useMediaZoomSource({
         });
         veil = dropZoomVeil(veilOwner, hole);
       }
-      const go = () => {
-        // The tile hands the zoom its stand-in (`MediaZoomSourceView`): the
-        // picture alone, which UIKit stretches with the window it grows, while
-        // the tile itself is hidden so no copy of it stays behind. Only once
-        // the stand-in has drawn: an empty one left the tile blank. A tile
-        // playing a clip stands in with the still of its frame, never the
-        // poster, an earlier moment than the one on screen; one whose still
-        // never drew stays as it is. The push waits for the lift to be drawn
-        // (`liftTile`).
-        const liftNow = video ? stillReady() : !videoOfferRef.current && standInDrawnRef.current;
-        if (!liftNow) {
+      // The tile hands the zoom its stand-in (`MediaZoomSourceView`): the
+      // picture alone, which UIKit stretches with the window it grows, while
+      // the tile itself is hidden so no copy of it stays behind. UIKit takes
+      // its picture of the stand-in as the push begins, so the push waits for
+      // the stand-in to draw (`whenStandInDrawn`) and then for the lift to be
+      // drawn (`liftTile`): a stand-in with nothing in it grew nothing out of
+      // the tile, the reel fading in already three-quarters the size of the
+      // screen (simulator, 2026-11-07). A tile playing a clip stands in with
+      // the still of the frame it is showing; the poster, an earlier moment,
+      // only if that still does not come in time, since a poster still grows
+      // out of the tile. A stand-in that drew nothing leaves the tile as it is.
+      whenStandInDrawn(video?.player ?? null, (drawn) => {
+        if (!drawn) {
           push(veil);
           return;
         }
-        liftTile(lifted, video ? () => setStandInStill(null) : undefined, () => push(veil));
-      };
-      // A tap quicker than the still of its frame waits for it a moment: UIKit
-      // takes its picture of the stand-in as the push begins, and a stand-in
-      // with nothing in it grew nothing out of the tile, the reel fading in
-      // already three-quarters the size of the screen (simulator, 2026-11-07).
-      if (video && !stillReady()) {
-        let done = false;
-        const goOnce = () => {
-          if (done) return;
-          done = true;
-          clearTimeout(deadline);
-          if (stillWaiterRef.current === goOnce) stillWaiterRef.current = null;
-          go();
-        };
-        const deadline = setTimeout(goOnce, STAND_IN_STILL_WAIT_MS);
-        stillWaiterRef.current = goOnce;
-        // The still read at the touch is drawn already or now; one still
-        // being read is drawn when it comes; a tap with neither reads one.
-        if (readStillRef.current) setStandInStill(readStillRef.current);
-        else if (!stillReadingRef.current) readStill(video.player);
-        return;
-      }
-      go();
+        // The still is this open's: no drop or later read takes it from the
+        // stand-in until the tile is put back, and then it goes.
+        if (drawn === 'still') forgetStill(false);
+        liftTile(lifted, drawn === 'still' ? () => forgetStill(true) : undefined, () => push(veil));
+      });
       return;
     }
     let handled = false;
@@ -1348,7 +1468,7 @@ export function useMediaZoomSource({
     // Fabric answers `measureInWindow` before it returns. A host that does not
     // must never swallow the tap, so the plain open runs instead.
     start(null);
-  }, [active, appleZoomId, aspectRatio, itemId, lifted, measure, post, preview, radius, readStill, reducedMotion, setStandInStill, surfaceId, veilOwner]);
+  }, [active, appleZoomId, aspectRatio, forgetStill, itemId, lifted, measure, post, preview, radius, reducedMotion, surfaceId, veilOwner, whenStandInDrawn]);
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 
@@ -2239,6 +2359,24 @@ export function useMediaZoomStage({
         cannotFly();
         return;
       }
+      // A video closing alone (iOS) flies the reel's own player, which goes
+      // back to its tile now, playing: the tile, hidden until the landing,
+      // draws the same clip under the flight and carries on with it, and the
+      // player outlives the reel, which goes from under the flight long before
+      // it lands. A player the tile does not take (`handBackVideoPlayer`
+      // refuses one the reel never adopted) would go with the reel mid-flight,
+      // so that close is UIKit's zoom after all.
+      let flown: ZoomVideo | null = null;
+      if (alone && flownVideo) {
+        const handed = handedBackRef.current === flownVideo.player
+          || handBackVideoPlayer(flownVideo.player, flownVideo.tileKey, flownVideo.url);
+        if (!handed) {
+          cannotFly();
+          return;
+        }
+        handedBackRef.current = flownVideo.player;
+        flown = { player: flownVideo.player, url: flownVideo.url };
+      }
       const live = !beforeHandoff && !alone;
       const geometry: ZoomGeometry = {
         screen: screenRef.current,
@@ -2267,16 +2405,8 @@ export function useMediaZoomStage({
       following.set(live ? 1 : 0);
       // Closed before the hand-off, a lent video is still the layer's to draw,
       // so it turns round with the flight rather than giving way to a poster.
-      // A live close hands the player to the tile at landing (`leaveIntoTile`).
-      // A video closing alone (iOS) flies the reel's own player, which goes
-      // back to its tile now, playing: the tile, hidden until the landing,
-      // draws the same clip under the flight and carries on with it, and the
-      // player outlives the reel, which goes from under the flight long before
-      // it lands.
-      const flown = alone && flownVideo ? { player: flownVideo.player, url: flownVideo.url } : null;
-      if (flown && flownVideo && handBackVideoPlayer(flown.player, flownVideo.tileKey, flown.url)) {
-        handedBackRef.current = flown.player;
-      }
+      // A live close hands the player to the tile at landing (`leaveIntoTile`),
+      // and one closing alone flies the player handed back above.
       const video = beforeHandoff ? lentVideo : flown;
       // The post shrinks whole: the layer draws its rail and caption over the
       // picture and fades them out as the window comes down. A live close has
