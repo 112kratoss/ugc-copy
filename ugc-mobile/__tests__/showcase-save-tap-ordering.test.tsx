@@ -467,23 +467,23 @@ describe('a signed-out tap', () => {
     };
   }
 
-  it('sends the reader to sign in and back to the screen the post is on', async () => {
+  it('opens the sign-up sheet, back to the screen the post is on (owner, 2026-11-08)', async () => {
     const surface = await mountSignedOut({ authReturnTo: '/post/post-signed-out' });
 
     await surface.tap();
 
-    expect(mocks.routerPush).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/post/post-signed-out' } });
+    expect(mocks.routerPush).toHaveBeenCalledWith({ pathname: '/join', params: { returnTo: '/post/post-signed-out' } });
     expect(mocks.saveShowcasePost).not.toHaveBeenCalled();
 
     surface.cleanup();
   });
 
-  it('keeps the plain sign-in for a surface that names no way back', async () => {
+  it('comes back to the post itself for a surface that names no way back (Home\'s cards)', async () => {
     const surface = await mountSignedOut();
 
     await surface.tap();
 
-    expect(mocks.routerPush).toHaveBeenCalledWith('/auth');
+    expect(mocks.routerPush).toHaveBeenCalledWith({ pathname: '/join', params: { returnTo: '/post/post-signed-out' } });
 
     surface.cleanup();
   });

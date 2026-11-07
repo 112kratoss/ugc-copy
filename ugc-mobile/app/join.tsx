@@ -49,6 +49,9 @@ export default function JoinScreen() {
   const unavailable = !isAuthConfigured || busy;
   const sheetHeight = Math.min(height - insets.top - 24, 760);
   const movedOn = useRef(false);
+  // A sign-in started here, for the funnel: success when it lands, a cancel
+  // when the sheet is closed after one began and before it did.
+  const attempted = useRef(false);
 
   useEffect(() => {
     Animated.timing(rise, {
@@ -64,8 +67,12 @@ export default function JoinScreen() {
   }, [api]);
 
   const close = useCallback(() => {
-    if (movedOn.current) return;
+    // Not while a sign-in is finishing (the guest's credits being carried over,
+    // Apple's token, Google's code): closing then left a new account with no
+    // name step and no welcome credits.
+    if (movedOn.current || busy) return;
     movedOn.current = true;
+    if (attempted.current) void trackOnboardingEvent(api, 'auth_canceled', { step: 'join' });
     Animated.timing(rise, {
       toValue: 0,
       duration: reducedMotion ? 0 : 220,
@@ -75,7 +82,7 @@ export default function JoinScreen() {
       if (router.canGoBack()) router.back();
       else router.replace('/(tabs)' as never);
     });
-  }, [reducedMotion, rise]);
+  }, [api, busy, reducedMotion, rise]);
 
   useHardwareBack(true, close);
 
@@ -84,16 +91,22 @@ export default function JoinScreen() {
   const moveOn = useCallback(() => {
     if (movedOn.current) return;
     movedOn.current = true;
+    if (attempted.current) void trackOnboardingEvent(api, 'auth_succeeded', { step: 'join' });
     router.replace({ pathname: '/onboarding', params: { returnTo: target } } as never);
-  }, [target]);
+  }, [api, target]);
 
   useEffect(() => {
     if (user) moveOn();
   }, [moveOn, user]);
 
+  const noteAttempt = () => {
+    if (!attempted.current) void trackOnboardingEvent(api, 'auth_started', { step: 'join' });
+    attempted.current = true;
+  };
+
   const signUpWithApple = async () => {
     if (unavailable) return;
-    void trackOnboardingEvent(api, 'auth_started', { step: 'join' });
+    noteAttempt();
     setAppleBusy(true);
     setNotice(null);
     try {
@@ -107,7 +120,7 @@ export default function JoinScreen() {
 
   const signUpWithGoogle = async () => {
     if (unavailable) return;
-    void trackOnboardingEvent(api, 'auth_started', { step: 'join' });
+    noteAttempt();
     setGoogleBusy(true);
     setNotice(null);
     try {
@@ -122,13 +135,16 @@ export default function JoinScreen() {
   const logIn = () => {
     if (movedOn.current) return;
     movedOn.current = true;
-    router.replace({ pathname: '/auth', params: { mode: 'login', returnTo: target } } as never);
+    // Through onboarding: the sign-in screen's Apple and Google make accounts
+    // too, and a new one still gets its name and welcome credits there. An
+    // existing, finished account passes straight through it to `target`.
+    router.replace({ pathname: '/auth', params: { mode: 'login', returnTo: `/onboarding?returnTo=${encodeURIComponent(target)}` } } as never);
   };
 
   return (
     <View style={StyleSheet.absoluteFill}>
       <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: mediaColors.mediaScrimStrong, opacity: rise }]}>
-        <Pressable accessibilityLabel="Close" style={StyleSheet.absoluteFill} onPress={close} />
+        <Pressable accessibilityLabel="Close" disabled={busy} style={StyleSheet.absoluteFill} onPress={close} />
       </Animated.View>
 
       <Animated.View

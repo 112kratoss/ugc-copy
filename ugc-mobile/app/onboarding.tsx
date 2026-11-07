@@ -36,6 +36,7 @@ import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { onboardingReturnTo } from '@/lib/join-navigation';
+import { completeAuthScreen } from '@/lib/auth-navigation';
 import { isIdentityDeferredInMetadata, resolveOnboardingDestination } from '@/lib/onboarding-destination';
 import { appTheme } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
@@ -134,6 +135,13 @@ function OnboardingFlow() {
   // Sent here by the sign-up sheet (app/join.tsx): the screen that asked for an
   // account, to go back to once the name and the welcome credits are done.
   const returnTo = onboardingReturnTo(((useRoute().params ?? {}) as { returnTo?: string | string[] }).returnTo);
+  // Back to that screen as the sign-in screen goes back: to the copy already
+  // in the stack (dismissTo), never a second one on top of it. A plain replace
+  // put a second Home, reel or editor over the first.
+  const leaveForReturn = useCallback(() => {
+    if (returnTo) completeAuthScreen(router, returnTo);
+    else router.replace('/(tabs)' as never);
+  }, [returnTo]);
   const { api, user, refreshProfile, updateCredits, markIdentityDeferredOnAccount } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
@@ -208,7 +216,7 @@ function OnboardingFlow() {
       if (destination === 'none') {
         // Nothing outstanding. Reaching here means a deep link, a stale card, or
         // an account that signed in from the sign-up sheet: back to what it was.
-        router.replace((returnTo ?? '/(tabs)') as never);
+        leaveForReturn();
         return;
       }
       setStage(destination === 'reward' ? 'reward' : 'identity');
@@ -227,7 +235,7 @@ function OnboardingFlow() {
   // always refreshes the state's `updatedAt`; depending on the whole state
   // object made that write recreate this callback, retrigger the effect below,
   // and hold signed-in creators in an endless profile/welcome-credits fetch loop.
-  }, [adoptWelcome, api, goal, identityDeferredAt, update, user]);
+  }, [adoptWelcome, api, goal, identityDeferredAt, leaveForReturn, update, user]);
 
   useEffect(() => {
     // Being signed in is the whole condition. This used to also require
@@ -300,7 +308,7 @@ function OnboardingFlow() {
       await skip();
     }
     void trackOnboardingEvent(api, 'skipped', { goal, step: fromStep });
-    router.replace((returnTo ?? '/(tabs)') as never);
+    leaveForReturn();
   };
 
   const exploreAsGuest = () => leaveForNow(stage === 'intro' ? (step === 0 ? 'welcome' : 'goal') : stage);
@@ -455,7 +463,7 @@ function OnboardingFlow() {
     }
     // From the sign-up sheet: back to what asked for an account, credits in hand.
     if (returnTo) {
-      router.replace(returnTo as never);
+      leaveForReturn();
       return;
     }
     void trackOnboardingEvent(api, 'guided_creator_opened', { goal, step: 'creator' });
@@ -616,6 +624,14 @@ function OnboardingFlow() {
                   disabled={busy}
                   onPress={() => void leaveForNow('identity')}
                 />
+                {/* Said where the choice is made: the welcome credits wait on a
+                    creator name, and after "later" nothing on the way back to
+                    the creator offers them again. */}
+                {welcome?.status === 'not_eligible' || welcome?.status === 'eligible' ? (
+                  <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
+                    Your 25 free credits are added once you choose a name.
+                  </AppText>
+                ) : null}
               </Card>
             </>
           ) : null}
