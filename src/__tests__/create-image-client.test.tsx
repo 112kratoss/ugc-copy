@@ -2894,6 +2894,25 @@ describe('CreateImageClient generation pipeline', () => {
     });
   });
 
+  it('draws its references as the video creator’s Inputs: a box that counts them, and what they are for while there are none', async () => {
+    // Ideogram V3 takes one reference image.
+    const view = render(<CreateImageClient prefill={{ model: 'ideogram-v3' }} />);
+    const inputs = screen.getByRole('group', { name: 'Inputs' });
+    const add = within(inputs).getByRole('button', { name: 'Add images, 0 of 1' });
+    expect(add).toBeEnabled();
+    // The visible line (the box carries the same words for a screen reader).
+    expect(within(inputs).getByText('Pictures of people, products or styles, used by @handle', { selector: 'p' })).toBeInTheDocument();
+
+    fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][multiple]')!, {
+      target: { files: [new File(['1'], 'first.png', { type: 'image/png' })] },
+    });
+
+    expect(await within(inputs).findByAltText('Element 1')).toBeInTheDocument();
+    // Full at the model's one: the box dims, and the strip takes the hint's place.
+    expect(within(inputs).getByRole('button', { name: 'Add images, 1 of 1' })).toBeDisabled();
+    expect(within(inputs).queryByText('Pictures of people, products or styles, used by @handle', { selector: 'p' })).not.toBeInTheDocument();
+  });
+
   it('refuses a file the upload would refuse, by name, and says when picks pass the model’s limit', async () => {
     // Ideogram V3 takes one reference image.
     const view = render(<CreateImageClient prefill={{ model: 'ideogram-v3' }} />);

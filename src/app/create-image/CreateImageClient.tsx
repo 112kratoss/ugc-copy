@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, Download, Image as ImageIcon, Plus } from 'lucide-react';
+import { Loader2, Download, Image as ImageIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
 import { catalogRunQuoteInput, GENERATION_PROMPT_MAX_LENGTH } from '../../../ugc-mobile/lib/model-catalog/protocol';
@@ -38,7 +38,6 @@ import {
     StudioUseOriginalButton,
 } from '@/components/CreatorStudio';
 import {
-    CreatorAddTile,
     CreatorBackgroundRunLine,
     CreatorBalanceNote,
     CreatorBarAction,
@@ -48,11 +47,13 @@ import {
     CreatorCanvasStage,
     CreatorColumnBar,
     CreatorColumnLayout,
+    CreatorInputsCard,
     CreatorModelChip,
     CreatorPendingStartNotice,
     CreatorReferencePreview,
-    CreatorReferenceStrip,
+    CreatorReferenceRow,
     CreatorReferenceTile,
+    type CreatorReferenceKind,
     CreatorRemixSlotTile,
     type CreatorReferencePreviewTarget,
     CreatorRunFailed,
@@ -468,7 +469,6 @@ function ImageCreator({
     const [resolution, setResolution] = useState(() => openingSetting<string>(opening, 'resolution', '1K') as ImageResolution);
     const [qualityMode, setQualityMode] = useState(() => openingSetting<string>(opening, 'qualityMode', 'standard') as ImageQualityMode);
     const [googleSearch, setGoogleSearch] = useState(() => openingSetting<boolean>(opening, 'googleSearch', false));
-    const [isDragging, setIsDragging] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [generationTiming, setGenerationTiming] = useState<GenerationTiming | null>(null);
     const [outputImage, setOutputImage] = useState<string | null>(null);
@@ -931,13 +931,6 @@ function ImageCreator({
         await persistUploadedImageElements(nextElements);
     };
 
-    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files?.length) {
-            await processImageFiles(e.target.files);
-            e.target.value = '';
-        }
-    };
-
     /**
      * The remixer's own picture in a remix's empty slot: a reference of theirs, named as both creators
      * name a fill (`remixSlotFillNaming`: "product" under the @product the prompt mentions it by, or the
@@ -969,13 +962,6 @@ function ImageCreator({
         commitElements(nextElements);
         setRemixSlots((slots) => withoutRemixInputSlot(slots, slot.id));
         await persistUploadedImageElements(nextElements);
-    };
-
-    const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
-    const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
-    const handleDrop = async (e: React.DragEvent) => {
-        e.preventDefault(); setIsDragging(false);
-        if (e.dataTransfer.files?.length) await processImageFiles(e.dataTransfer.files);
     };
 
     const handleRemoveElement = async (elementId: string) => {
@@ -1952,7 +1938,15 @@ function ImageCreator({
     const emptyCanvasHint = model.maxImages > 0
         ? 'Write a prompt, add reference images if you like, then Generate.'
         : 'Write a prompt, then Generate.';
-    const canAddReferences = elements.length < model.maxImages;
+    // The pictures' add box (the video creator's Inputs row): how many the run holds and the model takes.
+    const imageReferenceKind: CreatorReferenceKind = {
+        railLabel: 'Images',
+        hint: 'Pictures of people, products or styles, used by @handle',
+        accept: 'image/*',
+        count: elements.length,
+        limit: model.maxImages,
+        onFiles: (files) => void processImageFiles(files),
+    };
     const imageAccent = getAccentClasses('image');
     // A visitor's press needs no price: it checks the form, then asks for an account.
     const generateBlocked = !prompt.trim()
@@ -2336,85 +2330,52 @@ function ImageCreator({
                             buttons, even on a prompt-only model: the limit message asks the
                             creator to remove the extras, and this is the only place to do it. */}
                         {model.maxImages > 0 || elements.length > 0 ? (
-                            <section
-                                aria-labelledby="create-image-references"
-                                // A drop is taken only while one more fits: at the cap, or on a
-                                // prompt-only model keeping references, nothing can be added.
-                                onDragOver={canAddReferences ? handleDragOver : undefined}
-                                onDragLeave={canAddReferences ? (event) => {
-                                    // Leaving a row for the section is not leaving the section.
-                                    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-                                    handleDragLeave(event);
-                                } : undefined}
-                                onDrop={canAddReferences ? handleDrop : undefined}
-                                // A drop on a remix's empty box stays the box's, and the section lets go of its highlight all the same.
-                                onDropCapture={canAddReferences ? () => setIsDragging(false) : undefined}
-                                className={isDragging ? `rounded-ui-2xl border p-4 ${imageAccent.tileActive}` : 'ui-card p-4'}
+                            <CreatorInputsCard
+                                hint={model.maxImages > 0
+                                    ? 'Type @ in the prompt, or tap a handle, to use a reference.'
+                                    : `${model.displayName} does not take reference images. These are kept for another model; remove them to generate here.`}
                             >
-                                <div className="mb-1 flex items-center justify-between gap-3">
-                                    <h2 id="create-image-references" className="text-xs font-bold text-[var(--ui-text-muted)]">Reference images</h2>
-                                    <span className="text-xs font-bold tabular-nums text-[var(--ui-text-faint)]">
-                                        {elements.length}/{model.maxImages}
-                                    </span>
-                                </div>
-                                {model.maxImages > 0 ? (
-                                    <p className="mb-3 text-xs text-[var(--ui-text-faint)]">Type @ in the prompt, or tap a handle, to use one by its name.</p>
-                                ) : (
-                                    <p className="mb-3 mt-2 text-sm text-[var(--ui-text-muted)]">
-                                        {model.displayName} does not take reference images. These are kept for another model; remove them to generate here.
-                                    </p>
-                                )}
-
-                                {elements.length > 0 || referenceImageSlots.length > 0 ? (
-                                    <CreatorReferenceStrip className="mb-3">
-                                        {elements.map((element) => (
-                                            <CreatorReferenceTile
-                                                key={element.id}
-                                                accent="image"
-                                                preview={(
-                                                    <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
-                                                )}
-                                                displayName={element.displayName}
-                                                nameDraft={elementNames.drafts[element.id]}
-                                                placeholder="Rename element"
-                                                onNameChange={(value) => handleElementDraftChange(element.id, value)}
-                                                onNameCommit={() => void commitElementDraft(element.id)}
-                                                onNameCancel={() => elementNames.dropDraft(element.id)}
-                                                onRemove={() => void handleRemoveElement(element.id)}
-                                                handle={element.handle}
-                                                handleClassName="text-sky-300"
-                                                onInsert={() => handleInsertElementHandle(element.handle)}
-                                            />
-                                        ))}
-                                        {/* What the remix was not given, after what it brought back. */}
-                                        {referenceImageSlots.map((slot) => (
-                                            <CreatorRemixSlotTile
-                                                key={slot.id}
-                                                accent="image"
-                                                slotId={slot.id}
-                                                title={remixInputSlotTitle(slot)}
-                                                action={remixInputSlotAction(slot)}
-                                                accept="image/*"
-                                                handleClassName="text-sky-300"
-                                                onFiles={(files) => void fillReferenceImageSlot(slot, files)}
-                                            />
-                                        ))}
-                                    </CreatorReferenceStrip>
-                                ) : null}
-
-                                {canAddReferences ? (
-                                    <CreatorAddTile
-                                        accent="image"
-                                        icon={Plus}
-                                        label={isDragging ? 'Drop element images here' : 'Add reference images'}
-                                        input={{ accept: 'image/*', multiple: true, onChange: handleImageUpload }}
-                                        dragging={isDragging}
-                                    />
-                                ) : null}
+                                {/* The pictures' row, as the video creator's: the add box (a press picks, a drop
+                                    adds; dimmed at the model's limit), then the references beside it, or what
+                                    they are for while there are none. */}
+                                <CreatorReferenceRow accent="image" kind={imageReferenceKind} stripLabel="Reference images">
+                                    {elements.map((element) => (
+                                        <CreatorReferenceTile
+                                            key={element.id}
+                                            accent="image"
+                                            preview={(
+                                                <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
+                                            )}
+                                            displayName={element.displayName}
+                                            nameDraft={elementNames.drafts[element.id]}
+                                            placeholder="Rename element"
+                                            onNameChange={(value) => handleElementDraftChange(element.id, value)}
+                                            onNameCommit={() => void commitElementDraft(element.id)}
+                                            onNameCancel={() => elementNames.dropDraft(element.id)}
+                                            onRemove={() => void handleRemoveElement(element.id)}
+                                            handle={element.handle}
+                                            handleClassName="text-sky-300"
+                                            onInsert={() => handleInsertElementHandle(element.handle)}
+                                        />
+                                    ))}
+                                    {/* What the remix was not given, after what it brought back. */}
+                                    {referenceImageSlots.map((slot) => (
+                                        <CreatorRemixSlotTile
+                                            key={slot.id}
+                                            accent="image"
+                                            slotId={slot.id}
+                                            title={remixInputSlotTitle(slot)}
+                                            action={remixInputSlotAction(slot)}
+                                            accept="image/*"
+                                            handleClassName="text-sky-300"
+                                            onFiles={(files) => void fillReferenceImageSlot(slot, files)}
+                                        />
+                                    ))}
+                                </CreatorReferenceRow>
                                 {elementPickNotice ? (
-                                    <p role="status" className="mt-3 text-sm text-amber-200">{elementPickNotice}</p>
+                                    <p role="status" className="text-sm text-amber-200">{elementPickNotice}</p>
                                 ) : null}
-                            </section>
+                            </CreatorInputsCard>
                         ) : (
                             <div className="ui-card flex items-start gap-3 p-4 text-sm text-[var(--ui-text-secondary)]">
                                 <ImageIcon aria-hidden className={`mt-0.5 h-4 w-4 shrink-0 ${imageAccent.mark}`} />
