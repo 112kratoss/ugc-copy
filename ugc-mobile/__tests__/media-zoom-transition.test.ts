@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  closesPictureAlone,
   advanceZoomFlight,
   appleZoomAlignmentRect,
   beginTileOpen,
@@ -712,5 +713,20 @@ describe('computeZoomFrame, picture alone (owner, 2026-11-07: "can\'t it be just
     expect(whole.clip).toEqual({ x: 0, y: 0, width: 400, height: 900 });
     expect(whole.translateX).toBeCloseTo(0, 6);
     expect(whole.translateY).toBeCloseTo(0, 6);
+  });
+});
+
+describe('which closes fly the picture alone', () => {
+  const base = { picture: { url: 'p.jpg' }, videoUrl: null, reducedMotion: false, fromTile: true };
+
+  it('flies a still picture that came out of a tile', () => {
+    expect(closesPictureAlone(base)).toBe(true);
+  });
+
+  it('leaves a video, Reduce Motion, a reel with no tile and one with no picture to their own closes', () => {
+    expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8' })).toBe(false);
+    expect(closesPictureAlone({ ...base, reducedMotion: true })).toBe(false);
+    expect(closesPictureAlone({ ...base, fromTile: false })).toBe(false);
+    expect(closesPictureAlone({ ...base, picture: null })).toBe(false);
   });
 });

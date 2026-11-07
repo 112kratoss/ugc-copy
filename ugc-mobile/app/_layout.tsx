@@ -21,7 +21,7 @@ import { ActionSheetHost } from '@/components/action-sheet';
 import { DialogHost } from '@/components/dialog';
 import { LaunchSplash } from '@/components/launch-splash';
 import { OnboardingServerSync } from '@/components/onboarding-server-sync';
-import { MediaZoomFlightLayer } from '@/components/media-zoom';
+import { MediaZoomFlightLayer, noteRootScreenTransitionStart } from '@/components/media-zoom';
 import { ZoomPostChrome, ZoomPostPreparer } from '@/components/zoom-post-chrome';
 import { OverlayHost } from '@/components/overlay-host';
 import { PublicIdentitySheetHost } from '@/components/public-identity-sheet';
@@ -290,6 +290,9 @@ function RootLayoutNav() {
                 <PublicIdentitySheetHost />
                 <SignOutOverlay />
                 <Stack
+                // A screen coming back as a reel's pop begins: the cue for a
+                // picture closing into it to uncover it (components/media-zoom.tsx).
+                screenListeners={{ transitionStart: noteRootScreenTransitionStart }}
                 screenOptions={{
                   animation: reducedMotion ? 'none' : 'default',
                   gestureEnabled: true,

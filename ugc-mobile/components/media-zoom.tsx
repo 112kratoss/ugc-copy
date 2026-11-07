@@ -38,6 +38,7 @@ import {
   claimTileOpen,
   clearHiddenZoomSources,
   clearPendingZoomOrigin,
+  closesPictureAlone,
   computeZoomFrame,
   createZoomUncovering,
   endTileOpen,
@@ -109,7 +110,7 @@ import { useReducedMotion } from '@/lib/motion';
 import { appleZoomSourceId, type AppleZoomOpen } from '@/lib/apple-zoom';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { mediaColors } from '@/lib/theme';
-import { AppleZoomSource } from '@/components/apple-zoom';
+import { AppleZoomSource, withholdAppleZoomSource } from '@/components/apple-zoom';
 import { forgetAppleZoomSurface, registerAppleZoomSurface } from '@/lib/apple-zoom-surface';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { TopScrim } from '@/components/top-scrim';
@@ -150,6 +151,15 @@ const CLOSE_MS = 200;
  */
 const ZOOM_EASE_POWER = 3;
 /**
+ * iOS: a picture closing alone sets off only once UIKit has put the screen
+ * beneath back (`coverZoomCloseSource`), and on the cubic it took 40% of the
+ * way in its first frame, a snap rather than a shrink (simulator,
+ * 2026-11-07). It runs longer, on a softer ease-out, nearer the pace of
+ * UIKit's own zoom.
+ */
+const PICTURE_CLOSE_MS_IOS = 300;
+const PICTURE_CLOSE_EASE_POWER_IOS = 2;
+/**
  * The flight is stepped by the frames the device actually delivers, not by the
  * clock, and a step is capped here. Mounting the reel blocks the UI thread for
  * a stretch on a slow device; a clock-timed animation would be most of the way
@@ -157,6 +167,11 @@ const ZOOM_EASE_POWER = 3;
  * out in full.
  */
 const MAX_FLIGHT_STEP_MS = 34;
+/**
+ * iOS: the longest a tile stays kept from UIKit's zoom for a picture-only
+ * close, should the reel that took it never go.
+ */
+const ZOOM_SOURCE_WITHHELD_MS = 2000;
 /**
  * The flight moves once the layer has actually drawn its picture — a frame or
  * two after being asked for it, from memory — so the first thing seen moving
@@ -320,6 +335,70 @@ const flightGeometry = makeMutable<ZoomGeometry>({
   aspectRatio: null,
 });
 const flightFlying = makeMutable(false);
+/** The close's length and ease, which a picture closing alone on iOS changes. */
+const flightCloseMs = makeMutable(CLOSE_MS);
+const flightEasePower = makeMutable(ZOOM_EASE_POWER);
+/**
+ * iOS: the black over the screen a picture is closing into, until that screen
+ * is back in the window (`revealZoomCloseSource`).
+ */
+const closeSourceCover = makeMutable(0);
+/** Over which that screen comes back from under the cover. */
+const CLOSE_SOURCE_REVEAL_MS = 160;
+/** A screen that never says it is back is uncovered after this. */
+const CLOSE_SOURCE_REVEAL_DEADLINE_MS = 450;
+let closeSourcePending = false;
+/** Gives a withheld tile back to UIKit's zoom (`withholdAppleZoomSource`). */
+let closeSourceRestore: (() => void) | null = null;
+/**
+ * How long after the screen beneath is back the tile stays withheld: UIKit
+ * looks for it as the pop begins, around when that screen says it is coming
+ * back, and finding it a moment late it ran its zoom all the same.
+ */
+const ZOOM_SOURCE_RETURN_DELAY_MS = 300;
+
+/** What a picture closing alone does once the screen beneath is back: set off. */
+let closeSourceShown: (() => void) | null = null;
+
+/**
+ * Covers the screen a picture is closing into (iOS), and runs `onShown` once
+ * that screen is back. UIKit takes the screen beneath out of the window while
+ * a pushed reel is up and puts it back only as the pop begins: 100–130 ms
+ * after Back for a pop the app starts (an iPhone 16e and the simulator,
+ * 2026-11-06). Until then there is only the navigator's black round the
+ * picture (lib/reel-backdrop.ts). A cover keyed to the flight instead had
+ * thinned to nothing by the time the feed came back, which then cut in under
+ * the landing picture. So the feed comes up from black as it arrives, and the
+ * picture goes home over it.
+ */
+function coverZoomCloseSource(restoreSource: () => void, onShown?: () => void) {
+  closeSourcePending = true;
+  closeSourceRestore = restoreSource;
+  closeSourceShown = onShown ?? null;
+  closeSourceCover.set(1);
+  setTimeout(revealZoomCloseSource, CLOSE_SOURCE_REVEAL_DEADLINE_MS);
+}
+
+function revealZoomCloseSource() {
+  if (!closeSourcePending) return;
+  closeSourcePending = false;
+  closeSourceCover.set(withTiming(0, { duration: CLOSE_SOURCE_REVEAL_MS }));
+  const restore = closeSourceRestore;
+  closeSourceRestore = null;
+  const shown = closeSourceShown;
+  closeSourceShown = null;
+  if (shown) requestAnimationFrame(shown);
+  if (restore) setTimeout(restore, ZOOM_SOURCE_RETURN_DELAY_MS);
+}
+
+/**
+ * For the root navigator's `screenListeners`: a screen of it begins to come
+ * back into view (react-native-screens' `onWillAppear`), as the one a picture
+ * is closing into does when the reel's pop begins.
+ */
+export function noteRootScreenTransitionStart(event: { data?: { closing?: boolean } }) {
+  if (event.data?.closing === false) revealZoomCloseSource();
+}
 const flightClosing = makeMutable(false);
 const flightId = makeMutable(0);
 /** Whether the open flight has passed the point at which the reel is pushed. */
@@ -514,6 +593,9 @@ function startZoomFlight(
     flightTime.set(reverseZoomFlightTime(flightProgress.get(), ZOOM_EASE_POWER));
   }
   flightClosing.set(spec.direction === 'close');
+  const softClose = Platform.OS === 'ios' && spec.direction === 'close' && Boolean(spec.geometry.pictureOnly);
+  flightCloseMs.set(softClose ? PICTURE_CLOSE_MS_IOS : CLOSE_MS);
+  flightEasePower.set(softClose ? PICTURE_CLOSE_EASE_POWER_IOS : ZOOM_EASE_POWER);
   // The screen beneath comes back with the flight's own values, so it is drawn
   // in the frame the close starts moving. (Set from `dismiss` alone, it reached
   // the UI thread with the commit that started the close: the same frame on
@@ -1285,6 +1367,8 @@ export function useMediaZoomStage({
   const dismissingRef = useRef(false);
   const leftRef = useRef(false);
   const closeRef = useRef<{ id: number; live: boolean; dissolves: boolean } | null>(null);
+  /** Gives the tile back to UIKit's zoom after a picture-only close (`withholdAppleZoomSource`). */
+  const restoreZoomSourceRef = useRef<(() => void) | null>(null);
   /** The flight this reel follows and may reshape: its open, then its close. */
   const ownFlightRef = useRef<number | null>(origin?.flightId ?? null);
   const hiddenItemRef = useRef<string | null>(null);
@@ -1788,12 +1872,17 @@ export function useMediaZoomStage({
     // from where it sits down into its tile, and the reel goes from under it at
     // once. A video keeps its own close for now: its poster in the layer would
     // stand in for the frame it was showing.
-    // Android's own flight only, so far: on iOS the pop still ran UIKit's zoom
-    // over the layer, even under a custom animation (simulator, 2026-11-07).
-    const pictureOnly = !nativeZoom && Boolean(pictureRef.current) && !activeVideoUrlRef.current && !reducedMotion && Boolean(origin);
-    if (nativeZoom) {
-      // UIKit shrinks the reel into the tile registered for the post on screen;
-      // the pop is all the reel does (and hands a lent player back as it begins).
+    const pictureOnly = closesPictureAlone({
+      picture: pictureRef.current,
+      videoUrl: activeVideoUrlRef.current,
+      reducedMotion,
+      fromTile: Boolean(origin),
+    });
+    // iOS: anything else, and any close the picture cannot fly, is UIKit's
+    // zoom: it shrinks the reel into the tile registered for the post on
+    // screen, and the pop is all the reel does (handing a lent player back as
+    // it begins).
+    if (nativeZoom && !pictureOnly) {
       leave();
       return;
     }
@@ -1801,12 +1890,31 @@ export function useMediaZoomStage({
       plainLeave();
       return;
     }
+    // iOS: the pop under the flight must not run UIKit's zoom as well, so the
+    // tile is kept from it (`withholdAppleZoomSource`) until the pop is under
+    // way (`revealZoomCloseSource`).
+    // Kept from it here, a frame or more before the pop: renamed in the same
+    // commit as the pop, the tile was still found under its old name, and
+    // UIKit shrank it from the reel's size into its cell under the flight
+    // (simulator, 2026-11-07).
+    if (nativeZoom) {
+      restoreZoomSourceRef.current = withholdAppleZoomSource(appleZoomSourceId(origin.surfaceId, activeItemRef.current));
+      setTimeout(() => restoreZoomSourceRef.current?.(), ZOOM_SOURCE_WITHHELD_MS);
+    }
+    // A close the picture cannot fly. On iOS that is UIKit's zoom after all,
+    // given the tile back first and popped once that has been committed.
+    const cannotFly = nativeZoom
+      ? () => {
+        restoreZoomSourceRef.current?.();
+        requestAnimationFrame(() => requestAnimationFrame(leave));
+      }
+      : plainLeave;
     // Closed before the layer's picture was ever handed over: that picture is
     // still up, so it simply turns round, whatever the platform.
     const beforeHandoff = !openedRef.current;
     const handle = getZoomSource(origin.surfaceId, activeItemRef.current);
     if (!handle) {
-      plainLeave();
+      cannotFly();
       return;
     }
     // The screen beneath comes back into layout on the UI thread, a frame after
@@ -1822,10 +1930,14 @@ export function useMediaZoomStage({
         return;
       }
       if (!isReturnableRect(rect, screenRef.current)) {
-        plainLeave();
+        cannotFly();
         return;
       }
       const alone = pictureOnly && !beforeHandoff;
+      if (nativeZoom && !alone) {
+        cannotFly();
+        return;
+      }
       const live = !beforeHandoff && !alone;
       const geometry: ZoomGeometry = {
         screen: screenRef.current,
@@ -1858,23 +1970,46 @@ export function useMediaZoomStage({
       // standing over it until it lets go.
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
-      // A picture closing alone starts where it sits, whatever the last flight
-      // left behind.
-      if (alone) {
-        flightTime.set(1);
-        flightProgress.set(1);
-      }
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         whenDisplayed: () => {
           // A video's window waited out of sight for its first frame.
           if (video) stillOpacity.set(1);
           stageOpacity.set(0);
+          // iOS: the reel is popped now, and the picture sets off once UIKit
+          // has put the screen beneath back (`coverZoomCloseSource`). The pop
+          // holds the main thread for about 100 ms as it begins, wherever it
+          // falls, and the flight's frames are drawn there too. Set off with
+          // the pop, the picture moved within 10–40 ms of the finger lifting
+          // and then stood still mid-flight for 100 ms; set off after it, it
+          // waits 100–150 ms with the reel's buttons gone and then goes home in
+          // one unbroken movement while the feed comes up round it (simulator,
+          // 2026-11-07). Popped before the picture here was drawn, to save
+          // that wait, UIKit began on the reel itself: its buttons and caption
+          // shrank for a frame or two before the picture covered them.
+          if (nativeZoom) {
+            // The cover goes under the picture now that the picture is there to
+            // be seen; raised earlier it blanked the screen for two frames.
+            const restore = restoreZoomSourceRef.current;
+            coverZoomCloseSource(() => restore?.(), takeOffZoomFlight);
+            leave();
+            return;
+          }
           requestAnimationFrame(() => {
             leave();
             requestAnimationFrame(takeOffZoomFlight);
           });
         },
       });
+      // A picture closing alone starts where it sits, whatever the last flight
+      // left behind. Set after the flight has begun, which reverses from the
+      // progress it reads back: read on this thread just after being set
+      // here, that was still the last close's landing, so every close after
+      // the first started landed and went into its tile in one frame
+      // (simulator, 2026-11-07).
+      if (alone) {
+        flightTime.set(1);
+        flightProgress.set(1);
+      }
       closeRef.current = { id: flight.id, live, dissolves };
       ownFlightRef.current = flight.id;
       // With no layer to step it the flight has already landed.
@@ -2099,8 +2234,8 @@ export function MediaZoomFlightLayer({
       flightTime.value,
       closing,
       step,
-      closing ? CLOSE_MS : OPEN_MS,
-      ZOOM_EASE_POWER
+      closing ? flightCloseMs.value : OPEN_MS,
+      closing ? flightEasePower.value : ZOOM_EASE_POWER
     );
     flightTime.value = next.time;
     flightProgress.value = next.progress;
@@ -2186,6 +2321,9 @@ export function MediaZoomFlightLayer({
   const pictureOnlyDimStyle = useAnimatedStyle(() => ({
     opacity: flightGeometry.value.pictureOnly ? flightProgress.value * stillOpacity.value : 0,
   }));
+  // iOS keys that black to the screen beneath being back instead
+  // (`coverZoomCloseSource`), and outlives the picture's landing.
+  const closeSourceCoverStyle = useAnimatedStyle(() => ({ opacity: closeSourceCover.value }));
   // Nor does the poster drawn under the finger show in it, for the frame or two
   // before React swaps it for the video's view: the tile has moved on from it.
   const stillPictureStyle = useAnimatedStyle(() => ({
@@ -2232,7 +2370,9 @@ export function MediaZoomFlightLayer({
   // before any tile is tapped; it draws nothing until one is.
   return (
     <View ref={layerRef} pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={measureLayer}>
-      {still?.geometry.pictureOnly ? (
+      {Platform.OS === 'ios' ? (
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, closeSourceCoverStyle]} />
+      ) : still?.geometry.pictureOnly ? (
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, pictureOnlyDimStyle]} />
       ) : null}
       {still ? (

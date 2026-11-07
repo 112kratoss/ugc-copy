@@ -10,7 +10,7 @@
  */
 import { Link, useLocalSearchParams, useNavigation } from 'expo-router';
 import { LinkZoomTransitionSource } from 'expo-router/build/link/preview/native';
-import { useEffect, useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import { useWindowDimensions, View } from 'react-native';
 
 import {
@@ -21,6 +21,50 @@ import {
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { clearAppleZoomReturn, prepareAppleZoomReturn } from '@/lib/apple-zoom-surface';
 import { appleZoomAlignmentRect, type ZoomRect, type ZoomSize } from '@/lib/media-zoom-transition';
+
+/**
+ * Tiles kept from UIKit's zoom for one close (`withholdAppleZoomSource`).
+ */
+/** How many closes are keeping each tile from the zoom. */
+const withheld = new Map<string, number>();
+const withheldListeners = new Set<() => void>();
+
+function subscribeToWithheld(listener: () => void) {
+  withheldListeners.add(listener);
+  return () => {
+    withheldListeners.delete(listener);
+  };
+}
+
+/**
+ * Keeps the tile registered under `identifier` from UIKit's zoom until the
+ * returned function is called: the reel's Back flies the picture alone into
+ * the tile (`ZoomGeometry.pictureOnly`), and the pop under it must not zoom.
+ *
+ * Nothing on the reel's side turns the zoom off. It is the screen's
+ * `preferredTransition`, set once by Expo Router, and it outranks the
+ * navigation delegate's animator: with the reel's animation at `none`,
+ * committed long before Back, UIKit still shrank a copy of the tile and a
+ * black panel over the flight (simulator, 2026-11-07). What it cannot do is
+ * zoom into a tile it is not given. The tile's view is re-registered under
+ * another name, so the zoom's source lookup finds nothing for the post, and
+ * the pop goes with no tile to shrink into while the picture flies over it.
+ * React commits the rename before the pop that follows it, and UIKit asks for
+ * the tile only as the pop begins.
+ */
+export function withholdAppleZoomSource(identifier: string): () => void {
+  withheld.set(identifier, (withheld.get(identifier) ?? 0) + 1);
+  withheldListeners.forEach((listener) => listener());
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    const left = (withheld.get(identifier) ?? 1) - 1;
+    if (left > 0) withheld.set(identifier, left);
+    else withheld.delete(identifier);
+    withheldListeners.forEach((listener) => listener());
+  };
+}
 
 /**
  * Registers the tile view inside as the zoom's source under `identifier`, with
@@ -44,6 +88,7 @@ export function AppleZoomSource({
     () => (tile ? appleZoomAlignmentRect({ width, height }, aspectRatio, tile) : null),
     [aspectRatio, height, tile, width]
   );
+  const isWithheld = useSyncExternalStore(subscribeToWithheld, () => identifier !== null && withheld.has(identifier));
   if (!identifier || !isAppleZoomAvailable()) return children;
   return (
     // `animateAspectRatioChange`: a tile cropped to a shape other than its
@@ -61,7 +106,7 @@ export function AppleZoomSource({
     // screen: closing a Holi clip into its Home card, the card's picture sat at
     // the top of the shrinking window with the reel's below it, two copies of
     // her waist sliding into each other as though the reel were scrolling in.
-    <LinkZoomTransitionSource identifier={identifier} alignment={alignment ?? undefined} animateAspectRatioChange>
+    <LinkZoomTransitionSource identifier={isWithheld ? `${identifier}#withheld` : identifier} alignment={alignment ?? undefined} animateAspectRatioChange>
       {children}
     </LinkZoomTransitionSource>
   );

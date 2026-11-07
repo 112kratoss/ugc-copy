@@ -19,7 +19,7 @@ import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomProgress, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
 import { MediaZoomCarriedPicture, MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
-import { mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
+import { closesPictureAlone, mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
@@ -636,6 +636,19 @@ function ImmersivePreviewViewer() {
       playbackUrl: page.mediaItem.mediaKind === 'video' ? getShowcasePlaybackUrl(page.mediaItem) : null,
     };
   }, [activeItem, position?.mediaPageKey]);
+  // iOS: a still picture out of a tile closes by flying home alone
+  // (components/media-zoom.tsx), which the reel has to start before the pop, so
+  // it keeps the reel's own Back: the bar's pops before the app hears of it,
+  // under UIKit's zoom. A bar button of the app's own in its place took the
+  // back swipe away with the system Back (simulator, 2026-11-07); hidden, the
+  // bar leaves the swipe as it was.
+  const flownBack = Boolean(nativeZoomSourceId) && closesPictureAlone({
+    picture: activeMedia.picture,
+    videoUrl: activeMedia.playbackUrl,
+    reducedMotion,
+    fromTile: true,
+  });
+  const barBack = nativeBack && !flownBack;
   const zoom = useMediaZoomStage({
     screen: { width, height },
     initialItemId: initialId,
@@ -1569,7 +1582,9 @@ function ImmersivePreviewViewer() {
           fullScreenGestureEnabled: false,
           // iOS: Back and Mute are the navigation bar's own items, so Back pops
           // at once (lib/viewer-native-back.ts).
-          ...(nativeBack ? viewerNativeBackOptions({
+          // A picture out of a tile has the reel's own Back instead (`flownBack`).
+          ...(nativeBack && flownBack ? { headerShown: false } : null),
+          ...(barBack ? viewerNativeBackOptions({
             // Gone as a close begins, as the rest of the chrome fades: UIKit
             // drew the bar black over the top of the shrinking reel.
             hidden: detailsOpenForActive || (activeItem != null && leavingMediaItemId === activeItem.id),
@@ -1712,7 +1727,7 @@ function ImmersivePreviewViewer() {
             onPageChange={slideHandlers.onPageChange}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
             onActiveChromeShift={setActiveChromeShift}
-            onLeavesMedia={nativeBack ? setLeavingMediaItemId : undefined}
+            onLeavesMedia={barBack ? setLeavingMediaItemId : undefined}
             onOwnerAction={slideHandlers.onOwnerAction}
             onRecreate={slideHandlers.onRecreate}
             onSave={slideHandlers.onSave}
@@ -1754,7 +1769,7 @@ function ImmersivePreviewViewer() {
       >
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
-      {detailsOpenForActive || nativeBack ? null : (
+      {detailsOpenForActive || barBack ? null : (
         <ViewerTopControl label="Go back" onPress={zoom.dismiss} topInset={topInset} side="left">
           <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
         </ViewerTopControl>
@@ -1763,7 +1778,7 @@ function ImmersivePreviewViewer() {
           controls so people can complete their task without exiting full-screen
           mode." The reel is entered from a silent grid and is the only surface
           that makes a sound, so silencing it must not mean leaving it. */}
-      {detailsOpenForActive || nativeBack || !hasImmersiveAudibleMedia(activeItem) ? null : (
+      {detailsOpenForActive || barBack || !hasImmersiveAudibleMedia(activeItem) ? null : (
         <ViewerTopControl
           label={audioMuted ? 'Unmute video' : 'Mute video'}
           selected={audioMuted}

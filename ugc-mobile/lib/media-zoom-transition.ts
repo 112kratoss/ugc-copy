@@ -638,6 +638,27 @@ export interface ZoomGeometry {
   pictureOnly?: boolean;
 }
 
+/**
+ * Whether Back closes the post on screen by flying its picture alone into the
+ * tile it came from (`ZoomGeometry.pictureOnly`). Only a still picture: a
+ * video's poster in the flight would replace the frame it was showing, so a
+ * video keeps the window close (Android) or UIKit's zoom (iOS). Nothing flies
+ * under Reduce Motion, or for a reel that did not come out of a tile.
+ */
+export function closesPictureAlone({
+  picture,
+  videoUrl,
+  reducedMotion,
+  fromTile,
+}: {
+  picture: unknown;
+  videoUrl: string | null | undefined;
+  reducedMotion: boolean;
+  fromTile: boolean;
+}): boolean {
+  return Boolean(picture) && !videoUrl && !reducedMotion && fromTile;
+}
+
 export interface ZoomFrame {
   /** The window onto the reel, in window coordinates. */
   clip: ZoomRect;

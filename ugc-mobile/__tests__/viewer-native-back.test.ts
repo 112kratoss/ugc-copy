@@ -50,14 +50,14 @@ describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
 
   it('is used on iOS 26 only, and only when there is a screen to go back to', () => {
     expect(viewer).toContain("const [nativeBack] = useState(() => Platform.OS === 'ios' && isLiquidGlassAvailable() && router.canGoBack());");
-    expect(viewer).toContain('...(nativeBack ? viewerNativeBackOptions({');
+    expect(viewer).toContain('...(barBack ? viewerNativeBackOptions({');
     // Our own Back and Mute stand aside for the bar's; elsewhere they stay.
-    expect(viewer).toContain('{detailsOpenForActive || nativeBack ? null : (');
-    expect(viewer).toContain('{detailsOpenForActive || nativeBack || !hasImmersiveAudibleMedia(activeItem) ? null : (');
+    expect(viewer).toContain('{detailsOpenForActive || barBack ? null : (');
+    expect(viewer).toContain('{detailsOpenForActive || barBack || !hasImmersiveAudibleMedia(activeItem) ? null : (');
   });
 
   it('hears from the active slide as its swipe leaves the media page, on iOS only', () => {
-    expect(viewer).toContain('onLeavesMedia={nativeBack ? setLeavingMediaItemId : undefined}');
+    expect(viewer).toContain('onLeavesMedia={barBack ? setLeavingMediaItemId : undefined}');
     expect(viewer).toContain('const leaving = leavesMediaPage(offset, detailsPageIndex, width);');
     expect(viewer).toContain('if (activeRef.current) onLeavesMediaRef.current?.(leaving ? item.id : null);');
     // A slide opened on Details starts out as having left the media.
@@ -90,5 +90,15 @@ describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
       expect(leavesMediaPage(2 * width, 3, width)).toBe(false);
       expect(leavesMediaPage(2 * width + LEAVES_MEDIA_AFTER + 1, 3, width)).toBe(true);
     });
+  });
+});
+
+describe('a picture out of a tile keeps the reel\'s own Back', () => {
+  it('hides the bar for it, and the bar\'s Back stands aside for the rest only', () => {
+    expect(viewer).toContain('const flownBack = Boolean(nativeZoomSourceId) && closesPictureAlone({');
+    expect(viewer).toContain('const barBack = nativeBack && !flownBack;');
+    expect(viewer).toContain('...(nativeBack && flownBack ? { headerShown: false } : null),');
+    expect(viewer).toContain('...(barBack ? viewerNativeBackOptions({');
+    expect(viewer).toContain('{detailsOpenForActive || barBack ? null : (');
   });
 });
