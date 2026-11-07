@@ -459,6 +459,15 @@ const videoSurfaceOpacity = makeMutable(1);
  * see-through, with no bands and no poster in it.
  */
 const stillCarriesVideo = makeMutable(false);
+/** The held video lands on its picture (`ZoomStill.landsOnPicture`), for the layer's UI-thread styles. */
+const stillLandsOnPicture = makeMutable(false);
+/**
+ * Where a video landing on its picture dissolves into it, in the close's
+ * progress (1 at the screen, 0 in the tile). The iOS close runs at
+ * (1 − t)², so this is about its 150th to 250th ms of 300: the clip is still
+ * the clip while it travels, and the poster has settled for the last frames.
+ */
+const VIDEO_TO_PICTURE_PROGRESS = [0.03, 0.25] as const;
 
 /** Starts and stops the layer's frame callback; set while the layer is mounted. */
 let tickerControl: ((active: boolean) => void) | null = null;
@@ -599,6 +608,7 @@ function samePicture(a: ZoomPreview | null | undefined, b: ZoomPreview | null | 
 function drawsSameStill(a: ZoomStill, b: ZoomStill) {
   return samePicture(a.preview, b.preview)
     && (a.video?.player ?? null) === (b.video?.player ?? null)
+    && Boolean(a.landsOnPicture) === Boolean(b.landsOnPicture)
     && (a.post?.id ?? null) === (b.post?.id ?? null)
     && a.geometry.screen.width === b.geometry.screen.width
     && a.geometry.screen.height === b.geometry.screen.height
@@ -714,10 +724,12 @@ function startZoomFlight(
       preview: spec.preview,
       geometry: spec.geometry,
       video: spec.video ?? null,
+      landsOnPicture: Boolean(spec.video && spec.landsOnPicture),
       post: spec.post ?? null,
     }
     : null;
   const carriesVideo = Boolean(still?.video);
+  stillLandsOnPicture.set(Boolean(still?.landsOnPicture));
   // A picture the layer has already drawn — prepared under the finger, or
   // carried by the flight this one reverses — shows at once; a new one is kept
   // invisible until the layer says it has drawn it, so neither a blur nor the
@@ -1874,6 +1886,23 @@ export function useMediaZoomStage({
     return { player: adopted, url: lentVideo.url, tileKey };
   }, [lentVideo, nativeZoom, origin]);
 
+  /**
+   * iOS: the reel's own player for the post on screen, which a close flies home
+   * alone whether or not the tile takes it back (`tileTakes`): one the reel
+   * built is the reel's (`useViewerVideoPlayer`), and one a tile lent it, it
+   * adopted. Handed back, it outlives the reel (`endVideoReturn`), so the flight
+   * never loses it on the way down.
+   */
+  const flyableVideo = useCallback((): (ZoomVideo & { tileKey: string; tileTakes: boolean }) | null => {
+    if (!nativeZoom || !origin || !activeVideoUrlRef.current) return null;
+    const itemId = activeItemRef.current;
+    const url = activeVideoUrlRef.current;
+    const player = playerForRef.current?.(itemId, url);
+    if (!player) return null;
+    const tileKey = zoomTileKey(origin.surfaceId, itemId);
+    return { player, url, tileKey, tileTakes: tileAcceptsVideoReturn(tileKey, url) };
+  }, [nativeZoom, origin]);
+
   // Under iOS's own zoom the reel is the thing on screen from its first frame,
   // so a lent player is taken at once: the reel's slide draws it while the
   // tile's own view keeps drawing it under UIKit's crossfade, until the push
@@ -2286,18 +2315,21 @@ export function useMediaZoomStage({
     settleTileLift();
     // A picture closes alone (`ZoomGeometry.pictureOnly`): the layer carries it
     // from where it sits down into its tile, and the reel goes from under it at
-    // once. On iOS a video does too, with the reel's own player in the layer,
-    // when its tile will take that player back (`returnableVideo`): the frame
-    // on screen flies home and the tile goes on with the same clip. A video
-    // whose tile would not take it keeps UIKit's zoom: the player goes when the
-    // reel does, and would leave the flight empty part of the way down.
-    const flownVideo = nativeZoom && activeVideoUrlRef.current ? returnableVideo() : null;
+    // once. On iOS a video does too, with the reel's own player in the layer
+    // (`flyableVideo`): the frame on screen flies home, and a tile that takes
+    // the player back goes on with the same clip, while one showing its poster
+    // has the clip dissolve into that poster as it lands. A reel with no player
+    // for the post flies its poster. Left to UIKit's zoom, a video page shrank
+    // and faded into its tile in about a tenth of a second, see-through most
+    // of the way (owner, 2026-11-07, of a poster tile: "why this cat video is
+    // closing so fast").
+    const flownVideo = flyableVideo();
     const pictureOnly = closesPictureAlone({
       picture: pictureRef.current,
       videoUrl: activeVideoUrlRef.current,
       reducedMotion,
       fromTile: Boolean(origin),
-      fliesVideo: Boolean(flownVideo),
+      fliesVideo: nativeZoom,
     });
     // iOS: anything else, and any close the picture cannot fly, is UIKit's
     // zoom: it shrinks the reel into the tile registered for the post on
@@ -2360,12 +2392,13 @@ export function useMediaZoomStage({
         return;
       }
       // A video closing alone (iOS) flies the reel's own player, which goes
-      // back to its tile now, playing: the tile, hidden until the landing,
-      // draws the same clip under the flight and carries on with it, and the
-      // player outlives the reel, which goes from under the flight long before
-      // it lands. A player the tile does not take (`handBackVideoPlayer`
-      // refuses one the reel never adopted) would go with the reel mid-flight,
-      // so that close is UIKit's zoom after all.
+      // back to its tile now, playing: a tile that takes it, hidden until the
+      // landing, draws the same clip under the flight and carries on with it;
+      // one that does not leaves it to be released once the reel has gone
+      // (`endVideoReturn`). Either way it outlives the reel, which goes from
+      // under the flight long before it lands. A player the reel cannot hand
+      // back (`handBackVideoPlayer` refuses one it never adopted) would go with
+      // the reel mid-flight, so that close is UIKit's zoom after all.
       let flown: ZoomVideo | null = null;
       if (alone && flownVideo) {
         const handed = handedBackRef.current === flownVideo.player
@@ -2377,6 +2410,7 @@ export function useMediaZoomStage({
         handedBackRef.current = flownVideo.player;
         flown = { player: flownVideo.player, url: flownVideo.url };
       }
+      const landsOnPicture = Boolean(flown) && !beforeHandoff && !flownVideo?.tileTakes;
       const live = !beforeHandoff && !alone;
       const geometry: ZoomGeometry = {
         screen: screenRef.current,
@@ -2417,7 +2451,7 @@ export function useMediaZoomStage({
       // standing over it until it lets go.
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
-      const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
+      const flight = startZoomFlight({ direction: 'close', geometry, preview, video, landsOnPicture, post, still: !live }, live ? {} : {
         // A picture closing alone has the reel hidden (and on iOS the screen
         // covered) once it is up, so going on the usual deadline before it had
         // drawn left nothing on screen: on the Pixel 9a emulator, after a cold
@@ -2469,7 +2503,7 @@ export function useMediaZoomStage({
       if (live && !getZoomFlight()) leave();
     });
     measureTile(TILE_REMEASURE_FRAMES);
-  }, [closeDissolves, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
+  }, [closeDissolves, flyableVideo, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 
   const stageProps = useAnimatedProps(() => ({
     pointerEvents: interactive.value ? ('box-none' as const) : ('auto' as const),
@@ -2751,7 +2785,13 @@ export function MediaZoomFlightLayer({
     if (current?.video?.player === expectedVideo) markZoomFlightDisplayed(current.id);
   }, [expectedVideo]);
 
-  const videoSurfaceStyle = useAnimatedStyle(() => ({ opacity: videoSurfaceOpacity.value }));
+  // A video landing in a tile that shows its poster dissolves into that poster,
+  // drawn under it, as it settles (`ZoomStill.landsOnPicture`).
+  const videoSurfaceStyle = useAnimatedStyle(() => ({
+    opacity: videoSurfaceOpacity.value * (stillLandsOnPicture.value && flightClosing.value
+      ? interpolate(flightProgress.value, VIDEO_TO_PICTURE_PROGRESS, [0, 1], Extrapolation.CLAMP)
+      : 1),
+  }));
 
   // The reel's top shade comes up with the reel's own ground, over the last
   // stretch of an open; a close carries none, as the reel's chrome cuts away on
@@ -2871,6 +2911,20 @@ export function MediaZoomFlightLayer({
                 `_requiresAnimatedComponent` getter throws, from inside the
                 commit, and every render after it failed with "Should not already
                 be working": the app froze on whatever it last drew. */}
+            {still.video && still.landsOnPicture ? (
+              // What the video lands on: the poster of a tile that will not take
+              // its player. No `onDisplay`: the flight waits on the video.
+              <Image
+                key={`landing:${still.preview.url}:${still.preview.cacheKey ?? ''}`}
+                source={{ uri: still.preview.url, cacheKey: still.preview.cacheKey ?? undefined }}
+                contentFit="contain"
+                cachePolicy="memory-disk"
+                priority="high"
+                transition={0}
+                pointerEvents="none"
+                style={StyleSheet.absoluteFill}
+              />
+            ) : null}
             {still.video ? (
               // The tile's own player, still playing: the flight is the video
               // the reader was watching, not its first frame.

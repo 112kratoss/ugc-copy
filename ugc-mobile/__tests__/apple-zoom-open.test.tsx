@@ -682,7 +682,7 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => stage.dismiss());
 
     expect(flights).toHaveLength(1);
-    expect(flights[0]).toMatchObject({ direction: 'close', video: { player, url: STREAM } });
+    expect(flights[0]).toMatchObject({ direction: 'close', video: { player, url: STREAM }, landsOnPicture: false });
     expect(flights[0].geometry.pictureOnly).toBe(true);
     // Back to the tile at once, and playing: the flight and the tile draw the clip going on.
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
@@ -691,18 +691,65 @@ describe('a tile opening under the native zoom', () => {
     stopAccepting();
   });
 
-  it('keeps UIKit\'s zoom for a video whose tile would not take its player back', async () => {
+  // Owner, 2026-11-07, of a tile showing its poster: "why this cat video is
+  // closing so fast". UIKit's zoom shrank and faded the whole page into it in
+  // about a tenth of a second. The clip flies home alone instead, and
+  // dissolves into the poster the tile goes on showing.
+  it('flies a video home alone into a tile that shows its poster, landing on that poster', async () => {
     const player = fakePlayer();
     const { source } = mountTile(player);
+    const tileKey = source.tileKey!;
+    (source.ref as { current: unknown }).current = {
+      measure: (report: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void) => report(0, 0, 185, 320, 12, 196),
+      measureInWindow: () => {},
+    };
     await openTile(source);
-    const onExit = vi.fn();
+    const flights: ZoomFlight[] = [];
+    const stop = subscribeToZoomFlights((event) => {
+      if (event.type === 'begin') flights.push(event.flight);
+    });
     let stage!: ReturnType<typeof useMediaZoomStage>;
     renderer.act(() => {
-      renderer.create(<Reel onExit={onExit} playerFor={() => player} activePicture={PREVIEW} report={(value) => { stage = value; }} />);
+      renderer.create(<Reel onExit={() => {}} playerFor={() => player} activePicture={PREVIEW} report={(value) => { stage = value; }} />);
     });
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    // The tile does not take the player back: nothing registers for its stream.
+
     renderer.act(() => stage.dismiss());
-    expect(onExit).toHaveBeenCalledTimes(1);
-    expect(getZoomFlight()).toBeNull();
+
+    expect(flights).toHaveLength(1);
+    expect(flights[0]).toMatchObject({ direction: 'close', video: { player, url: STREAM }, landsOnPicture: true, preview: PREVIEW });
+    expect(flights[0].geometry.pictureOnly).toBe(true);
+    // Handed back all the same, so it outlives the reel until the flight has landed.
+    expect(isVideoPlayerHandedBack(player)).toBe(true);
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
+    stop();
+  });
+
+  it('flies the poster home when the reel has no player for the post', async () => {
+    vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));
+    const { source } = mountTile();
+    (source.ref as { current: unknown }).current = {
+      measure: (report: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void) => report(0, 0, 185, 320, 12, 196),
+      measureInWindow: () => {},
+    };
+    await openTile(source);
+    const flights: ZoomFlight[] = [];
+    const stop = subscribeToZoomFlights((event) => {
+      if (event.type === 'begin') flights.push(event.flight);
+    });
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} playerFor={() => null} activePicture={PREVIEW} report={(value) => { stage = value; }} />);
+    });
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+
+    renderer.act(() => stage.dismiss());
+
+    expect(flights).toHaveLength(1);
+    expect(flights[0]).toMatchObject({ direction: 'close', video: null, preview: PREVIEW });
+    expect(flights[0].geometry.pictureOnly).toBe(true);
+    stop();
   });
 
   // Review of #723: the close flew the reel's player even when the hand-back

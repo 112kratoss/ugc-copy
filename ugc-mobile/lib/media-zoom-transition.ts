@@ -143,6 +143,8 @@ export interface ZoomFlight {
   preview: ZoomPreview | null;
   /** A playing video the layer draws in place of `preview`; see `ZoomVideo`. */
   video?: ZoomVideo | null;
+  /** See `ZoomStill.landsOnPicture`. */
+  landsOnPicture?: boolean;
   /** The post itself, whose rail and caption an open carries; see `ZoomStill.post`. */
   post?: ImmersivePreviewItem | null;
   /**
@@ -328,6 +330,12 @@ export interface ZoomStill {
   geometry: ZoomGeometry;
   /** Drawn instead of `preview` when the tile lent its playing video. */
   video?: ZoomVideo | null;
+  /**
+   * A close flying `video` into a tile that will not take its player (a tile
+   * showing its poster): the video dissolves into `preview`, the picture that
+   * tile shows, as it settles, so it lands on what the tile goes on showing.
+   */
+  landsOnPicture?: boolean;
   /**
    * The post as the reel lists it, when the tile knows it. The layer draws the
    * reel's own rail, caption and controls over the picture, so the post grows
@@ -678,10 +686,11 @@ export interface ZoomGeometry {
 /**
  * Whether Back closes the post on screen by flying its media alone into the
  * tile it came from (`ZoomGeometry.pictureOnly`). A still picture always can. A
- * video can only where the flight carries the player itself (`fliesVideo`,
- * iOS): its poster in the flight would replace the frame it was showing, so
- * elsewhere a video keeps the window close (Android). Nothing flies under
- * Reduce Motion, or for a reel that did not come out of a tile.
+ * video can only where the flight carries the reel's own player (`fliesVideo`,
+ * iOS), or its poster when the reel has no player for it: elsewhere its poster
+ * in the flight would replace the frame it was showing, so a video keeps the
+ * window close (Android). Nothing flies under Reduce Motion, or for a reel that
+ * did not come out of a tile.
  *
  * Under UIKit's zoom a video shrank as the whole reel page and crossfaded into
  * its tile's own view, which drew another frame of the clip, or its poster, at

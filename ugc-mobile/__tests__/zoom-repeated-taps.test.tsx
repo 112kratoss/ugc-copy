@@ -172,6 +172,33 @@ describe('the picture the flight carries', () => {
 
     renderer.act(() => tree.unmount());
   });
+
+  // A close flying the reel's player into a tile that shows its poster: the
+  // video dissolves into that poster, drawn under it, as it lands.
+  it('draws the poster under a video that lands on it, and only then', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<MediaZoomFlightLayer />, { createNodeMock });
+    });
+    const video = { player: PLAYER, url: 'https://example.test/post.mp4' };
+
+    renderer.act(() => {
+      holdZoomPicture({ preview: PREVIEW, geometry: GEOMETRY, video });
+    });
+    expect(tree.root.findAllByType('expo-image' as never)).toHaveLength(0);
+
+    renderer.act(() => {
+      holdZoomPicture({ preview: PREVIEW, geometry: GEOMETRY, video, landsOnPicture: true });
+    });
+    const posters = tree.root.findAllByType('expo-image' as never);
+    expect(posters).toHaveLength(1);
+    expect(posters[0].props.source).toEqual({ uri: PREVIEW.url, cacheKey: PREVIEW.cacheKey });
+    // The flight waits on the video, never on the poster under it.
+    expect(posters[0].props.onDisplay).toBeUndefined();
+    expect(tree.root.findAllByType('video-view' as never)).toHaveLength(1);
+
+    renderer.act(() => tree.unmount());
+  });
 });
 
 describe('a tap while a post is already opening', () => {
