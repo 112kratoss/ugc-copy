@@ -458,7 +458,7 @@ export function CreatorSettingChoices<T extends string>({
   accent?: UiAccent;
   capitalize?: boolean;
   /**
-   * What the run costs with each option, under it: "19", or "23 · +1" in amber past the
+   * What the run costs with each option, under it: the total, "23", in amber past the
    * balance, with the words a screen reader says ("23 credits, 1 more than your balance";
    * `optionPricesOf`); null where it is not known yet. An option past the balance stays
    * selectable: the bar offers a top-up in Generate's place.
@@ -1013,25 +1013,6 @@ export function CreatorSettingsFootNote({ cost, costLabel, balance, isVisitor }:
           ? ` · leaves ${balance - cost}`
           : ` · ${cost - balance} more than ${isVisitor ? 'the free credits' : 'your balance'}`}
     </span>
-  );
-}
-
-/**
- * Under the settings while an option shown costs more than the balance: what "+N" means
- * (the least such N), and that those options can still be chosen.
- */
-export function CreatorOverBalanceLegend({ over, balance, isVisitor }: {
-  over: number | null;
-  balance: number | null;
-  /** A visitor's options say what sign-up gives; anyone else's put Top up in Generate's place. */
-  isVisitor: boolean;
-}) {
-  if (over === null || balance === null) return null;
-  return (
-    <p className="text-xs leading-5 text-[var(--ui-text-faint)]">
-      “+{over}” means {creditsWords(over)} more than {isVisitor ? `the ${balance} free credits` : `your balance of ${balance}`}.
-      {isVisitor ? ' Those options stay selectable.' : ' Those options stay selectable, and show Top up in place of Generate.'}
-    </p>
   );
 }
 

@@ -30,7 +30,6 @@ import {
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorModelChip,
-    CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorRunFailed,
     CreatorRunFailedLine,
@@ -50,7 +49,6 @@ import {
     NO_SETTINGS_VARIANTS,
     optionPricesOf,
     settingsVariants,
-    smallestOverBalance,
     useQuotePrices,
 } from '@/lib/use-quote-prices';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
@@ -1525,7 +1523,6 @@ function MotionCreator({
     );
     const priceOf = useQuotePrices([...variants.values()]);
     const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
-    const smallestOver = smallestOverBalance(optionPrice, settingsAxes);
     // The server's refusal holds until the balance or the price on screen moves.
     const creditRefusalMessage = creditRefusal && creditRefusal.balance === userCredits && creditRefusal.cost === estimatedCost
         ? creditRefusal.message
@@ -1668,7 +1665,6 @@ function MotionCreator({
                 accent="motion"
                 optionPrice={(quality) => optionPrice('resolution', quality)}
             />
-            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
             <CatalogAdditionalControls
                 appearance="panel"
                 descriptor={catalogDescriptor}

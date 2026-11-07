@@ -127,10 +127,10 @@ describe('the model list split by the balance', () => {
 });
 
 describe('prices read against the balance', () => {
-  it('marks an option that costs more than the balance by how much', () => {
+  it('shows the total alone, and marks an option past the balance by how much', () => {
     expect(optionPriceLabel(16, 22)).toEqual({ text: '16', over: null });
     expect(optionPriceLabel(22, 22)).toEqual({ text: '22', over: null });
-    expect(optionPriceLabel(23, 22)).toEqual({ text: '23 · +1', over: 1 });
+    expect(optionPriceLabel(23, 22)).toEqual({ text: '23', over: 1 });
     expect(optionPriceLabel(57, null)).toEqual({ text: '57', over: null });
   });
 

@@ -89,7 +89,7 @@ test('every setting and every model is priced against the balance, and a picked 
   await settingsChip(page).click();
   const settings = page.getByRole('dialog', { name: 'Generation settings' });
   await expect(settings.getByRole('radio', { name: '6s, 23 credits' })).toBeVisible();
-  await expect(settings.getByRole('radio', { name: '8s, 31 credits, 6 more than your balance' })).toContainText('31 · +6');
+  await expect(settings.getByRole('radio', { name: '8s, 31 credits, 6 more than your balance' })).toHaveText(/31$/);
   await expect(settings).toContainText('This run 19 credits · leaves 6');
   await expect(settings).toContainText('Same price for each');
 

@@ -7810,11 +7810,11 @@ describe('CreateVideoClient Kling video elements', () => {
       const settings = screen.getByRole('dialog', { name: 'Generation settings' });
       expect(within(settings).getByRole('radio', { name: '4s, 16 credits' })).toBeInTheDocument();
       expect(within(settings).getByRole('radio', { name: '5s, 19 credits' })).toBeChecked();
-      expect(within(settings).getByRole('radio', { name: '6s, 23 credits, 1 more than your balance' })).toHaveTextContent('6s23 · +1');
+      expect(within(settings).getByRole('radio', { name: '6s, 23 credits, 1 more than your balance' })).toHaveTextContent(/^6s23$/);
       expect(within(settings).getByRole('radio', { name: '720p, 41 credits, 19 more than your balance' })).toBeInTheDocument();
       expect(within(settings).getByRole('radiogroup', { name: 'Aspect ratio' }).parentElement).toHaveTextContent('Same price for each');
       expect(within(settings).getByRole('switch', { name: /Generated sound/ })).toHaveTextContent('No extra cost on Seedance 2 Mini');
-      expect(settings).toHaveTextContent('“+1” means 1 credit more than your balance of 22.');
+      expect(settings).not.toHaveTextContent('“+');
       expect(settings).toHaveTextContent('This run 19 credits · leaves 3');
 
       // Past the balance, an option is still chosen, and Top up stands in Generate's place.
@@ -7829,8 +7829,8 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.click(await screen.findByRole('button', { name: /^Generation settings: / }));
 
       const settings = screen.getByRole('dialog', { name: 'Generation settings' });
-      expect(await within(settings).findByRole('radio', { name: '6s, 23 credits, 1 more than the free credits' })).toHaveTextContent('6s23 · +1');
-      expect(settings).toHaveTextContent('“+1” means 1 credit more than the 22 free credits. Those options stay selectable.');
+      expect(await within(settings).findByRole('radio', { name: '6s, 23 credits, 1 more than the free credits' })).toHaveTextContent(/^6s23$/);
+      expect(settings).not.toHaveTextContent('“+');
     });
 
     it('reads the balance under the bar, and what the run leaves of it', async () => {
@@ -7903,9 +7903,9 @@ describe('CreateVideoClient Kling video elements', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
       const settings = screen.getByRole('dialog', { name: 'Generation settings' });
-      // Seedance 2.5 makes 4 to 30 s: a slider, at 5 s for 140. Its 4 s (112, "+87") is priced but not shown.
-      await waitFor(() => expect(settings).toHaveTextContent('5s · 140 credits · +115'));
-      expect(settings).toHaveTextContent('“+115” means 115 credits more than your balance of 25.');
+      // Seedance 2.5 makes 4 to 30 s: a slider, at 5 s for 140. Its 4 s (112) is priced but not shown.
+      await waitFor(() => expect(settings).toHaveTextContent('5s · 140 credits'));
+      expect(settings).not.toHaveTextContent('“+');
     });
 
     it('keeps Generate\'s place for a top-up while some video still fits the balance', async () => {
@@ -7967,7 +7967,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
         fireEvent.click(screen.getByRole('button', { name: /^Generation settings: / }));
         const settings = screen.getByRole('dialog', { name: 'Generation settings' });
-        await waitFor(() => expect(settings).toHaveTextContent(/more than your balance of 22\. Those options stay selectable, and show Top up in place of Generate\./));
+        expect(await within(settings).findAllByRole('radio', { name: /more than your balance$/ })).not.toHaveLength(0);
         const ratios = within(screen.getByRole('radiogroup', { name: /^Aspect ratio/ })).getAllByRole('radio');
         const other = ratios.find((radio) => radio.getAttribute('aria-checked') === 'false')!;
         const otherRatio = other.textContent;

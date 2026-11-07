@@ -2,7 +2,7 @@
  * How a creator fits a run to a model and to a balance, on the web and, once it adopts
  * it, in the app: which settings a model opens on when a creator switches to it, how the
  * model list is split by what the balance covers, and how an option's price is read
- * against the balance ("23 · +1"). A remix is never fitted: it opens on its original's
+ * against the balance ("23", in amber past it). A remix is never fitted: it opens on its original's
  * model and settings whatever the balance, and a balance short of it is offered a top-up
  * (owner, 2026-11-01: another model would not make what the creator came to remake), as
  * every short balance is (owner, 2026-11-02: never a picture instead).
@@ -127,12 +127,14 @@ export function groupModelsByBalance<T>(
 }
 
 /**
- * An option's price as the settings show it: "16", or "23 · +1" when it costs more than
- * the balance; `over` is how much more. Without a balance, the price alone.
+ * An option's price as the settings show it: the run's total, "23", and nothing more
+ * (owner, 2026-11-07: the "· +1" past the balance was noise); `over` is how much it
+ * costs past the balance, for the amber it is drawn in and the words a screen reader
+ * says, null within the balance or without one.
  */
 export function optionPriceLabel(cost: number, balance: number | null): { text: string; over: number | null } {
   const over = balance !== null && cost > balance ? cost - balance : null;
-  return { text: over === null ? String(cost) : `${cost} · +${over}`, over };
+  return { text: String(cost), over };
 }
 
 /** Whether a setting's options all cost the same, every price known: then it says so once ("Same price for each"). */

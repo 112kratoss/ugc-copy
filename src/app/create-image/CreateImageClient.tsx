@@ -49,7 +49,6 @@ import {
     CreatorColumnBar,
     CreatorColumnLayout,
     CreatorModelChip,
-    CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorReferencePreview,
     CreatorReferenceStrip,
@@ -87,7 +86,6 @@ import {
     NO_SETTINGS_VARIANTS,
     optionPricesOf,
     settingsVariants,
-    smallestOverBalance,
     useQuotePrices,
 } from '@/lib/use-quote-prices';
 import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
@@ -1376,7 +1374,6 @@ function ImageCreator({
     const priceOf = useQuotePrices([...[...modelRuns.values()].map((run) => run.quoteInput), ...variants.values()]);
     const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
     const sameRatioPrice = samePriceForEach(model.aspectRatios.map((ratio) => optionPrice('aspectRatio', ratio)?.cost ?? null));
-    const smallestOver = smallestOverBalance(optionPrice, sameRatioPrice ? settingsAxes.slice(1) : settingsAxes);
     // A page the start keeps refusing at its own price waits for a reload, not another press.
     const quotePending = quoteUi.blocksGenerate || quoteState.pageOutOfDate;
     const quoteRetry = quoteState.status === 'error' ? <StudioQuoteRetry message={quoteUi.message} onRetry={quoteState.retry} /> : null;
@@ -2120,7 +2117,6 @@ function ImageCreator({
                 />
             ) : null}
 
-            <CreatorOverBalanceLegend over={smallestOver} balance={listBalance} isVisitor={isVisitor} />
 
             <CatalogAdditionalControls appearance="panel" descriptor={catalogDescriptor} handledKeys={CATALOG_HANDLED_KEYS} settings={{ aspectRatio, resolution, qualityMode, googleSearch, ...additionalSettings.settings }} inputCounts={{ images: elements.length, videos: 0, audios: 0 }} onChange={additionalSettings.onChange} />
         </div>

@@ -3235,10 +3235,10 @@ describe('CreateImageClient prices', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
 
     const settings = screen.getByRole('dialog', { name: 'Generation settings' });
-    expect(within(settings).getByRole('radio', { name: '4K, 18 credits, 8 more than your balance' })).toHaveTextContent('4K18 · +8');
+    expect(within(settings).getByRole('radio', { name: '4K, 18 credits, 8 more than your balance' })).toHaveTextContent(/^4K18$/);
     expect(settings).toHaveTextContent('This run 8 credits · leaves 2');
-    // What "+8" means, as the video creator says it.
-    expect(settings).toHaveTextContent('“+8” means 8 credits more than your balance of 10.');
+    // The total alone (owner, 2026-11-07): no "+8" and no line explaining one.
+    expect(settings).not.toHaveTextContent('“+');
   });
 });
 
