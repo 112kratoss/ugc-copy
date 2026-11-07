@@ -636,19 +636,17 @@ function ImmersivePreviewViewer() {
       playbackUrl: page.mediaItem.mediaKind === 'video' ? getShowcasePlaybackUrl(page.mediaItem) : null,
     };
   }, [activeItem, position?.mediaPageKey]);
-  // iOS: a picture or a video out of a tile closes by flying home alone
+  // iOS: a still picture out of a tile closes by flying home alone
   // (components/media-zoom.tsx), which the reel has to start before the pop, so
   // it keeps the reel's own Back: the bar's pops before the app hears of it,
   // under UIKit's zoom. A bar button of the app's own in its place took the
   // back swipe away with the system Back (simulator, 2026-11-07); hidden, the
-  // bar leaves the swipe as it was. A video flies its own player, so the frame
-  // on screen is the one that goes home.
+  // bar leaves the swipe as it was.
   const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({
     picture: activeMedia.picture,
     videoUrl: activeMedia.playbackUrl,
     reducedMotion,
     fromTile: true,
-    fliesVideo: true,
   });
   const barBack = nativeBack && !flownBack;
   const zoom = useMediaZoomStage({
@@ -677,19 +675,13 @@ function ImmersivePreviewViewer() {
   // screen in front and its push has finished, and through its own close: the
   // picture alone shrinks back into the tile, as Photos does, while its chrome
   // fades (`MediaZoomChrome`). At rest that looks the same, the navigator's
-  // backdrop behind the reel being black (lib/reel-backdrop.ts). It is clear as
-  // it grows out of its tile too: black, the reel's page came up as a
-  // see-through dark panel round the growing picture, over a feed its tap's
-  // veil had not yet darkened (lib/zoom-veil.ts), for two to four frames of
-  // every open (simulator, 2026-11-07). Clear, the picture grows alone and the
-  // veil is the black round it. It stays black while a page pushed over it
-  // covers it or is popped off it (the backdrop is let go of while covered),
-  // under Reduce Motion (no zoom runs), and when pushed without a zoom, which
-  // fades in over the screen beneath.
+  // backdrop behind the reel being black (lib/reel-backdrop.ts). It stays black
+  // while it grows (the screen beneath shows only once the push is over), while
+  // a page pushed over it covers it or is popped off it (the backdrop is let go
+  // of while covered), under Reduce Motion (no zoom runs), and when pushed
+  // without a zoom, which fades in over the screen beneath.
   const reelNavigation = useNavigation();
   const [pushLanded, setPushLanded] = useState(false);
-  // The push that brought this reel up has ended (the first `transitionEnd`).
-  const [arrived, setArrived] = useState(false);
   // This reel's own close under way, as against a page pushed over it: both
   // start a transition that closes it, and only its own begins while it is
   // still the focused route. Focus is gone from the first frame of either.
@@ -719,17 +711,14 @@ function ImmersivePreviewViewer() {
         }
       }),
       listenToTransition(reelNavigation, 'transitionEnd', (event) => {
-        if (event.data?.closing === false) {
-          setPushLanded(true);
-          setArrived(true);
-        }
+        if (event.data?.closing === false) setPushLanded(true);
       }),
       listenToTransition(reelNavigation, 'gestureCancel', () => setClosingSelf(false)),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, [reelIsCovered, reelNavigation]);
   const groundClear = Platform.OS === 'ios'
-    ? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (isFocused && (pushLanded || !arrived)))
+    ? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (pushLanded && isFocused))
     // Android shrinks the reel itself (components/media-zoom.tsx), window and
     // all, in about three frames: too fast for a re-render to clear it as the
     // shrink begins (filmed on the Pixel 9a emulator). So it is always clear

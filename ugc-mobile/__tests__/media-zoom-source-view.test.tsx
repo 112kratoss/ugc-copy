@@ -38,13 +38,8 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }),
 }));
 
-import { makeMutable } from 'react-native-reanimated';
-
 import {
   MediaZoomSourceView,
-  TILE_LIFT_DEADLINE_MS,
-  liftTile,
-  settleTileLift,
   MediaZoomSurface,
   setZoomPostPreparer,
   useMediaZoomSource,
@@ -68,11 +63,6 @@ const source: MediaZoomSource = {
   tileKey: 'surface\u0000post',
   appleZoomId: null,
   aspectRatio: null,
-  standIn: null,
-  standInStill: null,
-  standInDrawn: () => {},
-  liftedStyle: { opacity: 1 },
-  standInStyle: { opacity: 0 },
 };
 
 function flatten(style: unknown): Record<string, unknown> {
@@ -80,19 +70,16 @@ function flatten(style: unknown): Record<string, unknown> {
   return (style ?? {}) as Record<string, unknown>;
 }
 
-/** The animated wrapper (mocked as `animated-view`), the measured one inside it, and the zoom's stand-in. */
+/** The animated wrapper (mocked as `animated-view`) and the measured one inside it. */
 function wrapperStyles(element: React.ReactElement) {
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
     tree = renderer.create(element);
   });
   const root = tree.root;
-  const [outer, inner] = root.findAllByType('animated-view' as never);
-  const standIn = root.findAllByType('expo-image' as never)[0] ?? null;
   return {
-    outer: flatten(outer.props.style),
-    inner: flatten(inner.props.style),
-    standIn: standIn ? { ...standIn.props, style: flatten(standIn.props.style) } : null,
+    outer: flatten(root.findByType('animated-view' as never).props.style),
+    inner: flatten(root.findByType('view' as never).props.style),
   };
 }
 
@@ -259,59 +246,6 @@ describe('the view a tile hands to the reel', () => {
     expect(shaped(null)).toEqual({ seen: false, radius: undefined, overflow: undefined });
   });
 
-  // UIKit's zoom resizes the view it grows the reel out of to its window from
-  // the first frame, and a React Native view keeps what it holds where Yoga put
-  // it: the tile's picture and badge rode tile-sized in the top corner of the
-  // growing window (owner's iPhone, 2026-11-07). The registered view is an
-  // expo-image of the picture alone, whose image view follows its bounds, laid
-  // over the tile and see-through until a still tile's open lifts it.
-  it('hands UIKit a stand-in of the picture alone, over the tile and see-through at rest', () => {
-    const preview = { url: 'https://cdn.example/p.jpg', cacheKey: 'p' };
-    const { inner, standIn } = wrapperStyles(
-      <MediaZoomSourceView source={{ ...source, appleZoomId: 'zoom|surface|post', radius: 16, standIn: preview }}>
-        <TileContent />
-      </MediaZoomSourceView>
-    );
-
-    expect(standIn).toMatchObject({
-      source: { uri: preview.url, cacheKey: 'p' },
-      contentFit: 'cover',
-      pointerEvents: 'none',
-      style: { position: 'absolute', borderRadius: 16, opacity: 0 },
-    });
-    // The tile itself shows until the open lifts it.
-    expect(inner.opacity).toBe(1);
-
-    // Where the zoom does not run there is no stand-in.
-    expect(wrapperStyles(
-      <MediaZoomSourceView source={{ ...source, standIn: preview }}>
-        <TileContent />
-      </MediaZoomSourceView>
-    ).standIn).toBeNull();
-  });
-
-  // A tile playing a clip stands in with a still of the frame it is showing,
-  // read as the finger comes down, not its poster: UIKit crossfades the
-  // stand-in with the reel's view of that same player as the zoom begins.
-  it('draws the still of a playing tile\'s frame in place of its poster, and says which it drew', () => {
-    const preview = { url: 'https://cdn.example/p.jpg', cacheKey: 'p' };
-    const still = { width: 413, height: 720 } as unknown as NonNullable<MediaZoomSource['standInStill']>;
-    const drawn: unknown[] = [];
-    let tree!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      tree = renderer.create(
-        <MediaZoomSourceView source={{ ...source, appleZoomId: 'zoom|surface|post', standIn: preview, standInStill: still, standInDrawn: (value) => drawn.push(value) }}>
-          <TileContent />
-        </MediaZoomSourceView>
-      );
-    });
-    const standIn = tree.root.findByType('expo-image' as never);
-    expect(standIn.props.source).toBe(still);
-    // expo-image reports an image reference only as shown.
-    renderer.act(() => standIn.props.onDisplay());
-    expect(drawn).toEqual([still]);
-  });
-
   it('hands its post to the app shell as the finger lands, to ask ahead for what the post draws', () => {
     const prepared: ImmersivePreviewItem[] = [];
     const stop = setZoomPostPreparer((post) => {
@@ -336,84 +270,5 @@ describe('the view a tile hands to the reel', () => {
     renderer.act(() => prepare?.());
 
     expect(prepared).toEqual([post]);
-  });
-});
-
-// A still tile's open shows its stand-in and hides the tile (`liftTile`); the
-// tile is put back when the reel lands or closes, or at the deadline.
-describe('a tile lifted for UIKit\'s zoom', () => {
-  it('is put back once, by whichever comes first', () => {
-    vi.useFakeTimers();
-    try {
-      const a = makeMutable(0);
-      const b = makeMutable(0);
-      liftTile(a);
-      expect(a.get()).toBe(1);
-      // Another open puts the first tile back.
-      liftTile(b);
-      expect([a.get(), b.get()]).toEqual([0, 1]);
-      settleTileLift();
-      expect(b.get()).toBe(0);
-      // Unsettled, the deadline puts it back.
-      liftTile(a);
-      vi.advanceTimersByTime(TILE_LIFT_DEADLINE_MS);
-      expect(a.get()).toBe(0);
-    } finally {
-      settleTileLift();
-      vi.useRealTimers();
-    }
-  });
-
-  // UIKit takes its picture of the stand-in as the push begins, and a lift set
-  // in the push's own task reached the screen only with the push's commit: the
-  // zoom took a see-through stand-in and faded the reel in large (simulator,
-  // 2026-11-07). The open pushes once the lift is drawn, or after its deadline.
-  it('says once that the lift is drawn, even when the UI thread never answers', () => {
-    vi.useFakeTimers();
-    try {
-      const tile = makeMutable(0);
-      const onLifted = vi.fn();
-      liftTile(tile, undefined, onLifted);
-      expect(tile.get()).toBe(1);
-      vi.advanceTimersByTime(100);
-      expect(onLifted).toHaveBeenCalledTimes(1);
-      vi.advanceTimersByTime(1000);
-      expect(onLifted).toHaveBeenCalledTimes(1);
-    } finally {
-      settleTileLift();
-      vi.useRealTimers();
-    }
-  });
-
-  it('lets the lifted tile drop what it lifted with once it is put back', () => {
-    const tile = makeMutable(0);
-    const onSettle = vi.fn();
-    liftTile(tile, onSettle);
-    expect(onSettle).not.toHaveBeenCalled();
-    settleTileLift();
-    expect(onSettle).toHaveBeenCalledTimes(1);
-    settleTileLift();
-    expect(onSettle).toHaveBeenCalledTimes(1);
-  });
-
-  // Review of #721: the deadline of an open that had already landed put the
-  // same tile back in the middle of its next open.
-  it('keeps no deadline from an earlier open of the same tile', () => {
-    vi.useFakeTimers();
-    try {
-      const tile = makeMutable(0);
-      liftTile(tile);
-      vi.advanceTimersByTime(500);
-      settleTileLift();
-      vi.advanceTimersByTime(1000);
-      liftTile(tile);
-      vi.advanceTimersByTime(TILE_LIFT_DEADLINE_MS - 1500);
-      expect(tile.get()).toBe(1);
-      vi.advanceTimersByTime(1500);
-      expect(tile.get()).toBe(0);
-    } finally {
-      settleTileLift();
-      vi.useRealTimers();
-    }
   });
 });
