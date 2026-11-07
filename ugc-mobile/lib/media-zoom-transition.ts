@@ -328,7 +328,11 @@ export function reverseZoomFlightTime(progress: number, easePower: number): numb
 export interface ZoomStill {
   preview: ZoomPreview;
   geometry: ZoomGeometry;
-  /** Drawn instead of `preview` when the tile lent its playing video. */
+  /**
+   * Drawn instead of `preview` when the tile lent its playing video. A close
+   * flying the reel's player home alone (`geometry.pictureOnly`, iOS) draws it
+   * over `preview`, which shows wherever the video has not drawn.
+   */
   video?: ZoomVideo | null;
   /**
    * A close flying `video` into a tile that will not take its player (a tile
@@ -728,6 +732,23 @@ export interface ZoomFrame {
 function lerp(from: number, to: number, progress: number) {
   'worklet';
   return from + (to - from) * progress;
+}
+
+/**
+ * Where a video landing on its picture (`ZoomStill.landsOnPicture`) dissolves
+ * into it, in the close's progress (1 at the screen, 0 in the tile). The iOS
+ * close runs at (1 − t)², so this is about its 150th to 250th ms of 300: the
+ * clip is still the clip while it travels, and the poster has settled for the
+ * last frames.
+ */
+export const VIDEO_TO_PICTURE_PROGRESS = [0.03, 0.25] as const;
+
+/** How much of a video landing on its picture still shows over it, at a close's `progress`. */
+export function videoOverPictureOpacity(progress: number) {
+  'worklet';
+  const gone = VIDEO_TO_PICTURE_PROGRESS[0];
+  const whole = VIDEO_TO_PICTURE_PROGRESS[1];
+  return Math.min(1, Math.max(0, (progress - gone) / (whole - gone)));
 }
 
 /**

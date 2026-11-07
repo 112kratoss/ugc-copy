@@ -95,7 +95,7 @@ import {
   useMediaZoomStage,
 } from '../components/media-zoom';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
-import { getZoomFlight, peekPendingZoomOrigin, resetMediaZoomTransitions, subscribeToZoomFlights, type ZoomFlight } from '../lib/media-zoom-transition';
+import { getHeldZoomPicture, getZoomFlight, peekPendingZoomOrigin, resetMediaZoomTransitions, subscribeToZoomFlights, type ZoomFlight } from '../lib/media-zoom-transition';
 import { useMediaZoomVideoOffer } from '../lib/media-zoom-video-offer';
 import {
   acceptVideoReturn,
@@ -104,7 +104,10 @@ import {
   isVideoPlayerHandedBack,
   isVideoPlayerOnLoan,
   isVideoReturnPending,
+  RELEASED_LOAN_GRACE_MS,
+  reportReturnedVideoDrawn,
   resetVideoPlayerLoans,
+  VIDEO_RETURN_TIMEOUT_MS,
 } from '../lib/video-player-loans';
 import {
   createScreenVeil,
@@ -659,6 +662,7 @@ describe('a tile opening under the native zoom', () => {
   // alone, as a picture does, rather than UIKit shrinking the whole page into
   // the tile's other frame.
   it('closes a video by flying its own player home alone, handing it to the tile still playing', async () => {
+    vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));
     const player = fakePlayer();
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
@@ -687,6 +691,16 @@ describe('a tile opening under the native zoom', () => {
     // Back to the tile at once, and playing: the flight and the tile draw the clip going on.
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
     expect(player.pause).not.toHaveBeenCalled();
+    // Landed (nothing steps the flight in a test, so it lands at once), the
+    // copy stays over the tile until the tile's own view has drawn the player
+    // it takes back, rather than uncover a tile still waiting for its picture.
+    await elapse(40);
+    expect(getHeldZoomPicture()?.video?.player).toBe(player);
+    renderer.act(() => {
+      claimReturnedVideoPlayer(tileKey, STREAM);
+      reportReturnedVideoDrawn(player);
+    });
+    expect(getHeldZoomPicture()).toBeNull();
     stop();
     stopAccepting();
   });
@@ -696,6 +710,7 @@ describe('a tile opening under the native zoom', () => {
   // about a tenth of a second. The clip flies home alone instead, and
   // dissolves into the poster the tile goes on showing.
   it('flies a video home alone into a tile that shows its poster, landing on that poster', async () => {
+    vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));
     const player = fakePlayer();
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
@@ -708,9 +723,12 @@ describe('a tile opening under the native zoom', () => {
     const stop = subscribeToZoomFlights((event) => {
       if (event.type === 'begin') flights.push(event.flight);
     });
+    // The page on screen is not the tile's picture: a later page of the post.
+    const onScreen = { url: 'https://example.test/page-2.webp', cacheKey: 'page-2', thumbhash: null };
     let stage!: ReturnType<typeof useMediaZoomStage>;
+    let reel!: renderer.ReactTestRenderer;
     renderer.act(() => {
-      renderer.create(<Reel onExit={() => {}} playerFor={() => player} activePicture={PREVIEW} report={(value) => { stage = value; }} />);
+      reel = renderer.create(<Reel onExit={() => {}} playerFor={() => player} activePicture={onScreen} report={(value) => { stage = value; }} />);
     });
     renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
     // The tile does not take the player back: nothing registers for its stream.
@@ -718,11 +736,28 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => stage.dismiss());
 
     expect(flights).toHaveLength(1);
+    // It lands on the tile's own picture, which the tile goes on showing (review
+    // of #723: on the page on screen, it cut to the tile's cover as it let go).
     expect(flights[0]).toMatchObject({ direction: 'close', video: { player, url: STREAM }, landsOnPicture: true, preview: PREVIEW });
     expect(flights[0].geometry.pictureOnly).toBe(true);
     // Handed back all the same, so it outlives the reel until the flight has landed.
     expect(isVideoPlayerHandedBack(player)).toBe(true);
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
+
+    // Landed on the poster, with no tile to draw the player under it: the copy
+    // goes two frames on, as a picture's does, not at the end of the wait for
+    // a tile's view (review of #723: it stood over the tile's badges for that).
+    expect(getHeldZoomPicture()?.landsOnPicture).toBe(true);
+    await elapse(40);
+    expect(getHeldZoomPicture()).toBeNull();
+
+    // No tile took the player: it is released once the reel has gone and a
+    // close could no longer be drawing it.
+    renderer.act(() => reel.unmount());
+    expect(player.release).not.toHaveBeenCalled();
+    await elapse(VIDEO_RETURN_TIMEOUT_MS + RELEASED_LOAN_GRACE_MS);
+    expect(player.release).toHaveBeenCalledTimes(1);
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
     stop();
   });
 

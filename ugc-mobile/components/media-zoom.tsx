@@ -97,6 +97,7 @@ import {
   subscribeToHeldZoomPicture,
   subscribeToZoomFlights,
   UNCOVERED,
+  videoOverPictureOpacity,
   type ZoomFlight,
   type ZoomGeometry,
   type ZoomOrigin,
@@ -120,6 +121,7 @@ import {
   handBackVideoPlayer,
   holdVideoLoan,
   isVideoPlayerHandedBack,
+  isVideoReturnClaimed,
   lendVideoPlayer,
   reclaimVideoPlayer,
   releaseAdoptedVideoPlayer,
@@ -461,13 +463,6 @@ const videoSurfaceOpacity = makeMutable(1);
 const stillCarriesVideo = makeMutable(false);
 /** The held video lands on its picture (`ZoomStill.landsOnPicture`), for the layer's UI-thread styles. */
 const stillLandsOnPicture = makeMutable(false);
-/**
- * Where a video landing on its picture dissolves into it, in the close's
- * progress (1 at the screen, 0 in the tile). The iOS close runs at
- * (1 − t)², so this is about its 150th to 250th ms of 300: the clip is still
- * the clip while it travels, and the poster has settled for the last frames.
- */
-const VIDEO_TO_PICTURE_PROGRESS = [0.03, 0.25] as const;
 
 /** Starts and stops the layer's frame callback; set while the layer is mounted. */
 let tickerControl: ((active: boolean) => void) | null = null;
@@ -609,6 +604,7 @@ function drawsSameStill(a: ZoomStill, b: ZoomStill) {
   return samePicture(a.preview, b.preview)
     && (a.video?.player ?? null) === (b.video?.player ?? null)
     && Boolean(a.landsOnPicture) === Boolean(b.landsOnPicture)
+    && Boolean(a.geometry.pictureOnly) === Boolean(b.geometry.pictureOnly)
     && (a.post?.id ?? null) === (b.post?.id ?? null)
     && a.geometry.screen.width === b.geometry.screen.width
     && a.geometry.screen.height === b.geometry.screen.height
@@ -811,6 +807,12 @@ function finishZoomFlight(id: number) {
   // A picture closing alone kept its tile hidden on the way down; it shows
   // under the picture now, before the picture lets go.
   const tileShown = showZoomSourceAtLanding();
+  // No tile to uncover (gone from the screen, or scrolled out of the list):
+  // nothing will be drawn under the picture, so it goes now.
+  if (!tileShown) {
+    holdStill(null);
+    return;
+  }
   // Landed in the tile, which is drawn underneath by now — the screen it is
   // on has been there for the whole collapse — so the picture lets go at once.
   // Left any longer it would sit over whatever floats above the tile (the tab
@@ -819,12 +821,13 @@ function finishZoomFlight(id: number) {
   // Except over a video the tile has just been handed back: its view took the
   // player during the collapse and lets go once that view has drawn it — a
   // frame or two — rather than uncover a tile still waiting for its picture.
-  const returned = getHeldZoomPicture()?.video?.player;
-  if (!returned || !isVideoPlayerHandedBack(returned)) {
-    if (!tileShown) {
-      holdStill(null);
-      return;
-    }
+  // A video that dissolved into the tile's poster (`landsOnPicture`) waits on
+  // nothing unless the tile took the player after all: that tile goes on
+  // showing the poster, so the copy goes as a picture's does (review of #723:
+  // it stood over the tile's badges for the whole deadline).
+  const landing = getHeldZoomPicture();
+  const returned = landing?.video?.player;
+  if (!returned || !isVideoPlayerHandedBack(returned) || (landing?.landsOnPicture && !isVideoReturnClaimed(returned))) {
     // The tile shows by a shared value and the picture goes by a React
     // commit, which do not reach the screen in a set order: let go together,
     // the picture went first and the tile stood empty for a frame (Home and
@@ -2420,8 +2423,13 @@ export function useMediaZoomStage({
         pictureOnly: alone,
       };
       // What shrinks when the reel cannot: what the reader was looking at, or
-      // the tile's own picture when the reel was never uncovered.
-      const preview = beforeHandoff ? origin.preview : (pictureRef.current ?? handle.preview);
+      // the tile's own picture when the reel was never uncovered. A video that
+      // dissolves into its tile lands on what that tile shows, its own picture:
+      // on a later page of a post that is not the page on screen (review of
+      // #723), which would cut to the tile's cover as the copy let go.
+      const preview = beforeHandoff
+        ? origin.preview
+        : landsOnPicture ? handle.preview : (pictureRef.current ?? handle.preview);
       // The window contains the tile at every step of a collapse, so the tile
       // can come back now, under cover, and be there when the reel lets go.
       clearHiddenZoomSources();
@@ -2789,7 +2797,7 @@ export function MediaZoomFlightLayer({
   // drawn under it, as it settles (`ZoomStill.landsOnPicture`).
   const videoSurfaceStyle = useAnimatedStyle(() => ({
     opacity: videoSurfaceOpacity.value * (stillLandsOnPicture.value && flightClosing.value
-      ? interpolate(flightProgress.value, VIDEO_TO_PICTURE_PROGRESS, [0, 1], Extrapolation.CLAMP)
+      ? videoOverPictureOpacity(flightProgress.value)
       : 1),
   }));
 
@@ -2911,9 +2919,16 @@ export function MediaZoomFlightLayer({
                 `_requiresAnimatedComponent` getter throws, from inside the
                 commit, and every render after it failed with "Should not already
                 be working": the app froze on whatever it last drew. */}
-            {still.video && still.landsOnPicture ? (
-              // What the video lands on: the poster of a tile that will not take
-              // its player. No `onDisplay`: the flight waits on the video.
+            {still.video && still.geometry.pictureOnly ? (
+              // Under a video flown home alone (iOS: only a close flies a video
+              // alone), its poster. It shows wherever the video has not drawn —
+              // Back pressed while the clip was still loading flew an empty
+              // window home (review of #723) — and it is what a tile that will
+              // not take the player goes on showing, so that video dissolves
+              // into it (`landsOnPicture`). Not under Android's lent video,
+              // whose window shows the tile's own playing clip through it until
+              // the layer's view has drawn. No `onDisplay`: the flight waits on
+              // the video.
               <Image
                 key={`landing:${still.preview.url}:${still.preview.cacheKey ?? ''}`}
                 source={{ uri: still.preview.url, cacheKey: still.preview.cacheKey ?? undefined }}
