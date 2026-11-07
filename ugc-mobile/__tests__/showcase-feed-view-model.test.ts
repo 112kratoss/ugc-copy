@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildShowcaseMasonry, getShowcaseGridLayout, getShowcaseMediaHeight, showcaseToMasonryCard } from '../lib/showcase-feed-view-model';
+import { buildShowcaseMasonry, getShowcaseGridLayout, getShowcaseMediaHeight, showcaseCardWidth, showcaseToMasonryCard } from '../lib/showcase-feed-view-model';
 import { applyShowcaseSaveStateToFeedResponse } from '../lib/showcase-save-cache';
 import type { ShowcaseFeedItem } from '../lib/types';
 
@@ -369,3 +369,16 @@ describe('showcase feed view model', () => {
     expect(getShowcaseMediaHeight(video, 180)).toBeGreaterThan(104);
   });
 });
+
+describe('showcaseCardWidth', () => {
+  it('is the cell less the gap the cell pads it by, so the pin fills its card exactly', () => {
+    // Pixel 9a and S24 width: 1080 px at 2.625. The card measured 189.7 dp on
+    // screen (551–1049 px); the old sum gave 193.7 dp.
+    const width = 1080 / 2.625;
+    expect(showcaseCardWidth(width, 8, 8)).toBeCloseTo(189.71, 2);
+    // Two cards, two gaps' halves on each side, and the list's padding fill the width.
+    const card = showcaseCardWidth(402, 8, 8);
+    expect(card * 2 + 8 * 2 + 8 * 2).toBeCloseTo(402, 6);
+  });
+});
+

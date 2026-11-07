@@ -6,6 +6,7 @@ import { FileText, Heart, MessageCircle, MoreVertical, Repeat2 } from 'lucide-re
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   FlatList,
   Keyboard,
   Platform,
@@ -94,6 +95,19 @@ export default function PostScreen() {
   const isFocused = useIsFocused();
   const { width, height } = useWindowDimensions();
   const pagerRef = useRef<FlatList<'post' | 'details'>>(null);
+  // The arrow belongs to the post page: on the way to Details it leaves with
+  // that page, under the finger, instead of standing over the Details header,
+  // and comes back with it. Followed on the native side, as the reel's is.
+  const [pagerScrollX] = useState(() => new Animated.Value(0, { useNativeDriver: true }));
+  const backShift = useMemo(() => pagerScrollX.interpolate({
+    inputRange: [0, width],
+    outputRange: [0, -width],
+    extrapolate: 'clamp',
+  }), [pagerScrollX, width]);
+  const onPagerScroll = useMemo(() => Animated.event(
+    [{ nativeEvent: { contentOffset: { x: pagerScrollX } } }],
+    { useNativeDriver: true },
+  ), [pagerScrollX]);
   const commentsRef = useRef<PostCommentsHandle>(null);
   const restoredCommentContextRef = useRef<string | null>(null);
   const recordedShareVisitRef = useRef<string | null>(null);
@@ -432,13 +446,15 @@ export default function PostScreen() {
           comments. The details page carries its own header and its own way
           back to the post, so the arrow steps aside there. */}
       <Stack.Screen options={{ gestureEnabled: !onDetailsPage, fullScreenGestureEnabled: false }} />
-      {onDetailsPage ? null : <BackControl topInset={topInset} />}
+      <BackControl topInset={topInset} shift={backShift} hidden={onDetailsPage} />
 
-      <FlatList
+      <Animated.FlatList
         ref={pagerRef}
         data={pages}
         keyExtractor={(page) => page}
         horizontal
+        onScroll={onPagerScroll}
+        scrollEventThrottle={16}
         // The pager holds the comment field, and at the default its first tap with that keyboard up
         // only put the keyboard away, wherever it landed: Cancel reply, in the composer row with Post
         // comment, did on the Pixel_9a (2026-10-22). What a tap in the post or its thread does is
@@ -575,14 +591,25 @@ function leavePost() {
   router.replace('/(tabs)/showcase' as never);
 }
 
-function BackControl({ topInset }: { topInset: number }) {
+function BackControl({ topInset, shift, hidden = false }: {
+  topInset: number;
+  /** How far the pager has slid the post page away (`backShift`); the arrow goes with it. */
+  shift?: Animated.AnimatedInterpolation<number>;
+  /**
+   * On Details, where the page draws its own header and way back. The arrow is
+   * then off the screen with the post page, and out of a screen reader's reach.
+   */
+  hidden?: boolean;
+}) {
   return (
-    <IconButton
-      icon={BackGlyph}
-      label="Go back"
-      onPress={leavePost}
-      style={{ position: 'absolute', zIndex: 2, left: appTheme.spacing.gap, top: topInset + appTheme.spacing.compact }}
-    />
+    <Animated.View
+      pointerEvents={hidden ? 'none' : 'box-none'}
+      accessibilityElementsHidden={hidden}
+      importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
+      style={{ position: 'absolute', zIndex: 2, left: appTheme.spacing.gap, top: topInset + appTheme.spacing.compact, transform: shift ? [{ translateX: shift }] : undefined }}
+    >
+      <IconButton icon={BackGlyph} label="Go back" onPress={leavePost} />
+    </Animated.View>
   );
 }
 

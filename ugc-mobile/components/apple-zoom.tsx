@@ -20,6 +20,10 @@ export function AppleZoomTarget(_props: { rect: ZoomRect }) {
   return null;
 }
 
+export function withholdAppleZoomSource(_identifier: string): () => void {
+  return () => {};
+}
+
 export function useAppleZoomSourceId(): string | null {
   return null;
 }

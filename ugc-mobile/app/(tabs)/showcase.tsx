@@ -100,6 +100,7 @@ import {
   getShowcaseMediaHeight,
   mergeAspectRatios,
   partitionAspectRatioUpdates,
+  showcaseCardWidth,
   type ShowcaseGridLayout,
   type ShowcaseMasonryCard,
 } from '@/lib/showcase-feed-view-model';
@@ -1362,7 +1363,7 @@ const MasonryPin = memo(function MasonryPin({
 }) {
   const theme = useAppTheme();
   const { width } = useWindowDimensions();
-  const columnWidth = (width - FEED_HORIZONTAL_PADDING * 2 - layout.columnGap) / 2;
+  const columnWidth = showcaseCardWidth(width, FEED_HORIZONTAL_PADDING, layout.columnGap);
   const mediaHeight = getShowcaseMediaHeight(card, columnWidth, resolvedAspectRatio);
   const accent = accentColor(card.accent, theme.colors);
   const isVideoCard = isShowcaseVideoPreviewCandidate(card.item);

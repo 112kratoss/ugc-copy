@@ -1,15 +1,16 @@
 import { useDecodedImageAspectRatio } from '@/lib/use-decoded-image-aspect-ratio';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams, useNavigation } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent } from 'react-native';
+import { isLiquidGlassAvailable } from 'expo-glass-effect';
+import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
@@ -18,7 +19,7 @@ import { DoubleTapPressable } from '@/components/double-tap-pressable';
 import { AppleZoomProgress, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
 import { MediaZoomCarriedPicture, MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
-import { mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
+import { closesPictureAlone, mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
 import { useMediaSource } from '@/lib/use-media-source';
 import { useVideoLoadDeadline } from '@/lib/use-video-load-deadline';
 import { restoreVideoPlayback } from '@/lib/video-playback-continuity';
@@ -62,6 +63,7 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
+import { leavesMediaPage, viewerNativeBackOptions } from '@/lib/viewer-native-back';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
@@ -163,7 +165,7 @@ import { isProfileLibrarySource, useProfileLibrarySource } from '@/lib/use-profi
 import { removeFromCachedCreatorGrid, updateCachedCreatorGridPost, useCreatorReelSource } from '@/lib/use-creator-reel-source';
 import { applyPostVisibilityToCaches } from '@/lib/viewer-media-cache';
 import { createViewerTopControls, ViewerTopControlsContext } from '@/lib/viewer-top-controls';
-import { useScreenLeaving } from '@/lib/use-screen-leaving';
+import { listenToTransition, useScreenLeaving } from '@/lib/use-screen-leaving';
 import { useScreenReturn } from '@/lib/use-screen-return';
 import { useViewerPlaybackGate } from '@/lib/use-viewer-playback-gate';
 import { useStableSignedUrl } from '@/lib/use-stable-signed-url';
@@ -229,6 +231,13 @@ const NEIGHBOUR_PLAYERS_DELAY_MS = 400;
 const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlaybackHandoff> | null>(null);
 /** The reel has started to go off screen (lib/use-screen-leaving.ts): its videos are silent from then on. */
 const ViewerLeavingContext = createContext(false);
+/** The reel's black. */
+const REEL_GROUND = '#000';
+/**
+ * What the reel draws behind its media: its black, or clear (`groundClear` in
+ * the screen) so that a close into a tile shrinks the picture alone.
+ */
+const ViewerGroundContext = createContext<string>(REEL_GROUND);
 
 /**
  * The reel stays dark in both schemes: it is an immersive media surface, and
@@ -300,6 +309,19 @@ function ImmersivePreviewViewer() {
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const audioMuted = useViewerAudioMuted();
+  const toggleMuteFromBar = useCallback(() => {
+    haptic.select();
+    toggleViewerAudioMuted();
+  }, []);
+  // iOS: the navigation bar's own Back, which UIKit pops at once. Only with a
+  // screen to go back to: a reel opened first (a link) keeps its own Back,
+  // which replaces it with Explore. Only with Liquid Glass too: before iOS 26
+  // the bar draws a bare chevron, where ours draws a disc that reads over any
+  // picture.
+  const [nativeBack] = useState(() => Platform.OS === 'ios' && isLiquidGlassAvailable() && router.canGoBack());
+  // The states drawn instead of the reel keep their own Back and Mute: the bar
+  // the loaded reel set up stays until it is told to go.
+  const shellHidesBar = nativeBack ? <Stack.Screen options={{ headerShown: false }} /> : null;
   useEffect(() => {
     void hydrateViewerAudioMuted();
   }, []);
@@ -324,6 +346,13 @@ function ImmersivePreviewViewer() {
   // The Undo offered after Not interested or Hide; one at a time (`dismissRecommendation`).
   const [undoNotice, setUndoNotice] = useState<FeedUndoNoticeModel | null>(null);
   const [isHorizontalScrolling, setIsHorizontalScrolling] = useState(false);
+  // How far the slide on screen has slid its chrome towards Details (ImmersiveSlide).
+  const [activeChromeShift, setActiveChromeShift] = useState<Animated.AnimatedInterpolation<number> | null>(null);
+  // The post whose swipe has left its media page for Details, if any: the
+  // navigation bar's Back and Mute go as it starts, as the rest of the chrome
+  // slides away with the media, rather than standing over Details' header
+  // until the page settles.
+  const [leavingMediaItemId, setLeavingMediaItemId] = useState<string | null>(null);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const skipInitialRankedFeedRefreshRef = useRef(Boolean(routeFeedSessionId));
   const restoredCommentContextRef = useRef<string | null>(null);
@@ -607,12 +636,27 @@ function ImmersivePreviewViewer() {
       playbackUrl: page.mediaItem.mediaKind === 'video' ? getShowcasePlaybackUrl(page.mediaItem) : null,
     };
   }, [activeItem, position?.mediaPageKey]);
+  // iOS: a still picture out of a tile closes by flying home alone
+  // (components/media-zoom.tsx), which the reel has to start before the pop, so
+  // it keeps the reel's own Back: the bar's pops before the app hears of it,
+  // under UIKit's zoom. A bar button of the app's own in its place took the
+  // back swipe away with the system Back (simulator, 2026-11-07); hidden, the
+  // bar leaves the swipe as it was.
+  const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({
+    picture: activeMedia.picture,
+    videoUrl: activeMedia.playbackUrl,
+    reducedMotion,
+    fromTile: true,
+  });
+  const barBack = nativeBack && !flownBack;
   const zoom = useMediaZoomStage({
     screen: { width, height },
     initialItemId: initialId,
     activeItemId: activeItem?.id ?? null,
     aspectRatio: activeMedia.aspectRatio,
-    activePicture: activeMedia.picture,
+    // Nothing to fly from the end slide, which shows no media: its close
+    // shrinks the window (Android) or is UIKit's zoom (iOS), as it was.
+    activePicture: onEndSlide ? null : activeMedia.picture,
     // What a close shrinks: this post, rail and caption included.
     activePost: activeItem ?? null,
     reducedMotion,
@@ -623,6 +667,65 @@ function ImmersivePreviewViewer() {
     playerFor: playbackHandoff.playerFor,
     onExit: leaveViewer,
   });
+  // iOS: UIKit's zoom shrinks the whole reel into the tile, not just the
+  // picture. The black around a picture that does not fill the screen shrank
+  // with it as a dark panel, cut to the tile's shape only at the end (owner,
+  // 2026-11-07: "a shadow appearing around the pic and that then shrinks"). So
+  // a reel zoomed out of a tile is clear behind its media while it is the
+  // screen in front and its push has finished, and through its own close: the
+  // picture alone shrinks back into the tile, as Photos does, while its chrome
+  // fades (`MediaZoomChrome`). At rest that looks the same, the navigator's
+  // backdrop behind the reel being black (lib/reel-backdrop.ts). It stays black
+  // while it grows (the screen beneath shows only once the push is over), while
+  // a page pushed over it covers it or is popped off it (the backdrop is let go
+  // of while covered), under Reduce Motion (no zoom runs), and when pushed
+  // without a zoom, which fades in over the screen beneath.
+  const reelNavigation = useNavigation();
+  const [pushLanded, setPushLanded] = useState(false);
+  // This reel's own close under way, as against a page pushed over it: both
+  // start a transition that closes it, and only its own begins while it is
+  // still the focused route. Focus is gone from the first frame of either.
+  const [closingSelf, setClosingSelf] = useState(false);
+  // Whether a page has been pushed on top of this reel, which is still below it.
+  const { key: reelRouteKey } = useRoute();
+  const reelIsCovered = useCallback(() => {
+    const state = (reelNavigation as unknown as { getState?: () => { index: number; routes: { key: string }[] } }).getState?.();
+    if (!state) return false;
+    const at = state.routes.findIndex((route) => route.key === reelRouteKey);
+    return at >= 0 && at < state.index;
+  }, [reelNavigation, reelRouteKey]);
+  useEffect(() => {
+    const unsubscribers = [
+      listenToTransition(reelNavigation, 'transitionStart', (event) => {
+        if (event.data?.closing === true) {
+          if ((reelNavigation as unknown as { isFocused: () => boolean }).isFocused()) setClosingSelf(true);
+          // A page pushed over the reel (the reel is still in the stack, below
+          // the top): black again until that page has come off. Popped from
+          // JS, it makes the reel focused as it starts to slide away, before
+          // the navigator's backdrop is held again (lib/reel-backdrop.ts), and
+          // a reel still counted as landed went clear over the light app
+          // ground for that render.
+          else if (reelIsCovered()) setPushLanded(false);
+        } else if (event.data?.closing === false) {
+          setClosingSelf(false);
+        }
+      }),
+      listenToTransition(reelNavigation, 'transitionEnd', (event) => {
+        if (event.data?.closing === false) setPushLanded(true);
+      }),
+      listenToTransition(reelNavigation, 'gestureCancel', () => setClosingSelf(false)),
+    ];
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  }, [reelIsCovered, reelNavigation]);
+  const groundClear = Platform.OS === 'ios'
+    ? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (pushLanded && isFocused))
+    // Android shrinks the reel itself (components/media-zoom.tsx), window and
+    // all, in about three frames: too fast for a re-render to clear it as the
+    // shrink begins (filmed on the Pixel 9a emulator). So it is always clear
+    // there: the stage's own ground is the reel's black at rest, and it fades
+    // as a shrink runs, inside the window and out of it alike.
+    : true;
+  const ground = groundClear ? 'transparent' : REEL_GROUND;
   // A zoom into the reel lands in steps, each a frame or two of the UI thread
   // rather than one long hold — traced on an S24, doing it all at once held one
   // 59 ms frame, two frames of a video still playing in the landed picture: the
@@ -1364,6 +1467,7 @@ function ImmersivePreviewViewer() {
   if (selectionMissing && !savedPosition) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        {shellHidesBar}
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             title="This isn’t available anymore"
@@ -1378,6 +1482,7 @@ function ImmersivePreviewViewer() {
   if (!items.length && sourceQuery.isLoading) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
+        {shellHidesBar}
         <ActivityIndicator accessibilityLabel="Loading preview" color={theme.colors.primary} />
       </ViewerShell>
     );
@@ -1386,6 +1491,7 @@ function ImmersivePreviewViewer() {
   if (!items.length && sourceQuery.isError) {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        {shellHidesBar}
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             tone="danger"
@@ -1406,6 +1512,7 @@ function ImmersivePreviewViewer() {
     // of them can be drawn in this reel. A final state, so it offers a way on.
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset}>
+        {shellHidesBar}
         <View style={{ width: '100%', maxWidth: 420, gap: 12 }}>
           <StatusBlock
             title="Nothing to show here"
@@ -1473,12 +1580,13 @@ function ImmersivePreviewViewer() {
   return (
     <ViewerPlaybackContext.Provider value={playbackHandoff}>
     <ViewerLeavingContext.Provider value={leaving}>
+    <ViewerGroundContext.Provider value={ground}>
     <ViewerActionsMenuProvider callbacksFor={actionCallbacksFor}>
     {/* The reel is drawn inside a window that grows out of the tapped tile and
         shrinks back into it, so opening a post reads as that post getting
         bigger rather than as another screen arriving. */}
-    <MediaZoomStage stage={zoom} screen={{ width, height }}>
-    <View style={{ flex: 1, backgroundColor: '#000' }}>
+    <MediaZoomStage stage={zoom} screen={{ width, height }} groundClear={groundClear}>
+    <View style={{ flex: 1, backgroundColor: ground }}>
       {/* iOS: a reel pushed out of a tile keeps the navigator's default
           animation, which is how react-native-screens leaves the pop to UIKit's
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
@@ -1489,6 +1597,16 @@ function ImmersivePreviewViewer() {
         options={{
           gestureEnabled: !detailsOpenForActive,
           fullScreenGestureEnabled: false,
+          // iOS: Back and Mute are the navigation bar's own items, so Back pops
+          // at once (lib/viewer-native-back.ts).
+          // A picture out of a tile has the reel's own Back instead (`flownBack`).
+          ...(nativeBack && flownBack ? { headerShown: false } : null),
+          ...(barBack ? viewerNativeBackOptions({
+            // Gone as a close begins, as the rest of the chrome fades: UIKit
+            // drew the bar black over the top of the shrinking reel.
+            hidden: detailsOpenForActive || (activeItem != null && leavingMediaItemId === activeItem.id),
+            mute: hasImmersiveAudibleMedia(activeItem) ? { muted: audioMuted, onPress: toggleMuteFromBar } : null,
+          }) : null),
           ...(Platform.OS === 'ios' && !nativeZoomSourceId && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
         }}
       />
@@ -1625,6 +1743,8 @@ function ImmersivePreviewViewer() {
             mediaPageKey={index === activeIndex ? position?.mediaPageKey : undefined}
             onPageChange={slideHandlers.onPageChange}
             onHorizontalScrollToggle={setIsHorizontalScrolling}
+            onActiveChromeShift={setActiveChromeShift}
+            onLeavesMedia={barBack ? setLeavingMediaItemId : undefined}
             onOwnerAction={slideHandlers.onOwnerAction}
             onRecreate={slideHandlers.onRecreate}
             onSave={slideHandlers.onSave}
@@ -1639,7 +1759,7 @@ function ImmersivePreviewViewer() {
         )}
         scrollEnabled={!overlayOpenItemId && !isHorizontalScrolling}
         showsVerticalScrollIndicator={false}
-        style={{ flex: 1, backgroundColor: '#000' }}
+        style={{ flex: 1, backgroundColor: ground }}
         // Neighbouring slides mount on the UI thread, and a reel that is still
         // growing out of a tile cannot afford that thread: they wait for it to
         // land and for the slide's own rail to be drawn (`neighbourSlidesAllowed`),
@@ -1658,10 +1778,15 @@ function ImmersivePreviewViewer() {
           has landed (`useMediaZoomLanded`); the shade above is part of the
           picture the flight shows. */}
       {zoom.landed && zoom.drawn ? (
-      <>
+      // They sit on the media like the rail does, and slide off with it on the
+      // way to Details instead of standing over that page's header.
+      <Animated.View
+        pointerEvents="box-none"
+        style={{ position: 'absolute', inset: 0, transform: [{ translateX: activeChromeShift ?? 0 }] }}
+      >
       {/* The details page draws its own header with its own way back; the
           reel's arrow would be a second back button that leaves the reel. */}
-      {detailsOpenForActive ? null : (
+      {detailsOpenForActive || barBack ? null : (
         <ViewerTopControl label="Go back" onPress={zoom.dismiss} topInset={topInset} side="left">
           <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
         </ViewerTopControl>
@@ -1670,14 +1795,11 @@ function ImmersivePreviewViewer() {
           controls so people can complete their task without exiting full-screen
           mode." The reel is entered from a silent grid and is the only surface
           that makes a sound, so silencing it must not mean leaving it. */}
-      {detailsOpenForActive || !hasImmersiveAudibleMedia(activeItem) ? null : (
+      {detailsOpenForActive || barBack || !hasImmersiveAudibleMedia(activeItem) ? null : (
         <ViewerTopControl
           label={audioMuted ? 'Unmute video' : 'Mute video'}
           selected={audioMuted}
-          onPress={() => {
-            haptic.select();
-            toggleViewerAudioMuted();
-          }}
+          onPress={toggleMuteFromBar}
           topInset={topInset}
           side="right"
         >
@@ -1688,7 +1810,7 @@ function ImmersivePreviewViewer() {
           </IconShadow>
         </ViewerTopControl>
       )}
-      </>
+      </Animated.View>
       ) : null}
       {/* Undo after Not interested or Hide. The reel has no tab bar, so it
           stands just above the safe area, over the caption, under the rail;
@@ -1762,6 +1884,7 @@ function ImmersivePreviewViewer() {
     </View>
     </MediaZoomStage>
     </ViewerActionsMenuProvider>
+    </ViewerGroundContext.Provider>
     </ViewerLeavingContext.Provider>
     </ViewerPlaybackContext.Provider>
   );
@@ -1970,11 +2093,20 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   topInset,
   width,
   onHorizontalScrollToggle,
+  onActiveChromeShift,
+  onLeavesMedia,
 }: {
   active: boolean;
   initialSection?: PostDetailsSection;
   prepareVideo: boolean;
   activeSlideRef: MutableRefObject<ImmersiveSlideHandle | null>;
+  /**
+   * The slide on screen hands the reel how far its chrome has slid towards
+   * Details, so the reel's Back and sound controls leave with the media too.
+   */
+  onActiveChromeShift?: (shift: Animated.AnimatedInterpolation<number> | null) => void;
+  /** Told the post's id once its swipe leaves the media page for Details, and null when it is back. */
+  onLeavesMedia?: (itemId: string | null) => void;
   /**
    * For a slide beside the one on screen: laid out means mounted and drawn,
    * which a reel growing out of a tile waits for before it is uncovered.
@@ -2011,6 +2143,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   width: number;
   onHorizontalScrollToggle?: (scrolling: boolean) => void;
 }) {
+  const ground = useContext(ViewerGroundContext);
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
   // The chrome and the pages take closures over this item; they are made once
   // per item here, so the memoised slide hands its children stable functions.
@@ -2064,6 +2197,53 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   // more never flashes the media page before its first layout.
   const [initialHorizontalOffset] = useState(() => ({ x: currentHorizontalIndex * width, y: 0 }));
   const currentPageIsDetails = isImmersiveDetailsSlidePageIndex(pages, currentHorizontalIndex);
+  // The rail, caption and counter belong to the media, not to the screen: on
+  // the way to Details they leave with the last media page, under the finger,
+  // and come back with it. Between media pages of a carousel they stay put.
+  // The scroll position is followed on the native side, so the chrome moves in
+  // the same frame as the page it sits on.
+  const [horizontalScrollX] = useState(() => new Animated.Value(initialHorizontalOffset.x, { useNativeDriver: true }));
+  const detailsPageIndex = pages.findIndex((page) => page.type === 'details');
+  const chromeShift = useMemo(() => (detailsPageIndex > 0
+    ? horizontalScrollX.interpolate({
+      inputRange: [(detailsPageIndex - 1) * width, detailsPageIndex * width],
+      outputRange: [0, -width],
+      extrapolate: 'clamp',
+    })
+    : null), [detailsPageIndex, horizontalScrollX, width]);
+  // Where this slide's swipe stands against Details, for the navigation bar
+  // (lib/viewer-native-back.ts); a slide opened on Details starts there.
+  const leavesMediaRef = useRef(leavesMediaPage(initialHorizontalOffset.x, detailsPageIndex, width));
+  const activeRef = useRef(active);
+  const onLeavesMediaRef = useRef(onLeavesMedia);
+  useEffect(() => {
+    activeRef.current = active;
+    onLeavesMediaRef.current = onLeavesMedia;
+  });
+  const onHorizontalScroll = useMemo(() => Animated.event(
+    [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
+    {
+      useNativeDriver: true,
+      listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const offset = event.nativeEvent.contentOffset.x;
+        const page = Math.round(offset / width);
+        setDraggedPageIndex(Math.max(0, Math.min(pages.length - 1, page)));
+        const leaving = leavesMediaPage(offset, detailsPageIndex, width);
+        if (leaving !== leavesMediaRef.current) {
+          leavesMediaRef.current = leaving;
+          if (activeRef.current) onLeavesMediaRef.current?.(leaving ? item.id : null);
+        }
+      },
+    },
+  ), [detailsPageIndex, horizontalScrollX, item.id, pages.length, width]);
+  // A slide that becomes the active one says where its own swipe stands.
+  useEffect(() => {
+    if (active) onLeavesMediaRef.current?.(leavesMediaRef.current ? item.id : null);
+  }, [active, item.id]);
+  useEffect(() => {
+    if (!active) return;
+    onActiveChromeShift?.(chromeShift);
+  }, [active, chromeShift, onActiveChromeShift]);
   // Details pauses the remembered media page without discarding its frame.
   const preparedMediaIndex = currentPageIsDetails
     ? Math.max(0, pages.findIndex((page) => slidePageKey(page) === mediaPageKey))
@@ -2132,7 +2312,18 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   // without (alternated runs, 2026-09-24).
   const renderChrome = () => (zoomLanded && !chromeHidden ? (
     <View pointerEvents="box-none" onLayout={onChromeLayout} style={{ position: 'absolute', inset: 0 }}>
-      {renderOverlays()}
+      {/* Always the same wrapper, so a post that gains or loses its Details
+          page keeps its chrome mounted. */}
+      <Animated.View
+        pointerEvents="box-none"
+        // Moved off the screen while Details is up, so out of reach of a
+        // screen reader as well as of a finger.
+        accessibilityElementsHidden={currentPageIsDetails}
+        importantForAccessibility={currentPageIsDetails ? 'no-hide-descendants' : 'auto'}
+        style={{ position: 'absolute', inset: 0, transform: [{ translateX: chromeShift ?? 0 }] }}
+      >
+        {renderOverlays()}
+      </Animated.View>
       <DoubleTapSaveHeart
         opacity={doubleTapHeart.opacity}
         palette={doubleTapHeart.palette}
@@ -2143,7 +2334,9 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   ) : null);
 
   const renderOverlays = () => {
-    if (currentPageIsDetails) {
+    // With a Details page the chrome stays mounted there, slid off with the
+    // media, so a swipe back brings it in with the page rather than after it.
+    if (currentPageIsDetails && !chromeShift) {
       return null;
     }
 
@@ -2211,8 +2404,8 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   }
 
   return (
-    <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: '#000' }}>
-      <FlatList
+    <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: ground }}>
+      <Animated.FlatList
         ref={horizontalRef}
         data={pages}
         decelerationRate="fast"
@@ -2224,10 +2417,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         contentOffset={initialHorizontalOffset}
         keyExtractor={slidePageKey}
         maxToRenderPerBatch={IMMERSIVE_HORIZONTAL_LIST_TUNING.maxToRenderPerBatch}
-        onScroll={(event) => {
-          const page = Math.round(event.nativeEvent.contentOffset.x / width);
-          setDraggedPageIndex(Math.max(0, Math.min(pages.length - 1, page)));
-        }}
+        onScroll={onHorizontalScroll}
         onScrollBeginDrag={() => onHorizontalScrollToggle?.(true)}
         onScrollEndDrag={() => onHorizontalScrollToggle?.(false)}
         scrollEventThrottle={16}
@@ -2275,7 +2465,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         )}
         scrollEnabled={active}
         showsHorizontalScrollIndicator={false}
-        style={{ width, height, backgroundColor: '#000' }}
+        style={{ width, height, backgroundColor: ground }}
         windowSize={IMMERSIVE_HORIZONTAL_LIST_TUNING.windowSize}
       />
       {renderChrome()}
@@ -2493,8 +2683,9 @@ function MediaSlidePage({
   topInset: number;
   width: number;
 }) {
+  const ground = useContext(ViewerGroundContext);
   return (
-    <View style={{ width, height, backgroundColor: '#000' }}>
+    <View style={{ width, height, backgroundColor: ground }}>
       {page.type === 'details' ? (
         <PostDetailsPage
           active={active}
@@ -2655,7 +2846,11 @@ function ImmersiveMedia({
     showcaseMediaZoomPreview(mediaItem)?.url,
     mediaItem.mediaKind === 'image' ? resolveShowcaseViewerImageSource(mediaItem, failedDisplayUrl).url : null,
   );
-  const letterboxBands = mediaAspectRatio ? (
+  // Black bands around a picture that does not fill the page: none once the
+  // reel's ground has gone clear for a close, so the picture shrinks alone.
+  const ground = useContext(ViewerGroundContext);
+  const groundClear = ground !== REEL_GROUND;
+  const letterboxBands = mediaAspectRatio && !groundClear ? (
     <LetterboxBands frame={{ width, height }} aspectRatio={mediaAspectRatio} />
   ) : null;
 
@@ -2671,7 +2866,7 @@ function ImmersiveMedia({
 
   if (mediaItem.mediaKind === 'video') {
     return (
-      <View style={{ width, height, backgroundColor: mediaColors.mediaGround }}>
+      <View style={{ width, height, backgroundColor: ground }}>
         {zoomTargetRect}
         {/* This image stays mounted while players enter and leave the prepared
             range. Even a fast swipe that outruns decoding keeps a sharp poster
@@ -2681,6 +2876,8 @@ function ImmersiveMedia({
             kind="image"
             onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
+            backgroundColor={ground}
+            imageBackdrop={groundClear ? 'none' : 'solid'}
             imageBackdropContent={letterboxBands}
             cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
             thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
@@ -2728,6 +2925,8 @@ function ImmersiveMedia({
           kind="image"
           onImageDisplay={reportSlidePainted}
           url={image.url}
+          backgroundColor={ground}
+          imageBackdrop={groundClear ? 'none' : 'solid'}
           imageBackdropContent={letterboxBands}
           cacheKey={image.cacheKey}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}

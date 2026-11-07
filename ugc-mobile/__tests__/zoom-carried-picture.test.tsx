@@ -295,7 +295,7 @@ describe('the reel slide that draws it', () => {
   it("draws the slide's rail and caption after its media, and the reel's shade and Back after the slides", () => {
     const onePage = slide.slice(slide.indexOf('if (pages.length <= 1) {'), slide.indexOf('</View>\n    );\n  }'));
     expect(onePage.indexOf('{renderChrome()}')).toBeGreaterThan(onePage.indexOf('<MediaSlidePage'));
-    const pages = slide.slice(slide.indexOf('<FlatList\n        ref={horizontalRef}'));
+    const pages = slide.slice(slide.indexOf('<Animated.FlatList\n        ref={horizontalRef}'));
     expect(pages.indexOf('{renderChrome()}')).toBeGreaterThan(pages.indexOf('<MediaSlidePage'));
     const reel = viewer.slice(viewer.indexOf('<MediaZoomStage stage={zoom}'), viewer.indexOf('</MediaZoomStage>'));
     const list = reel.indexOf('<FlatList');

@@ -86,6 +86,18 @@ export function getShowcaseGridLayout(windowWidth: number): ShowcaseGridLayout {
   };
 }
 
+/**
+ * The width of a pin in the two-column grid: half the list's width inside its
+ * padding, less the gap, which every cell pads by half on each side
+ * (`MasonryCardCell`). Half the gap too little, the pin's picture and the
+ * rectangle a reel shrinks back into stood 4 dp past the card's right edge,
+ * clipped there at rest; a closing reel landed that much wide and then snapped
+ * in (owner, S24, 2026-11-07).
+ */
+export function showcaseCardWidth(windowWidth: number, horizontalPadding: number, columnGap: number) {
+  return (windowWidth - horizontalPadding * 2) / 2 - columnGap;
+}
+
 export function showcaseToMasonryCard(item: ShowcaseFeedItem): ShowcaseMasonryCard {
   const accent = item.creationMode === 'motion' ? 'motion' : categoryAccent(item.category);
   const unlock = cardUnlock(item);

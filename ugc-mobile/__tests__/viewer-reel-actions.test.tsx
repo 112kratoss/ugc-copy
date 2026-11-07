@@ -103,9 +103,13 @@ vi.mock('expo-router', () => ({
   router: routerState,
   Stack: { Screen: nothing },
   useLocalSearchParams: () => routerState.params,
+  // The reel listens to its own transitions (its iOS ground) and to nothing else here.
+  useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
 }));
 
 vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
+// The reel asks it whether iOS 26's glass is there (its navigation bar's Back).
+vi.mock('expo-glass-effect', () => ({ isLiquidGlassAvailable: () => false }));
 
 // The reel's own route, whose key its forced sign-in return is given under.
 const reelRoute = vi.hoisted(() => ({ key: 'viewer-route', name: 'viewer' }));
@@ -289,7 +293,7 @@ vi.mock('@/lib/safe-area', () => ({
   resolvedBottomInset: (inset: number) => inset,
   resolvedTopInset: (inset: number) => inset,
 }));
-vi.mock('@/lib/use-screen-leaving', () => ({ useScreenLeaving: () => false }));
+vi.mock('@/lib/use-screen-leaving', () => ({ useScreenLeaving: () => false, listenToTransition: () => () => undefined }));
 vi.mock('@/lib/use-viewer-playback-gate', () => ({ useViewerPlaybackGate: () => ({}) }));
 vi.mock('@/lib/use-stable-signed-url', () => ({ useStableSignedUrl: (url: unknown) => url }));
 vi.mock('@/lib/unlock-cache', () => ({ refreshUnlockedBundleCaches: vi.fn() }));

@@ -10,7 +10,7 @@ const viewer = readFileSync(join(__dirname, '..', 'app', 'viewer.tsx'), 'utf8');
 // the reel had gone.
 describe('the reel is silent from the moment it starts to leave', () => {
   it('reads whether it is leaving from its own navigation transition', () => {
-    expect(viewer).toContain("import { useScreenLeaving } from '@/lib/use-screen-leaving';");
+    expect(viewer).toMatch(/import \{ (?:listenToTransition, )?useScreenLeaving \} from '@\/lib\/use-screen-leaving';/);
     expect(viewer).toContain('const leaving = useScreenLeaving();');
     expect(viewer).toContain('<ViewerLeavingContext.Provider value={leaving}>');
   });
