@@ -3,7 +3,7 @@ import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-c
 
 import { FirstOpenIntro } from '@/components/first-open-intro';
 import { useAuth } from '@/lib/auth';
-import { decideFirstOpenIntro, markFirstOpenIntroSeen, readFirstOpenIntroSeen } from '@/lib/first-open-intro';
+import { decideFirstOpenIntro, markFirstOpenIntroSeen, readFirstOpenIntroSeen, setFirstOpenIntroShowing } from '@/lib/first-open-intro';
 import { isLaunchSplashCovering, subscribeLaunchSplash } from '@/lib/launch-splash';
 import { useOnboarding } from '@/lib/onboarding';
 
@@ -59,6 +59,12 @@ export function FirstOpenIntroHost() {
     void markFirstOpenIntroSeen();
     setPhase('showing');
   }, [covering, decision, phase]);
+
+  useEffect(() => {
+    if (phase !== 'showing') return;
+    setFirstOpenIntroShowing(true);
+    return () => setFirstOpenIntroShowing(false);
+  }, [phase]);
 
   if (phase !== 'showing') return null;
   return (

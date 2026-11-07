@@ -40,6 +40,31 @@ export function decideFirstOpenIntro({
   return 'show';
 }
 
+// ---------- whether the intro is on screen, for the app beneath it ----------
+// While it plays, the app under it is hidden from VoiceOver and TalkBack
+// (app/_layout.tsx): touches cannot reach it, but a screen reader's swipe
+// otherwise could, and TalkBack's double-tap presses what it lands on.
+
+let showing = false;
+const listeners = new Set<() => void>();
+
+export function subscribeFirstOpenIntro(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+export function isFirstOpenIntroShowing() {
+  return showing;
+}
+
+export function setFirstOpenIntroShowing(next: boolean) {
+  if (showing === next) return;
+  showing = next;
+  for (const listener of listeners) listener();
+}
+
 /** Read failures count as seen, for the same reason. */
 export async function readFirstOpenIntroSeen(): Promise<boolean> {
   try {

@@ -14,8 +14,8 @@
 // Animated values on the native driver.
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type TextStyle } from 'react-native';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AccessibilityInfo, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View, type TextStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useDisplayFontLoaded } from '@/lib/display-font-ready';
@@ -176,6 +176,10 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
   // views) are made just after that line lands rather than all at the start,
   // so the work is spread over the arrival and the hold is not held up by it.
   const [dustBuilt, setDustBuilt] = useState(0);
+  // Each tile is a window onto the whole word, and on iOS every one of them
+  // keeps a bitmap of the whole word: about 110 MB at the peak on the iPhone
+  // simulator. They are let go the moment the dust has blown away.
+  const [dustGone, setDustGone] = useState(false);
   const [signWidth, setSignWidth] = useState(0);
   const { width: screenWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -211,9 +215,34 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
   }, []);
   const canStart = (fontReady || fontWaitOver) && measured && !held && entered;
 
+  // Every timer the timeline starts, cleared if the intro goes before they
+  // run. The timeline's own effect re-runs as the phase moves, so its cleanup
+  // cannot be where they are cleared.
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => {
+    for (const timer of timers.current) clearTimeout(timer);
+  }, []);
+
   useEffect(() => {
     if (!canStart || phase !== 'waiting') return;
     setPhase('appear');
+    const later = (run: () => void, ms: number) => {
+      timers.current.push(setTimeout(run, ms));
+    };
+    // A tick is only worth feeling as its letter appears. JS timers wait while
+    // the app is in the background and then all run together on its return:
+    // a tick that comes late is dropped rather than buzzed in a burst.
+    const tickAt = (ms: number) => {
+      const due = Date.now() + ms;
+      later(() => {
+        if (Date.now() - due < 120) haptic.soft();
+      }, ms);
+    };
+    // The note arriving is said out loud, so VoiceOver and TalkBack users
+    // know the page has changed under them.
+    const announceLetter = () => {
+      AccessibilityInfo.announceForAccessibility(`${LETTER.headline}. ${LETTER.bodyBefore}Magicbooklet${LETTER.bodyAfter}`);
+    };
 
     if (reducedMotion) {
       // Reduce Motion: the words come in together and stay, then cross-fade
@@ -223,6 +252,7 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
         Animated.delay(HOLD + 900),
       ]).start(() => {
         setPhase('letter');
+        announceLetter();
         Animated.parallel([
           Animated.timing(appear, { toValue: 0, duration: 400, easing: Easing.out(Easing.quad), useNativeDriver: true }),
           Animated.timing(letter, { toValue: 1, duration: 400, easing: Easing.out(Easing.quad), useNativeDriver: true }),
@@ -235,8 +265,9 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
     // ticks as it is written, as the words' notes did.
     const startLetter = () => {
       setPhase('letter');
+      announceLetter();
       letterTimes(LETTER.signature).forEach((at) => {
-        setTimeout(() => haptic.soft(), LETTER_SIGN[0] + at * (LETTER_SIGN[1] - LETTER_SIGN[0]));
+        tickAt(LETTER_SIGN[0] + at * (LETTER_SIGN[1] - LETTER_SIGN[0]));
       });
       Animated.timing(letter, { toValue: 1, duration: LETTER_TOTAL, easing: Easing.linear, useNativeDriver: true }).start(() => setLetterRead(true));
     };
@@ -244,20 +275,20 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
     // A soft tick for each letter as it is written, the way a chat app ticks
     // while a reply types out (owner, 2026-11-07). Spaces are a pause.
     WORDS.forEach((_, wordIndex) => {
-      setTimeout(() => setDustBuilt((built) => Math.max(built, wordIndex + 1)), WORD_GAP * wordIndex + WORD_IN);
+      later(() => setDustBuilt((built) => Math.max(built, wordIndex + 1)), WORD_GAP * wordIndex + WORD_IN);
     });
     WORDS.forEach((word, wordIndex) => {
       const noteStart = WORD_GAP * wordIndex + WORD_IN * 0.7;
       letterTimes(word.note).forEach((at) => {
-        setTimeout(() => haptic.soft(), noteStart + at * NOTE_WRITE);
+        tickAt(noteStart + at * NOTE_WRITE);
       });
     });
 
     Animated.timing(appear, { toValue: 1, duration: APPEAR_TOTAL, easing: Easing.linear, useNativeDriver: true }).start(() => {
-      setTimeout(() => {
+      later(() => {
         setPhase('snap');
-        Animated.timing(snap, { toValue: 1, duration: SNAP, easing: Easing.linear, useNativeDriver: true }).start();
-        setTimeout(startLetter, SNAP * LETTER_START);
+        Animated.timing(snap, { toValue: 1, duration: SNAP, easing: Easing.linear, useNativeDriver: true }).start(() => setDustGone(true));
+        later(startLetter, SNAP * LETTER_START);
       }, HOLD);
     });
   }, [appear, canStart, letter, phase, reducedMotion, snap]);
@@ -272,7 +303,8 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
   // it went to the screen beneath and left the app from behind the intro.
   useHardwareBack(phase !== 'leaving', leave);
 
-  const dusting = phase === 'snap' || phase === 'letter' || phase === 'leaving';
+  // Never under Reduce Motion: there the words fade with `appear` instead.
+  const dusting = !reducedMotion && (phase === 'snap' || phase === 'letter' || phase === 'leaving');
   const showingLetter = phase === 'letter' || phase === 'leaving';
   const letterPart = ([from, to]: number[], rise = 0) => ({
     opacity: letter.interpolate({ inputRange: [from / LETTER_TOTAL, to / LETTER_TOTAL], outputRange: [0, 1], extrapolate: 'clamp' }),
@@ -349,7 +381,7 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
                 >
                   {word.lead}
                 </Text>
-                {size && !reducedMotion && wordIndex < dustBuilt ? (
+                {size && !reducedMotion && !dustGone && wordIndex < dustBuilt ? (
                   <WordDust content={word.lead} style={wordStyle} size={size} seedBase={wordIndex} sweepDelay={wordIndex * 0.07} snap={snap} visible={dusting} />
                 ) : null}
               </Animated.View>
@@ -376,7 +408,7 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
                     >
                       {word.note}
                     </Text>
-                    {noteSize && !reducedMotion && wordIndex < dustBuilt ? (
+                    {noteSize && !reducedMotion && !dustGone && wordIndex < dustBuilt ? (
                       <WordDust content={word.note} style={noteStyle} size={noteSize} seedBase={wordIndex + 10} sweepDelay={0.18 + wordIndex * 0.07} snap={snap} visible={dusting} />
                     ) : null}
                   </Animated.View>
