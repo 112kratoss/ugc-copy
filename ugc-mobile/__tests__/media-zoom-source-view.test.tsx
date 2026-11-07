@@ -69,6 +69,7 @@ const source: MediaZoomSource = {
   appleZoomId: null,
   aspectRatio: null,
   standIn: null,
+  standInStill: null,
   standInDrawn: () => {},
   liftedStyle: { opacity: 1 },
   standInStyle: { opacity: 0 },
@@ -289,6 +290,28 @@ describe('the view a tile hands to the reel', () => {
     ).standIn).toBeNull();
   });
 
+  // A tile playing a clip stands in with a still of the frame it is showing,
+  // read as the finger comes down, not its poster: UIKit crossfades the
+  // stand-in with the reel's view of that same player as the zoom begins.
+  it('draws the still of a playing tile\'s frame in place of its poster, and says which it drew', () => {
+    const preview = { url: 'https://cdn.example/p.jpg', cacheKey: 'p' };
+    const still = { width: 413, height: 720 } as unknown as NonNullable<MediaZoomSource['standInStill']>;
+    const drawn: unknown[] = [];
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <MediaZoomSourceView source={{ ...source, appleZoomId: 'zoom|surface|post', standIn: preview, standInStill: still, standInDrawn: (value) => drawn.push(value) }}>
+          <TileContent />
+        </MediaZoomSourceView>
+      );
+    });
+    const standIn = tree.root.findByType('expo-image' as never);
+    expect(standIn.props.source).toBe(still);
+    // expo-image reports an image reference only as shown.
+    renderer.act(() => standIn.props.onDisplay());
+    expect(drawn).toEqual([still]);
+  });
+
   it('hands its post to the app shell as the finger lands, to ask ahead for what the post draws', () => {
     const prepared: ImmersivePreviewItem[] = [];
     const stop = setZoomPostPreparer((post) => {
@@ -339,6 +362,38 @@ describe('a tile lifted for UIKit\'s zoom', () => {
       settleTileLift();
       vi.useRealTimers();
     }
+  });
+
+  // UIKit takes its picture of the stand-in as the push begins, and a lift set
+  // in the push's own task reached the screen only with the push's commit: the
+  // zoom took a see-through stand-in and faded the reel in large (simulator,
+  // 2026-11-07). The open pushes once the lift is drawn, or after its deadline.
+  it('says once that the lift is drawn, even when the UI thread never answers', () => {
+    vi.useFakeTimers();
+    try {
+      const tile = makeMutable(0);
+      const onLifted = vi.fn();
+      liftTile(tile, undefined, onLifted);
+      expect(tile.get()).toBe(1);
+      vi.advanceTimersByTime(100);
+      expect(onLifted).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1000);
+      expect(onLifted).toHaveBeenCalledTimes(1);
+    } finally {
+      settleTileLift();
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets the lifted tile drop what it lifted with once it is put back', () => {
+    const tile = makeMutable(0);
+    const onSettle = vi.fn();
+    liftTile(tile, onSettle);
+    expect(onSettle).not.toHaveBeenCalled();
+    settleTileLift();
+    expect(onSettle).toHaveBeenCalledTimes(1);
+    settleTileLift();
+    expect(onSettle).toHaveBeenCalledTimes(1);
   });
 
   // Review of #721: the deadline of an open that had already landed put the

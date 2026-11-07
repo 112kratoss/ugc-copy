@@ -676,24 +676,34 @@ export interface ZoomGeometry {
 }
 
 /**
- * Whether Back closes the post on screen by flying its picture alone into the
- * tile it came from (`ZoomGeometry.pictureOnly`). Only a still picture: a
- * video's poster in the flight would replace the frame it was showing, so a
- * video keeps the window close (Android) or UIKit's zoom (iOS). Nothing flies
- * under Reduce Motion, or for a reel that did not come out of a tile.
+ * Whether Back closes the post on screen by flying its media alone into the
+ * tile it came from (`ZoomGeometry.pictureOnly`). A still picture always can. A
+ * video can only where the flight carries the player itself (`fliesVideo`,
+ * iOS): its poster in the flight would replace the frame it was showing, so
+ * elsewhere a video keeps the window close (Android). Nothing flies under
+ * Reduce Motion, or for a reel that did not come out of a tile.
+ *
+ * Under UIKit's zoom a video shrank as the whole reel page and crossfaded into
+ * its tile's own view, which drew another frame of the clip, or its poster, at
+ * the tile's size in the shrinking window's corner: two dancers at once for
+ * most of the close (owner's iPhone, 2026-11-07: "closing the video is having
+ * some ghost like feeling"). Flown alone it closes as a picture does.
  */
 export function closesPictureAlone({
   picture,
   videoUrl,
   reducedMotion,
   fromTile,
+  fliesVideo = false,
 }: {
   picture: unknown;
   videoUrl: string | null | undefined;
   reducedMotion: boolean;
   fromTile: boolean;
+  /** The flight can carry the reel's own player, so a video closes alone too. */
+  fliesVideo?: boolean;
 }): boolean {
-  return Boolean(picture) && !videoUrl && !reducedMotion && fromTile;
+  return Boolean(picture) && (!videoUrl || fliesVideo) && !reducedMotion && fromTile;
 }
 
 export interface ZoomFrame {

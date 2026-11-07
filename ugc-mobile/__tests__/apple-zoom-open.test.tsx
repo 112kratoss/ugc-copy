@@ -62,9 +62,9 @@ function createNavigation() {
 // The zoom is available: iOS 18 on the bridgeless runtime.
 vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true }));
 
-import { MediaZoomSourceView, MediaZoomSurface, peekOpeningPost, peekOpeningPreview, useMediaZoomSource, useMediaZoomStage } from '../components/media-zoom';
+import { MediaZoomSourceView, MediaZoomSurface, peekOpeningPost, peekOpeningPreview, STAND_IN_STILL_WAIT_MS, useMediaZoomSource, useMediaZoomStage } from '../components/media-zoom';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
-import { getZoomFlight, peekPendingZoomOrigin, resetMediaZoomTransitions } from '../lib/media-zoom-transition';
+import { getZoomFlight, peekPendingZoomOrigin, resetMediaZoomTransitions, subscribeToZoomFlights, type ZoomFlight } from '../lib/media-zoom-transition';
 import { useMediaZoomVideoOffer } from '../lib/media-zoom-video-offer';
 import {
   acceptVideoReturn,
@@ -92,8 +92,22 @@ import {
 const PREVIEW = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: null };
 const STREAM = 'https://example.test/clip.mp4';
 
-function fakePlayer() {
-  return { pause: vi.fn(), release: vi.fn() } as unknown as VideoPlayer;
+function fakePlayer({ still = 'none' }: { still?: 'none' | 'never' } = {}) {
+  return {
+    pause: vi.fn(),
+    release: vi.fn(),
+    currentTime: 4.2,
+    // The still of the frame a playing tile shows, for its stand-in: none at
+    // all here (a test tree draws nothing), or one that never comes.
+    generateThumbnailsAsync: vi.fn(() => (still === 'never' ? new Promise(() => {}) : Promise.reject(new Error('no still in a test')))),
+  } as unknown as VideoPlayer;
+}
+
+/** Taps the tile; a playing tile waits for the still of its frame, which settles a microtask later. */
+async function openTile(source: ReturnType<typeof useMediaZoomSource>, open: (zoom: unknown) => void = () => {}) {
+  await renderer.act(async () => {
+    source.capture(open);
+  });
 }
 
 // The screen the tiles are on, and the black it is covered in (lib/zoom-veil.ts).
@@ -158,13 +172,13 @@ describe('a tile opening under the native zoom', () => {
     expect(origin).toMatchObject({ itemId: 'post-1', native: true, flightId: null, rect: null });
   });
 
-  it('lends a playing video and keeps it on the tile until the push has landed', () => {
+  it('lends a playing video and keeps it on the tile until the push has landed', async () => {
     vi.useFakeTimers();
     const player = fakePlayer();
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
 
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
 
     expect(isVideoPlayerOnLoan(player)).toBe(true);
     expect(isVideoLoanHeld(tileKey, STREAM)).toBe(true);
@@ -181,11 +195,11 @@ describe('a tile opening under the native zoom', () => {
     expect(isVideoPlayerOnLoan(player)).toBe(true);
   });
 
-  it('hands the player back to the tile the moment the pop begins', () => {
+  it('hands the player back to the tile the moment the pop begins', async () => {
     const player = fakePlayer();
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
 
     const onExit = vi.fn();
     renderer.act(() => {
@@ -337,11 +351,11 @@ describe('a tile opening under the native zoom', () => {
     expect(feedVeil.cover.get()).toBe(0);
   });
 
-  it('hands the player to the tile as a dismissal gesture begins, and takes it back when the gesture is let go of', () => {
+  it('hands the player to the tile as a dismissal gesture begins, and takes it back when the gesture is let go of', async () => {
     const player = fakePlayer();
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
     let stage!: ReturnType<typeof useMediaZoomStage>;
     renderer.act(() => {
       renderer.create(<Reel onExit={() => {}} playerFor={() => player} report={(value) => { stage = value; }} />);
@@ -382,11 +396,11 @@ describe('a tile opening under the native zoom', () => {
     stopAccepting();
   });
 
-  it('keeps the player when a screen is pushed on top of it', () => {
+  it('keeps the player when a screen is pushed on top of it', async () => {
     const player = fakePlayer();
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
-    renderer.act(() => source.capture(() => {}));
+    await openTile(source);
     let stage!: ReturnType<typeof useMediaZoomStage>;
     renderer.act(() => {
       renderer.create(<Reel onExit={() => {}} playerFor={() => player} report={(value) => { stage = value; }} />);
@@ -403,6 +417,83 @@ describe('a tile opening under the native zoom', () => {
     expect(feedVeil.cover.get()).toBe(1);
     expect(getZoomVeilOpacity('feed')).toBe(transition);
     stopAccepting();
+  });
+
+  // A tap quicker than the still of a playing tile's frame (asked for as the
+  // finger comes down) waits for it a moment, and opens without it after that.
+  it('opens a playing tile once its still is drawn, or at the wait\'s end with the tile as it is', async () => {
+    vi.useFakeTimers();
+    const player = fakePlayer({ still: 'never' });
+    const { source } = mountTile(player);
+    const open = vi.fn();
+
+    await openTile(source, open);
+    expect(open).not.toHaveBeenCalled();
+    expect(player.generateThumbnailsAsync).toHaveBeenCalledWith([4.2], expect.anything());
+
+    renderer.act(() => { vi.advanceTimersByTime(STAND_IN_STILL_WAIT_MS); });
+    expect(open).toHaveBeenCalledWith({ sourceId: source.appleZoomId });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(peekPendingZoomOrigin('post-1', Date.now())?.video).toEqual({ player, url: STREAM });
+  });
+
+  it('opens at once when the tile has no still to wait for', async () => {
+    const player = fakePlayer();
+    const { source } = mountTile(player);
+    const open = vi.fn();
+    await openTile(source, open);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  // Owner's iPhone, 2026-11-07: "closing the video is having some ghost like
+  // feeling". A video whose tile takes its player back flies that player home
+  // alone, as a picture does, rather than UIKit shrinking the whole page into
+  // the tile's other frame.
+  it('closes a video by flying its own player home alone, handing it to the tile still playing', async () => {
+    const player = fakePlayer();
+    const { source } = mountTile(player);
+    const tileKey = source.tileKey!;
+    // The tile, measured where it lies on the feed.
+    (source.ref as { current: unknown }).current = {
+      measure: (report: (x: number, y: number, w: number, h: number, pageX: number, pageY: number) => void) => report(0, 0, 185, 320, 12, 196),
+      measureInWindow: () => {},
+    };
+    await openTile(source);
+    const flights: ZoomFlight[] = [];
+    const stop = subscribeToZoomFlights((event) => {
+      if (event.type === 'begin') flights.push(event.flight);
+    });
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    renderer.act(() => {
+      renderer.create(<Reel onExit={() => {}} playerFor={() => player} activePicture={PREVIEW} report={(value) => { stage = value; }} />);
+    });
+    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
+    const stopAccepting = acceptVideoReturn(tileKey, STREAM);
+
+    renderer.act(() => stage.dismiss());
+
+    expect(flights).toHaveLength(1);
+    expect(flights[0]).toMatchObject({ direction: 'close', video: { player, url: STREAM } });
+    expect(flights[0].geometry.pictureOnly).toBe(true);
+    // Back to the tile at once, and playing: the flight and the tile draw the clip going on.
+    expect(isVideoReturnPending(tileKey, STREAM)).toBe(true);
+    expect(player.pause).not.toHaveBeenCalled();
+    stop();
+    stopAccepting();
+  });
+
+  it('keeps UIKit\'s zoom for a video whose tile would not take its player back', async () => {
+    const player = fakePlayer();
+    const { source } = mountTile(player);
+    await openTile(source);
+    const onExit = vi.fn();
+    let stage!: ReturnType<typeof useMediaZoomStage>;
+    renderer.act(() => {
+      renderer.create(<Reel onExit={onExit} playerFor={() => player} activePicture={PREVIEW} report={(value) => { stage = value; }} />);
+    });
+    renderer.act(() => stage.dismiss());
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(getZoomFlight()).toBeNull();
   });
 
   it('dismisses by popping alone: UIKit shrinks the reel into the registered tile', () => {
@@ -427,12 +518,16 @@ function Reel({
   onExit,
   playerFor,
   report,
+  activePicture,
 }: {
   onExit: () => void;
   playerFor?: (itemId: string, url: string) => VideoPlayer | null;
   report?: (stage: ReturnType<typeof useMediaZoomStage>) => void;
+  /** The picture on screen, which a close can fly home alone. */
+  activePicture?: typeof PREVIEW;
 }) {
   const stage = useMediaZoomStage({
+    activePicture,
     screen: { width: 402, height: 874 },
     initialItemId: 'post-1',
     activeItemId: 'post-1',

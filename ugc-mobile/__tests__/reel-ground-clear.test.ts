@@ -11,11 +11,15 @@ const layout = read('app', '_layout.tsx');
 // appearing around the pic and that then shrinks"). Filmed frame by frame on the
 // iPhone 17 Pro simulator and the Pixel 9a emulator.
 describe('a reel closing into its tile shrinks only its picture', () => {
-  it('iOS: clear behind the media once the zoom push is over and the reel is in front, and through its own close', () => {
-    expect(viewer).toContain("? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (pushLanded && isFocused))");
+  // And as it grows out of its tile: black, the reel's page came up as a
+  // see-through dark panel round the growing picture over a feed the veil had
+  // not yet darkened (simulator, 2026-11-07).
+  it('iOS: clear behind the media while it grows out of its tile and is in front, and through its own close', () => {
+    expect(viewer).toContain("? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (isFocused && (pushLanded || !arrived)))");
     // Its own close, as against a page pushed over it: only its own begins while it is focused.
     expect(viewer).toContain("if ((reelNavigation as unknown as { isFocused: () => boolean }).isFocused()) setClosingSelf(true);");
-    expect(viewer).toContain("if (event.data?.closing === false) setPushLanded(true);");
+    // A page popped off it keeps it black until that pop has landed; the first push only once.
+    expect(viewer).toMatch(/if \(event\.data\?\.closing === false\) \{\n\s+setPushLanded\(true\);\n\s+setArrived\(true\);/);
   });
 
   it('Android: always clear, over the stage\'s own ground, which is its black at rest and fades as a shrink runs', () => {

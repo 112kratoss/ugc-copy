@@ -774,6 +774,10 @@ describe('which closes fly the picture alone', () => {
 
   it('leaves a video, Reduce Motion, a reel with no tile and one with no picture to their own closes', () => {
     expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8' })).toBe(false);
+    // iOS flies a video's own player home alone, where its tile takes it back.
+    expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8', fliesVideo: true })).toBe(true);
+    expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8', fliesVideo: true, picture: null })).toBe(false);
+    expect(closesPictureAlone({ ...base, videoUrl: 'https://x/clip.m3u8', fliesVideo: true, reducedMotion: true })).toBe(false);
     expect(closesPictureAlone({ ...base, reducedMotion: true })).toBe(false);
     expect(closesPictureAlone({ ...base, fromTile: false })).toBe(false);
     expect(closesPictureAlone({ ...base, picture: null })).toBe(false);

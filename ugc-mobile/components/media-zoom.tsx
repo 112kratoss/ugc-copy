@@ -15,7 +15,7 @@ import {
 } from 'react';
 import { Image } from 'expo-image';
 import { useNavigation } from 'expo-router';
-import { VideoView, type VideoPlayer } from 'expo-video';
+import { VideoView, type VideoPlayer, type VideoThumbnail } from 'expo-video';
 import { Platform, StyleSheet, View, type ImageStyle, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Extrapolation,
@@ -32,6 +32,14 @@ import Animated, {
 } from 'react-native-reanimated';
 
 const ZoomStandInImage = Animated.createAnimatedComponent(Image);
+/** The still a playing tile's stand-in draws: as large as the tile's picture needs at 3×. */
+const STAND_IN_STILL_SIZE = { maxWidth: 720, maxHeight: 720 };
+/**
+ * The longest a tap on a playing tile waits for the still of its frame before
+ * it opens without one. The still is asked for as the finger comes down and
+ * took 8–43 ms on the simulator, so a tap of usual length rarely waits at all.
+ */
+export const STAND_IN_STILL_WAIT_MS = 150;
 
 import {
   advanceZoomFlight,
@@ -491,12 +499,41 @@ let liftedTile: SharedValue<number> | null = null;
  * earlier open of the same tile put it back in the middle of the next one.
  */
 let liftDeadline: ReturnType<typeof setTimeout> | null = null;
+/** What the lifted tile does once it is put back, if anything (`liftTile`). */
+let liftSettled: (() => void) | null = null;
 export const TILE_LIFT_DEADLINE_MS = 2000;
+/** The longest an open waits for its lifted stand-in to be drawn before it pushes anyway. */
+const TILE_LIFT_DRAWN_DEADLINE_MS = 100;
 
-export function liftTile(lifted: SharedValue<number>) {
+/**
+ * Shows the tile's stand-in over it, and calls `onLifted` once the UI thread
+ * has drawn that: UIKit takes its picture of the stand-in as the push begins,
+ * and a lift set in the same task as the push reached the screen with the
+ * push's own commit (Reanimated holds its commits while React commits): the
+ * zoom took a stand-in still see-through, grew nothing out of the tile and
+ * faded the reel in at three-quarters of the screen (video tiles, simulator,
+ * 2026-11-07). `onLifted` also runs if the UI thread never answers.
+ */
+export function liftTile(lifted: SharedValue<number>, onSettle?: () => void, onLifted?: () => void) {
   settleTileLift();
   liftedTile = lifted;
-  lifted.set(1);
+  liftSettled = onSettle ?? null;
+  if (!onLifted) {
+    lifted.set(1);
+  } else {
+    let called = false;
+    const lifted_ = () => {
+      if (called) return;
+      called = true;
+      clearTimeout(safety);
+      onLifted();
+    };
+    const safety = setTimeout(lifted_, TILE_LIFT_DRAWN_DEADLINE_MS);
+    lifted.set(withTiming(1, { duration: 0 }, () => {
+      'worklet';
+      runOnJS(lifted_)();
+    }));
+  }
   liftDeadline = setTimeout(settleTileLift, TILE_LIFT_DEADLINE_MS);
 }
 
@@ -507,6 +544,9 @@ export function settleTileLift() {
   const lifted = liftedTile;
   liftedTile = null;
   lifted?.set(0);
+  const settled = liftSettled;
+  liftSettled = null;
+  settled?.();
 }
 
 function endTileOpenWhenSettled(serial: number) {
@@ -955,12 +995,20 @@ export interface MediaZoomSource {
   aspectRatio: number | null;
   /**
    * The picture UIKit's zoom grows out of in place of the tile (iOS 18), and
-   * the styles that swap the two while a still tile's open is under way; see
+   * the styles that swap the two while an open is under way; see
    * `MediaZoomSourceView`.
    */
   standIn: ZoomPreview | null;
-  /** The stand-in has its picture; until it does, an open leaves the tile as it is. */
-  standInDrawn: () => void;
+  /**
+   * For a tile playing a clip: a still of the frame it was showing when the
+   * finger came down, which the stand-in draws in place of the poster.
+   */
+  standInStill: VideoThumbnail | null;
+  /**
+   * The stand-in has drawn its picture (`still`: that still; null: the
+   * poster). Until it has, an open leaves the tile as it is.
+   */
+  standInDrawn: (still: VideoThumbnail | null) => void;
   liftedStyle: StyleProp<ViewStyle>;
   standInStyle: StyleProp<ImageStyle>;
 }
@@ -1020,9 +1068,63 @@ export function useMediaZoomSource({
   useEffect(() => {
     standInDrawnRef.current = false;
   }, [standInUrl]);
-  const standInDrawn = useCallback(() => {
-    standInDrawnRef.current = true;
+  // A tile playing a clip stands in for itself with a still of the frame it is
+  // showing, read from its player as the finger comes down
+  // (`generateThumbnailsAsync`, 8–43 ms on the simulator), not with its
+  // poster, the clip's first frame: for the first frames of UIKit's zoom the
+  // stand-in crossfades with the reel's view of that same player, and a poster
+  // there was another moment of the clip, a second dancer fading over the
+  // first. A view of the player itself cannot stand in: UIKit's zoom draws its
+  // source as a picture, and a player's layer came out black (simulator,
+  // 2026-11-07).
+  const [standInStill, setStandInStillState] = useState<VideoThumbnail | null>(null);
+  // The still a tap reads, in the task it runs in: the state reaches the tap's
+  // callback only once React has rendered it.
+  const standInStillRef = useRef<VideoThumbnail | null>(null);
+  const setStandInStill = useCallback((still: VideoThumbnail | null) => {
+    standInStillRef.current = still;
+    setStandInStillState(still);
   }, []);
+  const stillDrawnRef = useRef<VideoThumbnail | null>(null);
+  // A tap waiting on the still (`capture`) hears of it here.
+  const stillDrawnListenerRef = useRef<(() => void) | null>(null);
+  const stillPendingRef = useRef(false);
+  const standInDrawn = useCallback((still: VideoThumbnail | null) => {
+    if (!still) {
+      standInDrawnRef.current = true;
+      return;
+    }
+    stillDrawnRef.current = still;
+    if (still === standInStillRef.current) stillDrawnListenerRef.current?.();
+  }, []);
+  /** Reads the still of the frame `player` is showing, for the stand-in. */
+  const requestStill = useCallback((player: VideoPlayer) => {
+    // No still: a tap waiting on one opens at once, with the tile as it is.
+    const noStill = () => {
+      stillPendingRef.current = false;
+      stillDrawnListenerRef.current?.();
+    };
+    stillPendingRef.current = true;
+    let reading: Promise<VideoThumbnail[]>;
+    try {
+      reading = player.generateThumbnailsAsync([player.currentTime], STAND_IN_STILL_SIZE);
+    } catch {
+      // A player released under the tile.
+      noStill();
+      return;
+    }
+    reading.then(
+      (stills) => {
+        if (!stills[0]) {
+          noStill();
+          return;
+        }
+        stillPendingRef.current = false;
+        setStandInStill(stills[0]);
+      },
+      noStill,
+    );
+  }, [setStandInStill]);
   const active = Boolean(surfaceId) && enabled && Boolean(itemId);
   // iOS 18: the tile's view is registered with UIKit's zoom under this
   // identifier (`AppleZoomSource`), and a tap sends it along in the push.
@@ -1063,16 +1165,22 @@ export function useMediaZoomSource({
     });
   }, [active, aspectRatio, hidden, itemId, measure, previewCacheKey, previewThumbhash, previewUrl, radius, surfaceId]);
 
+  // A ref, not state: the offer changes as players come and go while the feed
+  // scrolls, and nothing renders from it — only a touch or a tap reads it.
+  const videoOfferRef = useRef<MediaZoomVideoOffer | null>(null);
+
   const prepare = useCallback(() => {
     if (!active) return;
+    // The frame a playing tile is showing, for its stand-in (above). A still
+    // that comes after the tap is dropped unused; one never lifted goes with
+    // the next touch.
+    const offer = appleZoomId ? videoOfferRef.current : null;
+    if (offer && offer.hasFrame()) requestStill(offer.player);
     if (appleZoomId) setStandInArmed(true);
     if (post) postPreparer?.(post);
     if (LAYER_FLIGHT && preview) prepareZoomPicture(preview, aspectRatio, false, post);
-  }, [active, appleZoomId, aspectRatio, post, preview]);
+  }, [active, appleZoomId, aspectRatio, post, preview, requestStill]);
 
-  // A ref, not state: the offer changes as players come and go while the feed
-  // scrolls, and nothing renders from it — only a tap reads it.
-  const videoOfferRef = useRef<MediaZoomVideoOffer | null>(null);
   const offerVideo = useCallback<OfferMediaZoomVideo>((offer) => {
     videoOfferRef.current = offer;
     return () => {
@@ -1115,39 +1223,74 @@ export function useMediaZoomSource({
         ? { player: offer.player, url: offer.url }
         : null;
       if (video) holdVideoLoan(video.player, zoomTileKey(surfaceId, itemId), video.url);
-      // A still tile hands the zoom its stand-in (`MediaZoomSourceView`): the
-      // picture alone, which UIKit stretches with the window it grows, while
-      // the tile itself is hidden so no copy of it stays behind. Only once the
-      // stand-in has its picture: an empty one left the tile blank. A video
-      // tile stays as it is, under the reel growing over it: the stand-in is
-      // the clip's poster, and the tile may be showing another frame of it.
-      if (!videoOfferRef.current && standInDrawnRef.current) liftTile(lifted);
-      // The screen goes black around this tile, under the transition that
-      // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
-      // reel simply appears. Fabric answers `measureInWindow` before it returns.
-      let veil: ZoomVeilDrop | null = null;
-      if (!reducedMotion) {
-        let hole: ZoomVeilHole | null = null;
-        ref.current?.measureInWindow((x, y, width, height) => {
-          if (width > 0 && height > 0) hole = { x, y, width, height, radius };
+      const stillReady = () => stillDrawnRef.current !== null && stillDrawnRef.current === standInStillRef.current;
+      const push = (veil: ZoomVeilDrop | null) => {
+        setPendingZoomOrigin({
+          surfaceId,
+          itemId,
+          rect: null,
+          radius,
+          aspectRatio,
+          preview,
+          video,
+          flightId: null,
+          native: true,
+          veil,
+          recordedAt: Date.now(),
         });
-        veil = dropZoomVeil(veilOwner, hole);
+        open({ sourceId: appleZoomId });
+        endTileOpenWhenSettled(openSerial);
+      };
+      const go = () => {
+        // The tile hands the zoom its stand-in (`MediaZoomSourceView`): the
+        // picture alone, which UIKit stretches with the window it grows, while
+        // the tile itself is hidden so no copy of it stays behind. Only once
+        // the stand-in has drawn: an empty one left the tile blank. A tile
+        // playing a clip stands in with the still of its frame, never the
+        // poster, an earlier moment than the one on screen; one whose still
+        // never drew stays as it is. The push waits for the lift to be drawn
+        // (`liftTile`).
+        const liftNow = video ? stillReady() : !videoOfferRef.current && standInDrawnRef.current;
+        // The screen goes black around this tile, under the transition that
+        // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
+        // reel simply appears. Fabric answers `measureInWindow` before it
+        // returns. Dropped here, in the task that decided to open, not where the
+        // push waits for the lift: dropped there, one open in six showed the
+        // veil in full for a frame before the zoom began (simulator,
+        // 2026-11-07).
+        let veil: ZoomVeilDrop | null = null;
+        if (!reducedMotion) {
+          let hole: ZoomVeilHole | null = null;
+          ref.current?.measureInWindow((x, y, width, height) => {
+            if (width > 0 && height > 0) hole = { x, y, width, height, radius };
+          });
+          veil = dropZoomVeil(veilOwner, hole);
+        }
+        if (!liftNow) {
+          push(veil);
+          return;
+        }
+        liftTile(lifted, video ? () => setStandInStill(null) : undefined, () => push(veil));
+      };
+      // A tap quicker than the still of its frame waits for it a moment: UIKit
+      // takes its picture of the stand-in as the push begins, and a stand-in
+      // with nothing in it grew nothing out of the tile, the reel fading in
+      // already three-quarters the size of the screen (simulator, 2026-11-07).
+      if (video && !stillReady()) {
+        if (!stillPendingRef.current) requestStill(video.player);
+        let done = false;
+        const goOnce = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(deadline);
+          if (stillDrawnListenerRef.current === goOnce) stillDrawnListenerRef.current = null;
+          go();
+        };
+        const deadline = setTimeout(goOnce, STAND_IN_STILL_WAIT_MS);
+        stillDrawnListenerRef.current = goOnce;
+        return;
       }
-      setPendingZoomOrigin({
-        surfaceId,
-        itemId,
-        rect: null,
-        radius,
-        aspectRatio,
-        preview,
-        video,
-        flightId: null,
-        native: true,
-        veil,
-        recordedAt: Date.now(),
-      });
-      open({ sourceId: appleZoomId });
-      endTileOpenWhenSettled(openSerial);
+      go();
       return;
     }
     let handled = false;
@@ -1203,11 +1346,26 @@ export function useMediaZoomSource({
     // Fabric answers `measureInWindow` before it returns. A host that does not
     // must never swallow the tap, so the plain open runs instead.
     start(null);
-  }, [active, appleZoomId, aspectRatio, itemId, lifted, measure, post, preview, radius, reducedMotion, surfaceId, veilOwner]);
+  }, [active, appleZoomId, aspectRatio, itemId, lifted, measure, post, preview, radius, reducedMotion, requestStill, setStandInStill, surfaceId, veilOwner]);
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 
-  return { ref, hiddenStyle, prepare, capture, offerVideo, tileKey, appleZoomId, aspectRatio, radius, standIn: standInArmed ? preview ?? null : null, standInDrawn, liftedStyle, standInStyle };
+  return {
+    ref,
+    hiddenStyle,
+    prepare,
+    capture,
+    offerVideo,
+    tileKey,
+    appleZoomId,
+    aspectRatio,
+    radius,
+    standIn: standInArmed ? preview ?? null : null,
+    standInStill,
+    standInDrawn,
+    liftedStyle,
+    standInStyle,
+  };
 }
 
 /**
@@ -1224,8 +1382,10 @@ export function useMediaZoomSource({
  * rode over the growing reel (owner's iPhone, 2026-11-07: "i think there is an
  * issue when opening the post"). expo-image's own image view follows its
  * bounds (`autoresizingMask`) and fills them as the tile does, so the picture
- * grows with the window instead. The stand-in is shown, and the tile hidden,
- * only while a still tile's open is under way (`liftTile`); the rest of the
+ * grows with the window instead. A tile playing a clip stands in with a still
+ * of the frame it is showing (`standInStill`), since UIKit draws its source as a
+ * picture and a view of the player came out black. The stand-in is shown, and
+ * the tile hidden, only while an open is under way (`liftTile`); the rest of the
  * time it is see-through, and a close lands on the tile itself, in place.
  */
 export function MediaZoomSourceView({
@@ -1248,6 +1408,11 @@ export function MediaZoomSourceView({
   }, []);
   const zoomed = Boolean(source.appleZoomId);
   const radius = source.radius ?? 0;
+  // Reports the picture this load was for: a poster load that ends after a
+  // still has replaced it must not read as the still drawn.
+  const standInStill = source.standInStill;
+  const { standInDrawn } = source;
+  const reportStandInDrawn = useCallback(() => standInDrawn(standInStill), [standInDrawn, standInStill]);
   return (
     // Both wrappers stay out of the layout's way: `flexBasis: 'auto'` keeps a
     // tile that sizes itself from its media (a feed card) at its own height,
@@ -1278,10 +1443,12 @@ export function MediaZoomSourceView({
           <ZoomStandInImage
             pointerEvents="none"
             accessible={false}
-            source={source.standIn ? { uri: source.standIn.url, cacheKey: source.standIn.cacheKey ?? undefined } : null}
+            source={standInStill ?? (source.standIn ? { uri: source.standIn.url, cacheKey: source.standIn.cacheKey ?? undefined } : null)}
             contentFit="cover"
             transition={0}
-            onLoad={source.standInDrawn}
+            // `onDisplay`, not `onLoad`: a still handed over as an image
+            // reference is drawn at once and reports only that it is shown.
+            onDisplay={reportStandInDrawn}
             style={[StyleSheet.absoluteFill, { borderRadius: radius, borderCurve: 'continuous' } as ImageStyle, source.standInStyle]}
           />
         </AppleZoomSource>
@@ -1997,13 +2164,18 @@ export function useMediaZoomStage({
     settleTileLift();
     // A picture closes alone (`ZoomGeometry.pictureOnly`): the layer carries it
     // from where it sits down into its tile, and the reel goes from under it at
-    // once. A video keeps its own close for now: its poster in the layer would
-    // stand in for the frame it was showing.
+    // once. On iOS a video does too, with the reel's own player in the layer,
+    // when its tile will take that player back (`returnableVideo`): the frame
+    // on screen flies home and the tile goes on with the same clip. A video
+    // whose tile would not take it keeps UIKit's zoom: the player goes when the
+    // reel does, and would leave the flight empty part of the way down.
+    const flownVideo = nativeZoom && activeVideoUrlRef.current ? returnableVideo() : null;
     const pictureOnly = closesPictureAlone({
       picture: pictureRef.current,
       videoUrl: activeVideoUrlRef.current,
       reducedMotion,
       fromTile: Boolean(origin),
+      fliesVideo: Boolean(flownVideo),
     });
     // iOS: anything else, and any close the picture cannot fly, is UIKit's
     // zoom: it shrinks the reel into the tile registered for the post on
@@ -2094,7 +2266,16 @@ export function useMediaZoomStage({
       // Closed before the hand-off, a lent video is still the layer's to draw,
       // so it turns round with the flight rather than giving way to a poster.
       // A live close hands the player to the tile at landing (`leaveIntoTile`).
-      const video = beforeHandoff ? lentVideo : null;
+      // A video closing alone (iOS) flies the reel's own player, which goes
+      // back to its tile now, playing: the tile, hidden until the landing,
+      // draws the same clip under the flight and carries on with it, and the
+      // player outlives the reel, which goes from under the flight long before
+      // it lands.
+      const flown = alone && flownVideo ? { player: flownVideo.player, url: flownVideo.url } : null;
+      if (flown && flownVideo && handBackVideoPlayer(flown.player, flownVideo.tileKey, flown.url)) {
+        handedBackRef.current = flown.player;
+      }
+      const video = beforeHandoff ? lentVideo : flown;
       // The post shrinks whole: the layer draws its rail and caption over the
       // picture and fades them out as the window comes down. A live close has
       // the reel's own chrome to fade instead (`chromeStyle`).
