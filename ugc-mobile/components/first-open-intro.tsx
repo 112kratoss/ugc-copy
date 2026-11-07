@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDisplayFontLoaded } from '@/lib/display-font-ready';
 import { launchSplashGround } from '@/lib/launch-splash';
 import { useReducedMotion } from '@/lib/motion';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 import { appTheme, DISPLAY_FONT, themes, type ThemeColorName } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -267,6 +268,10 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
     Animated.timing(ground, { toValue: 0, duration: FADE_OUT, easing: Easing.out(Easing.quad), useNativeDriver: true }).start(onDone);
   };
 
+  // Android's back button lifts the intro off, as Continue does; without this
+  // it went to the screen beneath and left the app from behind the intro.
+  useHardwareBack(phase !== 'leaving', leave);
+
   const dusting = phase === 'snap' || phase === 'letter' || phase === 'leaving';
   const showingLetter = phase === 'letter' || phase === 'leaving';
   const letterPart = ([from, to]: number[], rise = 0) => ({
@@ -398,6 +403,8 @@ export function FirstOpenIntro({ onDone, held = false }: { onDone: () => void; /
             style={{ flex: 1 }}
             contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', paddingHorizontal: 32, paddingVertical: 28 }}
             showsVerticalScrollIndicator={false}
+            // The default written out: nothing on this page opens a keyboard.
+            keyboardShouldPersistTaps="never"
           >
             <Animated.Text maxFontSizeMultiplier={appTheme.typeScale.title} style={[{ fontFamily: DISPLAY_FONT.extraBold, fontWeight: '400', fontSize: 30, lineHeight: 36, letterSpacing: -0.4, color: page.colors.text }, letterPart(LETTER_HEAD, 12)]}>
               {LETTER.headline}
