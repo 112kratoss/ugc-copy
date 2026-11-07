@@ -650,7 +650,7 @@ function asGuest(identityUserId = 'guest-1') {
 // guest's save straight to the server, which refused it, and the guest read
 // "Could not update media".
 describe('Save from the menu, without an account', () => {
-  it('asks a guest to sign in, back to the screen the item is on, and saves nothing', () => {
+  it('asks a guest to sign up, back to the screen the item is on, and saves nothing', () => {
     asGuest();
     const onSave = vi.fn();
     const handlers = mountHandlers(postItem(), { onSave, authReturnTo: '/post/post-1' });
@@ -658,7 +658,7 @@ describe('Save from the menu, without an account', () => {
     handlers.handleAction('save');
     handlers.handleAction('unsave');
 
-    const signIn = { pathname: '/auth', params: { returnTo: '/post/post-1' } };
+    const signIn = { pathname: '/join', params: { returnTo: '/post/post-1' } };
     expect(mocks.router.push.mock.calls).toEqual([[signIn], [signIn]]);
     expect(onSave).not.toHaveBeenCalled();
     expect(mocks.auth.api.saveShowcasePost).not.toHaveBeenCalled();
@@ -670,7 +670,7 @@ describe('Save from the menu, without an account', () => {
     mocks.auth.identityUserId = null;
     mountHandlers(postItem()).handleAction('save');
 
-    expect(mocks.router.push).toHaveBeenCalledWith('/auth');
+    expect(mocks.router.push).toHaveBeenCalledWith('/join');
     expect(mocks.auth.api.saveShowcasePost).not.toHaveBeenCalled();
   });
 });

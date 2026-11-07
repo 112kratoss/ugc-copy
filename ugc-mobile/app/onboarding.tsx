@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { StatusBar } from 'expo-status-bar';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, router } from 'expo-router';
 import {
@@ -35,6 +35,7 @@ import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
+import { onboardingReturnTo } from '@/lib/join-navigation';
 import { isIdentityDeferredInMetadata, resolveOnboardingDestination } from '@/lib/onboarding-destination';
 import { appTheme } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
@@ -130,6 +131,9 @@ export default function OnboardingScreen() {
 
 function OnboardingFlow() {
   const theme = useAppTheme();
+  // Sent here by the sign-up sheet (app/join.tsx): the screen that asked for an
+  // account, to go back to once the name and the welcome credits are done.
+  const returnTo = onboardingReturnTo(((useRoute().params ?? {}) as { returnTo?: string | string[] }).returnTo);
   const { api, user, refreshProfile, updateCredits, markIdentityDeferredOnAccount } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
@@ -202,9 +206,9 @@ function OnboardingFlow() {
         identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
       });
       if (destination === 'none') {
-        // Nothing outstanding. Reaching here means a deep link or a stale card,
-        // not a flow to walk.
-        router.replace('/(tabs)' as never);
+        // Nothing outstanding. Reaching here means a deep link, a stale card, or
+        // an account that signed in from the sign-up sheet: back to what it was.
+        router.replace((returnTo ?? '/(tabs)') as never);
         return;
       }
       setStage(destination === 'reward' ? 'reward' : 'identity');
@@ -296,7 +300,7 @@ function OnboardingFlow() {
       await skip();
     }
     void trackOnboardingEvent(api, 'skipped', { goal, step: fromStep });
-    router.replace('/(tabs)' as never);
+    router.replace((returnTo ?? '/(tabs)') as never);
   };
 
   const exploreAsGuest = () => leaveForNow(stage === 'intro' ? (step === 0 ? 'welcome' : 'goal') : stage);
@@ -448,6 +452,11 @@ function OnboardingFlow() {
     await api.updateOnboardingState({ status: 'completed', goal }).catch(() => undefined);
     if (welcome?.status === 'eligible' || welcome?.status === 'unavailable') {
       void trackOnboardingEvent(api, 'reward_deferred', { goal, step: 'reward' });
+    }
+    // From the sign-up sheet: back to what asked for an account, credits in hand.
+    if (returnTo) {
+      router.replace(returnTo as never);
+      return;
     }
     void trackOnboardingEvent(api, 'guided_creator_opened', { goal, step: 'creator' });
     router.replace({

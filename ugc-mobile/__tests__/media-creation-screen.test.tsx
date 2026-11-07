@@ -2814,7 +2814,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
 
       expect(routerState.push).toHaveBeenCalledTimes(1);
       expect(routerState.push).toHaveBeenCalledWith({
-        pathname: '/auth',
+        pathname: '/join',
         params: { returnTo: '/create/image?remix=gen-1&remixPost=post-1' },
       });
       // Nothing is read again until the identity changes.
@@ -10043,7 +10043,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
       const pushedReturnTo = () => {
         expect(routerState.push).toHaveBeenCalledTimes(1);
         const [{ pathname, params }] = routerState.push.mock.calls[0] as [{ pathname: string; params: { returnTo: string } }];
-        expect(pathname).toBe('/auth');
+        expect(pathname).toBe('/join');
         return params.returnTo;
       };
       /** The creator's params once sign-in has gone back to `returnTo`, read as expo-router reads them. */
@@ -10095,7 +10095,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         await typePrompt(tree, 'A dancer turns');
         await renderer.act(async () => { await labelled(tree.root, 'Enhance · 2 credits').props.onPress(); });
 
-        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/(tabs)/creator?tool=image' } });
+        expect(routerState.push).toHaveBeenCalledWith({ pathname: '/join', params: { returnTo: '/(tabs)/creator?tool=image' } });
       });
     });
   });

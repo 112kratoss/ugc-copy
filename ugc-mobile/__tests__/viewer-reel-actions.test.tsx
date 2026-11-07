@@ -662,7 +662,7 @@ describe("the reel's Recreate for a guest", () => {
     await recreateActive();
 
     expect(routerState.push).toHaveBeenCalledTimes(1);
-    expect(routerState.push.mock.calls[0][0]).toMatchObject({ pathname: '/auth', params: { returnTo: expect.any(String) } });
+    expect(routerState.push.mock.calls[0][0]).toMatchObject({ pathname: '/join', params: { returnTo: expect.any(String) } });
   });
 
   it('asks a device with no identity at all to sign in, even for a creation', async () => {
@@ -672,7 +672,7 @@ describe("the reel's Recreate for a guest", () => {
 
     await recreateActive();
 
-    expect(routerState.push.mock.calls[0][0]).toMatchObject({ pathname: '/auth' });
+    expect(routerState.push.mock.calls[0][0]).toMatchObject({ pathname: '/join' });
   });
 });
 

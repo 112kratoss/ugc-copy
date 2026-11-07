@@ -22,6 +22,7 @@ import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dia
 import { haptic } from '@/lib/haptics';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { useAuth } from '@/lib/auth';
+import { openSignUpSheet } from '@/lib/join-navigation';
 import { UNBLOCK_CONFIRM_MESSAGE, blockedUsersQueryKey, withoutBlockedUser } from '@/lib/blocked-users-view-model';
 import {
   CREATOR_PROFILE_TABS,
@@ -239,10 +240,7 @@ export function CreatorProfileScreen({
   const handleFollowPress = () => {
     if (!data) return;
     if (!user) {
-      router.push({
-        pathname: '/auth',
-        params: { returnTo: `/creators/${encodeURIComponent(data.profile.username)}` },
-      } as never);
+      openSignUpSheet(router, `/creators/${encodeURIComponent(data.profile.username)}`);
       return;
     }
     if (!data.viewer.isOwner) followMutation.mutate(!data.viewer.isFollowing);

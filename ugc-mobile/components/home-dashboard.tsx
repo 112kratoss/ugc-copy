@@ -26,6 +26,7 @@ import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { useAuth } from '@/lib/auth';
+import { openSignUpSheet, signUpNeededToCreate } from '@/lib/join-navigation';
 import { useAutoplayPolicy } from '@/lib/autoplay-preference';
 import { env } from '@/lib/env';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
@@ -727,7 +728,7 @@ export function HomeDashboard() {
     if (!user) {
       // The post page is where the Remix button lives, so land them on it
       // rather than the tab root they started from.
-      router.push({ pathname: '/auth', params: { returnTo: `/post/${item.id}` } } as never);
+      openSignUpSheet(router, `/post/${item.id}`);
       return;
     }
     // Straight after the unlock sheet the loaded post still reads as locked;
@@ -1119,6 +1120,7 @@ export function HomeDashboard() {
             <View style={{ paddingHorizontal: horizontalPadding, gap: 12 }}>
               <HomeTopBar
                 credits={credits}
+                askToSignUp={signUpNeededToCreate({ credits, hasUser: Boolean(user) })}
                 onMenuPress={sideMenu.open}
                 onSearchPress={() => setSearchVisible(true)}
               />
@@ -1147,7 +1149,7 @@ export function HomeDashboard() {
                 onMake={(creation) => {
                   if (remixingItemId) return;
                   if (!user) {
-                    router.push({ pathname: '/auth', params: { returnTo: homeShelfGuestReturnTo(creation) } } as never);
+                    openSignUpSheet(router, homeShelfGuestReturnTo(creation));
                     return;
                   }
                   remixItem(creation.post);
@@ -1283,10 +1285,13 @@ export function HomeDashboard() {
 
 function HomeTopBar({
   credits,
+  askToSignUp,
   onMenuPress,
   onSearchPress,
 }: {
   credits: number | null;
+  /** A guest with nothing to spend: the balance becomes the way to sign up. */
+  askToSignUp: boolean;
   onMenuPress: () => void;
   onSearchPress: () => void;
 }) {
@@ -1325,6 +1330,25 @@ function HomeTopBar({
         >
           <Search size={appTheme.icon.default} color={theme.colors.text} />
         </TopBarControl>
+        {askToSignUp ? (
+          // In place of a balance a guest does not have: the welcome credits,
+          // and the sign-up sheet that gets them (owner, 2026-11-08).
+          <TopBarControl
+            accessibilityLabel="Sign in for 25 free credits"
+            onPress={() => {
+              haptic.light();
+              openSignUpSheet(router, '/(tabs)');
+            }}
+            style={{ paddingHorizontal: 14 }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Crown size={appTheme.icon.sm} color={theme.colors.commerce} fill={`${theme.colors.commerce}33`} />
+              <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
+                Sign in · <Text style={{ color: theme.colors.primary, fontWeight: '800' }}>25 free credits</Text>
+              </Text>
+            </View>
+          </TopBarControl>
+        ) : (
         <TopBarControl
           accessibilityLabel="Open credits"
           onPress={() => {
@@ -1341,6 +1365,7 @@ function HomeTopBar({
             <Plus size={14} color={theme.colors.primary} />
           </View>
         </TopBarControl>
+        )}
       </View>
     </View>
   );
