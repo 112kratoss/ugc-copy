@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * Prices and affordability on the video creator (PR 2 of the redesign, owner 2026-10-28),
  * for the E2E account, which holds 25 credits:
- * - every option of the settings is priced, "+N" past the balance, and Top up takes
+ * - every option of the settings is priced, its total alone (in amber past the balance), and Top up takes
  *   Generate's place for a run past it;
  * - the model list prices every model at this run's settings and splits it by the balance;
  * - a picked model opens on this run's settings where it offers them;
@@ -134,11 +134,11 @@ test('a remix the balance cannot cover stays on its original, with Top up in Gen
   await expect(page.getByText('Settings pre-filled from "intense".')).toBeVisible(COLD_PAGE);
   await expect(page.getByRole('button', { name: /Top Up Credits/ })).toBeVisible(COLD_PAGE);
   await expect(page.locator('[data-creator-bar-status]')).toContainText('This run costs 140 credits but you only have 25.');
-  // The settings' options are priced by a price list, so once their "+N" line shows, a list has
-  // been asked and answered. The fitting this replaced moved a short remix within a second of
+  // The settings' options are priced by a price list, so once one is read as past the balance, a
+  // list has been asked and answered. The fitting this replaced moved a short remix within a second of
   // its price: by the end of this wait it would have asked for other models and moved.
   await settingsChip(page).click();
-  await expect(page.getByRole('dialog', { name: 'Generation settings' })).toContainText('show Top up in place of Generate', COLD_PAGE);
+  await expect(page.getByRole('dialog', { name: 'Generation settings' }).getByRole('radio', { name: /more than your balance$/ }).first()).toBeVisible(COLD_PAGE);
   await page.waitForTimeout(3_000);
   expect([...new Set(listed.filter((run) => run.kind === 'video').map((run) => run.modelId))]).toEqual(['seedance-2-5']);
   await expect(settingsChip(page)).toHaveAccessibleName('Generation settings: 480P · 9:16 · 5s · Sound off');

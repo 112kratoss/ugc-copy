@@ -7891,8 +7891,8 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(queryGenerateButton()).toBeNull();
     });
 
-    // "+N" is explained by the options on screen: a slider shows only its own length's price.
-    it('explains "+N" by the options shown, not by a slider\'s other lengths', async () => {
+    // A slider shows only its own length's price, the total alone.
+    it('prices a slider by its own length alone', async () => {
       authState.credits = 25;
       render(<CreateVideoClient prefill={{}} />);
       await waitFor(() => expect(costShown()).toBe('19 credits'));
@@ -7905,7 +7905,8 @@ describe('CreateVideoClient Kling video elements', () => {
       const settings = screen.getByRole('dialog', { name: 'Generation settings' });
       // Seedance 2.5 makes 4 to 30 s: a slider, at 5 s for 140. Its 4 s (112) is priced but not shown.
       await waitFor(() => expect(settings).toHaveTextContent('5s · 140 credits'));
-      expect(settings).not.toHaveTextContent('“+');
+      expect(settings).not.toHaveTextContent('112');
+      expect(settings).not.toHaveTextContent('+115');
     });
 
     it('keeps Generate\'s place for a top-up while some video still fits the balance', async () => {

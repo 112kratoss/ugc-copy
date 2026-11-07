@@ -161,7 +161,7 @@ describe('the settings\' options priced', () => {
     expect(variants.get('aspectRatio=1:1')?.settings).toMatchObject({ aspectRatio: '1:1', resolution: '1K' });
   });
 
-  it('reads each option against the balance, and the least "+N" among those shown', () => {
+  it('reads each option\'s total against the balance, with the amount past it', () => {
     const variants = settingsVariants(run(5), [['duration', [4, 5, 6]]]);
     const priceOf = (request: GenerationModelQuoteInput | null): ListedPrice => (request
       ? { status: 'ready', costCredits: 4 * Number(request.settings?.duration) }
