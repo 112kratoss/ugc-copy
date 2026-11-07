@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GenerationModelQuoteInput } from '@/lib/generation-model-catalog';
 import { fitImageFormToModel, type ImageFormSettings } from '@/lib/creator-image-candidates';
-import { optionPricesOf, settingsVariants, smallestOverBalance, useQuotePrices, type ListedPrice } from '@/lib/use-quote-prices';
+import { optionPricesOf, settingsVariants, useQuotePrices, type ListedPrice } from '@/lib/use-quote-prices';
 import { GENERATION_MODEL_QUOTE_BATCH_MAX } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
@@ -161,7 +161,7 @@ describe('the settings\' options priced', () => {
     expect(variants.get('aspectRatio=1:1')?.settings).toMatchObject({ aspectRatio: '1:1', resolution: '1K' });
   });
 
-  it('reads each option against the balance, and the least "+N" among those shown', () => {
+  it('reads each option\'s total against the balance, with the amount past it', () => {
     const variants = settingsVariants(run(5), [['duration', [4, 5, 6]]]);
     const priceOf = (request: GenerationModelQuoteInput | null): ListedPrice => (request
       ? { status: 'ready', costCredits: 4 * Number(request.settings?.duration) }
@@ -169,9 +169,7 @@ describe('the settings\' options priced', () => {
     const optionPrice = optionPricesOf(variants, priceOf, 18, 'the free credits');
 
     expect(optionPrice('duration', 4)).toEqual({ cost: 16, text: '16', over: null, spoken: '16 credits' });
-    expect(optionPrice('duration', 6)).toEqual({ cost: 24, text: '24 · +6', over: 6, spoken: '24 credits, 6 more than the free credits' });
+    expect(optionPrice('duration', 6)).toEqual({ cost: 24, text: '24', over: 6, spoken: '24 credits, 6 more than the free credits' });
     expect(optionPrice('duration', 9)).toBeNull();
-    expect(smallestOverBalance(optionPrice, [['duration', [4, 5, 6]]])).toBe(2);
-    expect(smallestOverBalance(optionPrice, [['duration', [4]]])).toBeNull();
   });
 });

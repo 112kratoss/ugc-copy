@@ -568,7 +568,7 @@ describe('CreateMotionClient prices', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generation settings/ }));
 
     const settings = screen.getByRole('dialog', { name: 'Generation settings' });
-    expect(within(settings).getByRole('radio', { name: 'Pro 1080p, 34 credits, 4 more than your balance' })).toHaveTextContent('34 · +4');
+    expect(within(settings).getByRole('radio', { name: 'Pro 1080p, 34 credits, 4 more than your balance' })).toHaveTextContent(/34$/);
     expect(settings).toHaveTextContent('This run 20 credits · leaves 10');
   });
 });

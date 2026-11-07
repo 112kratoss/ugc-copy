@@ -24,7 +24,6 @@ import {
     CreatorColumnLayout,
     CreatorInputsCard,
     CreatorModelChip,
-    CreatorOverBalanceLegend,
     CreatorPendingStartNotice,
     CreatorMediaReferenceTile,
     CreatorReferenceRow,
@@ -80,7 +79,6 @@ import {
     NO_SETTINGS_VARIANTS,
     optionPricesOf,
     settingsVariants,
-    smallestOverBalance,
     useQuotePrices,
 } from '@/lib/use-quote-prices';
 import {
@@ -2210,7 +2208,7 @@ function VideoCreator({
         ...[...modelRuns.values()].map((run) => run.quoteInput),
         ...variants.values(),
     ]);
-    // An option's price in the settings, against the balance: "19", or "23 · +1" past it.
+    // An option's price in the settings, against the balance: the total, "19", in amber past it.
     const optionPrice = optionPricesOf(variants, priceOf, listBalance, isVisitor ? 'the free credits' : 'your balance');
     // A single-shot prompt may mention only what its run sends: the server refuses any
     // other handle. A saved image the run leaves out is named as on standby, the rest as
@@ -5681,13 +5679,6 @@ function VideoCreator({
             ? `No extra cost on ${videoModel.displayName}`
             : `${soundCosts.on.cost > soundCosts.off.cost ? 'Adds' : 'Saves'} ${creditsWords(Math.abs(soundCosts.on.cost - soundCosts.off.cost))}`
         : 'Adds sound made for the scene.';
-    // "+N" is explained by the least N an option on screen carries: a slider shows only its own length's.
-    const smallestOver = smallestOverBalance(optionPrice, settingsAxes.flatMap(([key, values]) => (
-        key === 'duration' && !lengthButtons ? [[key, [currentDuration]] as const]
-            : key === 'aspectRatio' && sameRatioPrice ? []
-                : key === 'sound' ? [[key, [currentSound]] as const]
-                    : [[key, values] as const]
-    )));
     const sliderPrice = optionPrice('duration', currentDuration);
 
     // A setting the creator chooses is theirs: a remix's original still loading leaves it.
@@ -5731,7 +5722,7 @@ function VideoCreator({
                             {currentDuration}s
                             {sliderPrice ? (
                                 <span className={sliderPrice.over !== null ? 'text-amber-300' : 'text-[var(--ui-text-faint)]'}>
-                                    {` · ${creditsWords(sliderPrice.cost)}${sliderPrice.over !== null ? ` · +${sliderPrice.over}` : ''}`}
+                                    {` · ${creditsWords(sliderPrice.cost)}`}
                                 </span>
                             ) : null}
                         </span>
@@ -5804,12 +5795,6 @@ function VideoCreator({
                     accent="video"
                 />
             ) : null}
-
-            <CreatorOverBalanceLegend
-                over={smallestOver}
-                balance={listBalance}
-                isVisitor={isVisitor}
-            />
 
             <CatalogAdditionalControls
                 appearance="panel"

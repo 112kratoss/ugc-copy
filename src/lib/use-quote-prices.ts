@@ -65,12 +65,11 @@ export function settingsVariants(
   return variants;
 }
 
-/** What an option of the settings costs: "19", or "23 · +1" past the balance, and the words a screen reader says. */
+/** What an option of the settings costs: its total, "19", how much past the balance (`over`), and the words a screen reader says. */
 export type OptionPrice = { cost: number; text: string; over: number | null; spoken: string };
 
 /**
- * What the run costs with an option, read against the balance ("19", or "23 · +1" past
- * it, `optionPriceLabel`), named as `balanceName` ("your balance", "the free credits");
+ * What the run costs with an option, read against the balance (`optionPriceLabel`), named as `balanceName` ("your balance", "the free credits");
  * null until its price is in, and for an option not varied.
  */
 export function optionPricesOf(
@@ -86,25 +85,6 @@ export function optionPricesOf(
     const credits = `${cost} ${cost === 1 ? 'credit' : 'credits'}`;
     return { cost, ...label, spoken: label.over === null ? credits : `${credits}, ${label.over} more than ${balanceName}` };
   };
-}
-
-/**
- * The least an option shown goes past the balance by, for the line that says what "+N"
- * means; null when none does. Only the options `shown` are read: a slider's other lengths
- * are priced, but not on screen.
- */
-export function smallestOverBalance(
-  optionPrice: ReturnType<typeof optionPricesOf>,
-  shown: ReadonlyArray<readonly [key: string, values: readonly CatalogPrimitive[]]>,
-): number | null {
-  let least: number | null = null;
-  for (const [key, values] of shown) {
-    for (const value of values) {
-      const over = optionPrice(key, value)?.over ?? null;
-      if (over !== null && (least === null || over < least)) least = over;
-    }
-  }
-  return least;
 }
 
 /** How long a list that could not be priced (offline, the limit reached) waits before it is asked again. */
