@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -17,6 +19,7 @@ import {
   dropZoomVeil,
   followZoomVeilTransition,
   getZoomVeilOpacity,
+  getZoomVeilSerial,
   holdZoomVeil,
   liftZoomVeil,
   registerScreenVeil,
@@ -112,6 +115,23 @@ describe('the veil under the zoom', () => {
     dropZoomVeil('feed', TILE);
     expect(feed.cover.get()).toBe(0);
     expect(getZoomVeilOpacity('feed')).toBe(0);
+  });
+
+  // The view a reel's transition had driven to full cover showed the veil in
+  // full for a frame after the next tap had set it see-through: the whole feed
+  // black round the tile as the next open began (one open in three to six,
+  // simulator, 2026-11-07; none in 27 with a view per tap).
+  it('names each tap\'s veil, so the screen draws it in a view of its own', () => {
+    const before = getZoomVeilSerial('feed');
+    const first = dropZoomVeil('feed', TILE)!;
+    followZoomVeilTransition(first, transition('first reel'));
+    const firstSerial = getZoomVeilSerial('feed');
+    dropZoomVeil('feed', TILE);
+    expect(firstSerial).not.toBe(before);
+    expect(getZoomVeilSerial('feed')).not.toBe(firstSerial);
+    expect(getZoomVeilSerial('nowhere')).toBe(0);
+    const component = readFileSync(join(__dirname, '..', 'components', 'zoom-veil.tsx'), 'utf8');
+    expect(component).toContain('<NativeAnimated.View key={serial}');
   });
 
   it('keeps a veil down that came down before its reel bound a transition', () => {

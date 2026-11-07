@@ -1077,53 +1077,52 @@ export function useMediaZoomSource({
   // first. A view of the player itself cannot stand in: UIKit's zoom draws its
   // source as a picture, and a player's layer came out black (simulator,
   // 2026-11-07).
+  //
+  // The still is drawn into the stand-in, unseen, as soon as it is read, so a
+  // tap finds it on screen and opens without waiting; a touch that turns into
+  // a scroll costs that card one render. `readStillRef` is the last still read.
+  const readStillRef = useRef<VideoThumbnail | null>(null);
+  const stillReadingRef = useRef(false);
   const [standInStill, setStandInStillState] = useState<VideoThumbnail | null>(null);
-  // The still a tap reads, in the task it runs in: the state reaches the tap's
-  // callback only once React has rendered it.
+  // The still the stand-in is drawing, for the tap's own task: the state
+  // reaches the tap's callback only once React has rendered it.
   const standInStillRef = useRef<VideoThumbnail | null>(null);
   const setStandInStill = useCallback((still: VideoThumbnail | null) => {
     standInStillRef.current = still;
     setStandInStillState(still);
   }, []);
   const stillDrawnRef = useRef<VideoThumbnail | null>(null);
-  // A tap waiting on the still (`capture`) hears of it here.
-  const stillDrawnListenerRef = useRef<(() => void) | null>(null);
-  const stillPendingRef = useRef(false);
+  // A tap waiting on the still (`capture`): told when the stand-in has drawn
+  // it, or that there will be none.
+  const stillWaiterRef = useRef<(() => void) | null>(null);
   const standInDrawn = useCallback((still: VideoThumbnail | null) => {
     if (!still) {
       standInDrawnRef.current = true;
       return;
     }
     stillDrawnRef.current = still;
-    if (still === standInStillRef.current) stillDrawnListenerRef.current?.();
+    if (still === standInStillRef.current) stillWaiterRef.current?.();
   }, []);
   /** Reads the still of the frame `player` is showing, for the stand-in. */
-  const requestStill = useCallback((player: VideoPlayer) => {
-    // No still: a tap waiting on one opens at once, with the tile as it is.
-    const noStill = () => {
-      stillPendingRef.current = false;
-      stillDrawnListenerRef.current?.();
+  const readStill = useCallback((player: VideoPlayer) => {
+    stillReadingRef.current = true;
+    readStillRef.current = null;
+    const read = (still: VideoThumbnail | null) => {
+      stillReadingRef.current = false;
+      readStillRef.current = still;
+      // Drawn at once, unseen, so a tap finds it on screen already.
+      if (still) setStandInStill(still);
+      else stillWaiterRef.current?.();
     };
-    stillPendingRef.current = true;
     let reading: Promise<VideoThumbnail[]>;
     try {
       reading = player.generateThumbnailsAsync([player.currentTime], STAND_IN_STILL_SIZE);
     } catch {
       // A player released under the tile.
-      noStill();
+      read(null);
       return;
     }
-    reading.then(
-      (stills) => {
-        if (!stills[0]) {
-          noStill();
-          return;
-        }
-        stillPendingRef.current = false;
-        setStandInStill(stills[0]);
-      },
-      noStill,
-    );
+    reading.then((stills) => read(stills[0] ?? null), () => read(null));
   }, [setStandInStill]);
   const active = Boolean(surfaceId) && enabled && Boolean(itemId);
   // iOS 18: the tile's view is registered with UIKit's zoom under this
@@ -1175,11 +1174,11 @@ export function useMediaZoomSource({
     // that comes after the tap is dropped unused; one never lifted goes with
     // the next touch.
     const offer = appleZoomId ? videoOfferRef.current : null;
-    if (offer && offer.hasFrame()) requestStill(offer.player);
+    if (offer && offer.hasFrame()) readStill(offer.player);
     if (appleZoomId) setStandInArmed(true);
     if (post) postPreparer?.(post);
     if (LAYER_FLIGHT && preview) prepareZoomPicture(preview, aspectRatio, false, post);
-  }, [active, appleZoomId, aspectRatio, post, preview, requestStill]);
+  }, [active, appleZoomId, aspectRatio, post, preview, readStill]);
 
   const offerVideo = useCallback<OfferMediaZoomVideo>((offer) => {
     videoOfferRef.current = offer;
@@ -1241,6 +1240,21 @@ export function useMediaZoomSource({
         open({ sourceId: appleZoomId });
         endTileOpenWhenSettled(openSerial);
       };
+      // The screen goes black around this tile, under the transition that
+      // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
+      // reel simply appears. Fabric answers `measureInWindow` before it
+      // returns. Dropped here, in the tap's own task, whatever the open then
+      // waits for: dropped in a later one (the still drawn, the lift drawn),
+      // the veil showed in full round the tile for one to four frames before
+      // the zoom began (simulator, 2026-11-07).
+      let veil: ZoomVeilDrop | null = null;
+      if (!reducedMotion) {
+        let hole: ZoomVeilHole | null = null;
+        ref.current?.measureInWindow((x, y, width, height) => {
+          if (width > 0 && height > 0) hole = { x, y, width, height, radius };
+        });
+        veil = dropZoomVeil(veilOwner, hole);
+      }
       const go = () => {
         // The tile hands the zoom its stand-in (`MediaZoomSourceView`): the
         // picture alone, which UIKit stretches with the window it grows, while
@@ -1251,21 +1265,6 @@ export function useMediaZoomSource({
         // never drew stays as it is. The push waits for the lift to be drawn
         // (`liftTile`).
         const liftNow = video ? stillReady() : !videoOfferRef.current && standInDrawnRef.current;
-        // The screen goes black around this tile, under the transition that
-        // follows (lib/zoom-veil.ts); with Reduce Motion there is none, and the
-        // reel simply appears. Fabric answers `measureInWindow` before it
-        // returns. Dropped here, in the task that decided to open, not where the
-        // push waits for the lift: dropped there, one open in six showed the
-        // veil in full for a frame before the zoom began (simulator,
-        // 2026-11-07).
-        let veil: ZoomVeilDrop | null = null;
-        if (!reducedMotion) {
-          let hole: ZoomVeilHole | null = null;
-          ref.current?.measureInWindow((x, y, width, height) => {
-            if (width > 0 && height > 0) hole = { x, y, width, height, radius };
-          });
-          veil = dropZoomVeil(veilOwner, hole);
-        }
         if (!liftNow) {
           push(veil);
           return;
@@ -1277,17 +1276,20 @@ export function useMediaZoomSource({
       // with nothing in it grew nothing out of the tile, the reel fading in
       // already three-quarters the size of the screen (simulator, 2026-11-07).
       if (video && !stillReady()) {
-        if (!stillPendingRef.current) requestStill(video.player);
         let done = false;
         const goOnce = () => {
           if (done) return;
           done = true;
           clearTimeout(deadline);
-          if (stillDrawnListenerRef.current === goOnce) stillDrawnListenerRef.current = null;
+          if (stillWaiterRef.current === goOnce) stillWaiterRef.current = null;
           go();
         };
         const deadline = setTimeout(goOnce, STAND_IN_STILL_WAIT_MS);
-        stillDrawnListenerRef.current = goOnce;
+        stillWaiterRef.current = goOnce;
+        // The still read at the touch is drawn already or now; one still
+        // being read is drawn when it comes; a tap with neither reads one.
+        if (readStillRef.current) setStandInStill(readStillRef.current);
+        else if (!stillReadingRef.current) readStill(video.player);
         return;
       }
       go();
@@ -1346,7 +1348,7 @@ export function useMediaZoomSource({
     // Fabric answers `measureInWindow` before it returns. A host that does not
     // must never swallow the tap, so the plain open runs instead.
     start(null);
-  }, [active, appleZoomId, aspectRatio, itemId, lifted, measure, post, preview, radius, reducedMotion, requestStill, setStandInStill, surfaceId, veilOwner]);
+  }, [active, appleZoomId, aspectRatio, itemId, lifted, measure, post, preview, radius, readStill, reducedMotion, setStandInStill, surfaceId, veilOwner]);
 
   const tileKey = active && surfaceId ? zoomTileKey(surfaceId, itemId) : null;
 

@@ -8,6 +8,7 @@ import { mediaColors } from '@/lib/theme';
 import {
   createScreenVeil,
   getZoomVeilOpacity,
+  getZoomVeilSerial,
   registerScreenVeil,
   subscribeToZoomVeilOpacity,
   ZoomVeilOwnerContext,
@@ -49,6 +50,7 @@ const AnimatedPath = Animated.createAnimatedComponent(Path);
 function ZoomVeil({ owner, veil }: { owner: string; veil: ScreenVeil }) {
   const subscribe = useCallback((listener: () => void) => subscribeToZoomVeilOpacity(owner, listener), [owner]);
   const transition = useSyncExternalStore(subscribe, () => getZoomVeilOpacity(owner));
+  const serial = useSyncExternalStore(subscribe, () => getZoomVeilSerial(owner));
   const { width, height } = useWindowDimensions();
   const { cover, hole } = veil;
   const veilProps = useAnimatedProps(() => {
@@ -63,7 +65,11 @@ function ZoomVeil({ owner, veil }: { owner: string; veil: ScreenVeil }) {
   });
   if (!isAppleZoomAvailable()) return null;
   return (
-    <NativeAnimated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { zIndex: 1000, opacity: transition ?? 1 }]}>
+    // A view of its own for each tap's veil (`serial`): the one a reel's
+    // transition had driven to full cover could show it in full for a frame
+    // after the next tap had set it see-through, the whole feed black round
+    // the tile as the next open began (one open in six, simulator, 2026-11-07).
+    <NativeAnimated.View key={serial} pointerEvents="none" style={[StyleSheet.absoluteFill, { zIndex: 1000, opacity: transition ?? 1 }]}>
       <Svg width={width} height={height}>
         <AnimatedPath animatedProps={veilProps} fill={mediaColors.mediaGround} fillRule="evenodd" />
       </Svg>
