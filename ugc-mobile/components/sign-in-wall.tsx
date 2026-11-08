@@ -1,4 +1,4 @@
-// The one sign-in page (owner, 2026-11-08: "One full-screen page", "Create anything"): a wall
+// The one sign-in page (owner, 2026-11-08: "One full-screen page", "Start creating in"): a wall
 // of creations drifting behind a headline, then Apple, Google and email. It is what a guest
 // sees when they reach for an account (`app/join.tsx`) and what every "Sign in" opens
 // (`app/auth.tsx`, which keeps its email form behind "Sign in with email" and for the
@@ -181,16 +181,17 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
           style={{ alignSelf: 'flex-start', marginLeft: -12 }}
         />
 
-        <View style={{ marginTop: 20, gap: 12, maxWidth: 360 }}>
+        <View style={{ marginTop: 20, gap: 8, maxWidth: 360 }}>
           <AppText
             heading
             variant="display"
             maxFontSizeMultiplier={1.3}
             style={{ color: mediaColors.onMedia, fontSize: 52, lineHeight: 56, letterSpacing: -1.2 }}
           >
-            {'Create\nanything'}
+            {'Start\ncreating in'}
           </AppText>
-          {/* The app's one wordmark, at its compact size, under the headline as Kling's mark is. */}
+          {/* The headline runs on into the wordmark (owner, 2026-11-08: like "Start working in",
+              with the name below it): "Start creating in ✦ Magicbooklet". */}
           <View style={{ alignSelf: 'flex-start' }}>
             <BrandLockup />
           </View>
