@@ -35,7 +35,6 @@ vi.mock('react-native', () => {
     View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
   };
 });
-vi.mock('expo-router', () => ({ router: { push: vi.fn() } }));
 vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: MockProps) => React.createElement('linear-gradient', null, children) }));
 vi.mock('lucide-react-native', () => Object.fromEntries(['Clapperboard', 'Gift', 'ImageIcon', 'Rocket', 'Sparkles'].map((name) => [name, () => React.createElement(`icon-${name}`)])));
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused }));
@@ -66,7 +65,6 @@ vi.mock('@/lib/use-onboarding-destination', () => ({
   primeWelcomeCredits: (_client: unknown, _id: string, value: unknown) => harness.primed.push(value),
 }));
 
-import { router } from 'expo-router';
 import { WelcomeCreditsPopup } from '../components/welcome-credits-popup';
 import { resetWelcomePopupThisRun, wasWelcomePopupDismissedThisRun } from '../lib/welcome-popup';
 
@@ -96,7 +94,6 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     harness.haptics.length = 0;
     harness.announced.length = 0;
     harness.primed.length = 0;
-    vi.mocked(router.push).mockClear();
   });
   afterEach(() => {
     act(() => { for (const tree of trees.splice(0)) tree.unmount(); });
@@ -104,8 +101,9 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
 
   it('offers the credits with one Claim button and no "later"', () => {
     const tree = mount();
-    expect(text(tree)).toContain('Your welcome gift');
-    expect(button(tree, 'Claim 25 credits')).toBeTruthy();
+    expect(text(tree)).toContain('Claim your welcome credits');
+    expect(button(tree, 'Claim')).toBeTruthy();
+    expect(text(tree)).toContain('can only be used for creating media');
     expect(text(tree)).not.toContain('later');
   });
 
@@ -128,7 +126,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     harness.api.claimWelcomeCredits.mockResolvedValue({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
     const tree = mount();
     await act(async () => {
-      button(tree, 'Claim 25 credits').props.onPress();
+      button(tree, 'Claim').props.onPress();
       await flush();
     });
 
@@ -140,9 +138,28 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     expect(text(tree)).toContain('+25');
     expect(harness.haptics).toEqual(['light', 'success']);
     expect(harness.announced).toEqual(['25 credits added to your balance.']);
-    act(() => { button(tree, 'Start creating').props.onPress(); });
-    expect(router.push).toHaveBeenCalledWith('/(tabs)/creator');
-    expect(wasWelcomePopupDismissedThisRun()).toBe(true);
+    expect(button(tree, 'Claimed').props.disabled).toBe(true);
+    expect(tree.root.findAll((node) => String(node.type) === 'primary-button' && node.props.label === 'Start creating')).toHaveLength(0);
+  });
+
+  it('closes by itself a moment after the claim (owner 11-09)', async () => {
+    vi.useFakeTimers();
+    try {
+      harness.api.claimWelcomeCredits.mockResolvedValue({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
+      const tree = mount();
+      await act(async () => {
+        button(tree, 'Claim').props.onPress();
+        await flush();
+      });
+      expect(text(tree)).toContain('Credits added!');
+      await act(async () => { vi.advanceTimersByTime(1000); });
+      expect(tree.toJSON()).not.toBeNull();
+      await act(async () => { vi.advanceTimersByTime(1500); });
+      expect(tree.toJSON()).toBeNull();
+      expect(wasWelcomePopupDismissedThisRun()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ticks a haptic every five credits as they count up, then the success haptic', async () => {
@@ -152,7 +169,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
       harness.api.claimWelcomeCredits.mockResolvedValue({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
       const tree = mount();
       await act(async () => {
-        button(tree, 'Claim 25 credits').props.onPress();
+        button(tree, 'Claim').props.onPress();
         await flush();
       });
       await act(async () => { vi.advanceTimersByTime(1000); });
@@ -169,7 +186,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
       .mockResolvedValue({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
     const tree = mount();
     await act(async () => {
-      button(tree, 'Claim 25 credits').props.onPress();
+      button(tree, 'Claim').props.onPress();
       await flush();
     });
     expect(text(tree)).toContain('Network request failed');
@@ -185,7 +202,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     harness.api.claimWelcomeCredits.mockResolvedValue({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
     const tree = mount();
     await act(async () => {
-      button(tree, 'Claim 25 credits').props.onPress();
+      button(tree, 'Claim').props.onPress();
       await flush();
     });
     expect(text(tree)).toContain('Credits added!');
@@ -193,7 +210,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     harness.user = { id: 'creator-2' };
     harness.welcome = { status: 'eligible', identityComplete: true, amount: 25 };
     act(() => { tree.update(<WelcomeCreditsPopup />); });
-    expect(text(tree)).toContain('Your welcome gift');
+    expect(text(tree)).toContain('Claim your welcome credits');
     expect(text(tree)).not.toContain('Credits added!');
   });
 

@@ -1,8 +1,7 @@
 import { useIsFocused } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
-import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Clapperboard, Gift, ImageIcon, Rocket, Sparkles } from 'lucide-react-native';
+import { Gift, Sparkles } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Modal, Text, View } from 'react-native';
 
@@ -27,6 +26,8 @@ import {
 type Phase = 'offer' | 'claiming' | 'claimed' | 'failed';
 
 const CARD_MAX_WIDTH = 340;
+/** How long the card stays after the count-up before it closes itself (owner, 2026-11-09). */
+const CLOSE_AFTER_CLAIM_MS = 1400;
 const ENTRY_SCALE = 0.9;
 const BADGE_SIZE = 64;
 
@@ -60,6 +61,7 @@ function WelcomeCreditsPopupForAccount() {
   const [message, setMessage] = useState<string | null>(null);
   const [count, setCount] = useState(0);
   const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const eligibleNow = shouldShowWelcomePopup({
     signedIn: Boolean(user),
@@ -72,6 +74,7 @@ function WelcomeCreditsPopupForAccount() {
   }, [eligibleNow, offered, welcomeQuery.data]);
   useEffect(() => () => {
     if (countTimer.current) clearInterval(countTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
 
   const visible = Boolean(offered) && !dismissed;
@@ -82,10 +85,16 @@ function WelcomeCreditsPopupForAccount() {
     setDismissed(true);
   };
 
+  // Claim, the celebration, then the card closes by itself (owner, 2026-11-09).
+  const closeSoon = (afterMs: number) => {
+    closeTimer.current = setTimeout(close, afterMs);
+  };
+
   const countUp = (to: number) => {
     if (reducedMotion) {
       setCount(to);
       haptic.success();
+      closeSoon(CLOSE_AFTER_CLAIM_MS);
       return;
     }
     const ticks = welcomeCountUpTicks(to);
@@ -104,6 +113,7 @@ function WelcomeCreditsPopupForAccount() {
         if (countTimer.current) clearInterval(countTimer.current);
         countTimer.current = null;
         haptic.success();
+        closeSoon(CLOSE_AFTER_CLAIM_MS);
       }
     }, 32);
   };
@@ -133,11 +143,6 @@ function WelcomeCreditsPopupForAccount() {
     }
   };
 
-  const startCreating = () => {
-    close();
-    router.push('/(tabs)/creator' as never);
-  };
-
   return (
     <Modal visible={visible} transparent statusBarTranslucent navigationBarTranslucent animationType="none" onRequestClose={close}>
       {visible ? (
@@ -150,7 +155,6 @@ function WelcomeCreditsPopupForAccount() {
               count={count}
               message={message}
               onClaim={() => void claim()}
-              onStartCreating={startCreating}
             />
             <CloseChip disabled={phase === 'claiming'} onPress={close} />
           </ThemeScope>
@@ -191,14 +195,12 @@ function WelcomeCard({
   count,
   message,
   onClaim,
-  onStartCreating,
 }: {
   amount: number;
   phase: Phase;
   count: number;
   message: string | null;
   onClaim: () => void;
-  onStartCreating: () => void;
 }) {
   const theme = useAppTheme();
   const [entered, setEntered] = useState(false);
@@ -242,7 +244,7 @@ function WelcomeCard({
           <Gift size={appTheme.icon.hero} color={theme.colors.onPrimary} />
         </LinearGradient>
         <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>
-          {claimed ? 'Credits added!' : 'Your welcome gift'}
+          {claimed ? 'Credits added!' : 'Claim your welcome credits'}
         </AppText>
         <AppText variant="label" color="primary" style={{ textAlign: 'center' }}>
           {claimed ? 'Go make something amazing' : 'Free credits to start creating'}
@@ -263,32 +265,24 @@ function WelcomeCard({
           </AppText>
           <AppText variant="bodySm">creation credits</AppText>
         </View>
-        <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle }} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact, paddingVertical: appTheme.spacing.gap }}>
-          <ImageIcon size={appTheme.icon.sm} color={theme.colors.image} />
-          <Clapperboard size={appTheme.icon.sm} color={theme.colors.video} />
-          <Rocket size={appTheme.icon.sm} color={theme.colors.motion} />
-          <AppText variant="bodySm">Images, video and motion</AppText>
-        </View>
       </View>
 
       <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
-        {claimed ? 'They’re in your balance now.' : 'Yours to create with. They can’t unlock creators’ resources.'}
+        {claimed
+          ? 'They’re in your balance now.'
+          : 'This welcome gift can only be used for creating media. It can’t be used to buy recipes or resources.'}
       </AppText>
 
       {message ? (
         <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text>
       ) : null}
 
-      {claimed ? (
-        <PrimaryButton label="Start creating" onPress={onStartCreating} />
-      ) : (
-        <PrimaryButton
-          label={phase === 'failed' ? 'Try again' : `Claim ${amount} credits`}
-          loading={phase === 'claiming'}
-          onPress={onClaim}
-        />
-      )}
+      <PrimaryButton
+        label={claimed ? 'Claimed' : phase === 'failed' ? 'Try again' : 'Claim'}
+        loading={phase === 'claiming'}
+        disabled={claimed}
+        onPress={onClaim}
+      />
 
       <ConfettiBurst play={claimed} />
     </MotionView>
