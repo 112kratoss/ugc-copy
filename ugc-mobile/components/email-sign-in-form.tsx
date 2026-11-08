@@ -7,7 +7,7 @@ import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { SignInProviderButtons, SignInTerms } from '@/components/sign-in-parts';
+import { BUTTON_HEIGHT, BUTTON_LABEL_SIZE, BUTTON_MAX_WIDTH, SignInProviderButtons, SignInTerms } from '@/components/sign-in-parts';
 import { AppText, BrandLockup, IconButton } from '@/components/ui';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
@@ -29,8 +29,6 @@ import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
-/** The sign-in page's button height (`components/sign-in-parts.tsx`). */
-const SUBMIT_HEIGHT = 50;
 
 /**
  * The email form (owner, 2026-11-08), the sign-in page's second half: the page turns into it in
@@ -302,6 +300,8 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
                 Apple and Google below, which Apple's rules keep white on dark. */}
             {/* On solid black, so the faded state reads as a dimmed button, not as the wall
                 showing through it. */}
+            {/* The buttons share one compact, centred width (components/sign-in-parts.tsx). */}
+            <View style={{ width: '100%', maxWidth: BUTTON_MAX_WIDTH, alignSelf: 'center', gap: 12, marginTop: 4 }}>
             <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: mediaColors.mediaGround }}>
             <Pressable
               accessibilityRole="button"
@@ -310,7 +310,7 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
               disabled={!canSubmit}
               onPress={() => void submit()}
               style={({ pressed }) => ({
-                height: SUBMIT_HEIGHT,
+                height: BUTTON_HEIGHT,
                 borderRadius: appTheme.radii.pill,
                 backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
                 flexDirection: 'row',
@@ -321,7 +321,7 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
               })}
             >
               {isSubmitting ? <ActivityIndicator color={theme.colors.onPrimary} /> : null}
-              <Text style={{ color: theme.colors.onPrimary, fontSize: 19, fontWeight: '600', letterSpacing: -0.2 }}>
+              <Text style={{ color: theme.colors.onPrimary, fontSize: BUTTON_LABEL_SIZE, fontWeight: '600', letterSpacing: -0.2 }}>
                 {isSubmitting ? 'Signing in…' : 'Sign in'}
               </Text>
             </Pressable>
@@ -337,6 +337,7 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
               googleBusy={isGoogleSubmitting}
               unavailable={!isAuthConfigured || isSignInInFlight}
             />
+            </View>
           </View>
 
           <View style={{ flex: 1, minHeight: 24 }} />

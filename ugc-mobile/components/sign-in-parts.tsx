@@ -8,9 +8,14 @@ import { signInProviderButtons } from '@/lib/auth-error-copy';
 import { env } from '@/lib/env';
 import { appTheme, mediaColors } from '@/lib/theme';
 
-/** Both provider buttons: Apple's system button scales its title to about 19pt at this height. */
-export const BUTTON_HEIGHT = 50;
-const PROVIDER_LABEL_SIZE = 19;
+/**
+ * Every button on the sign-in page, a compact, centred pill (owner, 2026-11-08: "reduce the
+ * button lengths … a bit modern"): 48pt tall, which Apple's system button titles at about
+ * 18pt, so the drawn buttons beside it take that size too; at most 300pt wide, centred.
+ */
+export const BUTTON_HEIGHT = 48;
+export const BUTTON_LABEL_SIZE = 18;
+export const BUTTON_MAX_WIDTH = 300;
 
 /**
  * Apple and Google, as both sign-in screens draw them: one width, one height, one label size.
@@ -27,7 +32,7 @@ export function SignInProviderButtons({ onApple, onGoogle, appleBusy, googleBusy
 }) {
   const providers = signInProviderButtons(Platform.OS);
   return (
-    <View style={{ gap: appTheme.spacing.gap, width: '100%', maxWidth: 430, alignSelf: 'center' }}>
+    <View style={{ gap: 10, width: '100%', maxWidth: BUTTON_MAX_WIDTH, alignSelf: 'center' }}>
       {providers.includes('Apple') ? (
         <View
           pointerEvents={unavailable ? 'none' : 'auto'}
@@ -85,10 +90,10 @@ export function SignInProviderButtons({ onApple, onGoogle, appleBusy, googleBusy
             <ActivityIndicator color={mediaColors.mediaGround} />
           ) : (
             <>
-              <GoogleGMark size={20} />
+              <GoogleGMark size={18} />
               <Text
                 maxFontSizeMultiplier={1.3}
-                style={{ color: mediaColors.mediaGround, fontSize: PROVIDER_LABEL_SIZE, fontWeight: '600', letterSpacing: -0.2 }}
+                style={{ color: mediaColors.mediaGround, fontSize: BUTTON_LABEL_SIZE, fontWeight: '600', letterSpacing: -0.2 }}
               >
                 Continue with Google
               </Text>
