@@ -259,13 +259,16 @@ export function AppText({
  * phone's text size and the display face applied; the name drawn is scaled
  * down by as much as the row is short, to no smaller than `compact`'s size.
  */
-export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'hero' }) {
+export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'title' | 'hero' }) {
   const theme = useAppTheme();
   const hero = size === 'hero';
+  // The page-title size without the hero's centring and fitting: a line that finishes a
+  // headline set beside it, left-aligned (the sign-in page's "Start creating in").
+  const large = hero || size === 'title';
   const [rowWidth, setRowWidth] = useState(0);
   const [naturalWidth, setNaturalWidth] = useState(0);
-  const iconSize = hero ? appTheme.icon.hero : appTheme.icon.feature;
-  const gap = hero ? appTheme.spacing.compact : 7;
+  const iconSize = large ? appTheme.icon.hero : appTheme.icon.feature;
+  const gap = large ? appTheme.spacing.compact : 7;
   const fullType = appTheme.type.pageTitle;
   const fittedSize = hero
     ? fittedWordmarkSize({
@@ -297,11 +300,14 @@ export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'hero' })
         minWidth: 0,
       }}
     >
-      <Sparkles size={hero ? appTheme.icon.hero : appTheme.icon.feature} color={theme.colors.primary} />
+      <Sparkles size={iconSize} color={theme.colors.primary} />
       <AppText
         selectable={false}
         numberOfLines={1}
-        variant={hero ? 'pageTitle' : 'sectionTitle'}
+        variant={large ? 'pageTitle' : 'sectionTitle'}
+        // The title size has no fitting of its own, so it grows only a little with Dynamic
+        // Type rather than be cut to "Magicboo…" beside a headline.
+        maxFontSizeMultiplier={large && !hero ? 1.2 : undefined}
         accessibilityRole="none"
         style={fittedStyle}
       >

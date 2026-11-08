@@ -18,7 +18,6 @@ import type { VideoPlayer } from 'expo-video';
 import type { ImmersivePreviewItem } from './immersive-preview-view-model';
 import { getShowcaseMediaPreviewUrl, resolveShowcaseViewerImageSource } from './showcase-media';
 import type { ShowcaseMediaItem } from './types';
-import type { ZoomVeilDrop } from './zoom-veil';
 
 export interface ZoomRect {
   x: number;
@@ -78,8 +77,6 @@ export interface ZoomOrigin {
    * UIKit carries the picture up and down, and the reel takes only a lent video.
    */
   native?: boolean;
-  /** The veil the tap dropped under a native zoom (lib/zoom-veil.ts); null for none. */
-  veil?: ZoomVeilDrop | null;
   recordedAt: number;
 }
 
@@ -143,8 +140,6 @@ export interface ZoomFlight {
   preview: ZoomPreview | null;
   /** A playing video the layer draws in place of `preview`; see `ZoomVideo`. */
   video?: ZoomVideo | null;
-  /** See `ZoomStill.landsOnPicture`. */
-  landsOnPicture?: boolean;
   /** The post itself, whose rail and caption an open carries; see `ZoomStill.post`. */
   post?: ImmersivePreviewItem | null;
   /**
@@ -328,18 +323,8 @@ export function reverseZoomFlightTime(progress: number, easePower: number): numb
 export interface ZoomStill {
   preview: ZoomPreview;
   geometry: ZoomGeometry;
-  /**
-   * Drawn instead of `preview` when the tile lent its playing video. A close
-   * flying the reel's player home alone (`geometry.pictureOnly`, iOS) draws it
-   * over `preview`, which shows wherever the video has not drawn.
-   */
+  /** Drawn instead of `preview` when the tile lent its playing video. */
   video?: ZoomVideo | null;
-  /**
-   * A close flying `video` into a tile that will not take its player (a tile
-   * showing its poster): the video dissolves into `preview`, the picture that
-   * tile shows, as it settles, so it lands on what the tile goes on showing.
-   */
-  landsOnPicture?: boolean;
   /**
    * The post as the reel lists it, when the tile knows it. The layer draws the
    * reel's own rail, caption and controls over the picture, so the post grows
@@ -671,6 +656,56 @@ export function appleZoomAlignmentRect(
   return { x: media.x, y: media.y + (media.height - height) / 2, width: media.width, height };
 }
 
+/**
+ * The reel's whole screen drawn at a tile's scale, placed so that the part of
+ * its picture the tile shows (`appleZoomAlignmentRect`) covers the tile: the
+ * view UIKit's zoom grows the reel out of on iOS 18 (`AppleZoomSource`
+ * `pageShaped`), lined up with the whole screen.
+ *
+ * Lined up with the picture instead, the zoom's first frame on an iPhone drew
+ * the tile's picture lower in its tile by as much as the picture sits below the
+ * top of the screen, scaled to the tile: 83 pt for a 179×222 Explore tile, 104 pt
+ * for a square one ("the media goes down first and then opens", owner,
+ * 2026-11-07). The simulator never showed it. A screen-shaped source has its
+ * alignment at the top left, where that first frame puts it anyway.
+ *
+ * `page` is relative to the tile's top left; `tile` is the tile's own rectangle
+ * inside the page. Null until the tile has a size.
+ */
+export function appleZoomPageFrame(
+  screen: ZoomSize,
+  aspectRatio: number | null | undefined,
+  tile: ZoomSize
+): { page: ZoomRect; tile: ZoomRect } | null {
+  const aligned = appleZoomAlignmentRect(screen, aspectRatio, tile);
+  if (!aligned || !(aligned.width > 0)) return null;
+  const scale = tile.width / aligned.width;
+  return {
+    page: { x: -aligned.x * scale, y: -aligned.y * scale, width: screen.width * scale, height: screen.height * scale },
+    tile: { x: aligned.x * scale, y: aligned.y * scale, width: tile.width, height: tile.height },
+  };
+}
+
+/**
+ * iOS 18: whether Back flies a still picture home alone into its tile
+ * (`closesPictureAlone`, owner, 2026-11-07: "can't it be just the media
+ * only?") rather than leaving the close to UIKit's zoom, as every gesture close
+ * and every video's Back is. Off since 2026-11-08: filmed on the owner's iPhone
+ * 16e beside Instagram, whose Back shrinks the whole page, black and buttons
+ * and all, into the tile from the frame after the finger lifts and lands about
+ * seven frames later over a grid lit throughout
+ * (`archive/ios-ig-transitions-2026-11-08/`), the picture alone waited four
+ * frames on black for the pop to bring the feed back and then took twelve
+ * more. With it off a picture's reel has the navigation bar's own Back, which
+ * pops at once (app/viewer.tsx), and UIKit shrinks the page into the tile's
+ * shape. Set back to true, it flies the picture alone again, but over a page
+ * left lit: the black that covered the page under the zoom went the same day
+ * (lib/reel-backdrop.ts), and with it the cover over the pop the flight
+ * withholds the zoom from, which scales the page beneath up from about 92%
+ * (filmed on the iPhone 16e, 2026-11-08). Android always flies it.
+ */
+export const IOS_BACK_FLIES_PICTURE = false;
+
 export interface ZoomGeometry {
   screen: ZoomSize;
   /** The tile to grow from or return to; null when the reel has none. */
@@ -688,35 +723,24 @@ export interface ZoomGeometry {
 }
 
 /**
- * Whether Back closes the post on screen by flying its media alone into the
- * tile it came from (`ZoomGeometry.pictureOnly`). A still picture always can. A
- * video can only where the flight carries the reel's own player (`fliesVideo`,
- * iOS), or its poster when the reel has no player for it: elsewhere its poster
- * in the flight would replace the frame it was showing, so a video keeps the
- * window close (Android). Nothing flies under Reduce Motion, or for a reel that
- * did not come out of a tile.
- *
- * Under UIKit's zoom a video shrank as the whole reel page and crossfaded into
- * its tile's own view, which drew another frame of the clip, or its poster, at
- * the tile's size in the shrinking window's corner: two dancers at once for
- * most of the close (owner's iPhone, 2026-11-07: "closing the video is having
- * some ghost like feeling"). Flown alone it closes as a picture does.
+ * Whether Back closes the post on screen by flying its picture alone into the
+ * tile it came from (`ZoomGeometry.pictureOnly`). Only a still picture: a
+ * video's poster in the flight would replace the frame it was showing, so a
+ * video keeps the window close (Android) or UIKit's zoom (iOS). Nothing flies
+ * under Reduce Motion, or for a reel that did not come out of a tile.
  */
 export function closesPictureAlone({
   picture,
   videoUrl,
   reducedMotion,
   fromTile,
-  fliesVideo = false,
 }: {
   picture: unknown;
   videoUrl: string | null | undefined;
   reducedMotion: boolean;
   fromTile: boolean;
-  /** The flight can carry the reel's own player, so a video closes alone too. */
-  fliesVideo?: boolean;
 }): boolean {
-  return Boolean(picture) && (!videoUrl || fliesVideo) && !reducedMotion && fromTile;
+  return Boolean(picture) && !videoUrl && !reducedMotion && fromTile;
 }
 
 export interface ZoomFrame {
@@ -732,23 +756,6 @@ export interface ZoomFrame {
 function lerp(from: number, to: number, progress: number) {
   'worklet';
   return from + (to - from) * progress;
-}
-
-/**
- * Where a video landing on its picture (`ZoomStill.landsOnPicture`) dissolves
- * into it, in the close's progress (1 at the screen, 0 in the tile). The iOS
- * close runs at (1 − t)², so this is about its 150th to 250th ms of 300: the
- * clip is still the clip while it travels, and the poster has settled for the
- * last frames.
- */
-export const VIDEO_TO_PICTURE_PROGRESS = [0.03, 0.25] as const;
-
-/** How much of a video landing on its picture still shows over it, at a close's `progress`. */
-export function videoOverPictureOpacity(progress: number) {
-  'worklet';
-  const gone = VIDEO_TO_PICTURE_PROGRESS[0];
-  const whole = VIDEO_TO_PICTURE_PROGRESS[1];
-  return Math.min(1, Math.max(0, (progress - gone) / (whole - gone)));
 }
 
 /**

@@ -11,14 +11,23 @@
  * grows the pushed screen out of the tile's live view, crossfading one into
  * the other on the render server with nothing for the JS thread to do per
  * frame, and shrinks it back on Back, on the edge swipe, on a pinch or a drag
- * down — interactively, following the finger. The close lands in whichever
- * view is registered under the identifier when it begins, so the reel points
- * the param at the tile of the post the reader has moved to
- * (`useAppleZoomRetarget`), and marks where its media sits so the zoom aligns
- * with the picture rather than the whole screen (`AppleZoomTarget`). That mark
- * is not mounted when the push begins, nor once Back has taken the reel out of
- * React, so each tile also hands over the same rectangle itself
- * (`AppleZoomSource`, `appleZoomAlignmentRect`).
+ * down — interactively, following the finger, as Instagram's post viewer
+ * grows and shrinks its page (filmed side by side on the owner's iPhone,
+ * 2026-11-08, `archive/ios-ig-transitions-2026-11-08/`).
+ *
+ * Each tile registers two views. The push carries the first
+ * (`appleZoomOpenSourceId`): the reel's whole page drawn at the tile's scale,
+ * black, with the tile's picture over the tile, lined up with the whole screen
+ * (`appleZoomPageFrame` in lib/media-zoom-transition.ts). Lined up with the
+ * picture instead, the zoom's first frame on an iPhone drew the tile's picture
+ * lower in its tile by as much as the picture sits below the top of the screen
+ * ("the media goes down first"). Once the push has landed, the reel points the
+ * param at the tile's own view (`appleZoomSourceId`), which the closes shrink
+ * the reel into, in the tile's shape — the tile of whichever post the reader
+ * has moved to (`useAppleZoomRetarget`) — and marks where its media sits so
+ * the zoom aligns with the picture (`AppleZoomTarget`). That mark is not
+ * mounted once Back has taken the reel out of React, so each tile hands over
+ * the same rectangle itself (`AppleZoomSource`, `appleZoomAlignmentRect`).
  *
  * Only some of Expo Router's pieces are public — `Link.AppleZoom` needs a
  * `Link`, and the tiles open imperatively — so `components/apple-zoom.ios.tsx`
@@ -47,10 +56,29 @@ export function appleZoomSourceId(surfaceId: string, itemId: string) {
   return `${SOURCE_ID_PREFIX}${surfaceId}|${itemId}`;
 }
 
+const OPEN_SOURCE_SUFFIX = '#open';
+
+/**
+ * The identifier of the view a tile's open grows the reel out of: the reel's
+ * whole page at the tile's scale (`appleZoomPageFrame` in
+ * lib/media-zoom-transition.ts), registered beside the tile's own view. A push
+ * carries this one; once the reel has landed it points the zoom at the tile's
+ * own view (`appleZoomSourceId`) for the closes (`useAppleZoomRetarget`), which
+ * then shrink the reel into the tile's shape.
+ */
+export function appleZoomOpenSourceId(sourceId: string) {
+  return sourceId.endsWith(OPEN_SOURCE_SUFFIX) ? sourceId : `${sourceId}${OPEN_SOURCE_SUFFIX}`;
+}
+
+/** Whether `sourceId` names the view an open grows out of (`appleZoomOpenSourceId`). */
+export function isAppleZoomOpenSourceId(sourceId: string | null | undefined): boolean {
+  return typeof sourceId === 'string' && sourceId.endsWith(OPEN_SOURCE_SUFFIX);
+}
+
 /** The surface and post behind an identifier, or null for one this app did not make. */
 export function parseAppleZoomSourceId(sourceId: string | null | undefined): { surfaceId: string; itemId: string } | null {
   if (!sourceId || !sourceId.startsWith(SOURCE_ID_PREFIX)) return null;
-  const body = sourceId.slice(SOURCE_ID_PREFIX.length);
+  const body = sourceId.slice(SOURCE_ID_PREFIX.length, isAppleZoomOpenSourceId(sourceId) ? -OPEN_SOURCE_SUFFIX.length : undefined);
   // Surface ids come from React's `useId` and contain colons; post ids do not
   // contain the separator, so the last one is the split.
   const split = body.lastIndexOf('|');

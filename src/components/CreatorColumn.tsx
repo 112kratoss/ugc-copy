@@ -4,7 +4,7 @@ import Link from 'next/link';
 import type { ComponentPropsWithoutRef, ComponentPropsWithRef, CSSProperties, DragEvent, FocusEvent, KeyboardEvent, ReactNode, RefObject } from 'react';
 import { Children, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Play, Plus, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ChevronDown, CircleAlert, Images, Info, LayoutTemplate, Loader2, Pencil, Play, Plus, RefreshCw, SlidersHorizontal, Sparkles, Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import clsx from 'clsx';
 
@@ -1317,31 +1317,41 @@ export function CreatorReferenceTile({
         {preview}
         <TileRemoveButton label={`Remove ${displayName}`} onRemove={onRemove} />
       </div>
-      <input
-        type="text"
-        value={nameDraft ?? displayName}
-        onChange={(event) => onNameChange(event.target.value)}
-        onBlur={onNameCommit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') {
-            event.preventDefault();
-            onNameCommit();
-            event.currentTarget.blur();
-          }
-          if (event.key === 'Escape') {
-            onNameCancel();
-            event.currentTarget.blur();
-          }
-        }}
-        aria-label={`Name of ${displayName}`}
-        // A tile shows about a dozen characters of a long name; the rest on hover.
-        title={nameDraft ?? displayName}
-        placeholder={placeholder}
-        className={clsx(
-          'w-full min-w-0 rounded-ui-sm border border-transparent bg-transparent px-1.5 py-1 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)]',
-          getAccentClasses(accent).fieldFocus
-        )}
-      />
+      {/* The name is a field, and a pencil says so while it is not being typed in: as plain
+          words it read as a label, and its hover border never shows on a touch screen. The
+          pencil lets a press through to the field under it. */}
+      <div className="relative">
+        <input
+          type="text"
+          value={nameDraft ?? displayName}
+          onChange={(event) => onNameChange(event.target.value)}
+          onBlur={onNameCommit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              onNameCommit();
+              event.currentTarget.blur();
+            }
+            if (event.key === 'Escape') {
+              onNameCancel();
+              event.currentTarget.blur();
+            }
+          }}
+          aria-label={`Name of ${displayName}`}
+          // A tile shows about a dozen characters of a long name; the rest on hover.
+          title={nameDraft ?? displayName}
+          placeholder={placeholder}
+          className={clsx(
+            'peer w-full min-w-0 rounded-ui-sm border border-transparent bg-transparent py-1 pl-1.5 pr-6 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors hover:border-[var(--ui-border-default)] focus:bg-[var(--ui-surface-2)] focus:pr-1.5',
+            getAccentClasses(accent).fieldFocus
+          )}
+        />
+        <Pencil
+          aria-hidden
+          data-name-edit-mark
+          className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ui-text-faint)] transition-colors peer-hover:text-[var(--ui-text-secondary)] peer-focus:hidden"
+        />
+      </div>
       <button type="button" onClick={onInsert} aria-label={`Insert ${handle}`} title={`Insert ${handle}`} className={CREATOR_HANDLE_INSERT_CLASS}>
         <StudioElementHandle handle={handle} className={clsx('text-xs font-semibold', handleClassName)} />
       </button>
@@ -1376,6 +1386,123 @@ function TileRemoveButton({ label, onRemove }: { label: string; onRemove: () => 
     </button>
   );
 }
+
+/**
+ * Under a reference opened at full size, what the app's Reference details sheet holds: its
+ * name, Insert its @handle, Replace its file (a reference with a handle keeps it, so the
+ * prompt that mentions it stays right) and Remove. A clip or a track has no handle, so it has
+ * no name field or Insert. The name is the tile's field: what is typed is kept on Enter or on
+ * leaving it, and Escape takes it back (and only that, while there is something to take back:
+ * a second Escape closes the preview).
+ */
+export function CreatorReferenceDetails({
+  accent,
+  name,
+  insert,
+  replace,
+  onRemove,
+  note,
+}: {
+  accent: UiAccent;
+  name?: {
+    displayName: string;
+    draft: string | undefined;
+    placeholder: string;
+    onChange: (value: string) => void;
+    onCommit: () => void;
+    onCancel: () => void;
+  };
+  insert?: { handle: string; handleClassName: string; onInsert: () => void };
+  /** `keeps`: the handle the new file keeps, said on the button. */
+  replace?: { accept: string; keeps?: string; onFile: (file: File) => void };
+  onRemove: () => void;
+  /** A line under the actions: why the run holds this reference back, where it does. */
+  note?: ReactNode;
+}) {
+  const nameId = useId();
+  const pickerRef = useRef<HTMLInputElement>(null);
+  return (
+    <div className="flex flex-col gap-4">
+      {name ? (
+        <div className="flex flex-col gap-2">
+          <label htmlFor={nameId} className={CREATOR_REFERENCE_DETAILS_LABEL_CLASS}>Reference name</label>
+          <input
+            id={nameId}
+            type="text"
+            value={name.draft ?? name.displayName}
+            onChange={(event) => name.onChange(event.target.value)}
+            onBlur={name.onCommit}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                name.onCommit();
+              }
+              if (event.key === 'Escape' && name.draft !== undefined) {
+                // The preview closes on Escape; while a name is being typed, this one only takes it back.
+                event.preventDefault();
+                name.onCancel();
+              }
+            }}
+            placeholder={name.placeholder}
+            className={clsx(
+              'min-h-12 w-full rounded-ui-lg border border-[var(--ui-border-default)] bg-[var(--ui-surface-inset)] px-4 text-sm font-semibold text-[var(--ui-text-primary)] outline-none transition-colors',
+              getAccentClasses(accent).fieldFocus
+            )}
+          />
+        </div>
+      ) : null}
+      {/* Each as wide as its words, sharing the row; where they do not fit, they wrap. */}
+      <div className="flex flex-wrap gap-2">
+        {insert ? (
+          <button type="button" onClick={insert.onInsert} className="ui-button ui-button-secondary ui-focus-ring min-w-0 grow basis-auto">
+            <span className={CREATOR_REFERENCE_DETAILS_WORDS_CLASS}>Insert <span className={insert.handleClassName}>{insert.handle}</span></span>
+          </button>
+        ) : null}
+        {replace ? (
+          <>
+            <button
+              type="button"
+              onClick={() => pickerRef.current?.click()}
+              aria-label={replace.keeps ? `Replace media, keeps ${replace.keeps}` : 'Replace media'}
+              className="ui-button ui-button-secondary ui-focus-ring min-w-0 grow basis-auto"
+            >
+              <RefreshCw aria-hidden className="h-4 w-4 shrink-0" />
+              {/* Inside a phone's preview the row is narrower than the app's sheet: "media" goes first. */}
+              <span className={CREATOR_REFERENCE_DETAILS_WORDS_CLASS}>
+                Replace{replace.keeps ? <><span className="max-sm:hidden"> media</span> · keeps {replace.keeps}</> : ' media'}
+              </span>
+            </button>
+            <input
+              ref={pickerRef}
+              type="file"
+              accept={replace.accept}
+              tabIndex={-1}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (file) replace.onFile(file);
+              }}
+            />
+          </>
+        ) : null}
+        <button
+          type="button"
+          onClick={onRemove}
+          className="ui-button ui-focus-ring min-w-0 grow basis-auto border border-[color-mix(in_srgb,var(--ui-accent-danger)_40%,transparent)] bg-transparent text-[var(--ui-accent-danger)] hover:bg-[color-mix(in_srgb,var(--ui-accent-danger)_10%,transparent)]"
+        >
+          <Trash2 aria-hidden className="h-4 w-4 shrink-0" />
+          Remove reference
+        </button>
+      </div>
+      {note ? <p className="text-xs text-[var(--ui-text-faint)]">{note}</p> : null}
+    </div>
+  );
+}
+
+/** A button's words wrap rather than cut off a long handle: the button grows a line taller. */
+const CREATOR_REFERENCE_DETAILS_WORDS_CLASS = 'min-w-0 text-balance text-center [overflow-wrap:anywhere]';
+const CREATOR_REFERENCE_DETAILS_LABEL_CLASS = 'text-[11px] font-extrabold uppercase tracking-[0.08em] text-[var(--ui-text-muted)]';
 
 /**
  * A clip or a track as a tile in its row, as the app's rail draws them: a clip's frame on top
@@ -1651,6 +1778,20 @@ export function CreatorReferenceRow({ accent, kind, stripLabel, wide, children }
  * A press opens the kind's picker, and a drop hands the kind its files, whose check refuses one
  * of another kind as it refuses a pick.
  */
+/**
+ * After a reference is removed its tile and its Remove are gone, and the focus with them: it
+ * goes to the add box of its row (`word`, "images", "video", "audio"), where the next one is
+ * added, unless something else holds it by then.
+ */
+export function focusReferenceAddBox(word: string) {
+  if (typeof window === 'undefined') return;
+  window.requestAnimationFrame(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    document.querySelector<HTMLButtonElement>(`[data-reference-add="${word}"]`)?.focus({ preventScroll: true });
+  });
+}
+
 function CreatorReferenceAddBox({ accent, kind }: { accent: UiAccent; kind: CreatorReferenceKind }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1662,6 +1803,7 @@ function CreatorReferenceAddBox({ accent, kind }: { accent: UiAccent; kind: Crea
     <div className="shrink-0">
       <button
         type="button"
+        data-reference-add={word}
         aria-label={`Add ${word}, ${kind.count} of ${kind.limit}`}
         aria-describedby={hintId}
         title={kind.hint}

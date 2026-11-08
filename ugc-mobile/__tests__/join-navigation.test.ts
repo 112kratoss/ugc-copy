@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { JOIN_ROUTE, onboardingReturnTo, openSignUpSheet, signUpNeededToCreate } from '../lib/join-navigation';
+import { JOIN_ROUTE, onboardingReturnTo, openSignUpSheet, providerSignInNext, signUpNeededToCreate } from '../lib/join-navigation';
 
 describe('signUpNeededToCreate', () => {
   it('asks anyone without an account and without credits (owner, 2026-11-08)', () => {
@@ -38,5 +38,31 @@ describe('onboardingReturnTo', () => {
     expect(onboardingReturnTo(['/post/post-1'])).toBe('/post/post-1');
     expect(onboardingReturnTo(undefined)).toBeNull();
     expect(onboardingReturnTo('https://example.com')).toBeNull();
+  });
+});
+
+describe('providerSignInNext (Apple or Google, from either half of the sign-in page)', () => {
+  it('goes on through the name and the welcome credits, then the return', () => {
+    expect(providerSignInNext('/post/post-1')).toEqual({
+      kind: 'onboarding',
+      href: { pathname: '/onboarding', params: { returnTo: '/post/post-1' } },
+    });
+    expect(providerSignInNext(undefined)).toEqual({
+      kind: 'onboarding',
+      href: { pathname: '/onboarding', params: { returnTo: '/(tabs)' } },
+    });
+  });
+
+  it("carries a redirect's in-place return on to onboarding", () => {
+    expect(providerSignInNext('/viewer?initialId=post-b', true)).toEqual({
+      kind: 'onboarding',
+      href: { pathname: '/onboarding', params: { returnTo: '/viewer?initialId=post-b', inPlace: '1' } },
+    });
+  });
+
+  it('goes back to an onboarding that asked for the account, never a second one over it', () => {
+    expect(providerSignInNext('/onboarding')).toEqual({ kind: 'return', route: '/onboarding' });
+    expect(providerSignInNext('/onboarding?returnTo=%2Fpost%2Fpost-1'))
+      .toEqual({ kind: 'return', route: '/onboarding?returnTo=%2Fpost%2Fpost-1' });
   });
 });

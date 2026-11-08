@@ -36,7 +36,7 @@ import { useAuth } from '@/lib/auth';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { onboardingReturnTo } from '@/lib/join-navigation';
-import { completeAuthScreen } from '@/lib/auth-navigation';
+import { completeAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
 import { isIdentityDeferredInMetadata, resolveOnboardingDestination } from '@/lib/onboarding-destination';
 import { appTheme } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
@@ -134,14 +134,17 @@ function OnboardingFlow() {
   const theme = useAppTheme();
   // Sent here by the sign-up sheet (app/join.tsx): the screen that asked for an
   // account, to go back to once the name and the welcome credits are done.
-  const returnTo = onboardingReturnTo(((useRoute().params ?? {}) as { returnTo?: string | string[] }).returnTo);
+  const routeParams = (useRoute().params ?? {}) as { returnTo?: string | string[]; inPlace?: string | string[] };
+  const returnTo = onboardingReturnTo(routeParams.returnTo);
+  // A redirect's sign-in that took a screen's place (signed out over a reel) returns there too.
+  const returnsInPlace = tookReturnsPlace(routeParams.inPlace);
   // Back to that screen as the sign-in screen goes back: to the copy already
   // in the stack (dismissTo), never a second one on top of it. A plain replace
   // put a second Home, reel or editor over the first.
   const leaveForReturn = useCallback(() => {
-    if (returnTo) completeAuthScreen(router, returnTo);
+    if (returnTo) completeAuthScreen(router, returnTo, { inPlace: returnsInPlace });
     else router.replace('/(tabs)' as never);
-  }, [returnTo]);
+  }, [returnTo, returnsInPlace]);
   const { api, user, refreshProfile, updateCredits, markIdentityDeferredOnAccount } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();

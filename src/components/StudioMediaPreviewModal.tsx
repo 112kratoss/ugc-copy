@@ -105,7 +105,8 @@ export function StudioMediaPreviewModal({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose();
+        // A field inside that took the key for itself (a name being typed, taken back) keeps it open.
+        if (!event.defaultPrevented) onClose();
         return;
       }
       if (event.key !== 'Tab') return;

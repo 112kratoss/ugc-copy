@@ -193,6 +193,14 @@ export const mediaColors = {
   mediaChip: 'rgba(3,4,13,0.62)',
 } as const;
 
+/**
+ * The shade over the sign-in screen's wall of creations (`components/sign-in-wall.tsx`):
+ * dark enough at the top for the headline and at the bottom for the buttons, lighter between,
+ * where the pictures show. React Native's own gradient, as the reel's caption shade is.
+ */
+export const SIGN_IN_WALL_SHADE =
+  'linear-gradient(to bottom, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.66) 30%, rgba(0,0,0,0.62) 45%, rgba(0,0,0,0.40) 57%, rgba(0,0,0,0.88) 76%, rgba(0,0,0,0.97) 100%)';
+
 // Display face: Bricolage Grotesque carries titles and the wordmark; body text
 // stays on the system font for legibility and zero load cost. One token, so
 // the face can be swapped in one line. The faces are registered under these

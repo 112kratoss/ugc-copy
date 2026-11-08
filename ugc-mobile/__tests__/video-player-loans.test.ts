@@ -13,7 +13,6 @@ import {
   isVideoLoanHeld,
   isVideoPlayerHandedBack,
   isVideoPlayerOnLoan,
-  isVideoReturnClaimed,
   isVideoReturnPending,
   lenderUnmounting,
   lendVideoPlayer,
@@ -247,24 +246,6 @@ describe('a player the reel hands back to the tile it came from', () => {
     const late = vi.fn();
     whenReturnedVideoDrawn(player, late);
     expect(late).toHaveBeenCalledTimes(1);
-  });
-
-  // A close that landed on a tile's poster waits for the tile's own view only
-  // when the tile took the player after all (components/media-zoom.tsx).
-  it('says whether a tile has taken it, while the hand-back is under way', () => {
-    const player = adoptedPlayer();
-    expect(isVideoReturnClaimed(player)).toBe(false);
-    handBackVideoPlayer(player, TILE, STREAM);
-    expect(isVideoReturnClaimed(player)).toBe(false);
-
-    claimReturnedVideoPlayer(TILE, STREAM);
-    expect(isVideoReturnClaimed(player)).toBe(true);
-    expect(isVideoReturnClaimed(fakePlayer())).toBe(false);
-
-    // Taken, drawn and the reel gone: the hand-back is over.
-    reportReturnedVideoDrawn(player);
-    endVideoReturn(player);
-    expect(isVideoReturnClaimed(player)).toBe(false);
   });
 
   it('is released when no tile takes it, once a close could no longer be drawing it', () => {

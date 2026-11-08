@@ -12,8 +12,10 @@ import { INTERNAL_EXPO_ROUTER_ZOOM_TRANSITION_SOURCE_ID_PARAM_NAME } from 'expo-
 
 import {
   APPLE_ZOOM_SOURCE_PARAM,
+  appleZoomOpenSourceId,
   appleZoomSourceId,
   hasAppleZoomParam,
+  isAppleZoomOpenSourceId,
   parseAppleZoomSourceId,
   withAppleZoom,
 } from '../lib/apple-zoom';
@@ -32,6 +34,19 @@ describe('the param that carries the zoom', () => {
     expect(appleZoomSourceId(':r1:', 'post-2')).not.toBe(id);
     expect(parseAppleZoomSourceId('something-else')).toBeNull();
     expect(parseAppleZoomSourceId(null)).toBeNull();
+  });
+
+  // A push grows the reel out of a page-shaped view beside the tile; once
+  // landed the reel points the zoom at the tile's own view for its closes.
+  it('names the view an open grows out of after its tile, and reads the tile back from it', () => {
+    const id = appleZoomSourceId(':r1:', 'post-1');
+    const open = appleZoomOpenSourceId(id);
+    expect(open).toBe(`${id}#open`);
+    expect(appleZoomOpenSourceId(open)).toBe(open);
+    expect(isAppleZoomOpenSourceId(open)).toBe(true);
+    expect(isAppleZoomOpenSourceId(id)).toBe(false);
+    expect(isAppleZoomOpenSourceId(null)).toBe(false);
+    expect(parseAppleZoomSourceId(open)).toEqual({ surfaceId: ':r1:', itemId: 'post-1' });
   });
 
   it('rides the viewer href only when a tile hands one over', () => {

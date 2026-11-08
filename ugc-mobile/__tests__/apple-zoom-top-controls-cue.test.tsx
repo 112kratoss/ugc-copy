@@ -61,7 +61,6 @@ vi.mock('react-native', () => ({ Animated: {} }));
 vi.mock('react-native-screens', () => ({
   useTransitionProgress: () => ({ progress: transition.progress, closing: {}, goingForward: {} }),
 }));
-vi.mock('@/lib/zoom-veil', () => ({ followZoomVeilTransition: () => () => {} }));
 
 import { AppleZoomTopControlsCue } from '../components/apple-zoom-progress.ios';
 

@@ -1,10 +1,10 @@
 import { normalizeAuthReturnTo } from './auth-navigation';
 
 /**
- * The sign-up sheet (`app/join.tsx`): what a guest is asked when they reach
- * for something an account does (owner, 2026-11-08: Create, Generate, Remix,
- * Like, Follow). Signing up there goes on to the creator name and the welcome
- * credits once, then back to `returnTo`.
+ * The sign-in page (`app/join.tsx`, `components/sign-in-wall.tsx`): what a guest
+ * is asked when they reach for something an account does (owner, 2026-11-08:
+ * Create, Generate, Remix, Like, Follow). Signing up there goes on to the
+ * creator name and the welcome credits once, then back to `returnTo`.
  */
 export const JOIN_ROUTE = '/join';
 
@@ -28,4 +28,32 @@ export function signUpNeededToCreate({ hasUser, credits }: { hasUser: boolean; c
 /** Where onboarding sends someone back to once the sign-up's steps are done. */
 export function onboardingReturnTo(value: string | string[] | undefined): string | null {
   return normalizeAuthReturnTo(value) ?? null;
+}
+
+/**
+ * Whether the sign-in route opens on its email form rather than the full-screen sign-in page:
+ * only when the page's "Sign in with email" sent the person there. A redirect's notice ("You
+ * were signed out") shows on the page, where Apple and Google are.
+ */
+export function signInOpensOnEmailForm(email: string | string[] | undefined) {
+  return (Array.isArray(email) ? email[0] : email) === '1';
+}
+
+/**
+ * Where a sign-in by Apple or Google goes, from either half of the sign-in page: on to the
+ * creator name and the welcome credits once (an account already set up passes straight
+ * through), then the return. A return that is onboarding itself (its own "Continue" asked for
+ * an account) goes back to that screen, never a second onboarding over it. `inPlace` (a
+ * redirect's sign-in that took a screen's place) rides along so onboarding puts it back there.
+ */
+export function providerSignInNext(
+  target: string | string[] | undefined,
+  inPlace = false,
+): { kind: 'return'; route: string } | { kind: 'onboarding'; href: { pathname: '/onboarding'; params: Record<string, string> } } {
+  const route = normalizeAuthReturnTo(target) ?? '/(tabs)';
+  if (route === '/onboarding' || route.startsWith('/onboarding?')) return { kind: 'return', route };
+  return {
+    kind: 'onboarding',
+    href: { pathname: '/onboarding', params: inPlace ? { returnTo: route, inPlace: '1' } : { returnTo: route } },
+  };
 }

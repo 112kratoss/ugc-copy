@@ -192,9 +192,9 @@ function navigationThemeFor(theme: AppTheme) {
 }
 
 /**
- * Black behind the navigator while a reel is on screen or being revealed, so
- * the rounded corners iOS 26 draws a revealed screen with show black around
- * the dark reel rather than the app's light ground (lib/reel-backdrop.ts).
+ * Black behind the navigator while a pop reveals a reel, so the rounded
+ * corners iOS 26 draws a revealed screen with show black around the dark reel
+ * rather than the app's light ground (lib/reel-backdrop.ts).
  * Android opens the reel as a transparent modal over a drawn screen, where
  * the ground never shows.
  */
@@ -327,21 +327,22 @@ function RootLayoutNav() {
                   options={{
                     headerShown: false,
                     title: 'Sign In',
-                    presentation: 'modal',
-                    animation: reducedMotion ? 'none' : 'fade_from_bottom',
-                    contentStyle: { backgroundColor: theme.colors.background },
+                    // Full screen, as the sign-in page it opens on is (components/sign-in-wall.tsx).
+                    presentation: 'fullScreenModal',
+                    animation: reducedMotion ? 'none' : 'fade',
+                    contentStyle: { backgroundColor: mediaColors.mediaGround },
                   }}
                 />
-                {/* The sign-up sheet over whatever asked for an account: a see-through
-                    screen whose own panel slides up and back (app/join.tsx). */}
+                {/* The full-screen sign-in page over whatever asked for an account
+                    (app/join.tsx), faded in as the sign-in route is. */}
                 <Stack.Screen
                   name="join"
                   options={{
                     headerShown: false,
-                    presentation: 'transparentModal',
-                    animation: 'none',
+                    presentation: 'fullScreenModal',
+                    animation: reducedMotion ? 'none' : 'fade',
                     gestureEnabled: false,
-                    contentStyle: { backgroundColor: 'transparent' },
+                    contentStyle: { backgroundColor: mediaColors.mediaGround },
                   }}
                 />
                 {/* Same iOS 26 full-screen back pan as `post/new` below, and
@@ -423,9 +424,9 @@ function RootLayoutNav() {
                     cards from the grid look stacked over feed cards. */}
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
-                {/* Where UIKit's zoom runs the page draws its own bar, which the
-                    zoom's veil covers and a close never re-lays out (see
-                    `CreatorTopBar` in components/creator-profile-screen.tsx). */}
+                {/* Where UIKit's zoom runs the page draws its own bar, which a
+                    close never re-lays out (see `CreatorTopBar` in
+                    components/creator-profile-screen.tsx). */}
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator', headerShown: !isAppleZoomAvailable() }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Recipe' }} />
                 <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Recipe' }} />
