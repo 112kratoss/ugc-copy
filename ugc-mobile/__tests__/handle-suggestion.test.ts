@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { firstHandleSuggestion, numberedHandleSuggestion } from '../lib/handle-suggestion';
+import { firstHandleSuggestion, handleForTypedName, numberedHandleSuggestion } from '../lib/handle-suggestion';
 
 const PROFILE_HANDLE = /^[a-z0-9-]{3,24}$/;
 
@@ -34,5 +34,14 @@ describe('the next try after a taken suggestion', () => {
         expect(handle).not.toMatch(/--/);
       }
     }
+  });
+});
+
+describe('the handle for a display name being typed', () => {
+  it('comes from the name alone', () => {
+    expect(handleForTypedName('Kiran D')).toBe('kiran-d');
+    expect(handleForTypedName('ആതിര')).toBe('');
+    expect(handleForTypedName('')).toBe('');
+    expect(handleForTypedName('Support', (handle) => handle !== 'support')).toBe('');
   });
 });

@@ -402,6 +402,42 @@ describe('checking the handle as it is typed', () => {
     }
   });
 
+  it('follows the display name until the creator edits the handle (owner 11-08)', async () => {
+    const tree = await openIdentityStep();
+    const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+    await act(async () => { field('Display name').props.onChangeText('Kiran D'); });
+    expect(field('Unique handle').props.value).toBe('kiran-d');
+    // A name that makes no handle (another script, or emptied) leaves the last one.
+    await act(async () => { field('Display name').props.onChangeText('ആതിര'); });
+    expect(field('Unique handle').props.value).toBe('kiran-d');
+    await act(async () => { field('Display name').props.onChangeText(''); });
+    expect(field('Unique handle').props.value).toBe('kiran-d');
+    await letTheCheckAnswer();
+
+    await typeHandle(tree, 'my-own');
+    await act(async () => { field('Display name').props.onChangeText('Someone Else'); });
+    expect(field('Unique handle').props.value).toBe('my-own');
+    act(() => tree.unmount());
+  });
+
+  it('stops changing the handle the moment its field is focused, before any typing', async () => {
+    // A fast creator: renames, taps into the handle, and the check on the
+    // suggestion answers "taken" before the first key. Nothing may move under
+    // the cursor.
+    const tree = await openIdentityStep();
+    const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+    await act(async () => { field('Unique handle').props.onFocus?.({}); });
+
+    await letTheCheckAnswer();
+    await letTheCheckAnswer();
+    expect(field('Unique handle').props.value).toBe('sarath');
+    expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
+
+    await act(async () => { field('Display name').props.onChangeText('Kiran D'); });
+    expect(field('Unique handle').props.value).toBe('sarath');
+    act(() => tree.unmount());
+  });
+
   it('leaves a handle the creator typed alone, even a taken one', async () => {
     const tree = await openIdentityStep();
     await letTheCheckAnswer();

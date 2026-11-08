@@ -29,3 +29,16 @@ export function numberedHandleSuggestion(base: string, random: () => number = Ma
   const stem = base.slice(0, HANDLE_MAX_LENGTH - digits.length - 1).replace(/-+$/, '');
   return `${stem}-${digits}`;
 }
+
+/**
+ * The handle for a display name being typed, while the field still holds a
+ * suggestion: from the name alone, never the email, so typing a name does not
+ * fall back to it. Empty for a name that makes no handle; the caller then
+ * keeps the one it has.
+ */
+export function handleForTypedName(
+  displayName: string,
+  isUsable: (handle: string) => boolean = () => true,
+): string {
+  return suggestProfileHandle(displayName, null, isUsable);
+}

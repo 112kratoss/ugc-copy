@@ -44,7 +44,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { useHandleAvailability } from '@/lib/use-handle-availability';
-import { firstHandleSuggestion, numberedHandleSuggestion } from '@/lib/handle-suggestion';
+import { firstHandleSuggestion, handleForTypedName, numberedHandleSuggestion } from '@/lib/handle-suggestion';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
@@ -175,9 +175,9 @@ function OnboardingFlow() {
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
-  // The handle this screen filled in, while it is still the field's value: a
-  // taken one is swapped for a numbered one, a few times at most, and typing
-  // anything else ends it.
+  // The handle this screen filled in, while it is still the field's value: it
+  // follows the display name, a taken one is swapped for a numbered one (a few
+  // times at most), and focusing the handle field ends both.
   const suggestedHandle = useRef<{ base: string; current: string; tries: number } | null>(null);
   // A handle the save refused, and what it said: taken since it was checked,
   // or refused by a rule the live check did not get to answer.
@@ -598,7 +598,18 @@ function OnboardingFlow() {
                 <AppTextInput
                   label="Display name"
                   value={displayName}
-                  onChangeText={setDisplayName}
+                  onChangeText={(value) => {
+                    setDisplayName(value);
+                    // While the handle is still the one made for them, it
+                    // follows the name (owner, 2026-11-08); a name that makes
+                    // no handle keeps the last one.
+                    const suggestion = suggestedHandle.current;
+                    if (!suggestion || suggestion.current !== username) return;
+                    const next = handleForTypedName(value, (handle) => !readLocalUsernameRejection(handle));
+                    if (!next || next === suggestion.current) return;
+                    suggestedHandle.current = { base: next, current: next, tries: 0 };
+                    setUsername(next);
+                  }}
                   editable={!busy}
                   autoCapitalize="words"
                   autoComplete="name"
@@ -618,8 +629,11 @@ function OnboardingFlow() {
                       inputRef={handleRef}
                       label="Unique handle"
                       value={username}
+                      // Once this field is focused the handle is the
+                      // creator's: no swap or name-following may move the
+                      // text under the cursor, even before the first key.
+                      onFocus={() => { suggestedHandle.current = null; }}
                       onChangeText={(value) => {
-                        // Anything typed is the creator's own: no more swapping.
                         suggestedHandle.current = null;
                         setUsername(normalizeUsernameInput(value));
                       }}
