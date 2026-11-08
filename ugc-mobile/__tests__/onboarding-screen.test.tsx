@@ -97,6 +97,7 @@ vi.mock('@/lib/onboarding', async () => {
     updatedAt: null,
     completedAt: null,
     identityDeferredAt: null,
+    identityDeferredFor: null,
   };
 
   return {
@@ -728,6 +729,7 @@ describe('choosing a name later (02-11)', () => {
     expect(harness.localUpdates).toContainEqual(expect.objectContaining({
       status: 'skipped',
       identityDeferredAt: expect.any(String),
+      identityDeferredFor: 'creator-1',
     }));
     expect(router.replace).toHaveBeenCalledWith('/(tabs)');
 
