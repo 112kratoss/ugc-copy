@@ -145,6 +145,8 @@ vi.mock('@/lib/tab-bar-layout', async () =>
 // the hook is stubbed rather than dragging an auth provider and a query client
 // into a test about tab presses. `badgeValue` lets a case opt into a badge.
 let badgeValue: string | null = null;
+vi.mock('@/lib/auth', () => ({ useAuth: () => ({ user: { id: 'member' }, credits: 10 }) }));
+
 vi.mock('@/lib/use-notification-badge', () => ({
   useTabBarBadge: () => badgeValue,
   useUnreadNotificationCount: () => 0,

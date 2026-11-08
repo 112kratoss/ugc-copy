@@ -185,11 +185,11 @@ describe('root layout and the launch splash', () => {
     expect(layout).not.toContain('SplashScreen.hideAsync');
   });
 
-  it('covers home until the launch redirect to onboarding has landed, and settles only then', () => {
-    expect(layout).toContain("router.replace({ pathname: '/onboarding', params: { entry: ONBOARDING_LAUNCH_ENTRY } } as never)");
-    expect(layout).toContain("if (pathname === '/' && (!isHydrated || isLoading || holdingForRedirect))");
-    const effect = layout.slice(layout.indexOf('if (holdingForRedirect) {'));
-    expect(effect.indexOf('return () => clearTimeout(fallback);')).toBeLessThan(effect.indexOf('markLaunchRouteSettled();'));
+  it('never sends a launch to onboarding, and covers home only until the session is back', () => {
+    // Owner, 2026-11-08: a new install lands on Home as a guest; sign-up is
+    // asked for at Create, Generate, Remix, Like and Follow (app/join.tsx).
+    expect(layout).not.toContain("pathname: '/onboarding', params: { entry: ONBOARDING_LAUNCH_ENTRY }");
+    expect(layout).toContain("if (pathname === '/' && (!isHydrated || isLoading))");
     expect(layout).toContain("animation: reducedMotion ? 'none' : onboardingAnimation(route.params)");
   });
 });

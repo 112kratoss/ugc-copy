@@ -14,7 +14,7 @@ type HostPhase = 'deciding' | 'showing' | 'done';
  *
  * Rendered just under the launch splash, so the intro's ground is already
  * there when the logo fades and the page slides in over it; the screen the app
- * opened on (the welcome screen, for a new install) is set up beneath it the
+ * opened on (Home, for a new install) is set up beneath it the
  * whole time. Whether it plays is decided while the logo still covers the app:
  * if the answer is not known by the time the logo lifts, it does not play, so
  * it can never slide in over a screen someone has already started to use.

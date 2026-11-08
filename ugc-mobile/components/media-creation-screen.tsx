@@ -41,6 +41,7 @@ import { acquireActivityLock } from '@/lib/app-activity';
 import { showConfirmDialog } from '@/lib/dialog';
 import { reportGenerationOutput } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
+import { openSignUpSheet, signUpNeededToCreate } from '@/lib/join-navigation';
 import { env } from '@/lib/env';
 import { countDraftMedia, heldDraftMedia, needsRemixReferenceRecovery, recoverRemixReferences, remixSourceMediaUrl, replaceDraftMediaSeedanceAsset, replaceDraftMediaUrl } from '@/lib/remix-draft-recovery';
 import { holdsRemixOriginal, remixOriginalMedia, remixOriginalOf, remixOriginalPlace, replacedRemixOriginal, storedRemixOriginal, withRenewedRemixOriginal, type RemixOriginal, type RemixOriginalPlace } from '@/lib/remix-original-reference';
@@ -1066,7 +1067,7 @@ function IdentityCreationScreen({
   // guest the source of its own or a linked creation, and keeps another
   // creator's for accounts (403 REGISTRATION_REQUIRED), which the restore
   // answers with its sign-in line (D4).
-  const { identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
+  const { user, identityUserId, isGuest, session, api, credits, updateCredits, refreshProfile, ensureGuestMergeTicket } = useAuth();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<CreatorToolId>(isTool(initialTool) ? initialTool : 'image');
   // A guided first creation names its starter's model from the outset, so the default is never
@@ -1736,15 +1737,12 @@ function IdentityCreationScreen({
   // is not in the draft yet: a run started now would go to the model before it.
   const modelPickLoading = Boolean(modelPick && !modelPick.error);
   const generateDisabled = !draftsHydrated || isRestoringRemix || remixStartHeld || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || appOutOfDate || validation.errors.length > 0;
+  // The sign-up sheet (owner, 2026-11-08), which comes back to this screen once
+  // the name and the welcome credits are done.
   const openAuthForCurrentDraft = () => {
-    router.push({
-      pathname: '/auth',
-      params: {
-        // The route's own tool, not the one switched to: the tool, remix and prompt are what the
-        // route was opened with, and only those find this screen again.
-        returnTo: creatorReturnPath({ insideTab, tool: initialTool, guided, initialPrompt, remixSource }),
-      },
-    } as never);
+    // The route's own tool, not the one switched to: the tool, remix and prompt are what the
+    // route was opened with, and only those find this screen again.
+    openSignUpSheet(router, creatorReturnPath({ insideTab, tool: initialTool, guided, initialPrompt, remixSource }));
   };
 
   /** Answers whether the screen is now on `tool`: a run still going keeps its own, and says why. */
@@ -3067,9 +3065,10 @@ function IdentityCreationScreen({
       setWorkspaceVisible(true);
       return;
     }
-    // Guests generate. Credits are a server-side balance on their identity, so
-    // there is nothing account-specific to ask for before spending them.
-    if (!identityUserId) {
+    // A guest with credits generates with them (they are a server-side balance
+    // on its identity). One with none is asked to sign up, which brings the
+    // welcome credits, and comes back here (owner, 2026-11-08).
+    if (!identityUserId || signUpNeededToCreate({ credits, hasUser: Boolean(user) })) {
       openAuthForCurrentDraft();
       return;
     }

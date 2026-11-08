@@ -66,10 +66,7 @@ import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import {
-  isOnboardingRedirectDue,
-  ONBOARDING_LAUNCH_ENTRY,
   onboardingAnimation,
-  STARTUP_REDIRECT_FALLBACK_MS,
   STARTUP_VERSION_CHECK_FALLBACK_MS,
   type StartupVersionCheckStatus,
 } from '@/lib/startup-readiness';
@@ -335,6 +332,18 @@ function RootLayoutNav() {
                     contentStyle: { backgroundColor: theme.colors.background },
                   }}
                 />
+                {/* The sign-up sheet over whatever asked for an account: a see-through
+                    screen whose own panel slides up and back (app/join.tsx). */}
+                <Stack.Screen
+                  name="join"
+                  options={{
+                    headerShown: false,
+                    presentation: 'transparentModal',
+                    animation: 'none',
+                    gestureEnabled: false,
+                    contentStyle: { backgroundColor: 'transparent' },
+                  }}
+                />
                 {/* Same iOS 26 full-screen back pan as `post/new` below, and
                     the same static off — here because the editor holds unsaved
                     prompt/reference edits, and a native pop completes before
@@ -471,8 +480,8 @@ function RootLayoutNav() {
 
 function StartupCoordinator() {
   const theme = useAppTheme();
-  const { api, isLoading, user } = useAuth();
-  const { isHydrated, state, storageAvailable } = useOnboarding();
+  const { api, isLoading } = useAuth();
+  const { isHydrated } = useOnboarding();
   const pathname = usePathname();
   const [versionCheckStatus, setVersionCheckStatus] =
     useState<StartupVersionCheckStatus>('idle');
@@ -524,36 +533,18 @@ function StartupCoordinator() {
     }
   }, [pathname, versionCheckStatus]);
 
-  const redirectDue = isOnboardingRedirectDue({
-    isHydrated,
-    isAuthLoading: isLoading,
-    hasUser: Boolean(user),
-    storageAvailable,
-    versionCheckStatus,
-    pathname,
-    onboardingStatus: state.status,
-  });
-  // A redirect that has not landed after STARTUP_REDIRECT_FALLBACK_MS stops
-  // holding the cover, so nothing can leave the screen blank.
-  const [redirectStalled, setRedirectStalled] = useState(false);
-  const holdingForRedirect = redirectDue && !redirectStalled;
-
+  // A launch is no longer sent to the welcome screens (owner, 2026-11-08: a new
+  // install lands on Home as a guest after the first-open intro, and is asked
+  // to sign up when it reaches for something an account does, `app/join.tsx`).
   useEffect(() => {
     if (!isHydrated || isLoading) return;
-    if (holdingForRedirect) {
-      router.replace({ pathname: '/onboarding', params: { entry: ONBOARDING_LAUNCH_ENTRY } } as never);
-      const fallback = setTimeout(() => setRedirectStalled(true), STARTUP_REDIRECT_FALLBACK_MS);
-      return () => clearTimeout(fallback);
-    }
-    // The first screen is on screen now: nothing had to move, or the redirect
-    // has landed (the path has left home). The launch splash may leave once
-    // its clip has played.
+    // The first screen is on screen now. The launch splash may leave once its
+    // clip has played.
     markLaunchRouteSettled();
-  }, [holdingForRedirect, isHydrated, isLoading]);
+  }, [isHydrated, isLoading]);
 
-  // Home stays covered until the redirect away from it has landed: dropped any
-  // sooner, home was drawn for a moment before onboarding came over it.
-  if (pathname === '/' && (!isHydrated || isLoading || holdingForRedirect)) {
+  // Home stays covered until the session and the onboarding store are back.
+  if (pathname === '/' && (!isHydrated || isLoading)) {
     return <View pointerEvents="none" style={{ position: 'absolute', inset: 0, zIndex: 100, backgroundColor: theme.colors.background }} />;
   }
   return null;

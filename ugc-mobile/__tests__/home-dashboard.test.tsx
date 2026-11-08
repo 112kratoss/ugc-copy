@@ -1717,7 +1717,7 @@ describe('Home screen', () => {
     });
 
     expect(authState.api.remixShowcasePost).not.toHaveBeenCalled();
-    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/post/post-1' } });
+    expect(routerState.push).toHaveBeenCalledWith({ pathname: '/join', params: { returnTo: '/post/post-1' } });
 
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());

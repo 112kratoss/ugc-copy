@@ -127,8 +127,9 @@ describe("the ••• menu's Save and sign-in", () => {
   });
 
   it('brings a signed-out heart, double-tap or owner action back to the post', () => {
+    // A guest's heart is the sign-up sheet (owner, 2026-11-08); an owner action still signs in.
     expect(slice('const saveItem: SaveItemHandler', 'return;\n    }'))
-      .toContain("router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);");
+      .toContain('openSignUpSheet(router, returnPathFor(item));');
     expect(slice('const runOwnerAction = (action: string, item: ImmersivePreviewItem) => {', 'return;\n    }'))
       .toContain("router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);");
     expect(viewer).not.toContain("router.push('/auth')");

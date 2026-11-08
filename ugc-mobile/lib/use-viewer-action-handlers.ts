@@ -4,6 +4,7 @@ import { AccessibilityInfo, Linking } from 'react-native';
 
 import type { createApiClient, MagicbookletApiClient } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth';
+import { openSignUpSheet } from './join-navigation';
 import { showActionSheet } from '@/lib/action-sheet';
 import { setCachedCreatorProfileBlocked } from '@/lib/creator-profile-view-model';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
@@ -281,9 +282,12 @@ export function useViewerActionHandlers({
 
     if (action === 'save' || action === 'unsave') {
       // Saving is an account's (the server refuses a guest's save), so a guest
-      // is asked to sign in here, as Report asks, rather than sent to a refusal
-      // that read "Could not update media" (02-9).
-      if (!requireSignedIn()) return;
+      // is asked to sign up here (the sign-up sheet, owner 2026-11-08) rather
+      // than sent to a refusal that read "Could not update media" (02-9).
+      if (!user) {
+        openSignUpSheet(router, authReturnTo);
+        return;
+      }
       if (onSave) {
         onSave(item);
         return;
