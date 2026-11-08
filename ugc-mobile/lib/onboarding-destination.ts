@@ -15,8 +15,12 @@ export type OnboardingDestination = 'intro' | 'identity' | 'reward' | 'none' | '
 export interface OnboardingDestinationInput {
   /** A *registered* user. Guests are install-local and never resolve past `intro`. */
   hasUser: boolean;
-  /** The registered account's id: the install's deferral counts only for the account that chose it. */
-  userId?: string | null;
+  /**
+   * The registered account's id: the install's deferral counts only for the
+   * account that chose it. Required, so a caller cannot drop it and silently
+   * turn every install deferral off (review of #733).
+   */
+  userId: string | null;
   welcome: Pick<WelcomeCreditResponse, 'status' | 'identityComplete'> | null;
   local: Pick<InstallOnboardingState, 'identityDeferredAt' | 'identityDeferredFor' | 'status'>;
   /**
@@ -63,7 +67,7 @@ export function isIdentityDeferredInMetadata(metadata: unknown): boolean {
  */
 export function resolveOnboardingDestination({
   hasUser,
-  userId = null,
+  userId,
   welcome,
   local,
   identityDeferredOnAccount = false,

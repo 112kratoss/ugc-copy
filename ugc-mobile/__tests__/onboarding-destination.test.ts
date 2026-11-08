@@ -11,7 +11,7 @@ const noDeferral = { identityDeferredAt: null, identityDeferredFor: null, status
 describe('resolving the onboarding destination', () => {
   it('sends a signed-out visitor to the intro', () => {
     expect(resolveOnboardingDestination({
-      hasUser: false, welcome: null, local: noDeferral,
+      hasUser: false, userId: null, welcome: null, local: noDeferral,
     })).toBe('intro');
   });
 
@@ -19,10 +19,10 @@ describe('resolving the onboarding destination', () => {
     // "Explore as guest" marks the flow skipped; the Home card used to come
     // back on every visit regardless. Settings still opens the flow.
     expect(resolveOnboardingDestination({
-      hasUser: false, welcome: null, local: { identityDeferredAt: null, identityDeferredFor: null, status: 'skipped' },
+      hasUser: false, userId: null, welcome: null, local: { identityDeferredAt: null, identityDeferredFor: null, status: 'skipped' },
     })).toBe('none');
     expect(resolveOnboardingDestination({
-      hasUser: false, welcome: null, local: { identityDeferredAt: null, identityDeferredFor: null, status: 'completed' },
+      hasUser: false, userId: null, welcome: null, local: { identityDeferredAt: null, identityDeferredFor: null, status: 'completed' },
     })).toBe('none');
   });
 
@@ -31,13 +31,14 @@ describe('resolving the onboarding destination', () => {
     // Answering `none` here is what made the card flicker in after the feed had
     // already laid out, shifting rows under a thumb.
     expect(resolveOnboardingDestination({
-      hasUser: true, welcome: null, local: noDeferral,
+      hasUser: true, userId: 'account-a', welcome: null, local: noDeferral,
     })).toBe('pending');
   });
 
   it('asks for a handle before anything else', () => {
     expect(resolveOnboardingDestination({
       hasUser: true,
+      userId: 'account-a',
       welcome: { status: 'not_eligible', identityComplete: false },
       local: noDeferral,
     })).toBe('identity');
@@ -49,6 +50,7 @@ describe('resolving the onboarding destination', () => {
     // account would silence the one prompt that is actually actionable.
     expect(resolveOnboardingDestination({
       hasUser: true,
+      userId: 'account-a',
       welcome: { status: 'legacy_ineligible', identityComplete: false },
       local: noDeferral,
     })).toBe('identity');
@@ -97,6 +99,7 @@ describe('resolving the onboarding destination', () => {
     // "Finish your creator setup" to a creator who had chosen it there.
     expect(resolveOnboardingDestination({
       hasUser: true,
+      userId: 'account-a',
       welcome: { status: 'not_eligible', identityComplete: false },
       local: noDeferral,
       identityDeferredOnAccount: true,
@@ -104,6 +107,7 @@ describe('resolving the onboarding destination', () => {
     // It defers the handle only: a claimable pack is still offered.
     expect(resolveOnboardingDestination({
       hasUser: true,
+      userId: 'account-a',
       welcome: { status: 'eligible', identityComplete: true },
       local: noDeferral,
       identityDeferredOnAccount: true,
@@ -123,6 +127,7 @@ describe('resolving the onboarding destination', () => {
   it('offers the pack only while it is claimable', () => {
     expect(resolveOnboardingDestination({
       hasUser: true,
+      userId: 'account-a',
       welcome: { status: 'eligible', identityComplete: true },
       local: noDeferral,
     })).toBe('reward');
@@ -134,6 +139,7 @@ describe('resolving the onboarding destination', () => {
     for (const status of ['legacy_ineligible', 'already_claimed', 'claimed', 'unavailable', 'not_eligible'] as const) {
       expect(resolveOnboardingDestination({
         hasUser: true,
+        userId: 'account-a',
         welcome: { status, identityComplete: true },
         local: noDeferral,
       })).toBe('none');
