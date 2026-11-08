@@ -30,8 +30,8 @@ import {
     CreatorReferencePreview,
     CreatorReferenceStrip,
     CreatorReferenceTile,
+    CreatorReferenceDetails,
     CreatorRemixSlotTile,
-    type CreatorReferencePreviewTarget,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -216,6 +216,7 @@ import {
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
     remixReferencesBesideOwn,
+    removePromptHandle,
     replacePromptHandles,
     type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -1381,6 +1382,11 @@ function VideoCreator({
     // Why files just picked were left out: their own line, so it never stands in for a
     // run's error or its background state.
     const [pickNotice, setPickNotice] = useState<string | null>(null);
+    // What a removal took with it ("Element 1 and @element_1 were removed from this draft."), as the
+    // app says it, with how many references were left: it is said until one is added or taken off.
+    const [removedNotice, setRemovedNotice] = useState<{ text: string; left: number } | null>(null);
+    // The reference opened at full size, with what the app's Reference details sheet holds under it.
+    const [referenceDetails, setReferenceDetails] = useState<{ kind: 'element' | 'klingVideo' | 'referenceVideo'; id: string } | null>(null);
     // A start sent without an answer that says whether it started. Until one comes, the
     // bar offers to check again under the same key instead of starting another.
     const [unconfirmedStart, setUnconfirmedStart] = useState<PendingWebStart | null>(null);
@@ -1472,7 +1478,6 @@ function VideoCreator({
     const [remixSlotsNoticeDismissed, setRemixSlotsNoticeDismissed] = useState(false);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
-    const openReferencePreview = ({ kind, src, name }: CreatorReferencePreviewTarget) => setUploadPreview({ type: kind, src, alt: name, title: name });
     // Bumped once a start the creator pressed is confirmed: the result canvas comes into view.
     const [canvasRevealKey, setCanvasRevealKey] = useState(0);
     // The run in flight's shape, settings and prompt, which its frame and caption keep while
@@ -3644,6 +3649,64 @@ function VideoCreator({
         await persistSeedanceAssets(elementsRef.current, referenceVideosRef.current, nextReferences);
     };
 
+    // Remove, as the app's: asked first, since a file the creator picked cannot be brought back,
+    // and a reference's handle leaves the prompt and the shots with it, so no mention is left
+    // naming nothing. A question is moot once the references change while it is up.
+    const referenceCount = elements.length + klingVideoElements.length + referenceVideos.length + referenceAudios.length;
+    const confirmReferenceRemoval = useConfirmation([
+        ...elements, ...klingVideoElements, ...referenceVideos, ...referenceAudios,
+    ].map((reference) => reference.id).join('|'));
+    const promptsMention = (handle: string) => (
+        extractPromptHandles(prompt).includes(handle)
+        || multiPrompts.some((shot) => extractPromptHandles(shot.prompt).includes(handle))
+    );
+    const removeReferenceAsked = async (
+        target: { displayName: string; handle?: string | null } | undefined,
+        remove: () => Promise<void>,
+    ): Promise<boolean> => {
+        if (!target) return false;
+        const handle = target.handle ?? null;
+        const mentioned = handle !== null && promptsMention(handle);
+        const removed = await confirmReferenceRemoval({
+            title: `Remove ${target.displayName}?`,
+            message: mentioned
+                ? `${target.displayName} and ${handle} will be removed from this draft.`
+                : `${target.displayName} will be removed from this draft.`,
+            confirmLabel: 'Remove',
+            tone: 'danger',
+        });
+        if (!removed) return false;
+        const done = remove();
+        if (mentioned) {
+            setPrompt((currentPrompt) => removePromptHandle(currentPrompt, handle));
+            setMultiPrompts((currentPrompts) => currentPrompts.map((shot) => ({ ...shot, prompt: removePromptHandle(shot.prompt, handle) })));
+        }
+        setRemovedNotice({
+            text: mentioned
+                ? `${target.displayName} and ${handle} were removed from this draft.`
+                : `${target.displayName} was removed from this draft.`,
+            left: referenceCount - 1,
+        });
+        await done;
+        return true;
+    };
+    const requestRemoveElement = (id: string) => removeReferenceAsked(
+        elementsRef.current.find((element) => element.id === id),
+        () => handleRemoveElement(id),
+    );
+    const requestRemoveKlingVideoElement = (id: string) => removeReferenceAsked(
+        klingVideoElementsRef.current.find((element) => element.id === id),
+        () => handleRemoveKlingVideoElement(id),
+    );
+    const requestRemoveReferenceVideo = (id: string) => removeReferenceAsked(
+        referenceVideosRef.current.find((reference) => reference.id === id),
+        () => handleRemoveReferenceVideo(id),
+    );
+    const requestRemoveReferenceAudio = (id: string) => removeReferenceAsked(
+        referenceAudiosRef.current.find((reference) => reference.id === id),
+        () => handleRemoveReferenceAudio(id),
+    );
+
     // The inputs' switch (the artboard Inputs). A pick that would clear something asks first,
     // and its yes brings along what the other side can take: frames become references, the
     // first pictures become the free frames. The focus goes back to the side shown.
@@ -3842,6 +3905,32 @@ function VideoCreator({
         }]);
         revokeObjectUrl(target.previewUrl);
         await saveMediaReferences(kind, current.map((reference) => (reference.id === referenceId ? replaced : reference)));
+    };
+
+    /** Replace on a named clip: a new clip under the same name and handle, measured as an added one is. */
+    const replaceKlingVideoElement = async (elementId: string, file: File) => {
+        if (!isKlingVideoElementFile(file)) {
+            setPickNotice(refusedKlingClipsNotice([file.name || 'This file']));
+            return;
+        }
+        setPickNotice(null);
+        const durationSeconds = await readVideoDurationSeconds(file);
+        // Read now, not before the measuring: the list may have changed meanwhile.
+        const current = klingVideoElementsRef.current;
+        const target = current.find((element) => element.id === elementId);
+        if (!target) return;
+        revokeObjectUrl(target.previewUrl);
+        const nextElements = hydrateKlingVideoElements(current.map((element) => (element.id === elementId ? {
+            id: element.id,
+            displayName: element.displayName,
+            handle: element.handle,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            source: 'upload' as const,
+            durationSeconds,
+        } : element)));
+        commitKlingVideoElements(nextElements);
+        await persistKlingVideoElements(nextElements);
     };
 
     // A remix's empty boxes, filled (owner, 2026-11-03): the remixer's own file becomes a reference
@@ -5442,18 +5531,117 @@ function VideoCreator({
         void handleGenerate({ replacingUnconfirmed: true });
     };
 
+    // Past the model's limit a picture is kept, not sent (the run waits until it fits): its tile
+    // and its details say which ones, as the app keeps them apart.
+    const elementNotSentNote = (index: number) => (canUseVideoElements && modelCatalog.detailsReady && index >= videoElementSupport.maxElements
+        ? `Not sent: ${videoModel.displayName} takes ${videoElementSupport.maxElements}`
+        : undefined);
+    // The reference opened with its details: a picture and a named clip have a name and a handle,
+    // a clip has neither. Each has Replace and Remove; Remove asks with the preview put away, so
+    // the question is the one dialog up, and kept, the preview opens again.
+    const removeFromDetails = (request: (id: string) => Promise<boolean>, target: NonNullable<typeof referenceDetails>) => {
+        setReferenceDetails(null);
+        void request(target.id).then((removed) => {
+            if (!removed) setReferenceDetails(target);
+        });
+    };
+    const detailsView = (() => {
+        if (!referenceDetails) return null;
+        const target = referenceDetails;
+        if (target.kind === 'element') {
+            const index = elements.findIndex((element) => element.id === target.id);
+            const element = elements[index];
+            if (!element) return null;
+            return {
+                mediaType: 'image' as const,
+                src: element.previewUrl,
+                alt: element.displayName,
+                footer: (
+                    <CreatorReferenceDetails
+                        accent="video"
+                        name={{
+                            displayName: element.displayName,
+                            draft: elementNames.drafts[element.id],
+                            placeholder: 'Reference name',
+                            onChange: (value) => handleElementDraftChange(element.id, value),
+                            onCommit: () => void commitElementDraft(element.id),
+                            onCancel: () => elementNames.dropDraft(element.id),
+                        }}
+                        insert={{
+                            handle: element.handle,
+                            handleClassName: 'text-sky-300',
+                            onInsert: () => {
+                                setReferenceDetails(null);
+                                handleInsertElementHandle(element.handle);
+                            },
+                        }}
+                        replace={{ accept: 'image/*', keeps: element.handle, onFile: (file) => void replaceElement(element.id, file) }}
+                        onRemove={() => removeFromDetails(requestRemoveElement, target)}
+                        note={elementNotSentNote(index)}
+                    />
+                ),
+            };
+        }
+        if (target.kind === 'klingVideo') {
+            const element = klingVideoElements.find((candidate) => candidate.id === target.id);
+            if (!element) return null;
+            return {
+                mediaType: 'video' as const,
+                src: element.previewUrl || element.providerUrl,
+                alt: element.displayName,
+                footer: (
+                    <CreatorReferenceDetails
+                        accent="video"
+                        name={{
+                            displayName: element.displayName,
+                            draft: klingVideoNames.drafts[element.id],
+                            placeholder: 'Reference name',
+                            onChange: (value) => handleKlingVideoDraftChange(element.id, value),
+                            onCommit: () => void commitKlingVideoDraft(element.id),
+                            onCancel: () => klingVideoNames.dropDraft(element.id),
+                        }}
+                        insert={{
+                            handle: element.handle,
+                            handleClassName: 'text-emerald-300',
+                            onInsert: () => {
+                                setReferenceDetails(null);
+                                handleInsertKlingVideoHandle(element.handle);
+                            },
+                        }}
+                        replace={{ accept: 'video/*', keeps: element.handle, onFile: (file) => void replaceKlingVideoElement(element.id, file) }}
+                        onRemove={() => removeFromDetails(requestRemoveKlingVideoElement, target)}
+                    />
+                ),
+            };
+        }
+        const reference = referenceVideos.find((candidate) => candidate.id === target.id);
+        if (!reference) return null;
+        return {
+            mediaType: 'video' as const,
+            src: reference.previewUrl || reference.providerUrl,
+            alt: reference.displayName,
+            footer: (
+                <CreatorReferenceDetails
+                    accent="video"
+                    replace={{ accept: 'video/*', onFile: (file) => void replaceMediaReference('video', reference.id, file) }}
+                    onRemove={() => removeFromDetails(requestRemoveReferenceVideo, target)}
+                />
+            ),
+        };
+    })();
+
     // What the run leaves out because the model has no slot for it, with a way to take
     // each off: the standby card used to say they were kept and offer no means to remove them.
     const standbyReferences: Array<{ kind: 'image' | 'video' | 'audio'; id: string; displayName: string; onRemove: () => void }> = [
         ...(showSavedElementNotice
-            ? elements.map((element) => ({ kind: 'image' as const, id: element.id, displayName: element.displayName, onRemove: () => void handleRemoveElement(element.id) }))
+            ? elements.map((element) => ({ kind: 'image' as const, id: element.id, displayName: element.displayName, onRemove: () => void requestRemoveElement(element.id) }))
             : []),
         ...(affordances.carries.videos
             ? []
-            : referenceVideos.map((reference) => ({ kind: 'video' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceVideo(reference.id) }))),
+            : referenceVideos.map((reference) => ({ kind: 'video' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void requestRemoveReferenceVideo(reference.id) }))),
         ...(affordances.carries.audios
             ? []
-            : referenceAudios.map((reference) => ({ kind: 'audio' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void handleRemoveReferenceAudio(reference.id) }))),
+            : referenceAudios.map((reference) => ({ kind: 'audio' as const, id: reference.id, displayName: reference.displayName, onRemove: () => void requestRemoveReferenceAudio(reference.id) }))),
     ];
 
     // A read that failed, said with Try again; else what the restore could not bring back.
@@ -5622,6 +5810,8 @@ function VideoCreator({
         </div>
     ) : quoteState.status === 'error' ? (
         quoteRetry
+    ) : removedNotice && removedNotice.left === referenceCount ? (
+        <p role="status" className="text-[var(--ui-text-secondary)] [overflow-wrap:anywhere]">{removedNotice.text}</p>
     ) : null;
     // A remix short of its original lands here too: it says what the original costs, with
     // Top up in Generate's place, and the run stays the original's (owner, 2026-11-01).
@@ -6189,12 +6379,12 @@ function VideoCreator({
                                             <div className="space-y-2">
                                             {imageReferenceKind ? (
                                                 <CreatorReferenceRow accent="video" kind={imageReferenceKind} stripLabel="Reference images">
-                                                    {elements.map((element) => (
+                                                    {elements.map((element, index) => (
                                                         <CreatorReferenceTile
                                                             key={element.id}
                                                             accent="video"
                                                             preview={(
-                                                                <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
+                                                                <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={() => setReferenceDetails({ kind: 'element', id: element.id })} />
                                                             )}
                                                             displayName={element.displayName}
                                                             nameDraft={elementNames.drafts[element.id]}
@@ -6202,15 +6392,16 @@ function VideoCreator({
                                                             onNameChange={(value) => handleElementDraftChange(element.id, value)}
                                                             onNameCommit={() => void commitElementDraft(element.id)}
                                                             onNameCancel={() => elementNames.dropDraft(element.id)}
-                                                            onRemove={() => void handleRemoveElement(element.id)}
+                                                            onRemove={() => void requestRemoveElement(element.id)}
                                                             handle={element.handle}
                                                             handleClassName="text-sky-300"
                                                             onInsert={() => handleInsertElementHandle(element.handle)}
-                                                            replace={element.restoredFromRemix ? {
+                                                            replace={{
                                                                 label: `Replace ${element.handle} with your own photo`,
                                                                 accept: 'image/*',
                                                                 onFile: (file) => void replaceElement(element.id, file),
-                                                            } : undefined}
+                                                            }}
+                                                            note={elementNotSentNote(index)}
                                                         />
                                                     ))}
                                                     {shownSlotsOf('reference_image').map((slot) => (
@@ -6239,18 +6430,18 @@ function VideoCreator({
                                                                         kind="video"
                                                                         src={reference.previewUrl || reference.providerUrl}
                                                                         name={reference.displayName}
-                                                                        onPreview={openReferencePreview}
+                                                                        onPreview={() => setReferenceDetails({ kind: 'referenceVideo', id: reference.id })}
                                                                     />
                                                                 )}
                                                                 displayName={reference.displayName}
                                                                 line={length?.text ?? 'Duration unavailable'}
                                                                 lineHeld={Boolean(length?.held)}
-                                                                onRemove={() => void handleRemoveReferenceVideo(reference.id)}
-                                                                replace={reference.restoredFromRemix ? {
+                                                                onRemove={() => void requestRemoveReferenceVideo(reference.id)}
+                                                                replace={{
                                                                     label: `Replace ${reference.displayName} with your own clip`,
                                                                     accept: 'video/*',
                                                                     onFile: (file) => void replaceMediaReference('video', reference.id, file),
-                                                                } : undefined}
+                                                                }}
                                                             />
                                                         );
                                                     })}
@@ -6285,12 +6476,12 @@ function VideoCreator({
                                                                         ? (reference.seedanceAsset.assetId ? 'Prepared asset available' : 'Uses URL fallback until prepared')
                                                                         : length?.text}
                                                                 lineHeld={Boolean(length?.held)}
-                                                                onRemove={() => void handleRemoveReferenceAudio(reference.id)}
-                                                                replace={reference.restoredFromRemix ? {
+                                                                onRemove={() => void requestRemoveReferenceAudio(reference.id)}
+                                                                replace={{
                                                                     label: `Replace ${reference.displayName} with your own track`,
                                                                     accept: 'audio/*',
                                                                     onFile: (file) => void replaceMediaReference('audio', reference.id, file),
-                                                                } : undefined}
+                                                                }}
                                                             />
                                                         );
                                                     })}
@@ -6358,7 +6549,7 @@ function VideoCreator({
                                                         src={element.previewUrl || element.providerUrl}
                                                         name={element.displayName}
                                                         wide
-                                                        onPreview={openReferencePreview}
+                                                        onPreview={() => setReferenceDetails({ kind: 'klingVideo', id: element.id })}
                                                     />
                                                 )}
                                                 displayName={element.displayName}
@@ -6367,10 +6558,15 @@ function VideoCreator({
                                                 onNameChange={(value) => handleKlingVideoDraftChange(element.id, value)}
                                                 onNameCommit={() => void commitKlingVideoDraft(element.id)}
                                                 onNameCancel={() => klingVideoNames.dropDraft(element.id)}
-                                                onRemove={() => void handleRemoveKlingVideoElement(element.id)}
+                                                onRemove={() => void requestRemoveKlingVideoElement(element.id)}
                                                 handle={element.handle}
                                                 handleClassName="text-emerald-300"
                                                 onInsert={() => handleInsertKlingVideoHandle(element.handle)}
+                                                replace={{
+                                                    label: `Replace ${element.handle} with another clip`,
+                                                    accept: 'video/*',
+                                                    onFile: (file) => void replaceKlingVideoElement(element.id, file),
+                                                }}
                                                 onCopy={() => {
                                                     if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
                                                         void navigator.clipboard.writeText(element.handle);
@@ -6747,6 +6943,17 @@ function VideoCreator({
                 keepsPrompt={currentIsMultiShot ? multiPrompts.some((shot) => shot.prompt.trim()) : Boolean(prompt.trim())}
                 keepsImages={Boolean(startImageFile || endImageFile) || elements.length > 0 || klingSubjects.length > 0}
                 onClose={() => setSignUpReason(null)}
+            />
+
+            <StudioMediaPreviewModal
+                isOpen={Boolean(detailsView?.src)}
+                onClose={() => setReferenceDetails(null)}
+                mediaType={detailsView?.mediaType ?? 'image'}
+                src={detailsView?.src ?? null}
+                alt={detailsView?.alt ?? 'Reference'}
+                title="Reference details"
+                renewSrc={remixId ? renewRemixLink : undefined}
+                footer={detailsView?.footer}
             />
 
             <StudioMediaPreviewModal

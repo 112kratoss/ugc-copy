@@ -233,6 +233,24 @@ export function findUnknownPromptHandles(prompt: string, validHandles: string[])
   return extractPromptHandles(prompt).filter((handle) => !validHandleSet.has(handle));
 }
 
+/**
+ * The prompt without a removed reference's mentions, as the app removes them
+ * (`replacePromptHandle` in the mobile creator): the space each leaves is closed
+ * up, before punctuation and at a line's ends too, so "with @hero, then" reads
+ * "with, then" and no doubled space or blank line is left behind.
+ */
+export function removePromptHandle(prompt: string, handle: string): string {
+  if (!extractPromptHandles(prompt).includes(handle)) return prompt;
+  return prompt
+    .replace(HANDLE_PATTERN, (match, prefix: string, found: string) => (found === handle ? prefix : match))
+    .replace(/[ \t]+([,.;!?])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 export function replacePromptHandles(prompt: string, replacements: Map<string, string>): string {
   if (replacements.size === 0) {
     return prompt;

@@ -973,6 +973,11 @@ describe('a reference tile', () => {
     expect(screen.getByText('4s clip')).toBeInTheDocument();
 
     const name = screen.getByRole('textbox', { name: 'Name of Hero' });
+    // A pencil beside it says the name can be changed (owner, 2026-11-08): it hides while typing
+    // and lets a press through to the field.
+    const mark = name.parentElement?.querySelector('[data-name-edit-mark]');
+    expect(mark?.getAttribute('class')?.split(' ')).toEqual(expect.arrayContaining(['pointer-events-none', 'peer-focus:hidden']));
+    expect(name.className.split(' ')).toContain('peer');
     fireEvent.change(name, { target: { value: 'Villain' } });
     expect(calls.onNameChange).toHaveBeenCalledWith('Villain');
     fireEvent.keyDown(name, { key: 'Enter' });

@@ -398,6 +398,13 @@ const videoModelSummaries = [
 ];
 
 /** The inputs' switch (the artboard Inputs): picks a side, as a creator presses it. */
+/** Remove asks first, as the app's: the yes in the page's own question. */
+async function confirmRemoval() {
+  const dialog = await screen.findByRole('alertdialog', { name: /^Remove / });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+  await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+}
+
 async function chooseInputs(side: 'Frames' | 'References') {
   fireEvent.click(await screen.findByRole('radio', { name: side }));
 }
@@ -806,6 +813,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     await screen.findByAltText('Element 1');
     fireEvent.click(screen.getByRole('button', { name: 'Remove Element 1' }));
+    await confirmRemoval();
 
     await waitFor(() => {
       expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(2);
@@ -842,7 +850,12 @@ describe('CreateVideoClient Kling video elements', () => {
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
 
     expect(screen.getByAltText('Saved element 3')).toBeInTheDocument();
+    // The one past the limit says it is kept, not sent: the third, and only it.
+    const notSent = screen.getAllByText(/^Not sent: .+ takes 2$/);
+    expect(notSent).toHaveLength(1);
+    expect(notSent[0]?.closest('li')).toContainElement(screen.getByAltText('Saved element 3'));
     fireEvent.click(screen.getByRole('button', { name: 'Remove Saved element 3' }));
+    await confirmRemoval();
 
     await waitFor(() => {
       expect(screen.queryByAltText('Saved element 3')).not.toBeInTheDocument();
@@ -1124,6 +1137,35 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(temporaryUploadMock).toHaveBeenCalledWith(start, pressedForUser1);
     });
 
+    // The app's Reference details, and its Remove: asked first, and the handle leaves the prompt (owner, 2026-11-08).
+    it('opens a picture with its details, and a Remove there takes its handle out of the prompt', async () => {
+      const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
+      await chooseInputs('References');
+      await attachPictures(view.container, [picture('hero')]);
+      fireEvent.change(promptField(), { target: { value: '@element_1 walks through the rain' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Preview Element 1' }));
+      const details = await screen.findByRole('dialog', { name: 'Reference details' });
+      expect(within(details).getByRole('textbox', { name: 'Reference name' })).toHaveValue('Element 1');
+      expect(within(details).getByRole('button', { name: 'Insert @element_1' })).toBeInTheDocument();
+      expect(within(details).getByRole('button', { name: 'Replace media, keeps @element_1' })).toBeInTheDocument();
+
+      // Kept, the details come back and the prompt is as it was.
+      fireEvent.click(within(details).getByRole('button', { name: 'Remove reference' }));
+      const asked = await screen.findByRole('alertdialog', { name: 'Remove Element 1?' });
+      expect(asked).toHaveAccessibleDescription('Element 1 and @element_1 will be removed from this draft.');
+      fireEvent.click(within(asked).getByRole('button', { name: 'Cancel' }));
+      expect(await screen.findByRole('dialog', { name: 'Reference details' })).toBeInTheDocument();
+      expect(promptField()).toHaveValue('@element_1 walks through the rain');
+
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Reference details' })).getByRole('button', { name: 'Remove reference' }));
+      await confirmRemoval();
+      await waitFor(() => expect(screen.queryByAltText('Element 1')).not.toBeInTheDocument());
+      expect(screen.queryByRole('dialog', { name: 'Reference details' })).toBeNull();
+      expect(promptField()).toHaveValue('walks through the rain');
+      expect(await screen.findByText('Element 1 and @element_1 were removed from this draft.')).toBeInTheDocument();
+    });
+
     it('asks the mirror question going back to frames, and brings the first pictures along as the start and end images', async () => {
       const view = render(<CreateVideoClient prefill={{ model: 'seedance-2-5' }} />);
       await chooseInputs('References');
@@ -1187,6 +1229,7 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
+      await confirmRemoval();
 
       await waitFor(() => expect(screen.queryByPlaceholderText('Rename element')).toBeNull());
       expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
@@ -1242,6 +1285,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await act(async () => answerDraft!({ inputSide: 'frames' }));
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
+      await confirmRemoval();
       await waitFor(() => expect(screen.queryByPlaceholderText('Rename element')).toBeNull());
       expect(screen.getByRole('radio', { name: 'References' })).toBeChecked();
     });
@@ -1428,11 +1472,12 @@ describe('CreateVideoClient Kling video elements', () => {
           .toMatchObject({ url: 'https://signed.example.com/uploads/user-1/mine.mp4', label: 'Camera move', durationSeconds: 4.2 });
       });
 
-      it('offers no Replace on the creator’s own references', async () => {
+      // As the app's: every reference has Replace, the creator's own too (owner, 2026-11-08).
+      it('offers Replace on the creator’s own references too', async () => {
         const view = render(<CreateVideoClient prefill={{ model: 'seedance-1.5-pro' }} />);
         await chooseInputs('References');
         await attachPictures(view.container, [picture('own')]);
-        expect(screen.queryByRole('button', { name: /^Replace / })).toBeNull();
+        expect(screen.getAllByRole('button', { name: /^Replace @/ })).toHaveLength(1);
       });
 
       // The first answer put the original's pictures over one the creator added while it loaded. Theirs
@@ -1905,6 +1950,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(readDurationMock.mock.calls.at(-1)?.[0]).toBe(lengthUnread));
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove Harbour' }));
+      await confirmRemoval();
       await waitFor(() => expect(screen.queryByText('Harbour')).toBeNull());
       setPersistedMediaRecordsMock.mockClear();
       await act(async () => {
@@ -2267,6 +2313,36 @@ describe('CreateVideoClient Kling video elements', () => {
         .filter(([key]) => key === 'create-video:kling-video-elements:user-1')
         .flatMap(([, records]) => records.map((record) => record.displayName));
       expect(savedNames).not.toContain('Red jacket');
+    });
+
+    // A named clip's details: its name, Insert, Replace (it keeps the handle) and Remove, which
+    // takes the handle out of the prompt too (owner, 2026-11-08).
+    it('opens a Kling clip with its details, and a Remove there takes its handle out of the prompt', async () => {
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+      fireEvent.change(promptBox(), { target: { value: 'A dancer follows @video_element_1 across the stage' } });
+      // Replace: another clip under the same name and handle.
+      const replace = screen.getByRole('button', { name: 'Replace @video_element_1 with another clip' });
+      const fresh = new File(['other-bytes'], 'other.mp4', { type: 'video/mp4' });
+      setPersistedMediaRecordsMock.mockClear();
+      fireEvent.change(replace.nextElementSibling as HTMLInputElement, { target: { files: [fresh] } });
+      await waitFor(() => expect(setPersistedMediaRecordsMock.mock.calls.some(([key]) => key === 'create-video:kling-video-elements:user-1')).toBe(true));
+      const replaced = setPersistedMediaRecordsMock.mock.calls.filter(([key]) => key === 'create-video:kling-video-elements:user-1').at(-1)?.[1];
+      expect(replaced).toEqual([expect.objectContaining({ displayName: 'Video element 1', handle: '@video_element_1', file: fresh })]);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Preview Video element 1' }));
+      const details = await screen.findByRole('dialog', { name: 'Reference details' });
+      expect(within(details).getByRole('textbox', { name: 'Reference name' })).toHaveValue('Video element 1');
+      expect(within(details).getByRole('button', { name: 'Insert @video_element_1' })).toBeInTheDocument();
+      expect(within(details).getByRole('button', { name: 'Replace media, keeps @video_element_1' })).toBeInTheDocument();
+
+      fireEvent.click(within(details).getByRole('button', { name: 'Remove reference' }));
+      const asked = await screen.findByRole('alertdialog', { name: 'Remove Video element 1?' });
+      expect(asked).toHaveAccessibleDescription('Video element 1 and @video_element_1 will be removed from this draft.');
+      await confirmRemoval();
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual([]));
+      expect(promptBox()).toHaveValue('A dancer follows across the stage');
     });
 
     it('shows the same Kling clip handles after a reload as before it', async () => {
@@ -7519,6 +7595,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await screen.findByText('Saved references are on standby');
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
+      await confirmRemoval();
 
       await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenLastCalledWith(
         'create-video:elements:user-1',
@@ -7538,6 +7615,7 @@ describe('CreateVideoClient Kling video elements', () => {
       await screen.findByText('Saved references are on standby');
 
       fireEvent.click(screen.getByRole('button', { name: 'Remove Voice line' }));
+      await confirmRemoval();
 
       await waitFor(() => expect(setPersistedMediaRecordsMock).toHaveBeenLastCalledWith('create-video:reference-audios:user-1', []));
       await waitFor(() => expect(screen.queryByText('Saved references are on standby')).toBeNull());
@@ -8723,7 +8801,13 @@ describe('CreateVideoClient Kling video elements', () => {
       advancePastTheHour();
       fireEvent.click(within(clips).getByRole('button', { name: 'Preview Video reference 1' }));
 
-      const shown = await previewLink('Video reference 1');
+      // A clip has no name to type or handle to insert: its details are Replace and Remove.
+      const details = await screen.findByRole('dialog', { name: 'Reference details' });
+      expect(within(details).queryByRole('textbox')).toBeNull();
+      expect(within(details).queryByRole('button', { name: /^Insert/ })).toBeNull();
+      expect(within(details).getByRole('button', { name: 'Replace media' })).toBeInTheDocument();
+      expect(within(details).getByRole('button', { name: 'Remove reference' })).toBeInTheDocument();
+      const shown = await previewLink('Reference details');
       expectOpensObject(shown, CLIP);
     });
   });

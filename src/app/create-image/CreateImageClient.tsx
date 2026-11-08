@@ -56,7 +56,7 @@ import {
     CreatorReferenceTile,
     type CreatorReferenceKind,
     CreatorRemixSlotTile,
-    type CreatorReferencePreviewTarget,
+    CreatorReferenceDetails,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -72,6 +72,7 @@ import {
     creatorCanvasChip,
     describeRunFailure,
 } from '@/components/CreatorColumn';
+import { useConfirmation } from '@/components/useConfirmation';
 import { CreatorMentionMenu, useCreatorMentionMenu } from '@/components/CreatorMentionMenu';
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
@@ -138,6 +139,7 @@ import {
     getMentionQueryAtCaret,
     insertHandleIntoPrompt,
     remixReferencesBesideOwn,
+    removePromptHandle,
     replacePromptHandles,
     type ImageElementDescriptor,
 } from '@/lib/image-elements';
@@ -218,13 +220,6 @@ interface ImageWorkflowSettings {
     elements?: ImageElementDescriptor[];
     promptMode?: 'element-mentions-v1';
     compiledPrompt?: string;
-}
-
-interface UploadPreviewState {
-    type: 'image';
-    src: string;
-    alt: string;
-    title: string;
 }
 
 /** An element's file as this page last staged it in `uploads`, kept with the element across reloads. */
@@ -487,6 +482,8 @@ function ImageCreator({
     const [pendingStartNotice, setPendingStartNotice] = useState<string | null>(null);
     const [creditRefusal, setCreditRefusal] = useState<{ message: string; credits: number | null; cost: number | null } | null>(null);
     const [elementPickNotice, setElementPickNotice] = useState<string | null>(null);
+    // What a removal took with it ("Element 1 and @element_1 were removed from this draft."), as the app says it.
+    const [elementRemovedNotice, setElementRemovedNotice] = useState<string | null>(null);
     const [catalogNotice, setCatalogNotice] = useState<string | null>(null);
     const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
     // Open settings price each of their options; the bar says when they open and close.
@@ -562,9 +559,8 @@ function ImageCreator({
     const [remixSlotsNoticeDismissed, setRemixSlotsNoticeDismissed] = useState(false);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [isResultPreviewOpen, setIsResultPreviewOpen] = useState(false);
-    const [uploadPreview, setUploadPreview] = useState<UploadPreviewState | null>(null);
-    // This creator's references are all pictures.
-    const openReferencePreview = ({ src, name }: CreatorReferencePreviewTarget) => setUploadPreview({ type: 'image', src, alt: name, title: name });
+    // The reference opened at full size, with what the app's Reference details sheet holds under it.
+    const [detailsElementId, setDetailsElementId] = useState<string | null>(null);
     const elementNames = useNameDrafts();
     const [resultPreviewImage, setResultPreviewImage] = useState<string | null>(null);
     const nowMs = useTicker(isGenerating) ?? undefined;
@@ -915,6 +911,7 @@ function ImageCreator({
                 : `This model takes up to ${model.maxImages} image${model.maxImages === 1 ? '' : 's'}. Remove one to add another.`);
         }
         setElementPickNotice(refusals.length > 0 ? refusals.join(' ') : null);
+        setElementRemovedNotice(null);
 
         if (filesToAdd.length === 0) {
             return;
@@ -952,6 +949,7 @@ function ImageCreator({
             return;
         }
         setElementPickNotice(null);
+        setElementRemovedNotice(null);
         const naming = remixSlotFillNaming(slot);
         const nextElements = hydrateImageElements([...currentElements, {
             displayName: naming.displayName,
@@ -965,18 +963,67 @@ function ImageCreator({
         await persistUploadedImageElements(nextElements);
     };
 
-    const handleRemoveElement = async (elementId: string) => {
+    // A question about a picture is moot once the pictures change while it is up: it is answered "keep".
+    const confirmElementRemoval = useConfirmation(elements);
+
+    /**
+     * Remove, as the app's: asked first, since a picture the creator picked cannot be brought
+     * back, and its handle leaves the prompt with it, so no mention is left naming nothing.
+     */
+    const handleRemoveElement = async (elementId: string): Promise<boolean> => {
+        const target = elementRefs.current.find((element) => element.id === elementId);
+        if (!target) return false;
+        const mentioned = extractPromptHandles(prompt).includes(target.handle);
+        const removed = await confirmElementRemoval({
+            title: `Remove ${target.displayName}?`,
+            message: mentioned
+                ? `${target.displayName} and ${target.handle} will be removed from this draft.`
+                : `${target.displayName} will be removed from this draft.`,
+            confirmLabel: 'Remove',
+            tone: 'danger',
+        });
+        if (!removed) return false;
+
         const currentElements = elementRefs.current;
         const removedElement = currentElements.find((element) => element.id === elementId);
-        if (removedElement) {
-            revokePreviewUrl(removedElement.previewUrl);
-        }
+        if (!removedElement) return false;
+        revokePreviewUrl(removedElement.previewUrl);
 
         const nextElements = hydrateImageElements(
             currentElements.filter((element) => element.id !== elementId)
         );
         elementNames.dropDraft(elementId);
         setElementPickNotice(null);
+        commitElements(nextElements);
+        if (mentioned) setPrompt((currentPrompt) => removePromptHandle(currentPrompt, removedElement.handle));
+        setElementRemovedNotice(mentioned
+            ? `${removedElement.displayName} and ${removedElement.handle} were removed from this draft.`
+            : `${removedElement.displayName} was removed from this draft.`);
+        await persistUploadedImageElements(nextElements);
+        return true;
+    };
+
+    /**
+     * Replace, as the app's: a new picture in the reference's place, under the same name and
+     * handle, so the prompt that mentions it is right as it is. The checks of an add hold.
+     */
+    const handleReplaceElement = async (elementId: string, file: File) => {
+        const refusal = imageFileRefusal(file);
+        setElementPickNotice(refusal);
+        setElementRemovedNotice(null);
+        if (refusal) return;
+        const currentElements = elementRefs.current;
+        const target = currentElements.find((element) => element.id === elementId);
+        if (!target) return;
+        revokePreviewUrl(target.previewUrl);
+        const nextElements = hydrateImageElements(currentElements.map((element): ImageElementSeed => (element.id === elementId ? {
+            id: element.id,
+            displayName: element.displayName,
+            handle: element.handle,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            source: 'upload',
+        } : element)));
         commitElements(nextElements);
         await persistUploadedImageElements(nextElements);
     };
@@ -1939,14 +1986,21 @@ function ImageCreator({
     const emptyCanvasHint = model.maxImages > 0
         ? 'Write a prompt, add reference images if you like, then Generate.'
         : 'Write a prompt, then Generate.';
+    // Past the model's limit a picture is kept, not sent (the run waits until it fits): its tile
+    // and its details say which ones, as the app keeps them apart.
+    const elementNotSentNote = (index: number) => (model.maxImages > 0 && index >= model.maxImages
+        ? `Not sent: ${model.displayName} takes ${model.maxImages}`
+        : undefined);
+    const detailsIndex = detailsElementId ? elements.findIndex((element) => element.id === detailsElementId) : -1;
+    const detailsElement = detailsIndex >= 0 ? elements[detailsIndex] : null;
     // The pictures' tiles: what the run holds, then the boxes a remix was not given.
     const referenceImageTiles = [
-        ...elements.map((element) => (
+        ...elements.map((element, index) => (
             <CreatorReferenceTile
                 key={element.id}
                 accent="image"
                 preview={(
-                    <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={openReferencePreview} />
+                    <CreatorReferencePreview kind="image" src={element.previewUrl} name={element.displayName} onPreview={() => setDetailsElementId(element.id)} />
                 )}
                 displayName={element.displayName}
                 nameDraft={elementNames.drafts[element.id]}
@@ -1958,6 +2012,12 @@ function ImageCreator({
                 handle={element.handle}
                 handleClassName="text-sky-300"
                 onInsert={() => handleInsertElementHandle(element.handle)}
+                replace={{
+                    label: `Replace ${element.handle} with another picture`,
+                    accept: 'image/*',
+                    onFile: (file) => void handleReplaceElement(element.id, file),
+                }}
+                note={elementNotSentNote(index)}
             />
         )),
         // What the remix was not given, after what it brought back.
@@ -2399,6 +2459,9 @@ function ImageCreator({
                                     {elementPickNotice ? (
                                         <p role="status" className="text-sm text-amber-200">{elementPickNotice}</p>
                                     ) : null}
+                                    {elementRemovedNotice ? (
+                                        <p role="status" className="text-sm text-[var(--ui-text-secondary)]">{elementRemovedNotice}</p>
+                                    ) : null}
                                 </CreatorInputsCard>
                             </div>
                         ) : (
@@ -2567,13 +2630,49 @@ function ImageCreator({
             />
 
             <StudioMediaPreviewModal
-                isOpen={Boolean(uploadPreview)}
-                onClose={() => setUploadPreview(null)}
+                isOpen={Boolean(detailsElement)}
+                onClose={() => setDetailsElementId(null)}
                 mediaType="image"
-                src={uploadPreview?.src ?? null}
-                alt={uploadPreview?.alt ?? 'Reference image'}
-                title={uploadPreview?.title ?? 'Reference Preview'}
+                src={detailsElement?.previewUrl ?? null}
+                alt={detailsElement?.displayName ?? 'Reference image'}
+                title="Reference details"
                 renewSrc={remixId ? renewRemixLink : undefined}
+                footer={detailsElement ? (
+                    <CreatorReferenceDetails
+                        accent="image"
+                        name={{
+                            displayName: detailsElement.displayName,
+                            draft: elementNames.drafts[detailsElement.id],
+                            placeholder: 'Reference name',
+                            onChange: (value) => handleElementDraftChange(detailsElement.id, value),
+                            onCommit: () => void commitElementDraft(detailsElement.id),
+                            onCancel: () => elementNames.dropDraft(detailsElement.id),
+                        }}
+                        insert={{
+                            handle: detailsElement.handle,
+                            handleClassName: 'text-sky-300',
+                            onInsert: () => {
+                                setDetailsElementId(null);
+                                handleInsertElementHandle(detailsElement.handle);
+                            },
+                        }}
+                        replace={{
+                            accept: 'image/*',
+                            keeps: detailsElement.handle,
+                            onFile: (file) => void handleReplaceElement(detailsElement.id, file),
+                        }}
+                        onRemove={() => {
+                            // Asked with the preview put away, so the question is the one dialog up;
+                            // kept, it opens again.
+                            const id = detailsElement.id;
+                            setDetailsElementId(null);
+                            void handleRemoveElement(id).then((removed) => {
+                                if (!removed) setDetailsElementId(id);
+                            });
+                        }}
+                        note={elementNotSentNote(detailsIndex)}
+                    />
+                ) : undefined}
             />
 
             <StudioMediaPreviewModal
