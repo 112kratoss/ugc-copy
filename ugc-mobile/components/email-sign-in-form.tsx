@@ -437,21 +437,23 @@ function WorkspaceInput({
   const theme = useAppTheme();
   return (
     <View style={{ gap: appTheme.spacing.compact }}>
-      <Text style={{ color: theme.colors.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' }}>
+      {/* In line with the text inside the pill below it. */}
+      <Text style={{ color: theme.colors.textSecondary, fontSize: 13, lineHeight: 18, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase', paddingLeft: 22 }}>
         {label}
       </Text>
       <View
         style={{
-          minHeight: 56,
-          borderRadius: appTheme.radii.md,
-          borderCurve: 'continuous',
+          // A pill, as the page's buttons are (owner, 2026-11-08: "round as the button for
+          // consistency").
+          minHeight: 52,
+          borderRadius: appTheme.radii.pill,
           borderWidth: 1,
           borderColor: theme.colors.borderStrong,
           backgroundColor: theme.colors.surfaceInset,
           flexDirection: 'row',
           alignItems: 'center',
-          paddingLeft: 16,
-          paddingRight: trailingIcon ? 6 : 14,
+          paddingLeft: 22,
+          paddingRight: trailingIcon ? 8 : 20,
           gap: 10,
         }}
       >
