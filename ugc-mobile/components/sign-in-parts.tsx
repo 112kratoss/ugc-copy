@@ -10,12 +10,13 @@ import { appTheme, mediaColors } from '@/lib/theme';
 
 /**
  * Every button on the sign-in page, a compact, centred pill (owner, 2026-11-08: "reduce the
- * button lengths … a bit modern"): 48pt tall, which Apple's system button titles at about
- * 18pt, so the drawn buttons beside it take that size too; at most 300pt wide, centred.
+ * button lengths … a bit modern … a little more smaller"): 44pt tall, the HIG's tap-target
+ * floor, which Apple's system button titles at about 16pt, so the drawn buttons beside it take
+ * that size too; at most 270pt wide, centred.
  */
-export const BUTTON_HEIGHT = 48;
-export const BUTTON_LABEL_SIZE = 18;
-export const BUTTON_MAX_WIDTH = 300;
+export const BUTTON_HEIGHT = 44;
+export const BUTTON_LABEL_SIZE = 16;
+export const BUTTON_MAX_WIDTH = 270;
 
 /**
  * Apple and Google, as both sign-in screens draw them: one width, one height, one label size.
@@ -90,7 +91,7 @@ export function SignInProviderButtons({ onApple, onGoogle, appleBusy, googleBusy
             <ActivityIndicator color={mediaColors.mediaGround} />
           ) : (
             <>
-              <GoogleGMark size={18} />
+              <GoogleGMark size={17} />
               <Text
                 maxFontSizeMultiplier={1.3}
                 style={{ color: mediaColors.mediaGround, fontSize: BUTTON_LABEL_SIZE, fontWeight: '600', letterSpacing: -0.2 }}
