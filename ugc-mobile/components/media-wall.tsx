@@ -69,8 +69,16 @@ export function mediaWallColumn(column: number) {
   return order.map((index) => MEDIA_WALL_TILES[index]);
 }
 
-export function MediaWall({ width, height }: { width: number; height: number }) {
+export function MediaWall({ width, height, still = false }: {
+  width: number;
+  height: number;
+  /** Held where it sits behind something read and typed in (the email form). */
+  still?: boolean;
+}) {
   const geometry = mediaWallGeometry(width, height);
+  // One random start for every column: the columns that share pictures keep the same distance
+  // apart, which never puts one picture on the same row twice.
+  const [start] = useState(() => Math.random());
 
   return (
     <View
@@ -101,7 +109,10 @@ export function MediaWall({ width, height }: { width: number; height: number }) 
             geometry={geometry}
             // Neighbours drift opposite ways, and each at its own pace, so rows never line up.
             upward={column % 2 === 0}
-            speed={DRIFT_SPEED * (column % 2 === 0 ? 1 : 0.8) * (column < 2 ? 1 : 1.15)}
+            // One pace per direction, so columns that share pictures never drift into step.
+            speed={DRIFT_SPEED * (column % 2 === 0 ? 1 : 0.8)}
+            start={start}
+            still={still}
           />
         ))}
       </View>
@@ -110,18 +121,25 @@ export function MediaWall({ width, height }: { width: number; height: number }) 
   );
 }
 
-function WallColumn({ tiles, geometry, upward, speed }: {
+function WallColumn({ tiles, geometry, upward, speed, start, still }: {
   tiles: readonly number[];
   geometry: MediaWallGeometry;
   upward: boolean;
   speed: number;
+  /** Where along the loop this open begins, 0 to 1. */
+  start: number;
+  still: boolean;
 }) {
   const reducedMotion = useReducedMotion();
   const [progress] = useState(() => new Animated.Value(0, { useNativeDriver: true }));
+  // Each open starts somewhere new along the loop. The offset is added and wrapped rather
+  // than set as the start, because a loop resets to where it started: a start part-way would
+  // jump back there at the end of every lap.
+  const [offset] = useState(() => new Animated.Value(start, { useNativeDriver: true }));
   const duration = Math.round((geometry.cycle / speed) * 1000);
 
   useEffect(() => {
-    if (reducedMotion) return;
+    if (reducedMotion || still) return;
     const drift = Animated.loop(
       Animated.timing(progress, {
         toValue: 1,
@@ -133,9 +151,9 @@ function WallColumn({ tiles, geometry, upward, speed }: {
     );
     drift.start();
     return () => drift.stop();
-  }, [duration, progress, reducedMotion]);
+  }, [duration, progress, reducedMotion, still]);
 
-  const translateY = progress.interpolate({
+  const translateY = Animated.modulo(Animated.add(progress, offset), 1).interpolate({
     inputRange: [0, 1],
     outputRange: upward ? [0, -geometry.cycle] : [-geometry.cycle, 0],
   });

@@ -61,6 +61,7 @@ vi.mock('expo-router', () => ({
     canGoBack: vi.fn(() => false),
     back: vi.fn(),
     dismissTo: vi.fn(),
+    push: vi.fn(),
     replace: vi.fn(),
   },
   useNavigation: () => ({ addListener: navigationState.addListener }),
@@ -169,7 +170,7 @@ import { signInOpensOnEmailForm } from '../lib/join-navigation';
 
 async function routerMock() {
   const { router } = await import('expo-router');
-  for (const fn of [router.replace, router.back, router.dismissTo]) vi.mocked(fn).mockClear();
+  for (const fn of [router.replace, router.back, router.dismissTo, router.push]) vi.mocked(fn).mockClear();
   vi.mocked(router.canGoBack).mockReturnValue(true);
   return router;
 }
@@ -237,13 +238,22 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
   });
 
-  it('shows the email form in place after "Sign in with email"', () => {
+  it('opens the email form over the page after "Sign in with email", so its X steps back here', async () => {
+    const router = await routerMock();
+    paramsState.params = { returnTo: '/profile' };
     const tree = render(<AuthRoute />);
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
-    // The same wall stays behind the form, with Apple and Google under it.
+    expect(router.push).toHaveBeenCalledWith({ pathname: '/auth', params: { email: '1', returnTo: '/profile' } });
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it('draws the email form, the same wall behind it and Apple and Google under it', () => {
+    paramsState.params = { email: '1' };
+    const tree = render(<AuthRoute />);
     expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
+    expect(tree.root.findAllByType('media-wall' as never)[0].props.still).toBe(true);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Switch to sign up' })).toHaveLength(0);
@@ -296,7 +306,7 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
-    expect(router.replace).toHaveBeenCalledWith({
+    expect(router.push).toHaveBeenCalledWith({
       pathname: '/auth',
       params: { email: '1', returnTo: `/onboarding?returnTo=${encodeURIComponent('/create/image?remix=gen-1')}` },
     });

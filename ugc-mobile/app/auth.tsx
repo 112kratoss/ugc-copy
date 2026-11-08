@@ -2,8 +2,9 @@ import { useIsFocused, useRoute } from '@react-navigation/native';
 import { router, useNavigation } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Eye, EyeOff, LockKeyhole, Mail, X } from 'lucide-react-native';
+import { Eye, EyeOff, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -57,15 +58,19 @@ export default function AuthRoute() {
     notice?: string | string[];
     email?: string | string[];
   };
-  const [showEmailForm, setShowEmailForm] = useState(() => signInOpensOnEmailForm(email));
-
-  if (!showEmailForm) {
+  if (!signInOpensOnEmailForm(email)) {
+    const route = normalizeAuthReturnTo(returnTo);
     return (
       <SignInWall
-        target={normalizeAuthReturnTo(returnTo) ?? '/(tabs)'}
+        target={route ?? '/(tabs)'}
         step={authAnalyticsStep(returnTo)}
         notice={authNoticeForRedirect(notice)}
-        onUseEmail={() => setShowEmailForm(true)}
+        // The form over this page, so its X steps back here rather than out of sign-in, and the
+        // wall never leaves the screen between the two.
+        onUseEmail={() => router.push({
+          pathname: '/auth',
+          params: route ? { email: '1', returnTo: route } : { email: '1' },
+        } as never)}
       />
     );
   }
@@ -230,9 +235,13 @@ function EmailSignIn() {
   return (
     <View style={{ flex: 1, backgroundColor: mediaColors.mediaGround }}>
       {isFocused ? <StatusBar style="light" /> : null}
-      <MediaWall width={width} height={height} />
-      {/* Darker than the page before: here the wall sits behind fields that are read and typed in. */}
+      {/* The page's wall, held still and pushed back (blurred on iOS, darker everywhere): here
+          it sits behind fields that are read and typed in. */}
+      <MediaWall width={width} height={height} still />
+      {Platform.OS === 'ios' ? <BlurView pointerEvents="none" intensity={28} tint="dark" style={StyleSheet.absoluteFill} /> : null}
       <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: mediaColors.mediaScrimStrong }]} />
+      {/* Android draws no blur here, so the wall is held back by shade alone. */}
+      {Platform.OS === 'android' ? <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: mediaColors.mediaScrim }]} /> : null}
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
         contentInsetAdjustmentBehavior="never"
@@ -267,7 +276,7 @@ function EmailSignIn() {
               Sign in with email
             </AppText>
             <AppText variant="body" style={{ color: mediaColors.onMediaSecondary }}>
-              For an account you made with email. New accounts start with Apple or Google.
+              For accounts made with email.
             </AppText>
           </View>
 
@@ -281,7 +290,6 @@ function EmailSignIn() {
 
             <WorkspaceInput
               label="Email"
-              icon={<Mail size={appTheme.icon.compact} color={theme.colors.primary} />}
               autoCapitalize="none"
               autoCorrect={false}
               spellCheck={false}
@@ -315,7 +323,6 @@ function EmailSignIn() {
             <WorkspaceInput
               label="Password"
               inputRef={passwordRef}
-              icon={<LockKeyhole size={appTheme.icon.compact} color={theme.colors.primary} />}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
               autoCorrect={false}
@@ -352,7 +359,11 @@ function EmailSignIn() {
                 Return key is "go", which submits with the keyboard up. */}
             {notice ? <InlineNotice title={notice.title} body={notice.body} tone={notice.tone} /> : null}
 
-            {/* White, as the sign-in page's buttons are. */}
+            {/* Coral, the app's own action colour, so this page's one action stands apart from
+                Apple and Google below, which Apple's rules keep white on dark. */}
+            {/* On solid black, so the faded state reads as a dimmed button, not as the wall
+                showing through it. */}
+            <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: mediaColors.mediaGround }}>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={isSubmitting ? 'Signing in…' : 'Sign in'}
@@ -362,19 +373,20 @@ function EmailSignIn() {
               style={({ pressed }) => ({
                 height: SUBMIT_HEIGHT,
                 borderRadius: appTheme.radii.pill,
-                backgroundColor: mediaColors.onMedia,
+                backgroundColor: pressed ? theme.colors.primaryFillPressed : theme.colors.primaryFill,
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 10,
-                opacity: !canSubmit && !isSubmitting ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+                opacity: !canSubmit && !isSubmitting ? appTheme.opacity.disabled : 1,
               })}
             >
-              {isSubmitting ? <ActivityIndicator color={mediaColors.mediaGround} /> : null}
-              <Text style={{ color: mediaColors.mediaGround, fontSize: 19, fontWeight: '600', letterSpacing: -0.2 }}>
+              {isSubmitting ? <ActivityIndicator color={theme.colors.onPrimary} /> : null}
+              <Text style={{ color: theme.colors.onPrimary, fontSize: 19, fontWeight: '600', letterSpacing: -0.2 }}>
                 {isSubmitting ? 'Signing in…' : 'Sign in'}
               </Text>
             </Pressable>
+            </View>
 
             {/* For an account made with Apple or Google, which the wrong-password copy points
                 at, and for anyone who reached email by mistake: the X leaves sign-in. */}
@@ -382,6 +394,7 @@ function EmailSignIn() {
             <SignInProviderButtons
               onApple={() => void continueWithApple()}
               onGoogle={() => void continueWithGoogle()}
+              appleBusy={isAppleSubmitting}
               googleBusy={isGoogleSubmitting}
               unavailable={!isAuthConfigured || isSignInInFlight}
             />
@@ -401,9 +414,9 @@ function OrDivider() {
   const theme = useAppTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 2 }}>
-      <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.border }} />
+      <View style={{ flex: 1, height: StyleSheet.hairlineWidth * 2, backgroundColor: theme.colors.borderStrong }} />
       <Text style={{ color: mediaColors.onMediaSecondary, fontSize: 13, fontWeight: '600' }}>or</Text>
-      <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.border }} />
+      <View style={{ flex: 1, height: StyleSheet.hairlineWidth * 2, backgroundColor: theme.colors.borderStrong }} />
     </View>
   );
 }
@@ -471,7 +484,6 @@ function FieldButton({ label, onPress, children }: { label: string; onPress: () 
 
 function WorkspaceInput({
   label,
-  icon,
   trailingIcon,
   inputRef,
   ...props
@@ -483,7 +495,6 @@ function WorkspaceInput({
    * the app's fields all label themselves the same way.
    */
   label: string;
-  icon: React.ReactNode;
   trailingIcon?: React.ReactNode;
   inputRef?: React.RefObject<TextInput | null>;
 }) {
@@ -503,14 +514,11 @@ function WorkspaceInput({
           backgroundColor: theme.colors.surfaceInset,
           flexDirection: 'row',
           alignItems: 'center',
-          paddingLeft: 13,
+          paddingLeft: 16,
           paddingRight: trailingIcon ? 6 : 14,
           gap: 10,
         }}
       >
-        <View style={{ width: 32, height: 32, borderRadius: appTheme.radii.xs, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.pressed }}>
-          {icon}
-        </View>
         <TextInput
           ref={inputRef}
           accessibilityLabel={label}

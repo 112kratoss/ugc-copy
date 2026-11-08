@@ -12,6 +12,9 @@ export default defineConfig({
       // avatar in components/ui.tsx renders through it, every suite that touches
       // a UI primitive loads it. The double is a host element with props intact.
       'expo-image': path.resolve(__dirname, '__tests__/mocks/expo-image.tsx'),
+      // expo-blur's published source does not parse under vitest; the email sign-in form
+      // blurs the wall behind it with it.
+      'expo-blur': path.resolve(__dirname, '__tests__/mocks/expo-blur.tsx'),
       // react-native-reanimated re-exports react-native/index.js, whose Flow
       // syntax vitest cannot parse. The double resolves animated styles once at
       // render time so layout intent stays assertable without a UI thread.

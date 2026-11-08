@@ -57,9 +57,9 @@ describe('the product has one wordmark', () => {
    * the definitive one, and being a display variant it must not be re-weighted
    * (`hig-type-and-contrast.test.ts` enforces that tree-wide).
    */
-  it('takes the display face from the ramp at both sizes', () => {
-    expect(ui).toContain("variant={hero ? 'pageTitle' : 'sectionTitle'}");
-    expect(ui).toContain('size={hero ? appTheme.icon.hero : appTheme.icon.feature}');
+  it('takes the display face from the ramp at every size', () => {
+    expect(ui).toContain("variant={large ? 'pageTitle' : 'sectionTitle'}");
+    expect(ui).toContain('const iconSize = large ? appTheme.icon.hero : appTheme.icon.feature;');
     expect(appTheme.type.pageTitle).toHaveProperty('fontFamily');
     expect(appTheme.type.sectionTitle).toHaveProperty('fontFamily');
   });

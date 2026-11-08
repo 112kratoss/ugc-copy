@@ -104,9 +104,11 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
     router.replace(signInWallNextHref(target) as never);
   }, [api, step, target]);
 
+  // Only while in front: with the email form over this page, that form takes its own sign-in
+  // where it goes, and two moves at once would stack a second onboarding.
   useEffect(() => {
-    if (user) moveOn();
-  }, [moveOn, user]);
+    if (user && isFocused) moveOn();
+  }, [isFocused, moveOn, user]);
 
   const noteAttempt = () => {
     if (!attempted.current) void trackOnboardingEvent(api, 'auth_started', { step });
@@ -180,26 +182,31 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
           style={{ alignSelf: 'flex-start', marginLeft: -12 }}
         />
 
-        <View style={{ marginTop: 20, gap: 8, maxWidth: 360 }}>
+        {/* The headline runs on into the wordmark (owner, 2026-11-08: like "Start working in",
+            with the name below it), at a size that finishes the sentence, and is read as the one
+            line it is: "Start creating in Magicbooklet". */}
+        <View
+          accessible
+          accessibilityRole="header"
+          accessibilityLabel="Start creating in Magicbooklet"
+          style={{ marginTop: 20, gap: 6, maxWidth: 360 }}
+        >
           <AppText
-            heading
             variant="display"
             maxFontSizeMultiplier={1.3}
             style={{ color: mediaColors.onMedia, fontSize: 52, lineHeight: 56, letterSpacing: -1.2 }}
           >
             {'Start\ncreating in'}
           </AppText>
-          {/* The headline runs on into the wordmark (owner, 2026-11-08: like "Start working in",
-              with the name below it): "Start creating in ✦ Magicbooklet". */}
           <View style={{ alignSelf: 'flex-start' }}>
-            <BrandLockup />
+            <BrandLockup size="title" />
           </View>
         </View>
 
         <View style={{ flex: 1, minHeight: 24 }} />
 
         <AppText variant="body" style={{ color: mediaColors.onMedia, textAlign: 'center', marginBottom: 14 }}>
-          Join free and get 25 credits to start
+          Join free and get <Text style={{ fontWeight: '700' }}>25 credits</Text> to start
         </AppText>
 
         {notice ? (
@@ -217,6 +224,7 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
         <SignInProviderButtons
           onApple={() => void signUpWithApple()}
           onGoogle={() => void signUpWithGoogle()}
+          appleBusy={appleBusy}
           googleBusy={googleBusy}
           unavailable={unavailable}
         />
@@ -256,9 +264,10 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
  * Apple's system button and a drawn Google button to match it, both white on the dark wall.
  * Android has Google alone, and it leads there just as Apple does on iOS.
  */
-export function SignInProviderButtons({ onApple, onGoogle, googleBusy, unavailable }: {
+export function SignInProviderButtons({ onApple, onGoogle, appleBusy, googleBusy, unavailable }: {
   onApple: () => void;
   onGoogle: () => void;
+  appleBusy: boolean;
   googleBusy: boolean;
   /** A sign-in is under way, or auth is not configured: the buttons wait. */
   unavailable: boolean;
@@ -267,7 +276,10 @@ export function SignInProviderButtons({ onApple, onGoogle, googleBusy, unavailab
   return (
     <View style={{ gap: appTheme.spacing.gap, width: '100%', maxWidth: 430, alignSelf: 'center' }}>
       {providers.includes('Apple') ? (
-        <View pointerEvents={unavailable ? 'none' : 'auto'} style={{ opacity: unavailable ? appTheme.opacity.disabled : 1 }}>
+        <View
+          pointerEvents={unavailable ? 'none' : 'auto'}
+          style={{ opacity: unavailable && !appleBusy ? appTheme.opacity.disabled : 1 }}
+        >
           <AppleAuthentication.AppleAuthenticationButton
             accessibilityLabel="Continue with Apple"
             buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
@@ -277,6 +289,24 @@ export function SignInProviderButtons({ onApple, onGoogle, googleBusy, unavailab
             onPress={onApple}
             style={{ width: '100%', height: BUTTON_HEIGHT }}
           />
+          {/* Apple's button cannot show progress itself; the same spinner Google's shows,
+              over it, while its sign-in finishes. */}
+          {appleBusy ? (
+            <View
+              accessibilityLabel="Signing in with Apple"
+              accessibilityLiveRegion="polite"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                borderRadius: appTheme.radii.pill,
+                backgroundColor: mediaColors.onMedia,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <ActivityIndicator color={mediaColors.mediaGround} />
+            </View>
+          ) : null}
         </View>
       ) : null}
       {providers.includes('Google') ? (
@@ -317,26 +347,27 @@ export function SignInProviderButtons({ onApple, onGoogle, googleBusy, unavailab
   );
 }
 
-/** The terms line both sign-in screens end on, white on the wall. */
+/**
+ * The terms line both sign-in screens end on, white on the wall: one sentence whose two
+ * documents are its links, each its own control with a full reach.
+ */
 export function SignInTerms() {
+  const words = { color: mediaColors.onMediaSecondary, fontSize: 13, lineHeight: 18 } as const;
   return (
-    <View style={{ alignItems: 'center', gap: 2 }}>
-      <Text style={{ color: mediaColors.onMediaSecondary, fontSize: 12, lineHeight: 17, textAlign: 'center' }}>
-        By continuing, you agree to the Magicbooklet terms and privacy policy.
-      </Text>
-      <View style={{ flexDirection: 'row', gap: 20 }}>
-        <TermsLink label="Terms of Service" path="/terms" />
-        <TermsLink label="Privacy Policy" path="/privacy" />
-      </View>
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', columnGap: 4 }}>
+      <Text style={words}>By continuing you agree to our</Text>
+      <TermsLink label="Terms" spoken="terms of service" path="/terms" />
+      <Text style={words}>and</Text>
+      <TermsLink label="Privacy Policy" spoken="privacy policy" path="/privacy" />
     </View>
   );
 }
 
-function TermsLink({ label, path }: { label: string; path: string }) {
+function TermsLink({ label, spoken, path }: { label: string; spoken: string; path: string }) {
   return (
     <Pressable
       accessibilityRole="link"
-      accessibilityLabel={`Open ${label.toLowerCase()}`}
+      accessibilityLabel={`Open ${spoken}`}
       onPress={() => void Linking.openURL(`${env.siteUrl}${path}`)}
       // A 13pt line reached from a full 44pt row.
       hitSlop={{ top: 14, bottom: 14, left: 8, right: 8 }}

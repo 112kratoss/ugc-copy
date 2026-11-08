@@ -16,9 +16,10 @@ export default function JoinScreen() {
     <SignInWall
       target={target}
       step="join"
-      // The email form, which still meets a new account at the name and credits: an existing,
-      // finished account passes straight through onboarding to `target`.
-      onUseEmail={() => router.replace({
+      // The email form, over this page so its X steps back to it, and a sign-in there still
+      // meets a new account at the name and credits: an existing, finished account passes
+      // straight through onboarding to `target`.
+      onUseEmail={() => router.push({
         pathname: '/auth',
         params: { email: '1', returnTo: `/onboarding?returnTo=${encodeURIComponent(target)}` },
       } as never)}
