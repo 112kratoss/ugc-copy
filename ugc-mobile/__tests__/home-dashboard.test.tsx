@@ -174,6 +174,7 @@ vi.mock('lucide-react-native', () => ({
 
 // The shelf has a suite of its own (home-shelf.test.tsx); here it is the props
 // the screen hands it.
+vi.mock('@/components/setup-reopen', () => ({ SetupReopen: () => null }));
 vi.mock('@/components/home-shelf', () => ({
   HomeShelf: (props: MockProps) => React.createElement('home-shelf', props),
 }));
@@ -229,9 +230,6 @@ vi.mock('@/components/workspace-side-menu-gesture-layer', () => ({
   WorkspaceSideMenuGlyph: (props: MockProps) => React.createElement('workspace-side-menu-glyph', props),
 }));
 
-vi.mock('@/components/onboarding-resume-card', () => ({
-  OnboardingResumeCard: () => React.createElement('onboarding-resume-card'),
-}));
 
 vi.mock('@/components/reveal', () => ({
   Reveal: ({ children, ...props }: MockProps) => React.createElement('reveal', props, children),

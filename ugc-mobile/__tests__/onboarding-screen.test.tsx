@@ -745,7 +745,7 @@ describe('what the welcome answer after the identity step says (03-6)', () => {
 
   it.each([
     ['identity_already_claimed', 'Welcome credits already claimed', 'This sign-in already received the one-time welcome credits on a previous account.'],
-    ['unavailable', 'Welcome credits are unavailable right now', 'Your welcome credits are temporarily unavailable. You can continue and claim them from Home.'],
+    ['unavailable', 'Welcome credits are unavailable right now', 'Your welcome credits are temporarily unavailable. You can continue for now.'],
   ])('says %s before it opens the creator', async (status, title, line) => {
     harness.api.getWelcomeCredits.mockReset()
       .mockResolvedValueOnce(welcome)
@@ -813,6 +813,7 @@ describe('claiming the welcome credits (03-9)', () => {
     harness.localUpdates.length = 0;
   });
 
+  // The stage claims as it opens (owner 11-08): there is no button to press.
   async function claim(result: Record<string, unknown>) {
     harness.api.claimWelcomeCredits.mockResolvedValue(result);
     const queryClient = new QueryClient();
@@ -821,10 +822,7 @@ describe('claiming the welcome credits (03-9)', () => {
       tree = renderScreen(queryClient);
       await settle();
     });
-    await act(async () => {
-      findButton(tree!, 'primary-button', 'Claim 25 credits').props.onPress();
-      await settle();
-    });
+    await act(async () => { await settle(); });
     return tree!;
   }
 
@@ -843,6 +841,76 @@ describe('claiming the welcome credits (03-9)', () => {
     expect(harness.refreshProfile).toHaveBeenCalledTimes(1);
     expect(harness.updateCredits).not.toHaveBeenCalled();
     act(() => tree.unmount());
+  });
+
+  it('adds the credits by itself, once, with no button to claim or put off (owner 11-08)', async () => {
+    const tree = await claim({ ...eligible, status: 'claimed', credits: 25, claimedAt: '2026-11-08T07:00:00.000Z' });
+
+    expect(harness.api.claimWelcomeCredits).toHaveBeenCalledTimes(1);
+    expect(rendered(tree)).toContain('Your welcome credits are ready');
+    expect(tree.root.findAll((node) => String(node.type) === 'primary-button' && String(node.props.label).startsWith('Claim'))).toHaveLength(0);
+    expect(tree.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
+    expect(rendered(tree)).not.toContain('Claim later');
+    expect(findButton(tree, 'primary-button', 'Start creating').props.loading).toBe(false);
+    act(() => tree.unmount());
+  });
+
+  it('holds Start creating while the claim runs', async () => {
+    harness.api.claimWelcomeCredits.mockReset().mockReturnValue(new Promise(() => undefined));
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+
+    expect(rendered(tree)).toContain('Adding your welcome credits');
+    expect(findButton(tree!, 'primary-button', 'Start creating').props.loading).toBe(true);
+    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
+    act(() => tree?.unmount());
+  });
+
+  it('offers a retry and a way out when the claim fails, and drops them once a retry works', async () => {
+    harness.api.claimWelcomeCredits.mockReset()
+      .mockRejectedValueOnce(new Error('Network request failed'))
+      .mockResolvedValue({ ...eligible, status: 'claimed', credits: 25, claimedAt: '2026-11-08T07:00:00.000Z' });
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    await act(async () => { await settle(); });
+
+    expect(rendered(tree)).toContain('Your welcome credits are waiting');
+    expect(findButton(tree!, 'secondary-button', 'Try again later')).toBeTruthy();
+    await act(async () => {
+      findButton(tree!, 'primary-button', 'Try again').props.onPress();
+      await settle();
+    });
+    expect(rendered(tree)).toContain('Your welcome credits are ready');
+    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
+    act(() => tree?.unmount());
+  });
+
+  it('lets a failed claim be left, finishing the run', async () => {
+    harness.api.claimWelcomeCredits.mockReset().mockRejectedValue(new Error('Network request failed'));
+    vi.mocked(router.replace).mockClear();
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    await act(async () => { await settle(); });
+
+    await act(async () => {
+      findButton(tree!, 'secondary-button', 'Try again later').props.onPress();
+      await settle();
+    });
+    expect(harness.localUpdates).toContainEqual(expect.objectContaining({ status: 'completed' }));
+    expect(router.replace).toHaveBeenCalled();
+    act(() => tree?.unmount());
   });
 
   it('adds nothing for a sign-in that was paid out on a previous account', async () => {

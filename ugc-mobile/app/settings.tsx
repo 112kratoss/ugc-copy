@@ -6,7 +6,6 @@ import { ActivityIndicator, Linking, Platform, Pressable, View } from 'react-nat
 
 import { AppText, Card, Screen, SectionTitle, SegmentedControl } from '@/components/ui';
 import { AutoplaySetting } from '@/components/autoplay-setting';
-import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { useAiDataConsent } from '@/lib/ai-data-consent';
 import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
 import {
@@ -47,8 +46,6 @@ export default function SettingsScreen() {
         title="Account settings."
         body={user ? 'Manage profile details, credits, and app preferences.' : 'Sign in to manage your Magicbooklet account.'}
       />
-
-      <OnboardingResumeCard />
 
       <GroupLabel>Account</GroupLabel>
 

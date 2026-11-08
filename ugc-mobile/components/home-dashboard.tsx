@@ -8,6 +8,7 @@ import { AccessibilityInfo, ActivityIndicator, Dimensions, Linking, Platform, Pr
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
+import { SetupReopen } from '@/components/setup-reopen';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
@@ -19,7 +20,6 @@ import { MediaZoomSurface } from '@/components/media-zoom';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { WorkspaceSideMenu } from '@/components/workspace-side-menu';
 import { WorkspaceSideMenuGlyph, WORKSPACE_SIDE_MENU_LABEL } from '@/components/workspace-side-menu-gesture-layer';
-import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { Reveal } from '@/components/reveal';
 import { HomeFeedSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
@@ -1158,9 +1158,8 @@ export function HomeDashboard() {
               />
             </View>
 
-            <View style={{ paddingHorizontal: horizontalPadding }}>
-              <OnboardingResumeCard />
-            </View>
+            {/* An unfinished creator setup opens once per app start. */}
+            <SetupReopen />
 
             <FeedChips
               activeChipId={activeChipId}
