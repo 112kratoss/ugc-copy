@@ -70,7 +70,6 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
   useNavigationBarSurface(isFocused ? 'dark' : null);
   const { width, height } = useWindowDimensions();
   const { api, user, signInWithApple, signInWithGoogle, isAuthConfigured } = useAuth();
-  const providers = signInProviderButtons(Platform.OS);
   const [appleBusy, setAppleBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [notice, setNotice] = useState<AuthNotice | null>(redirectNotice);
@@ -215,58 +214,12 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
           </View>
         ) : null}
 
-        {/* One width, one height, one label size: Apple's system button and a drawn Google
-            button to match it, both white on the dark wall. Android has Google alone, and it
-            leads there just as Apple does on iOS. */}
-        <View style={{ gap: appTheme.spacing.gap, width: '100%', maxWidth: 430, alignSelf: 'center' }}>
-          {providers.includes('Apple') ? (
-            <View pointerEvents={unavailable ? 'none' : 'auto'} style={{ opacity: unavailable ? appTheme.opacity.disabled : 1 }}>
-              <AppleAuthentication.AppleAuthenticationButton
-                accessibilityLabel="Continue with Apple"
-                buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
-                // Apple's rule for the system button: white on a dark background.
-                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
-                cornerRadius={BUTTON_HEIGHT / 2}
-                onPress={() => void signUpWithApple()}
-                style={{ width: '100%', height: BUTTON_HEIGHT }}
-              />
-            </View>
-          ) : null}
-          {providers.includes('Google') ? (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Continue with Google"
-              accessibilityHint="Signs in, or creates your account, with Google"
-              accessibilityState={{ busy: googleBusy, disabled: unavailable }}
-              disabled={unavailable}
-              onPress={() => void signUpWithGoogle()}
-              style={({ pressed }) => ({
-                height: BUTTON_HEIGHT,
-                borderRadius: appTheme.radii.pill,
-                backgroundColor: mediaColors.onMedia,
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 10,
-                opacity: unavailable ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-              })}
-            >
-              {googleBusy ? (
-                <ActivityIndicator color={mediaColors.mediaGround} />
-              ) : (
-                <>
-                  <GoogleGMark size={20} />
-                  <Text
-                    maxFontSizeMultiplier={1.3}
-                    style={{ color: mediaColors.mediaGround, fontSize: PROVIDER_LABEL_SIZE, fontWeight: '600', letterSpacing: -0.2 }}
-                  >
-                    Continue with Google
-                  </Text>
-                </>
-              )}
-            </Pressable>
-          ) : null}
-        </View>
+        <SignInProviderButtons
+          onApple={() => void signUpWithApple()}
+          onGoogle={() => void signUpWithGoogle()}
+          googleBusy={googleBusy}
+          unavailable={unavailable}
+        />
 
         {/* Email makes no new accounts, so it is a way back in for one, not a third button. */}
         <Pressable
@@ -294,6 +247,72 @@ function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = nul
           <SignInTerms />
         </View>
       </ScrollView>
+    </View>
+  );
+}
+
+/**
+ * Apple and Google, as both sign-in screens draw them: one width, one height, one label size.
+ * Apple's system button and a drawn Google button to match it, both white on the dark wall.
+ * Android has Google alone, and it leads there just as Apple does on iOS.
+ */
+export function SignInProviderButtons({ onApple, onGoogle, googleBusy, unavailable }: {
+  onApple: () => void;
+  onGoogle: () => void;
+  googleBusy: boolean;
+  /** A sign-in is under way, or auth is not configured: the buttons wait. */
+  unavailable: boolean;
+}) {
+  const providers = signInProviderButtons(Platform.OS);
+  return (
+    <View style={{ gap: appTheme.spacing.gap, width: '100%', maxWidth: 430, alignSelf: 'center' }}>
+      {providers.includes('Apple') ? (
+        <View pointerEvents={unavailable ? 'none' : 'auto'} style={{ opacity: unavailable ? appTheme.opacity.disabled : 1 }}>
+          <AppleAuthentication.AppleAuthenticationButton
+            accessibilityLabel="Continue with Apple"
+            buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+            // Apple's rule for the system button: white on a dark background.
+            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.WHITE}
+            cornerRadius={BUTTON_HEIGHT / 2}
+            onPress={onApple}
+            style={{ width: '100%', height: BUTTON_HEIGHT }}
+          />
+        </View>
+      ) : null}
+      {providers.includes('Google') ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Continue with Google"
+          accessibilityHint="Signs in, or creates your account, with Google"
+          accessibilityState={{ busy: googleBusy, disabled: unavailable }}
+          disabled={unavailable}
+          onPress={onGoogle}
+          style={({ pressed }) => ({
+            height: BUTTON_HEIGHT,
+            borderRadius: appTheme.radii.pill,
+            backgroundColor: mediaColors.onMedia,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 10,
+            opacity: unavailable ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          {googleBusy ? (
+            <ActivityIndicator color={mediaColors.mediaGround} />
+          ) : (
+            <>
+              <GoogleGMark size={20} />
+              <Text
+                maxFontSizeMultiplier={1.3}
+                style={{ color: mediaColors.mediaGround, fontSize: PROVIDER_LABEL_SIZE, fontWeight: '600', letterSpacing: -0.2 }}
+              >
+                Continue with Google
+              </Text>
+            </>
+          )}
+        </Pressable>
+      ) : null}
     </View>
   );
 }

@@ -417,3 +417,65 @@ describe('AuthScreen copy names only the buttons the sign-in page draws (audit 0
     expect(body).toContain('created the account with Apple or Google, use that button instead');
   });
 });
+
+describe('Apple and Google on the email form (owner, 2026-11-08: "Yes, add them")', () => {
+  beforeEach(() => {
+    platformState.os = 'ios';
+    authState.user = null;
+    paramsState.params = {};
+    navigationState.listeners = [];
+    authState.signInWithApple.mockReset();
+    authState.signInWithApple.mockResolvedValue(undefined);
+    authState.signInWithGoogle.mockReset();
+    authState.signInWithGoogle.mockResolvedValue(undefined);
+  });
+
+  function mount() {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+    return tree!;
+  }
+
+  it('draws Apple then Google under the form on iOS, and Google alone on Android', () => {
+    const labels = (tree: renderer.ReactTestRenderer) => tree.root
+      .findAll((node) => typeof node.type === 'string' && /^Continue with /.test(String(node.props.accessibilityLabel ?? '')))
+      .map((node) => node.props.accessibilityLabel);
+    expect(labels(mount())).toEqual(['Continue with Apple', 'Continue with Google']);
+    platformState.os = 'android';
+    expect(labels(mount())).toEqual(['Continue with Google']);
+  });
+
+  it('takes an Apple sign-in on through the name and the credits, then back', async () => {
+    const { router } = await import('expo-router');
+    vi.mocked(router.replace).mockClear();
+    vi.mocked(router.dismissTo).mockClear();
+    paramsState.params = { returnTo: '/post/post-1' };
+    const tree = mount();
+    await renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Continue with Apple' }).props.onPress();
+    });
+    expect(authState.signInWithApple).toHaveBeenCalledWith('signup');
+    expect(router.replace).toHaveBeenCalledWith({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
+    expect(router.dismissTo).not.toHaveBeenCalled();
+  });
+
+  it('holds the email Sign in while Google is under way', async () => {
+    let finish!: () => void;
+    authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+    const tree = mount();
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+      tree.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('a-good-password');
+    });
+    const google = tree.root.findAll((node) => node.props.accessibilityLabel === 'Continue with Google' && typeof node.props.onPress === 'function')[0];
+    renderer.act(() => {
+      google.props.onPress();
+    });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Sign in' }).props.disabled).toBe(true);
+    await renderer.act(async () => finish());
+  });
+});

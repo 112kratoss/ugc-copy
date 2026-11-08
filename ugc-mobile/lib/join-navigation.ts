@@ -38,3 +38,15 @@ export function onboardingReturnTo(value: string | string[] | undefined): string
 export function signInOpensOnEmailForm(email: string | string[] | undefined) {
   return (Array.isArray(email) ? email[0] : email) === '1';
 }
+
+/**
+ * Where a sign-in by Apple or Google on the email form goes: as from the sign-in page, on to
+ * the creator name and the welcome credits once (an account already set up passes straight
+ * through), then the return. A return that is onboarding already, as the guest's sign-in page
+ * hands the form, is used as it is.
+ */
+export function providerSignInHref(returnTo: string | string[] | undefined) {
+  const route = normalizeAuthReturnTo(returnTo) ?? '/(tabs)';
+  if (route === '/onboarding' || route.startsWith('/onboarding?')) return route;
+  return { pathname: '/onboarding', params: { returnTo: route } } as const;
+}

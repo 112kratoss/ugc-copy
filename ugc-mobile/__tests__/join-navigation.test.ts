@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { JOIN_ROUTE, onboardingReturnTo, openSignUpSheet, signUpNeededToCreate } from '../lib/join-navigation';
+import { JOIN_ROUTE, onboardingReturnTo, openSignUpSheet, providerSignInHref, signUpNeededToCreate } from '../lib/join-navigation';
 
 describe('signUpNeededToCreate', () => {
   it('asks anyone without an account and without credits (owner, 2026-11-08)', () => {
@@ -38,5 +38,17 @@ describe('onboardingReturnTo', () => {
     expect(onboardingReturnTo(['/post/post-1'])).toBe('/post/post-1');
     expect(onboardingReturnTo(undefined)).toBeNull();
     expect(onboardingReturnTo('https://example.com')).toBeNull();
+  });
+});
+
+describe('providerSignInHref (Apple or Google on the email form)', () => {
+  it('goes on through the name and the welcome credits, then the return', () => {
+    expect(providerSignInHref('/post/post-1')).toEqual({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
+    expect(providerSignInHref(undefined)).toEqual({ pathname: '/onboarding', params: { returnTo: '/(tabs)' } });
+  });
+
+  it('uses a return that is onboarding already as it is, never wrapping it twice', () => {
+    expect(providerSignInHref('/onboarding?returnTo=%2Fpost%2Fpost-1')).toBe('/onboarding?returnTo=%2Fpost%2Fpost-1');
+    expect(providerSignInHref('/onboarding')).toBe('/onboarding');
   });
 });

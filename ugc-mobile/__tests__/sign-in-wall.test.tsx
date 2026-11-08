@@ -242,10 +242,10 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
-    // The same wall stays behind the form; Apple and Google stay on the page before it.
+    // The same wall stays behind the form, with Apple and Google under it.
     expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
-    expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Switch to sign up' })).toHaveLength(0);
   });
 
