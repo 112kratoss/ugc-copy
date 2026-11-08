@@ -1,14 +1,38 @@
-import { describe, expect, it, vi } from 'vitest';
+import React from 'react';
+import renderer, { act } from 'react-test-renderer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('react-native', () => ({
-  Animated: { Value: class {}, View: () => null, timing: () => ({}), parallel: () => ({}) },
-  Easing: { linear: () => 0 },
-  View: () => null,
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
+
+const harness = vi.hoisted(() => ({
+  reducedMotion: true,
+  timings: [] as Array<Record<string, unknown>>,
+  started: 0,
 }));
-vi.mock('@/lib/motion', () => ({ useReducedMotion: () => true }));
-vi.mock('@/lib/theme-context', () => ({ useAppTheme: () => ({ colors: {} }) }));
 
-import { CLAIM_CONFETTI_MS, claimConfettiPieces } from '../components/claim-confetti';
+vi.mock('react-native', () => {
+  class Value {
+    constructor(public value: number) {}
+    setValue() {}
+    interpolate() { return 0; }
+  }
+  return {
+    Animated: {
+      Value,
+      View: (props: MockProps) => React.createElement('animated-view', props, props.children),
+      timing: (_value: unknown, config: Record<string, unknown>) => { harness.timings.push(config); return {}; },
+      parallel: () => ({ start() { harness.started += 1; }, stop() {} }),
+    },
+    Easing: { linear: () => 0 },
+    View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+  };
+});
+vi.mock('@/lib/motion', () => ({ useReducedMotion: () => harness.reducedMotion }));
+vi.mock('@/lib/theme-context', () => ({ useAppTheme: () => ({ colors: new Proxy({}, { get: (_target, name) => `token-${String(name)}` }) }) }));
+
+import { CLAIM_CONFETTI_MS, ClaimConfetti, claimConfettiPieces } from '../components/claim-confetti';
 
 describe('the claim confetti (owner 11-09: "premium feel ... satisfaction of gaining something")', () => {
   const pieces = claimConfettiPieces();
@@ -56,5 +80,50 @@ describe('the claim confetti (owner 11-09: "premium feel ... satisfaction of gai
   it('is over in under two seconds, so the card can leave beneath it', () => {
     expect(CLAIM_CONFETTI_MS).toBeLessThan(2000);
     expect(CLAIM_CONFETTI_MS).toBeGreaterThan(1400);
+  });
+});
+
+describe('drawing the burst', () => {
+  const origin = { x: 160, y: 340 };
+  const trees: renderer.ReactTestRenderer[] = [];
+  const render = (props: { ready: boolean; play: boolean; origin: { x: number; y: number } | null }) => {
+    let tree!: renderer.ReactTestRenderer;
+    act(() => { tree = renderer.create(React.createElement(ClaimConfetti, props)); });
+    trees.push(tree);
+    return tree;
+  };
+  const views = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => String(node.type) === 'animated-view');
+
+  beforeEach(() => {
+    harness.reducedMotion = false;
+    harness.timings.length = 0;
+    harness.started = 0;
+    act(() => { for (const tree of trees.splice(0)) tree.unmount(); });
+  });
+
+  it('mounts every piece at the origin once ready, invisible and still, and throws them on play', () => {
+    const tree = render({ ready: true, play: false, origin });
+    expect(views(tree)).toHaveLength(48);
+    expect(harness.started).toBe(0);
+    act(() => { tree.update(React.createElement(ClaimConfetti, { ready: true, play: true, origin })); });
+    expect(harness.started).toBe(1);
+    expect(harness.timings).toHaveLength(48);
+  });
+
+  it('runs every piece on the native driver, with its own flight', () => {
+    render({ ready: true, play: true, origin });
+    for (const config of harness.timings) {
+      expect(config.useNativeDriver).toBe(true);
+      expect(config.toValue).toBe(1);
+    }
+    expect(new Set(harness.timings.map((config) => config.duration)).size).toBeGreaterThan(10);
+  });
+
+  it('draws nothing without an origin, before it is ready, or under Reduce Motion', () => {
+    expect(render({ ready: true, play: true, origin: null }).toJSON()).toBeNull();
+    expect(render({ ready: false, play: false, origin }).toJSON()).toBeNull();
+    harness.reducedMotion = true;
+    expect(render({ ready: true, play: true, origin }).toJSON()).toBeNull();
+    expect(harness.started).toBe(0);
   });
 });

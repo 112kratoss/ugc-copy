@@ -25,7 +25,8 @@ import {
   welcomeFillProgress,
 } from '@/lib/welcome-popup';
 
-type Phase = 'offer' | 'claiming' | 'claimed' | 'failed';
+/** `failed` offers a retry; `refused` is the server's final no, with only Close left. */
+type Phase = 'offer' | 'claiming' | 'claimed' | 'failed' | 'refused';
 
 const CARD_MAX_WIDTH = 340;
 const ENTRY_SCALE = 0.9;
@@ -92,15 +93,24 @@ function WelcomeCreditsPopupForAccount() {
   const [offered, setOffered] = useState<WelcomeCreditResponse | null>(null);
   const [phase, setPhase] = useState<Phase>('offer');
   const [message, setMessage] = useState<string | null>(null);
+  // What the claim granted: the fill's target, once the server has answered.
+  const [granted, setGranted] = useState<number | null>(null);
   // How far the fill has got, 0..1, and the credits shown so far.
   const [fill, setFill] = useState(0);
   const [count, setCount] = useState(0);
-  // Where the credits figure sits in the window: the confetti bursts out of it.
-  const [origin, setOrigin] = useState<ClaimOrigin | null>(null);
+  // Where the credits figure sits in the window: the confetti bursts out of
+  // it. Read through the ref by the fill's timers, whose closures predate it.
+  const [origin, setOriginState] = useState<ClaimOrigin | null>(null);
+  const originRef = useRef<ClaimOrigin | null>(null);
+  const setOrigin = (next: ClaimOrigin | null) => {
+    originRef.current = next;
+    setOriginState(next);
+  };
   const fillTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
   // The new balance, held back until the figure lands so the header jumps
-  // with it; applied on unmount if the fill was cut short.
+  // with it.
   const pendingBalance = useRef<number | null>(null);
   // When the last piece of confetti will have fallen (0 when none is flying).
   const confettiEndsAt = useRef(0);
@@ -115,14 +125,23 @@ function WelcomeCreditsPopupForAccount() {
     if (eligibleNow && !offered && welcomeQuery.data) setOffered(welcomeQuery.data);
   }, [eligibleNow, offered, welcomeQuery.data]);
   useEffect(() => () => {
+    mounted.current = false;
     if (fillTimer.current) clearInterval(fillTimer.current);
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    if (pendingBalance.current !== null) updateCredits(pendingBalance.current);
-  }, [updateCredits]);
+    // A fill cut short (an account switch, Home gone): the claim is in, so
+    // the current account's profile is read again. Never `updateCredits`
+    // here: that would write one account's balance over the next one's.
+    if (pendingBalance.current !== null) void refreshProfile().catch(() => undefined);
+  }, [refreshProfile]);
 
   const visible = Boolean(offered) && !dismissed;
-  const amount = offered?.amount ?? 25;
+  // The figure: what was offered, then what the claim granted.
+  const amount = granted ?? offered?.amount ?? 25;
   const landed = phase === 'claimed' && count >= amount;
+  // While the claim is in flight or filling, neither Close nor Android's
+  // back key may take the card away: a failed claim would land on a hidden
+  // Modal with no retry.
+  const busy = phase === 'claiming' || (phase === 'claimed' && !landed);
 
   // 1 while the popup is up, 0 once it has gone.
   const [presence] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
@@ -157,7 +176,8 @@ function WelcomeCreditsPopupForAccount() {
       closeTimer.current = setTimeout(close, EXIT_AFTER_LANDING_STILL_MS);
       return;
     }
-    confettiEndsAt.current = Date.now() + CLAIM_CONFETTI_MS + 100;
+    // No origin (the figure could not be measured): no burst, nothing to wait for.
+    confettiEndsAt.current = originRef.current ? Date.now() + CLAIM_CONFETTI_MS + 100 : 0;
     closeTimer.current = setTimeout(close, EXIT_AFTER_LANDING_MS);
   };
 
@@ -197,17 +217,23 @@ function WelcomeCreditsPopupForAccount() {
     try {
       const result = await api.claimWelcomeCredits();
       primeWelcomeCredits(queryClient, user.id, result);
+      // Gone meanwhile (an account switch): the claim is recorded for the
+      // account that made it; nothing here may start timers or touch state.
+      if (!mounted.current) return;
       if (result.status === 'claimed' || result.status === 'already_claimed') {
         if (result.status === 'claimed') pendingBalance.current = result.credits;
         else void refreshProfile().catch(() => undefined);
+        setGranted(result.amount);
         setPhase('claimed');
         fillUp(result.amount);
         AccessibilityInfo.announceForAccessibility(`${result.amount} credits added to your balance.`);
       } else {
-        setPhase('failed');
+        // The server's final answer: nothing to retry.
+        setPhase('refused');
         setMessage('These credits can’t be claimed on this account.');
       }
     } catch (error) {
+      if (!mounted.current) return;
       haptic.error();
       setPhase('failed');
       setMessage(error instanceof Error ? error.message : 'Could not add your credits. Try again.');
@@ -215,11 +241,22 @@ function WelcomeCreditsPopupForAccount() {
   };
 
   return (
-    <Modal visible={visible} transparent statusBarTranslucent navigationBarTranslucent animationType="none" onRequestClose={close}>
+    <Modal
+      visible={visible}
+      transparent
+      statusBarTranslucent
+      navigationBarTranslucent
+      animationType="none"
+      onRequestClose={() => {
+        if (!busy) close();
+      }}
+    >
       {visible ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: appTheme.spacing.section, gap: appTheme.spacing.screen }}>
           <Animated.View style={{ position: 'absolute', inset: 0, backgroundColor: outerTheme.colors.overlay, opacity: presence }} />
+          {/* The card and its Close together are what VoiceOver is held to. */}
           <Animated.View
+            accessibilityViewIsModal
             style={{
               width: '100%',
               alignItems: 'center',
@@ -241,7 +278,7 @@ function WelcomeCreditsPopupForAccount() {
                 onClaim={claim}
                 onFigureMeasured={setOrigin}
               />
-              <CloseChip disabled={phase === 'claiming' || (phase === 'claimed' && !landed)} onPress={close} />
+              <CloseChip disabled={busy} onPress={close} />
             </ThemeScope>
           </Animated.View>
           {/* Over the whole window, outside the sinking card, in the card's own light palette. */}
@@ -365,7 +402,6 @@ function WelcomeCard({
 
   return (
     <MotionView
-      accessibilityViewIsModal
       style={{
         width: '100%',
         maxWidth: CARD_MAX_WIDTH,
@@ -448,7 +484,7 @@ function WelcomeCard({
           <Check size={appTheme.icon.compact} color={theme.colors.success} />
           <AppText variant="label" color="success">{landed ? 'Added to your balance' : 'Adding to your balance'}</AppText>
         </View>
-      ) : (
+      ) : phase === 'refused' ? null : (
         <PrimaryButton
           label={phase === 'failed' ? 'Try again' : 'Claim'}
           loadingLabel="Claiming…"

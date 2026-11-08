@@ -30,7 +30,7 @@ vi.mock('react-native', () => {
     AccessibilityInfo: { announceForAccessibility: (text: string) => harness.announced.push(text) },
     Animated: { Value, View: (props: MockProps) => React.createElement('animated-view', props, props.children), timing: (_value: unknown, config: { toValue: number }) => ({ start(done?: () => void) { if (config.toValue === 0 && done) harness.exits.push(done); }, stop() {} }), parallel: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
     Easing: { out: () => () => 0, quad: () => 0, bezier: () => () => 0, linear: () => 0 },
-    Modal: ({ visible, children }: MockProps) => (visible ? React.createElement('modal', null, children) : null),
+    Modal: ({ visible, children, onRequestClose }: MockProps) => (visible ? React.createElement('modal', { onRequestClose }, children) : null),
     Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, typeof children === 'function' ? null : children),
     Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
     View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -78,9 +78,11 @@ import { WelcomeCreditsPopup } from '../components/welcome-credits-popup';
 import { resetWelcomePopupThisRun, wasWelcomePopupDismissedThisRun, WELCOME_COUNT_UP_MS } from '../lib/welcome-popup';
 
 const trees: renderer.ReactTestRenderer[] = [];
+// Every host view measures to the same window frame, so the figure has an origin for the burst.
+const nodeMock = { measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(40, 300, 240, 88) };
 function mount() {
   let tree!: renderer.ReactTestRenderer;
-  act(() => { tree = renderer.create(<WelcomeCreditsPopup />); });
+  act(() => { tree = renderer.create(<WelcomeCreditsPopup />, { createNodeMock: () => nodeMock }); });
   trees.push(tree);
   return tree;
 }
@@ -89,6 +91,10 @@ const button = (tree: renderer.ReactTestRenderer, label: string) =>
   tree.root.find((node) => String(node.type) === 'primary-button' && node.props.label === label);
 const close = (tree: renderer.ReactTestRenderer) =>
   tree.root.find((node) => String(node.type) === 'icon-button' && node.props.label === 'Close');
+const modal = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'modal');
+// The confetti pieces: the only animated views placed by a numeric left and width.
+const confetti = (tree: renderer.ReactTestRenderer) =>
+  tree.root.findAll((node) => String(node.type) === 'animated-view' && typeof node.props.style?.left === 'number' && typeof node.props.style?.width === 'number');
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 
 describe('the welcome-credits popup over Home (owner 11-09)', () => {
@@ -96,6 +102,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     resetWelcomePopupThisRun();
     harness.api.claimWelcomeCredits.mockReset();
     harness.updateCredits.mockClear();
+    harness.refreshProfile.mockClear();
     harness.welcome = { status: 'eligible', identityComplete: true, amount: 25 };
     harness.user = { id: 'creator-1' };
     harness.focused = true;
@@ -213,8 +220,11 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
         button(tree, 'Claim').props.onPress();
         await flush();
       });
+      // Mounted invisible during the fill, so the landing has nothing to build.
+      expect(confetti(tree)).toHaveLength(48);
       await act(async () => { vi.advanceTimersByTime(WELCOME_COUNT_UP_MS + 50); });
       expect(text(tree)).toContain('Credits added!');
+      expect(confetti(tree)).toHaveLength(48);
       // Not yet leaving: a beat for the landing.
       expect(harness.exits).toHaveLength(0);
       await act(async () => { vi.advanceTimersByTime(300); });
@@ -246,6 +256,67 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
       await flush();
     });
     expect(text(tree)).toContain('Credits added!');
+  });
+
+  it('keeps the card when the server refuses, with no retry to press and Close open', async () => {
+    harness.api.claimWelcomeCredits.mockResolvedValue({ status: 'legacy_ineligible', identityComplete: true, amount: 25 });
+    const tree = mount();
+    await act(async () => {
+      button(tree, 'Claim').props.onPress();
+      await flush();
+    });
+    expect(text(tree)).toContain('can’t be claimed on this account');
+    expect(tree.root.findAll((node) => String(node.type) === 'primary-button')).toHaveLength(0);
+    expect(close(tree).props.disabled).toBe(false);
+    expect(harness.updateCredits).not.toHaveBeenCalled();
+  });
+
+  it('ignores Android\'s back key while the claim is in flight, so a failed claim is not lost behind a hidden card', async () => {
+    let answer!: (value: unknown) => void;
+    harness.api.claimWelcomeCredits.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+    const tree = mount();
+    await act(async () => {
+      button(tree, 'Claim').props.onPress();
+      await flush();
+    });
+    act(() => { modal(tree).props.onRequestClose(); });
+    expect(tree.toJSON()).not.toBeNull();
+    expect(wasWelcomePopupDismissedThisRun('creator-1')).toBe(false);
+    expect(close(tree).props.disabled).toBe(true);
+    await act(async () => {
+      answer({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
+      await flush();
+    });
+    expect(text(tree)).toContain('Credits added!');
+    act(() => { modal(tree).props.onRequestClose(); });
+    expect(tree.toJSON()).toBeNull();
+  });
+
+  it('never writes one account\'s balance over the next: a switch mid-fill reads the profile again instead', async () => {
+    vi.useFakeTimers();
+    try {
+      harness.reducedMotion = false;
+      harness.api.claimWelcomeCredits.mockResolvedValue({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
+      const tree = mount();
+      await act(async () => {
+        button(tree, 'Claim').props.onPress();
+        await flush();
+      });
+      await act(async () => { vi.advanceTimersByTime(400); });
+      expect(text(tree)).toContain('Adding your credits');
+      harness.user = { id: 'creator-2' };
+      harness.welcome = { status: 'eligible', identityComplete: true, amount: 25 };
+      act(() => { tree.update(<WelcomeCreditsPopup />); });
+      expect(harness.updateCredits).not.toHaveBeenCalled();
+      expect(harness.refreshProfile).toHaveBeenCalledTimes(1);
+      expect(text(tree)).toContain('Claim your welcome credits');
+      await act(async () => { vi.advanceTimersByTime(3000); });
+      expect(harness.updateCredits).not.toHaveBeenCalled();
+      expect(text(tree)).toContain('Claim your welcome credits');
+      expect(harness.haptics).not.toContain('success');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('starts afresh for the next account rather than showing one account\'s claim to another', async () => {
