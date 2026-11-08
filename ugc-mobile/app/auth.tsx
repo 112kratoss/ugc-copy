@@ -8,6 +8,7 @@ import { Eye, EyeOff, LockKeyhole, Mail, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
+import { SignInWall } from '@/components/sign-in-wall';
 import { BrandLockup, IconButton, PrimaryButton, SegmentedControl } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
@@ -26,6 +27,7 @@ import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { completeAuthScreen, leaveAuthScreen, normalizeAuthReturnTo, tookReturnsPlace } from '@/lib/auth-navigation';
 import { env } from '@/lib/env';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
+import { signInOpensOnEmailForm } from '@/lib/join-navigation';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme } from '@/lib/theme';
@@ -59,7 +61,35 @@ function authAnalyticsStep(returnTo: string | string[] | undefined) {
   return (destination.split(/[?#]/, 1)[0] || '/(tabs)').slice(0, 64);
 }
 
-export default function AuthScreen() {
+/**
+ * Every "Sign in" opens the full-screen sign-in page (owner, 2026-11-08: one page for signing
+ * up and in, `components/sign-in-wall.tsx`). The email form below is for an account made with
+ * email, behind the page's "Sign in with email", and comes straight up for a redirect's notice
+ * ("You were signed out"), which explains why the person is here and keeps its own return.
+ */
+export default function AuthRoute() {
+  const { returnTo, notice, email } = (useRoute().params ?? {}) as {
+    returnTo?: string | string[];
+    notice?: string | string[];
+    email?: string | string[];
+  };
+  const [showEmailForm, setShowEmailForm] = useState(
+    () => signInOpensOnEmailForm({ hasNotice: authNoticeForRedirect(notice) !== null, email }),
+  );
+
+  if (!showEmailForm) {
+    return (
+      <SignInWall
+        target={normalizeAuthReturnTo(returnTo) ?? '/(tabs)'}
+        step={authAnalyticsStep(returnTo)}
+        onUseEmail={() => setShowEmailForm(true)}
+      />
+    );
+  }
+  return <AuthScreen />;
+}
+
+function AuthScreen() {
   const theme = useAppTheme();
   // The route's own params: the URL parse has decoded them once, as every caller encoded its
   // return once. expo-router's `useLocalSearchParams` decodes them again, which cut a prompt in a

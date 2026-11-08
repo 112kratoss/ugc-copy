@@ -277,11 +277,14 @@ describe('HIG S15 — the way out and the way through', () => {
     // which traps the person on the form. `Alert` is presented by the OS and
     // does appear. Captured on the simulator before this fix.
     const layout = file('app/_layout.tsx');
-    const modalRoutes = [...layout.matchAll(/name="([^"]+)"[^>]*?presentation: 'modal'/gs)].map((m) => m[1]);
+    // A full-screen modal is presented above the root view controller too.
+    const modalRoutes = [...layout.matchAll(/name="([^"]+)"[^>]*?presentation: '(?:modal|fullScreenModal)'/gs)].map((m) => m[1]);
     // A new modal route lands here deliberately, so whoever adds it reads this.
-    expect(modalRoutes.sort()).toEqual(['auth', 'edit-profile']);
+    expect(modalRoutes.sort()).toEqual(['auth', 'edit-profile', 'join']);
     expect(screen).not.toContain('showActionSheet');
     expect(file('app/auth.tsx')).not.toContain('showActionSheet');
+    expect(file('app/join.tsx')).not.toContain('showActionSheet');
+    expect(file('components/sign-in-wall.tsx')).not.toContain('showActionSheet');
   });
 
   it('does not let the Close control disarm the guard it should trip', () => {

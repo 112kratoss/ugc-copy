@@ -1,10 +1,10 @@
 import { normalizeAuthReturnTo } from './auth-navigation';
 
 /**
- * The sign-up sheet (`app/join.tsx`): what a guest is asked when they reach
- * for something an account does (owner, 2026-11-08: Create, Generate, Remix,
- * Like, Follow). Signing up there goes on to the creator name and the welcome
- * credits once, then back to `returnTo`.
+ * The sign-in page (`app/join.tsx`, `components/sign-in-wall.tsx`): what a guest
+ * is asked when they reach for something an account does (owner, 2026-11-08:
+ * Create, Generate, Remix, Like, Follow). Signing up there goes on to the
+ * creator name and the welcome credits once, then back to `returnTo`.
  */
 export const JOIN_ROUTE = '/join';
 
@@ -28,4 +28,13 @@ export function signUpNeededToCreate({ hasUser, credits }: { hasUser: boolean; c
 /** Where onboarding sends someone back to once the sign-up's steps are done. */
 export function onboardingReturnTo(value: string | string[] | undefined): string | null {
   return normalizeAuthReturnTo(value) ?? null;
+}
+
+/**
+ * Whether the sign-in route opens on its email form rather than the full-screen
+ * sign-in page: for a redirect's notice ("You were signed out"), which explains
+ * why the person is there, and when the page's "Sign in with email" sent them.
+ */
+export function signInOpensOnEmailForm({ hasNotice, email }: { hasNotice: boolean; email: string | string[] | undefined }) {
+  return hasNotice || (Array.isArray(email) ? email[0] : email) === '1';
 }

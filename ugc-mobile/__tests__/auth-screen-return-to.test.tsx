@@ -46,7 +46,8 @@ const authState = vi.hoisted(() => ({
 }));
 
 vi.mock('@react-navigation/native', () => ({
-  useRoute: () => ({ key: 'auth-1', name: 'auth', params: routeState.params }),
+  // The email form, behind the sign-in page's "Sign in with email".
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: { email: '1', ...routeState.params } }),
 }));
 
 vi.mock('expo-router', () => ({

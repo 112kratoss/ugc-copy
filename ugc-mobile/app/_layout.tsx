@@ -327,21 +327,22 @@ function RootLayoutNav() {
                   options={{
                     headerShown: false,
                     title: 'Sign In',
-                    presentation: 'modal',
-                    animation: reducedMotion ? 'none' : 'fade_from_bottom',
-                    contentStyle: { backgroundColor: theme.colors.background },
+                    // Full screen, as the sign-in page it opens on is (components/sign-in-wall.tsx).
+                    presentation: 'fullScreenModal',
+                    animation: reducedMotion ? 'none' : 'fade',
+                    contentStyle: { backgroundColor: mediaColors.mediaGround },
                   }}
                 />
-                {/* The sign-up sheet over whatever asked for an account: a see-through
-                    screen whose own panel slides up and back (app/join.tsx). */}
+                {/* The full-screen sign-in page over whatever asked for an account
+                    (app/join.tsx), faded in as the sign-in route is. */}
                 <Stack.Screen
                   name="join"
                   options={{
                     headerShown: false,
-                    presentation: 'transparentModal',
-                    animation: 'none',
+                    presentation: 'fullScreenModal',
+                    animation: reducedMotion ? 'none' : 'fade',
                     gestureEnabled: false,
-                    contentStyle: { backgroundColor: 'transparent' },
+                    contentStyle: { backgroundColor: mediaColors.mediaGround },
                   }}
                 />
                 {/* Same iOS 26 full-screen back pan as `post/new` below, and

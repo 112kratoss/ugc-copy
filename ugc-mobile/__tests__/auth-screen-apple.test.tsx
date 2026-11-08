@@ -65,7 +65,8 @@ vi.mock('expo-router', () => ({
 
 // The screen reads its params from the route itself (auth-screen-return-to.test.tsx says why).
 vi.mock('@react-navigation/native', () => ({
-  useRoute: () => ({ key: 'auth-1', name: 'auth', params: paramsState.params }),
+  // The email form: "Sign in with email" on the sign-in page (sign-in-wall.test.tsx covers the page).
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: { email: '1', ...paramsState.params } }),
 }));
 
 vi.mock('expo-apple-authentication', () => ({

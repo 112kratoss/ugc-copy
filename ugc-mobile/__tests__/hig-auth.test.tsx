@@ -38,7 +38,8 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('@react-navigation/native', () => ({
-  useRoute: () => ({ key: 'auth-1', name: 'auth', params: {} }),
+  // The email form, behind the sign-in page's "Sign in with email".
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: { email: '1' } }),
 }));
 
 vi.mock('expo-apple-authentication', () => ({
