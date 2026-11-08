@@ -1756,7 +1756,7 @@ function ProfileMediaTile({
     ? `${item.label}, ${item.title}, ${countLabel} likes`
     : `${item.label}, ${item.title}, ${getProfileTileState(item).label}${outputsLabel ? `, ${outputsLabel}` : ''}`;
   // UIKit captures this view at its laid-out size. A simultaneous press scale
-  // exposes the light grid inside the opening veil and shifts the zoom source.
+  // shifts the zoom source.
   const motion = usePressMotion(nativeZoomTile, { scale: appTheme.motion.scale.pressed });
   // Saved tiles open the reel, and the reel grows out of this tile. Creations
   // and Posts open the card feed, which is not a zoom.

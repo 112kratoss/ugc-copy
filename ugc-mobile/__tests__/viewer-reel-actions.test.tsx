@@ -92,7 +92,6 @@ const screenState = vi.hoisted(() => ({
     opened: true,
     reportChromeDrawn: vi.fn(),
     reportNeighbourDrawn: vi.fn(),
-    veil: null,
   },
 }));
 
@@ -185,7 +184,7 @@ vi.mock('@/components/apple-zoom', () => ({
   useAppleZoomRetarget: () => undefined,
   useAppleZoomSourceId: () => null,
 }));
-vi.mock('@/components/apple-zoom-progress', () => ({ AppleZoomProgress: nothing, AppleZoomTopControlsCue: nothing }));
+vi.mock('@/components/apple-zoom-progress', () => ({ AppleZoomTopControlsCue: nothing }));
 vi.mock('@/components/app-scheme-scope', () => ({ AppSchemeScope: passThrough }));
 vi.mock('@/components/audio-creation-player', () => ({ AudioCreationPlayer: nothing }));
 vi.mock('@/components/comments-sheet', () => ({ CommentsSheet: nothing }));
@@ -255,6 +254,7 @@ vi.mock('@/lib/use-profile-library-source', () => ({
   }),
 }));
 vi.mock('@/lib/media-zoom-transition', () => ({
+  IOS_BACK_FLIES_PICTURE: false,
   mediaItemAspectRatio: () => null,
   mediaRectInScreen: () => ({ x: 0, y: 0, width: 390, height: 844 }),
   showcaseMediaZoomPreview: () => null,

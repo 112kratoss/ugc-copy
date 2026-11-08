@@ -413,11 +413,6 @@ export function claimReturnedVideoPlayer(tileKey: string, url: string): VideoPla
   return pending.player;
 }
 
-/** A tile has taken back `player`, and the hand-back is still under way. */
-export function isVideoReturnClaimed(player: VideoPlayer) {
-  return pendingReturn?.player === player && pendingReturn.claimed;
-}
-
 /** The tile's own view has drawn the player it took back. */
 export function reportReturnedVideoDrawn(player: VideoPlayer) {
   const pending = pendingReturn;

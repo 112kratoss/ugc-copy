@@ -231,7 +231,6 @@ vi.mock('@/components/comments-sheet', () => ({
 }));
 vi.mock('@/components/feed-pagination-footer', () => ({ FeedLoadMoreErrorFooter: nothing }));
 vi.mock('@/components/media-zoom', () => ({ MediaZoomSurface: passThrough }));
-vi.mock('@/components/zoom-veil', () => ({ ZoomVeilScope: passThrough }));
 vi.mock('@/components/profile-feed-card', () => ({
   ProfileFeedCardView: ({ card, onAction, screenFocused }: {
     card: { id: string };
