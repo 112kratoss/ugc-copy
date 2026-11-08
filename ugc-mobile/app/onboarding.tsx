@@ -52,6 +52,7 @@ import {
   startHandleSuggestion,
   swapHandleSuggestion,
 } from '@/lib/handle-suggestion';
+import { markSetupShownThisRun } from '@/lib/setup-reopen';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
@@ -113,7 +114,7 @@ function welcomeStatusNotice(status: WelcomeCreditResponse['status'] | undefined
   if (status === 'unavailable') {
     return {
       title: 'Welcome credits are unavailable right now',
-      body: 'Your welcome credits are temporarily unavailable. You can continue and claim them from Home.',
+      body: 'Your welcome credits are temporarily unavailable. You can continue for now.',
     };
   }
   return null;
@@ -169,6 +170,10 @@ function OnboardingFlow() {
   // what put an account holder on the welcome card while the profile fetch was
   // still in flight.
   const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? 'loading' : 'intro');
+  // Seen in this run of the app: Home does not open it again until the next start.
+  useEffect(() => {
+    markSetupShownThisRun();
+  }, []);
   // The creator name is required to go on (owner, 2026-11-08). iOS already
   // offers no way past it (the route turns the back gesture off); Android's
   // back key would otherwise pop the screen with no name chosen.
@@ -211,11 +216,9 @@ function OnboardingFlow() {
   /**
    * Adopt a welcome response this screen fetched first-hand.
    *
-   * Also written into the shared `welcome-credits` query, which is what the
-   * Home and Settings cards read. Nothing used to refresh that copy when this
-   * flow changed the answer, so a creator who had just saved a handle walked
-   * back to a card still reading "Finish your creator setup" — and tapping it
-   * re-opened this screen only for it to find nothing to do and leave again.
+   * Also written into the shared `welcome-credits` query, which the start-up
+   * reopen (`components/setup-reopen.tsx`) reads, so an answer this flow has
+   * just changed is never judged from a stale copy.
    */
   const adoptWelcome = useCallback((next: WelcomeCreditResponse) => {
     setWelcome(next);
@@ -270,7 +273,7 @@ function OnboardingFlow() {
     } catch (error) {
       setMessage(isNetworkRequestFailedError(error)
         ? 'You appear to be offline. Check your connection and try again.'
-        : 'We could not load your creator setup. Try again, or skip it for now — you can finish from Home.');
+        : 'We could not load your creator setup. Try again, or skip it for now. It opens again the next time you start the app.');
       setStage('loading');
     }
   // Depend only on the local field that affects routing. `update({ goal })`
@@ -305,6 +308,17 @@ function OnboardingFlow() {
     const key = step === 0 ? 'welcome' : 'goal';
     void trackOnboardingEvent(api, step === 0 ? 'started' : 'screen_viewed', { goal, step: key });
   }, [api, goal, stage, step]);
+
+  // The credits are added as soon as the stage opens, once a visit; a retry
+  // is the creator's own "Try again".
+  const autoClaimStarted = useRef(false);
+  useEffect(() => {
+    if (stage !== 'reward' || welcome?.status !== 'eligible' || autoClaimStarted.current) return;
+    autoClaimStarted.current = true;
+    void claimCredits();
+  // `claimCredits` is recreated every render; the ref keeps this to one call.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, welcome?.status]);
 
   useEffect(() => {
     // A stage that only explains why nothing can be claimed is not a reward view.
@@ -530,7 +544,8 @@ function OnboardingFlow() {
   // The figure is only meaningful to someone who is about to receive it or just
   // did. For everyone else `amount` falls back to the program default, which is
   // how an account holding 26,831 credits was shown a headline "25".
-  const showAmount = claimReady || claimed;
+  // Not while the claim is still running: the figure counts up once it lands.
+  const showAmount = claimed || (claimReady && claimFailed);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -688,7 +703,7 @@ function OnboardingFlow() {
                 {/* The name stays required; this only keeps a save that cannot
                     get through (offline, a server error) from holding someone
                     on a step with no back gesture. Nothing records "later",
-                    so Home asks again. */}
+                    so it opens again at the next app start. */}
                 {saveFailed ? (
                   <SecondaryButton label="Try again later" disabled={busy} onPress={() => void leaveForNow('identity_save_failed')} />
                 ) : null}
@@ -719,14 +734,18 @@ function OnboardingFlow() {
                     <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>
                       {statusNotice
                         ? statusNotice.title
-                        : claimed ? 'Your welcome credits are ready' : 'Claim your welcome credits'}
+                        : claimed
+                          ? 'Your welcome credits are ready'
+                          : claimFailed ? 'Your welcome credits are waiting' : 'Adding your welcome credits'}
                     </AppText>
                     <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
                       {statusNotice
                         ? statusNotice.body
                         : claimed
                           ? 'Your creation credits are ready for your first project.'
-                          : 'Claim creation-only credits for images, video, and motion.'}
+                          : claimFailed
+                            ? 'They could not be added just now.'
+                            : 'One moment while they go into your balance.'}
                     </AppText>
                   </View>
                   {showAmount ? (
@@ -741,15 +760,19 @@ function OnboardingFlow() {
                 </Card>
               </Animated.View>
               {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
-              {claimReady ? <PrimaryButton label={`Claim ${welcome?.amount} credits`} loading={busy} onPress={() => void claimCredits()} /> : null}
-              {!claimReady || claimed ? <PrimaryButton label="Start creating" onPress={() => void startCreating()} /> : null}
-              {/* No "Claim later" (owner, 2026-11-08): the Home and Settings
-                  card that offered the credits again is gone. A claim that
-                  failed can still be left, since the route has no back
-                  gesture. */}
+              {/* The credits are added as this stage opens (owner, 2026-11-08:
+                  "just this screen is enough"): no claim button, no "Claim
+                  later". A claim that failed can be tried again or left, since
+                  the route has no back gesture; an unfinished setup opens
+                  again at the next app start. */}
               {claimReady && claimFailed ? (
-                <SecondaryButton label="Try again later" disabled={busy} onPress={() => void startCreating()} />
-              ) : null}
+                <>
+                  <PrimaryButton label="Try again" loading={busy} onPress={() => void claimCredits()} />
+                  <SecondaryButton label="Try again later" disabled={busy} onPress={() => void startCreating()} />
+                </>
+              ) : (
+                <PrimaryButton label="Start creating" loading={claimReady && !claimed} onPress={() => void startCreating()} />
+              )}
             </View>
           ) : null}
         </View>

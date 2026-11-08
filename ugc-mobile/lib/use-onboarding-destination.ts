@@ -1,6 +1,12 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { useAuth } from './auth';
+import { useOnboarding } from './onboarding';
+import {
+  isIdentityDeferredInMetadata,
+  resolveOnboardingDestination,
+  type OnboardingDestination,
+} from './onboarding-destination';
 import type { WelcomeCreditResponse } from './types';
 
 const WELCOME_CREDITS_QUERY_SCOPE = 'welcome-credits';
@@ -13,13 +19,11 @@ export function welcomeCreditsQueryKey(userId: string | undefined) {
 /**
  * Teach the shared query a response some screen just fetched first-hand.
  *
- * The onboarding screen fetches welcome credits on its own, and until it wrote
- * the answer back here the Home and Settings cards kept the copy they took at
- * sign-in. A creator who had just saved a handle walked back to a card still
- * headlined "Finish your creator setup", tapped it, and watched the flow open,
- * learn there was nothing left to do, and bounce straight back out — until a
- * refetch happened to land and the card vanished on its own. Seeding the cache
- * costs no request and moves every entry point in the same frame.
+ * The onboarding screen fetches welcome credits on its own. Writing the answer
+ * back here keeps the start-up reopen (`components/setup-reopen.tsx`) from
+ * judging a setup unfinished from the copy it took at sign-in (the removed
+ * Home card once reopened a finished flow that way). Seeding the cache costs
+ * no request.
  */
 export function primeWelcomeCredits(
   queryClient: Pick<QueryClient, 'setQueryData'>,
@@ -43,11 +47,9 @@ export function invalidateWelcomeCredits(queryClient: Pick<QueryClient, 'invalid
 /**
  * One shared welcome-credits query.
  *
- * The resume card mounts in two places at once (Home and Settings) and
- * `getWelcomeCredits` is uncached in the API client, so the previous
- * per-component `useEffect` fetch fired the same request twice on every launch.
- * A single query key collapses them and lets the foreground refetch — wired to
- * AppState in `app/_layout.tsx` — keep every consumer in step for free.
+ * `getWelcomeCredits` is uncached in the API client; one query key shares a
+ * single answer between the start-up reopen and onboarding's own writes, and
+ * the foreground refetch wired to AppState in `app/_layout.tsx` keeps it fresh.
  *
  * `enabled: Boolean(user)` is the guest guard, and it is load-bearing rather
  * than an optimisation: `useAuth().user` is deliberately null for anonymous
@@ -63,7 +65,7 @@ export function useWelcomeCreditsQuery() {
     enabled: Boolean(user),
     queryFn: () => api.getWelcomeCredits(),
     // An answer that can no longer lead anywhere is not asked again on every
-    // return to the app (330 requests a week, from Home's card): once read per
+    // return to the app (330 requests a week, from the old Home card): once read per
     // launch, and again only when Edit Profile or a claimed name invalidates it.
     staleTime: (query) => (isWelcomeCreditAnswerSettled(query.state.data) ? Infinity : WELCOME_CREDITS_STALE_MS),
   });
@@ -93,4 +95,29 @@ const SETTLED_WELCOME_STATUSES: ReadonlySet<WelcomeCreditResponse['status']> = n
  */
 export function isWelcomeCreditAnswerSettled(welcome: WelcomeCreditResponse | undefined): boolean {
   return Boolean(welcome?.identityComplete) && SETTLED_WELCOME_STATUSES.has(welcome!.status);
+}
+
+/**
+ * Where the creator-setup entry points should lead, if anywhere.
+ *
+ * Returns `pending` until the welcome response lands, so callers render nothing
+ * rather than guessing "nothing to do" from a request that has not finished.
+ */
+export function useOnboardingDestination(): OnboardingDestination {
+  const { user, isLoading } = useAuth();
+  const { state } = useOnboarding();
+  const welcomeQuery = useWelcomeCreditsQuery();
+
+  // A session still being read off the keychain is not a guest. Resolving
+  // before it lands answers `intro` for every registered creator on every cold
+  // start: the guest card's copy, for a moment, on an account holder's Home.
+  if (isLoading) return 'pending';
+
+  return resolveOnboardingDestination({
+    hasUser: Boolean(user),
+    userId: user?.id ?? null,
+    welcome: welcomeQuery.data ?? null,
+    local: state,
+    identityDeferredOnAccount: isIdentityDeferredInMetadata(user?.user_metadata),
+  });
 }

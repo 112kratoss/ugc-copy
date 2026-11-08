@@ -8,6 +8,7 @@ import { AccessibilityInfo, ActivityIndicator, Dimensions, Linking, Platform, Pr
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
+import { SetupReopen } from '@/components/setup-reopen';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
@@ -1156,6 +1157,9 @@ export function HomeDashboard() {
                 onPlaybackCandidateChange={onShelfPlaybackCandidateChange}
               />
             </View>
+
+            {/* An unfinished creator setup opens once per app start. */}
+            <SetupReopen />
 
             <FeedChips
               activeChipId={activeChipId}
