@@ -2,6 +2,9 @@ import { suggestProfileHandle } from '@/lib/post-publish-policy/post-publish-pol
 
 const HANDLE_MAX_LENGTH = 24;
 
+/** How many times the creator-name step swaps a taken suggestion for a numbered one, in all. */
+export const MAX_HANDLE_SUGGESTION_SWAPS = 3;
+
 /**
  * The handle the creator-name step starts with (owner, 2026-11-08: "a random
  * unique name ... as default"). From the name or the email, as the post
@@ -41,4 +44,66 @@ export function handleForTypedName(
   isUsable: (handle: string) => boolean = () => true,
 ): string {
   return suggestProfileHandle(displayName, null, isUsable);
+}
+
+/**
+ * The suggestion the creator-name step is keeping, while the field still holds
+ * it. `taken` remembers every handle the check refused, so a name edited back
+ * does not bring one of them again (review of #735); `swaps` counts across the
+ * whole visit, never reset by a name edit.
+ */
+export interface HandleSuggestion {
+  current: string;
+  swaps: number;
+  taken: readonly string[];
+}
+
+export function startHandleSuggestion(handle: string): HandleSuggestion {
+  return { current: handle, swaps: 0, taken: [] };
+}
+
+/**
+ * Whether a taken suggestion should be swapped now. Never while the handle
+ * field has the cursor (nothing moves under it, owner 11-08), never while a
+ * save is running (the fields hold still), and not past the cap.
+ */
+export function shouldSwapHandleSuggestion(
+  suggestion: HandleSuggestion | null,
+  { username, taken, fieldFocused, saving }: { username: string; taken: boolean; fieldFocused: boolean; saving: boolean },
+): suggestion is HandleSuggestion {
+  return Boolean(suggestion)
+    && suggestion!.current === username
+    && taken
+    && !fieldFocused
+    && !saving
+    && suggestion!.swaps < MAX_HANDLE_SUGGESTION_SWAPS;
+}
+
+/** The suggestion after its current handle was found taken. */
+export function swapHandleSuggestion(suggestion: HandleSuggestion, random: () => number = Math.random): HandleSuggestion {
+  const base = suggestion.current.replace(/-\d{3}$/, '');
+  return {
+    current: numberedHandleSuggestion(base, random),
+    swaps: suggestion.swaps + 1,
+    taken: [...suggestion.taken, suggestion.current],
+  };
+}
+
+/**
+ * The suggestion after the display name changed to `displayName`, or null to
+ * keep it as it is: a name that makes no handle, or the same handle. A handle
+ * already found taken comes back numbered straight away while swaps remain,
+ * and is passed over once they are spent.
+ */
+export function followNameWithHandleSuggestion(
+  suggestion: HandleSuggestion,
+  displayName: string,
+  isUsable: (handle: string) => boolean = () => true,
+  random: () => number = Math.random,
+): HandleSuggestion | null {
+  const handle = handleForTypedName(displayName, isUsable);
+  if (!handle || handle === suggestion.current) return null;
+  if (!suggestion.taken.includes(handle)) return { ...suggestion, current: handle };
+  if (suggestion.swaps >= MAX_HANDLE_SUGGESTION_SWAPS) return null;
+  return { ...suggestion, current: numberedHandleSuggestion(handle, random), swaps: suggestion.swaps + 1 };
 }

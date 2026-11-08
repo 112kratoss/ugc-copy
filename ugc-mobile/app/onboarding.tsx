@@ -44,7 +44,14 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { useHandleAvailability } from '@/lib/use-handle-availability';
-import { firstHandleSuggestion, handleForTypedName, numberedHandleSuggestion } from '@/lib/handle-suggestion';
+import {
+  firstHandleSuggestion,
+  followNameWithHandleSuggestion,
+  type HandleSuggestion,
+  shouldSwapHandleSuggestion,
+  startHandleSuggestion,
+  swapHandleSuggestion,
+} from '@/lib/handle-suggestion';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
@@ -60,9 +67,6 @@ import imagePreview from '../assets/images/onboarding-pages/image.jpg';
 import videoPreview from '../assets/images/onboarding-pages/video.jpg';
 import motionPreview from '../assets/images/onboarding-pages/motion.jpg';
 import { haptic } from '@/lib/haptics';
-
-/** How many numbered handles the creator-name step tries after a taken suggestion. */
-const MAX_HANDLE_SUGGESTION_TRIES = 3;
 
 const GOALS: BookletGoal[] = [
   {
@@ -176,9 +180,14 @@ function OnboardingFlow() {
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   // The handle this screen filled in, while it is still the field's value: it
-  // follows the display name, a taken one is swapped for a numbered one (a few
-  // times at most), and focusing the handle field ends both.
-  const suggestedHandle = useRef<{ base: string; current: string; tries: number } | null>(null);
+  // follows the display name and a taken one is swapped for a numbered one,
+  // but nothing moves while the handle field has the cursor or a save runs,
+  // and typing in the handle field ends it (owner 11-08, review of #735).
+  const [suggestion, setSuggestion] = useState<HandleSuggestion | null>(null);
+  const [handleFocused, setHandleFocused] = useState(false);
+  // A save that failed for a reason other than the handle: the step then
+  // offers a way out, so a lost connection cannot hold someone on it.
+  const [saveFailed, setSaveFailed] = useState(false);
   // A handle the save refused, and what it said: taken since it was checked,
   // or refused by a rule the live check did not get to answer.
   const [handleRefusedAtSave, setHandleRefusedAtSave] = useState<{ handle: string; message: string } | null>(null);
@@ -226,11 +235,11 @@ function OnboardingFlow() {
       if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '')) {
         // The signup placeholder is nobody's name, so the field starts with a
         // handle made for them instead (owner, 2026-11-08), which they can change.
-        const suggestion = firstHandleSuggestion(startingName, user.email ?? null, (handle) => !readLocalUsernameRejection(handle));
-        suggestedHandle.current = { base: suggestion, current: suggestion, tries: 0 };
-        setUsername(suggestion);
+        const first = firstHandleSuggestion(startingName, user.email ?? null, (handle) => !readLocalUsernameRejection(handle));
+        setSuggestion(startHandleSuggestion(first));
+        setUsername(first);
       } else {
-        suggestedHandle.current = null;
+        setSuggestion(null);
         setUsername(nextProfile.username ?? '');
       }
       // Resolved once, on entry. Re-deriving as state changes would eject
@@ -306,19 +315,24 @@ function OnboardingFlow() {
   // and the reserved list with no round trip (D3); a check that failed
   // (offline, rate limited) is no verdict, and the save still judges.
   const handleCheck = useHandleAvailability(api, { username, displayName, savedUsername: profile?.username });
-  const handleRefusal = (handleRefusedAtSave?.handle === username ? handleRefusedAtSave.message : null)
+  const swapConditions = { username, taken: handleCheck.availability === 'taken', fieldFocused: handleFocused, saving: busy };
+  // A taken suggestion about to be swapped reads as still being checked, so
+  // "unavailable" is neither drawn nor announced for a frame first.
+  const swapPending = stage === 'identity' && shouldSwapHandleSuggestion(suggestion, swapConditions);
+  const handleRefusal = swapPending ? null : (handleRefusedAtSave?.handle === username ? handleRefusedAtSave.message : null)
     ?? (handleCheck.availability === 'taken' ? handleCheck.message ?? 'This creator name is unavailable.' : null);
-  const usernameState = handleRefusal ? 'error' : handleCheck.availability;
+  const usernameState = swapPending ? 'checking' : handleRefusal ? 'error' : handleCheck.availability;
   const usernameMessage = handleRefusal ?? (usernameState === 'available' ? 'This creator name is available.' : null);
 
   useEffect(() => {
-    const suggestion = suggestedHandle.current;
-    if (stage !== 'identity' || !suggestion || suggestion.current !== username) return;
-    if (handleCheck.availability !== 'taken' || suggestion.tries >= MAX_HANDLE_SUGGESTION_TRIES) return;
-    const next = numberedHandleSuggestion(suggestion.base);
-    suggestedHandle.current = { ...suggestion, current: next, tries: suggestion.tries + 1 };
-    setUsername(next);
-  }, [handleCheck.availability, stage, username]);
+    if (stage !== 'identity' || !shouldSwapHandleSuggestion(suggestion, swapConditions)) return;
+    const next = swapHandleSuggestion(suggestion);
+    setSuggestion(next);
+    setUsername(next.current);
+    AccessibilityInfo.announceForAccessibility(`${suggestion.current} is taken. Suggested handle: ${next.current}.`);
+  // `swapConditions` is rebuilt every render from the values listed here.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, handleCheck.availability, handleFocused, stage, suggestion, username]);
 
   const moveToStep = async (nextStep: number) => {
     setStep(nextStep);
@@ -381,6 +395,7 @@ function OnboardingFlow() {
     }
     setBusy(true);
     setMessage(null);
+    setSaveFailed(false);
     try {
       const payload = buildIdentityClaimBody(normalizedUsername, displayName.trim());
       await api.validateProfile(payload);
@@ -419,6 +434,7 @@ function OnboardingFlow() {
         if (conflict) void trackOnboardingEvent(api, 'username_conflict', { goal, step: 'identity' });
       } else {
         setMessage(error instanceof Error ? error.message : 'Could not save your creator name.');
+        setSaveFailed(true);
       }
     } finally {
       setBusy(false);
@@ -602,13 +618,13 @@ function OnboardingFlow() {
                     setDisplayName(value);
                     // While the handle is still the one made for them, it
                     // follows the name (owner, 2026-11-08); a name that makes
-                    // no handle keeps the last one.
-                    const suggestion = suggestedHandle.current;
-                    if (!suggestion || suggestion.current !== username) return;
-                    const next = handleForTypedName(value, (handle) => !readLocalUsernameRejection(handle));
-                    if (!next || next === suggestion.current) return;
-                    suggestedHandle.current = { base: next, current: next, tries: 0 };
-                    setUsername(next);
+                    // no handle keeps the last one, and a handle already found
+                    // taken comes back numbered.
+                    if (!suggestion || suggestion.current !== username || handleFocused) return;
+                    const next = followNameWithHandleSuggestion(suggestion, value, (handle) => !readLocalUsernameRejection(handle));
+                    if (!next) return;
+                    setSuggestion(next);
+                    setUsername(next.current);
                   }}
                   editable={!busy}
                   autoCapitalize="words"
@@ -630,12 +646,14 @@ function OnboardingFlow() {
                     inputRef={handleRef}
                     label="Unique handle"
                     value={username}
-                    // Once this field is focused the handle is the
-                    // creator's: no swap or name-following may move the
-                    // text under the cursor, even before the first key.
-                    onFocus={() => { suggestedHandle.current = null; }}
+                    // Nothing moves the text while the cursor is here, even
+                    // before the first key (owner 11-08); a taken suggestion
+                    // left untouched is swapped once the field is left.
+                    onFocus={() => setHandleFocused(true)}
+                    onBlur={() => setHandleFocused(false)}
                     onChangeText={(value) => {
-                      suggestedHandle.current = null;
+                      // Anything typed is the creator's own.
+                      setSuggestion(null);
                       setUsername(normalizeUsernameInput(value));
                     }}
                     editable={!busy}
@@ -662,6 +680,13 @@ function OnboardingFlow() {
                   disabled={!displayName.trim() || !PROFILE_USERNAME_PATTERN.test(username) || usernameState === 'error'}
                   onPress={() => void saveIdentity()}
                 />
+                {/* The name stays required; this only keeps a save that cannot
+                    get through (offline, a server error) from holding someone
+                    on a step with no back gesture. Nothing records "later",
+                    so Home asks again. */}
+                {saveFailed ? (
+                  <SecondaryButton label="Try again later" disabled={busy} onPress={() => void leaveForNow('identity_save_failed')} />
+                ) : null}
                 {/* The name is required to go on (owner, 2026-11-08): no
                     "Choose a name later", and Android's back key is held while
                     this step is up. Said here because the credits wait on it. */}

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { firstHandleSuggestion, handleForTypedName, numberedHandleSuggestion } from '../lib/handle-suggestion';
+import {
+  firstHandleSuggestion,
+  followNameWithHandleSuggestion,
+  handleForTypedName,
+  MAX_HANDLE_SUGGESTION_SWAPS,
+  numberedHandleSuggestion,
+  shouldSwapHandleSuggestion,
+  startHandleSuggestion,
+  swapHandleSuggestion,
+} from '../lib/handle-suggestion';
 
 const PROFILE_HANDLE = /^[a-z0-9-]{3,24}$/;
 
@@ -43,5 +52,43 @@ describe('the handle for a display name being typed', () => {
     expect(handleForTypedName('ആതിര')).toBe('');
     expect(handleForTypedName('')).toBe('');
     expect(handleForTypedName('Support', (handle) => handle !== 'support')).toBe('');
+  });
+});
+
+describe('keeping a suggestion through a visit (review of #735)', () => {
+  const at = (value: number) => () => value;
+
+  it('swaps only when nothing holds the field still', () => {
+    const s = startHandleSuggestion('kiran');
+    const base = { username: 'kiran', taken: true, fieldFocused: false, saving: false };
+    expect(shouldSwapHandleSuggestion(s, base)).toBe(true);
+    expect(shouldSwapHandleSuggestion(s, { ...base, fieldFocused: true })).toBe(false);
+    expect(shouldSwapHandleSuggestion(s, { ...base, saving: true })).toBe(false);
+    expect(shouldSwapHandleSuggestion(s, { ...base, taken: false })).toBe(false);
+    expect(shouldSwapHandleSuggestion(s, { ...base, username: 'typed' })).toBe(false);
+    expect(shouldSwapHandleSuggestion(null, base)).toBe(false);
+    expect(shouldSwapHandleSuggestion({ ...s, swaps: MAX_HANDLE_SUGGESTION_SWAPS }, base)).toBe(false);
+  });
+
+  it('remembers what was taken and numbers from the plain handle', () => {
+    const once = swapHandleSuggestion(startHandleSuggestion('kiran'), at(0.5));
+    expect(once).toEqual({ current: 'kiran-550', swaps: 1, taken: ['kiran'] });
+    expect(swapHandleSuggestion(once, at(0.1)).current).toBe('kiran-190');
+  });
+
+  it('does not bring back a taken handle when the name is edited back', () => {
+    const swapped = swapHandleSuggestion(startHandleSuggestion('kiran'), at(0.5));
+    const renamed = followNameWithHandleSuggestion(swapped, 'Kiran D', () => true, at(0.2))!;
+    expect(renamed.current).toBe('kiran-d');
+    const back = followNameWithHandleSuggestion(renamed, 'Kiran', () => true, at(0.2))!;
+    expect(back.current).toBe('kiran-280');
+    expect(back.swaps).toBe(2);
+    expect(followNameWithHandleSuggestion({ ...renamed, swaps: MAX_HANDLE_SUGGESTION_SWAPS }, 'Kiran')).toBeNull();
+  });
+
+  it('keeps the handle for a name that makes none, or the same one', () => {
+    const s = startHandleSuggestion('kiran');
+    expect(followNameWithHandleSuggestion(s, 'ആതിര')).toBeNull();
+    expect(followNameWithHandleSuggestion(s, 'Kiran')).toBeNull();
   });
 });

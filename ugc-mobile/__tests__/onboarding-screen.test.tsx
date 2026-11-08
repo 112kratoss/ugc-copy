@@ -29,6 +29,7 @@ const harness = vi.hoisted(() => ({
   markIdentityDeferredOnAccount: vi.fn(),
   localUpdates: [] as Array<Record<string, unknown>>,
   backListeners: [] as Array<() => boolean>,
+  focused: true,
 }));
 
 vi.mock('expo-router', () => ({
@@ -90,7 +91,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => true }));
 // The first run is drawn dark and raises its own light status bar while it is in front.
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true, useRoute: () => ({ params: {} }) }));
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused, useRoute: () => ({ params: {} }) }));
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 vi.mock('@/lib/onboarding', async () => {
@@ -420,21 +421,83 @@ describe('checking the handle as it is typed', () => {
     act(() => tree.unmount());
   });
 
-  it('stops changing the handle the moment its field is focused, before any typing', async () => {
-    // A fast creator: renames, taps into the handle, and the check on the
-    // suggestion answers "taken" before the first key. Nothing may move under
-    // the cursor.
+  it('changes nothing while the handle field has the cursor, then swaps once it is left untouched', async () => {
+    // A fast creator presses Next on the name (which focuses the handle) and
+    // the check on the suggestion answers "taken" before the first key.
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+      await act(async () => { field('Unique handle').props.onFocus?.({}); });
+
+      await letTheCheckAnswer();
+      await letTheCheckAnswer();
+      expect(field('Unique handle').props.value).toBe('sarath');
+      expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
+      // The name cannot be edited with the cursor in the handle, but even so:
+      await act(async () => { field('Display name').props.onChangeText('Kiran D'); });
+      expect(field('Unique handle').props.value).toBe('sarath');
+      await act(async () => { field('Display name').props.onChangeText('Sarath'); });
+
+      await act(async () => { field('Unique handle').props.onBlur?.({}); });
+      expect(field('Unique handle').props.value).toBe('sarath-550');
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('says a swap out loud, for VoiceOver and TalkBack', async () => {
+    const { AccessibilityInfo } = await import('react-native');
+    vi.mocked(AccessibilityInfo.announceForAccessibility).mockClear();
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      await letTheCheckAnswer();
+      expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith('sarath is taken. Suggested handle: sarath-550.');
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('does not bring a taken handle back when the name is edited back to it', async () => {
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+      await letTheCheckAnswer();
+      expect(field('Unique handle').props.value).toBe('sarath-550');
+      await act(async () => { field('Display name').props.onChangeText('Sarath K'); });
+      expect(field('Unique handle').props.value).toBe('sarath-k');
+      roll.mockReturnValue(0.2);
+      await act(async () => { field('Display name').props.onChangeText('Sarath'); });
+      expect(field('Unique handle').props.value).toBe('sarath-280');
+      await letTheCheckAnswer();
+      expect(harness.api.validateProfile.mock.calls.filter(([body]) => body.username === 'sarath')).toHaveLength(1);
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('holds the handle still while a save is running', async () => {
+    let calls = 0;
+    harness.api.validateProfile.mockReset().mockImplementation(() => {
+      calls += 1;
+      // The save asks first and hangs; the live check answers "taken" meanwhile.
+      if (calls === 1) return new Promise(() => undefined);
+      return Promise.reject(new ApiError('That username is already taken.', 409, {
+        error: 'That username is already taken.',
+        fieldErrors: { username: 'That username is already taken.' },
+      }));
+    });
     const tree = await openIdentityStep();
-    const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
-    await act(async () => { field('Unique handle').props.onFocus?.({}); });
-
+    await act(async () => { findButton(tree, 'primary-button', 'Save creator name').props.onPress(); });
     await letTheCheckAnswer();
     await letTheCheckAnswer();
-    expect(field('Unique handle').props.value).toBe('sarath');
-    expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
 
-    await act(async () => { field('Display name').props.onChangeText('Kiran D'); });
-    expect(field('Unique handle').props.value).toBe('sarath');
+    expect(tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle').props.value).toBe('sarath');
     act(() => tree.unmount());
   });
 
@@ -834,6 +897,46 @@ describe('the creator name step (owner 11-08)', () => {
     expect(rendered(tree)).toContain('Claim your creator name');
     act(() => tree?.unmount());
     expect(harness.backListeners).toHaveLength(0);
+  });
+
+  it('lets go of the back key while another screen is over this one', async () => {
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    expect(harness.backListeners).toHaveLength(1);
+    harness.focused = false;
+    try {
+      await act(async () => { tree!.update(<QueryClientProvider client={queryClient}><OnboardingScreen /></QueryClientProvider>); });
+      expect(harness.backListeners).toHaveLength(0);
+    } finally {
+      harness.focused = true;
+      act(() => tree?.unmount());
+    }
+  });
+
+  it('offers a way out when a save fails for a reason other than the handle', async () => {
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockRejectedValue(new Error('Network request failed'));
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
+    await saveHandle(tree!);
+
+    await act(async () => {
+      findButton(tree!, 'secondary-button', 'Try again later').props.onPress();
+      await settle();
+    });
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(harness.markIdentityDeferredOnAccount).not.toHaveBeenCalled();
+    expect(harness.localUpdates).not.toContainEqual(expect.objectContaining({ identityDeferredAt: expect.any(String) }));
+    act(() => tree?.unmount());
   });
 
   it('lets go of the back key once the name is saved', async () => {
