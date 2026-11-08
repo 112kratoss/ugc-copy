@@ -1,4 +1,4 @@
-// The one sign-in page (owner, 2026-11-08: "One full-screen page", "Start creating in"): a wall
+// The one sign-in page (owner, 2026-11-08: "One full-screen page", "Start filling your"): a wall
 // of creations drifting behind a headline, then Apple, Google and email. It is what a guest
 // sees when they reach for an account (`app/join.tsx`) and what every "Sign in" opens
 // (`app/auth.tsx`). "Sign in with email" turns the same page into the email form in place,
@@ -237,11 +237,11 @@ function SignInWallBody({
 
           {/* The headline runs on into the wordmark (owner, 2026-11-08: like "Start working in",
               with the name below it), at a size that finishes the sentence, and is read as the
-              one line it is: "Start creating in Magicbooklet". */}
+              one line it is: "Start filling your Magicbooklet" (owner, 2026-11-08). */}
           <View
             accessible
             accessibilityRole="header"
-            accessibilityLabel="Start creating in Magicbooklet"
+            accessibilityLabel="Start filling your Magicbooklet"
             style={{ marginTop: 20, gap: 6, maxWidth: 360 }}
           >
             <AppText
@@ -249,7 +249,7 @@ function SignInWallBody({
               maxFontSizeMultiplier={1.3}
               style={{ color: mediaColors.onMedia, fontSize: 52, lineHeight: 56, letterSpacing: -1.2 }}
             >
-              {'Start\ncreating in'}
+              {'Start\nfilling your'}
             </AppText>
             <View style={{ alignSelf: 'flex-start' }}>
               <BrandLockup size="title" />

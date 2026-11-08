@@ -254,7 +254,7 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     paramsState.params = { returnTo: '/profile' };
     const tree = render(<AuthRoute />);
     expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
-    expect(JSON.stringify(tree.toJSON())).toContain('Start\\ncreating in');
+    expect(JSON.stringify(tree.toJSON())).toContain('Start\\nfilling your');
     expect(tree.root.findByProps({ accessibilityLabel: 'Continue with Apple' }).props.buttonStyle).toBe('WHITE');
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Google' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
