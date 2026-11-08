@@ -33,6 +33,7 @@ vi.mock('@/lib/motion', () => ({ useReducedMotion: () => harness.reducedMotion }
 vi.mock('@/lib/theme-context', () => ({ useAppTheme: () => ({ colors: new Proxy({}, { get: (_target, name) => `token-${String(name)}` }) }) }));
 
 import { CLAIM_CONFETTI_MS, ClaimConfetti, claimConfettiPieces } from '../components/claim-confetti';
+import * as sharedFlight from '../lib/claim-confetti-flight/claim-confetti-flight';
 
 describe('the claim confetti (owner 11-09: "premium feel ... satisfaction of gaining something")', () => {
   const pieces = claimConfettiPieces();
@@ -77,6 +78,12 @@ describe('the claim confetti (owner 11-09: "premium feel ... satisfaction of gai
     expect(new Set(pieces.map((piece) => piece.flutterPhase)).size).toBe(pieces.length);
   });
 
+  it('is the flight shared with the web, so both clients throw the same burst', () => {
+    expect(claimConfettiPieces).toBe(sharedFlight.claimConfettiPieces);
+    expect(CLAIM_CONFETTI_MS).toBe(sharedFlight.CLAIM_CONFETTI_MS);
+    expect(sharedFlight.CLAIM_CONFETTI_TONES).toEqual(['primaryFill', 'navigationCreateTop', 'navigationCreateBottom', 'selectedStrong', 'surfaceInset']);
+  });
+
   it('is over in under two seconds, so the card can leave beneath it', () => {
     expect(CLAIM_CONFETTI_MS).toBeLessThan(2000);
     expect(CLAIM_CONFETTI_MS).toBeGreaterThan(1400);
@@ -108,6 +115,12 @@ describe('drawing the burst', () => {
     act(() => { tree.update(React.createElement(ClaimConfetti, { ready: true, play: true, origin })); });
     expect(harness.started).toBe(1);
     expect(harness.timings).toHaveLength(48);
+  });
+
+  it('paints each piece in its tone from the theme', () => {
+    const tree = render({ ready: true, play: false, origin });
+    const colours = views(tree).map((view) => (view.props.style as { backgroundColor: string }).backgroundColor);
+    expect(colours.slice(0, 5)).toEqual(sharedFlight.CLAIM_CONFETTI_TONES.map((name) => `token-${name}`));
   });
 
   it('runs every piece on the native driver, with its own flight', () => {

@@ -118,7 +118,7 @@ function WelcomeCreditsPopupForAccount() {
   const eligibleNow = shouldShowWelcomePopup({
     signedIn: Boolean(user),
     welcome: welcomeQuery.data,
-    homeFocused,
+    offeredHere: homeFocused,
     dismissed,
   });
   useEffect(() => {
