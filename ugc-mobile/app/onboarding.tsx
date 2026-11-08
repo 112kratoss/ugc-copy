@@ -14,7 +14,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AtSign, Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-react-native';
+import { Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/lib/api-client';
@@ -621,33 +621,32 @@ function OnboardingFlow() {
                   placeholder="Your creator name"
                 />
                 <View style={{ gap: 7 }}>
-                  <View style={{ position: 'relative' }}>
-                    <View pointerEvents="none" style={{ position: 'absolute', left: 14, top: 42, zIndex: 2 }}>
-                      <AtSign size={18} color={theme.colors.muted} />
-                    </View>
-                    <AppTextInput
-                      inputRef={handleRef}
-                      label="Unique handle"
-                      value={username}
-                      // Once this field is focused the handle is the
-                      // creator's: no swap or name-following may move the
-                      // text under the cursor, even before the first key.
-                      onFocus={() => { suggestedHandle.current = null; }}
-                      onChangeText={(value) => {
-                        suggestedHandle.current = null;
-                        setUsername(normalizeUsernameInput(value));
-                      }}
-                      editable={!busy}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      spellCheck={false}
-                      textContentType="nickname"
-                      returnKeyType="done"
-                      maxLength={PROFILE_USERNAME_MAX_LENGTH}
-                      placeholder="your-name"
-                      style={{ paddingLeft: 38 }}
-                    />
-                  </View>
+                  {/* No drawn "@" in front (owner, 2026-11-08): it pushed the
+                      handle 22pt right of the display name above, and its
+                      fixed offset ignored the label's height. The handle now
+                      starts where every other field's text does, as Edit
+                      profile's Username field already did. */}
+                  <AppTextInput
+                    inputRef={handleRef}
+                    label="Unique handle"
+                    value={username}
+                    // Once this field is focused the handle is the
+                    // creator's: no swap or name-following may move the
+                    // text under the cursor, even before the first key.
+                    onFocus={() => { suggestedHandle.current = null; }}
+                    onChangeText={(value) => {
+                      suggestedHandle.current = null;
+                      setUsername(normalizeUsernameInput(value));
+                    }}
+                    editable={!busy}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    textContentType="nickname"
+                    returnKeyType="done"
+                    maxLength={PROFILE_USERNAME_MAX_LENGTH}
+                    placeholder="your-name"
+                  />
                   <AppText
                     accessibilityLiveRegion="polite"
                     variant="caption"
