@@ -72,7 +72,7 @@ test('a mouse drags the references row sideways, and a drag presses no picture a
   // A drag that starts on a picture scrolls the row and opens nothing.
   await dragFrom(page, (await row.getByRole('button', { name: 'Preview Element 2' }).boundingBox())!, -200);
   await expect.poll(() => row.evaluate((list) => list.scrollLeft)).toBeGreaterThan(100);
-  await expect(page.getByRole('dialog', { name: 'Element 2' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Reference details' })).toHaveCount(0);
 
   // A drag that starts on a Remove scrolls back and removes nothing: one the row shows, since a tile
   // past its edge is clipped and a press there lands on something else.
@@ -89,8 +89,12 @@ test('a mouse drags the references row sideways, and a drag presses no picture a
   await dragFrom(page, removeBox!, 200);
   await expect.poll(() => row.evaluate((list) => list.scrollLeft)).toBeLessThan(50);
   await expect(row.getByRole('listitem')).toHaveCount(5);
+  // Remove asks first (#732), so a pressed Remove would show its question rather than drop a tile.
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
 
-  // A press that does not move still opens the picture.
+  // A press that does not move still opens the picture, in its Reference details.
   await row.getByRole('button', { name: 'Preview Element 1' }).click();
-  await expect(page.getByRole('dialog', { name: 'Element 1' })).toBeVisible();
+  const details = page.getByRole('dialog', { name: 'Reference details' });
+  await expect(details).toBeVisible();
+  await expect(details.getByRole('textbox', { name: 'Reference name' })).toHaveValue('Element 1');
 });
