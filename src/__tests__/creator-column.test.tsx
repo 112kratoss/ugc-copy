@@ -180,6 +180,15 @@ describe('the creator column bar', () => {
     expect(bar?.className).not.toMatch(/max-md:/);
   });
 
+  // A card scrolling under the held bar ran straight into its top edge (owner, 2026-11-08).
+  it('fades what scrolls under it, within the gap it keeps at rest', () => {
+    const { container } = renderBar();
+    const bar = container.querySelector('[data-creator-bar]');
+    expect(bar?.className.split(' ')).toContain('mt-3');
+    const fade = bar?.querySelector('[aria-hidden].bottom-full');
+    expect(fade?.className.split(' ')).toEqual(expect.arrayContaining(['absolute', 'pointer-events-none', 'h-6', 'from-[var(--ui-bg-page)]']));
+  });
+
   // `max-[1119px]` is `width < 1119px`: at 1119px, one column, the bar stayed stuck and the Publish
   // bar never showed. `max-[1120px]` is the exact complement of the two panes' `min-[1120px]`.
   it('waits at the column\'s end under the two panes\' width, with no safe area', () => {

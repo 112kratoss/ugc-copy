@@ -719,7 +719,7 @@ export function CreatorColumnBar({
       ref={barRef}
       data-creator-bar
       className={clsx(
-        'sticky bottom-3 z-30 mt-1 max-[768px]:bottom-0',
+        'sticky bottom-3 z-30 mt-3 max-[768px]:bottom-0',
         !holdsFootUnderColumn && 'max-[1120px]:static',
       )}
     >
@@ -781,6 +781,12 @@ export function CreatorColumnBar({
         ) : null}
       </div>
 
+      {/* While the bar is held at the window's foot, a card scrolling under it fades out
+          over the 24px above it (the column's 12px gap and the bar's 12px margin, so at
+          rest the fade covers only empty page), and from 768px, where the bar floats
+          12px up, the page's own fill hides what would show beneath it. */}
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-full h-6 bg-gradient-to-t from-[var(--ui-bg-page)] from-40% to-transparent" />
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-full h-3 bg-[var(--ui-bg-page)] max-[768px]:hidden" />
       <AnimatePresence>
         {showsSettings ? (
           <motion.div
