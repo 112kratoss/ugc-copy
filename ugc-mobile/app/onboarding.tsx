@@ -14,7 +14,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AtSign, Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-react-native';
+import { Clapperboard, ImageIcon, Sparkles, WandSparkles } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '@/lib/api-client';
@@ -29,6 +29,7 @@ import {
   PROFILE_USERNAME_MAX_LENGTH,
   PROFILE_USERNAME_PATTERN,
   PROFILE_USERNAME_RULE,
+  readLocalUsernameRejection,
   readUsernameRejection,
 } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
@@ -43,6 +44,15 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { useHandleAvailability } from '@/lib/use-handle-availability';
+import {
+  firstHandleSuggestion,
+  followNameWithHandleSuggestion,
+  type HandleSuggestion,
+  shouldSwapHandleSuggestion,
+  startHandleSuggestion,
+  swapHandleSuggestion,
+} from '@/lib/handle-suggestion';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -145,7 +155,7 @@ function OnboardingFlow() {
     if (returnTo) completeAuthScreen(router, returnTo, { inPlace: returnsInPlace });
     else router.replace('/(tabs)' as never);
   }, [returnTo, returnsInPlace]);
-  const { api, user, refreshProfile, updateCredits, markIdentityDeferredOnAccount } = useAuth();
+  const { api, user, refreshProfile, updateCredits } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
@@ -159,11 +169,25 @@ function OnboardingFlow() {
   // what put an account holder on the welcome card while the profile fetch was
   // still in flight.
   const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? 'loading' : 'intro');
+  // The creator name is required to go on (owner, 2026-11-08). iOS already
+  // offers no way past it (the route turns the back gesture off); Android's
+  // back key would otherwise pop the screen with no name chosen.
+  const isFlowFocused = useIsFocused();
+  useHardwareBack(stage === 'identity' && isFlowFocused, () => undefined);
   const [goal, setGoal] = useState<OnboardingGoal>(state.goal);
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
+  // The handle this screen filled in, while it is still the field's value: it
+  // follows the display name and a taken one is swapped for a numbered one,
+  // but nothing moves while the handle field has the cursor or a save runs,
+  // and typing in the handle field ends it (owner 11-08, review of #735).
+  const [suggestion, setSuggestion] = useState<HandleSuggestion | null>(null);
+  const [handleFocused, setHandleFocused] = useState(false);
+  // A save that failed for a reason other than the handle: the step then
+  // offers a way out, so a lost connection cannot hold someone on it.
+  const [saveFailed, setSaveFailed] = useState(false);
   // A handle the save refused, and what it said: taken since it was checked,
   // or refused by a rule the live check did not get to answer.
   const [handleRefusedAtSave, setHandleRefusedAtSave] = useState<{ handle: string; message: string } | null>(null);
@@ -206,8 +230,18 @@ function OnboardingFlow() {
       ]);
       setProfile(nextProfile);
       adoptWelcome(nextWelcome);
-      setDisplayName(nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator');
-      setUsername(PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '') ? '' : nextProfile.username ?? '');
+      const startingName = nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator';
+      setDisplayName(startingName);
+      if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '')) {
+        // The signup placeholder is nobody's name, so the field starts with a
+        // handle made for them instead (owner, 2026-11-08), which they can change.
+        const first = firstHandleSuggestion(startingName, user.email ?? null, (handle) => !readLocalUsernameRejection(handle));
+        setSuggestion(startHandleSuggestion(first));
+        setUsername(first);
+      } else {
+        setSuggestion(null);
+        setUsername(nextProfile.username ?? '');
+      }
       // Resolved once, on entry. Re-deriving as state changes would eject
       // someone the instant `claimCredits` flips `eligible` to `claimed` —
       // mid-celebration, with the credits counter still animating.
@@ -281,10 +315,24 @@ function OnboardingFlow() {
   // and the reserved list with no round trip (D3); a check that failed
   // (offline, rate limited) is no verdict, and the save still judges.
   const handleCheck = useHandleAvailability(api, { username, displayName, savedUsername: profile?.username });
-  const handleRefusal = (handleRefusedAtSave?.handle === username ? handleRefusedAtSave.message : null)
+  const swapConditions = { username, taken: handleCheck.availability === 'taken', fieldFocused: handleFocused, saving: busy };
+  // A taken suggestion about to be swapped reads as still being checked, so
+  // "unavailable" is neither drawn nor announced for a frame first.
+  const swapPending = stage === 'identity' && shouldSwapHandleSuggestion(suggestion, swapConditions);
+  const handleRefusal = swapPending ? null : (handleRefusedAtSave?.handle === username ? handleRefusedAtSave.message : null)
     ?? (handleCheck.availability === 'taken' ? handleCheck.message ?? 'This creator name is unavailable.' : null);
-  const usernameState = handleRefusal ? 'error' : handleCheck.availability;
+  const usernameState = swapPending ? 'checking' : handleRefusal ? 'error' : handleCheck.availability;
   const usernameMessage = handleRefusal ?? (usernameState === 'available' ? 'This creator name is available.' : null);
+
+  useEffect(() => {
+    if (stage !== 'identity' || !shouldSwapHandleSuggestion(suggestion, swapConditions)) return;
+    const next = swapHandleSuggestion(suggestion);
+    setSuggestion(next);
+    setUsername(next.current);
+    AccessibilityInfo.announceForAccessibility(`${suggestion.current} is taken. Suggested handle: ${next.current}.`);
+  // `swapConditions` is rebuilt every render from the values listed here.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, handleCheck.availability, handleFocused, stage, suggestion, username]);
 
   const moveToStep = async (nextStep: number) => {
     setStep(nextStep);
@@ -297,21 +345,12 @@ function OnboardingFlow() {
    * `skip()` marks the flow skipped rather than complete, so the entry points
    * can still offer the flow later — stepping out is deferring, not losing.
    *
-   * Leaving the identity stage records the deferral. Without it the resolver
-   * sends an unclaimed handle straight back to this same stage on the next
-   * render, which is the old loop wearing a different hat: "later" has to mean
-   * later. Settings still opens the flow whenever they want it.
+   * The creator name step is not one of the ways out (owner, 2026-11-08): it
+   * has no "Choose a name later", so nothing here records a deferral. One made
+   * earlier, or on the web, is still honoured by the destination resolver.
    */
   const leaveForNow = async (fromStep: string) => {
-    if (fromStep === 'identity') {
-      await update({ status: 'skipped', identityDeferredAt: new Date().toISOString(), identityDeferredFor: user?.id ?? null });
-      // The account's own record, the one the web keeps too, so "later" holds
-      // on the web and on the next device as well. Not awaited: the install's
-      // record above already holds it here, and leaving must not wait on auth.
-      void markIdentityDeferredOnAccount().catch(() => undefined);
-    } else {
-      await skip();
-    }
+    await skip();
     void trackOnboardingEvent(api, 'skipped', { goal, step: fromStep });
     leaveForReturn();
   };
@@ -356,6 +395,7 @@ function OnboardingFlow() {
     }
     setBusy(true);
     setMessage(null);
+    setSaveFailed(false);
     try {
       const payload = buildIdentityClaimBody(normalizedUsername, displayName.trim());
       await api.validateProfile(payload);
@@ -394,6 +434,7 @@ function OnboardingFlow() {
         if (conflict) void trackOnboardingEvent(api, 'username_conflict', { goal, step: 'identity' });
       } else {
         setMessage(error instanceof Error ? error.message : 'Could not save your creator name.');
+        setSaveFailed(true);
       }
     } finally {
       setBusy(false);
@@ -573,7 +614,18 @@ function OnboardingFlow() {
                 <AppTextInput
                   label="Display name"
                   value={displayName}
-                  onChangeText={setDisplayName}
+                  onChangeText={(value) => {
+                    setDisplayName(value);
+                    // While the handle is still the one made for them, it
+                    // follows the name (owner, 2026-11-08); a name that makes
+                    // no handle keeps the last one, and a handle already found
+                    // taken comes back numbered.
+                    if (!suggestion || suggestion.current !== username || handleFocused) return;
+                    const next = followNameWithHandleSuggestion(suggestion, value, (handle) => !readLocalUsernameRejection(handle));
+                    if (!next) return;
+                    setSuggestion(next);
+                    setUsername(next.current);
+                  }}
                   editable={!busy}
                   autoCapitalize="words"
                   autoComplete="name"
@@ -585,26 +637,34 @@ function OnboardingFlow() {
                   placeholder="Your creator name"
                 />
                 <View style={{ gap: 7 }}>
-                  <View style={{ position: 'relative' }}>
-                    <View pointerEvents="none" style={{ position: 'absolute', left: 14, top: 42, zIndex: 2 }}>
-                      <AtSign size={18} color={theme.colors.muted} />
-                    </View>
-                    <AppTextInput
-                      inputRef={handleRef}
-                      label="Unique handle"
-                      value={username}
-                      onChangeText={(value) => setUsername(normalizeUsernameInput(value))}
-                      editable={!busy}
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      spellCheck={false}
-                      textContentType="nickname"
-                      returnKeyType="done"
-                      maxLength={PROFILE_USERNAME_MAX_LENGTH}
-                      placeholder="your-name"
-                      style={{ paddingLeft: 38 }}
-                    />
-                  </View>
+                  {/* No drawn "@" in front (owner, 2026-11-08): it pushed the
+                      handle 22pt right of the display name above, and its
+                      fixed offset ignored the label's height. The handle now
+                      starts where every other field's text does, as Edit
+                      profile's Username field already did. */}
+                  <AppTextInput
+                    inputRef={handleRef}
+                    label="Unique handle"
+                    value={username}
+                    // Nothing moves the text while the cursor is here, even
+                    // before the first key (owner 11-08); a taken suggestion
+                    // left untouched is swapped once the field is left.
+                    onFocus={() => setHandleFocused(true)}
+                    onBlur={() => setHandleFocused(false)}
+                    onChangeText={(value) => {
+                      // Anything typed is the creator's own.
+                      setSuggestion(null);
+                      setUsername(normalizeUsernameInput(value));
+                    }}
+                    editable={!busy}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    textContentType="nickname"
+                    returnKeyType="done"
+                    maxLength={PROFILE_USERNAME_MAX_LENGTH}
+                    placeholder="your-name"
+                  />
                   <AppText
                     accessibilityLiveRegion="polite"
                     variant="caption"
@@ -620,18 +680,16 @@ function OnboardingFlow() {
                   disabled={!displayName.trim() || !PROFILE_USERNAME_PATTERN.test(username) || usernameState === 'error'}
                   onPress={() => void saveIdentity()}
                 />
-                {/* The flow has to stay optional: this stage offered no skip and
-                    the route disables the back gesture, so a signed-in creator
-                    was held here until they picked a handle. A generated one
-                    already exists to fall back on. */}
-                <SecondaryButton
-                  label="Choose a name later"
-                  disabled={busy}
-                  onPress={() => void leaveForNow('identity')}
-                />
-                {/* Said where the choice is made: the welcome credits wait on a
-                    creator name, and after "later" nothing on the way back to
-                    the creator offers them again. */}
+                {/* The name stays required; this only keeps a save that cannot
+                    get through (offline, a server error) from holding someone
+                    on a step with no back gesture. Nothing records "later",
+                    so Home asks again. */}
+                {saveFailed ? (
+                  <SecondaryButton label="Try again later" disabled={busy} onPress={() => void leaveForNow('identity_save_failed')} />
+                ) : null}
+                {/* The name is required to go on (owner, 2026-11-08): no
+                    "Choose a name later", and Android's back key is held while
+                    this step is up. Said here because the credits wait on it. */}
                 {welcome?.status === 'not_eligible' || welcome?.status === 'eligible' ? (
                   <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
                     Your 25 free credits are added once you choose a name.

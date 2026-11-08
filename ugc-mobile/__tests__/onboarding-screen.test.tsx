@@ -28,6 +28,8 @@ const harness = vi.hoisted(() => ({
   updateCredits: vi.fn(),
   markIdentityDeferredOnAccount: vi.fn(),
   localUpdates: [] as Array<Record<string, unknown>>,
+  backListeners: [] as Array<() => boolean>,
+  focused: true,
 }));
 
 vi.mock('expo-router', () => ({
@@ -46,6 +48,12 @@ vi.mock('react-native', () => {
   return {
     AccessibilityInfo: { announceForAccessibility: vi.fn() },
     ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+    BackHandler: {
+      addEventListener: (_event: string, listener: () => boolean) => {
+        harness.backListeners.push(listener);
+        return { remove: () => { harness.backListeners.splice(harness.backListeners.indexOf(listener), 1); } };
+      },
+    },
     Animated: {
       Value,
       View: ({ children, ...props }: MockProps) => React.createElement('animated-view', props, children),
@@ -83,7 +91,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => true }));
 // The first run is drawn dark and raises its own light status bar while it is in front.
-vi.mock('@react-navigation/native', () => ({ useIsFocused: () => true, useRoute: () => ({ params: {} }) }));
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused, useRoute: () => ({ params: {} }) }));
 vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
 
 vi.mock('@/lib/onboarding', async () => {
@@ -375,10 +383,154 @@ describe('checking the handle as it is typed', () => {
     });
   }
 
+  it('starts with a handle made from the name, numbered when that one is taken (owner 11-08)', async () => {
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      const handleField = () => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle');
+      // The signup placeholder (`creator-1234abcd`) is nobody's name: a handle
+      // from "Sarath" goes in its place.
+      expect(handleField().props.value).toBe('sarath');
+
+      await letTheCheckAnswer();
+      expect(handleField().props.value).toBe('sarath-550');
+      await letTheCheckAnswer();
+      expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+      expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('follows the display name until the creator edits the handle (owner 11-08)', async () => {
+    const tree = await openIdentityStep();
+    const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+    await act(async () => { field('Display name').props.onChangeText('Kiran D'); });
+    expect(field('Unique handle').props.value).toBe('kiran-d');
+    // A name that makes no handle (another script, or emptied) leaves the last one.
+    await act(async () => { field('Display name').props.onChangeText('ആതിര'); });
+    expect(field('Unique handle').props.value).toBe('kiran-d');
+    await act(async () => { field('Display name').props.onChangeText(''); });
+    expect(field('Unique handle').props.value).toBe('kiran-d');
+    await letTheCheckAnswer();
+
+    await typeHandle(tree, 'my-own');
+    await act(async () => { field('Display name').props.onChangeText('Someone Else'); });
+    expect(field('Unique handle').props.value).toBe('my-own');
+    act(() => tree.unmount());
+  });
+
+  it('changes nothing while the handle field has the cursor, then swaps once it is left untouched', async () => {
+    // A fast creator presses Next on the name (which focuses the handle) and
+    // the check on the suggestion answers "taken" before the first key.
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+      await act(async () => { field('Unique handle').props.onFocus?.({}); });
+
+      await letTheCheckAnswer();
+      await letTheCheckAnswer();
+      expect(field('Unique handle').props.value).toBe('sarath');
+      expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
+      // The name cannot be edited with the cursor in the handle, but even so:
+      await act(async () => { field('Display name').props.onChangeText('Kiran D'); });
+      expect(field('Unique handle').props.value).toBe('sarath');
+      await act(async () => { field('Display name').props.onChangeText('Sarath'); });
+
+      await act(async () => { field('Unique handle').props.onBlur?.({}); });
+      expect(field('Unique handle').props.value).toBe('sarath-550');
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('says a swap out loud, for VoiceOver and TalkBack', async () => {
+    const { AccessibilityInfo } = await import('react-native');
+    vi.mocked(AccessibilityInfo.announceForAccessibility).mockClear();
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      await letTheCheckAnswer();
+      expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith('sarath is taken. Suggested handle: sarath-550.');
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('does not bring a taken handle back when the name is edited back to it', async () => {
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      const field = (label: string) => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === label);
+      await letTheCheckAnswer();
+      expect(field('Unique handle').props.value).toBe('sarath-550');
+      await act(async () => { field('Display name').props.onChangeText('Sarath K'); });
+      expect(field('Unique handle').props.value).toBe('sarath-k');
+      roll.mockReturnValue(0.2);
+      await act(async () => { field('Display name').props.onChangeText('Sarath'); });
+      expect(field('Unique handle').props.value).toBe('sarath-280');
+      await letTheCheckAnswer();
+      expect(harness.api.validateProfile.mock.calls.filter(([body]) => body.username === 'sarath')).toHaveLength(1);
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('holds the handle still while a save is running', async () => {
+    let calls = 0;
+    harness.api.validateProfile.mockReset().mockImplementation(() => {
+      calls += 1;
+      // The save asks first and hangs; the live check answers "taken" meanwhile.
+      if (calls === 1) return new Promise(() => undefined);
+      return Promise.reject(new ApiError('That username is already taken.', 409, {
+        error: 'That username is already taken.',
+        fieldErrors: { username: 'That username is already taken.' },
+      }));
+    });
+    const tree = await openIdentityStep();
+    await act(async () => { findButton(tree, 'primary-button', 'Save creator name').props.onPress(); });
+    await letTheCheckAnswer();
+    await letTheCheckAnswer();
+
+    expect(tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle').props.value).toBe('sarath');
+    act(() => tree.unmount());
+  });
+
+  it('leaves a handle the creator typed alone, even a taken one', async () => {
+    const tree = await openIdentityStep();
+    await letTheCheckAnswer();
+    await letTheCheckAnswer();
+
+    await typeHandle(tree, 'sarath');
+    await letTheCheckAnswer();
+    await letTheCheckAnswer();
+
+    expect(tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle').props.value).toBe('sarath');
+    expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
+    act(() => tree.unmount());
+  });
+
+  it('gives up swapping after a few taken suggestions', async () => {
+    harness.api.validateProfile.mockReset().mockRejectedValue(new ApiError('That username is already taken.', 409, {
+      error: 'That username is already taken.',
+      fieldErrors: { username: 'That username is already taken.' },
+    }));
+    const tree = await openIdentityStep();
+    for (let i = 0; i < 8; i += 1) await letTheCheckAnswer();
+
+    // The first suggestion and three numbered ones; then the field is left to the creator.
+    expect(harness.api.validateProfile).toHaveBeenCalledTimes(4);
+    expect(handleLine(tree).color).toBe('danger');
+    act(() => tree.unmount());
+  });
+
   it('says an available handle and a taken one in its own words', async () => {
     const tree = await openIdentityStep();
-    // The signup placeholder (`creator-1234abcd`) is nobody's name: the field opens empty.
-    expect(tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle').props.value).toBe('');
 
     await typeHandle(tree, 'sarath-makes');
     expect(handleLine(tree).text).toBe('Checking availability…');
@@ -702,7 +854,9 @@ describe('claiming the welcome credits (03-9)', () => {
   });
 });
 
-describe('choosing a name later (02-11)', () => {
+// Owner, 2026-11-08: the creator name is required to go on; "Choose a name
+// later" is gone. A load that failed can still be skipped.
+describe('the creator name step (owner 11-08)', () => {
   beforeEach(() => {
     harness.api.getProfile.mockReset().mockResolvedValue(profile);
     harness.api.getWelcomeCredits.mockReset().mockResolvedValue(welcome);
@@ -712,7 +866,7 @@ describe('choosing a name later (02-11)', () => {
     vi.mocked(router.replace).mockClear();
   });
 
-  it('records the deferral on the account as well as on this install', async () => {
+  it('offers no way to put the name off', async () => {
     const queryClient = new QueryClient();
     let tree: renderer.ReactTestRenderer | undefined;
     await act(async () => {
@@ -720,24 +874,14 @@ describe('choosing a name later (02-11)', () => {
       await settle();
     });
 
-    await act(async () => {
-      findButton(tree!, 'secondary-button', 'Choose a name later').props.onPress();
-      await settle();
-    });
-
-    expect(harness.markIdentityDeferredOnAccount).toHaveBeenCalledTimes(1);
-    expect(harness.localUpdates).toContainEqual(expect.objectContaining({
-      status: 'skipped',
-      identityDeferredAt: expect.any(String),
-      identityDeferredFor: 'creator-1',
-    }));
-    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
-
+    expect(rendered(tree)).toContain('Claim your creator name');
+    expect(findButton(tree!, 'primary-button', 'Save creator name')).toBeTruthy();
+    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
+    expect(rendered(tree)).not.toContain('Choose a name later');
     act(() => tree?.unmount());
   });
 
-  it('leaves even when the account write fails', async () => {
-    harness.markIdentityDeferredOnAccount.mockRejectedValue(new Error('Network request failed'));
+  it("holds Android's back key while the name is asked for", async () => {
     const queryClient = new QueryClient();
     let tree: renderer.ReactTestRenderer | undefined;
     await act(async () => {
@@ -745,16 +889,76 @@ describe('choosing a name later (02-11)', () => {
       await settle();
     });
 
+    expect(harness.backListeners).toHaveLength(1);
+    let handled = false;
+    act(() => { handled = harness.backListeners[0](); });
+    expect(handled).toBe(true);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(rendered(tree)).toContain('Claim your creator name');
+    act(() => tree?.unmount());
+    expect(harness.backListeners).toHaveLength(0);
+  });
+
+  it('lets go of the back key while another screen is over this one', async () => {
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
     await act(async () => {
-      findButton(tree!, 'secondary-button', 'Choose a name later').props.onPress();
+      tree = renderScreen(queryClient);
       await settle();
     });
+    expect(harness.backListeners).toHaveLength(1);
+    harness.focused = false;
+    try {
+      await act(async () => { tree!.update(<QueryClientProvider client={queryClient}><OnboardingScreen /></QueryClientProvider>); });
+      expect(harness.backListeners).toHaveLength(0);
+    } finally {
+      harness.focused = true;
+      act(() => tree?.unmount());
+    }
+  });
 
+  it('offers a way out when a save fails for a reason other than the handle', async () => {
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockRejectedValue(new Error('Network request failed'));
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
+    await saveHandle(tree!);
+
+    await act(async () => {
+      findButton(tree!, 'secondary-button', 'Try again later').props.onPress();
+      await settle();
+    });
     expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(harness.markIdentityDeferredOnAccount).not.toHaveBeenCalled();
+    expect(harness.localUpdates).not.toContainEqual(expect.objectContaining({ identityDeferredAt: expect.any(String) }));
     act(() => tree?.unmount());
   });
 
-  it('does not write it for the other ways out', async () => {
+  it('lets go of the back key once the name is saved', async () => {
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => ({ ...profile, ...body }));
+    harness.api.getWelcomeCredits.mockReset()
+      .mockResolvedValueOnce(welcome)
+      .mockResolvedValue({ ...welcome, status: 'eligible', identityComplete: true });
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    await saveHandle(tree!);
+
+    expect(rendered(tree)).not.toContain('Claim your creator name');
+    expect(harness.backListeners).toHaveLength(0);
+    act(() => tree?.unmount());
+  });
+
+  it('still lets a failed load be skipped, without recording a deferral', async () => {
     harness.api.getProfile.mockReset().mockRejectedValue(new Error('Server error'));
     const queryClient = new QueryClient();
     let tree: renderer.ReactTestRenderer | undefined;
@@ -770,6 +974,7 @@ describe('choosing a name later (02-11)', () => {
 
     expect(router.replace).toHaveBeenCalledWith('/(tabs)');
     expect(harness.markIdentityDeferredOnAccount).not.toHaveBeenCalled();
+    expect(harness.localUpdates).not.toContainEqual(expect.objectContaining({ identityDeferredAt: expect.any(String) }));
     act(() => tree?.unmount());
   });
 });
