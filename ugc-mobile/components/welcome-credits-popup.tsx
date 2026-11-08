@@ -1,14 +1,16 @@
 import { useIsFocused } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Gift, Sparkles } from 'lucide-react-native';
+import { Check, Sparkles } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Easing, Modal, Text, View } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 
-import { CLAIM_CELEBRATION_MS, ClaimSparkles, type ClaimFrame } from '@/components/claim-sparkles';
+import { CLAIM_CONFETTI_MS, ClaimConfetti, type ClaimOrigin } from '@/components/claim-confetti';
 import { AppText, IconButton, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { haptic } from '@/lib/haptics';
+import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { MotionView, useReducedMotion, useSpringState } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
@@ -19,42 +21,55 @@ import {
   dismissWelcomePopupThisRun,
   shouldShowWelcomePopup,
   wasWelcomePopupDismissedThisRun,
-  WELCOME_COUNT_UP_MS,
   welcomeCountUpTicks,
+  welcomeFillProgress,
 } from '@/lib/welcome-popup';
 
 type Phase = 'offer' | 'claiming' | 'claimed' | 'failed';
 
 const CARD_MAX_WIDTH = 340;
 const ENTRY_SCALE = 0.9;
+/** The ring around the badge: its box, the track's radius and its stroke. */
+const RING_SIZE = 108;
+const RING_STROKE = 5;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
+const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
+const BADGE_SIZE = 72;
+const FIGURE_SIZE = 60;
+const FIGURE_LINE = 68;
 /**
- * The way out (owner, 2026-11-09: "a little smoother"): the page's dim fades
- * as the card and its Close settle back a touch and fade, on one even
- * ease-in-out, instead of the Modal vanishing in a single frame. (An ease-out
- * spent most of the fade in the first 100 ms and left a ghost lingering.)
+ * The way out (owner, 2026-11-09: "as the confetti is popping the pop up is
+ * closing down smoothly"): a beat after the figure lands and the confetti
+ * bursts, the dim fades while the card and its Close sink back and fade on one
+ * even ease-in-out. The confetti is drawn outside the fading card and keeps
+ * falling over Home; the Modal goes only once the last piece has.
  */
-const EXIT_MS = 360;
-const EXIT_SCALE = 0.96;
-const EXIT_DROP = 12;
+const EXIT_AFTER_LANDING_MS = 260;
+const EXIT_MS = 420;
+const EXIT_SCALE = 0.92;
+const EXIT_DROP = 24;
 const EXIT_EASE = Easing.bezier(0.4, 0, 0.2, 1);
-/**
- * How long the card stays once the figure lands before it closes itself
- * (owner, 2026-11-09: "make the pop up go as the confetti is popping"). The
- * sparkles burst as the figure lands and the card fades away under them; they
- * are drawn outside the fading card, so they finish over Home, and the popup
- * leaves only when the last one has gone. Under Reduce Motion there are no
- * sparkles and the figure lands at once, so the card holds longer to be read.
- */
-const CLOSE_AFTER_CLAIM_MS = 150;
-const CLOSE_AFTER_CLAIM_STILL_MS = 1400;
-const BADGE_SIZE = 64;
+/** Under Reduce Motion there is no fill and no confetti: the card holds to be read. */
+const EXIT_AFTER_LANDING_STILL_MS = 1400;
+/** The figure's pop as it lands: up fast, then a springy settle. */
+const POP_SCALE = 1.16;
+const POP_EASE = Easing.bezier(0.34, 1.56, 0.64, 1);
 
 /**
- * The welcome-credits popup over Home (owner, 2026-11-09): a bright card with a
- * Claim button, a quiet sparkle celebration as the figure lands, and the figure
- * counting up with haptic ticks. Offered to a named account with credits still
- * to claim; closing it waits until the next app start (`lib/welcome-popup.ts`).
- * Through a `Modal`: it holds no text field (see `components/dialog.tsx`).
+ * The welcome-credits popup over Home (owner, 2026-11-09, redesigned the same
+ * day: "the credits increasing with the haptics ... like games with filling
+ * animations", confetti "with a premium feel which gives the user the
+ * satisfaction of gaining something", the popup closing as the confetti pops).
+ *
+ * A white card: a coral badge inside a ring, the credits as a large figure
+ * under it, the title, a note and Claim. On Claim the ring fills and the figure
+ * counts up from 0 as a game's counter does, a haptic tick per credit, fast
+ * off the mark and slowing into the landing; as it lands the figure and badge
+ * pop, the balance in the header jumps, and confetti bursts out of the figure
+ * while the card sinks away beneath it. Offered to a named account with credits
+ * still to claim; closing it waits until the next app start
+ * (`lib/welcome-popup.ts`). Through a `Modal`: it holds no text field (see
+ * `components/dialog.tsx`).
  */
 export function WelcomeCreditsPopup() {
   const { user } = useAuth();
@@ -77,13 +92,18 @@ function WelcomeCreditsPopupForAccount() {
   const [offered, setOffered] = useState<WelcomeCreditResponse | null>(null);
   const [phase, setPhase] = useState<Phase>('offer');
   const [message, setMessage] = useState<string | null>(null);
+  // How far the fill has got, 0..1, and the credits shown so far.
+  const [fill, setFill] = useState(0);
   const [count, setCount] = useState(0);
-  // Where the Claim button sits in the window: the celebration starts there.
-  const [buttonFrame, setButtonFrame] = useState<ClaimFrame | null>(null);
-  const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Where the credits figure sits in the window: the confetti bursts out of it.
+  const [origin, setOrigin] = useState<ClaimOrigin | null>(null);
+  const fillTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // When the last sparkle will have gone (0 when none are playing).
-  const celebrationEndsAt = useRef(0);
+  // The new balance, held back until the figure lands so the header jumps
+  // with it; applied on unmount if the fill was cut short.
+  const pendingBalance = useRef<number | null>(null);
+  // When the last piece of confetti will have fallen (0 when none is flying).
+  const confettiEndsAt = useRef(0);
 
   const eligibleNow = shouldShowWelcomePopup({
     signedIn: Boolean(user),
@@ -95,12 +115,14 @@ function WelcomeCreditsPopupForAccount() {
     if (eligibleNow && !offered && welcomeQuery.data) setOffered(welcomeQuery.data);
   }, [eligibleNow, offered, welcomeQuery.data]);
   useEffect(() => () => {
-    if (countTimer.current) clearInterval(countTimer.current);
+    if (fillTimer.current) clearInterval(fillTimer.current);
     if (closeTimer.current) clearTimeout(closeTimer.current);
-  }, []);
+    if (pendingBalance.current !== null) updateCredits(pendingBalance.current);
+  }, [updateCredits]);
 
   const visible = Boolean(offered) && !dismissed;
   const amount = offered?.amount ?? 25;
+  const landed = phase === 'claimed' && count >= amount;
 
   // 1 while the popup is up, 0 once it has gone.
   const [presence] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
@@ -116,45 +138,55 @@ function WelcomeCreditsPopupForAccount() {
     }
     Animated.timing(presence, { toValue: 0, duration: EXIT_MS, easing: EXIT_EASE, useNativeDriver: true })
       .start(() => {
-        // The sparkles live in this Modal: let them finish before it goes.
-        const remaining = celebrationEndsAt.current - Date.now();
+        // The confetti lives in this Modal: let it fall before the Modal goes.
+        const remaining = confettiEndsAt.current - Date.now();
         if (remaining <= 0) setDismissed(true);
         else closeTimer.current = setTimeout(() => setDismissed(true), remaining);
       });
   };
 
-  // Claim, the celebration, then the card closes by itself (owner, 2026-11-09).
-  const closeSoon = (afterMs: number) => {
-    closeTimer.current = setTimeout(close, afterMs);
+  const land = (to: number) => {
+    setFill(1);
+    setCount(to);
+    haptic.success();
+    if (pendingBalance.current !== null) {
+      updateCredits(pendingBalance.current);
+      pendingBalance.current = null;
+    }
+    if (reducedMotion) {
+      closeTimer.current = setTimeout(close, EXIT_AFTER_LANDING_STILL_MS);
+      return;
+    }
+    confettiEndsAt.current = Date.now() + CLAIM_CONFETTI_MS + 100;
+    closeTimer.current = setTimeout(close, EXIT_AFTER_LANDING_MS);
   };
 
-  const countUp = (to: number) => {
+  const fillUp = (to: number) => {
     if (reducedMotion) {
-      setCount(to);
-      haptic.success();
-      closeSoon(CLOSE_AFTER_CLAIM_STILL_MS);
+      land(to);
       return;
     }
     const ticks = welcomeCountUpTicks(to);
     const started = Date.now();
     let passed = 0;
+    setFill(0);
     setCount(0);
-    countTimer.current = setInterval(() => {
-      const progress = Math.min(1, (Date.now() - started) / WELCOME_COUNT_UP_MS);
-      const value = Math.round(to * progress);
+    fillTimer.current = setInterval(() => {
+      const progress = welcomeFillProgress(Date.now() - started);
+      if (progress >= 1) {
+        if (fillTimer.current) clearInterval(fillTimer.current);
+        fillTimer.current = null;
+        land(to);
+        return;
+      }
+      const value = Math.floor(to * progress);
+      setFill(progress);
       setCount(value);
       while (passed < ticks.length && value >= ticks[passed]) {
         passed += 1;
         haptic.select();
       }
-      if (progress >= 1) {
-        if (countTimer.current) clearInterval(countTimer.current);
-        countTimer.current = null;
-        haptic.success();
-        celebrationEndsAt.current = Date.now() + CLAIM_CELEBRATION_MS;
-        closeSoon(CLOSE_AFTER_CLAIM_MS);
-      }
-    }, 32);
+    }, 16);
   };
 
   const claim = async () => {
@@ -166,10 +198,10 @@ function WelcomeCreditsPopupForAccount() {
       const result = await api.claimWelcomeCredits();
       primeWelcomeCredits(queryClient, user.id, result);
       if (result.status === 'claimed' || result.status === 'already_claimed') {
-        if (result.status === 'claimed') updateCredits(result.credits);
+        if (result.status === 'claimed') pendingBalance.current = result.credits;
         else void refreshProfile().catch(() => undefined);
         setPhase('claimed');
-        countUp(result.amount);
+        fillUp(result.amount);
         AccessibilityInfo.announceForAccessibility(`${result.amount} credits added to your balance.`);
       } else {
         setPhase('failed');
@@ -203,17 +235,19 @@ function WelcomeCreditsPopupForAccount() {
               <WelcomeCard
                 amount={amount}
                 phase={phase}
+                fill={fill}
                 count={count}
                 message={message}
-                onClaim={(frame) => {
-                  setButtonFrame(frame);
-                  void claim();
-                }}
+                onClaim={claim}
+                onFigureMeasured={setOrigin}
               />
-              <CloseChip disabled={phase === 'claiming'} onPress={close} />
+              <CloseChip disabled={phase === 'claiming' || (phase === 'claimed' && !landed)} onPress={close} />
             </ThemeScope>
           </Animated.View>
-          <ClaimSparkles play={phase === 'claimed' && count >= amount} frame={buttonFrame} />
+          {/* Over the whole window, outside the sinking card, in the card's own light palette. */}
+          <ThemeScope scheme="light">
+            <ClaimConfetti ready={phase === 'claiming' || phase === 'claimed'} play={landed} origin={origin} />
+          </ThemeScope>
         </View>
       ) : null}
     </Modal>
@@ -233,18 +267,6 @@ function CloseChip({ disabled, onPress }: { disabled: boolean; onPress: () => vo
   );
 }
 
-/** iOS draws a one-sided dashed border solid, so the divider is drawn as dashes. */
-function DashedRule() {
-  const theme = useAppTheme();
-  return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', overflow: 'hidden' }}>
-      {Array.from({ length: 34 }, (_, index) => (
-        <View key={index} style={{ width: appTheme.spacing.unit, height: 1, backgroundColor: theme.colors.borderStrong }} />
-      ))}
-    </View>
-  );
-}
-
 /** An onLayout that records a block's first height and ignores later ones. */
 function keepFirstHeight(set: (update: (previous: number | undefined) => number | undefined) => void) {
   return (event: { nativeEvent: { layout: { height: number } } }) => {
@@ -253,44 +275,93 @@ function keepFirstHeight(set: (update: (previous: number | undefined) => number 
   };
 }
 
+/**
+ * The ring around the badge: a peach track, and the coral fill sweeping round
+ * it clockwise from the top with the count. Drawn from the fill's value, so it
+ * moves with the figure under it frame for frame.
+ */
+function FillRing({ fill }: { fill: number }) {
+  const theme = useAppTheme();
+  const centre = RING_SIZE / 2;
+  return (
+    <Svg width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`} style={{ position: 'absolute' }}>
+      <Circle cx={centre} cy={centre} r={RING_RADIUS} stroke={theme.colors.selectedStrong} strokeWidth={RING_STROKE} fill="none" />
+      <Circle
+        cx={centre}
+        cy={centre}
+        r={RING_RADIUS}
+        stroke={theme.colors.primaryFill}
+        strokeWidth={RING_STROKE}
+        strokeLinecap="round"
+        fill="none"
+        strokeDasharray={`${RING_LENGTH} ${RING_LENGTH}`}
+        strokeDashoffset={RING_LENGTH * (1 - Math.min(1, Math.max(0, fill)))}
+        transform={`rotate(-90 ${centre} ${centre})`}
+      />
+    </Svg>
+  );
+}
+
 function WelcomeCard({
   amount,
   phase,
+  fill,
   count,
   message,
   onClaim,
+  onFigureMeasured,
 }: {
   amount: number;
   phase: Phase;
+  fill: number;
   count: number;
   message: string | null;
-  onClaim: (buttonFrame: ClaimFrame | null) => void;
+  onClaim: () => void;
+  onFigureMeasured: (origin: ClaimOrigin | null) => void;
 }) {
   const theme = useAppTheme();
+  const reducedMotion = useReducedMotion();
   const [entered, setEntered] = useState(false);
   useEffect(() => setEntered(true), []);
   const progress = useSpringState(entered);
   const scale = progress ? progress.interpolate({ inputRange: [0, 1], outputRange: [ENTRY_SCALE, 1] }) : 1;
   const claimed = phase === 'claimed';
-  const buttonRef = useRef<View | null>(null);
-  // The heading and the note keep the height they first had: the shorter
-  // claimed words must not shrink the card, or the button jumps up and the
-  // celebration starts where it used to be.
-  const [headingHeight, setHeadingHeight] = useState<number | undefined>(undefined);
-  const [noteHeight, setNoteHeight] = useState<number | undefined>(undefined);
-  const reducedMotion = useReducedMotion();
-  const [pop] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
   const landed = claimed && count >= amount;
+  const figureRef = useRef<View | null>(null);
+  // The title and the note keep the height they first had: the shorter
+  // claimed words must not shrink the card and move the figure under the burst.
+  const [titleHeight, setTitleHeight] = useState<number | undefined>(undefined);
+  const [noteHeight, setNoteHeight] = useState<number | undefined>(undefined);
+  // The badge's and the figure's pop as the count lands.
+  const [pop] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
+
   useEffect(() => {
     if (!landed || reducedMotion) return;
-    // One soft pop as the figure lands: up fast, settle slow, no bounce.
     const settle = Animated.sequence([
-      Animated.timing(pop, { toValue: 1.08, duration: 140, easing: Easing.bezier(0.23, 1, 0.32, 1), useNativeDriver: true }),
-      Animated.timing(pop, { toValue: 1, duration: 360, easing: Easing.bezier(0.23, 1, 0.32, 1), useNativeDriver: true }),
+      Animated.timing(pop, { toValue: POP_SCALE, duration: 120, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(pop, { toValue: 1, duration: 460, easing: POP_EASE, useNativeDriver: true }),
     ]);
     settle.start();
     return () => settle.stop();
   }, [landed, pop, reducedMotion]);
+
+  // Where the figure is, for the burst: measured as Claim is tapped, before
+  // anything moves. The burst starts a little above its centre.
+  const measureFigure = () => {
+    const figure = figureRef.current;
+    if (!figure?.measureInWindow) {
+      onFigureMeasured(null);
+      return;
+    }
+    figure.measureInWindow((x, y, width, height) => onFigureMeasured({ x: x + width / 2, y: y + height * 0.4 }));
+  };
+
+  const title = landed ? 'Credits added!' : claimed ? 'Adding your credits' : 'Claim your welcome credits';
+  const note = landed
+    ? 'They’re in your balance now. Go make something amazing.'
+    : claimed
+      ? 'Counting them into your balance…'
+      : 'A welcome gift for creating images, video and motion. It can only be used for creating media, not to buy recipes or resources.';
 
   return (
     <MotionView
@@ -300,86 +371,95 @@ function WelcomeCard({
         maxWidth: CARD_MAX_WIDTH,
         borderRadius: appTheme.radii.xl,
         borderCurve: 'continuous',
-        backgroundColor: theme.colors.selected,
+        backgroundColor: theme.colors.surfaceInset,
         borderWidth: 1,
-        borderColor: theme.colors.selectedStrong,
-        paddingTop: appTheme.spacing.panel,
-        paddingHorizontal: appTheme.spacing.screen,
-        paddingBottom: appTheme.spacing.screen,
+        borderColor: theme.colors.border,
+        paddingTop: appTheme.spacing.section,
+        paddingHorizontal: appTheme.spacing.panel,
+        paddingBottom: appTheme.spacing.panel,
+        alignItems: 'center',
         gap: appTheme.spacing.screen,
         overflow: 'hidden',
         opacity: progress ?? 1,
         transform: [{ scale }],
       }}
     >
-      {/* A large soft glyph in the corner, as Kling's card carries its mark. */}
-      <View pointerEvents="none" style={{ position: 'absolute', right: -appTheme.spacing.section, top: -appTheme.spacing.compact }}>
-        <Sparkles size={appTheme.icon.hero * 4} color={theme.colors.selectedStrong} />
-      </View>
+      {/* A warm wash behind the badge, fading into the white below. */}
+      <LinearGradient
+        pointerEvents="none"
+        colors={[theme.colors.selected, theme.colors.surfaceInset]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={{ position: 'absolute', left: 0, right: 0, top: 0, height: RING_SIZE + appTheme.spacing.section + FIGURE_LINE }}
+      />
 
-      <View
-        onLayout={keepFirstHeight(setHeadingHeight)}
-        style={{ alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact, minHeight: headingHeight }}
-      >
-        <LinearGradient
-          colors={[theme.colors.navigationCreateTop, theme.colors.navigationCreateBottom]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={{ width: BADGE_SIZE, height: BADGE_SIZE, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center' }}
-        >
-          <Gift size={appTheme.icon.hero} color={theme.colors.onPrimary} />
-        </LinearGradient>
-        <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>
-          {claimed ? 'Credits added!' : 'Claim your welcome credits'}
-        </AppText>
-        <AppText variant="label" color="primary" style={{ textAlign: 'center' }}>
-          {claimed ? 'Go make something amazing' : 'Free credits to start creating'}
-        </AppText>
-      </View>
-
-      <DashedRule />
-
-      <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, overflow: 'hidden' }}>
-        <Animated.View
-          accessible
-          accessibilityLabel={`${claimed ? count : amount} creation credits`}
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact, paddingVertical: appTheme.spacing.screen, transform: [{ scale: pop }] }}
-        >
-          <Sparkles size={appTheme.icon.feature} color={theme.colors.primaryFill} />
-          <AppText variant="display" color="primary" style={{ fontVariant: ['tabular-nums'] }}>
-            {claimed ? `+${count}` : amount}
-          </AppText>
-          <AppText variant="bodySm">creation credits</AppText>
+      <View style={{ width: RING_SIZE, height: RING_SIZE, alignItems: 'center', justifyContent: 'center' }}>
+        <FillRing fill={claimed ? fill : 0} />
+        <Animated.View style={{ transform: [{ scale: pop }] }}>
+          <LinearGradient
+            colors={[theme.colors.navigationCreateTop, theme.colors.navigationCreateBottom]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{ width: BADGE_SIZE, height: BADGE_SIZE, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', boxShadow: theme.shadow.navigationCreate.boxShadow }}
+          >
+            <Sparkles size={appTheme.icon.hero} color={theme.colors.onPrimary} />
+          </LinearGradient>
         </Animated.View>
       </View>
 
-      <View onLayout={keepFirstHeight(setNoteHeight)} style={{ justifyContent: 'center', minHeight: noteHeight }}>
-        <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
-          {claimed
-            ? 'They’re in your balance now.'
-            : 'This welcome gift can only be used for creating media. It can’t be used to buy recipes or resources.'}
+      <View
+        ref={figureRef}
+        collapsable={false}
+        accessible
+        accessibilityLabel={`${claimed ? count : amount} creation credits`}
+        style={{ alignItems: 'center' }}
+      >
+        <Animated.View style={{ transform: [{ scale: pop }] }}>
+          <AppText
+            variant="display"
+            color={claimed ? 'primary' : 'text'}
+            style={{ fontSize: FIGURE_SIZE, lineHeight: FIGURE_LINE, textAlign: 'center', fontVariant: ['tabular-nums'] }}
+          >
+            {claimed ? `+${count}` : amount}
+          </AppText>
+        </Animated.View>
+        <AppText variant="label" color="muted" style={{ textAlign: 'center', letterSpacing: 1.2, textTransform: 'uppercase' }}>
+          creation credits
         </AppText>
+      </View>
+
+      <View onLayout={keepFirstHeight(setTitleHeight)} style={{ justifyContent: 'center', minHeight: titleHeight }}>
+        <AppText heading variant="sectionTitle" style={{ textAlign: 'center' }}>{title}</AppText>
+      </View>
+
+      <View onLayout={keepFirstHeight(setNoteHeight)} style={{ justifyContent: 'center', minHeight: noteHeight }}>
+        <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>{note}</AppText>
       </View>
 
       {message ? (
         <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text>
       ) : null}
 
-      <View ref={buttonRef} collapsable={false}>
+      {claimed ? (
+        <View
+          accessibilityRole="text"
+          style={{ alignSelf: 'stretch', minHeight: MIN_HIT_TARGET_PT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact }}
+        >
+          <Check size={appTheme.icon.compact} color={theme.colors.success} />
+          <AppText variant="label" color="success">{landed ? 'Added to your balance' : 'Adding to your balance'}</AppText>
+        </View>
+      ) : (
         <PrimaryButton
-          label={claimed ? 'Claimed' : phase === 'failed' ? 'Try again' : 'Claim'}
+          label={phase === 'failed' ? 'Try again' : 'Claim'}
+          loadingLabel="Claiming…"
           loading={phase === 'claiming'}
-          disabled={claimed}
+          style={{ alignSelf: 'stretch' }}
           onPress={() => {
-            const button = buttonRef.current;
-            if (!button?.measureInWindow) {
-              onClaim(null);
-              return;
-            }
-            button.measureInWindow((x, y, width, height) => onClaim({ x, y, width, height }));
+            measureFigure();
+            onClaim();
           }}
         />
-      </View>
+      )}
     </MotionView>
   );
 }

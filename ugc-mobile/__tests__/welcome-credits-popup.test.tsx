@@ -29,7 +29,7 @@ vi.mock('react-native', () => {
   return {
     AccessibilityInfo: { announceForAccessibility: (text: string) => harness.announced.push(text) },
     Animated: { Value, View: (props: MockProps) => React.createElement('animated-view', props, props.children), timing: (_value: unknown, config: { toValue: number }) => ({ start(done?: () => void) { if (config.toValue === 0 && done) harness.exits.push(done); }, stop() {} }), parallel: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
-    Easing: { out: () => () => 0, quad: () => 0, bezier: () => () => 0 },
+    Easing: { out: () => () => 0, quad: () => 0, bezier: () => () => 0, linear: () => 0 },
     Modal: ({ visible, children }: MockProps) => (visible ? React.createElement('modal', null, children) : null),
     Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, typeof children === 'function' ? null : children),
     Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
@@ -37,7 +37,11 @@ vi.mock('react-native', () => {
   };
 });
 vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: MockProps) => React.createElement('linear-gradient', null, children) }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['Gift', 'Sparkle', 'Sparkles'].map((name) => [name, () => React.createElement(`icon-${name}`)])));
+vi.mock('lucide-react-native', () => Object.fromEntries(['Check', 'Sparkles'].map((name) => [name, () => React.createElement(`icon-${name}`)])));
+vi.mock('react-native-svg', () => ({
+  default: ({ children }: MockProps) => React.createElement('svg', null, children),
+  Circle: (props: MockProps) => React.createElement('circle', props),
+}));
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({}) }));
 vi.mock('@/components/ui', () => ({
@@ -58,7 +62,10 @@ vi.mock('@/lib/motion', () => ({
   useSpringState: () => null,
 }));
 vi.mock('@/lib/theme-context', () => ({
-  useAppTheme: () => ({ colors: new Proxy({}, { get: (_target, name) => `token-${String(name)}` }) }),
+  useAppTheme: () => ({
+    colors: new Proxy({}, { get: (_target, name) => `token-${String(name)}` }),
+    shadow: new Proxy({}, { get: () => ({ boxShadow: 'none' }) }),
+  }),
   ThemeScope: ({ children }: MockProps) => React.createElement('theme-scope', null, children),
 }));
 vi.mock('@/lib/use-onboarding-destination', () => ({
@@ -66,8 +73,9 @@ vi.mock('@/lib/use-onboarding-destination', () => ({
   primeWelcomeCredits: (_client: unknown, _id: string, value: unknown) => harness.primed.push(value),
 }));
 
+import { CLAIM_CONFETTI_MS } from '../components/claim-confetti';
 import { WelcomeCreditsPopup } from '../components/welcome-credits-popup';
-import { resetWelcomePopupThisRun, wasWelcomePopupDismissedThisRun } from '../lib/welcome-popup';
+import { resetWelcomePopupThisRun, wasWelcomePopupDismissedThisRun, WELCOME_COUNT_UP_MS } from '../lib/welcome-popup';
 
 const trees: renderer.ReactTestRenderer[] = [];
 function mount() {
@@ -140,8 +148,9 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     expect(text(tree)).toContain('+25');
     expect(harness.haptics).toEqual(['light', 'success']);
     expect(harness.announced).toEqual(['25 credits added to your balance.']);
-    expect(button(tree, 'Claimed').props.disabled).toBe(true);
-    expect(tree.root.findAll((node) => String(node.type) === 'primary-button' && node.props.label === 'Start creating')).toHaveLength(0);
+    // Claim gives way to the outcome; no second button to press.
+    expect(text(tree)).toContain('Added to your balance');
+    expect(tree.root.findAll((node) => String(node.type) === 'primary-button')).toHaveLength(0);
   });
 
   it('closes by itself a moment after the claim (owner 11-09)', async () => {
@@ -164,7 +173,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     }
   });
 
-  it('ticks a haptic every five credits as they count up, then the success haptic', async () => {
+  it('fills up with a haptic tick for every credit, then the success haptic as it lands (owner 11-09: "like games")', async () => {
     vi.useFakeTimers();
     try {
       harness.reducedMotion = false;
@@ -174,9 +183,48 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
         button(tree, 'Claim').props.onPress();
         await flush();
       });
+      await act(async () => { vi.advanceTimersByTime(600); });
+      expect(text(tree)).toContain('Adding your credits');
+      expect(harness.haptics).not.toContain('success');
+      // The header's balance waits for the landing; Close waits with it.
+      expect(harness.updateCredits).not.toHaveBeenCalled();
+      expect(close(tree).props.disabled).toBe(true);
+      // Fast off the mark: most of the credits are in before the halfway mark.
+      const shown = Number(text(tree).match(/\+(\d+)/)?.[1]);
+      expect(shown).toBeGreaterThanOrEqual(15);
+      expect(shown).toBeLessThan(25);
       await act(async () => { vi.advanceTimersByTime(1000); });
-      expect(harness.haptics).toEqual(['light', 'select', 'select', 'select', 'select', 'success']);
+      expect(harness.haptics).toEqual(['light', ...Array<string>(24).fill('select'), 'success']);
       expect(text(tree)).toContain('+25');
+      expect(text(tree)).toContain('Credits added!');
+      expect(harness.updateCredits).toHaveBeenCalledWith(25);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bursts confetti out of the figure as it lands, sinks away beneath it and goes once the last piece has fallen', async () => {
+    vi.useFakeTimers();
+    try {
+      harness.reducedMotion = false;
+      harness.api.claimWelcomeCredits.mockResolvedValue({ status: 'claimed', identityComplete: true, amount: 25, credits: 25 });
+      const tree = mount();
+      await act(async () => {
+        button(tree, 'Claim').props.onPress();
+        await flush();
+      });
+      await act(async () => { vi.advanceTimersByTime(WELCOME_COUNT_UP_MS + 50); });
+      expect(text(tree)).toContain('Credits added!');
+      // Not yet leaving: a beat for the landing.
+      expect(harness.exits).toHaveLength(0);
+      await act(async () => { vi.advanceTimersByTime(300); });
+      expect(harness.exits).toHaveLength(1);
+      // The card has faded, but the Modal stays for the confetti still falling.
+      act(() => { harness.exits[0](); });
+      expect(tree.toJSON()).not.toBeNull();
+      await act(async () => { vi.advanceTimersByTime(CLAIM_CONFETTI_MS + 200); });
+      expect(tree.toJSON()).toBeNull();
+      expect(wasWelcomePopupDismissedThisRun('creator-1')).toBe(true);
     } finally {
       vi.useRealTimers();
     }

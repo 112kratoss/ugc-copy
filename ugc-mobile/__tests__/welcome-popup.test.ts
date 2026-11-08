@@ -5,7 +5,9 @@ import {
   resetWelcomePopupThisRun,
   shouldShowWelcomePopup,
   wasWelcomePopupDismissedThisRun,
+  WELCOME_COUNT_UP_MS,
   welcomeCountUpTicks,
+  welcomeFillProgress,
 } from '../lib/welcome-popup';
 
 describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
@@ -38,10 +40,30 @@ describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
   });
 });
 
-describe('the haptic ticks while the credits count up', () => {
-  it('ticks every five credits on the way up, leaving the last to the success haptic', () => {
-    expect(welcomeCountUpTicks(25)).toEqual([5, 10, 15, 20]);
-    expect(welcomeCountUpTicks(5)).toEqual([]);
-    expect(welcomeCountUpTicks(12, 4)).toEqual([4, 8]);
+describe('the fill while the credits count up (owner 11-09: "like games with filling animations")', () => {
+  it('ticks a haptic for every credit on the way up, leaving the last to the success haptic', () => {
+    expect(welcomeCountUpTicks(25)).toEqual(Array.from({ length: 24 }, (_, index) => index + 1));
+    expect(welcomeCountUpTicks(1)).toEqual([]);
+  });
+
+  it('runs fast off the mark and slows into the landing', () => {
+    expect(welcomeFillProgress(0)).toBe(0);
+    expect(welcomeFillProgress(WELCOME_COUNT_UP_MS / 4)).toBeCloseTo(0.4375, 3);
+    expect(welcomeFillProgress(WELCOME_COUNT_UP_MS / 2)).toBeCloseTo(0.75, 3);
+    // The last credit lands within a quarter of a second of the one before.
+    expect(Math.floor(25 * welcomeFillProgress(WELCOME_COUNT_UP_MS - 260))).toBe(24);
+    expect(welcomeFillProgress(WELCOME_COUNT_UP_MS)).toBe(1);
+    expect(welcomeFillProgress(WELCOME_COUNT_UP_MS * 2)).toBe(1);
+    expect(welcomeFillProgress(-10)).toBe(0);
+  });
+
+  it('never adds more than one credit a frame, so every credit gets its tick', () => {
+    const amount = 25;
+    let previous = 0;
+    for (let elapsed = 0; elapsed <= WELCOME_COUNT_UP_MS; elapsed += 16) {
+      const value = Math.floor(amount * welcomeFillProgress(elapsed));
+      expect(value - previous).toBeLessThanOrEqual(1);
+      previous = value;
+    }
   });
 });
