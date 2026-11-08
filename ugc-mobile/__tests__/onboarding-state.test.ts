@@ -58,6 +58,28 @@ describe('install onboarding state', () => {
     }))).toMatchObject({ status: 'completed', completedAt: '2026-08-25T18:05:41.167Z' });
   });
 
+  it('keeps "choose a name later" with the account that chose it (11-08)', () => {
+    // The exact record found on the throwaway simulator: left by one test
+    // account, it skipped the creator name and credits for the next.
+    expect(parseInstallOnboardingState(JSON.stringify({
+      flowVersion: 1, status: 'completed', introStep: 0, goal: 'image',
+      completedAt: '2026-11-07T21:38:57.216Z', identityDeferredAt: '2026-11-07T21:50:50.449Z',
+    }))).toMatchObject({ identityDeferredAt: '2026-11-07T21:50:50.449Z', identityDeferredFor: null });
+    expect(parseInstallOnboardingState(JSON.stringify({
+      flowVersion: 1, identityDeferredAt: '2026-11-07T21:50:50.449Z', identityDeferredFor: 7,
+    }))).toMatchObject({ identityDeferredFor: null });
+
+    const deferred = mergeInstallOnboardingState(defaultInstallOnboardingState, {
+      identityDeferredAt: '2026-11-08T10:00:00.000Z', identityDeferredFor: 'account-a',
+    });
+    expect(deferred.identityDeferredFor).toBe('account-a');
+    // An unrelated write keeps it; a deferral without an account names no one;
+    // clearing the deferral clears whose it was.
+    expect(mergeInstallOnboardingState(deferred, { goal: 'video' }).identityDeferredFor).toBe('account-a');
+    expect(mergeInstallOnboardingState(deferred, { identityDeferredAt: '2026-11-08T11:00:00.000Z' }).identityDeferredFor).toBeNull();
+    expect(mergeInstallOnboardingState(deferred, { identityDeferredAt: null, identityDeferredFor: 'account-a' }).identityDeferredFor).toBeNull();
+  });
+
   it('never walks a finished run backwards', () => {
     const done = mergeInstallOnboardingState(defaultInstallOnboardingState, { status: 'completed' }, '2026-08-16T08:27:09.326Z');
     for (const status of ['in_progress', 'skipped', 'not_started'] as const) {

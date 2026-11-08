@@ -15,14 +15,14 @@ const authState = vi.hoisted(() => ({
   user: null as AccountUser | null,
 }));
 
-type InstallState = { identityDeferredAt: string | null; status?: string; completedAt?: string | null };
+type InstallState = { identityDeferredAt: string | null; identityDeferredFor?: string | null; status?: string; completedAt?: string | null };
 
 const onboardingState = vi.hoisted(() => ({
   isHydrated: true,
   state: { identityDeferredAt: null } as InstallState,
   reconcileFromServer: vi.fn(async () => undefined),
   // As the provider's does: the in-memory state changes before the write.
-  update: vi.fn(async (value: { identityDeferredAt?: string | null }) => {
+  update: vi.fn(async (value: { identityDeferredAt?: string | null; identityDeferredFor?: string | null }) => {
     onboardingState.state = { ...onboardingState.state, ...value };
     return onboardingState.state;
   }),
@@ -88,8 +88,9 @@ describe("the account's Set up later on this install", () => {
 
     expect(onboardingState.update).toHaveBeenCalledTimes(1);
     const [written] = onboardingState.update.mock.calls[0];
-    expect(Object.keys(written)).toEqual(['identityDeferredAt']);
+    expect(Object.keys(written)).toEqual(['identityDeferredAt', 'identityDeferredFor']);
     expect(new Date(String(written.identityDeferredAt)).toISOString()).toBe(written.identityDeferredAt);
+    expect(written.identityDeferredFor).toBe('account-1');
   });
 
   it('is written once, also when every effect runs again', () => {
@@ -107,10 +108,24 @@ describe("the account's Set up later on this install", () => {
   });
 
   it('leaves an install that has its own record of the choice alone', () => {
-    onboardingState.state = { identityDeferredAt: '2026-10-01T09:00:00.000Z' };
+    onboardingState.state = { identityDeferredAt: '2026-10-01T09:00:00.000Z', identityDeferredFor: 'account-1' };
     renderSync();
 
     expect(onboardingState.update).not.toHaveBeenCalled();
+  });
+
+  it("records it over a record another account left on this phone (11-08)", () => {
+    // The phone's record once counted for whoever signed in next; it names its
+    // account now, so another account's (or an unnamed old one) is not this one's.
+    for (const left of [{ identityDeferredFor: 'account-0' }, { identityDeferredFor: null }]) {
+      onboardingState.update.mockClear();
+      onboardingState.state = { identityDeferredAt: '2026-10-01T09:00:00.000Z', ...left };
+      const sync = renderSync();
+      expect(onboardingState.update).toHaveBeenCalledTimes(1);
+      expect(onboardingState.update.mock.calls[0][0]).toMatchObject({ identityDeferredFor: 'account-1' });
+      act(() => sync.tree.unmount());
+      trees.splice(trees.indexOf(sync.tree), 1);
+    }
   });
 
   it.each([

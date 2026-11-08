@@ -119,6 +119,7 @@ export function useOnboardingDestination(): OnboardingDestination {
 
   return resolveOnboardingDestination({
     hasUser: Boolean(user),
+    userId: user?.id ?? null,
     welcome: welcomeQuery.data ?? null,
     local: state,
     identityDeferredOnAccount: isIdentityDeferredInMetadata(user?.user_metadata),

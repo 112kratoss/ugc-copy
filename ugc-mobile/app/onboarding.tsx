@@ -149,6 +149,7 @@ function OnboardingFlow() {
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
+  const identityDeferredFor = state.identityDeferredFor;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const reducedMotion = useReducedMotion();
@@ -212,8 +213,9 @@ function OnboardingFlow() {
       // mid-celebration, with the credits counter still animating.
       const destination = resolveOnboardingDestination({
         hasUser: true,
+        userId: user.id,
         welcome: nextWelcome,
-        local: { identityDeferredAt, status: state.status },
+        local: { identityDeferredAt, identityDeferredFor, status: state.status },
         identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
       });
       if (destination === 'none') {
@@ -238,7 +240,7 @@ function OnboardingFlow() {
   // always refreshes the state's `updatedAt`; depending on the whole state
   // object made that write recreate this callback, retrigger the effect below,
   // and hold signed-in creators in an endless profile/welcome-credits fetch loop.
-  }, [adoptWelcome, api, goal, identityDeferredAt, leaveForReturn, update, user]);
+  }, [adoptWelcome, api, goal, identityDeferredAt, identityDeferredFor, leaveForReturn, update, user]);
 
   useEffect(() => {
     // Being signed in is the whole condition. This used to also require
@@ -302,7 +304,7 @@ function OnboardingFlow() {
    */
   const leaveForNow = async (fromStep: string) => {
     if (fromStep === 'identity') {
-      await update({ status: 'skipped', identityDeferredAt: new Date().toISOString() });
+      await update({ status: 'skipped', identityDeferredAt: new Date().toISOString(), identityDeferredFor: user?.id ?? null });
       // The account's own record, the one the web keeps too, so "later" holds
       // on the web and on the next device as well. Not awaited: the install's
       // record above already holds it here, and leaving must not wait on auth.

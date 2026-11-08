@@ -29,6 +29,14 @@ export interface InstallOnboardingState {
    * actually mean later. Settings still opens the flow on demand.
    */
   identityDeferredAt: string | null;
+  /**
+   * The account that chose it. The record lives on the phone, not the account,
+   * so without this the next account to sign up here inherited the choice: it
+   * was never asked for a name and, without one, never offered its welcome
+   * credits (11-08). A record that names no one (written before this field)
+   * defers no one; the account's own `user_metadata` record still holds.
+   */
+  identityDeferredFor: string | null;
 }
 
 export const defaultInstallOnboardingState: InstallOnboardingState = {
@@ -40,6 +48,7 @@ export const defaultInstallOnboardingState: InstallOnboardingState = {
   updatedAt: null,
   completedAt: null,
   identityDeferredAt: null,
+  identityDeferredFor: null,
 };
 
 function isGoal(value: unknown): value is OnboardingGoal {
@@ -98,6 +107,7 @@ export function parseInstallOnboardingState(value: string | null): InstallOnboar
       updatedAt: safeTimestamp(parsed.updatedAt),
       completedAt,
       identityDeferredAt: safeTimestamp(parsed.identityDeferredAt),
+      identityDeferredFor: typeof parsed.identityDeferredFor === 'string' && parsed.identityDeferredFor ? parsed.identityDeferredFor : null,
     };
   } catch {
     return defaultInstallOnboardingState;
@@ -142,6 +152,11 @@ export function mergeInstallOnboardingState(
     identityDeferredAt: update.identityDeferredAt !== undefined
       ? update.identityDeferredAt
       : current.identityDeferredAt,
+    // The two travel together: a new deferral names its account, a cleared one
+    // names no one.
+    identityDeferredFor: update.identityDeferredAt !== undefined
+      ? (update.identityDeferredAt ? update.identityDeferredFor ?? null : null)
+      : update.identityDeferredFor !== undefined ? update.identityDeferredFor : current.identityDeferredFor,
   };
 }
 

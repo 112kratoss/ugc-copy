@@ -6,7 +6,7 @@ import {
   resolveOnboardingDestination,
 } from '../lib/onboarding-destination';
 
-const noDeferral = { identityDeferredAt: null, status: 'not_started' as const };
+const noDeferral = { identityDeferredAt: null, identityDeferredFor: null, status: 'not_started' as const };
 
 describe('resolving the onboarding destination', () => {
   it('sends a signed-out visitor to the intro', () => {
@@ -19,10 +19,10 @@ describe('resolving the onboarding destination', () => {
     // "Explore as guest" marks the flow skipped; the Home card used to come
     // back on every visit regardless. Settings still opens the flow.
     expect(resolveOnboardingDestination({
-      hasUser: false, welcome: null, local: { identityDeferredAt: null, status: 'skipped' },
+      hasUser: false, welcome: null, local: { identityDeferredAt: null, identityDeferredFor: null, status: 'skipped' },
     })).toBe('none');
     expect(resolveOnboardingDestination({
-      hasUser: false, welcome: null, local: { identityDeferredAt: null, status: 'completed' },
+      hasUser: false, welcome: null, local: { identityDeferredAt: null, identityDeferredFor: null, status: 'completed' },
     })).toBe('none');
   });
 
@@ -57,8 +57,38 @@ describe('resolving the onboarding destination', () => {
   it('honours "choose a name later"', () => {
     expect(resolveOnboardingDestination({
       hasUser: true,
+      userId: 'account-a',
       welcome: { status: 'not_eligible', identityComplete: false },
-      local: { identityDeferredAt: '2026-08-28T07:00:00.000Z', status: 'not_started' as const },
+      local: { identityDeferredAt: '2026-08-28T07:00:00.000Z', identityDeferredFor: 'account-a', status: 'not_started' as const },
+    })).toBe('none');
+  });
+
+  it('keeps "choose a name later" to the account that chose it (11-08)', () => {
+    // The phone's record of the choice was once kept for the install alone, so
+    // the next account to sign up on that phone was never asked for a name,
+    // and without a name never offered its welcome credits.
+    const deferredByA = { identityDeferredAt: '2026-11-07T21:50:50.449Z', identityDeferredFor: 'account-a', status: 'completed' as const };
+    expect(resolveOnboardingDestination({
+      hasUser: true,
+      userId: 'account-b',
+      welcome: { status: 'not_eligible', identityComplete: false },
+      local: deferredByA,
+    })).toBe('identity');
+    // A record written before the account was kept beside it names no one, so
+    // it defers no one; the account's own record still holds for its owner.
+    const unattributed = { identityDeferredAt: '2026-11-07T21:50:50.449Z', identityDeferredFor: null, status: 'completed' as const };
+    expect(resolveOnboardingDestination({
+      hasUser: true,
+      userId: 'account-b',
+      welcome: { status: 'not_eligible', identityComplete: false },
+      local: unattributed,
+    })).toBe('identity');
+    expect(resolveOnboardingDestination({
+      hasUser: true,
+      userId: 'account-a',
+      welcome: { status: 'not_eligible', identityComplete: false },
+      local: unattributed,
+      identityDeferredOnAccount: true,
     })).toBe('none');
   });
 

@@ -15,12 +15,14 @@ export type OnboardingDestination = 'intro' | 'identity' | 'reward' | 'none' | '
 export interface OnboardingDestinationInput {
   /** A *registered* user. Guests are install-local and never resolve past `intro`. */
   hasUser: boolean;
+  /** The registered account's id: the install's deferral counts only for the account that chose it. */
+  userId?: string | null;
   welcome: Pick<WelcomeCreditResponse, 'status' | 'identityComplete'> | null;
-  local: Pick<InstallOnboardingState, 'identityDeferredAt' | 'status'>;
+  local: Pick<InstallOnboardingState, 'identityDeferredAt' | 'identityDeferredFor' | 'status'>;
   /**
    * "Set up later" on record for the account (`isIdentityDeferredInMetadata`),
    * chosen on the web or on another device. It defers the identity step as the
-   * install's own `identityDeferredAt` does.
+   * install's own `identityDeferredAt` does for the account it names.
    */
   identityDeferredOnAccount?: boolean;
 }
@@ -61,6 +63,7 @@ export function isIdentityDeferredInMetadata(metadata: unknown): boolean {
  */
 export function resolveOnboardingDestination({
   hasUser,
+  userId = null,
   welcome,
   local,
   identityDeferredOnAccount = false,
@@ -69,7 +72,8 @@ export function resolveOnboardingDestination({
   // is not asked again on every visit; Settings still opens the flow.
   if (!hasUser) return local.status === 'skipped' || local.status === 'completed' ? 'none' : 'intro';
   if (!welcome) return 'pending';
-  if (!welcome.identityComplete && !local.identityDeferredAt && !identityDeferredOnAccount) return 'identity';
+  const deferredOnInstall = Boolean(local.identityDeferredAt) && Boolean(userId) && local.identityDeferredFor === userId;
+  if (!welcome.identityComplete && !deferredOnInstall && !identityDeferredOnAccount) return 'identity';
   if (welcome.status === 'eligible') return 'reward';
   return 'none';
 }

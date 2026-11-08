@@ -58,11 +58,12 @@ export function OnboardingServerSync() {
   // record stops it, and only after hydration, so it never lands on the
   // default state.
   const deferredOnAccount = isIdentityDeferredOnAccount(user);
-  const deferredOnInstall = Boolean(state.identityDeferredAt);
+  const accountId = user?.id ?? null;
+  const deferredOnInstall = Boolean(state.identityDeferredAt) && state.identityDeferredFor === accountId;
   useEffect(() => {
-    if (!isHydrated || !deferredOnAccount || deferredOnInstall) return;
-    void update({ identityDeferredAt: new Date().toISOString() });
-  }, [deferredOnAccount, deferredOnInstall, isHydrated, update]);
+    if (!isHydrated || !deferredOnAccount || deferredOnInstall || !accountId) return;
+    void update({ identityDeferredAt: new Date().toISOString(), identityDeferredFor: accountId });
+  }, [accountId, deferredOnAccount, deferredOnInstall, isHydrated, update]);
 
   return null;
 }
