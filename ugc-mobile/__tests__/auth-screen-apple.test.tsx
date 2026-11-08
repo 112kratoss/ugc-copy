@@ -50,6 +50,8 @@ const authState = vi.hoisted(() => ({
   missingEnvKeys: [] as string[],
 }));
 
+vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
+vi.mock('@/components/media-wall', () => ({ MediaWall: () => null }));
 vi.mock('expo-router', () => ({
   Stack: {
     Screen: (props: MockProps) => React.createElement('stack-screen', props),
@@ -65,7 +67,9 @@ vi.mock('expo-router', () => ({
 
 // The screen reads its params from the route itself (auth-screen-return-to.test.tsx says why).
 vi.mock('@react-navigation/native', () => ({
-  useRoute: () => ({ key: 'auth-1', name: 'auth', params: paramsState.params }),
+  useIsFocused: () => true,
+  // The email form: "Sign in with email" on the sign-in page (sign-in-wall.test.tsx covers the page).
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: { email: '1', ...paramsState.params } }),
 }));
 
 vi.mock('expo-apple-authentication', () => ({
@@ -75,6 +79,29 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Keyboard: { dismiss: () => undefined },
+  AccessibilityInfo: { announceForAccessibility: () => undefined },
+  Animated: (() => {
+    class Value {
+      value: number;
+      constructor(value: number) { this.value = value; }
+      setValue(value: number) { this.value = value; }
+      interpolate() { return this; }
+    }
+    const animation = (value: Value, config: { toValue: number }) => ({
+      start: (done?: () => void) => { value.value = config.toValue; done?.(); },
+      stop: () => undefined,
+    });
+    return {
+      Value,
+      View: ({ children, ...props }: MockProps) => React.createElement('animated-view', props, children),
+      timing: animation,
+      loop: () => ({ start: () => undefined, stop: () => undefined }),
+      add: (a: Value) => a,
+      modulo: (a: Value) => a,
+    };
+  })(),
+  Easing: { out: (fn: unknown) => fn, cubic: (t: number) => t, linear: (t: number) => t },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Image: (props: MockProps) => React.createElement('image', props),
   Linking: linking,
@@ -90,6 +117,7 @@ vi.mock('react-native', () => ({
       style: resolvePressableStyle(style),
     }, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
+  StyleSheet: { absoluteFill: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } },
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: (props: MockProps) => React.createElement('textinput', props),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -139,9 +167,10 @@ vi.mock('@/lib/google-auth', () => ({
 vi.mock('@/lib/onboarding', () => analytics);
 
 import AuthScreen from '../app/auth';
+import { EmailSignInForm } from '../components/email-sign-in-form';
 import { ThemeScope } from '../lib/theme-context';
 
-describe('AuthScreen Apple sign-in', () => {
+describe('The email sign-in form', () => {
   beforeEach(() => {
     platformState.os = 'ios';
     authState.user = null;
@@ -173,59 +202,6 @@ describe('AuthScreen Apple sign-in', () => {
     expect(tree!.root.findByProps({ accessibilityLabel: 'Email' }).props.value).toBe('creator@example.com');
   });
 
-  it('starts Apple sign-in in login mode on iOS', async () => {
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-
-    await renderer.act(async () => {
-      tree!.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-    });
-
-    expect(authState.signInWithApple).toHaveBeenCalledWith('login');
-  });
-
-  it('uses Apple for new iOS accounts and keeps email/password sign-up unavailable', async () => {
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-
-    renderer.act(() => {
-      tree!.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Password' })).toHaveLength(0);
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Create account' })).toHaveLength(0);
-
-    await renderer.act(async () => {
-      tree!.root.findByProps({ accessibilityLabel: 'Sign up with Apple' }).props.onPress();
-    });
-
-    expect(authState.signInWithApple).toHaveBeenCalledWith('signup');
-    expect(authState.signUpWithPassword).not.toHaveBeenCalled();
-  });
-
-  it('dismisses the auth flow after Apple sign-in succeeds', async () => {
-    const { router } = await import('expo-router');
-    const dismissTo = vi.mocked(router.dismissTo);
-    dismissTo.mockClear();
-
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-
-    await renderer.act(async () => {
-      tree!.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-    });
-
-    expect(dismissTo).toHaveBeenCalledTimes(1);
-    expect(dismissTo).toHaveBeenCalledWith('/(tabs)');
-  });
-
   it('automatically dismisses auth when a session already exists', async () => {
     const { router } = await import('expo-router');
     const dismissTo = vi.mocked(router.dismissTo);
@@ -240,82 +216,6 @@ describe('AuthScreen Apple sign-in', () => {
     expect(dismissTo).toHaveBeenCalledWith('/(tabs)');
   });
 
-  it('draws the white Apple button on the dark scheme and the black one on the light', () => {
-    let dark!: renderer.ReactTestRenderer;
-    let light!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      dark = renderer.create(<AuthScreen />);
-      light = renderer.create(<ThemeScope scheme="light"><AuthScreen /></ThemeScope>);
-    });
-    const styleOf = (tree: renderer.ReactTestRenderer) =>
-      tree.root.find((node) => String(node.type) === 'apple-authentication-button').props.buttonStyle;
-    expect(styleOf(dark)).toBe('WHITE');
-    expect(styleOf(light)).toBe('BLACK');
-  });
-
-  it('hides Apple sign-in outside iOS', () => {
-    platformState.os = 'android';
-
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Sign in with Apple' })).toHaveLength(0);
-  });
-
-  it('starts Google sign-in on Android', async () => {
-    platformState.os = 'android';
-
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-
-    await renderer.act(async () => {
-      tree!.root.findByProps({ accessibilityLabel: 'Sign in with Google' }).props.onPress();
-    });
-
-    expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
-  });
-
-  it('uses Google for new Android accounts and keeps email/password sign-up unavailable', async () => {
-    platformState.os = 'android';
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-
-    renderer.act(() => {
-      tree!.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
-    expect(tree!.root.findAllByProps({ accessibilityLabel: 'Password' })).toHaveLength(0);
-
-    // One Google asset, one name: the artwork reads "Sign in with Google" in
-    // both modes, so the accessible name matches it and the hint carries the
-    // mode (see the comment on the control in app/auth.tsx).
-    await renderer.act(async () => {
-      tree!.root.findByProps({
-        accessibilityLabel: 'Sign in with Google',
-        accessibilityHint: 'Creates your account with Google and returns to Magicbooklet',
-      }).props.onPress();
-    });
-
-    expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
-    expect(authState.signUpWithPassword).not.toHaveBeenCalled();
-  });
-
-  it('draws Google alone on Android, without Apple', () => {
-    platformState.os = 'android';
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-
-    expect(providerButtonsInOrder(tree!)).toEqual(['Sign in with Google']);
-  });
 });
 
 /**
@@ -332,139 +232,6 @@ function providerButtonsInOrder(tree: renderer.ReactTestRenderer) {
 
 // Decision D1: Google on the iPhone too, so an account made with Google on
 // Android or the web can be reached there (audit 01-1). Apple stays first.
-describe('AuthScreen Google sign-in on iOS', () => {
-  beforeEach(() => {
-    platformState.os = 'ios';
-    authState.user = null;
-    paramsState.params = {};
-    navigationState.listeners = [];
-    authState.signInWithApple.mockReset();
-    authState.signInWithApple.mockResolvedValue(undefined);
-    authState.signInWithGoogle.mockReset();
-    authState.signInWithGoogle.mockResolvedValue(undefined);
-    authState.signInWithPassword.mockReset();
-    authState.signInWithPassword.mockResolvedValue(undefined);
-  });
-
-  function mount() {
-    let tree: renderer.ReactTestRenderer | undefined;
-    renderer.act(() => {
-      tree = renderer.create(<AuthScreen />);
-    });
-    return tree!;
-  }
-
-  it('draws Google under Apple, in both modes', () => {
-    const tree = mount();
-    expect(providerButtonsInOrder(tree)).toEqual(['Sign in with Apple', 'Sign in with Google']);
-
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-    expect(providerButtonsInOrder(tree)).toEqual(['Sign up with Apple', 'Sign in with Google']);
-  });
-
-  it('starts Google sign-in and leaves the screen once it succeeds', async () => {
-    const { router } = await import('expo-router');
-    const dismissTo = vi.mocked(router.dismissTo);
-    dismissTo.mockClear();
-    const tree = mount();
-
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Google', accessibilityRole: 'button' }).props.onPress();
-    });
-
-    expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
-    expect(authState.signInWithApple).not.toHaveBeenCalled();
-    expect(dismissTo).toHaveBeenCalledWith('/(tabs)');
-  });
-
-  it('creates a new account with Google from the sign-up tab, never with a password', async () => {
-    const tree = mount();
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-
-    await renderer.act(async () => {
-      tree.root.findByProps({
-        accessibilityLabel: 'Sign in with Google',
-        accessibilityHint: 'Creates your account with Google and returns to Magicbooklet',
-      }).props.onPress();
-    });
-
-    expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
-    expect(authState.signUpWithPassword).not.toHaveBeenCalled();
-  });
-
-  it('says a failed Google sign-in in the app\'s words', async () => {
-    authState.signInWithGoogle.mockRejectedValue(new Error('access_denied'));
-    const tree = mount();
-
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Google', accessibilityRole: 'button' }).props.onPress();
-    });
-
-    const copy = JSON.stringify(tree.toJSON());
-    expect(copy).toContain('Could not finish with Google');
-    expect(copy).not.toContain('access_denied');
-  });
-
-  it('holds the other ways in while one sign-in is under way', async () => {
-    let finishGoogle!: () => void;
-    authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
-      finishGoogle = resolve;
-    }));
-    const tree = mount();
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
-      tree.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('correct-Horse-1');
-    });
-
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Google', accessibilityRole: 'button' }).props.onPress();
-    });
-
-    // The innermost view that holds the system button decides whether it takes touches.
-    const appleWrapper = () => tree.root
-      .findAll((node) => String(node.type) === 'view'
-        && 'pointerEvents' in node.props
-        && node.findAll((child) => String(child.type) === 'apple-authentication-button').length === 1)
-      .at(-1)!;
-    const signInButton = () => tree.root.findByProps({ accessibilityLabel: 'Sign in', accessibilityRole: 'button' });
-    expect(appleWrapper().props.pointerEvents).toBe('none');
-    expect(signInButton().props.accessibilityState.disabled).toBe(true);
-
-    // A press that lands anyway starts nothing.
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-      signInButton().props.onPress();
-    });
-    expect(authState.signInWithApple).not.toHaveBeenCalled();
-    expect(authState.signInWithPassword).not.toHaveBeenCalled();
-
-    await renderer.act(async () => {
-      finishGoogle();
-    });
-    expect(authState.signInWithGoogle).toHaveBeenCalledTimes(1);
-  });
-
-  it('frees the other ways in again after a sign-in that failed', async () => {
-    authState.signInWithGoogle.mockRejectedValue(new Error('access_denied'));
-    const tree = mount();
-
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Google', accessibilityRole: 'button' }).props.onPress();
-    });
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-    });
-
-    expect(authState.signInWithApple).toHaveBeenCalledWith('login');
-  });
-});
-
-// Decision D2: no mail sender, so no password reset. "Forgot password?" led to
-// a form whose mail never came (audit 01-2); support stands in its place.
 describe('AuthScreen help for someone who cannot sign in', () => {
   const supportLabel = 'Trouble signing in? Email info@magicbooklet.com';
 
@@ -522,13 +289,6 @@ describe('AuthScreen help for someone who cannot sign in', () => {
     expect(JSON.stringify(tree.toJSON())).toContain('Email info@magicbooklet.com');
   });
 
-  it('shows the line beside the password form only, not on the sign-up tab', () => {
-    const tree = mount('ios');
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-    expect(tree.root.findAllByProps({ accessibilityLabel: supportLabel })).toHaveLength(0);
-  });
 });
 
 describe('AuthScreen sign-in analytics (audit 01-11)', () => {
@@ -538,8 +298,8 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
     paramsState.params = {};
     navigationState.listeners = [];
     analytics.trackOnboardingEvent.mockClear();
-    authState.signInWithApple.mockReset();
-    authState.signInWithApple.mockResolvedValue(undefined);
+    authState.signInWithPassword.mockReset();
+    authState.signInWithPassword.mockResolvedValue(undefined);
   });
 
   function mount() {
@@ -550,9 +310,22 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
     return tree!;
   }
 
-  const recorded = () => analytics.trackOnboardingEvent.mock.calls.map(([, eventName, options]) => [eventName, options?.step]);
+  async function signIn(tree: renderer.ReactTestRenderer) {
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+      tree.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('a-good-password');
+    });
+    await renderer.act(async () => {
+      tree.root.findByProps({ accessibilityLabel: 'Sign in' }).props.onPress();
+    });
+  }
 
-  /** The person leaves the screen: Close, a swipe down, Android's back. */
+  // The sign-in events; the page's own view of itself is counted elsewhere.
+  const recorded = () => analytics.trackOnboardingEvent.mock.calls
+    .filter(([, eventName]) => eventName !== 'screen_viewed')
+    .map(([, eventName, options]) => [eventName, options?.step]);
+
+  /** The person leaves the screen: Close, Android's back. */
   const leave = () => {
     renderer.act(() => {
       navigationState.listeners.forEach((listener) => listener());
@@ -564,9 +337,7 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
     const tree = mount();
     expect(recorded()).toEqual([]);
 
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-    });
+    await signIn(tree);
 
     expect(recorded()).toEqual([['auth_started', '/creator/sam'], ['auth_succeeded', '/creator/sam']]);
     expect(analytics.trackOnboardingEvent).toHaveBeenCalledWith(authState.api, 'auth_started', { step: '/creator/sam' });
@@ -577,26 +348,20 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
   });
 
   it('counts one start per visit, however many attempts it takes', async () => {
-    authState.signInWithApple.mockRejectedValueOnce(new Error('nonce mismatch'));
+    authState.signInWithPassword.mockRejectedValueOnce(new Error('Invalid login credentials'));
     const tree = mount();
 
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-    });
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-    });
+    await signIn(tree);
+    await signIn(tree);
 
     expect(recorded()).toEqual([['auth_started', '/(tabs)'], ['auth_succeeded', '/(tabs)']]);
   });
 
   it('records a visit left without signing in as canceled, once', async () => {
-    authState.signInWithApple.mockRejectedValue(new Error('nonce mismatch'));
+    authState.signInWithPassword.mockRejectedValue(new Error('Invalid login credentials'));
     const tree = mount();
 
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
-    });
+    await signIn(tree);
     leave();
     leave();
 
@@ -611,26 +376,30 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
     expect(recorded()).toEqual([]);
   });
 
-  // Signed out elsewhere over reel B, the person pressed Apple, then Close before it finished, and
-  // is on the screen below. A return now would take that screen's place.
+  // Signed out elsewhere over reel B, the person signed in with email, then pressed Close before
+  // it finished, and is on the screen below. A return now would take that screen's place.
   it('goes nowhere when the sign-in finishes after the person left the screen', async () => {
     const { router } = await import('expo-router');
     vi.mocked(router.dismissTo).mockClear();
     vi.mocked(router.replace).mockClear();
     paramsState.params = { notice: 'signed-out', returnTo: '/viewer?source=home&initialId=post-b', inPlace: '1' };
-    let finishApple!: () => void;
-    authState.signInWithApple.mockReturnValue(new Promise<void>((resolve) => {
-      finishApple = resolve;
+    let finish!: () => void;
+    authState.signInWithPassword.mockReturnValue(new Promise<void>((resolve) => {
+      finish = resolve;
     }));
     const tree = mount();
 
     renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Sign in with Apple' }).props.onPress();
+      tree.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+      tree.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('a-good-password');
+    });
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Sign in' }).props.onPress();
     });
     leave();
     renderer.act(() => tree.unmount());
     await renderer.act(async () => {
-      finishApple();
+      finish();
     });
 
     expect(recorded()).toEqual([['auth_started', '/viewer'], ['auth_canceled', '/viewer'], ['auth_succeeded', '/viewer']]);
@@ -639,7 +408,7 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
   });
 });
 
-describe('AuthScreen copy names only the buttons it draws (audit 01-8)', () => {
+describe('AuthScreen copy names only the buttons the sign-in page draws (audit 01-8)', () => {
   beforeEach(() => {
     authState.user = null;
     paramsState.params = {};
@@ -659,7 +428,7 @@ describe('AuthScreen copy names only the buttons it draws (audit 01-8)', () => {
       tree!.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('wrong-password');
     });
     await renderer.act(async () => {
-      tree!.root.findByProps({ label: 'Sign in' }).props.onPress();
+      tree!.root.findByProps({ accessibilityLabel: 'Sign in' }).props.onPress();
     });
     return tree!.root.findAll((node) => typeof node.props.body === 'string')[0]?.props.body as string;
   }
@@ -673,5 +442,70 @@ describe('AuthScreen copy names only the buttons it draws (audit 01-8)', () => {
   it('points a wrong password at both buttons on iOS, Apple first', async () => {
     const body = await wrongPasswordNotice('ios');
     expect(body).toContain('created the account with Apple or Google, use that button instead');
+  });
+});
+
+describe('Apple and Google on the email form (owner, 2026-11-08: "Yes, add them")', () => {
+  beforeEach(() => {
+    platformState.os = 'ios';
+    authState.user = null;
+    paramsState.params = {};
+    navigationState.listeners = [];
+    authState.signInWithApple.mockReset();
+    authState.signInWithApple.mockResolvedValue(undefined);
+    authState.signInWithGoogle.mockReset();
+    authState.signInWithGoogle.mockResolvedValue(undefined);
+  });
+
+  function mount() {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<AuthScreen />);
+    });
+    return tree!;
+  }
+
+  /** The email half of the page, where these buttons sit under the form. */
+  const form = (tree: renderer.ReactTestRenderer) => tree.root.findByType(EmailSignInForm);
+
+  it('draws Apple then Google under the form on iOS, and Google alone on Android', () => {
+    const labels = (tree: renderer.ReactTestRenderer) => form(tree)
+      .findAll((node) => typeof node.type === 'string' && /^Continue with /.test(String(node.props.accessibilityLabel ?? '')))
+      .map((node) => node.props.accessibilityLabel);
+    expect(labels(mount())).toEqual(['Continue with Apple', 'Continue with Google']);
+    platformState.os = 'android';
+    expect(labels(mount())).toEqual(['Continue with Google']);
+  });
+
+  it('takes an Apple sign-in on through the name and the credits, then back', async () => {
+    const { router } = await import('expo-router');
+    vi.mocked(router.replace).mockClear();
+    vi.mocked(router.dismissTo).mockClear();
+    paramsState.params = { returnTo: '/post/post-1' };
+    const tree = mount();
+    await renderer.act(async () => {
+      form(tree).findByProps({ accessibilityLabel: 'Continue with Apple' }).props.onPress();
+    });
+    expect(authState.signInWithApple).toHaveBeenCalledWith('signup');
+    expect(router.replace).toHaveBeenCalledWith({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
+    expect(router.dismissTo).not.toHaveBeenCalled();
+  });
+
+  it('holds the email Sign in while Google is under way', async () => {
+    let finish!: () => void;
+    authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+    const tree = mount();
+    renderer.act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+      tree.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('a-good-password');
+    });
+    const google = form(tree).findAll((node) => node.props.accessibilityLabel === 'Continue with Google' && typeof node.props.onPress === 'function')[0];
+    renderer.act(() => {
+      google.props.onPress();
+    });
+    expect(tree.root.findByProps({ accessibilityLabel: 'Sign in' }).props.disabled).toBe(true);
+    await renderer.act(async () => finish());
   });
 });

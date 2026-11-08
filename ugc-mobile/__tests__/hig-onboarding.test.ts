@@ -47,7 +47,7 @@ describe('the product has one wordmark', () => {
   });
 
   it('is mounted by every surface that used to draw its own', () => {
-    for (const source of [read('app/auth.tsx'), read('components/home-side-menu.tsx'), header]) {
+    for (const source of [read('components/email-sign-in-form.tsx'), read('components/home-side-menu.tsx'), header]) {
       expect(source).toContain('BrandLockup');
     }
   });
@@ -57,9 +57,9 @@ describe('the product has one wordmark', () => {
    * the definitive one, and being a display variant it must not be re-weighted
    * (`hig-type-and-contrast.test.ts` enforces that tree-wide).
    */
-  it('takes the display face from the ramp at both sizes', () => {
-    expect(ui).toContain("variant={hero ? 'pageTitle' : 'sectionTitle'}");
-    expect(ui).toContain('size={hero ? appTheme.icon.hero : appTheme.icon.feature}');
+  it('takes the display face from the ramp at every size', () => {
+    expect(ui).toContain("variant={large ? 'pageTitle' : 'sectionTitle'}");
+    expect(ui).toContain('const iconSize = large ? appTheme.icon.hero : appTheme.icon.feature;');
     expect(appTheme.type.pageTitle).toHaveProperty('fontFamily');
     expect(appTheme.type.sectionTitle).toHaveProperty('fontFamily');
   });

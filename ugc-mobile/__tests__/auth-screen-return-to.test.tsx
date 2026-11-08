@@ -45,8 +45,12 @@ const authState = vi.hoisted(() => ({
   missingEnvKeys: [] as string[],
 }));
 
+vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
+vi.mock('@/components/media-wall', () => ({ MediaWall: () => null }));
 vi.mock('@react-navigation/native', () => ({
-  useRoute: () => ({ key: 'auth-1', name: 'auth', params: routeState.params }),
+  useIsFocused: () => true,
+  // The email form, behind the sign-in page's "Sign in with email".
+  useRoute: () => ({ key: 'auth-1', name: 'auth', params: { email: '1', ...routeState.params } }),
 }));
 
 vi.mock('expo-router', () => ({
@@ -62,12 +66,36 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Keyboard: { dismiss: () => undefined },
+  AccessibilityInfo: { announceForAccessibility: () => undefined },
+  Animated: (() => {
+    class Value {
+      value: number;
+      constructor(value: number) { this.value = value; }
+      setValue(value: number) { this.value = value; }
+      interpolate() { return this; }
+    }
+    const animation = (value: Value, config: { toValue: number }) => ({
+      start: (done?: () => void) => { value.value = config.toValue; done?.(); },
+      stop: () => undefined,
+    });
+    return {
+      Value,
+      View: ({ children, ...props }: MockProps) => React.createElement('animated-view', props, children),
+      timing: animation,
+      loop: () => ({ start: () => undefined, stop: () => undefined }),
+      add: (a: Value) => a,
+      modulo: (a: Value) => a,
+    };
+  })(),
+  Easing: { out: (fn: unknown) => fn, cubic: (t: number) => t, linear: (t: number) => t },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Image: (props: MockProps) => React.createElement('image', props),
   Linking: { openURL: vi.fn(async () => undefined) },
   Platform: { OS: 'ios', select: (obj: Record<string, unknown>) => obj.ios || obj.default },
   Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
+  StyleSheet: { absoluteFill: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } },
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: (props: MockProps) => React.createElement('textinput', props),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -185,13 +213,6 @@ describe("the sign-in screen's other params", () => {
     .filter((child): child is string => typeof child === 'string');
 
   // The sign-up pushes: the invite, the profile, onboarding and Pricing.
-  it('opens on Sign up when the push asks for it', () => {
-    routeState.params = authRoute({ mode: 'signup', returnTo: '/onboarding' });
-
-    const tree = render();
-
-    expect(tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.accessibilityState).toMatchObject({ selected: true });
-  });
 
   // `signInNoticeRoute`, after this device's session ended elsewhere.
   it('says why a redirect sent the person here', () => {
@@ -201,9 +222,9 @@ describe("the sign-in screen's other params", () => {
   });
 
   // A route with an empty query has no params object at all.
-  it('opens on Sign in with no params, and steps aside for someone signed in', async () => {
+  it('opens on the email form with no other params, and steps aside for someone signed in', async () => {
     routeState.params = undefined as unknown as Record<string, string>;
-    expect(render().root.findByProps({ accessibilityLabel: 'Switch to sign in' }).props.accessibilityState).toMatchObject({ selected: true });
+    expect(render().root.findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
 
     authState.user = { id: 'user-1' };
     await renderer.act(async () => {

@@ -268,8 +268,11 @@ describe('HIG modality — sheets, alerts and the way out', () => {
       .map((match) => match[1].match(/name="([^"]+)"/)?.[1] ?? '?');
 
     // Adding a modal route without settling its dismiss control fails here.
-    expect(new Set(modalRoutes)).toEqual(new Set(['auth', 'edit-profile']));
+    expect(new Set(modalRoutes)).toEqual(new Set(['auth', 'edit-profile', 'join']));
     expect(file('app/auth.tsx')).not.toContain('BackGlyph');
+    // The sign-in page both routes open (app/join.tsx, app/auth.tsx) leaves with Close.
+    expect(file('components/sign-in-wall.tsx')).not.toContain('BackGlyph');
+    expect(file('components/sign-in-wall.tsx')).toContain('CloseGlyph');
     expect(file('components/edit-profile-screen.tsx')).not.toContain('BackGlyph');
     // The composer is a push by deliberate choice (DV7), but the step that
     // leaves it still closes with the shared Close control, not a bare glyph.
