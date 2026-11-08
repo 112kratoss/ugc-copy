@@ -382,10 +382,56 @@ describe('checking the handle as it is typed', () => {
     });
   }
 
+  it('starts with a handle made from the name, numbered when that one is taken (owner 11-08)', async () => {
+    const roll = vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const tree = await openIdentityStep();
+      const handleField = () => tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle');
+      // The signup placeholder (`creator-1234abcd`) is nobody's name: a handle
+      // from "Sarath" goes in its place.
+      expect(handleField().props.value).toBe('sarath');
+
+      await letTheCheckAnswer();
+      expect(handleField().props.value).toBe('sarath-550');
+      await letTheCheckAnswer();
+      expect(handleLine(tree)).toEqual({ text: 'This creator name is available.', color: 'success' });
+      expect(findButton(tree, 'primary-button', 'Save creator name').props.disabled).toBe(false);
+      act(() => tree.unmount());
+    } finally {
+      roll.mockRestore();
+    }
+  });
+
+  it('leaves a handle the creator typed alone, even a taken one', async () => {
+    const tree = await openIdentityStep();
+    await letTheCheckAnswer();
+    await letTheCheckAnswer();
+
+    await typeHandle(tree, 'sarath');
+    await letTheCheckAnswer();
+    await letTheCheckAnswer();
+
+    expect(tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle').props.value).toBe('sarath');
+    expect(handleLine(tree)).toEqual({ text: 'That username is already taken.', color: 'danger' });
+    act(() => tree.unmount());
+  });
+
+  it('gives up swapping after a few taken suggestions', async () => {
+    harness.api.validateProfile.mockReset().mockRejectedValue(new ApiError('That username is already taken.', 409, {
+      error: 'That username is already taken.',
+      fieldErrors: { username: 'That username is already taken.' },
+    }));
+    const tree = await openIdentityStep();
+    for (let i = 0; i < 8; i += 1) await letTheCheckAnswer();
+
+    // The first suggestion and three numbered ones; then the field is left to the creator.
+    expect(harness.api.validateProfile).toHaveBeenCalledTimes(4);
+    expect(handleLine(tree).color).toBe('danger');
+    act(() => tree.unmount());
+  });
+
   it('says an available handle and a taken one in its own words', async () => {
     const tree = await openIdentityStep();
-    // The signup placeholder (`creator-1234abcd`) is nobody's name: the field opens empty.
-    expect(tree.root.find((node) => String(node.type) === 'app-text-input' && node.props.label === 'Unique handle').props.value).toBe('');
 
     await typeHandle(tree, 'sarath-makes');
     expect(handleLine(tree).text).toBe('Checking availability…');

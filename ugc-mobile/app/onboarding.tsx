@@ -29,6 +29,7 @@ import {
   PROFILE_USERNAME_MAX_LENGTH,
   PROFILE_USERNAME_PATTERN,
   PROFILE_USERNAME_RULE,
+  readLocalUsernameRejection,
   readUsernameRejection,
 } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
@@ -43,6 +44,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { useHandleAvailability } from '@/lib/use-handle-availability';
+import { firstHandleSuggestion, numberedHandleSuggestion } from '@/lib/handle-suggestion';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
@@ -58,6 +60,9 @@ import imagePreview from '../assets/images/onboarding-pages/image.jpg';
 import videoPreview from '../assets/images/onboarding-pages/video.jpg';
 import motionPreview from '../assets/images/onboarding-pages/motion.jpg';
 import { haptic } from '@/lib/haptics';
+
+/** How many numbered handles the creator-name step tries after a taken suggestion. */
+const MAX_HANDLE_SUGGESTION_TRIES = 3;
 
 const GOALS: BookletGoal[] = [
   {
@@ -170,6 +175,10 @@ function OnboardingFlow() {
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
+  // The handle this screen filled in, while it is still the field's value: a
+  // taken one is swapped for a numbered one, a few times at most, and typing
+  // anything else ends it.
+  const suggestedHandle = useRef<{ base: string; current: string; tries: number } | null>(null);
   // A handle the save refused, and what it said: taken since it was checked,
   // or refused by a rule the live check did not get to answer.
   const [handleRefusedAtSave, setHandleRefusedAtSave] = useState<{ handle: string; message: string } | null>(null);
@@ -212,8 +221,18 @@ function OnboardingFlow() {
       ]);
       setProfile(nextProfile);
       adoptWelcome(nextWelcome);
-      setDisplayName(nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator');
-      setUsername(PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '') ? '' : nextProfile.username ?? '');
+      const startingName = nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator';
+      setDisplayName(startingName);
+      if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '')) {
+        // The signup placeholder is nobody's name, so the field starts with a
+        // handle made for them instead (owner, 2026-11-08), which they can change.
+        const suggestion = firstHandleSuggestion(startingName, user.email ?? null, (handle) => !readLocalUsernameRejection(handle));
+        suggestedHandle.current = { base: suggestion, current: suggestion, tries: 0 };
+        setUsername(suggestion);
+      } else {
+        suggestedHandle.current = null;
+        setUsername(nextProfile.username ?? '');
+      }
       // Resolved once, on entry. Re-deriving as state changes would eject
       // someone the instant `claimCredits` flips `eligible` to `claimed` —
       // mid-celebration, with the credits counter still animating.
@@ -291,6 +310,15 @@ function OnboardingFlow() {
     ?? (handleCheck.availability === 'taken' ? handleCheck.message ?? 'This creator name is unavailable.' : null);
   const usernameState = handleRefusal ? 'error' : handleCheck.availability;
   const usernameMessage = handleRefusal ?? (usernameState === 'available' ? 'This creator name is available.' : null);
+
+  useEffect(() => {
+    const suggestion = suggestedHandle.current;
+    if (stage !== 'identity' || !suggestion || suggestion.current !== username) return;
+    if (handleCheck.availability !== 'taken' || suggestion.tries >= MAX_HANDLE_SUGGESTION_TRIES) return;
+    const next = numberedHandleSuggestion(suggestion.base);
+    suggestedHandle.current = { ...suggestion, current: next, tries: suggestion.tries + 1 };
+    setUsername(next);
+  }, [handleCheck.availability, stage, username]);
 
   const moveToStep = async (nextStep: number) => {
     setStep(nextStep);
@@ -590,7 +618,11 @@ function OnboardingFlow() {
                       inputRef={handleRef}
                       label="Unique handle"
                       value={username}
-                      onChangeText={(value) => setUsername(normalizeUsernameInput(value))}
+                      onChangeText={(value) => {
+                        // Anything typed is the creator's own: no more swapping.
+                        suggestedHandle.current = null;
+                        setUsername(normalizeUsernameInput(value));
+                      }}
                       editable={!busy}
                       autoCapitalize="none"
                       autoCorrect={false}
