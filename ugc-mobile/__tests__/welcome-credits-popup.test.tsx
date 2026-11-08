@@ -156,7 +156,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
       expect(tree.toJSON()).not.toBeNull();
       await act(async () => { vi.advanceTimersByTime(1500); });
       expect(tree.toJSON()).toBeNull();
-      expect(wasWelcomePopupDismissedThisRun()).toBe(true);
+      expect(wasWelcomePopupDismissedThisRun('creator-1')).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -218,7 +218,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     const tree = mount();
     act(() => { close(tree).props.onPress(); });
     expect(tree.toJSON()).toBeNull();
-    expect(wasWelcomePopupDismissedThisRun()).toBe(true);
+    expect(wasWelcomePopupDismissedThisRun('creator-1')).toBe(true);
     expect(mount().toJSON()).toBeNull();
   });
 });

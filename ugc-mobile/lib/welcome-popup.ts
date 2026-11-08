@@ -6,19 +6,20 @@ import type { WelcomeCreditResponse } from './types';
  * up). It offers the credits to a signed-in account that has its creator name
  * and has not claimed them yet. Closing it waits until the next app start.
  */
-let dismissedThisRun = false;
+const dismissedThisRun = new Set<string>();
 
-export function dismissWelcomePopupThisRun() {
-  dismissedThisRun = true;
+/** Per account: one account closing it says nothing about the next to sign in. */
+export function dismissWelcomePopupThisRun(userId: string) {
+  dismissedThisRun.add(userId);
 }
 
-export function wasWelcomePopupDismissedThisRun() {
-  return dismissedThisRun;
+export function wasWelcomePopupDismissedThisRun(userId: string | null | undefined) {
+  return Boolean(userId) && dismissedThisRun.has(userId!);
 }
 
 /** For tests: a fresh app start. */
 export function resetWelcomePopupThisRun() {
-  dismissedThisRun = false;
+  dismissedThisRun.clear();
 }
 
 export function shouldShowWelcomePopup({

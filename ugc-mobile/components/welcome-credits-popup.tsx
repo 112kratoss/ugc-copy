@@ -53,7 +53,7 @@ function WelcomeCreditsPopupForAccount() {
   const homeFocused = useIsFocused();
   const outerTheme = useAppTheme();
   const reducedMotion = useReducedMotion();
-  const [dismissed, setDismissed] = useState(wasWelcomePopupDismissedThisRun);
+  const [dismissed, setDismissed] = useState(() => wasWelcomePopupDismissedThisRun(user?.id));
   // Latched once offered, so the claim (which turns the answer to "claimed")
   // does not take the card away mid-celebration.
   const [offered, setOffered] = useState<WelcomeCreditResponse | null>(null);
@@ -81,7 +81,7 @@ function WelcomeCreditsPopupForAccount() {
   const amount = offered?.amount ?? 25;
 
   const close = () => {
-    dismissWelcomePopupThisRun();
+    if (user) dismissWelcomePopupThisRun(user.id);
     setDismissed(true);
   };
 

@@ -29,10 +29,12 @@ describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
     }
   });
 
-  it('remembers a close until the next app start', () => {
-    expect(wasWelcomePopupDismissedThisRun()).toBe(false);
-    dismissWelcomePopupThisRun();
-    expect(wasWelcomePopupDismissedThisRun()).toBe(true);
+  it('remembers a close until the next app start, for that account only', () => {
+    expect(wasWelcomePopupDismissedThisRun('a')).toBe(false);
+    dismissWelcomePopupThisRun('a');
+    expect(wasWelcomePopupDismissedThisRun('a')).toBe(true);
+    expect(wasWelcomePopupDismissedThisRun('b')).toBe(false);
+    expect(wasWelcomePopupDismissedThisRun(null)).toBe(false);
   });
 });
 
