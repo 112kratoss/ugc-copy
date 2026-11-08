@@ -297,7 +297,9 @@ function keepFocusClearOfBar(event: FocusEvent<HTMLDivElement>) {
   const barBox = bar.getBoundingClientRect();
   if (barBox.height === 0) return;
   const { bottom } = target.getBoundingClientRect();
-  if (bottom > barBox.top - 8) window.scrollBy({ top: bottom - barBox.top + 16 });
+  // The bar fades what passes under it over the 24px above it, so a control stops 8px
+  // above the fade: 32px above the bar.
+  if (bottom > barBox.top - 28) window.scrollBy({ top: bottom - barBox.top + 32 });
 }
 
 /** Whether the browser draws this focus (the keyboard's, or a text field's); a browser without `:focus-visible` says yes. */
@@ -714,13 +716,15 @@ export function CreatorColumnBar({
     // Below 768px (in px, as the shell's own breakpoint) the creators hide the shell's bottom
     // navigation (`hidesBottomNav`), so the bar holds the window's bottom edge in its place, the
     // safe area inside it; wider, it floats just above the edge. Under the column's width it waits
-    // at the column's end while a done run's Publish bar holds the foot.
+    // at the column's end while a done run's Publish bar holds the foot: relative there, not
+    // static, so its fills and its settings panel still place themselves against it (static,
+    // they took the column's grid instead, the panel opening above the page's top).
     <div
       ref={barRef}
       data-creator-bar
       className={clsx(
         'sticky bottom-3 z-30 mt-3 max-[768px]:bottom-0',
-        !holdsFootUnderColumn && 'max-[1120px]:static',
+        !holdsFootUnderColumn && 'max-[1120px]:relative',
       )}
     >
       {/* One surface for the line and the bar, so nothing scrolling under the
