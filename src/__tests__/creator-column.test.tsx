@@ -185,8 +185,9 @@ describe('the creator column bar', () => {
     const { container } = renderBar();
     const bar = container.querySelector('[data-creator-bar]');
     expect(bar?.className.split(' ')).toContain('mt-3');
-    const fade = bar?.querySelector('[aria-hidden].bottom-full');
-    expect(fade?.className.split(' ')).toEqual(expect.arrayContaining(['absolute', 'pointer-events-none', 'h-6', 'from-[var(--ui-bg-page)]']));
+    // 56px tall, its lower 32px behind the bar's rounded corners: 24px of fade show above it.
+    const fade = bar?.querySelector('[aria-hidden][class*="bottom-[calc(100%-2rem)]"]');
+    expect(fade?.className.split(' ')).toEqual(expect.arrayContaining(['absolute', 'pointer-events-none', '-z-10', 'h-14', 'from-[57%]', 'from-[var(--ui-bg-page)]']));
   });
 
   // `max-[1119px]` is `width < 1119px`: at 1119px, one column, the bar stayed stuck and the Publish

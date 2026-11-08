@@ -783,10 +783,11 @@ export function CreatorColumnBar({
 
       {/* While the bar is held at the window's foot, a card scrolling under it fades out
           over the 24px above it (the column's 12px gap and the bar's 12px margin, so at
-          rest the fade covers only empty page), and from 768px, where the bar floats
-          12px up, the page's own fill hides what would show beneath it. */}
-      <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-full h-6 bg-gradient-to-t from-[var(--ui-bg-page)] from-40% to-transparent" />
-      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-full h-3 bg-[var(--ui-bg-page)] max-[768px]:hidden" />
+          rest the fade covers only empty page). Both fills reach 32px into the bar, the
+          radius of its corners, and sit behind it: a card's borders showed in the corners'
+          gaps. From 768px, where the bar floats 12px up, the fill under it takes that gap. */}
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-2rem)] -z-10 h-14 bg-gradient-to-t from-[var(--ui-bg-page)] from-[57%] to-transparent" />
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-[calc(100%-2rem)] -z-10 h-8 bg-[var(--ui-bg-page)] min-[768px]:h-11" />
       <AnimatePresence>
         {showsSettings ? (
           <motion.div
