@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, Download, Image as ImageIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -57,6 +57,7 @@ import {
     type CreatorReferenceKind,
     CreatorRemixSlotTile,
     CreatorReferenceDetails,
+    focusReferenceAddBox,
     CreatorRunFailed,
     CreatorRunFailedLine,
     CreatorRunWaitLines,
@@ -963,8 +964,16 @@ function ImageCreator({
         await persistUploadedImageElements(nextElements);
     };
 
-    // A question about a picture is moot once the pictures change while it is up: it is answered "keep".
-    const confirmElementRemoval = useConfirmation(elements);
+    // A question about a picture is moot once the pictures change while it is up: it is answered
+    // "keep". Which pictures, not their array: an upload landing on one replaced the array and
+    // took the question down unasked.
+    const confirmElementRemoval = useConfirmation(elements.map((element) => element.id).join('|'));
+    // The prompt as it is now, read again once the question is answered: an Enhance or a restored
+    // prompt can land while it is up.
+    const latestPrompt = useRef(prompt);
+    useLayoutEffect(() => {
+        latestPrompt.current = prompt;
+    });
 
     /**
      * Remove, as the app's: asked first, since a picture the creator picked cannot be brought
@@ -973,16 +982,16 @@ function ImageCreator({
     const handleRemoveElement = async (elementId: string): Promise<boolean> => {
         const target = elementRefs.current.find((element) => element.id === elementId);
         if (!target) return false;
-        const mentioned = extractPromptHandles(prompt).includes(target.handle);
         const removed = await confirmElementRemoval({
             title: `Remove ${target.displayName}?`,
-            message: mentioned
+            message: extractPromptHandles(latestPrompt.current).includes(target.handle)
                 ? `${target.displayName} and ${target.handle} will be removed from this draft.`
                 : `${target.displayName} will be removed from this draft.`,
             confirmLabel: 'Remove',
             tone: 'danger',
         });
         if (!removed) return false;
+        const mentioned = extractPromptHandles(latestPrompt.current).includes(target.handle);
 
         const currentElements = elementRefs.current;
         const removedElement = currentElements.find((element) => element.id === elementId);
@@ -999,6 +1008,7 @@ function ImageCreator({
         setElementRemovedNotice(mentioned
             ? `${removedElement.displayName} and ${removedElement.handle} were removed from this draft.`
             : `${removedElement.displayName} was removed from this draft.`);
+        focusReferenceAddBox('images');
         await persistUploadedImageElements(nextElements);
         return true;
     };
@@ -1778,16 +1788,18 @@ function ImageCreator({
 
         // Every file that went up stays on its element, so the next press sends the
         // staged copy instead of uploading it again, even when another file failed.
-        const stagedById = new Map<string, StagedElementUpload>();
+        // Kept with the file that went up: a picture replaced while it went up keeps its id but not
+        // its file, and the old file's copy on the new picture sent the old picture from then on.
+        const stagedById = new Map<string, { staged: StagedElementUpload; file: File | null }>();
         results.forEach((result) => {
             if (result.status === 'fulfilled' && result.value.staged) {
-                stagedById.set(result.value.element.id, result.value.staged);
+                stagedById.set(result.value.element.id, { staged: result.value.staged, file: result.value.element.file });
             }
         });
         if (stagedById.size > 0) {
             commitElements(elementRefs.current.map((element) => {
-                const staged = stagedById.get(element.id);
-                return staged ? { ...element, staged } : element;
+                const landed = stagedById.get(element.id);
+                return landed && landed.file === element.file ? { ...element, staged: landed.staged } : element;
             }));
             // Saved now: a reload runs no cleanup, so this is the copy's only way past one.
             void persistUploadedImageElements(elementRefs.current);
@@ -1988,7 +2000,7 @@ function ImageCreator({
         : 'Write a prompt, then Generate.';
     // Past the model's limit a picture is kept, not sent (the run waits until it fits): its tile
     // and its details say which ones, as the app keeps them apart.
-    const elementNotSentNote = (index: number) => (model.maxImages > 0 && index >= model.maxImages
+    const elementNotSentNote = (index: number) => (modelCatalog.detailsReady && model.maxImages > 0 && index >= model.maxImages
         ? `Not sent: ${model.displayName} takes ${model.maxImages}`
         : undefined);
     const detailsIndex = detailsElementId ? elements.findIndex((element) => element.id === detailsElementId) : -1;
@@ -2459,9 +2471,10 @@ function ImageCreator({
                                     {elementPickNotice ? (
                                         <p role="status" className="text-sm text-amber-200">{elementPickNotice}</p>
                                     ) : null}
-                                    {elementRemovedNotice ? (
-                                        <p role="status" className="text-sm text-[var(--ui-text-secondary)]">{elementRemovedNotice}</p>
-                                    ) : null}
+                                    {/* Always there, so a screen reader hears the line when its words arrive. */}
+                                    <p role="status" className={elementRemovedNotice ? 'text-sm text-[var(--ui-text-secondary)]' : 'sr-only'}>
+                                        {elementRemovedNotice ?? ''}
+                                    </p>
                                 </CreatorInputsCard>
                             </div>
                         ) : (

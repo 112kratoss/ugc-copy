@@ -1163,7 +1163,8 @@ describe('CreateVideoClient Kling video elements', () => {
       await waitFor(() => expect(screen.queryByAltText('Element 1')).not.toBeInTheDocument());
       expect(screen.queryByRole('dialog', { name: 'Reference details' })).toBeNull();
       expect(promptField()).toHaveValue('walks through the rain');
-      expect(await screen.findByText('Element 1 and @element_1 were removed from this draft.')).toBeInTheDocument();
+      // Said over the bar, and to a screen reader by the page's status line, which is always there.
+      expect(await screen.findAllByText('Element 1 and @element_1 were removed from this draft.')).toHaveLength(2);
     });
 
     it('asks the mirror question going back to frames, and brings the first pictures along as the start and end images', async () => {
@@ -2345,6 +2346,38 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(promptBox()).toHaveValue('A dancer follows across the stage');
     });
 
+    // Two quick Replaces on one clip: the later pick stands, however long the first takes to measure (review of #732).
+    it('keeps the later of two quick Replaces on a Kling clip', async () => {
+      let finishSlow: (seconds: number) => void = () => undefined;
+      readDurationMock.mockImplementation((source: File | string) => (
+        typeof source !== 'string' && source.name === 'slow.mp4'
+          ? new Promise<number>((resolve) => { finishSlow = resolve; })
+          : Promise.resolve(5)
+      ));
+      const view = render(<CreateVideoClient prefill={{}} />);
+      addKlingClip(view.container, 'clip.mp4');
+      await waitFor(() => expect(cardHandles(view.container, KLING_RENAME)).toEqual(['@video_element_1']));
+
+      const picker = screen.getByRole('button', { name: 'Replace @video_element_1 with another clip' }).nextElementSibling as HTMLInputElement;
+      const slow = new File(['slow'], 'slow.mp4', { type: 'video/mp4' });
+      const quick = new File(['quick'], 'quick.mp4', { type: 'video/mp4' });
+      setPersistedMediaRecordsMock.mockClear();
+      fireEvent.change(picker, { target: { files: [slow] } });
+      fireEvent.change(picker, { target: { files: [quick] } });
+      const saved = () => setPersistedMediaRecordsMock.mock.calls.filter(([key]) => key === 'create-video:kling-video-elements:user-1');
+      await waitFor(() => expect(saved().at(-1)?.[1]).toEqual([expect.objectContaining({ file: quick })]));
+
+      const savesBefore = saved().length;
+      await act(async () => {
+        finishSlow(9);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      // The slow pick, measured last, writes nothing over the later one.
+      expect(saved()).toHaveLength(savesBefore);
+      expect(saved().at(-1)?.[1]).toEqual([expect.objectContaining({ file: quick, handle: '@video_element_1' })]);
+      expect(screen.getByRole('button', { name: 'Preview Video element 1' }).querySelector('video')?.getAttribute('src')).toContain('quick.mp4');
+    });
+
     it('shows the same Kling clip handles after a reload as before it', async () => {
       const first = render(<CreateVideoClient prefill={{}} />);
       addKlingClip(first.container, 'first.mp4');
@@ -3104,6 +3137,21 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(screen.queryByText(/Unknown element mention/)).not.toBeInTheDocument();
     });
 
+    // A subject's Remove asks, as every reference's does, and its handle leaves the prompt (review of #732).
+    it('asks before removing a subject, and takes its handle out of the prompt', async () => {
+      const view = await renderWithSubjects('Hero');
+      await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@hero']));
+      fireEvent.change(promptBox(), { target: { value: '@hero walks on alone' } });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Hero' }));
+      const asked = await screen.findByRole('alertdialog', { name: 'Remove Hero?' });
+      expect(asked).toHaveAccessibleDescription('Hero and @hero will be removed from this draft.');
+      await confirmRemoval();
+
+      await waitFor(() => expect(subjectFields(view.container)).toHaveLength(0));
+      expect(promptBox()).toHaveValue('walks on alone');
+    });
+
     it('leaves the second of two subjects with one name its handle when the first is removed', async () => {
       const view = await renderWithSubjects('Hero', 'Hero');
       await waitFor(() => expect(subjectHandles(view.container)).toEqual(['@hero', '@hero_2']));
@@ -3111,6 +3159,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.change(promptBox(), { target: { value: '@hero_2 walks on alone' } });
 
       fireEvent.click(screen.getAllByRole('button', { name: 'Remove Hero' })[0]);
+      await confirmRemoval();
 
       await waitFor(() => expect(subjectFields(view.container)).toHaveLength(1));
       // The subject that is left is the one the prompt mentions.
@@ -3125,6 +3174,7 @@ describe('CreateVideoClient Kling video elements', () => {
       const prompt = '@hero_2 walks on alone through the bright studio, slow push in on the face.';
       fireEvent.change(promptBox(), { target: { value: prompt } });
       fireEvent.click(screen.getAllByRole('button', { name: 'Remove Hero' })[0]);
+      await confirmRemoval();
       await waitFor(() => expect(subjectFields(view.container)).toHaveLength(1));
 
       fireEvent.click(generateButton());

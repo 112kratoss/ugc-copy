@@ -234,21 +234,27 @@ export function findUnknownPromptHandles(prompt: string, validHandles: string[])
 }
 
 /**
- * The prompt without a removed reference's mentions, as the app removes them
- * (`replacePromptHandle` in the mobile creator): the space each leaves is closed
- * up, before punctuation and at a line's ends too, so "with @hero, then" reads
- * "with, then" and no doubled space or blank line is left behind.
+ * The prompt without a removed reference's mentions. Only the space each mention leaves is
+ * tidied, as the app tidies it: the spaces either side become one, none before punctuation or
+ * at a line's start or end, and a prompt that did not start or end with space does not now.
+ * The rest of the prompt (its spacing, indentation, blank lines) stays as it was typed.
  */
 export function removePromptHandle(prompt: string, handle: string): string {
   if (!extractPromptHandles(prompt).includes(handle)) return prompt;
-  return prompt
-    .replace(HANDLE_PATTERN, (match, prefix: string, found: string) => (found === handle ? prefix : match))
-    .replace(/[ \t]+([,.;!?])/g, '$1')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const escaped = handle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const mention = new RegExp(`([ \\t]*)(?<![\\w@])${escaped}(?!\\w)([ \\t]*)`, 'g');
+  let result = prompt.replace(mention, (match: string, before: string, after: string, offset: number, whole: string) => {
+    const end = offset + match.length;
+    const atLineStart = offset === 0 || whole[offset - 1] === '\n';
+    const atLineEnd = end === whole.length || whole[end] === '\n';
+    // A line's indentation stays; what trailed the mention goes with it.
+    if (atLineStart) return atLineEnd ? '' : before;
+    if (atLineEnd || /[,.;:!?)]/.test(whole[end] ?? '')) return '';
+    return before || after ? ' ' : '';
+  });
+  if (!/^\s/.test(prompt)) result = result.trimStart();
+  if (!/\s$/.test(prompt)) result = result.trimEnd();
+  return result;
 }
 
 export function replacePromptHandles(prompt: string, replacements: Map<string, string>): string {

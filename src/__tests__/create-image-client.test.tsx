@@ -381,7 +381,7 @@ describe('CreateImageClient persisted elements', () => {
     expect(picker).toHaveAttribute('type', 'file');
     // A file the sign step refuses leaves the picture where it is, and says why.
     fireEvent.change(picker, { target: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } });
-    expect(await screen.findByRole('status')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole('status').some((line) => line.textContent?.trim())).toBe(true));
     expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
 
     const fresh = new File(['fresh'], 'fresh.png', { type: 'image/png' });
@@ -2660,6 +2660,36 @@ describe('CreateImageClient generation pipeline', () => {
         storagePath: 'uploads/user-1/restored-element.png',
         handle: '@restored_product',
       });
+    });
+
+    // A picture replaced while its file went up kept the old file's copy, and from then on every
+    // run sent the old picture under the new one's tile (review of #732).
+    it('is not kept on a picture replaced while its file went up', async () => {
+      let finish: () => void = () => undefined;
+      uploadMediaToTemporaryStorageMock.mockImplementationOnce((file: File) => new Promise((resolve) => {
+        finish = () => resolve({ signedUrl: `https://signed.example.com/uploads/${file.name}`, storagePath: `uploads/user-1/${file.name}` });
+      }));
+      installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+      typePrompt('A portrait of @restored_product');
+      pressGenerate();
+      await waitFor(() => expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalled());
+
+      const replace = screen.getByRole('button', { name: 'Replace @restored_product with another picture' });
+      const fresh = new File(['fresh'], 'fresh.png', { type: 'image/png' });
+      fireEvent.change(replace.nextElementSibling as HTMLInputElement, { target: { files: [fresh] } });
+      await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenLastCalledWith(expect.any(String), [
+        expect.objectContaining({ file: fresh }),
+      ]));
+      await act(async () => finish());
+
+      await waitFor(() => expect(setPersistedImageElementRecordsMock.mock.calls.length).toBeGreaterThan(1));
+      for (const [, records] of setPersistedImageElementRecordsMock.mock.calls) {
+        for (const record of records as Array<{ file: File; staged: unknown }>) {
+          if (record.file === fresh) expect(record.staged).toBeNull();
+        }
+      }
     });
 
     it('is saved with its element, since a reload runs no cleanup', async () => {

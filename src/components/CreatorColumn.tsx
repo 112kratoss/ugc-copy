@@ -1767,6 +1767,20 @@ export function CreatorReferenceRow({ accent, kind, stripLabel, wide, children }
  * A press opens the kind's picker, and a drop hands the kind its files, whose check refuses one
  * of another kind as it refuses a pick.
  */
+/**
+ * After a reference is removed its tile and its Remove are gone, and the focus with them: it
+ * goes to the add box of its row (`word`, "images", "video", "audio"), where the next one is
+ * added, unless something else holds it by then.
+ */
+export function focusReferenceAddBox(word: string) {
+  if (typeof window === 'undefined') return;
+  window.requestAnimationFrame(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    document.querySelector<HTMLButtonElement>(`[data-reference-add="${word}"]`)?.focus({ preventScroll: true });
+  });
+}
+
 function CreatorReferenceAddBox({ accent, kind }: { accent: UiAccent; kind: CreatorReferenceKind }) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1778,6 +1792,7 @@ function CreatorReferenceAddBox({ accent, kind }: { accent: UiAccent; kind: Crea
     <div className="shrink-0">
       <button
         type="button"
+        data-reference-add={word}
         aria-label={`Add ${word}, ${kind.count} of ${kind.limit}`}
         aria-describedby={hintId}
         title={kind.hint}

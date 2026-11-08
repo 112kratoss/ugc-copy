@@ -495,6 +495,14 @@ describe('removePromptHandle', () => {
     expect(removePromptHandle('Line one @hero\nline two', '@hero')).toBe('Line one\nline two');
   });
 
+  // Only around the mention: the rest of the prompt keeps the spacing it was typed with (review of #732).
+  it('leaves the spacing, indentation and blank lines elsewhere in the prompt as they were', () => {
+    expect(removePromptHandle('Scene one:\n  - a  wide  shot\n\n\nThen @hero waves', '@hero')).toBe('Scene one:\n  - a  wide  shot\n\n\nThen waves');
+    expect(removePromptHandle('  indented @hero line', '@hero')).toBe('  indented line');
+    expect(removePromptHandle('\t@hero runs', '@hero')).toBe('\truns');
+    expect(removePromptHandle('Near (@hero) the door', '@hero')).toBe('Near () the door');
+  });
+
   it('leaves a longer handle that starts with it, and a prompt that does not mention it, as they are', () => {
     expect(removePromptHandle('Put @hero_2 there', '@hero')).toBe('Put @hero_2 there');
     expect(removePromptHandle('  Spaces  kept  ', '@hero')).toBe('  Spaces  kept  ');

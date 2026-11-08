@@ -3,7 +3,7 @@
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Sparkles, Loader2, X, ImagePlus, Video, Plus, Trash2, Volume2, Play } from 'lucide-react';
@@ -31,6 +31,7 @@ import {
     CreatorReferenceStrip,
     CreatorReferenceTile,
     CreatorReferenceDetails,
+    focusReferenceAddBox,
     CreatorRemixSlotTile,
     CreatorRunFailed,
     CreatorRunFailedLine,
@@ -818,6 +819,7 @@ function KlingSubjectsEditor({
     onInsert,
     slots = [],
     onFillSlot,
+    onRequestRemove,
 }: {
     subjects: KlingSubjectDraft[];
     limits: SubjectLimits;
@@ -833,6 +835,8 @@ function KlingSubjectsEditor({
      */
     slots?: ShownRemixSlot[];
     onFillSlot?: (slot: ShownRemixSlot, files: File[]) => void;
+    /** Remove, asked first by the page, as every reference's is; without it the subject goes at once. */
+    onRequestRemove?: (subjectId: string) => void;
 }) {
     const KLING_SUBJECT_LIMIT = limits.maxNamed;
     const KLING_SUBJECT_MIN_IMAGES = limits.imagesPerSubject.min;
@@ -961,7 +965,7 @@ function KlingSubjectsEditor({
                                     <button
                                         type="button"
                                         disabled={disabled}
-                                        onClick={() => removeSubject(subject.id)}
+                                        onClick={() => (onRequestRemove ? onRequestRemove(subject.id) : removeSubject(subject.id))}
                                         className="mt-[calc(0.375rem+1px)] shrink-0 rounded-full bg-black/60 p-1.5 text-white transition hover:bg-red-500"
                                         aria-label={`Remove ${subject.displayName}`}
                                     >
@@ -3652,31 +3656,41 @@ function VideoCreator({
     // Remove, as the app's: asked first, since a file the creator picked cannot be brought back,
     // and a reference's handle leaves the prompt and the shots with it, so no mention is left
     // naming nothing. A question is moot once the references change while it is up.
-    const referenceCount = elements.length + klingVideoElements.length + referenceVideos.length + referenceAudios.length;
+    const referenceCount = elements.length + klingVideoElements.length + referenceVideos.length + referenceAudios.length + klingSubjects.length;
     const confirmReferenceRemoval = useConfirmation([
-        ...elements, ...klingVideoElements, ...referenceVideos, ...referenceAudios,
+        ...elements, ...klingVideoElements, ...referenceVideos, ...referenceAudios, ...klingSubjects,
     ].map((reference) => reference.id).join('|'));
+    // The prompt and shots as they are now, read again once the question is answered: an Enhance
+    // or a restored prompt can land while it is up.
+    const latestPrompts = useRef({ prompt, multiPrompts });
+    useLayoutEffect(() => {
+        latestPrompts.current = { prompt, multiPrompts };
+    });
     const promptsMention = (handle: string) => (
-        extractPromptHandles(prompt).includes(handle)
-        || multiPrompts.some((shot) => extractPromptHandles(shot.prompt).includes(handle))
+        extractPromptHandles(latestPrompts.current.prompt).includes(handle)
+        || latestPrompts.current.multiPrompts.some((shot) => extractPromptHandles(shot.prompt).includes(handle))
     );
     const removeReferenceAsked = async (
         target: { displayName: string; handle?: string | null } | undefined,
         remove: () => Promise<void>,
+        /** The row's add box, which takes the focus the gone tile had. */
+        addBox?: 'images' | 'video' | 'audio',
     ): Promise<boolean> => {
         if (!target) return false;
         const handle = target.handle ?? null;
-        const mentioned = handle !== null && promptsMention(handle);
         const removed = await confirmReferenceRemoval({
             title: `Remove ${target.displayName}?`,
-            message: mentioned
+            message: handle !== null && promptsMention(handle)
                 ? `${target.displayName} and ${handle} will be removed from this draft.`
                 : `${target.displayName} will be removed from this draft.`,
             confirmLabel: 'Remove',
             tone: 'danger',
         });
         if (!removed) return false;
+        const mentioned = handle !== null && promptsMention(handle);
         const done = remove();
+        // A pick's notice from before would stand in the removal's place over the bar.
+        setPickNotice(null);
         if (mentioned) {
             setPrompt((currentPrompt) => removePromptHandle(currentPrompt, handle));
             setMultiPrompts((currentPrompts) => currentPrompts.map((shot) => ({ ...shot, prompt: removePromptHandle(shot.prompt, handle) })));
@@ -3687,12 +3701,14 @@ function VideoCreator({
                 : `${target.displayName} was removed from this draft.`,
             left: referenceCount - 1,
         });
+        if (addBox) focusReferenceAddBox(addBox);
         await done;
         return true;
     };
     const requestRemoveElement = (id: string) => removeReferenceAsked(
         elementsRef.current.find((element) => element.id === id),
         () => handleRemoveElement(id),
+        'images',
     );
     const requestRemoveKlingVideoElement = (id: string) => removeReferenceAsked(
         klingVideoElementsRef.current.find((element) => element.id === id),
@@ -3701,10 +3717,20 @@ function VideoCreator({
     const requestRemoveReferenceVideo = (id: string) => removeReferenceAsked(
         referenceVideosRef.current.find((reference) => reference.id === id),
         () => handleRemoveReferenceVideo(id),
+        'video',
+    );
+    const requestRemoveKlingSubject = (id: string) => removeReferenceAsked(
+        klingSubjectsRef.current.find((subject) => subject.id === id),
+        async () => {
+            const subject = klingSubjectsRef.current.find((candidate) => candidate.id === id);
+            subject?.images.forEach((image) => revokeObjectUrl(image.previewUrl));
+            commitKlingSubjects(klingSubjectsRef.current.filter((candidate) => candidate.id !== id));
+        },
     );
     const requestRemoveReferenceAudio = (id: string) => removeReferenceAsked(
         referenceAudiosRef.current.find((reference) => reference.id === id),
         () => handleRemoveReferenceAudio(id),
+        'audio',
     );
 
     // The inputs' switch (the artboard Inputs). A pick that would clear something asks first,
@@ -3914,7 +3940,13 @@ function VideoCreator({
             return;
         }
         setPickNotice(null);
+        const latestPicks = latestReplacePicksRef.current;
+        latestPicks.set(elementId, file);
         const durationSeconds = await readVideoDurationSeconds(file);
+        // A newer pick for the same clip won while this one was measured, or another owner's
+        // form took this one's place meanwhile.
+        if (latestPicks.get(elementId) !== file || form.replaced.aborted) return;
+        latestPicks.delete(elementId);
         // Read now, not before the measuring: the list may have changed meanwhile.
         const current = klingVideoElementsRef.current;
         const target = current.find((element) => element.id === elementId);
@@ -5771,6 +5803,8 @@ function VideoCreator({
                     : 'Write a prompt, add frames if you like, then Generate.';
 
     const isAwaitingStartCheck = Boolean(unconfirmedStart) && !isGenerating;
+    // Said until a reference is added or another taken off.
+    const shownRemovedNotice = removedNotice && removedNotice.left === referenceCount ? removedNotice.text : null;
     // What stops or explains a run, said just above the bar. Progress is drawn on the
     // canvas; a run in the background is named here too, beside Generate.
     const runStatus = isGenerating ? null : isBackgroundProcessing ? (
@@ -5810,8 +5844,9 @@ function VideoCreator({
         </div>
     ) : quoteState.status === 'error' ? (
         quoteRetry
-    ) : removedNotice && removedNotice.left === referenceCount ? (
-        <p role="status" className="text-[var(--ui-text-secondary)] [overflow-wrap:anywhere]">{removedNotice.text}</p>
+    ) : shownRemovedNotice ? (
+        // Heard through the page's own status line below, which is always there.
+        <p className="text-[var(--ui-text-secondary)] [overflow-wrap:anywhere]">{shownRemovedNotice}</p>
     ) : null;
     // A remix short of its original lands here too: it says what the original costs, with
     // Top up in Generate's place, and the run stays the original's (owner, 2026-11-01).
@@ -6523,6 +6558,7 @@ function VideoCreator({
                                     onInsert={handleInsertKlingVideoHandle}
                                     slots={shownSlotsOf('subject')}
                                     onFillSlot={fillSubjectSlot}
+                                    onRequestRemove={(subjectId) => void requestRemoveKlingSubject(subjectId)}
                                 />
                             </div>
                         )}
@@ -6944,6 +6980,9 @@ function VideoCreator({
                 keepsImages={Boolean(startImageFile || endImageFile) || elements.length > 0 || klingSubjects.length > 0}
                 onClose={() => setSignUpReason(null)}
             />
+
+            {/* A removal said to a screen reader: a status line put in with its words is not always heard. */}
+            <p role="status" className="sr-only">{shownRemovedNotice ?? ''}</p>
 
             <StudioMediaPreviewModal
                 isOpen={Boolean(detailsView?.src)}
