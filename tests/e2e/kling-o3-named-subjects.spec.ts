@@ -500,6 +500,11 @@ test.describe('Kling O3 named subjects', () => {
 
     // The subject's own remove control, not the per-image ones.
     await page.getByRole('button', { name: 'Remove Subject 1', exact: true }).click();
+    // Removing asks first (#732), as the app does; the subject stays until the answer.
+    const question = page.getByRole('alertdialog', { name: 'Remove Subject 1?' });
+    await expect(page.getByPlaceholder('Subject name')).toHaveCount(1);
+    await question.getByRole('button', { name: 'Remove', exact: true }).click();
+    await expect(question).toHaveCount(0);
     await expect(page.getByPlaceholder('Subject name')).toHaveCount(0);
     // Forgotten in storage too, not just on screen — and with the store empty
     // before the reload, an editor that comes back empty can only have stayed
