@@ -845,6 +845,44 @@ describe('claiming the welcome credits (03-9)', () => {
     act(() => tree.unmount());
   });
 
+  it('offers the credits with no "Claim later" (owner 11-08)', async () => {
+    // The Home and Settings card that offered them again is gone, so "later"
+    // would have left the credits with nowhere to be claimed.
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    expect(findButton(tree!, 'primary-button', 'Claim 25 credits')).toBeTruthy();
+    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
+    expect(rendered(tree)).not.toContain('Claim later');
+    act(() => tree?.unmount());
+  });
+
+  it('lets a claim that failed be left, so nobody is held on the screen', async () => {
+    harness.api.claimWelcomeCredits.mockReset().mockRejectedValue(new Error('Network request failed'));
+    vi.mocked(router.replace).mockClear();
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    await act(async () => {
+      findButton(tree!, 'primary-button', 'Claim 25 credits').props.onPress();
+      await settle();
+    });
+
+    expect(findButton(tree!, 'primary-button', 'Claim 25 credits')).toBeTruthy();
+    await act(async () => {
+      findButton(tree!, 'secondary-button', 'Try again later').props.onPress();
+      await settle();
+    });
+    expect(router.replace).toHaveBeenCalled();
+    act(() => tree?.unmount());
+  });
+
   it('adds nothing for a sign-in that was paid out on a previous account', async () => {
     const tree = await claim({ ...eligible, status: 'identity_already_claimed' });
 

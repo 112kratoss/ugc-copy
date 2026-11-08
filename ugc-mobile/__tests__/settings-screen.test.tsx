@@ -87,9 +87,6 @@ vi.mock('@/components/ui', async (importOriginal) => {
   };
 });
 
-vi.mock('@/components/onboarding-resume-card', () => ({
-  OnboardingResumeCard: (props: MockProps) => React.createElement('onboarding-resume-card', props),
-}));
 
 vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,

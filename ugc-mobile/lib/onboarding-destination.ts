@@ -81,8 +81,3 @@ export function resolveOnboardingDestination({
   if (welcome.status === 'eligible') return 'reward';
   return 'none';
 }
-
-/** Whether an entry point (Home card, Settings row) should render at all. */
-export function isOnboardingActionable(destination: OnboardingDestination): boolean {
-  return destination === 'intro' || destination === 'identity' || destination === 'reward';
-}

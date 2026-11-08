@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isIdentityDeferredInMetadata,
-  isOnboardingActionable,
   resolveOnboardingDestination,
 } from '../lib/onboarding-destination';
 
@@ -144,18 +143,5 @@ describe('resolving the onboarding destination', () => {
         local: noDeferral,
       })).toBe('none');
     }
-  });
-});
-
-describe('whether an entry point should render', () => {
-  it('shows only for destinations a tap can act on', () => {
-    expect(isOnboardingActionable('intro')).toBe(true);
-    expect(isOnboardingActionable('identity')).toBe(true);
-    expect(isOnboardingActionable('reward')).toBe(true);
-  });
-
-  it('stays hidden when there is nothing to do or nothing known yet', () => {
-    expect(isOnboardingActionable('none')).toBe(false);
-    expect(isOnboardingActionable('pending')).toBe(false);
   });
 });

@@ -188,6 +188,9 @@ function OnboardingFlow() {
   // A save that failed for a reason other than the handle: the step then
   // offers a way out, so a lost connection cannot hold someone on it.
   const [saveFailed, setSaveFailed] = useState(false);
+  // A claim that threw (offline, a server error): the reward stage then offers
+  // a way out instead of holding someone on a retry.
+  const [claimFailed, setClaimFailed] = useState(false);
   // A handle the save refused, and what it said: taken since it was checked,
   // or refused by a rule the live check did not get to answer.
   const [handleRefusedAtSave, setHandleRefusedAtSave] = useState<{ handle: string; message: string } | null>(null);
@@ -472,6 +475,7 @@ function OnboardingFlow() {
     if (busy) return;
     setBusy(true);
     setMessage(null);
+    setClaimFailed(false);
     try {
       const result = await api.claimWelcomeCredits();
       adoptWelcome(result);
@@ -495,6 +499,7 @@ function OnboardingFlow() {
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not claim credits.');
+      setClaimFailed(true);
       void trackOnboardingEvent(api, 'reward_failed', { goal, step: 'reward' });
     } finally {
       setBusy(false);
@@ -738,11 +743,13 @@ function OnboardingFlow() {
               {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
               {claimReady ? <PrimaryButton label={`Claim ${welcome?.amount} credits`} loading={busy} onPress={() => void claimCredits()} /> : null}
               {!claimReady || claimed ? <PrimaryButton label="Start creating" onPress={() => void startCreating()} /> : null}
-              {/* An explicit way out. "Start creating" used to be the only exit
-                  from this stage, and the route disables the back gesture, so
-                  anyone who wanted neither the pack nor the guided creator was
-                  held here. */}
-              {claimReady ? <SecondaryButton label="Claim later" onPress={() => void startCreating()} /> : null}
+              {/* No "Claim later" (owner, 2026-11-08): the Home and Settings
+                  card that offered the credits again is gone. A claim that
+                  failed can still be left, since the route has no back
+                  gesture. */}
+              {claimReady && claimFailed ? (
+                <SecondaryButton label="Try again later" disabled={busy} onPress={() => void startCreating()} />
+              ) : null}
             </View>
           ) : null}
         </View>

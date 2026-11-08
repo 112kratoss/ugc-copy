@@ -1,12 +1,6 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 
 import { useAuth } from './auth';
-import { useOnboarding } from './onboarding';
-import {
-  isIdentityDeferredInMetadata,
-  resolveOnboardingDestination,
-  type OnboardingDestination,
-} from './onboarding-destination';
 import type { WelcomeCreditResponse } from './types';
 
 const WELCOME_CREDITS_QUERY_SCOPE = 'welcome-credits';
@@ -99,29 +93,4 @@ const SETTLED_WELCOME_STATUSES: ReadonlySet<WelcomeCreditResponse['status']> = n
  */
 export function isWelcomeCreditAnswerSettled(welcome: WelcomeCreditResponse | undefined): boolean {
   return Boolean(welcome?.identityComplete) && SETTLED_WELCOME_STATUSES.has(welcome!.status);
-}
-
-/**
- * Where the creator-setup entry points should lead, if anywhere.
- *
- * Returns `pending` until the welcome response lands, so callers render nothing
- * rather than guessing "nothing to do" from a request that has not finished.
- */
-export function useOnboardingDestination(): OnboardingDestination {
-  const { user, isLoading } = useAuth();
-  const { state } = useOnboarding();
-  const welcomeQuery = useWelcomeCreditsQuery();
-
-  // A session still being read off the keychain is not a guest. Resolving
-  // before it lands answers `intro` for every registered creator on every cold
-  // start: the guest card's copy, for a moment, on an account holder's Home.
-  if (isLoading) return 'pending';
-
-  return resolveOnboardingDestination({
-    hasUser: Boolean(user),
-    userId: user?.id ?? null,
-    welcome: welcomeQuery.data ?? null,
-    local: state,
-    identityDeferredOnAccount: isIdentityDeferredInMetadata(user?.user_metadata),
-  });
 }

@@ -19,7 +19,6 @@ import { MediaZoomSurface } from '@/components/media-zoom';
 import { NewPostsPill } from '@/components/new-posts-pill';
 import { WorkspaceSideMenu } from '@/components/workspace-side-menu';
 import { WorkspaceSideMenuGlyph, WORKSPACE_SIDE_MENU_LABEL } from '@/components/workspace-side-menu-gesture-layer';
-import { OnboardingResumeCard } from '@/components/onboarding-resume-card';
 import { Reveal } from '@/components/reveal';
 import { HomeFeedSkeleton } from '@/components/skeleton';
 import { TopScrim } from '@/components/top-scrim';
@@ -1156,10 +1155,6 @@ export function HomeDashboard() {
                 }}
                 onPlaybackCandidateChange={onShelfPlaybackCandidateChange}
               />
-            </View>
-
-            <View style={{ paddingHorizontal: horizontalPadding }}>
-              <OnboardingResumeCard />
             </View>
 
             <FeedChips

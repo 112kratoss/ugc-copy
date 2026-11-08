@@ -229,9 +229,6 @@ vi.mock('@/components/workspace-side-menu-gesture-layer', () => ({
   WorkspaceSideMenuGlyph: (props: MockProps) => React.createElement('workspace-side-menu-glyph', props),
 }));
 
-vi.mock('@/components/onboarding-resume-card', () => ({
-  OnboardingResumeCard: () => React.createElement('onboarding-resume-card'),
-}));
 
 vi.mock('@/components/reveal', () => ({
   Reveal: ({ children, ...props }: MockProps) => React.createElement('reveal', props, children),
