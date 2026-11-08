@@ -180,8 +180,23 @@ describe('the creator column bar', () => {
     expect(bar?.className).not.toMatch(/max-md:/);
   });
 
+  // A card scrolling under the held bar ran straight into its top edge (owner, 2026-11-08).
+  it('fades what scrolls under it, within the gap it keeps at rest', () => {
+    const { container } = renderBar();
+    const bar = container.querySelector('[data-creator-bar]');
+    expect(bar?.className.split(' ')).toContain('mt-3');
+    // 56px tall, its lower 32px behind the bar's rounded corners: 24px of fade show above it.
+    const fade = bar?.querySelector('[aria-hidden][class*="bottom-[calc(100%-2rem)]"]');
+    expect(fade?.className.split(' ')).toEqual(expect.arrayContaining(['absolute', 'pointer-events-none', '-z-10', 'h-14', 'from-[57%]', 'from-[var(--ui-bg-page)]']));
+    // Under it, the same 32px behind its lower corners, and from 768px the 12px it floats up (bottom-3) too.
+    const under = bar?.querySelector('[aria-hidden][class*="top-[calc(100%-2rem)]"]');
+    expect(under?.className.split(' ')).toEqual(expect.arrayContaining(['absolute', 'pointer-events-none', '-z-10', 'h-8', 'min-[768px]:h-11', 'bg-[var(--ui-bg-page)]']));
+    expect(bar?.className.split(' ')).toContain('bottom-3');
+  });
+
   // `max-[1119px]` is `width < 1119px`: at 1119px, one column, the bar stayed stuck and the Publish
   // bar never showed. `max-[1120px]` is the exact complement of the two panes' `min-[1120px]`.
+  // Relative, not static: static, its fills and settings panel placed themselves on the column's grid.
   it('waits at the column\'s end under the two panes\' width, with no safe area', () => {
     const { container } = render(
       <CreatorColumnBar
@@ -192,7 +207,8 @@ describe('the creator column bar', () => {
       />
     );
     const bar = container.querySelector('[data-creator-bar]');
-    expect(bar?.className.split(' ')).toContain('max-[1120px]:static');
+    expect(bar?.className.split(' ')).toContain('max-[1120px]:relative');
+    expect(bar?.className).not.toContain('static');
     expect(bar?.firstElementChild?.className).not.toContain('safe-area-inset-bottom');
   });
 });
@@ -207,7 +223,7 @@ describe('the creator column', () => {
   it('scrolls a control focused under its bar clear of it, and leaves the rest where they are', () => {
     const scrollBy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-      const [top, height] = this.hasAttribute('data-creator-bar') ? [700, 80] : this.textContent === 'Low' ? [680, 48] : [200, 48];
+      const [top, height] = this.hasAttribute('data-creator-bar') ? [700, 80] : this.textContent === 'Low' ? [680, 48] : this.textContent === 'Near' ? [642, 48] : [200, 48];
       return { top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
     });
     render(
@@ -216,6 +232,7 @@ describe('the creator column', () => {
         column={
           <>
             <button type="button">High</button>
+            <button type="button">Near</button>
             <button type="button">Low</button>
             <CreatorColumnBar settingsSummary="1K" settings={null} action={<button type="button">Generate</button>} />
           </>
@@ -235,16 +252,19 @@ describe('the creator column', () => {
     act(() => screen.getByRole('button', { name: 'Generate' }).focus());
     expect(scrollBy).not.toHaveBeenCalled();
 
-    // Its bottom, 728, is 28px under the bar's top: that and 16px more.
+    // Its bottom, 728, is 28px under the bar's top: that and 32px more, clear of the bar's 24px fade.
     act(() => screen.getByRole('button', { name: 'Low' }).focus());
-    expect(scrollBy).toHaveBeenCalledExactlyOnceWith({ top: 44 });
+    expect(scrollBy).toHaveBeenCalledExactlyOnceWith({ top: 60 });
+    // Its bottom, 690, is above the bar but inside its fade: 22px up, to 32px above the bar.
+    act(() => screen.getByRole('button', { name: 'Near' }).focus());
+    expect(scrollBy).toHaveBeenLastCalledWith({ top: 22 });
 
     // A press focuses its control on the way down: scrolling then would move it from under
     // the pointer before the press ended, and the click would land on nothing.
     fromKeyboard = false;
     act(() => screen.getByRole('button', { name: 'High' }).focus());
     act(() => screen.getByRole('button', { name: 'Low' }).focus());
-    expect(scrollBy).toHaveBeenCalledTimes(1);
+    expect(scrollBy).toHaveBeenCalledTimes(2);
   });
 });
 

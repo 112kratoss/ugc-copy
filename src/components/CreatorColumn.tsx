@@ -297,7 +297,9 @@ function keepFocusClearOfBar(event: FocusEvent<HTMLDivElement>) {
   const barBox = bar.getBoundingClientRect();
   if (barBox.height === 0) return;
   const { bottom } = target.getBoundingClientRect();
-  if (bottom > barBox.top - 8) window.scrollBy({ top: bottom - barBox.top + 16 });
+  // The bar fades what passes under it over the 24px above it, so a control stops 8px
+  // above the fade: 32px above the bar.
+  if (bottom > barBox.top - 28) window.scrollBy({ top: bottom - barBox.top + 32 });
 }
 
 /** Whether the browser draws this focus (the keyboard's, or a text field's); a browser without `:focus-visible` says yes. */
@@ -714,13 +716,15 @@ export function CreatorColumnBar({
     // Below 768px (in px, as the shell's own breakpoint) the creators hide the shell's bottom
     // navigation (`hidesBottomNav`), so the bar holds the window's bottom edge in its place, the
     // safe area inside it; wider, it floats just above the edge. Under the column's width it waits
-    // at the column's end while a done run's Publish bar holds the foot.
+    // at the column's end while a done run's Publish bar holds the foot: relative there, not
+    // static, so its fills and its settings panel still place themselves against it (static,
+    // they took the column's grid instead, the panel opening above the page's top).
     <div
       ref={barRef}
       data-creator-bar
       className={clsx(
-        'sticky bottom-3 z-30 mt-1 max-[768px]:bottom-0',
-        !holdsFootUnderColumn && 'max-[1120px]:static',
+        'sticky bottom-3 z-30 mt-3 max-[768px]:bottom-0',
+        !holdsFootUnderColumn && 'max-[1120px]:relative',
       )}
     >
       {/* One surface for the line and the bar, so nothing scrolling under the
@@ -781,6 +785,13 @@ export function CreatorColumnBar({
         ) : null}
       </div>
 
+      {/* While the bar is held at the window's foot, a card scrolling under it fades out
+          over the 24px above it (the column's 12px gap and the bar's 12px margin, so at
+          rest the fade covers only empty page). Both fills reach 32px into the bar, the
+          radius of its corners, and sit behind it: a card's borders showed in the corners'
+          gaps. From 768px, where the bar floats 12px up, the fill under it takes that gap. */}
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-[calc(100%-2rem)] -z-10 h-14 bg-gradient-to-t from-[var(--ui-bg-page)] from-[57%] to-transparent" />
+      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-[calc(100%-2rem)] -z-10 h-8 bg-[var(--ui-bg-page)] min-[768px]:h-11" />
       <AnimatePresence>
         {showsSettings ? (
           <motion.div
