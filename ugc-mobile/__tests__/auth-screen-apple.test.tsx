@@ -79,6 +79,8 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Keyboard: { dismiss: () => undefined },
+  AccessibilityInfo: { announceForAccessibility: () => undefined },
   Animated: (() => {
     class Value {
       value: number;

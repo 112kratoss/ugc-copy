@@ -305,6 +305,9 @@ export function BrandLockup({ size = 'compact' }: { size?: 'compact' | 'title' |
         selectable={false}
         numberOfLines={1}
         variant={large ? 'pageTitle' : 'sectionTitle'}
+        // The title size has no fitting of its own, so it grows only a little with Dynamic
+        // Type rather than be cut to "Magicboo…" beside a headline.
+        maxFontSizeMultiplier={large && !hero ? 1.2 : undefined}
         accessibilityRole="none"
         style={fittedStyle}
       >

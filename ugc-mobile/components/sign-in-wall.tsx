@@ -8,10 +8,10 @@
 // the creator name and the welcome credits once (`app/onboarding.tsx`, given the return), and
 // from there back to what they were doing; an account already set up passes straight through.
 import { useIsFocused } from '@react-navigation/native';
-import { router } from 'expo-router';
+import { router, useNavigation } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { EmailSignInForm } from '@/components/email-sign-in-form';
@@ -21,8 +21,9 @@ import { AppText, BrandLockup, IconButton } from '@/components/ui';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
 import { describeProviderSignInError, type AuthNotice } from '@/lib/auth-error-copy';
-import { leaveAuthScreen } from '@/lib/auth-navigation';
+import { completeAuthScreen, leaveAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
+import { providerSignInNext } from '@/lib/join-navigation';
 import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
@@ -37,10 +38,11 @@ const TURN_MS = 360;
 
 export type SignInWallMode = 'choose' | 'email';
 
-/** Where a sign-in made here goes: the name and credits once, then `target`. */
-export function signInWallNextHref(target: string) {
-  return { pathname: '/onboarding', params: { returnTo: target } } as const;
-}
+/** A way into an account from the sign-in page. */
+export type SignInMethod = 'apple' | 'google' | 'email';
+
+/** One sign-in, run by the page for either half (see `runSignIn` below). */
+export type RunSignIn = (method: SignInMethod, attempt: () => Promise<unknown>) => Promise<boolean>;
 
 type SignInWallProps = {
   /** Where to end up once signed in: an app path, already checked. */
@@ -88,19 +90,32 @@ function SignInWallBody({
   // keeps what was typed.
   const [formBuilt, setFormBuilt] = useState(initialMode === 'email');
   const [turn] = useState(() => new Animated.Value(initialMode === 'email' ? 1 : 0, { useNativeDriver: true }));
-  const [appleBusy, setAppleBusy] = useState(false);
-  const [googleBusy, setGoogleBusy] = useState(false);
   const [notice, setNotice] = useState<AuthNotice | null>(redirectNotice);
-  const busy = appleBusy || googleBusy;
+  // One sign-in at a time, from either half: each way in prepares the guest's credits for the
+  // account before it replaces the session, so while one runs nothing else may start, and the
+  // page may not be left or turned (that left a new account with no name step and no welcome
+  // credits, or a sign-in landing on a screen the person had moved to).
+  const [inFlight, setInFlight] = useState<SignInMethod | null>(null);
+  const inFlightRef = useRef<SignInMethod | null>(null);
+  const busy = inFlight !== null;
   const unavailable = !isAuthConfigured || busy;
-  const movedOn = useRef(false);
-  // A sign-in started here, for the funnel: success when it lands, a cancel when the page is
-  // closed after one began and before it did.
+  const navigation = useNavigation();
+  // The visit's sign-in, kept here once for both halves: whether one began (for the funnel),
+  // whether it finished, whether the page was left first, and how, which decides where it goes.
   const attempted = useRef(false);
+  const completed = useRef(false);
+  const canceled = useRef(false);
+  const lastMethod = useRef<SignInMethod | null>(null);
 
   useEffect(() => {
     void trackOnboardingEvent(api, 'screen_viewed', { step });
   }, [api, step]);
+
+  // A failed sign-in on the first half, read out on iOS too, where a live region says nothing.
+  useEffect(() => {
+    if (!notice || Platform.OS !== 'ios') return;
+    AccessibilityInfo.announceForAccessibility(`${notice.title}. ${notice.body}`);
+  }, [notice]);
 
   const turnTo = useCallback((next: SignInWallMode) => {
     if (next === 'email') setFormBuilt(true);
@@ -114,69 +129,92 @@ function SignInWallBody({
   }, [reducedMotion, turn]);
 
   const close = useCallback(() => {
-    // Not while a sign-in is finishing (the guest's credits being carried over, Apple's token,
-    // Google's code): closing then left a new account with no name step and no welcome credits.
-    if (movedOn.current || busy) return;
-    movedOn.current = true;
-    if (attempted.current) void trackOnboardingEvent(api, 'auth_canceled', { step });
+    if (completed.current || inFlightRef.current) return;
     leaveAuthScreen(router);
-  }, [api, busy, step]);
+  }, []);
 
-  const backToChoices = useCallback(() => turnTo('choose'), [turnTo]);
+  const backToChoices = useCallback(() => {
+    if (inFlightRef.current) return;
+    // The form's keyboard would cover Apple and Google, and keep typing into a hidden field.
+    Keyboard.dismiss();
+    turnTo('choose');
+  }, [turnTo]);
 
   // Back on the email half turns the page back; on the first half it closes it.
   useHardwareBack(true, mode === 'email' ? backToChoices : close);
 
-  // Signed in, by either button (or already, if an account opened the page): on to the name
-  // and the welcome credits, which come back to `target`.
-  const moveOn = useCallback(() => {
-    if (movedOn.current) return;
-    movedOn.current = true;
+  // Left without finishing (Close, Android's back, or anything else that removes the page):
+  // a sign-in landing after that goes nowhere, since the person is on the screen they went to.
+  useEffect(() => navigation.addListener('beforeRemove', () => {
+    if (completed.current || canceled.current) return;
+    canceled.current = true;
+    if (attempted.current) void trackOnboardingEvent(api, 'auth_canceled', { step });
+  }), [api, navigation, step]);
+
+  // Signed in, by any way in (or already, if an account opened the page): once, from here.
+  // Apple and Google go on to the name and the welcome credits (`providerSignInNext`); email,
+  // and an account that opened the page signed in, go back to the return as the sign-in screen
+  // always did (for a guest's `/join` that return is onboarding itself).
+  const finish = useCallback(() => {
+    if (completed.current) return;
+    completed.current = true;
     if (attempted.current) void trackOnboardingEvent(api, 'auth_succeeded', { step });
-    router.replace(signInWallNextHref(target) as never);
-  }, [api, step, target]);
+    if (canceled.current) return;
+    const inPlace = tookReturnsPlace(emailInPlace);
+    if (lastMethod.current === 'email' || lastMethod.current === null) {
+      completeAuthScreen(router, emailReturnTo, { inPlace });
+      return;
+    }
+    const next = providerSignInNext(target, inPlace);
+    if (next.kind === 'return') completeAuthScreen(router, next.route, { inPlace });
+    else router.replace(next.href as never);
+  }, [api, emailInPlace, emailReturnTo, step, target]);
 
-  // Only on the first half and in front: on the email half the form takes its own sign-in
-  // where it goes, and two moves at once would stack a second onboarding.
   useEffect(() => {
-    if (user && isFocused && mode === 'choose') moveOn();
-  }, [isFocused, mode, moveOn, user]);
+    if (user && isFocused) finish();
+  }, [finish, isFocused, user]);
 
-  const noteAttempt = () => {
+  /**
+   * Runs one sign-in for either half. Refuses while another runs, counts the visit's first
+   * attempt, moves the page on once it lands, and hands a failure back to the caller to word.
+   */
+  const runSignIn = useCallback<RunSignIn>(async (method, attempt) => {
+    if (inFlightRef.current || completed.current || !isAuthConfigured) return false;
+    inFlightRef.current = method;
+    setInFlight(method);
     if (!attempted.current) void trackOnboardingEvent(api, 'auth_started', { step });
     attempted.current = true;
-  };
+    lastMethod.current = method;
+    try {
+      await attempt();
+      finish();
+      return true;
+    } finally {
+      inFlightRef.current = null;
+      setInFlight(null);
+    }
+  }, [api, finish, isAuthConfigured, step]);
 
   const signUpWithApple = async () => {
-    if (unavailable) return;
-    noteAttempt();
-    setAppleBusy(true);
     setNotice(null);
     try {
-      await signInWithApple('signup');
+      await runSignIn('apple', () => signInWithApple('signup'));
     } catch (error) {
       if (!isAppleAuthCanceled(error)) setNotice(describeProviderSignInError(error, 'Apple'));
-    } finally {
-      setAppleBusy(false);
     }
   };
 
   const signUpWithGoogle = async () => {
-    if (unavailable) return;
-    noteAttempt();
-    setGoogleBusy(true);
     setNotice(null);
     try {
-      await signInWithGoogle();
+      await runSignIn('google', () => signInWithGoogle());
     } catch (error) {
       if (!isGoogleAuthCanceled(error)) setNotice(describeProviderSignInError(error, 'Google'));
-    } finally {
-      setGoogleBusy(false);
     }
   };
 
   const useEmail = () => {
-    if (busy || movedOn.current) return;
+    if (busy || completed.current) return;
     turnTo('email');
   };
 
@@ -277,8 +315,8 @@ function SignInWallBody({
           <SignInProviderButtons
             onApple={() => void signUpWithApple()}
             onGoogle={() => void signUpWithGoogle()}
-            appleBusy={appleBusy}
-            googleBusy={googleBusy}
+            appleBusy={inFlight === 'apple'}
+            googleBusy={inFlight === 'google'}
             unavailable={unavailable}
           />
 
@@ -325,11 +363,9 @@ function SignInWallBody({
           ]}
         >
           <EmailSignInForm
-            returnTo={emailReturnTo}
-            inPlace={emailInPlace}
             initialNotice={emailNotice}
-            analyticsStep={step}
-            active={!onChoose}
+            inFlight={inFlight}
+            runSignIn={runSignIn}
             onBack={backToChoices}
           />
         </Animated.View>

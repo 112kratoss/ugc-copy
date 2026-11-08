@@ -52,6 +52,7 @@ export function SignInProviderButtons({ onApple, onGoogle, appleBusy, googleBusy
               over it, while its sign-in finishes. */}
           {appleBusy ? (
             <View
+              accessible
               accessibilityLabel="Signing in with Apple"
               accessibilityLiveRegion="polite"
               style={{

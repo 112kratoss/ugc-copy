@@ -40,13 +40,20 @@ export function signInOpensOnEmailForm(email: string | string[] | undefined) {
 }
 
 /**
- * Where a sign-in by Apple or Google on the email form goes: as from the sign-in page, on to
- * the creator name and the welcome credits once (an account already set up passes straight
- * through), then the return. A return that is onboarding already, as the guest's sign-in page
- * hands the form, is used as it is.
+ * Where a sign-in by Apple or Google goes, from either half of the sign-in page: on to the
+ * creator name and the welcome credits once (an account already set up passes straight
+ * through), then the return. A return that is onboarding itself (its own "Continue" asked for
+ * an account) goes back to that screen, never a second onboarding over it. `inPlace` (a
+ * redirect's sign-in that took a screen's place) rides along so onboarding puts it back there.
  */
-export function providerSignInHref(returnTo: string | string[] | undefined) {
-  const route = normalizeAuthReturnTo(returnTo) ?? '/(tabs)';
-  if (route === '/onboarding' || route.startsWith('/onboarding?')) return route;
-  return { pathname: '/onboarding', params: { returnTo: route } } as const;
+export function providerSignInNext(
+  target: string | string[] | undefined,
+  inPlace = false,
+): { kind: 'return'; route: string } | { kind: 'onboarding'; href: { pathname: '/onboarding'; params: Record<string, string> } } {
+  const route = normalizeAuthReturnTo(target) ?? '/(tabs)';
+  if (route === '/onboarding' || route.startsWith('/onboarding?')) return { kind: 'return', route };
+  return {
+    kind: 'onboarding',
+    href: { pathname: '/onboarding', params: inPlace ? { returnTo: route, inPlace: '1' } : { returnTo: route } },
+  };
 }

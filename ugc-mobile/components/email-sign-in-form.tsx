@@ -1,13 +1,13 @@
 // The email half of the sign-in page (`components/sign-in-wall.tsx`), drawn in place over its
 // wall when "Sign in with email" is chosen.
-import { router, useNavigation } from 'expo-router';
 import { Eye, EyeOff, X } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { BUTTON_HEIGHT, BUTTON_LABEL_SIZE, BUTTON_MAX_WIDTH, SignInProviderButtons, SignInTerms } from '@/components/sign-in-parts';
+import type { RunSignIn, SignInMethod } from '@/components/sign-in-wall';
 import { AppText, BrandLockup, IconButton } from '@/components/ui';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
@@ -20,11 +20,8 @@ import {
   validateCredentials,
   type AuthNotice,
 } from '@/lib/auth-error-copy';
-import { completeAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
-import { providerSignInHref } from '@/lib/join-navigation';
-import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -36,24 +33,19 @@ import { useAppTheme } from '@/lib/theme-context';
  * the sign in section … keep the background moving too"). Email signs into an account made with
  * email; it makes none, so there are no Sign in / Sign up tabs. Apple and Google stay under it.
  */
-export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analyticsStep, active, onBack }: {
-  /** Where an email sign-in returns, as the route was given it. */
-  returnTo: string | string[] | undefined;
-  inPlace?: string | string[];
-  /** Why a redirect sent the person here, when the form is opened straight away. */
+export function EmailSignInForm({ initialNotice = null, inFlight, runSignIn, onBack }: {
+  /** Why a redirect sent the person here, when the page opens on this form. */
   initialNotice?: AuthNotice | null;
-  analyticsStep: string;
-  /** In front: only then does a sign-in here move the page on, or leaving it count as a cancel. */
-  active: boolean;
+  /** The page's sign-in under way, from either half; while one runs, this form waits. */
+  inFlight: SignInMethod | null;
+  /** The page runs every sign-in: one at a time, counted once, and moved on from once. */
+  runSignIn: RunSignIn;
   /** Back to the page's first choices. */
   onBack: () => void;
 }) {
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
-  const activeRef = useRef(active);
-  activeRef.current = active;
-  const { api, user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
-  const navigation = useNavigation();
+  const { signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
   // The buttons the sign-in page draws on this platform, and so the only ones the copy may name.
   const providerButtons = signInProviderButtons(Platform.OS);
   const [email, setEmail] = useState('');
@@ -63,118 +55,45 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
   // Only a known key maps to copy; an unrecognised one shows nothing rather
   // than letting a deep link put arbitrary text on the sign-in screen.
   const [notice, setNotice] = useState<AuthNotice | null>(initialNotice);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isAppleSubmitting, setIsAppleSubmitting] = useState(false);
-  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
-  // One sign-in at a time: each way in prepares the guest's credits for the account before it
-  // replaces the session, and a second tap would start another over it.
-  const isSignInInFlight = isSubmitting || isAppleSubmitting || isGoogleSubmitting;
-  // Apple or Google can make an account here too, so their sign-in goes on through the name
-  // and the welcome credits, as it does from the sign-in page.
-  const viaProvider = useRef(false);
+  const isSubmitting = inFlight === 'email';
+  const isSignInInFlight = inFlight !== null;
   const passwordRef = useRef<TextInput | null>(null);
   // Deliberately not a validity gate. A button that is disabled for a reason it
   // cannot state leaves people guessing (the old gate wanted six characters and
   // said so only in a placeholder that vanished on the first keystroke); the
   // shape of what was typed is checked on submit instead, where it can be named.
   const canSubmit = isAuthConfigured && !isSignInInFlight && email.trim().length > 0 && password.length > 0;
-  const hasCompletedAuth = useRef(false);
-  const hasStartedAuth = useRef(false);
-  const hasCanceledAuth = useRef(false);
-
-  // Fire-and-forget: a sign-in never waits on its own measurement.
-  const trackAuthEvent = useCallback((eventName: 'auth_started' | 'auth_succeeded' | 'auth_canceled') => {
-    void trackOnboardingEvent(api, eventName, { step: analyticsStep });
-  }, [analyticsStep, api]);
-
-  const finishAuth = useCallback(() => {
-    if (hasCompletedAuth.current) return;
-    hasCompletedAuth.current = true;
-    // A sign-in made here. Opened by someone signed in already, the screen
-    // only steps aside, and nothing was signed in.
-    if (hasStartedAuth.current) trackAuthEvent('auth_succeeded');
-    // Left before its sign-in finished (Close, Android's back): the person is
-    // on the screen they went to, which a return would replace.
-    if (hasCanceledAuth.current) return;
-    if (viaProvider.current) {
-      router.replace(providerSignInHref(returnTo) as never);
-      return;
-    }
-    completeAuthScreen(router, returnTo, { inPlace: tookReturnsPlace(inPlace) });
-  }, [inPlace, returnTo, trackAuthEvent]);
-
-  useEffect(() => {
-    if (user && active) finishAuth();
-  }, [active, finishAuth, user]);
-
-  // Left without signing in: the Close button, Android's back. A sign-in's own
-  // exit is marked completed before it leaves.
-  useEffect(() => navigation.addListener('beforeRemove', () => {
-    if (!activeRef.current || hasCompletedAuth.current || hasCanceledAuth.current) return;
-    hasCanceledAuth.current = true;
-    trackAuthEvent('auth_canceled');
-  }), [navigation, trackAuthEvent]);
-
-  // Once a visit, at the first attempt by any of the screen's ways in.
-  const noteAuthStarted = () => {
-    if (hasStartedAuth.current) return;
-    hasStartedAuth.current = true;
-    trackAuthEvent('auth_started');
-  };
 
   const continueWithApple = async () => {
-    if (isSignInInFlight || !isAuthConfigured) return;
-    noteAuthStarted();
-    viaProvider.current = true;
-    setIsAppleSubmitting(true);
     setNotice(null);
     try {
-      await signInWithApple('signup');
-      finishAuth();
+      await runSignIn('apple', () => signInWithApple('signup'));
     } catch (nextError) {
-      viaProvider.current = false;
       if (!isAppleAuthCanceled(nextError)) setNotice(describeProviderSignInError(nextError, 'Apple'));
-    } finally {
-      setIsAppleSubmitting(false);
     }
   };
 
   const continueWithGoogle = async () => {
-    if (isSignInInFlight || !isAuthConfigured) return;
-    noteAuthStarted();
-    viaProvider.current = true;
-    setIsGoogleSubmitting(true);
     setNotice(null);
     try {
-      await signInWithGoogle();
-      finishAuth();
+      await runSignIn('google', () => signInWithGoogle());
     } catch (nextError) {
-      viaProvider.current = false;
       if (!isGoogleAuthCanceled(nextError)) setNotice(describeProviderSignInError(nextError, 'Google'));
-    } finally {
-      setIsGoogleSubmitting(false);
     }
   };
 
   const submit = async () => {
     if (isSignInInFlight) return;
-    noteAuthStarted();
-
     const invalid = validateCredentials(email, password);
     if (invalid) {
       setNotice(invalid);
       return;
     }
-
-    setIsSubmitting(true);
     setNotice(null);
     try {
-      await signInWithPassword(email.trim(), password);
-      finishAuth();
+      await runSignIn('email', () => signInWithPassword(email.trim(), password));
     } catch (nextError) {
       setNotice(describePasswordSignInError(nextError, { providerButtons }));
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -200,6 +119,8 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
             icon={CloseGlyph}
             label="Back to all sign-in options"
             variant="plain"
+            // Not while a sign-in is under way: it lands on this page, which must still be here.
+            disabled={isSignInInFlight}
             onPress={onBack}
             // The glyph's left edge on the title's.
             style={{ alignSelf: 'flex-start', marginLeft: -12 }}
@@ -330,8 +251,8 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
             <SignInProviderButtons
               onApple={() => void continueWithApple()}
               onGoogle={() => void continueWithGoogle()}
-              appleBusy={isAppleSubmitting}
-              googleBusy={isGoogleSubmitting}
+              appleBusy={inFlight === 'apple'}
+              googleBusy={inFlight === 'google'}
               unavailable={!isAuthConfigured || isSignInInFlight}
             />
             </View>

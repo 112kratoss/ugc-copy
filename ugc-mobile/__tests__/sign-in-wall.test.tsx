@@ -80,6 +80,8 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Keyboard: keyboard,
+  AccessibilityInfo: { announceForAccessibility: () => undefined },
   Animated: (() => {
     class Value {
       value: number;
@@ -175,6 +177,8 @@ vi.mock('@/components/media-wall', async () => {
   return { ...actual, MediaWall: (props: MockProps) => React.createElement('media-wall', props) };
 });
 
+const keyboard = vi.hoisted(() => ({ dismiss: vi.fn() }));
+
 const hardwareBack = vi.hoisted(() => ({ handler: null as null | (() => void) }));
 vi.mock('@/lib/use-hardware-back', () => ({
   useHardwareBack: (_enabled: boolean, handler: () => void) => {
@@ -248,6 +252,7 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     authState.signInWithGoogle.mockReset();
     authState.signInWithGoogle.mockResolvedValue(undefined);
     analytics.trackOnboardingEvent.mockClear();
+    navigationState.listeners = [];
   });
 
   it('draws the wall, the headline and the three ways in for a plain "Sign in"', () => {
@@ -260,6 +265,27 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
   });
 
+  /** The email half's form, where the fields and its own Apple and Google sit. */
+  const form = (tree: renderer.ReactTestRenderer) => tree.root.findByType(EmailSignInForm);
+  const formIsInFront = (tree: renderer.ReactTestRenderer) => {
+    const layer = tree.root.findAll((node) => node.props.pointerEvents !== undefined
+      && node.findAllByType(EmailSignInForm).length > 0)[0];
+    return layer.props.pointerEvents === 'auto';
+  };
+  const leave = () => renderer.act(() => {
+    navigationState.listeners.forEach((listener) => listener());
+  });
+  const events = () => analytics.trackOnboardingEvent.mock.calls.map((call) => call[1]);
+  async function typeAndSignIn(tree: renderer.ReactTestRenderer) {
+    renderer.act(() => {
+      form(tree).findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+      form(tree).findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('a-good-password');
+    });
+    renderer.act(() => {
+      form(tree).findByProps({ accessibilityLabel: 'Sign in' }).props.onPress();
+    });
+  }
+
   it('turns the same page into the email form, over the same moving wall, and back again', async () => {
     const router = await routerMock();
     paramsState.params = { returnTo: '/profile' };
@@ -268,28 +294,25 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
-    // No new screen: the form is the page's second half, in front now.
+    // No new screen: the form is the page's second half, in front now, over the one wall.
     expect(router.push).not.toHaveBeenCalled();
     expect(router.replace).not.toHaveBeenCalled();
-    const form = tree.root.findByType(EmailSignInForm);
-    expect(form.props.active).toBe(true);
-    expect(form.props.returnTo).toBe('/profile');
+    expect(formIsInFront(tree)).toBe(true);
     expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
     // Its X, and Android's back, turn the page back rather than leave it.
     renderer.act(() => {
-      form.findByProps({ accessibilityLabel: 'Back to all sign-in options' }).props.onPress();
+      form(tree).findByProps({ accessibilityLabel: 'Back to all sign-in options' }).props.onPress();
     });
-    expect(tree.root.findByType(EmailSignInForm).props.active).toBe(false);
+    expect(formIsInFront(tree)).toBe(false);
     expect(router.back).not.toHaveBeenCalled();
   });
 
   it('opens on the email half for email=1, with Apple and Google under the form', () => {
     paramsState.params = { email: '1' };
     const tree = render(<AuthRoute />);
-    const form = tree.root.findByType(EmailSignInForm);
-    expect(form.props.active).toBe(true);
-    expect(form.findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
-    expect(form.findAllByProps({ accessibilityLabel: 'Continue with Apple' }).length).toBeGreaterThan(0);
+    expect(formIsInFront(tree)).toBe(true);
+    expect(form(tree).findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
+    expect(form(tree).findAllByProps({ accessibilityLabel: 'Continue with Apple' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Switch to sign up' })).toHaveLength(0);
   });
 
@@ -300,48 +323,148 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     expect(JSON.stringify(tree.toJSON())).toContain('signed out');
   });
 
-  it('starts Apple as a sign-up, which makes an account or signs into one', async () => {
-    const tree = render(<AuthRoute />);
-    await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Continue with Apple' }).props.onPress();
-    });
-    expect(authState.signInWithApple).toHaveBeenCalledWith('signup');
-    expect(analytics.trackOnboardingEvent.mock.calls.map((call) => call[1])).toEqual(['screen_viewed', 'auth_started']);
-  });
-
-  it('goes on to the name and credits once signed in, and back to where the person was', async () => {
+  it('starts Apple as a sign-up and, once it lands, goes on through the name and credits, then back', async () => {
     const router = await routerMock();
     paramsState.params = { returnTo: '/post/post-1' };
-    authState.user = { id: 'user-1' };
-    render(<AuthRoute />);
+    const tree = render(<AuthRoute />);
+    await renderer.act(async () => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' })[0].props.onPress();
+    });
+    expect(authState.signInWithApple).toHaveBeenCalledWith('signup');
+    expect(router.replace).toHaveBeenCalledTimes(1);
     expect(router.replace).toHaveBeenCalledWith({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
+    expect(events()).toEqual(['screen_viewed', 'auth_started', 'auth_succeeded']);
   });
 
-  it('closes back to the page beneath, but not while a sign-in is finishing', async () => {
+  it('steps aside to the return for an account that opened the page signed in', async () => {
     const router = await routerMock();
-    let finish: () => void = () => {};
-    authState.signInWithGoogle.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+    paramsState.params = { returnTo: '/profile' };
+    authState.user = { id: 'user-1' };
+    render(<AuthRoute />);
+    expect(router.dismissTo).toHaveBeenCalledWith('/profile');
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  // Review of #731, blocking 2: onboarding's own "Continue" asks for an account with
+  // `returnTo=/onboarding`; a sign-in goes back to that onboarding, not a second over it.
+  it('goes back to an onboarding that asked for the account, never a second one over it', async () => {
+    const router = await routerMock();
+    paramsState.params = { returnTo: '/onboarding' };
+    const tree = render(<AuthRoute />);
+    await renderer.act(async () => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' })[0].props.onPress();
+    });
+    expect(router.dismissTo).toHaveBeenCalledWith('/onboarding');
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it("keeps a redirect's in-place return through onboarding", async () => {
+    const router = await routerMock();
+    paramsState.params = { notice: 'signed-out', returnTo: '/viewer?initialId=post-b', inPlace: '1' };
+    const tree = render(<AuthRoute />);
+    await renderer.act(async () => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' })[0].props.onPress();
+    });
+    expect(router.replace).toHaveBeenCalledWith({
+      pathname: '/onboarding',
+      params: { returnTo: '/viewer?initialId=post-b', inPlace: '1' },
+    });
+  });
+
+  // Review of #731, blocking 1: a sign-in under way holds both halves still, and lands once.
+  it('holds the X, Back and Close while an email sign-in runs, then moves on exactly once', async () => {
+    const router = await routerMock();
+    paramsState.params = { returnTo: '/profile' };
+    let land: () => void = () => {};
+    authState.signInWithPassword.mockReset();
+    authState.signInWithPassword.mockImplementation(() => new Promise<void>((resolve) => {
+      land = () => {
+        authState.user = { id: 'user-1' };
+        resolve();
+      };
+    }));
+    const tree = render(<AuthRoute />);
+    renderer.act(() => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
+    });
+    await typeAndSignIn(tree);
+    // The form's X is held, and neither Back nor the page's Close does anything.
+    expect(form(tree).findByProps({ accessibilityLabel: 'Back to all sign-in options' }).props.disabled).toBe(true);
+    renderer.act(() => hardwareBack.handler?.());
+    expect(formIsInFront(tree)).toBe(true);
+    renderer.act(() => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Close' })[0].props.onPress?.();
+    });
+    expect(router.back).not.toHaveBeenCalled();
+    await renderer.act(async () => land());
+    renderer.act(() => tree.update(<AuthRoute />));
+    // One move: back to the return, as email always went; never onboarding on top as well.
+    expect(router.dismissTo).toHaveBeenCalledTimes(1);
+    expect(router.dismissTo).toHaveBeenCalledWith('/profile');
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(events()).toEqual(['screen_viewed', 'auth_started', 'auth_succeeded']);
+  });
+
+  it('counts one start and one cancel for a visit that tried two ways and left', async () => {
+    authState.signInWithApple.mockReset();
+    authState.signInWithApple.mockRejectedValue(new Error('nonce mismatch'));
+    authState.signInWithPassword.mockReset();
+    authState.signInWithPassword.mockRejectedValue(new Error('Invalid login credentials'));
+    const tree = render(<AuthRoute />);
+    await renderer.act(async () => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' })[0].props.onPress();
+    });
+    renderer.act(() => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
+    });
+    await typeAndSignIn(tree);
+    await renderer.act(async () => undefined);
+    leave();
+    leave();
+    expect(events()).toEqual(['screen_viewed', 'auth_started', 'auth_canceled']);
+  });
+
+  it('closes back to the page beneath once no sign-in is running', async () => {
+    const router = await routerMock();
+    let fail: () => void = () => {};
+    authState.signInWithGoogle.mockReset();
+    authState.signInWithGoogle.mockImplementation(() => new Promise<void>((_, reject) => {
+      fail = () => reject(new Error('network'));
+    }));
     const tree = render(<AuthRoute />);
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Continue with Google' })[0].props.onPress();
     });
     renderer.act(() => hardwareBack.handler?.());
     expect(router.back).not.toHaveBeenCalled();
-    await renderer.act(async () => finish());
+    await renderer.act(async () => fail());
     renderer.act(() => hardwareBack.handler?.());
     expect(router.back).toHaveBeenCalledTimes(1);
-    expect(analytics.trackOnboardingEvent.mock.calls.map((call) => call[1])).toContain('auth_canceled');
+  });
+
+  it('turns back with the keyboard put away, so it covers neither Apple nor Google', async () => {
+    const tree = render(<AuthRoute />);
+    renderer.act(() => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
+    });
+    keyboard.dismiss.mockClear();
+    renderer.act(() => hardwareBack.handler?.());
+    expect(keyboard.dismiss).toHaveBeenCalledTimes(1);
+    expect(formIsInFront(tree)).toBe(false);
   });
 
   it('sends a guest from the join route to the email form with the name and credits still ahead', async () => {
     const router = await routerMock();
     paramsState.params = { returnTo: '/create/image?remix=gen-1' };
+    authState.signInWithPassword.mockReset();
+    authState.signInWithPassword.mockResolvedValue(undefined);
     const tree = render(<JoinScreen />);
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
     expect(router.push).not.toHaveBeenCalled();
-    expect(tree.root.findByType(EmailSignInForm).props.returnTo)
-      .toBe(`/onboarding?returnTo=${encodeURIComponent('/create/image?remix=gen-1')}`);
+    await typeAndSignIn(tree);
+    await renderer.act(async () => undefined);
+    expect(router.dismissTo).toHaveBeenCalledWith(`/onboarding?returnTo=${encodeURIComponent('/create/image?remix=gen-1')}`);
   });
 });
