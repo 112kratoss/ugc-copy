@@ -175,6 +175,7 @@ vi.mock('lucide-react-native', () => ({
 // The shelf has a suite of its own (home-shelf.test.tsx); here it is the props
 // the screen hands it.
 vi.mock('@/components/setup-reopen', () => ({ SetupReopen: () => null }));
+vi.mock('@/components/welcome-credits-popup', () => ({ WelcomeCreditsPopup: () => null }));
 vi.mock('@/components/home-shelf', () => ({
   HomeShelf: (props: MockProps) => React.createElement('home-shelf', props),
 }));
