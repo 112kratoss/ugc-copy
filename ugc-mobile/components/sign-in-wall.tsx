@@ -303,7 +303,7 @@ function SignInWallBody({
           <AppText variant="body" style={{ color: mediaColors.onMedia, textAlign: 'center', marginBottom: 14 }}>
             {welcomePromise ? (
               <>Join free and get <Text style={{ fontWeight: '700' }}>25 credits</Text> to start</>
-            ) : 'Welcome back. Sign in to keep creating.'}
+            ) : 'Sign in or join free to start creating.'}
           </AppText>
 
           {notice ? (

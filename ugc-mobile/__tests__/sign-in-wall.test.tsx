@@ -1,7 +1,7 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Effects and state updates flush inside act(), as React expects of a test renderer.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -203,6 +203,9 @@ import { MEDIA_WALL_TILES, mediaWallColumn, mediaWallGeometry } from '../compone
 import { signInOpensOnEmailForm } from '../lib/join-navigation';
 import { rememberWelcomeAnswer, resetWelcomePromiseForTests } from '../lib/welcome-promise';
 
+// The phone's welcome-credit record is a module singleton: each test starts on a fresh launch.
+afterEach(() => resetWelcomePromiseForTests());
+
 async function routerMock() {
   const { router } = await import('expo-router');
   for (const fn of [router.replace, router.back, router.dismissTo, router.push]) vi.mocked(fn).mockClear();
@@ -285,10 +288,9 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     });
     tree = render(<JoinScreen />);
     const text = JSON.stringify(tree.toJSON());
-    expect(text).toContain('Welcome back. Sign in to keep creating.');
+    expect(text).toContain('Sign in or join free to start creating.');
     expect(text).not.toContain('25 credits');
     renderer.act(() => tree.unmount());
-    resetWelcomePromiseForTests();
   });
 
   /** The email half's form, where the fields and its own Apple and Google sit. */

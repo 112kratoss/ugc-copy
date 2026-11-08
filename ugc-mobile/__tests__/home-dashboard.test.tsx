@@ -379,6 +379,9 @@ vi.mock('@/lib/feed-attention-view-model', async (importOriginal) => {
 
 import { HomeDashboard } from '../components/home-dashboard';
 import { rememberWelcomeAnswer, resetWelcomePromiseForTests } from '../lib/welcome-promise';
+
+// The phone's welcome-credit record is a module singleton: each test starts on a fresh launch.
+afterEach(() => resetWelcomePromiseForTests());
 import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
@@ -1743,6 +1746,5 @@ describe('Home screen', () => {
 
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());
-    resetWelcomePromiseForTests();
   });
 });

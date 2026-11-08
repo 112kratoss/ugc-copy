@@ -13,9 +13,11 @@ import type { WelcomeCreditResponse } from './types';
  * The server cannot tell who a signed-out visitor is, so the phone remembers
  * what the last account signed in here was told. Once that account's credits
  * are claimed (by it, or by another account of the same person), the promise
- * stops; an account that still has them waiting brings it back, so a new person
+ * stops; an account that still has them coming brings it back, so a new person
  * on a shared phone sees the promise again after their own sign-up. A phone
- * that never had an account keeps the promise, as before.
+ * that never had an account keeps the promise, as before. So does a phone
+ * whose account signed out before this record existed, until an account signs
+ * in on it again: nothing the phone kept says what that account was told.
  */
 export const WELCOME_PROMISE_STORAGE_KEY = 'magicbooklet.welcome-promise.spent.v1';
 
@@ -36,9 +38,12 @@ export function welcomePromiseAfterAnswer(status: WelcomeStatus): boolean | null
     case 'already_claimed':
     // The same person already had them on another account.
     case 'identity_already_claimed':
-    // An account from before the program: this person is not owed them.
-    case 'legacy_ineligible':
       return false;
+    // The server's `loadWelcomeCreditStatus` answers this to an account made
+    // before the program and to one holding 25 credits while the program is
+    // off: neither says this person had the welcome credits, and the second may
+    // still be owed them when the program comes back.
+    case 'legacy_ineligible':
     // A guest's answer, or the program off for now.
     case 'requires_account':
     case 'unavailable':
@@ -48,8 +53,11 @@ export function welcomePromiseAfterAnswer(status: WelcomeStatus): boolean | null
   }
 }
 
-// null until the stored answer has been read.
+// What screens draw: null until the stored answer has been read.
 let promise: boolean | null = null;
+// What the store is known to hold (true = no record), learned only from a read
+// or a write that succeeded: a failed one is tried again with the next answer.
+let stored: boolean | null = null;
 let loading: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 
@@ -59,6 +67,23 @@ function publish(next: boolean) {
   for (const listener of listeners) listener();
 }
 
+function persist(next: boolean, now: string) {
+  let write: Promise<void>;
+  try {
+    write = next
+      ? AsyncStorage.removeItem(WELCOME_PROMISE_STORAGE_KEY)
+      : AsyncStorage.setItem(WELCOME_PROMISE_STORAGE_KEY, now);
+  } catch {
+    return;
+  }
+  write.then(
+    () => {
+      stored = next;
+    },
+    () => undefined,
+  );
+}
+
 /**
  * Reads the stored answer once. Called at launch from `app/_layout.tsx`, so it
  * is known before Home draws its top bar. A read that fails keeps the promise:
@@ -66,28 +91,29 @@ function publish(next: boolean) {
  */
 export function loadWelcomePromise(): Promise<void> {
   loading ??= (async () => {
-    let stored = true;
+    let read: boolean | null = null;
     try {
-      stored = (await AsyncStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)) === null;
+      read = (await AsyncStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)) === null;
     } catch {
-      stored = true;
+      read = null;
     }
+    if (read !== null && stored === null) stored = read;
     // An answer learned while the read was in flight is newer than the store.
-    if (promise === null) publish(stored);
+    if (promise === null) publish(read ?? true);
   })();
   return loading;
 }
 
-/** Teaches the phone an account's welcome answer, from a fetch or a claim. */
+/**
+ * Teaches the phone what the account signed in now was told. Fed only from
+ * that account's own answer (`useWelcomeCreditsQuery`), never from a request
+ * that may have outlived its account.
+ */
 export function rememberWelcomeAnswer(status: WelcomeStatus, now = new Date().toISOString()) {
   const next = welcomePromiseAfterAnswer(status);
-  if (next === null || next === promise) return;
+  if (next === null) return;
   publish(next);
-  const write = next
-    ? AsyncStorage.removeItem(WELCOME_PROMISE_STORAGE_KEY)
-    : AsyncStorage.setItem(WELCOME_PROMISE_STORAGE_KEY, now);
-  // At worst the next launch shows what the phone knew before this answer.
-  write.catch(() => undefined);
+  if (stored !== next) persist(next, now);
 }
 
 function subscribe(listener: () => void) {
@@ -110,9 +136,10 @@ export function useWelcomePromise(): boolean {
   return value;
 }
 
-/** For tests: a fresh launch. */
+/** For tests: a fresh launch. Screens still drawn read the promise again. */
 export function resetWelcomePromiseForTests() {
   promise = null;
+  stored = null;
   loading = null;
-  listeners.clear();
+  for (const listener of listeners) listener();
 }
