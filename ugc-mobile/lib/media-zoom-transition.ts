@@ -18,7 +18,6 @@ import type { VideoPlayer } from 'expo-video';
 import type { ImmersivePreviewItem } from './immersive-preview-view-model';
 import { getShowcaseMediaPreviewUrl, resolveShowcaseViewerImageSource } from './showcase-media';
 import type { ShowcaseMediaItem } from './types';
-import type { ZoomVeilDrop } from './zoom-veil';
 
 export interface ZoomRect {
   x: number;
@@ -78,8 +77,6 @@ export interface ZoomOrigin {
    * UIKit carries the picture up and down, and the reel takes only a lent video.
    */
   native?: boolean;
-  /** The veil the tap dropped under a native zoom (lib/zoom-veil.ts); null for none. */
-  veil?: ZoomVeilDrop | null;
   recordedAt: number;
 }
 
@@ -701,7 +698,11 @@ export function appleZoomPageFrame(
  * frames on black for the pop to bring the feed back and then took twelve
  * more. With it off a picture's reel has the navigation bar's own Back, which
  * pops at once (app/viewer.tsx), and UIKit shrinks the page into the tile's
- * shape. Set it back to true for the picture alone; Android always flies it.
+ * shape. Set back to true, it flies the picture alone again, but over a page
+ * left lit: the black that covered the page under the zoom went the same day
+ * (lib/reel-backdrop.ts), and with it the cover over the pop the flight
+ * withholds the zoom from, which scales the page beneath up from about 92%
+ * (filmed on the iPhone 16e, 2026-11-08). Android always flies it.
  */
 export const IOS_BACK_FLIES_PICTURE = false;
 

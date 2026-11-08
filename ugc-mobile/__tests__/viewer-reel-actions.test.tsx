@@ -92,7 +92,6 @@ const screenState = vi.hoisted(() => ({
     opened: true,
     reportChromeDrawn: vi.fn(),
     reportNeighbourDrawn: vi.fn(),
-    veil: null,
   },
 }));
 

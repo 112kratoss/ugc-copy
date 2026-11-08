@@ -47,7 +47,6 @@ import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
 import { MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource } from '@/components/media-zoom';
-import { ZoomVeilScope } from '@/components/zoom-veil';
 import { mediaItemAspectRatio, showcaseMediaZoomPreview } from '@/lib/media-zoom-transition';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
@@ -613,9 +612,7 @@ export function CreatorProfileScreen({
   };
 
   return (
-    // Tiles on this profile are what the reel grows out of and returns to; the
-    // black over this screen while one does (lib/zoom-veil.ts) is drawn last.
-    <ZoomVeilScope>
+    // Tiles on this profile are what the reel grows out of and returns to.
     <MediaZoomSurface>
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       {/* The bar says what the view is, not who it contains: a username has no
@@ -664,7 +661,6 @@ export function CreatorProfileScreen({
       />
     </View>
     </MediaZoomSurface>
-    </ZoomVeilScope>
   );
 }
 
@@ -684,12 +680,9 @@ function leaveCreatorProfile() {
  * (react-native-screens shows the bar with `setNavigationBarHidden:animated:`,
  * and lays an opaque bar's page out beneath it through
  * `edgesForExtendedLayout`). So the page came back 54 pt too high, under the
- * bar, and dropped into place a second later. The navigator's bar is also
- * drawn above the page, beyond the black the page is covered in while the zoom
- * runs (components/zoom-veil.tsx): UIKit dimmed it grey over a black page. A
- * bar of the page's own is laid out once and goes dark with the rest. Drawn as
- * the navigator's is: the title centred, and Back a glass circle on the
- * leading edge (a bare chevron where there is no Liquid Glass).
+ * bar, and dropped into place a second later. A bar of the page's own is laid
+ * out once. Drawn as the navigator's is: the title centred, and Back a glass
+ * circle on the leading edge (a bare chevron where there is no Liquid Glass).
  */
 function CreatorTopBar({ topInset }: { topInset: number }) {
   const theme = useAppTheme();

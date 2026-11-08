@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { VideoPlayer } from 'expo-video';
 
 /**
@@ -38,25 +38,9 @@ const navigation = {
   },
   isFocused: () => reelFocused,
 };
-// A second reel, opened from a page pushed over the first, has a screen of its own.
-const ReelNavigation = React.createContext<unknown>(null);
-vi.mock('expo-router', () => ({ useNavigation: () => React.useContext(ReelNavigation) ?? navigation }));
+vi.mock('expo-router', () => ({ useNavigation: () => navigation }));
 function fire(type: string, event?: unknown) {
   listeners.get(type)?.forEach((listener) => listener(event));
-}
-function createNavigation() {
-  const own = new Map<string, Set<(event?: unknown) => void>>();
-  return {
-    navigation: {
-      addListener: (type: string, listener: (event?: unknown) => void) => {
-        if (!own.has(type)) own.set(type, new Set());
-        own.get(type)!.add(listener);
-        return () => own.get(type)?.delete(listener);
-      },
-      isFocused: () => true,
-    },
-    fire: (type: string, event?: unknown) => own.get(type)?.forEach((listener) => listener(event)),
-  };
 }
 
 // The zoom is available: iOS 18 on the bridgeless runtime.
@@ -75,19 +59,6 @@ import {
   isVideoReturnPending,
   resetVideoPlayerLoans,
 } from '../lib/video-player-loans';
-import {
-  createScreenVeil,
-  followZoomVeilTransition,
-  getZoomVeilOpacity,
-  registerScreenVeil,
-  resetZoomVeil,
-  subscribeToZoomVeilOpacity,
-  ZOOM_VEIL_LIFT_DELAY_MS,
-  ZOOM_VEIL_LIFT_MS,
-  ZoomVeilOwnerContext,
-  type ScreenVeil,
-  type ZoomVeilTransition,
-} from '../lib/zoom-veil';
 
 const PREVIEW = { url: 'https://example.test/tile.webp', cacheKey: 'tile', thumbhash: null };
 const STREAM = 'https://example.test/clip.mp4';
@@ -96,17 +67,9 @@ function fakePlayer() {
   return { pause: vi.fn(), release: vi.fn() } as unknown as VideoPlayer;
 }
 
-// The screen the tiles are on, and the black it is covered in (lib/zoom-veil.ts).
-let feedVeil: ScreenVeil;
-beforeEach(() => {
-  feedVeil = createScreenVeil();
-  registerScreenVeil('feed', feedVeil);
-});
-
 afterEach(() => {
   resetMediaZoomTransitions();
   resetVideoPlayerLoans();
-  resetZoomVeil();
   listeners.clear();
   reelFocused = true;
   vi.useRealTimers();
@@ -129,16 +92,14 @@ function VideoLayer({ player }: { player: VideoPlayer }) {
   return null;
 }
 
-function mountTile(player?: VideoPlayer, screen: string | null = 'feed') {
+function mountTile(player?: VideoPlayer) {
   let source!: ReturnType<typeof useMediaZoomSource>;
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
     tree = renderer.create(
-      <ZoomVeilOwnerContext.Provider value={screen}>
-        <MediaZoomSurface>
-          <Tile report={(value) => { source = value; }} player={player} />
-        </MediaZoomSurface>
-      </ZoomVeilOwnerContext.Provider>
+      <MediaZoomSurface>
+        <Tile report={(value) => { source = value; }} player={player} />
+      </MediaZoomSurface>
     );
   });
   return { source, tree };
@@ -204,140 +165,6 @@ describe('a tile opening under the native zoom', () => {
     stopAccepting();
   });
 
-  it('drops the feed\'s veil at the tap, covers the feed in black under the reel\'s transition, and lifts it as the pop begins', () => {
-    const { source } = mountTile();
-    expect(feedVeil.cover.get()).toBe(0);
-    renderer.act(() => source.capture(() => {}));
-    // Waiting for the reel's transition, and clear until it is bound: the
-    // screen's veil switches to following only when React commits it, and a
-    // cover raised at the tap showed black until then (lib/zoom-veil.ts).
-    expect(getZoomVeilOpacity('feed')).toBe(0);
-    expect(feedVeil.cover.get()).toBe(0);
-    expect(peekPendingZoomOrigin('post-1', Date.now())?.veil).toMatchObject({ owner: 'feed' });
-
-    let stage!: ReturnType<typeof useMediaZoomStage>;
-    renderer.act(() => {
-      renderer.create(<Reel onExit={() => {}} report={(value) => { stage = value; }} />);
-    });
-    expect(stage.veil).toMatchObject({ owner: 'feed' });
-    // The viewer's `AppleZoomProgress` hands the veil the reel's transition.
-    const transition = { name: 'reel' } as unknown as ZoomVeilTransition;
-    followZoomVeilTransition(stage.veil!, transition);
-    expect(feedVeil.cover.get()).toBe(1);
-    expect(getZoomVeilOpacity('feed')).toBe(transition);
-    renderer.act(() => { fire('beforeRemove'); });
-    // The test double resolves the delayed fade at once.
-    expect(feedVeil.cover.get()).toBe(0);
-  });
-
-  // A reel whose first load outlives the zoom draws its loading or error shell,
-  // which mounts no `AppleZoomProgress` and so binds no transition. Back from
-  // there faded a cover still at 0 from the tap, over the lit feed.
-  it('covers the feed for Back from a reel that never bound its transition, and fades it from there', () => {
-    const { source } = mountTile();
-    renderer.act(() => source.capture(() => {}));
-    renderer.act(() => {
-      renderer.create(<Reel onExit={() => {}} />);
-    });
-    const set = vi.spyOn(feedVeil.cover, 'set');
-    renderer.act(() => { fire('beforeRemove'); });
-    // Up, then the fade, which the test double resolves at once.
-    expect(set.mock.calls.map(([value]) => value)).toEqual([1, 0]);
-    expect(getZoomVeilOpacity('feed')).toBeNull();
-    set.mockRestore();
-  });
-
-  it('keeps the veil on the reel\'s own transition for the reel\'s whole life, so a gesture close can follow the finger', () => {
-    // Swapping the transition for a plain number detaches its Animated graph,
-    // and React Native then drops the native nodes of the transition's values:
-    // re-attached later they are fresh nodes react-native-screens no longer
-    // drives, frozen at "open", and a dismissal gesture ran over solid black.
-    const { source } = mountTile();
-    renderer.act(() => source.capture(() => {}));
-    let stage!: ReturnType<typeof useMediaZoomStage>;
-    renderer.act(() => {
-      renderer.create(<Reel onExit={() => {}} report={(value) => { stage = value; }} />);
-    });
-    const transition = { name: 'reel' } as unknown as ZoomVeilTransition;
-    followZoomVeilTransition(stage.veil!, transition);
-    const seen: unknown[] = [];
-    subscribeToZoomVeilOpacity('feed', () => seen.push(getZoomVeilOpacity('feed')));
-
-    // Landed; a page pushed over the reel and popped off it; a dismissal
-    // gesture let go of; then one carried through.
-    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
-    reelFocused = false;
-    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
-    reelFocused = true;
-    renderer.act(() => { fire('transitionStart', { data: { closing: false } }); });
-    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
-    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
-    renderer.act(() => { fire('gestureCancel'); });
-    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
-
-    expect(getZoomVeilOpacity('feed')).toBe(transition);
-    expect(seen.every((value) => value === transition)).toBe(true);
-    expect(feedVeil.cover.get()).toBe(1);
-  });
-
-  it('drops no veil for a tile on a screen without one', () => {
-    const { source } = mountTile(undefined, null);
-    renderer.act(() => source.capture(() => {}));
-    expect(peekPendingZoomOrigin('post-1', Date.now())?.veil).toBeNull();
-    expect(feedVeil.cover.get()).toBe(0);
-  });
-
-  it('closes a reel opened from a page above another reel without taking the first reel\'s veil down', () => {
-    vi.useFakeTimers();
-    const creatorVeil = createScreenVeil();
-    registerScreenVeil('creator', creatorVeil);
-
-    // Explore → a reel, landed.
-    const { source: exploreTile } = mountTile();
-    renderer.act(() => exploreTile.capture(() => {}));
-    let firstStage!: ReturnType<typeof useMediaZoomStage>;
-    renderer.act(() => {
-      renderer.create(<Reel onExit={() => {}} report={(value) => { firstStage = value; }} />);
-    });
-    followZoomVeilTransition(firstStage.veil!, { name: 'first reel' } as unknown as ZoomVeilTransition);
-    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
-    // A second later the reel can be touched, and tiles open posts again.
-    vi.advanceTimersByTime(1000);
-    // The creator page pushed over it is not the reel's to cover.
-    reelFocused = false;
-    renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
-    expect(creatorVeil.cover.get()).toBe(0);
-
-    // A tile on the creator page opens a second reel, and Back closes it.
-    const { source: creatorTile } = mountTile(undefined, 'creator');
-    renderer.act(() => creatorTile.capture(() => {}));
-    const second = createNavigation();
-    let secondReel!: renderer.ReactTestRenderer;
-    let secondStage!: ReturnType<typeof useMediaZoomStage>;
-    renderer.act(() => {
-      secondReel = renderer.create(
-        <ReelNavigation.Provider value={second.navigation}>
-          <Reel onExit={() => {}} report={(value) => { secondStage = value; }} />
-        </ReelNavigation.Provider>
-      );
-    });
-    followZoomVeilTransition(secondStage.veil!, { name: 'second reel' } as unknown as ZoomVeilTransition);
-    expect(creatorVeil.cover.get()).toBe(1);
-    renderer.act(() => { second.fire('transitionEnd', { data: { closing: false } }); });
-    renderer.act(() => { second.fire('beforeRemove'); });
-    renderer.act(() => secondReel.unmount());
-    vi.advanceTimersByTime(ZOOM_VEIL_LIFT_DELAY_MS + ZOOM_VEIL_LIFT_MS);
-    expect(creatorVeil.cover.get()).toBe(0);
-
-    // The page pops off the first reel, which then closes over black, not the lit feed.
-    reelFocused = true;
-    renderer.act(() => { fire('transitionStart', { data: { closing: false } }); });
-    renderer.act(() => { fire('transitionEnd', { data: { closing: false } }); });
-    expect(feedVeil.cover.get()).toBe(1);
-    renderer.act(() => { fire('beforeRemove'); });
-    expect(feedVeil.cover.get()).toBe(0);
-  });
-
   it('hands the player to the tile as a dismissal gesture begins, and takes it back when the gesture is let go of', () => {
     const player = fakePlayer();
     const { source } = mountTile(player);
@@ -356,7 +183,6 @@ describe('a tile opening under the native zoom', () => {
     expect(isVideoPlayerHandedBack(player)).toBe(true);
     // Playing: a gesture keeps the reel itself, and both draw the clip going on.
     expect(player.pause).not.toHaveBeenCalled();
-    expect(feedVeil.cover.get()).toBe(0);
     expect(stage.lentVideo?.reclaimed).toBe(0);
     // The tile takes it and draws the clip under the shrinking reel.
     expect(claimReturnedVideoPlayer(tileKey, STREAM)).toBe(player);
@@ -365,7 +191,6 @@ describe('a tile opening under the native zoom', () => {
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
     expect(isVideoPlayerHandedBack(player)).toBe(false);
     expect(isVideoPlayerOnLoan(player)).toBe(true);
-    expect(feedVeil.cover.get()).toBe(1);
     expect(stage.lentVideo?.reclaimed).toBe(1);
 
     // Let go of once more, then closed for good: handed back again, exactly once.
@@ -388,12 +213,9 @@ describe('a tile opening under the native zoom', () => {
     const { source } = mountTile(player);
     const tileKey = source.tileKey!;
     renderer.act(() => source.capture(() => {}));
-    let stage!: ReturnType<typeof useMediaZoomStage>;
     renderer.act(() => {
-      renderer.create(<Reel onExit={() => {}} playerFor={() => player} report={(value) => { stage = value; }} />);
+      renderer.create(<Reel onExit={() => {}} playerFor={() => player} />);
     });
-    const transition = { name: 'reel' } as unknown as ZoomVeilTransition;
-    followZoomVeilTransition(stage.veil!, transition);
     const stopAccepting = acceptVideoReturn(tileKey, STREAM);
 
     // A creator profile pushed from the reel: the same event, but the reel is no longer focused.
@@ -401,8 +223,6 @@ describe('a tile opening under the native zoom', () => {
     renderer.act(() => { fire('transitionStart', { data: { closing: true } }); });
     expect(isVideoReturnPending(tileKey, STREAM)).toBe(false);
     expect(isVideoPlayerOnLoan(player)).toBe(true);
-    expect(feedVeil.cover.get()).toBe(1);
-    expect(getZoomVeilOpacity('feed')).toBe(transition);
     stopAccepting();
   });
 

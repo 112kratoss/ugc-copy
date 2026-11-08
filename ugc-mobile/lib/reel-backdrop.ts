@@ -1,11 +1,9 @@
 import { useNavigation } from 'expo-router';
 import { useEffect } from 'react';
 
-import { ZOOM_VEIL_LIFT_DELAY_MS, ZOOM_VEIL_LIFT_MS } from './zoom-veil';
-
 /**
- * Black behind the navigator while a reel is on screen or being revealed
- * (`ReelBackdrop` in app/_layout.tsx).
+ * Black behind the navigator while a pop reveals a reel (`ReelBackdrop` in
+ * app/_layout.tsx).
  *
  * iOS 26 draws a screen that a pop is revealing with the display's rounded
  * corners until the transition is over, and whatever lies behind the navigator
@@ -14,25 +12,22 @@ import { ZOOM_VEIL_LIFT_DELAY_MS, ZOOM_VEIL_LIFT_MS } from './zoom-veil';
  * drew four light corners for up to half a second whenever a page pushed from
  * the reel — a creator profile — was popped back to it.
  *
- * The same ground showed around a pushed page a reel closes into: UIKit's zoom
- * scales such a page up from about 92% as the reel shrinks into it, over the
- * first quarter of a second, and the page is black under its veil all that
- * time (lib/zoom-veil.ts) — so the page grew inside a light frame. Screens that
- * fill the window, the tabs, are not scaled.
+ * Only then. UIKit's zoom shrinks a pushed page a reel grows out of — a
+ * creator profile, the card list of a profile's own posts — to about 92% as
+ * the reel grows, and scales it back up as the reel shrinks into it, and the
+ * ground shows round that page meanwhile. The tabs, which fill the window, are
+ * not scaled. No screen is darkened under the zoom since 2026-11-08: Instagram
+ * leaves its pages lit round its post as it grows and shrinks (filmed on the
+ * owner's iPhone 16e). Round a lit page the app's own ground, the colour of
+ * the page, lets that small move read as depth; black drew a frame round it.
  *
- * Each reel holds the backdrop from the moment it starts to appear until a
- * page pushed over it has covered it, and again as a pop starts to reveal it —
- * Back and the edge swipe alike — and until its own close has landed. Back
- * takes the reel out of React before UIKit has run that close, so a reel on
- * its way out lets go only after the close's own length. It lets go once
- * covered because light pages popped back to one another above it want the
- * light ground behind their own corners.
+ * So a reel holds the backdrop from a pop starting to reveal it — Back on the
+ * page above, or that page's edge swipe — until that transition ends,
+ * whichever way it ends. The page pushed over the reel having covered it is
+ * what makes the next transition that brings the reel in a reveal, not the
+ * reel's own push.
  */
-/** How long the backdrop outlasts a reel Back removed: the close, until its veil has lifted. */
-export const REEL_BACKDROP_CLOSE_MS = ZOOM_VEIL_LIFT_DELAY_MS + ZOOM_VEIL_LIFT_MS;
-
 const holders = new Set<object>();
-const releases = new Set<ReturnType<typeof setTimeout>>();
 const listeners = new Set<() => void>();
 
 function hold(holder: object, held: boolean) {
@@ -51,48 +46,34 @@ export function subscribeToReelBackdrop(listener: () => void) {
   return () => { listeners.delete(listener); };
 }
 
-/** For the reel's screen: holds the backdrop while that screen is showing or being revealed. */
+/** For the reel's screen: holds the backdrop while a pop reveals that screen. */
 export function useReelBackdrop() {
   const navigation = useNavigation();
   useEffect(() => {
     const holder = {};
-    let leaving = false;
-    hold(holder, true);
+    let covered = false;
     const listen = navigation.addListener as unknown as (
-      type: 'transitionStart' | 'transitionEnd' | 'beforeRemove',
+      type: 'transitionStart' | 'transitionEnd',
       listener: (event: { data?: { closing?: boolean } }) => void
     ) => () => void;
     const unsubscribers = [
       listen('transitionStart', (event) => {
-        if (event.data?.closing === false) hold(holder, true);
+        if (event.data?.closing === false && covered) hold(holder, true);
       }),
       listen('transitionEnd', (event) => {
-        if (event.data?.closing === true) hold(holder, false);
-      }),
-      listen('beforeRemove', () => {
-        leaving = true;
-        hold(holder, true);
+        covered = event.data?.closing === true;
+        hold(holder, false);
       }),
     ];
     return () => {
       unsubscribers.forEach((unsubscribe) => unsubscribe());
-      if (!leaving) {
-        hold(holder, false);
-        return;
-      }
-      const release = setTimeout(() => {
-        releases.delete(release);
-        hold(holder, false);
-      }, REEL_BACKDROP_CLOSE_MS);
-      releases.add(release);
+      hold(holder, false);
     };
   }, [navigation]);
 }
 
 /** Test support. */
 export function resetReelBackdrop() {
-  releases.forEach(clearTimeout);
-  releases.clear();
   holders.clear();
   listeners.clear();
 }

@@ -16,7 +16,7 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, Path, Stop } from 'reac
 
 import { AudioCreationPlayer } from '@/components/audio-creation-player';
 import { DoubleTapPressable } from '@/components/double-tap-pressable';
-import { AppleZoomProgress, AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
+import { AppleZoomTopControlsCue } from '@/components/apple-zoom-progress';
 import { AppleZoomTarget, useAppleZoomRetarget, useAppleZoomSourceId } from '@/components/apple-zoom';
 import { MediaZoomCarriedPicture, MediaZoomChrome, MediaZoomStage, peekOpeningPost, peekOpeningPreview, useMediaZoomLanded, useMediaZoomLentVideo, useMediaZoomOpened, useMediaZoomPaintReport, useMediaZoomStage, useMediaZoomUncovering, type MediaZoomLentVideo } from '@/components/media-zoom';
 import { closesPictureAlone, IOS_BACK_FLIES_PICTURE, mediaItemAspectRatio, mediaRectInScreen, showcaseMediaZoomPreview, showcaseViewerMediaPicture, type ZoomPreview } from '@/lib/media-zoom-transition';
@@ -671,8 +671,8 @@ function ImmersivePreviewViewer() {
   });
   // iOS: the reel keeps its black behind its media, and UIKit's zoom grows and
   // shrinks that page, black, buttons and all, as Instagram's does (filmed on
-  // the owner's iPhone 16e beside ours, 2026-11-08), over a feed left lit
-  // (lib/zoom-veil.ts), into and out of the tile's shape
+  // the owner's iPhone 16e beside ours, 2026-11-08), over a page left lit, into
+  // and out of the tile's shape
   // (`useAppleZoomRetarget`). Clear behind its media, as the reel was from
   // 2026-11-07, its page showed UIKit's own ground in the bands round a picture
   // that does not fill the screen: white in the light scheme, a black slab in
@@ -1552,7 +1552,6 @@ function ImmersivePreviewViewer() {
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
           with `gestureEnabled`. One pushed any other way fades out as it faded
           in — set once the reel is up, so it is not folded into the push. */}
-      {nativeZoomSourceId ? <AppleZoomProgress veil={zoom.veil} /> : null}
       <Stack.Screen
         options={{
           gestureEnabled: !detailsOpenForActive,
