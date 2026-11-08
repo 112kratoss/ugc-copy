@@ -27,8 +27,8 @@ vi.mock('react-native', () => {
   }
   return {
     AccessibilityInfo: { announceForAccessibility: (text: string) => harness.announced.push(text) },
-    Animated: { Value, View: (props: MockProps) => React.createElement('animated-view', props, props.children), timing: () => ({ start() {}, stop() {} }), parallel: () => ({ start() {}, stop() {} }) },
-    Easing: { out: () => () => 0, quad: () => 0 },
+    Animated: { Value, View: (props: MockProps) => React.createElement('animated-view', props, props.children), timing: () => ({ start() {}, stop() {} }), parallel: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
+    Easing: { out: () => () => 0, quad: () => 0, bezier: () => () => 0 },
     Modal: ({ visible, children }: MockProps) => (visible ? React.createElement('modal', null, children) : null),
     Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, typeof children === 'function' ? null : children),
     Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
@@ -36,7 +36,7 @@ vi.mock('react-native', () => {
   };
 });
 vi.mock('expo-linear-gradient', () => ({ LinearGradient: ({ children }: MockProps) => React.createElement('linear-gradient', null, children) }));
-vi.mock('lucide-react-native', () => Object.fromEntries(['Clapperboard', 'Gift', 'ImageIcon', 'Rocket', 'Sparkles'].map((name) => [name, () => React.createElement(`icon-${name}`)])));
+vi.mock('lucide-react-native', () => Object.fromEntries(['Gift', 'Sparkle', 'Sparkles'].map((name) => [name, () => React.createElement(`icon-${name}`)])));
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => harness.focused }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({}) }));
 vi.mock('@/components/ui', () => ({

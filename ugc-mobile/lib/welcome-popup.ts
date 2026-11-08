@@ -2,9 +2,11 @@ import type { WelcomeCreditResponse } from './types';
 
 /**
  * The welcome-credits popup over Home (owner, 2026-11-09: "the kling one looks
- * live and cheerful", a Claim button, confetti, haptics while the credits count
- * up). It offers the credits to a signed-in account that has its creator name
- * and has not claimed them yet. Closing it waits until the next app start.
+ * live and cheerful", a Claim button, a celebration, haptics while the credits
+ * count up; the confetti became quiet sparkles the same day, "premium" not
+ * "childish"). It offers the credits to a signed-in account that has its
+ * creator name and has not claimed them yet. Closing it waits until the next
+ * app start.
  */
 const dismissedThisRun = new Set<string>();
 

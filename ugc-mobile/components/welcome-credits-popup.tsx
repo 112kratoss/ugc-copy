@@ -3,9 +3,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Gift, Sparkles } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { AccessibilityInfo, Modal, Text, View } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Modal, Text, View } from 'react-native';
 
-import { ConfettiBurst } from '@/components/confetti-burst';
+import { ClaimSparkles, type ClaimFrame } from '@/components/claim-sparkles';
 import { AppText, IconButton, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { haptic } from '@/lib/haptics';
@@ -33,7 +33,7 @@ const BADGE_SIZE = 64;
 
 /**
  * The welcome-credits popup over Home (owner, 2026-11-09): a bright card with a
- * Claim button, a subtle confetti burst once the claim lands, and the figure
+ * Claim button, a quiet sparkle celebration once the claim lands, and the figure
  * counting up with haptic ticks. Offered to a named account with credits still
  * to claim; closing it waits until the next app start (`lib/welcome-popup.ts`).
  * Through a `Modal`: it holds no text field (see `components/dialog.tsx`).
@@ -60,8 +60,8 @@ function WelcomeCreditsPopupForAccount() {
   const [phase, setPhase] = useState<Phase>('offer');
   const [message, setMessage] = useState<string | null>(null);
   const [count, setCount] = useState(0);
-  // Where the Claim button sits in the window: the confetti pops out of it.
-  const [burstOrigin, setBurstOrigin] = useState<{ x: number; y: number } | null>(null);
+  // Where the Claim button sits in the window: the celebration starts there.
+  const [buttonFrame, setButtonFrame] = useState<ClaimFrame | null>(null);
   const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -156,14 +156,14 @@ function WelcomeCreditsPopupForAccount() {
               phase={phase}
               count={count}
               message={message}
-              onClaim={(origin) => {
-                setBurstOrigin(origin);
+              onClaim={(frame) => {
+                setButtonFrame(frame);
                 void claim();
               }}
             />
             <CloseChip disabled={phase === 'claiming'} onPress={close} />
           </ThemeScope>
-          <ConfettiBurst play={phase === 'claimed'} origin={burstOrigin} />
+          <ClaimSparkles play={phase === 'claimed'} frame={buttonFrame} />
         </View>
       ) : null}
     </Modal>
@@ -195,6 +195,14 @@ function DashedRule() {
   );
 }
 
+/** An onLayout that records a block's first height and ignores later ones. */
+function keepFirstHeight(set: (update: (previous: number | undefined) => number | undefined) => void) {
+  return (event: { nativeEvent: { layout: { height: number } } }) => {
+    const height = event.nativeEvent.layout.height;
+    set((previous) => previous ?? height);
+  };
+}
+
 function WelcomeCard({
   amount,
   phase,
@@ -206,7 +214,7 @@ function WelcomeCard({
   phase: Phase;
   count: number;
   message: string | null;
-  onClaim: (buttonCentre: { x: number; y: number } | null) => void;
+  onClaim: (buttonFrame: ClaimFrame | null) => void;
 }) {
   const theme = useAppTheme();
   const [entered, setEntered] = useState(false);
@@ -215,6 +223,24 @@ function WelcomeCard({
   const scale = progress ? progress.interpolate({ inputRange: [0, 1], outputRange: [ENTRY_SCALE, 1] }) : 1;
   const claimed = phase === 'claimed';
   const buttonRef = useRef<View | null>(null);
+  // The heading and the note keep the height they first had: the shorter
+  // claimed words must not shrink the card, or the button jumps up and the
+  // celebration starts where it used to be.
+  const [headingHeight, setHeadingHeight] = useState<number | undefined>(undefined);
+  const [noteHeight, setNoteHeight] = useState<number | undefined>(undefined);
+  const reducedMotion = useReducedMotion();
+  const [pop] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
+  const landed = claimed && count >= amount;
+  useEffect(() => {
+    if (!landed || reducedMotion) return;
+    // One soft pop as the figure lands: up fast, settle slow, no bounce.
+    const settle = Animated.sequence([
+      Animated.timing(pop, { toValue: 1.08, duration: 140, easing: Easing.bezier(0.23, 1, 0.32, 1), useNativeDriver: true }),
+      Animated.timing(pop, { toValue: 1, duration: 360, easing: Easing.bezier(0.23, 1, 0.32, 1), useNativeDriver: true }),
+    ]);
+    settle.start();
+    return () => settle.stop();
+  }, [landed, pop, reducedMotion]);
 
   return (
     <MotionView
@@ -241,7 +267,10 @@ function WelcomeCard({
         <Sparkles size={appTheme.icon.hero * 4} color={theme.colors.selectedStrong} />
       </View>
 
-      <View style={{ alignItems: 'center', gap: appTheme.spacing.compact }}>
+      <View
+        onLayout={keepFirstHeight(setHeadingHeight)}
+        style={{ alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact, minHeight: headingHeight }}
+      >
         <LinearGradient
           colors={[theme.colors.navigationCreateTop, theme.colors.navigationCreateBottom]}
           start={{ x: 0, y: 0 }}
@@ -261,24 +290,26 @@ function WelcomeCard({
       <DashedRule />
 
       <View style={{ borderRadius: appTheme.radii.md, borderCurve: 'continuous', backgroundColor: theme.colors.surfaceInset, overflow: 'hidden' }}>
-        <View
+        <Animated.View
           accessible
           accessibilityLabel={`${claimed ? count : amount} creation credits`}
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact, paddingVertical: appTheme.spacing.screen }}
+          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: appTheme.spacing.compact, paddingVertical: appTheme.spacing.screen, transform: [{ scale: pop }] }}
         >
           <Sparkles size={appTheme.icon.feature} color={theme.colors.primaryFill} />
           <AppText variant="display" color="primary" style={{ fontVariant: ['tabular-nums'] }}>
             {claimed ? `+${count}` : amount}
           </AppText>
           <AppText variant="bodySm">creation credits</AppText>
-        </View>
+        </Animated.View>
       </View>
 
-      <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
-        {claimed
-          ? 'They’re in your balance now.'
-          : 'This welcome gift can only be used for creating media. It can’t be used to buy recipes or resources.'}
-      </AppText>
+      <View onLayout={keepFirstHeight(setNoteHeight)} style={{ justifyContent: 'center', minHeight: noteHeight }}>
+        <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
+          {claimed
+            ? 'They’re in your balance now.'
+            : 'This welcome gift can only be used for creating media. It can’t be used to buy recipes or resources.'}
+        </AppText>
+      </View>
 
       {message ? (
         <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text>
@@ -295,7 +326,7 @@ function WelcomeCard({
               onClaim(null);
               return;
             }
-            button.measureInWindow((x, y, width, height) => onClaim({ x: x + width / 2, y: y + height / 2 }));
+            button.measureInWindow((x, y, width, height) => onClaim({ x, y, width, height }));
           }}
         />
       </View>
