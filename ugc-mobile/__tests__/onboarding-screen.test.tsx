@@ -800,7 +800,9 @@ describe('what the welcome answer after the identity step says (03-6)', () => {
   });
 });
 
-describe('claiming the welcome credits (03-9)', () => {
+// Owner, 2026-11-09: claimable credits are offered by the popup over Home, so
+// the setup claims nothing itself and ends there.
+describe('handing the welcome credits to the popup over Home', () => {
   const eligible = { ...welcome, status: 'eligible', identityComplete: true };
 
   beforeEach(() => {
@@ -808,117 +810,63 @@ describe('claiming the welcome credits (03-9)', () => {
     harness.api.getWelcomeCredits.mockReset().mockResolvedValue(eligible);
     harness.api.updateOnboardingState.mockReset().mockResolvedValue(undefined);
     harness.api.claimWelcomeCredits.mockReset();
-    harness.refreshProfile.mockReset().mockResolvedValue(undefined);
-    harness.updateCredits.mockReset();
     harness.localUpdates.length = 0;
-  });
-
-  // The stage claims as it opens (owner 11-08): there is no button to press.
-  async function claim(result: Record<string, unknown>) {
-    harness.api.claimWelcomeCredits.mockResolvedValue(result);
-    const queryClient = new QueryClient();
-    let tree: renderer.ReactTestRenderer | undefined;
-    await act(async () => {
-      tree = renderScreen(queryClient);
-      await settle();
-    });
-    await act(async () => { await settle(); });
-    return tree!;
-  }
-
-  it('takes the balance from a claim made just now', async () => {
-    const tree = await claim({ ...eligible, status: 'claimed', credits: 25, claimedAt: '2026-10-15T07:00:00.000Z' });
-
-    expect(harness.updateCredits).toHaveBeenCalledWith(25);
-    expect(harness.refreshProfile).not.toHaveBeenCalled();
-    act(() => tree.unmount());
-  });
-
-  it('re-reads the balance for a claim made earlier instead of trusting its stale figure', async () => {
-    // Claimed on the web last week; 25 was the balance right after that grant.
-    const tree = await claim({ ...eligible, status: 'already_claimed', credits: 25, claimedAt: '2026-10-08T07:00:00.000Z' });
-
-    expect(harness.refreshProfile).toHaveBeenCalledTimes(1);
-    expect(harness.updateCredits).not.toHaveBeenCalled();
-    act(() => tree.unmount());
-  });
-
-  it('adds the credits by itself, once, with no button to claim or put off (owner 11-08)', async () => {
-    const tree = await claim({ ...eligible, status: 'claimed', credits: 25, claimedAt: '2026-11-08T07:00:00.000Z' });
-
-    expect(harness.api.claimWelcomeCredits).toHaveBeenCalledTimes(1);
-    expect(rendered(tree)).toContain('Your welcome credits are ready');
-    expect(tree.root.findAll((node) => String(node.type) === 'primary-button' && String(node.props.label).startsWith('Claim'))).toHaveLength(0);
-    expect(tree.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
-    expect(rendered(tree)).not.toContain('Claim later');
-    expect(findButton(tree, 'primary-button', 'Start creating').props.loading).toBe(false);
-    act(() => tree.unmount());
-  });
-
-  it('holds Start creating while the claim runs', async () => {
-    harness.api.claimWelcomeCredits.mockReset().mockReturnValue(new Promise(() => undefined));
-    const queryClient = new QueryClient();
-    let tree: renderer.ReactTestRenderer | undefined;
-    await act(async () => {
-      tree = renderScreen(queryClient);
-      await settle();
-    });
-
-    expect(rendered(tree)).toContain('Adding your welcome credits');
-    expect(findButton(tree!, 'primary-button', 'Start creating').props.loading).toBe(true);
-    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
-    act(() => tree?.unmount());
-  });
-
-  it('offers a retry and a way out when the claim fails, and drops them once a retry works', async () => {
-    harness.api.claimWelcomeCredits.mockReset()
-      .mockRejectedValueOnce(new Error('Network request failed'))
-      .mockResolvedValue({ ...eligible, status: 'claimed', credits: 25, claimedAt: '2026-11-08T07:00:00.000Z' });
-    const queryClient = new QueryClient();
-    let tree: renderer.ReactTestRenderer | undefined;
-    await act(async () => {
-      tree = renderScreen(queryClient);
-      await settle();
-    });
-    await act(async () => { await settle(); });
-
-    expect(rendered(tree)).toContain('Your welcome credits are waiting');
-    expect(findButton(tree!, 'secondary-button', 'Try again later')).toBeTruthy();
-    await act(async () => {
-      findButton(tree!, 'primary-button', 'Try again').props.onPress();
-      await settle();
-    });
-    expect(rendered(tree)).toContain('Your welcome credits are ready');
-    expect(tree!.root.findAll((node) => String(node.type) === 'secondary-button')).toHaveLength(0);
-    act(() => tree?.unmount());
-  });
-
-  it('lets a failed claim be left, finishing the run', async () => {
-    harness.api.claimWelcomeCredits.mockReset().mockRejectedValue(new Error('Network request failed'));
     vi.mocked(router.replace).mockClear();
+  });
+
+  it('leaves at once for a named account with credits still to claim, claiming nothing', async () => {
     const queryClient = new QueryClient();
     let tree: renderer.ReactTestRenderer | undefined;
     await act(async () => {
       tree = renderScreen(queryClient);
       await settle();
     });
-    await act(async () => { await settle(); });
 
-    await act(async () => {
-      findButton(tree!, 'secondary-button', 'Try again later').props.onPress();
-      await settle();
-    });
-    expect(harness.localUpdates).toContainEqual(expect.objectContaining({ status: 'completed' }));
-    expect(router.replace).toHaveBeenCalled();
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(harness.api.claimWelcomeCredits).not.toHaveBeenCalled();
+    expect(rendered(tree)).not.toContain('Claim 25 credits');
     act(() => tree?.unmount());
   });
 
-  it('adds nothing for a sign-in that was paid out on a previous account', async () => {
-    const tree = await claim({ ...eligible, status: 'identity_already_claimed' });
+  it('ends the setup on Home once the name is saved, claiming nothing', async () => {
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockReset()
+      .mockResolvedValueOnce(welcome)
+      .mockResolvedValue(eligible);
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => ({ ...profile, ...body }));
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    await saveHandle(tree!);
 
-    expect(harness.updateCredits).not.toHaveBeenCalled();
+    expect(harness.api.claimWelcomeCredits).not.toHaveBeenCalled();
+    expect(harness.localUpdates).toContainEqual(expect.objectContaining({ status: 'completed' }));
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    act(() => tree?.unmount());
+  });
+
+  it('still says when a sign-in was paid out on a previous account', async () => {
+    harness.api.getProfile.mockReset().mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockReset()
+      .mockResolvedValueOnce(welcome)
+      .mockResolvedValue({ ...welcome, status: 'identity_already_claimed', identityComplete: true });
+    harness.api.validateProfile.mockReset().mockResolvedValue({ ok: true });
+    harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => ({ ...profile, ...body }));
+    const queryClient = new QueryClient();
+    let tree: renderer.ReactTestRenderer | undefined;
+    await act(async () => {
+      tree = renderScreen(queryClient);
+      await settle();
+    });
+    await saveHandle(tree!);
+
     expect(rendered(tree)).toContain('Welcome credits already claimed');
-    act(() => tree.unmount());
+    expect(harness.api.claimWelcomeCredits).not.toHaveBeenCalled();
+    act(() => tree?.unmount());
   });
 });
 
@@ -1012,7 +960,7 @@ describe('the creator name step (owner 11-08)', () => {
     harness.api.updateProfile.mockReset().mockImplementation(async (body: Record<string, unknown>) => ({ ...profile, ...body }));
     harness.api.getWelcomeCredits.mockReset()
       .mockResolvedValueOnce(welcome)
-      .mockResolvedValue({ ...welcome, status: 'eligible', identityComplete: true });
+      .mockResolvedValue({ ...welcome, status: 'identity_already_claimed', identityComplete: true });
     const queryClient = new QueryClient();
     let tree: renderer.ReactTestRenderer | undefined;
     await act(async () => {

@@ -6,7 +6,6 @@ import { Stack, router } from 'expo-router';
 import {
   AccessibilityInfo,
   ActivityIndicator,
-  Animated,
   ScrollView,
   Text,
   type TextInput,
@@ -34,7 +33,6 @@ import {
 } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
-import { useReducedMotion } from '@/lib/motion';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { onboardingReturnTo } from '@/lib/join-navigation';
 import { completeAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
@@ -156,14 +154,13 @@ function OnboardingFlow() {
     if (returnTo) completeAuthScreen(router, returnTo, { inPlace: returnsInPlace });
     else router.replace('/(tabs)' as never);
   }, [returnTo, returnsInPlace]);
-  const { api, user, refreshProfile, updateCredits } = useAuth();
+  const { api, user, refreshProfile } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
   const identityDeferredFor = state.identityDeferredFor;
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
-  const reducedMotion = useReducedMotion();
   const [step, setStep] = useState(state.introStep);
   // A signed-in creator never belongs on the guest intro, so open straight into
   // `loading` and let the resolver pick the real stage. Seeding `intro` here is
@@ -193,20 +190,13 @@ function OnboardingFlow() {
   // A save that failed for a reason other than the handle: the step then
   // offers a way out, so a lost connection cannot hold someone on it.
   const [saveFailed, setSaveFailed] = useState(false);
-  // A claim that threw (offline, a server error): the reward stage then offers
-  // a way out instead of holding someone on a retry.
-  const [claimFailed, setClaimFailed] = useState(false);
   // A handle the save refused, and what it said: taken since it was checked,
   // or refused by a rule the live check did not get to answer.
   const [handleRefusedAtSave, setHandleRefusedAtSave] = useState<{ handle: string; message: string } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [animatedCredits, setAnimatedCredits] = useState(0);
-  const [isCelebrating, setIsCelebrating] = useState(false);
-  const rewardScale = useRef(new Animated.Value(1)).current;
   const authSucceededTracked = useRef(false);
   const previousUserRef = useRef<string | null>(user?.id ?? null);
-  const rewardViewedTracked = useRef(false);
   const handleRef = useRef<TextInput | null>(null);
   const cardWidth = Math.min(520, width - 32);
   const isWelcome = stage === 'intro' && step === 0;
@@ -258,13 +248,14 @@ function OnboardingFlow() {
         local: { identityDeferredAt, identityDeferredFor, status: state.status },
         identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
       });
-      if (destination === 'none') {
-        // Nothing outstanding. Reaching here means a deep link, a stale card, or
-        // an account that signed in from the sign-up sheet: back to what it was.
+      if (destination === 'none' || destination === 'reward') {
+        // Nothing for this screen to do: a deep link, a stale entry, an account
+        // that signed in from the sign-in page, or credits still to claim,
+        // which the popup over Home offers (owner, 2026-11-09). Back to what it was.
         leaveForReturn();
         return;
       }
-      setStage(destination === 'reward' ? 'reward' : 'identity');
+      setStage('identity');
       // Only the goal. Sending `status: 'in_progress'` here is what demoted a
       // finished run one second after it completed — the server keeps its own
       // guard now, but the fix belongs at the source too.
@@ -308,25 +299,6 @@ function OnboardingFlow() {
     const key = step === 0 ? 'welcome' : 'goal';
     void trackOnboardingEvent(api, step === 0 ? 'started' : 'screen_viewed', { goal, step: key });
   }, [api, goal, stage, step]);
-
-  // The credits are added as soon as the stage opens, once a visit; a retry
-  // is the creator's own "Try again".
-  const autoClaimStarted = useRef(false);
-  useEffect(() => {
-    if (stage !== 'reward' || welcome?.status !== 'eligible' || autoClaimStarted.current) return;
-    autoClaimStarted.current = true;
-    void claimCredits();
-  // `claimCredits` is recreated every render; the ref keeps this to one call.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, welcome?.status]);
-
-  useEffect(() => {
-    // A stage that only explains why nothing can be claimed is not a reward view.
-    if (stage !== 'reward' || rewardViewedTracked.current || welcomeStatusNotice(welcome?.status)) return;
-    rewardViewedTracked.current = true;
-    setAnimatedCredits(welcome?.status === 'eligible' ? 0 : welcome?.amount ?? 25);
-    void trackOnboardingEvent(api, 'reward_viewed', { goal, step: 'reward' });
-  }, [api, goal, stage, welcome]);
 
   // The check Edit profile runs on the same handle. It refuses the placeholder
   // and the reserved list with no round trip (D3); a check that failed
@@ -424,13 +396,14 @@ function OnboardingFlow() {
       await update({ goal });
       await api.updateOnboardingState({ goal }).catch(() => undefined);
       void trackOnboardingEvent(api, 'username_saved', { goal, step: 'identity' });
-      // The reward stage is for people who can actually claim, and for the two
-      // answers that need a word first (it shows no figure for them). Anyone
-      // else — most often an account that predates the grant program — has now
-      // finished everything the flow can offer, so end it rather than show a
-      // welcome-credits figure they will never receive.
-      if (nextWelcome.status === 'eligible' || welcomeStatusNotice(nextWelcome.status)) {
+      // Claimable credits are offered by the popup over Home (owner,
+      // 2026-11-09), so the setup ends there. The reward stage is left for the
+      // two answers that need a word first; anyone else (most often an account
+      // that predates the grant program) has finished everything it can offer.
+      if (welcomeStatusNotice(nextWelcome.status)) {
         setStage('reward');
+      } else if (nextWelcome.status === 'eligible') {
+        await finishToHome();
       } else {
         await startCreating();
       }
@@ -458,66 +431,11 @@ function OnboardingFlow() {
     }
   };
 
-  const celebrateCredits = async (amount: number) => {
-    setIsCelebrating(true);
-    if (reducedMotion) {
-      setAnimatedCredits(amount);
-    } else {
-      setAnimatedCredits(0);
-      const started = Date.now();
-      await new Promise<void>((resolve) => {
-        const timer = setInterval(() => {
-          const progress = Math.min(1, (Date.now() - started) / 850);
-          setAnimatedCredits(Math.round(amount * progress));
-          if (progress >= 1) {
-            clearInterval(timer);
-            resolve();
-          }
-        }, 32);
-      });
-      Animated.sequence([
-        Animated.spring(rewardScale, { toValue: 1.08, useNativeDriver: true, speed: 18 }),
-        Animated.spring(rewardScale, { toValue: 1, useNativeDriver: true, speed: 18 }),
-      ]).start();
-    }
-    haptic.success();
-    AccessibilityInfo.announceForAccessibility(`${amount} creation credits added.`);
-    setIsCelebrating(false);
-  };
-
-  const claimCredits = async () => {
-    if (busy) return;
-    setBusy(true);
-    setMessage(null);
-    setClaimFailed(false);
-    try {
-      const result = await api.claimWelcomeCredits();
-      adoptWelcome(result);
-      if (result.status === 'claimed' || result.status === 'already_claimed') {
-        if (result.status === 'claimed') {
-          updateCredits(result.credits);
-        } else {
-          // Claimed earlier, perhaps on the web: `credits` is the balance right
-          // after that grant, not the balance now.
-          void refreshProfile().catch(() => undefined);
-        }
-        await celebrateCredits(result.amount);
-        void trackOnboardingEvent(api, 'reward_claimed', { goal, step: 'reward' });
-      } else if (!welcomeStatusNotice(result.status)) {
-        // `unavailable` and `identity_already_claimed` are said by the card
-        // itself (and the latter must never reach celebrateCredits or
-        // updateCredits: nothing was added).
-        setMessage(result.status === 'requires_account'
-          ? 'Create an account to claim your welcome credits.'
-          : 'Finish your creator name before claiming this reward.');
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Could not claim credits.');
-      setClaimFailed(true);
-      void trackOnboardingEvent(api, 'reward_failed', { goal, step: 'reward' });
-    } finally {
-      setBusy(false);
-    }
+  /** Ends the setup and goes back (Home, by default), where the welcome popup takes over. */
+  const finishToHome = async () => {
+    await complete();
+    await api.updateOnboardingState({ status: 'completed', goal }).catch(() => undefined);
+    leaveForReturn();
   };
 
   const startCreating = async () => {
@@ -538,14 +456,7 @@ function OnboardingFlow() {
     } as never);
   };
 
-  const claimReady = welcome?.status === 'eligible';
-  const claimed = welcome?.status === 'claimed' || welcome?.status === 'already_claimed';
   const statusNotice = welcomeStatusNotice(welcome?.status);
-  // The figure is only meaningful to someone who is about to receive it or just
-  // did. For everyone else `amount` falls back to the program default, which is
-  // how an account holding 26,831 credits was shown a headline "25".
-  // Not while the claim is still running: the figure counts up once it lands.
-  const showAmount = claimed || (claimReady && claimFailed);
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -719,60 +630,21 @@ function OnboardingFlow() {
             </>
           ) : null}
 
-          {stage === 'reward' ? (
+          {/* Only the answers that need a word before the creator: the credits
+              themselves are offered by the popup over Home (owner, 2026-11-09). */}
+          {stage === 'reward' && statusNotice ? (
             <View style={{ flex: 1, justifyContent: 'center', gap: 18, paddingVertical: 24 }}>
-              <Animated.View style={{ transform: [{ scale: rewardScale }] }}>
-                <Card accent="primary" padding="lg" style={{ alignItems: 'center', paddingVertical: 34, gap: 16 }}>
-                  <View style={{ width: 72, height: 72, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
-                    <Sparkles size={appTheme.icon.hero} color={theme.colors.primary} />
-                  </View>
-                  <View style={{ alignItems: 'center', gap: 8 }}>
-                    {/* "Welcome credits", as the server and the web call them. This was the
-                        "Creator Pack": a free grant named like the paid Creator credit pack, which
-                        a guest was told to "unlock" by creating an account. */}
-                    <Kicker color="primary">Welcome credits</Kicker>
-                    <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>
-                      {statusNotice
-                        ? statusNotice.title
-                        : claimed
-                          ? 'Your welcome credits are ready'
-                          : claimFailed ? 'Your welcome credits are waiting' : 'Adding your welcome credits'}
-                    </AppText>
-                    <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>
-                      {statusNotice
-                        ? statusNotice.body
-                        : claimed
-                          ? 'Your creation credits are ready for your first project.'
-                          : claimFailed
-                            ? 'They could not be added just now.'
-                            : 'One moment while they go into your balance.'}
-                    </AppText>
-                  </View>
-                  {showAmount ? (
-                    <View accessible accessibilityLiveRegion="polite" accessibilityLabel={`${isCelebrating ? animatedCredits : welcome?.amount} creation credits`} style={{ alignItems: 'center' }}>
-                      <AppText variant="display" color="primary" style={{ fontVariant: ['tabular-nums'], fontSize: 52, lineHeight: 60 }}>{isCelebrating ? animatedCredits : welcome?.amount}</AppText>
-                      <AppText variant="label" color="textSecondary">creation credits</AppText>
-                    </View>
-                  ) : null}
-                  {statusNotice ? null : (
-                    <AppText variant="caption" color="faint" style={{ textAlign: 'center' }}>Welcome credits are for creating. They can’t unlock creators’ resources.</AppText>
-                  )}
-                </Card>
-              </Animated.View>
-              {message ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text> : null}
-              {/* The credits are added as this stage opens (owner, 2026-11-08:
-                  "just this screen is enough"): no claim button, no "Claim
-                  later". A claim that failed can be tried again or left, since
-                  the route has no back gesture; an unfinished setup opens
-                  again at the next app start. */}
-              {claimReady && claimFailed ? (
-                <>
-                  <PrimaryButton label="Try again" loading={busy} onPress={() => void claimCredits()} />
-                  <SecondaryButton label="Try again later" disabled={busy} onPress={() => void startCreating()} />
-                </>
-              ) : (
-                <PrimaryButton label="Start creating" loading={claimReady && !claimed} onPress={() => void startCreating()} />
-              )}
+              <Card accent="primary" padding="lg" style={{ alignItems: 'center', paddingVertical: 34, gap: 16 }}>
+                <View style={{ width: 72, height: 72, borderRadius: appTheme.radii.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.selectedStrong }}>
+                  <Sparkles size={appTheme.icon.hero} color={theme.colors.primary} />
+                </View>
+                <View style={{ alignItems: 'center', gap: 8 }}>
+                  <Kicker color="primary">Welcome credits</Kicker>
+                  <AppText heading variant="pageTitle" style={{ textAlign: 'center' }}>{statusNotice.title}</AppText>
+                  <AppText variant="bodySm" color="muted" style={{ textAlign: 'center' }}>{statusNotice.body}</AppText>
+                </View>
+              </Card>
+              <PrimaryButton label="Start creating" onPress={() => void startCreating()} />
             </View>
           ) : null}
         </View>

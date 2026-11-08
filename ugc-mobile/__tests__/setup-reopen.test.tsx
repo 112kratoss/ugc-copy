@@ -23,9 +23,9 @@ import {
 } from '../lib/setup-reopen';
 
 describe('when an unfinished setup opens again (owner 11-08)', () => {
-  it('opens for a missing name or credits still to add, once per app start', () => {
+  it('opens for a missing name, once per app start; credits go to the popup (owner 11-09)', () => {
     expect(shouldReopenSetup('identity', false)).toBe(true);
-    expect(shouldReopenSetup('reward', false)).toBe(true);
+    expect(shouldReopenSetup('reward', false)).toBe(false);
     expect(shouldReopenSetup('identity', true)).toBe(false);
     for (const destination of ['intro', 'none', 'pending'] as const) {
       expect(shouldReopenSetup(destination, false)).toBe(false);
@@ -75,7 +75,7 @@ describe('the reopen on Home', () => {
     harness.focused = true;
     act(() => { tree.update(<SetupReopen />); });
     expect(router.push).not.toHaveBeenCalled();
-    harness.destination = 'reward';
+    harness.destination = 'identity';
     act(() => { tree.update(<SetupReopen />); });
     expect(router.push).toHaveBeenCalledTimes(1);
   });
