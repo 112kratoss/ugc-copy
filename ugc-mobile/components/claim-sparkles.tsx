@@ -52,6 +52,9 @@ export function claimSparklePieces(count = SPARKLE_COUNT, seed = 11): SparklePie
   }));
 }
 
+/** From the claim landing to the last sparkle gone. */
+export const CLAIM_CELEBRATION_MS = SPARKLE_MS + Math.max(...claimSparklePieces().map((piece) => piece.delay));
+
 export function ClaimSparkles({ play, frame }: { play: boolean; frame: ClaimFrame | null }) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();

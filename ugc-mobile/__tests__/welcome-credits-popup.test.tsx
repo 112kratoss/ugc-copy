@@ -17,6 +17,7 @@ const harness = vi.hoisted(() => ({
   haptics: [] as string[],
   announced: [] as string[],
   primed: [] as unknown[],
+  exits: [] as Array<() => void>,
 }));
 
 vi.mock('react-native', () => {
@@ -27,7 +28,7 @@ vi.mock('react-native', () => {
   }
   return {
     AccessibilityInfo: { announceForAccessibility: (text: string) => harness.announced.push(text) },
-    Animated: { Value, View: (props: MockProps) => React.createElement('animated-view', props, props.children), timing: () => ({ start() {}, stop() {} }), parallel: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
+    Animated: { Value, View: (props: MockProps) => React.createElement('animated-view', props, props.children), timing: (_value: unknown, config: { toValue: number }) => ({ start(done?: () => void) { if (config.toValue === 0 && done) harness.exits.push(done); }, stop() {} }), parallel: () => ({ start() {}, stop() {} }), sequence: () => ({ start() {}, stop() {} }) },
     Easing: { out: () => () => 0, quad: () => 0, bezier: () => () => 0 },
     Modal: ({ visible, children }: MockProps) => (visible ? React.createElement('modal', null, children) : null),
     Pressable: ({ children, ...props }: MockProps) => React.createElement('pressable', props, typeof children === 'function' ? null : children),
@@ -94,6 +95,7 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     harness.haptics.length = 0;
     harness.announced.length = 0;
     harness.primed.length = 0;
+    harness.exits.length = 0;
   });
   afterEach(() => {
     act(() => { for (const tree of trees.splice(0)) tree.unmount(); });
@@ -220,5 +222,17 @@ describe('the welcome-credits popup over Home (owner 11-09)', () => {
     expect(tree.toJSON()).toBeNull();
     expect(wasWelcomePopupDismissedThisRun('creator-1')).toBe(true);
     expect(mount().toJSON()).toBeNull();
+  });
+
+  it('fades out before it goes, rather than vanishing in one frame (owner 11-09: "smoother")', () => {
+    harness.reducedMotion = false;
+    const tree = mount();
+    act(() => { close(tree).props.onPress(); });
+    expect(text(tree)).toContain('Claim your welcome credits');
+    expect(harness.exits).toHaveLength(1);
+    act(() => { close(tree).props.onPress(); });
+    expect(harness.exits).toHaveLength(1);
+    act(() => { harness.exits[0](); });
+    expect(tree.toJSON()).toBeNull();
   });
 });

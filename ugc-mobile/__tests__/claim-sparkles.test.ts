@@ -9,7 +9,7 @@ vi.mock('lucide-react-native', () => ({ Sparkle: () => null }));
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => true }));
 vi.mock('@/lib/theme-context', () => ({ useAppTheme: () => ({ colors: {} }) }));
 
-import { claimSparklePieces } from '../components/claim-sparkles';
+import { CLAIM_CELEBRATION_MS, claimSparklePieces } from '../components/claim-sparkles';
 
 describe('the claim celebration stays quiet (owner 11-09: "premium", not confetti)', () => {
   const pieces = claimSparklePieces();
@@ -33,5 +33,10 @@ describe('the claim celebration stays quiet (owner 11-09: "premium", not confett
     const delays = pieces.map((piece) => piece.delay);
     expect(new Set(delays).size).toBe(pieces.length);
     expect(Math.max(...delays)).toBeLessThan(450);
+  });
+
+  it('is over within about a second and a half, so the card can leave as it ends', () => {
+    expect(CLAIM_CELEBRATION_MS).toBe(1250 + Math.max(...pieces.map((piece) => piece.delay)));
+    expect(CLAIM_CELEBRATION_MS).toBeLessThan(1700);
   });
 });

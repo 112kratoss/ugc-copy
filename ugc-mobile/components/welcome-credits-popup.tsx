@@ -5,7 +5,7 @@ import { Gift, Sparkles } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Easing, Modal, Text, View } from 'react-native';
 
-import { ClaimSparkles, type ClaimFrame } from '@/components/claim-sparkles';
+import { CLAIM_CELEBRATION_MS, ClaimSparkles, type ClaimFrame } from '@/components/claim-sparkles';
 import { AppText, IconButton, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { haptic } from '@/lib/haptics';
@@ -26,14 +26,32 @@ import {
 type Phase = 'offer' | 'claiming' | 'claimed' | 'failed';
 
 const CARD_MAX_WIDTH = 340;
-/** How long the card stays after the count-up before it closes itself (owner, 2026-11-09). */
-const CLOSE_AFTER_CLAIM_MS = 1400;
 const ENTRY_SCALE = 0.9;
+/**
+ * The way out (owner, 2026-11-09: "a little smoother"): the page's dim fades
+ * as the card and its Close settle back a touch and fade, on one even
+ * ease-in-out, instead of the Modal vanishing in a single frame. (An ease-out
+ * spent most of the fade in the first 100 ms and left a ghost lingering.)
+ */
+const EXIT_MS = 360;
+const EXIT_SCALE = 0.96;
+const EXIT_DROP = 12;
+const EXIT_EASE = Easing.bezier(0.4, 0, 0.2, 1);
+/**
+ * How long the card stays once the figure lands before it closes itself
+ * (owner, 2026-11-09: "make the pop up go as the confetti is popping"). The
+ * sparkles burst as the figure lands and the card fades away under them; they
+ * are drawn outside the fading card, so they finish over Home, and the popup
+ * leaves only when the last one has gone. Under Reduce Motion there are no
+ * sparkles and the figure lands at once, so the card holds longer to be read.
+ */
+const CLOSE_AFTER_CLAIM_MS = 150;
+const CLOSE_AFTER_CLAIM_STILL_MS = 1400;
 const BADGE_SIZE = 64;
 
 /**
  * The welcome-credits popup over Home (owner, 2026-11-09): a bright card with a
- * Claim button, a quiet sparkle celebration once the claim lands, and the figure
+ * Claim button, a quiet sparkle celebration as the figure lands, and the figure
  * counting up with haptic ticks. Offered to a named account with credits still
  * to claim; closing it waits until the next app start (`lib/welcome-popup.ts`).
  * Through a `Modal`: it holds no text field (see `components/dialog.tsx`).
@@ -64,6 +82,8 @@ function WelcomeCreditsPopupForAccount() {
   const [buttonFrame, setButtonFrame] = useState<ClaimFrame | null>(null);
   const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the last sparkle will have gone (0 when none are playing).
+  const celebrationEndsAt = useRef(0);
 
   const eligibleNow = shouldShowWelcomePopup({
     signedIn: Boolean(user),
@@ -82,9 +102,25 @@ function WelcomeCreditsPopupForAccount() {
   const visible = Boolean(offered) && !dismissed;
   const amount = offered?.amount ?? 25;
 
+  // 1 while the popup is up, 0 once it has gone.
+  const [presence] = useState(() => new Animated.Value(1, { useNativeDriver: true }));
+  const leaving = useRef(false);
   const close = () => {
+    if (leaving.current) return;
+    leaving.current = true;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
     if (user) dismissWelcomePopupThisRun(user.id);
-    setDismissed(true);
+    if (reducedMotion) {
+      setDismissed(true);
+      return;
+    }
+    Animated.timing(presence, { toValue: 0, duration: EXIT_MS, easing: EXIT_EASE, useNativeDriver: true })
+      .start(() => {
+        // The sparkles live in this Modal: let them finish before it goes.
+        const remaining = celebrationEndsAt.current - Date.now();
+        if (remaining <= 0) setDismissed(true);
+        else closeTimer.current = setTimeout(() => setDismissed(true), remaining);
+      });
   };
 
   // Claim, the celebration, then the card closes by itself (owner, 2026-11-09).
@@ -96,7 +132,7 @@ function WelcomeCreditsPopupForAccount() {
     if (reducedMotion) {
       setCount(to);
       haptic.success();
-      closeSoon(CLOSE_AFTER_CLAIM_MS);
+      closeSoon(CLOSE_AFTER_CLAIM_STILL_MS);
       return;
     }
     const ticks = welcomeCountUpTicks(to);
@@ -115,6 +151,7 @@ function WelcomeCreditsPopupForAccount() {
         if (countTimer.current) clearInterval(countTimer.current);
         countTimer.current = null;
         haptic.success();
+        celebrationEndsAt.current = Date.now() + CLAIM_CELEBRATION_MS;
         closeSoon(CLOSE_AFTER_CLAIM_MS);
       }
     }, 32);
@@ -149,21 +186,34 @@ function WelcomeCreditsPopupForAccount() {
     <Modal visible={visible} transparent statusBarTranslucent navigationBarTranslucent animationType="none" onRequestClose={close}>
       {visible ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: appTheme.spacing.section, gap: appTheme.spacing.screen }}>
-          <View style={{ position: 'absolute', inset: 0, backgroundColor: outerTheme.colors.overlay }} />
-          <ThemeScope scheme="light">
-            <WelcomeCard
-              amount={amount}
-              phase={phase}
-              count={count}
-              message={message}
-              onClaim={(frame) => {
-                setButtonFrame(frame);
-                void claim();
-              }}
-            />
-            <CloseChip disabled={phase === 'claiming'} onPress={close} />
-          </ThemeScope>
-          <ClaimSparkles play={phase === 'claimed'} frame={buttonFrame} />
+          <Animated.View style={{ position: 'absolute', inset: 0, backgroundColor: outerTheme.colors.overlay, opacity: presence }} />
+          <Animated.View
+            style={{
+              width: '100%',
+              alignItems: 'center',
+              gap: appTheme.spacing.screen,
+              opacity: presence,
+              transform: [
+                { translateY: presence.interpolate({ inputRange: [0, 1], outputRange: [EXIT_DROP, 0] }) },
+                { scale: presence.interpolate({ inputRange: [0, 1], outputRange: [EXIT_SCALE, 1] }) },
+              ],
+            }}
+          >
+            <ThemeScope scheme="light">
+              <WelcomeCard
+                amount={amount}
+                phase={phase}
+                count={count}
+                message={message}
+                onClaim={(frame) => {
+                  setButtonFrame(frame);
+                  void claim();
+                }}
+              />
+              <CloseChip disabled={phase === 'claiming'} onPress={close} />
+            </ThemeScope>
+          </Animated.View>
+          <ClaimSparkles play={phase === 'claimed' && count >= amount} frame={buttonFrame} />
         </View>
       ) : null}
     </Modal>
