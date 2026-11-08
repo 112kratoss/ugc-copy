@@ -93,9 +93,12 @@ describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
   });
 });
 
-describe('a picture out of a tile keeps the reel\'s own Back', () => {
+// Since 2026-11-08 a picture flies home alone on iOS only with
+// `IOS_BACK_FLIES_PICTURE`, which is off: every post has the bar's own Back,
+// and UIKit's zoom shrinks the page into its tile, as Instagram's Back does.
+describe('a picture out of a tile keeps the reel\'s own Back only while its picture flies home alone', () => {
   it('hides the bar for it, and the bar\'s Back stands aside for the rest only', () => {
-    expect(viewer).toContain('const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({');
+    expect(viewer).toContain('const flownBack = IOS_BACK_FLIES_PICTURE && Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({');
     expect(viewer).toContain('const barBack = nativeBack && !flownBack;');
     expect(viewer).toContain('...(nativeBack && flownBack ? { headerShown: false } : null),');
     expect(viewer).toContain('...(barBack ? viewerNativeBackOptions({');

@@ -172,40 +172,6 @@ describe('the picture the flight carries', () => {
 
     renderer.act(() => tree.unmount());
   });
-
-  // A close flying the reel's player home alone (iOS) draws the poster under
-  // it: shown wherever the video has not drawn (Back pressed while the clip was
-  // still loading flew an empty window home, review of #723), and what a video
-  // landing in a poster tile dissolves into. A lent video's window (Android's
-  // open) has none: the tile's own playing clip shows through it until the
-  // layer's view has drawn.
-  it('draws the poster under a video flown home alone, and under no other video', () => {
-    let tree!: renderer.ReactTestRenderer;
-    renderer.act(() => {
-      tree = renderer.create(<MediaZoomFlightLayer />, { createNodeMock });
-    });
-    const video = { player: PLAYER, url: 'https://example.test/post.mp4' };
-    const alone: ZoomGeometry = { ...GEOMETRY, pictureOnly: true };
-
-    renderer.act(() => {
-      holdZoomPicture({ preview: PREVIEW, geometry: GEOMETRY, video });
-    });
-    expect(tree.root.findAllByType('expo-image' as never)).toHaveLength(0);
-
-    for (const landsOnPicture of [false, true]) {
-      renderer.act(() => {
-        holdZoomPicture({ preview: PREVIEW, geometry: alone, video, landsOnPicture });
-      });
-      const posters = tree.root.findAllByType('expo-image' as never);
-      expect(posters).toHaveLength(1);
-      expect(posters[0].props.source).toEqual({ uri: PREVIEW.url, cacheKey: PREVIEW.cacheKey });
-      // The flight waits on the video, never on the poster under it.
-      expect(posters[0].props.onDisplay).toBeUndefined();
-      expect(tree.root.findAllByType('video-view' as never)).toHaveLength(1);
-    }
-
-    renderer.act(() => tree.unmount());
-  });
 });
 
 describe('a tap while a post is already opening', () => {

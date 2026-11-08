@@ -6,20 +6,18 @@ const read = (...path: string[]) => readFileSync(join(__dirname, '..', ...path),
 const viewer = read('app', 'viewer.tsx');
 const zoom = read('components', 'media-zoom.tsx');
 const layout = read('app', '_layout.tsx');
+const transition = read('lib', 'media-zoom-transition.ts');
 
-// A close shrinks the picture alone into its tile (owner, 2026-11-07: "a shadow
-// appearing around the pic and that then shrinks"). Filmed frame by frame on the
-// iPhone 17 Pro simulator and the Pixel 9a emulator.
-describe('a reel closing into its tile shrinks only its picture', () => {
-  // And as it grows out of its tile: black, the reel's page came up as a
-  // see-through dark panel round the growing picture over a feed the veil had
-  // not yet darkened (simulator, 2026-11-07).
-  it('iOS: clear behind the media while it grows out of its tile and is in front, and through its own close', () => {
-    expect(viewer).toContain("? Boolean(nativeZoomSourceId) && !reducedMotion && (closingSelf || (isFocused && (pushLanded || !arrived)))");
-    // Its own close, as against a page pushed over it: only its own begins while it is focused.
-    expect(viewer).toContain("if ((reelNavigation as unknown as { isFocused: () => boolean }).isFocused()) setClosingSelf(true);");
-    // A page popped off it keeps it black until that pop has landed; the first push only once.
-    expect(viewer).toMatch(/if \(event\.data\?\.closing === false\) \{\n\s+setPushLanded\(true\);\n\s+setArrived\(true\);/);
+// Android shrinks the picture alone into its tile (owner, 2026-11-07: "a shadow
+// appearing around the pic and that then shrinks"), filmed on the Pixel 9a
+// emulator. On iOS 18, UIKit's zoom grows and shrinks the reel's page, black and
+// all, as Instagram's post viewer does (filmed side by side on the owner's
+// iPhone 16e, 2026-11-08): clear behind its media, the page showed UIKit's own
+// ground in its bands, white in the light scheme and a black slab in the dark.
+describe('the reel\'s ground as it grows out of its tile and shrinks back', () => {
+  it('iOS: keeps its black, as Instagram\'s page does', () => {
+    expect(viewer).toMatch(/const groundClear = Platform\.OS === 'ios'\n\s+\? false\n/);
+    expect(viewer).not.toContain('setClosingSelf');
   });
 
   it('Android: always clear, over the stage\'s own ground, which is its black at rest and fades as a shrink runs', () => {
@@ -41,18 +39,23 @@ describe('a reel closing into its tile shrinks only its picture', () => {
     expect(viewer.match(/imageBackdrop=\{groundClear \? 'none' : 'solid'\}/g)).toHaveLength(2);
   });
 
-  // UIKit resizes its source view to the window as it grows or shrinks it. The
-  // tile is no longer that view: a stand-in of the picture alone is, whose
-  // image view follows its bounds, and the tile's own view has no ground.
-  it('iOS: the view UIKit resizes to the window is the picture alone, and the tile has no ground', () => {
-    expect(zoom).toMatch(/<AppleZoomSource [^>]*>\s*<ZoomStandInImage/);
-    expect(zoom).toContain("zoomed ? { borderRadius: radius, borderCurve: 'continuous', overflow: 'hidden' } : null,");
+  // UIKit resizes the view it grows or shrinks the reel with to the window, and
+  // React Native content keeps its own frames: given the tile, the tile's
+  // picture dropped and a copy of the card rode over the growing reel. It is
+  // given two empty views beside the tile instead: a page-shaped one for opens
+  // and one in the tile's own shape for closes.
+  it('iOS: UIKit zooms two empty views beside the tile, never the tile itself', () => {
+    expect(zoom).toMatch(/<AppleZoomSource identifier=\{source\.appleZoomId\} [^>]*>\s*<View pointerEvents="none" collapsable=\{false\} style=\{\[StyleSheet\.absoluteFill/);
+    expect(zoom).toMatch(/<AppleZoomSource identifier=\{appleZoomOpenSourceId\(source\.appleZoomId\)\} [^>]*pageShaped=\{pageFrame !== null\}>/);
+    // The tile's own view, the one it measures, is not inside an AppleZoomSource.
+    expect(zoom).toMatch(/<Animated\.View collapsable=\{false\} style=\{\[ZOOM_SOURCE_FILL, style, source\.hiddenStyle\]\}>\s*<View\s+ref=\{source\.ref\}/);
   });
 
-  it('iOS: the chrome goes on the UI thread as the close begins, and comes back if it is let go of', () => {
-    expect(zoom).toContain('if (!following.value) return { opacity: nativeCloseChrome.value };');
-    expect(zoom).toContain('nativeCloseChrome.set(0);');
-    expect(zoom.match(/nativeCloseChrome\.set\(withTiming\(1, \{ duration: NATIVE_CLOSE_CHROME_MS \}\)\)/g)).toHaveLength(2);
+  // Instagram keeps the rail and caption on the page as it shrinks under the
+  // finger (filmed 2026-11-08); they go with it in UIKit's crossfade.
+  it('iOS: the chrome stays on the page a gesture close shrinks', () => {
+    expect(zoom).toContain('if (!following.value) return { opacity: 1 };');
+    expect(zoom).not.toContain('nativeCloseChrome');
   });
 });
 
@@ -66,6 +69,13 @@ describe('a picture closing alone', () => {
 
   it('flies nothing from the end slide, which shows no media', () => {
     expect(viewer).toContain('activePicture: onEndSlide ? null : activeMedia.picture,');
-    expect(viewer).toContain('const flownBack = Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({');
+    expect(viewer).toContain('const flownBack = IOS_BACK_FLIES_PICTURE && Boolean(nativeZoomSourceId) && !onEndSlide && closesPictureAlone({');
+  });
+
+  // Filmed beside Instagram on the owner's iPhone 16e, 2026-11-08: its Back
+  // shrinks the whole page into the tile from the frame after the press.
+  it('iOS: Back leaves the close to UIKit\'s zoom, as Instagram\'s Back does', () => {
+    expect(transition).toContain('export const IOS_BACK_FLIES_PICTURE = false;');
+    expect(zoom).toContain('if (nativeZoom && (!IOS_BACK_FLIES_PICTURE || !pictureOnly)) {');
   });
 });

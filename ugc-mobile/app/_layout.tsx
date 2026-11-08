@@ -192,9 +192,9 @@ function navigationThemeFor(theme: AppTheme) {
 }
 
 /**
- * Black behind the navigator while a reel is on screen or being revealed, so
- * the rounded corners iOS 26 draws a revealed screen with show black around
- * the dark reel rather than the app's light ground (lib/reel-backdrop.ts).
+ * Black behind the navigator while a pop reveals a reel, so the rounded
+ * corners iOS 26 draws a revealed screen with show black around the dark reel
+ * rather than the app's light ground (lib/reel-backdrop.ts).
  * Android opens the reel as a transparent modal over a drawn screen, where
  * the ground never shows.
  */
@@ -424,9 +424,9 @@ function RootLayoutNav() {
                     cards from the grid look stacked over feed cards. */}
                 <Stack.Screen name="profile-media-feed" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'simple_push' }} />
                 <Stack.Screen name="showcase" options={{ headerShown: false, animation: reducedMotion ? 'none' : 'fade' }} />
-                {/* Where UIKit's zoom runs the page draws its own bar, which the
-                    zoom's veil covers and a close never re-lays out (see
-                    `CreatorTopBar` in components/creator-profile-screen.tsx). */}
+                {/* Where UIKit's zoom runs the page draws its own bar, which a
+                    close never re-lays out (see `CreatorTopBar` in
+                    components/creator-profile-screen.tsx). */}
                 <Stack.Screen name="creators/[username]" options={{ title: 'Creator', headerShown: !isAppleZoomAvailable() }} />
                 <Stack.Screen name="marketplace/[assetId]" options={{ title: 'Recipe' }} />
                 <Stack.Screen name="unlock/[unlockId]" options={{ title: 'Recipe' }} />

@@ -4,7 +4,6 @@ import { Platform, StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 
 import { MagicTabBar } from '@/components/magic-tab-bar';
-import { ZoomVeilScope } from '@/components/zoom-veil';
 import { useReducedMotion } from '@/lib/motion';
 import { createSideMenuStore, SideMenuHostContext } from '@/lib/side-menu-host';
 import { useAppTheme } from '@/lib/theme-context';
@@ -39,9 +38,6 @@ export default function TabLayout() {
 
   return (
     <Animated.View style={[styles.fill, underlayStyle]}>
-      {/* Over the tabs and their dock while a reel grows out of one of them or
-          shrinks back into it under UIKit's zoom (lib/zoom-veil.ts). */}
-      <ZoomVeilScope fillsWindow>
       <SideMenuHostContext.Provider value={sideMenu}>
       <Tabs
         backBehavior="history"
@@ -102,7 +98,6 @@ export default function TabLayout() {
         />
       </Tabs>
       </SideMenuHostContext.Provider>
-      </ZoomVeilScope>
     </Animated.View>
   );
 }

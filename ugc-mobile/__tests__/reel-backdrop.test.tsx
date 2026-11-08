@@ -3,10 +3,11 @@ import renderer from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Black behind the navigator while a reel is on screen or being revealed
- * (lib/reel-backdrop.ts): iOS 26 draws a screen a pop reveals with the
- * display's rounded corners, and the app's light ground showed in them around
- * the dark reel.
+ * Black behind the navigator while a pop reveals a reel (lib/reel-backdrop.ts):
+ * iOS 26 draws a screen a pop reveals with the display's rounded corners, and
+ * the app's light ground showed in them around the dark reel. Never while the
+ * reel grows or shrinks itself: UIKit scales a pushed page round it then, and
+ * black drew a frame round that lit page.
  */
 
 // The reel's navigator: whatever listens for its transitions can be fired from the test.
@@ -19,12 +20,11 @@ const navigation = {
   },
 };
 vi.mock('expo-router', () => ({ useNavigation: () => navigation }));
-vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true }));
 function fire(type: string, closing?: boolean) {
   listeners.get(type)?.forEach((listener) => listener({ data: { closing } }));
 }
 
-import { isReelBackdropShown, REEL_BACKDROP_CLOSE_MS, resetReelBackdrop, subscribeToReelBackdrop, useReelBackdrop } from '../lib/reel-backdrop';
+import { isReelBackdropShown, resetReelBackdrop, subscribeToReelBackdrop, useReelBackdrop } from '../lib/reel-backdrop';
 
 function Reel() {
   useReelBackdrop();
@@ -34,54 +34,63 @@ function Reel() {
 afterEach(() => {
   resetReelBackdrop();
   listeners.clear();
-  vi.useRealTimers();
 });
 
 describe('the backdrop behind a reel', () => {
-  it('is up while the reel is on screen, and gone with the reel', () => {
+  it('stays down while the reel grows out of its tile, rests and closes again', () => {
     let reel!: renderer.ReactTestRenderer;
-    expect(isReelBackdropShown()).toBe(false);
     renderer.act(() => { reel = renderer.create(<Reel />); });
-    expect(isReelBackdropShown()).toBe(true);
+    // The push grows the reel out of its tile, over a page UIKit shrinks behind it.
+    fire('transitionStart', false);
+    expect(isReelBackdropShown()).toBe(false);
+    fire('transitionEnd', false);
+    expect(isReelBackdropShown()).toBe(false);
+    // An edge swipe closes it into its tile.
+    fire('transitionStart', true);
+    expect(isReelBackdropShown()).toBe(false);
     renderer.act(() => reel.unmount());
     expect(isReelBackdropShown()).toBe(false);
   });
 
-  it('goes once a page pushed over the reel has covered it, and comes back as a pop starts to reveal the reel', () => {
+  it('comes up as a pop starts to reveal the reel from under a page pushed over it, and goes as that pop ends', () => {
     renderer.act(() => { renderer.create(<Reel />); });
+    fire('transitionStart', false);
+    fire('transitionEnd', false);
     // A creator profile slides over the reel.
     fire('transitionStart', true);
-    expect(isReelBackdropShown()).toBe(true);
+    expect(isReelBackdropShown()).toBe(false);
     fire('transitionEnd', true);
-    // Light pages popped back to one another keep the light ground behind their corners.
     expect(isReelBackdropShown()).toBe(false);
     // Back on the profile, or its edge swipe, starts to reveal the reel.
     fire('transitionStart', false);
     expect(isReelBackdropShown()).toBe(true);
-  });
-
-  it('outlasts a reel Back removes until its close has landed', () => {
-    vi.useFakeTimers();
-    let reel!: renderer.ReactTestRenderer;
-    renderer.act(() => { reel = renderer.create(<Reel />); });
-    // Back: the reel leaves React before UIKit has shrunk it into its tile, and
-    // UIKit scales a pushed page up from behind it meanwhile.
-    fire('beforeRemove');
-    renderer.act(() => reel.unmount());
-    expect(isReelBackdropShown()).toBe(true);
-    vi.advanceTimersByTime(REEL_BACKDROP_CLOSE_MS - 1);
-    expect(isReelBackdropShown()).toBe(true);
-    vi.advanceTimersByTime(1);
+    fire('transitionEnd', false);
+    expect(isReelBackdropShown()).toBe(false);
+    // The reel up again, its own close is no reveal.
+    fire('transitionStart', true);
     expect(isReelBackdropShown()).toBe(false);
   });
 
-  it('stays up while any reel on screen holds it, and tells whoever draws it', () => {
+  it('goes when a reveal is let go of and the page stays over the reel', () => {
+    renderer.act(() => { renderer.create(<Reel />); });
+    fire('transitionEnd', true);
+    fire('transitionStart', false);
+    expect(isReelBackdropShown()).toBe(true);
+    // Light pages popped back to one another above it keep the light ground behind their corners.
+    fire('transitionEnd', true);
+    expect(isReelBackdropShown()).toBe(false);
+  });
+
+  it('stays up while any reel holds it, tells whoever draws it, and goes with the last of them', () => {
     const listener = vi.fn();
     subscribeToReelBackdrop(listener);
     let first!: renderer.ReactTestRenderer;
     let second!: renderer.ReactTestRenderer;
     renderer.act(() => { first = renderer.create(<Reel />); });
     renderer.act(() => { second = renderer.create(<Reel />); });
+    fire('transitionEnd', true);
+    fire('transitionStart', false);
+    expect(isReelBackdropShown()).toBe(true);
     renderer.act(() => second.unmount());
     expect(isReelBackdropShown()).toBe(true);
     renderer.act(() => first.unmount());

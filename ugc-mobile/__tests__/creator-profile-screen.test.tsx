@@ -141,9 +141,6 @@ vi.mock('@/components/media-zoom', () => ({
   MediaZoomSurface: ({ children }: MockProps) => React.createElement(React.Fragment, null, children),
   useMediaZoomSource: () => ({ capture: (open: (zoom: null) => void) => open(null), prepare: () => undefined }),
 }));
-vi.mock('@/components/zoom-veil', () => ({
-  ZoomVeilScope: ({ children }: MockProps) => React.createElement(React.Fragment, null, children),
-}));
 vi.mock('@/components/skeleton', () => ({
   CreatorProfileSkeleton: () => React.createElement('creator-profile-skeleton'),
   SkeletonBone: (props: MockProps) => React.createElement('skeleton-bone', props),
