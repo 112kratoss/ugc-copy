@@ -857,3 +857,43 @@ describe('AuthProvider', () => {
     });
   });
 });
+
+// The welcome claim on /welcome-reward, a page drawn without a provider, left the
+// header at 0 credits, and still at 0 on /create after a client navigation
+// (reproduced on a local stack, 2026-11-05 and 2026-11-09): outside a provider
+// `updateCredits` did nothing, and the header hears only the window event.
+describe('a balance announced from outside any provider', () => {
+  function Claimer() {
+    const { updateCredits } = useAuth();
+    return <button type="button" onClick={() => updateCredits(25)}>Claimed</button>;
+  }
+
+  it('goes out on the credits_updated event the header listens for', () => {
+    const heard: unknown[] = [];
+    const listener = (event: Event) => heard.push((event as CustomEvent).detail);
+    window.addEventListener('credits_updated', listener);
+    try {
+      render(<Claimer />);
+      fireEvent.click(screen.getByRole('button', { name: 'Claimed' }));
+    } finally {
+      window.removeEventListener('credits_updated', listener);
+    }
+    expect(heard).toEqual([{ credits: 25, marketplaceSpendableCredits: undefined }]);
+  });
+
+  it('moves a provider elsewhere on the page to the new balance', async () => {
+    render(
+      <>
+        <Claimer />
+        <AuthProvider initialSession={authenticatedSession} initialCredits={0} initialMarketplaceSpendableCredits={0} hasResolvedInitialState>
+          <AuthProbe />
+        </AuthProvider>
+      </>,
+    );
+    expect(screen.getByTestId('credits')).toHaveTextContent('0');
+    fireEvent.click(screen.getByRole('button', { name: 'Claimed' }));
+    await waitFor(() => expect(screen.getByTestId('credits')).toHaveTextContent('25'));
+    // A grant is promotional: none of it is spendable on a recipe until the server says so.
+    expect(screen.getByTestId('spendable')).toHaveTextContent('0');
+  });
+});

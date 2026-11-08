@@ -393,6 +393,31 @@ describe('AppShellAccount', () => {
     expect(screen.getByText('77 credits')).toBeInTheDocument();
     expect(screen.queryByText('9999 credits')).toBeNull();
   });
+  // The welcome popup holds the new balance back until its figure lands, then
+  // announces it: the header moves with the landing, not a read later.
+  it('draws the balance a credits_updated event carries at once, while its read is still out', async () => {
+    render(<AppShellAccount />);
+    expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+    mocks.maybeSingle.mockImplementation(() => new Promise(() => {}));
+    await waitFor(() => {
+      act(() => window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 1320 } })));
+      expect(screen.getByText('1320 credits')).toBeInTheDocument();
+    });
+  });
+
+  it('takes no announced balance for an account that is no longer the one shown', async () => {
+    render(<AppShellAccount />);
+    expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+    mocks.getUser.mockImplementationOnce(() => new Promise(() => {}));
+    act(() => appShellAuthCallback?.('SIGNED_IN', {
+      ...authenticatedSession,
+      access_token: 'second-access-token',
+      user: { ...authenticatedSession.user, id: 'user-2' },
+    }));
+    act(() => window.dispatchEvent(new CustomEvent('credits_updated', { detail: { credits: 9999 } })));
+    expect(screen.queryByText('9999 credits')).toBeNull();
+  });
+
   it('invalidates a pending credit refresh immediately when another account starts verification', async () => {
     render(<AppShellAccount />);
     expect(await screen.findByText('1295 credits')).toBeInTheDocument();
