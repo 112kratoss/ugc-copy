@@ -7,17 +7,17 @@
 // (`app/onboarding.tsx`, given the return), and from there back to what they were doing;
 // an account already set up passes straight through.
 import * as AppleAuthentication from 'expo-apple-authentication';
-import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Mail } from 'lucide-react-native';
+import { Sparkles } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Platform, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { GoogleGMark } from '@/components/google-g-mark';
 import { MediaWall } from '@/components/media-wall';
-import { AppText, BrandLockup, IconButton } from '@/components/ui';
+import { AppText, IconButton } from '@/components/ui';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
 import { describeProviderSignInError, signInProviderButtons, type AuthNotice } from '@/lib/auth-error-copy';
@@ -31,11 +31,10 @@ import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 
-import googleSignInArtwork from '../assets/images/google-signin-android.png';
-
-/** The sign-in screen's own provider buttons' height and shape (`app/auth.tsx`). */
-const BUTTON_HEIGHT = appTheme.touch.roomy;
-const GOOGLE_BUTTON_ASPECT = 216 / 48;
+/** Both provider buttons: Apple's system button scales its title to about 19pt at this height. */
+const BUTTON_HEIGHT = 50;
+const PROVIDER_LABEL_SIZE = 19;
+const SIDE = 20;
 
 /** Where a sign-in made here goes: the name and credits once, then `target`. */
 export function signInWallNextHref(target: string) {
@@ -151,12 +150,19 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
         style={{ position: 'absolute', inset: 0, experimental_backgroundImage: SIGN_IN_WALL_SHADE }}
       />
 
-      <View
-        style={{
-          flex: 1,
+      {/* Scrolls only when it has to: at the largest text sizes on a small phone, so the
+          buttons are never pushed off the screen. */}
+      <ScrollView
+        style={{ flex: 1 }}
+        alwaysBounceVertical={false}
+        showsVerticalScrollIndicator={false}
+        // No field on this page; a keyboard left up by the page beneath gives way to the tap.
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{
+          flexGrow: 1,
           paddingTop: insets.top + 4,
-          paddingBottom: Math.max(insets.bottom, 16) + 8,
-          paddingHorizontal: 20,
+          paddingBottom: Math.max(insets.bottom, 16) + 4,
+          paddingHorizontal: SIDE,
         }}
       >
         <IconButton
@@ -165,10 +171,11 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
           variant="plain"
           disabled={busy}
           onPress={close}
-          style={{ alignSelf: 'flex-start', marginLeft: -10 }}
+          // The glyph's left edge on the headline's.
+          style={{ alignSelf: 'flex-start', marginLeft: -12 }}
         />
 
-        <View style={{ marginTop: 20, gap: 14, maxWidth: 360 }}>
+        <View style={{ marginTop: 20, gap: 12, maxWidth: 360 }}>
           <AppText
             heading
             variant="display"
@@ -177,12 +184,16 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
           >
             {'Create\nanything'}
           </AppText>
-          <View style={{ alignSelf: 'flex-start' }}>
-            <BrandLockup />
+          {/* A small mark under the headline, as Kling's is: the full lockup is a page title. */}
+          <View accessibilityRole="header" accessibilityLabel="Magicbooklet" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Sparkles size={appTheme.icon.compact} color={theme.colors.primary} />
+            <AppText variant="sectionTitle" style={{ color: mediaColors.onMedia, fontSize: 19, lineHeight: 24 }}>
+              Magicbooklet
+            </AppText>
           </View>
         </View>
 
-        <View style={{ flex: 1 }} />
+        <View style={{ flex: 1, minHeight: 24 }} />
 
         <AppText variant="body" style={{ color: mediaColors.onMedia, textAlign: 'center', marginBottom: 14 }}>
           Join free and get 25 credits to start
@@ -195,6 +206,9 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
           </View>
         ) : null}
 
+        {/* One width, one height, one label size: Apple's system button and a drawn Google
+            button to match it, both white on the dark wall. Android has Google alone, and it
+            leads there just as Apple does on iOS. */}
         <View style={{ gap: appTheme.spacing.gap, width: '100%', maxWidth: 430, alignSelf: 'center' }}>
           {providers.includes('Apple') ? (
             <View pointerEvents={unavailable ? 'none' : 'auto'} style={{ opacity: unavailable ? appTheme.opacity.disabled : 1 }}>
@@ -212,77 +226,86 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
           {providers.includes('Google') ? (
             <Pressable
               accessibilityRole="button"
-              // Google's one asset reads "Sign in with Google" for sign-up too, so the spoken
-              // name matches the drawn one and the hint says the rest.
-              accessibilityLabel="Sign in with Google"
+              accessibilityLabel="Continue with Google"
               accessibilityHint="Signs in, or creates your account, with Google"
               accessibilityState={{ busy: googleBusy, disabled: unavailable }}
               disabled={unavailable}
               onPress={() => void signUpWithGoogle()}
               style={({ pressed }) => ({
-                minHeight: BUTTON_HEIGHT,
+                height: BUTTON_HEIGHT,
+                borderRadius: appTheme.radii.pill,
+                backgroundColor: mediaColors.onMedia,
+                flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'center',
+                gap: 10,
                 opacity: unavailable ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
               })}
             >
               {googleBusy ? (
-                <ActivityIndicator color={mediaColors.onMedia} />
+                <ActivityIndicator color={mediaColors.mediaGround} />
               ) : (
-                <Image
-                  accessibilityIgnoresInvertColors
-                  contentFit="contain"
-                  source={googleSignInArtwork}
-                  style={{ width: BUTTON_HEIGHT * GOOGLE_BUTTON_ASPECT, height: BUTTON_HEIGHT }}
-                />
+                <>
+                  <GoogleGMark size={20} />
+                  <Text
+                    maxFontSizeMultiplier={1.3}
+                    style={{ color: mediaColors.mediaGround, fontSize: PROVIDER_LABEL_SIZE, fontWeight: '600', letterSpacing: -0.2 }}
+                  >
+                    Continue with Google
+                  </Text>
+                </>
               )}
             </Pressable>
           ) : null}
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Sign in with email"
-            accessibilityHint="For an account you made with email"
-            accessibilityState={{ disabled: busy }}
-            disabled={busy}
-            onPress={useEmail}
-            style={({ pressed }) => ({
-              minHeight: BUTTON_HEIGHT,
-              borderRadius: appTheme.radii.pill,
-              borderWidth: 1,
-              borderColor: mediaColors.onMediaSecondary,
-              backgroundColor: mediaColors.mediaChip,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 10,
-              opacity: busy ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-            })}
-          >
-            <Mail size={appTheme.icon.compact} color={mediaColors.onMedia} />
-            <AppText variant="button" style={{ color: mediaColors.onMedia }}>Sign in with email</AppText>
-          </Pressable>
         </View>
 
-        <Text style={{ marginTop: 16, color: mediaColors.onMediaSecondary, fontSize: 11, lineHeight: 16, textAlign: 'center' }}>
-          By continuing, you agree to the Magicbooklet{' '}
-          <Text
-            accessibilityRole="link"
-            onPress={() => void Linking.openURL(`${env.siteUrl}/terms`)}
-            style={{ color: mediaColors.onMedia, fontWeight: '700' }}
-          >
-            Terms of Service
+        {/* Email makes no new accounts, so it is a way back in for one, not a third button. */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Sign in with email"
+          accessibilityHint="For an account you made with email"
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
+          onPress={useEmail}
+          style={({ pressed }) => ({
+            minHeight: appTheme.touch.default,
+            marginTop: 6,
+            alignItems: 'center',
+            justifyContent: 'center',
+            opacity: busy ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+          })}
+        >
+          <Text style={{ color: mediaColors.onMediaSecondary, fontSize: 15, lineHeight: 20, textAlign: 'center' }}>
+            Made an account with email?{' '}
+            <Text style={{ color: mediaColors.onMedia, fontWeight: '700' }}>Sign in</Text>
           </Text>
-          {' '}and acknowledge the{' '}
-          <Text
-            accessibilityRole="link"
-            onPress={() => void Linking.openURL(`${env.siteUrl}/privacy`)}
-            style={{ color: mediaColors.onMedia, fontWeight: '700' }}
-          >
-            Privacy Policy
+        </Pressable>
+
+        <View style={{ marginTop: 4, alignItems: 'center', gap: 2 }}>
+          <Text style={{ color: mediaColors.onMediaSecondary, fontSize: 12, lineHeight: 17, textAlign: 'center' }}>
+            By continuing, you agree to the Magicbooklet terms and privacy policy.
           </Text>
-          .
-        </Text>
-      </View>
+          <View style={{ flexDirection: 'row', gap: 20 }}>
+            <TermsLink label="Terms of Service" path="/terms" />
+            <TermsLink label="Privacy Policy" path="/privacy" />
+          </View>
+        </View>
+      </ScrollView>
     </View>
+  );
+}
+
+function TermsLink({ label, path }: { label: string; path: string }) {
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={`Open ${label.toLowerCase()}`}
+      onPress={() => void Linking.openURL(`${env.siteUrl}${path}`)}
+      // A 13pt line reached from a full 44pt row.
+      hitSlop={{ top: 14, bottom: 14, left: 8, right: 8 }}
+      style={({ pressed }) => ({ paddingVertical: 2, opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
+      <Text style={{ color: mediaColors.onMedia, fontSize: 13, lineHeight: 18, fontWeight: '700' }}>{label}</Text>
+    </Pressable>
   );
 }

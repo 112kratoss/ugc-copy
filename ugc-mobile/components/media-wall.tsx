@@ -1,6 +1,6 @@
 // The wall of creations behind the sign-in screen (owner, 2026-11-08: "medias in the
 // background in a loop"): twelve community posts, shipped inside the app so the wall is
-// never blank on a slow network, in four tilted columns that drift past each other.
+// never blank on a slow network, in five tilted columns that drift past each other.
 // Each column is its tiles twice over, slid by exactly one set's height and started again,
 // so the loop has no seam. The slides run on the native driver; Reduce Motion holds them.
 import { Image } from 'expo-image';
@@ -28,12 +28,12 @@ export const MEDIA_WALL_TILES = [
   wall01, wall02, wall03, wall04, wall05, wall06, wall07, wall08, wall09, wall10, wall11, wall12,
 ] as const;
 
-const COLUMNS = 4;
+const COLUMNS = 5;
 /** Each column's set: six of the twelve, so a picture never meets itself on screen. */
 const PER_COLUMN = 6;
 const GAP = 10;
-/** Wider than the screen, so the tilt never shows a corner. */
-const WALL_SCALE = 1.5;
+/** Wider than the screen, so the tilt never shows a corner (a tilted phone screen needs ~1.37×). */
+const WALL_SCALE = 1.45;
 const TILT = '-10deg';
 /** Points a second: slow enough to read as a backdrop, not a feed. */
 const DRIFT_SPEED = 14;
@@ -60,7 +60,8 @@ export function mediaWallGeometry(width: number, height: number): MediaWallGeome
 
 /**
  * Column c takes every fourth picture from c, then every fourth from c + 2: neighbouring
- * columns never share one, and the two that do (0 and 2, 1 and 3) start apart.
+ * columns never share one (the evens and the odds alternate), and the columns that share a
+ * set start apart.
  */
 export function mediaWallColumn(column: number) {
   const count = MEDIA_WALL_TILES.length;
@@ -78,6 +79,10 @@ export function MediaWall({ width, height }: { width: number; height: number }) 
       importantForAccessibility="no-hide-descendants"
       style={[StyleSheet.absoluteFill, { overflow: 'hidden' }]}
     >
+      {/* The tilt turns a screen-sized frame, so it pivots on the screen's centre. Turning the
+          doubled columns themselves pivoted on their own centre, half a cycle below the screen's,
+          and swung the top-right corner in: an empty wedge down the right edge. */}
+      <View style={{ position: 'absolute', left: 0, top: 0, width, height, transform: [{ rotate: TILT }] }}>
       <View
         style={{
           position: 'absolute',
@@ -87,7 +92,6 @@ export function MediaWall({ width, height }: { width: number; height: number }) 
           height: geometry.cycle * 2,
           flexDirection: 'row',
           gap: GAP,
-          transform: [{ rotate: TILT }],
         }}
       >
         {Array.from({ length: COLUMNS }, (_, column) => (
@@ -100,6 +104,7 @@ export function MediaWall({ width, height }: { width: number; height: number }) 
             speed={DRIFT_SPEED * (column % 2 === 0 ? 1 : 0.8) * (column < 2 ? 1 : 1.15)}
           />
         ))}
+      </View>
       </View>
     </View>
   );
@@ -143,7 +148,7 @@ function WallColumn({ tiles, geometry, upward, speed }: {
           style={{
             width: geometry.tileWidth,
             height: geometry.tileHeight,
-            borderRadius: appTheme.radii.md,
+            borderRadius: appTheme.radii.sm,
             borderCurve: 'continuous',
             overflow: 'hidden',
           }}

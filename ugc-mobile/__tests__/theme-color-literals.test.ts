@@ -56,6 +56,7 @@ const EXEMPT: Record<string, string> = {
   'components/media-lightbox.tsx': 'a picture on black in both schemes, like the reel',
   'app/onboarding.tsx': 'the first run stays dark in both schemes: its art is a night scene made for black',
   'components/onboarding-booklet.tsx': 'the first run stays dark in both schemes: its art is a night scene made for black',
+  'components/google-g-mark.tsx': "Google's own mark, which its branding guidelines say is drawn in Google's four colours and never recoloured",
   'components/letterbox-bands.tsx': "the shade belongs to the picture: it darkens a mirrored, blurred copy of the picture's own edge",
 };
 

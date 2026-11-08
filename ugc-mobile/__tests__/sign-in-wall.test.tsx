@@ -189,15 +189,19 @@ describe('the sign-in wall of creations', () => {
       const margin = height * 0.12;
       expect(g.top).toBeLessThanOrEqual(-margin);
       expect(g.top - g.cycle + 2 * g.cycle).toBeGreaterThanOrEqual(height + margin);
+      // Wide enough that the screen, turned by the tilt, stays inside the wall.
+      const tilt = (10 * Math.PI) / 180;
+      expect(g.wallWidth).toBeGreaterThanOrEqual(width * Math.cos(tilt) + height * Math.sin(tilt));
     }
   });
 
-  it('ships twelve pictures, six to a column, and never the same one in neighbouring columns', () => {
+  it('ships twelve pictures, six to each of five columns, and never the same one in neighbouring columns', () => {
     expect(MEDIA_WALL_TILES).toHaveLength(12);
-    for (let column = 0; column < 4; column += 1) {
+    for (let column = 0; column < 5; column += 1) {
       const own = mediaWallColumn(column);
       expect(new Set(own).size).toBe(6);
-      const next = new Set(mediaWallColumn((column + 1) % 4));
+      if (column === 4) continue;
+      const next = new Set(mediaWallColumn(column + 1));
       expect(own.some((tile) => next.has(tile))).toBe(false);
     }
   });
@@ -228,7 +232,7 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
     expect(JSON.stringify(tree.toJSON())).toContain('Create\\nanything');
     expect(tree.root.findByProps({ accessibilityLabel: 'Continue with Apple' }).props.buttonStyle).toBe('WHITE');
-    expect(tree.root.findAllByProps({ accessibilityLabel: 'Sign in with Google' }).length).toBeGreaterThan(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Google' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
   });
 
@@ -270,7 +274,7 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     authState.signInWithGoogle.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
     const tree = render(<AuthRoute />);
     renderer.act(() => {
-      tree.root.findAllByProps({ accessibilityLabel: 'Sign in with Google' })[0].props.onPress();
+      tree.root.findAllByProps({ accessibilityLabel: 'Continue with Google' })[0].props.onPress();
     });
     renderer.act(() => hardwareBack.handler?.());
     expect(router.back).not.toHaveBeenCalled();
