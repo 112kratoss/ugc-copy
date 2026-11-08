@@ -43,6 +43,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { OnboardingGoal, ProfileResponse, WelcomeCreditResponse } from '@/lib/types';
 import { useHandleAvailability } from '@/lib/use-handle-availability';
+import { useHardwareBack } from '@/lib/use-hardware-back';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
@@ -145,7 +146,7 @@ function OnboardingFlow() {
     if (returnTo) completeAuthScreen(router, returnTo, { inPlace: returnsInPlace });
     else router.replace('/(tabs)' as never);
   }, [returnTo, returnsInPlace]);
-  const { api, user, refreshProfile, updateCredits, markIdentityDeferredOnAccount } = useAuth();
+  const { api, user, refreshProfile, updateCredits } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
@@ -159,6 +160,11 @@ function OnboardingFlow() {
   // what put an account holder on the welcome card while the profile fetch was
   // still in flight.
   const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? 'loading' : 'intro');
+  // The creator name is required to go on (owner, 2026-11-08). iOS already
+  // offers no way past it (the route turns the back gesture off); Android's
+  // back key would otherwise pop the screen with no name chosen.
+  const isFlowFocused = useIsFocused();
+  useHardwareBack(stage === 'identity' && isFlowFocused, () => undefined);
   const [goal, setGoal] = useState<OnboardingGoal>(state.goal);
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
@@ -297,21 +303,12 @@ function OnboardingFlow() {
    * `skip()` marks the flow skipped rather than complete, so the entry points
    * can still offer the flow later — stepping out is deferring, not losing.
    *
-   * Leaving the identity stage records the deferral. Without it the resolver
-   * sends an unclaimed handle straight back to this same stage on the next
-   * render, which is the old loop wearing a different hat: "later" has to mean
-   * later. Settings still opens the flow whenever they want it.
+   * The creator name step is not one of the ways out (owner, 2026-11-08): it
+   * has no "Choose a name later", so nothing here records a deferral. One made
+   * earlier, or on the web, is still honoured by the destination resolver.
    */
   const leaveForNow = async (fromStep: string) => {
-    if (fromStep === 'identity') {
-      await update({ status: 'skipped', identityDeferredAt: new Date().toISOString(), identityDeferredFor: user?.id ?? null });
-      // The account's own record, the one the web keeps too, so "later" holds
-      // on the web and on the next device as well. Not awaited: the install's
-      // record above already holds it here, and leaving must not wait on auth.
-      void markIdentityDeferredOnAccount().catch(() => undefined);
-    } else {
-      await skip();
-    }
+    await skip();
     void trackOnboardingEvent(api, 'skipped', { goal, step: fromStep });
     leaveForReturn();
   };
@@ -620,18 +617,9 @@ function OnboardingFlow() {
                   disabled={!displayName.trim() || !PROFILE_USERNAME_PATTERN.test(username) || usernameState === 'error'}
                   onPress={() => void saveIdentity()}
                 />
-                {/* The flow has to stay optional: this stage offered no skip and
-                    the route disables the back gesture, so a signed-in creator
-                    was held here until they picked a handle. A generated one
-                    already exists to fall back on. */}
-                <SecondaryButton
-                  label="Choose a name later"
-                  disabled={busy}
-                  onPress={() => void leaveForNow('identity')}
-                />
-                {/* Said where the choice is made: the welcome credits wait on a
-                    creator name, and after "later" nothing on the way back to
-                    the creator offers them again. */}
+                {/* The name is required to go on (owner, 2026-11-08): no
+                    "Choose a name later", and Android's back key is held while
+                    this step is up. Said here because the credits wait on it. */}
                 {welcome?.status === 'not_eligible' || welcome?.status === 'eligible' ? (
                   <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
                     Your 25 free credits are added once you choose a name.
