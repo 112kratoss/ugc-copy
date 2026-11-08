@@ -13,7 +13,8 @@ const read = (name: string) => readFileSync(path.join(mobileRoot, name), 'utf8')
 
 const dashboard = read('components/home-dashboard.tsx');
 const shelfSource = read('components/home-shelf.tsx');
-const authScreen = read('app/auth.tsx');
+// The sign-in page's email half, which carries the wordmark over its form.
+const authScreen = read('components/email-sign-in-form.tsx');
 
 /** Slice one function out of a 1,400-line file rather than matching across it. */
 function declaration(source: string, header: string) {

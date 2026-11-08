@@ -52,6 +52,27 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Animated: (() => {
+    class Value {
+      value: number;
+      constructor(value: number) { this.value = value; }
+      setValue(value: number) { this.value = value; }
+      interpolate() { return this; }
+    }
+    const animation = (value: Value, config: { toValue: number }) => ({
+      start: (done?: () => void) => { value.value = config.toValue; done?.(); },
+      stop: () => undefined,
+    });
+    return {
+      Value,
+      View: ({ children, ...props }: MockProps) => React.createElement('animated-view', props, children),
+      timing: animation,
+      loop: () => ({ start: () => undefined, stop: () => undefined }),
+      add: (a: Value) => a,
+      modulo: (a: Value) => a,
+    };
+  })(),
+  Easing: { out: (fn: unknown) => fn, cubic: (t: number) => t, linear: (t: number) => t },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Image: (props: MockProps) => React.createElement('image', props),
   Linking: { openURL: vi.fn(async () => undefined) },
@@ -95,7 +116,8 @@ vi.mock('@/lib/onboarding', () => ({ trackOnboardingEvent: vi.fn(async () => und
 
 import AuthScreen from '../app/auth';
 
-const authSource = readFileSync('app/auth.tsx', 'utf8');
+// The email half of the sign-in page, where the form lives.
+const authSource = readFileSync('components/email-sign-in-form.tsx', 'utf8');
 
 function render() {
   let tree: renderer.ReactTestRenderer | undefined;
@@ -150,9 +172,9 @@ beforeEach(() => {
 
 describe('S2 — the sign-in buttons are the same size', () => {
   // Sign in with Apple: "Make a Sign in with Apple button no smaller than other sign-in
-  // buttons". They live on the sign-in page now (components/sign-in-wall.tsx), one height and
-  // one width each.
-  const wallSource = readFileSync('components/sign-in-wall.tsx', 'utf8');
+  // buttons". Both halves of the sign-in page draw them from components/sign-in-parts.tsx, one
+  // height and one width each.
+  const wallSource = readFileSync('components/sign-in-parts.tsx', 'utf8');
 
   it('draws Apple and Google at one height and the full width', () => {
     expect(wallSource).toContain("style={{ width: '100%', height: BUTTON_HEIGHT }}");

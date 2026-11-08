@@ -47,7 +47,7 @@ describe('the product has one wordmark', () => {
   });
 
   it('is mounted by every surface that used to draw its own', () => {
-    for (const source of [read('app/auth.tsx'), read('components/home-side-menu.tsx'), header]) {
+    for (const source of [read('components/email-sign-in-form.tsx'), read('components/home-side-menu.tsx'), header]) {
       expect(source).toContain('BrandLockup');
     }
   });

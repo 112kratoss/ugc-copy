@@ -3,7 +3,6 @@
 // (`components/sign-in-wall.tsx`). Signing in goes on to the creator name and the welcome
 // credits once, then back to what was tapped.
 import { useRoute } from '@react-navigation/native';
-import { router } from 'expo-router';
 
 import { SignInWall } from '@/components/sign-in-wall';
 import { onboardingReturnTo } from '@/lib/join-navigation';
@@ -16,13 +15,9 @@ export default function JoinScreen() {
     <SignInWall
       target={target}
       step="join"
-      // The email form, over this page so its X steps back to it, and a sign-in there still
-      // meets a new account at the name and credits: an existing, finished account passes
-      // straight through onboarding to `target`.
-      onUseEmail={() => router.push({
-        pathname: '/auth',
-        params: { email: '1', returnTo: `/onboarding?returnTo=${encodeURIComponent(target)}` },
-      } as never)}
+      // An email sign-in on the page's second half still meets a new account at the name and
+      // credits: an existing, finished account passes straight through onboarding to `target`.
+      emailReturnTo={`/onboarding?returnTo=${encodeURIComponent(target)}`}
     />
   );
 }

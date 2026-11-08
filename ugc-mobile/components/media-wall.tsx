@@ -69,12 +69,7 @@ export function mediaWallColumn(column: number) {
   return order.map((index) => MEDIA_WALL_TILES[index]);
 }
 
-export function MediaWall({ width, height, still = false }: {
-  width: number;
-  height: number;
-  /** Held where it sits behind something read and typed in (the email form). */
-  still?: boolean;
-}) {
+export function MediaWall({ width, height }: { width: number; height: number }) {
   const geometry = mediaWallGeometry(width, height);
   // One random start for every column: the columns that share pictures keep the same distance
   // apart, which never puts one picture on the same row twice.
@@ -112,7 +107,6 @@ export function MediaWall({ width, height, still = false }: {
             // One pace per direction, so columns that share pictures never drift into step.
             speed={DRIFT_SPEED * (column % 2 === 0 ? 1 : 0.8)}
             start={start}
-            still={still}
           />
         ))}
       </View>
@@ -121,14 +115,13 @@ export function MediaWall({ width, height, still = false }: {
   );
 }
 
-function WallColumn({ tiles, geometry, upward, speed, start, still }: {
+function WallColumn({ tiles, geometry, upward, speed, start }: {
   tiles: readonly number[];
   geometry: MediaWallGeometry;
   upward: boolean;
   speed: number;
   /** Where along the loop this open begins, 0 to 1. */
   start: number;
-  still: boolean;
 }) {
   const reducedMotion = useReducedMotion();
   const [progress] = useState(() => new Animated.Value(0, { useNativeDriver: true }));
@@ -139,7 +132,7 @@ function WallColumn({ tiles, geometry, upward, speed, start, still }: {
   const duration = Math.round((geometry.cycle / speed) * 1000);
 
   useEffect(() => {
-    if (reducedMotion || still) return;
+    if (reducedMotion) return;
     const drift = Animated.loop(
       Animated.timing(progress, {
         toValue: 1,
@@ -151,7 +144,7 @@ function WallColumn({ tiles, geometry, upward, speed, start, still }: {
     );
     drift.start();
     return () => drift.stop();
-  }, [duration, progress, reducedMotion, still]);
+  }, [duration, progress, reducedMotion]);
 
   const translateY = Animated.modulo(Animated.add(progress, offset), 1).interpolate({
     inputRange: [0, 1],

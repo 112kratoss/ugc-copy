@@ -80,6 +80,27 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Animated: (() => {
+    class Value {
+      value: number;
+      constructor(value: number) { this.value = value; }
+      setValue(value: number) { this.value = value; }
+      interpolate() { return this; }
+    }
+    const animation = (value: Value, config: { toValue: number }) => ({
+      start: (done?: () => void) => { value.value = config.toValue; done?.(); },
+      stop: () => undefined,
+    });
+    return {
+      Value,
+      View: ({ children, ...props }: MockProps) => React.createElement('animated-view', props, children),
+      timing: animation,
+      loop: () => ({ start: () => undefined, stop: () => undefined }),
+      add: (a: Value) => a,
+      modulo: (a: Value) => a,
+    };
+  })(),
+  Easing: { out: (fn: unknown) => fn, cubic: (t: number) => t, linear: (t: number) => t },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Image: (props: MockProps) => React.createElement('image', props),
   Linking: linking,
@@ -165,6 +186,7 @@ vi.mock('../assets/images/sign-in-wall/wall-01.jpg', () => ({ default: 1 }));
 
 import AuthRoute from '../app/auth';
 import JoinScreen from '../app/join';
+import { EmailSignInForm } from '../components/email-sign-in-form';
 import { MEDIA_WALL_TILES, mediaWallColumn, mediaWallGeometry } from '../components/media-wall';
 import { signInOpensOnEmailForm } from '../lib/join-navigation';
 
@@ -238,24 +260,36 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
   });
 
-  it('opens the email form over the page after "Sign in with email", so its X steps back here', async () => {
+  it('turns the same page into the email form, over the same moving wall, and back again', async () => {
     const router = await routerMock();
     paramsState.params = { returnTo: '/profile' };
     const tree = render(<AuthRoute />);
+    expect(tree.root.findAllByType(EmailSignInForm)).toHaveLength(0);
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
-    expect(router.push).toHaveBeenCalledWith({ pathname: '/auth', params: { email: '1', returnTo: '/profile' } });
+    // No new screen: the form is the page's second half, in front now.
+    expect(router.push).not.toHaveBeenCalled();
     expect(router.replace).not.toHaveBeenCalled();
+    const form = tree.root.findByType(EmailSignInForm);
+    expect(form.props.active).toBe(true);
+    expect(form.props.returnTo).toBe('/profile');
+    expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
+    // Its X, and Android's back, turn the page back rather than leave it.
+    renderer.act(() => {
+      form.findByProps({ accessibilityLabel: 'Back to all sign-in options' }).props.onPress();
+    });
+    expect(tree.root.findByType(EmailSignInForm).props.active).toBe(false);
+    expect(router.back).not.toHaveBeenCalled();
   });
 
-  it('draws the email form, the same wall behind it and Apple and Google under it', () => {
+  it('opens on the email half for email=1, with Apple and Google under the form', () => {
     paramsState.params = { email: '1' };
     const tree = render(<AuthRoute />);
-    expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
-    expect(tree.root.findAllByType('media-wall' as never)[0].props.still).toBe(true);
-    expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
-    expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' }).length).toBeGreaterThan(0);
+    const form = tree.root.findByType(EmailSignInForm);
+    expect(form.props.active).toBe(true);
+    expect(form.findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
+    expect(form.findAllByProps({ accessibilityLabel: 'Continue with Apple' }).length).toBeGreaterThan(0);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Switch to sign up' })).toHaveLength(0);
   });
 
@@ -306,9 +340,8 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
-    expect(router.push).toHaveBeenCalledWith({
-      pathname: '/auth',
-      params: { email: '1', returnTo: `/onboarding?returnTo=${encodeURIComponent('/create/image?remix=gen-1')}` },
-    });
+    expect(router.push).not.toHaveBeenCalled();
+    expect(tree.root.findByType(EmailSignInForm).props.returnTo)
+      .toBe(`/onboarding?returnTo=${encodeURIComponent('/create/image?remix=gen-1')}`);
   });
 });

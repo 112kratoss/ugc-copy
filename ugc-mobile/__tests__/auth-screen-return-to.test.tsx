@@ -66,6 +66,27 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Animated: (() => {
+    class Value {
+      value: number;
+      constructor(value: number) { this.value = value; }
+      setValue(value: number) { this.value = value; }
+      interpolate() { return this; }
+    }
+    const animation = (value: Value, config: { toValue: number }) => ({
+      start: (done?: () => void) => { value.value = config.toValue; done?.(); },
+      stop: () => undefined,
+    });
+    return {
+      Value,
+      View: ({ children, ...props }: MockProps) => React.createElement('animated-view', props, children),
+      timing: animation,
+      loop: () => ({ start: () => undefined, stop: () => undefined }),
+      add: (a: Value) => a,
+      modulo: (a: Value) => a,
+    };
+  })(),
+  Easing: { out: (fn: unknown) => fn, cubic: (t: number) => t, linear: (t: number) => t },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Image: (props: MockProps) => React.createElement('image', props),
   Linking: { openURL: vi.fn(async () => undefined) },

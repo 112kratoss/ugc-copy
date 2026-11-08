@@ -79,6 +79,27 @@ vi.mock('expo-apple-authentication', () => ({
 }));
 
 vi.mock('react-native', () => ({
+  Animated: (() => {
+    class Value {
+      value: number;
+      constructor(value: number) { this.value = value; }
+      setValue(value: number) { this.value = value; }
+      interpolate() { return this; }
+    }
+    const animation = (value: Value, config: { toValue: number }) => ({
+      start: (done?: () => void) => { value.value = config.toValue; done?.(); },
+      stop: () => undefined,
+    });
+    return {
+      Value,
+      View: ({ children, ...props }: MockProps) => React.createElement('animated-view', props, children),
+      timing: animation,
+      loop: () => ({ start: () => undefined, stop: () => undefined }),
+      add: (a: Value) => a,
+      modulo: (a: Value) => a,
+    };
+  })(),
+  Easing: { out: (fn: unknown) => fn, cubic: (t: number) => t, linear: (t: number) => t },
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
   Image: (props: MockProps) => React.createElement('image', props),
   Linking: linking,
@@ -144,6 +165,7 @@ vi.mock('@/lib/google-auth', () => ({
 vi.mock('@/lib/onboarding', () => analytics);
 
 import AuthScreen from '../app/auth';
+import { EmailSignInForm } from '../components/email-sign-in-form';
 import { ThemeScope } from '../lib/theme-context';
 
 describe('The email sign-in form', () => {
@@ -296,7 +318,10 @@ describe('AuthScreen sign-in analytics (audit 01-11)', () => {
     });
   }
 
-  const recorded = () => analytics.trackOnboardingEvent.mock.calls.map(([, eventName, options]) => [eventName, options?.step]);
+  // The sign-in events; the page's own view of itself is counted elsewhere.
+  const recorded = () => analytics.trackOnboardingEvent.mock.calls
+    .filter(([, eventName]) => eventName !== 'screen_viewed')
+    .map(([, eventName, options]) => [eventName, options?.step]);
 
   /** The person leaves the screen: Close, Android's back. */
   const leave = () => {
@@ -438,8 +463,11 @@ describe('Apple and Google on the email form (owner, 2026-11-08: "Yes, add them"
     return tree!;
   }
 
+  /** The email half of the page, where these buttons sit under the form. */
+  const form = (tree: renderer.ReactTestRenderer) => tree.root.findByType(EmailSignInForm);
+
   it('draws Apple then Google under the form on iOS, and Google alone on Android', () => {
-    const labels = (tree: renderer.ReactTestRenderer) => tree.root
+    const labels = (tree: renderer.ReactTestRenderer) => form(tree)
       .findAll((node) => typeof node.type === 'string' && /^Continue with /.test(String(node.props.accessibilityLabel ?? '')))
       .map((node) => node.props.accessibilityLabel);
     expect(labels(mount())).toEqual(['Continue with Apple', 'Continue with Google']);
@@ -454,7 +482,7 @@ describe('Apple and Google on the email form (owner, 2026-11-08: "Yes, add them"
     paramsState.params = { returnTo: '/post/post-1' };
     const tree = mount();
     await renderer.act(async () => {
-      tree.root.findByProps({ accessibilityLabel: 'Continue with Apple' }).props.onPress();
+      form(tree).findByProps({ accessibilityLabel: 'Continue with Apple' }).props.onPress();
     });
     expect(authState.signInWithApple).toHaveBeenCalledWith('signup');
     expect(router.replace).toHaveBeenCalledWith({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
@@ -471,7 +499,7 @@ describe('Apple and Google on the email form (owner, 2026-11-08: "Yes, add them"
       tree.root.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
       tree.root.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('a-good-password');
     });
-    const google = tree.root.findAll((node) => node.props.accessibilityLabel === 'Continue with Google' && typeof node.props.onPress === 'function')[0];
+    const google = form(tree).findAll((node) => node.props.accessibilityLabel === 'Continue with Google' && typeof node.props.onPress === 'function')[0];
     renderer.act(() => {
       google.props.onPress();
     });
