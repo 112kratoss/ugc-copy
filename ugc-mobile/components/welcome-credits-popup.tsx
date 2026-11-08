@@ -60,6 +60,8 @@ function WelcomeCreditsPopupForAccount() {
   const [phase, setPhase] = useState<Phase>('offer');
   const [message, setMessage] = useState<string | null>(null);
   const [count, setCount] = useState(0);
+  // Where the Claim button sits in the window: the confetti pops out of it.
+  const [burstOrigin, setBurstOrigin] = useState<{ x: number; y: number } | null>(null);
   const countTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -154,10 +156,14 @@ function WelcomeCreditsPopupForAccount() {
               phase={phase}
               count={count}
               message={message}
-              onClaim={() => void claim()}
+              onClaim={(origin) => {
+                setBurstOrigin(origin);
+                void claim();
+              }}
             />
             <CloseChip disabled={phase === 'claiming'} onPress={close} />
           </ThemeScope>
+          <ConfettiBurst play={phase === 'claimed'} origin={burstOrigin} />
         </View>
       ) : null}
     </Modal>
@@ -200,7 +206,7 @@ function WelcomeCard({
   phase: Phase;
   count: number;
   message: string | null;
-  onClaim: () => void;
+  onClaim: (buttonCentre: { x: number; y: number } | null) => void;
 }) {
   const theme = useAppTheme();
   const [entered, setEntered] = useState(false);
@@ -208,6 +214,7 @@ function WelcomeCard({
   const progress = useSpringState(entered);
   const scale = progress ? progress.interpolate({ inputRange: [0, 1], outputRange: [ENTRY_SCALE, 1] }) : 1;
   const claimed = phase === 'claimed';
+  const buttonRef = useRef<View | null>(null);
 
   return (
     <MotionView
@@ -277,14 +284,21 @@ function WelcomeCard({
         <Text accessibilityRole="alert" style={{ color: theme.colors.danger, textAlign: 'center' }}>{message}</Text>
       ) : null}
 
-      <PrimaryButton
-        label={claimed ? 'Claimed' : phase === 'failed' ? 'Try again' : 'Claim'}
-        loading={phase === 'claiming'}
-        disabled={claimed}
-        onPress={onClaim}
-      />
-
-      <ConfettiBurst play={claimed} />
+      <View ref={buttonRef} collapsable={false}>
+        <PrimaryButton
+          label={claimed ? 'Claimed' : phase === 'failed' ? 'Try again' : 'Claim'}
+          loading={phase === 'claiming'}
+          disabled={claimed}
+          onPress={() => {
+            const button = buttonRef.current;
+            if (!button?.measureInWindow) {
+              onClaim(null);
+              return;
+            }
+            button.measureInWindow((x, y, width, height) => onClaim({ x: x + width / 2, y: y + height / 2 }));
+          }}
+        />
+      </View>
     </MotionView>
   );
 }

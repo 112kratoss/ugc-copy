@@ -5,9 +5,12 @@ import { useReducedMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
-/** A subtle burst: few, small pieces, about a second (owner, 2026-11-09). */
-const PIECE_COUNT = 26;
-const BURST_MS = 1150;
+/**
+ * A burst with some volume that pops up out of the Claim button and falls
+ * back over the card (owner, 2026-11-09): a few dozen pieces, under two seconds.
+ */
+const PIECE_COUNT = 56;
+const BURST_MS = 1700;
 
 type Piece = {
   dx: number;
@@ -29,26 +32,27 @@ export function confettiPieces(count = PIECE_COUNT, seed = 7): Piece[] {
   };
   return Array.from({ length: count }, (_, index) => {
     const round = index % 3 === 0;
-    const size = 5 + Math.round(next() * 3);
+    const size = 6 + Math.round(next() * 4);
     return {
-      dx: (next() - 0.5) * 300,
-      rise: 70 + next() * 90,
-      fall: 160 + next() * 120,
-      spin: (next() - 0.5) * 720,
+      dx: (next() - 0.5) * 380,
+      rise: 220 + next() * 260,
+      fall: 320 + next() * 220,
+      spin: (next() - 0.5) * 900,
       width: size,
-      height: round ? size : size + 4,
-      delay: Math.round(next() * 120),
+      height: round ? size : size + 5,
+      delay: Math.round(next() * 140),
       colorIndex: index,
     };
   });
 }
 
 /**
- * Plays once when `play` turns true. Pieces start at the top centre of the
- * parent and arc out and down, fading as they fall. Native-driven transforms
- * and opacity only; nothing under Reduce Motion. Not touchable.
+ * Plays once when `play` turns true. Pieces start at `origin` (a point in the
+ * parent, which should fill the screen), shoot up and out, then fall and fade.
+ * Native-driven transforms and opacity only; nothing under Reduce Motion. Not
+ * touchable.
  */
-export function ConfettiBurst({ play }: { play: boolean }) {
+export function ConfettiBurst({ play, origin }: { play: boolean; origin: { x: number; y: number } | null }) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const [pieces] = useState(() => confettiPieces());
@@ -79,14 +83,14 @@ export function ConfettiBurst({ play }: { play: boolean }) {
     return () => burst.stop();
   }, [play, pieces, progress, reducedMotion]);
 
-  if (!play || reducedMotion) return null;
+  if (!play || reducedMotion || !origin) return null;
 
   return (
     <View
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={{ position: 'absolute', left: 0, right: 0, top: appTheme.spacing.panel, alignItems: 'center' }}
+      style={{ position: 'absolute', inset: 0 }}
     >
       {pieces.map((piece, index) => {
         const value = progress[index];
@@ -97,6 +101,8 @@ export function ConfettiBurst({ play }: { play: boolean }) {
               // Round pieces are dots; the rest are square-cornered strips.
               ...(piece.width === piece.height ? { borderRadius: appTheme.radii.pill } : null),
               position: 'absolute',
+              left: origin.x - piece.width / 2,
+              top: origin.y - piece.height / 2,
               width: piece.width,
               height: piece.height,
               backgroundColor: palette[piece.colorIndex % palette.length],
@@ -105,8 +111,8 @@ export function ConfettiBurst({ play }: { play: boolean }) {
                 { translateX: value.interpolate({ inputRange: [0, 1], outputRange: [0, piece.dx] }) },
                 {
                   translateY: value.interpolate({
-                    inputRange: [0, 0.35, 1],
-                    outputRange: [0, -piece.rise, piece.fall],
+                    inputRange: [0, 0.38, 1],
+                    outputRange: [0, -piece.rise, piece.fall - piece.rise],
                   }),
                 },
                 { rotate: value.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${piece.spin}deg`] }) },
