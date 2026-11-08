@@ -3,7 +3,7 @@
 // time with a handwritten note beside each word, holds, then turns to dust and
 // blows away (the owner's brief, 2026-11-06: "the way Thanos snapped"); a note
 // from the team comes in as it goes, and its button lifts the page off the
-// screen beneath (the welcome screen, for a new install).
+// screen beneath (Home, for a new install).
 //
 // No Skia in this binary (adding it is a store build), so the dust is built
 // from the words themselves: each word is cut into a grid of small tiles, every
@@ -73,8 +73,7 @@ const LETTER = {
   bodyAfter:
     '. We’re building a kind, creative community where anyone can make something amazing, share it, and earn when others build on it. We’re so glad you’re here.',
   signature: '— Magicbooklet',
-  // It opens onto the welcome screen for a new install, whose own button is
-  // "Get started": this one only moves on.
+  // It opens onto Home for a new install: this button only moves on.
   action: 'Continue',
 };
 const LETTER_START = 0.55; // how far into the dust the note starts to come in

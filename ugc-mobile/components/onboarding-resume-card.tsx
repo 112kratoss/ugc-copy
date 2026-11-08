@@ -19,6 +19,10 @@ export function OnboardingResumeCard() {
   // Both render nothing, but for different reasons — guessing during `pending`
   // is what made the card pop in late and shift the feed under a thumb.
   if (!isOnboardingActionable(destination)) return null;
+  // A guest's only destination is the welcome intro, which launches no longer
+  // open (owner, 2026-11-08): a guest is asked to sign up where they reach for
+  // an account instead, and Home's "Sign in · 25 free credits" says the rest.
+  if (destination === 'intro') return null;
 
   // The identity step is only chosen for a signed-in user, so one title serves.
   const title = destination === 'reward'

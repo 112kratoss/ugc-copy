@@ -77,7 +77,7 @@ test('the image creator draws a box for each reference it was not given, and the
     { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
   ], { aspectRatio: '1:1' }));
 
-  const references = page.locator('section[aria-labelledby="create-image-references"]');
+  const references = page.getByRole('group', { name: 'Inputs' });
   const productBox = references.getByRole('button', { name: 'Add your image for @product' });
   await expect(productBox).toBeVisible(COLD_PAGE);
   await expect(productBox).toContainText('@product');
@@ -116,7 +116,7 @@ test('the image creator keeps an empty box through Enhance and a switch of model
     { id: 'slot-2', kind: 'image', role: 'reference_image', handle: null, name: 'Reference image 2' },
   ], { aspectRatio: '1:1' }));
 
-  const references = page.locator('section[aria-labelledby="create-image-references"]');
+  const references = page.getByRole('group', { name: 'Inputs' });
   const productBox = references.getByRole('button', { name: 'Add your image for @product' });
   // Drawn once the page's script has read the remix: a press from here reaches React.
   await expect(productBox).toBeVisible(COLD_PAGE);

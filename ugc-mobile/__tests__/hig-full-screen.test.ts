@@ -232,6 +232,8 @@ describe('S6 — no player holds the audio session while it is silent', () => {
     // A picked track's length. Its player is muted, never played, and let go
     // once the length is read.
     'lib/media-file-length.ts',
+    // The sign-up sheet's demo: a bundled clip, always muted.
+    'components/welcome-generate-demo.tsx',
   ];
 
   it.each(playerFiles)('%s declares a mixing mode for every player it creates', (name) => {

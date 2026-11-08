@@ -20,6 +20,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MagicCreateMenu } from '@/components/magic-create-menu';
 import { TabBarSideMenu } from '@/components/workspace-side-menu';
 import { getCreateMenuActionHref, type CreateMenuActionId } from '@/lib/create-menu-view-model';
+import { useAuth } from '@/lib/auth';
+import { openSignUpSheet, signUpNeededToCreate } from '@/lib/join-navigation';
 import { haptic } from '@/lib/haptics';
 import { useMenuHandoff } from '@/lib/menu-handoff';
 import { useCrossFade, usePressMotion, useReducedMotion, useSpringState } from '@/lib/motion';
@@ -148,6 +150,17 @@ export function MagicTabBar({
   const { width } = useWindowDimensions();
   const [createMenuVisible, setCreateMenuVisible] = useState(false);
   const closeCreateMenu = () => setCreateMenuVisible(false);
+  const { user, credits } = useAuth();
+  // Create, for a guest with nothing to spend, is the sign-up sheet (owner,
+  // 2026-11-08), which comes back to the creator once signed up.
+  const openCreate = () => {
+    haptic.medium();
+    if (signUpNeededToCreate({ credits, hasUser: Boolean(user) })) {
+      openSignUpSheet(router, getCreateMenuActionHref('create'));
+      return;
+    }
+    setCreateMenuVisible(true);
+  };
   // A tile opens its screen at the tap, and the menu stays up until that
   // screen is under it (`lib/menu-handoff.ts`). It used to wait for the
   // menu's exit, or a 400 ms fallback, before navigating: Generate reached
@@ -291,10 +304,7 @@ export function MagicTabBar({
           runningGenerations={runningGenerations}
           menuVisible={createMenuOpen}
           onNavigate={navigateTo}
-          onCreate={() => {
-            haptic.medium();
-            setCreateMenuVisible(true);
-          }}
+          onCreate={openCreate}
         />
       ) : <>
       <TabBarSurface mode={surfaceMode} barHeight={barHeight} fallbackFill={fallbackFill} hidden={hidden}>
@@ -324,10 +334,7 @@ export function MagicTabBar({
           accessibilityLabel={createControlLabel(runningGenerations)}
           accessibilityHint="Choose whether to create media or publish a post"
           accessibilityState={{ expanded: createMenuOpen, busy: runningGenerations > 0 }}
-          onPress={() => {
-            haptic.medium();
-            setCreateMenuVisible(true);
-          }}
+          onPress={openCreate}
           onPressIn={createMotion.onPressIn}
           onPressOut={createMotion.onPressOut}
           style={({ pressed }) => ({

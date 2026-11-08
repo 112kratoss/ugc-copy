@@ -126,11 +126,11 @@ describe('the creator-setup card', () => {
     act(() => tree.unmount());
   });
 
-  it('offers the intro once a signed-out session has settled', () => {
+  it('never offers a guest the welcome intro, which launches no longer open (owner, 2026-11-08)', () => {
     authState.user = null;
     authState.isLoading = false;
     const tree = renderCard(new QueryClient());
-    expect(rendered(tree)).toContain('See the new creator setup');
+    expect(tree.toJSON()).toBeNull();
     act(() => tree.unmount());
   });
 });

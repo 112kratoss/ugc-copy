@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { useCallback } from 'react';
 
 import { useAuth } from '@/lib/auth';
+import { openSignUpSheet } from '@/lib/join-navigation';
 import { adjustProfileStats } from '@/lib/profile-stats';
 import { announceQueued } from '@/lib/accessibility-announcement';
 import { haptic } from '@/lib/haptics';
@@ -134,7 +135,9 @@ export function useShowcaseSaveMutation({
     onSaved?: (isSaved: boolean) => void;
   }) => {
     if (!user) {
-      router.push((authReturnTo ? { pathname: '/auth', params: { returnTo: authReturnTo } } : '/auth') as never);
+      // A guest's heart is the sign-up sheet (owner, 2026-11-08), which comes
+      // back to the screen's own return, or to the post itself (Home's cards).
+      openSignUpSheet(router, authReturnTo ?? `/post/${options.postId}`);
       return;
     }
 

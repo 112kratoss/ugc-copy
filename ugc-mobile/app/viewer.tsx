@@ -46,6 +46,7 @@ import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
 import type { ViewerActionCallbacks } from '@/lib/use-viewer-action-handlers';
 import { useAuth } from '@/lib/auth';
+import { openSignUpSheet } from '@/lib/join-navigation';
 import { applyCommentCountToSourceData } from '@/lib/comments-view-model';
 import { env } from '@/lib/env';
 import { TopScrim } from '@/components/top-scrim';
@@ -1002,8 +1003,8 @@ function ImmersivePreviewViewer() {
     if (!item.canSave || !item.showcasePostId) return;
     if (!user) {
       // The heart and a double-tap are a guest's likeliest first action:
-      // signing in comes back to this post rather than to Home.
-      router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);
+      // the sign-up sheet, which comes back to this post rather than to Home.
+      openSignUpSheet(router, returnPathFor(item));
       return;
     }
     // The rail button owns its tick the way the double-tap gesture already
@@ -1054,9 +1055,9 @@ function ImmersivePreviewViewer() {
     // A guest can generate, so its own creation opens in the creator as an
     // account's does; anything else asks a guest to sign in first.
     if (!user && !isViewerOwnGeneration(item, identityUserId)) {
-      // Send them back to this exact item, so signing in does not cost them
+      // Send them back to this exact item, so signing up does not cost them
       // their place in the reel and a second hunt for the post.
-      router.push({ pathname: '/auth', params: { returnTo: returnPathFor(item) } } as never);
+      openSignUpSheet(router, returnPathFor(item));
       return;
     }
 
@@ -2144,7 +2145,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   const { toggle: toggleFollow } = follow;
   const onFollowPress = useCallback(() => {
     if (!user) {
-      router.push({ pathname: '/auth', params: { returnTo: authReturnTo } } as never);
+      openSignUpSheet(router, authReturnTo);
       return;
     }
     toggleFollow();
