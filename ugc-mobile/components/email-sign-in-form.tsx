@@ -212,9 +212,6 @@ export function EmailSignInForm({ returnTo, inPlace, initialNotice = null, analy
             <AppText heading variant="pageTitle" style={{ color: mediaColors.onMedia }}>
               Sign in with email
             </AppText>
-            <AppText variant="body" style={{ color: mediaColors.onMediaSecondary }}>
-              For accounts made with email.
-            </AppText>
           </View>
 
           <View style={{ marginTop: 28, gap: 14 }}>
