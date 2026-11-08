@@ -333,6 +333,7 @@ describe('CreateImageClient persisted elements', () => {
     expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toHaveLength(2);
 
     await screen.findByAltText('Element 2');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Remove Element 2' }));
 
     await waitFor(() => {
@@ -342,6 +343,57 @@ describe('CreateImageClient persisted elements', () => {
       expect.objectContaining({ displayName: 'Restored product', file: restoredFile }),
     ]);
     expect(URL.revokeObjectURL).toHaveBeenCalledWith(expect.stringContaining('blob:'));
+  });
+
+  // As the app's Remove: asked first, and the handle leaves the prompt with the picture, so no
+  // mention is left naming nothing ("Unknown element mention").
+  it('asks before removing a reference, and takes its handle out of the prompt with it', async () => {
+    render(<CreateImageClient prefill={{}} />);
+    await screen.findByAltText('Restored product');
+    const promptBox = screen.getByPlaceholderText('Describe the image you want to create...') as HTMLTextAreaElement;
+    fireEvent.change(promptBox, { target: { value: 'Put @restored_product on a marble table, lit softly' } });
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Restored product' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(confirm.mock.calls[0]?.[0]).toContain('Restored product and @restored_product will be removed from this draft.');
+    expect(screen.getByAltText('Restored product')).toBeInTheDocument();
+    expect(promptBox.value).toBe('Put @restored_product on a marble table, lit softly');
+    expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalledWith(expect.anything(), []);
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Restored product' }));
+    await waitFor(() => expect(screen.queryByAltText('Restored product')).not.toBeInTheDocument());
+    expect(promptBox.value).toBe('Put on a marble table, lit softly');
+    expect(screen.getByText('Restored product and @restored_product were removed from this draft.')).toBeInTheDocument();
+    expect(screen.queryByText(/^Unknown element mention/)).not.toBeInTheDocument();
+  });
+
+  // As the app's Replace: another picture in its place, under the same name and handle, so the
+  // prompt that mentions it stays right.
+  it('replaces a reference\'s picture and keeps its name and handle', async () => {
+    render(<CreateImageClient prefill={{}} />);
+    const oldSrc = (await screen.findByAltText('Restored product')).getAttribute('src');
+    setPersistedImageElementRecordsMock.mockClear();
+
+    const replace = screen.getByRole('button', { name: 'Replace @restored_product with another picture' });
+    const picker = replace.nextElementSibling as HTMLInputElement;
+    expect(picker).toHaveAttribute('type', 'file');
+    // A file the sign step refuses leaves the picture where it is, and says why.
+    fireEvent.change(picker, { target: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] } });
+    await waitFor(() => expect(screen.getAllByRole('status').some((line) => line.textContent?.trim())).toBe(true));
+    expect(setPersistedImageElementRecordsMock).not.toHaveBeenCalled();
+
+    const fresh = new File(['fresh'], 'fresh.png', { type: 'image/png' });
+    fireEvent.change(picker, { target: { files: [fresh] } });
+    await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1));
+    expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({ displayName: 'Restored product', handle: '@restored_product', file: fresh }),
+    ]);
+    expect(screen.getAllByAltText('Restored product')).toHaveLength(1);
+    expect(URL.createObjectURL).toHaveBeenCalledWith(fresh);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(oldSrc);
+    expect(screen.getAllByText('@restored_product').length).toBeGreaterThan(0);
   });
 
   // Nano Banana 2, the default model, takes 10 references since the 2026-10-20 re-check
@@ -380,6 +432,63 @@ describe('CreateImageClient persisted elements', () => {
     expect(request?.inputMetadata?.slots).toEqual({ imageReferences: { count: 10 } });
   });
 
+  // The app's Reference details sheet, under the picture opened at full size (owner, 2026-11-08).
+  it('opens a picture with its details: its name, Insert, Replace and Remove', async () => {
+    render(<CreateImageClient prefill={{}} />);
+    await screen.findByAltText('Restored product');
+    const promptBox = screen.getByPlaceholderText('Describe the image you want to create...') as HTMLTextAreaElement;
+    fireEvent.change(promptBox, { target: { value: 'A shelf with' } });
+
+    const open = () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Preview Restored product' }));
+      return screen.getByRole('dialog', { name: 'Reference details' });
+    };
+    let details = open();
+    expect(within(details).getByRole('img', { name: 'Restored product' })).toBeInTheDocument();
+    const name = within(details).getByRole('textbox', { name: 'Reference name' });
+    expect(name).toHaveValue('Restored product');
+
+    // Escape takes back a name being typed and leaves the details open; a second closes them.
+    fireEvent.change(name, { target: { value: 'Hero bottle' } });
+    fireEvent.keyDown(name, { key: 'Escape' });
+    expect(name).toHaveValue('Restored product');
+    expect(screen.getByRole('dialog', { name: 'Reference details' })).toBeInTheDocument();
+    fireEvent.keyDown(name, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Reference details' })).not.toBeInTheDocument();
+
+    // Insert puts the handle in the prompt and puts the details away.
+    details = open();
+    fireEvent.click(within(details).getByRole('button', { name: 'Insert @restored_product' }));
+    expect(screen.queryByRole('dialog', { name: 'Reference details' })).not.toBeInTheDocument();
+    expect(promptBox.value).toContain('@restored_product');
+
+    // Replace keeps them open, on the new picture, under the same name and handle.
+    details = open();
+    setPersistedImageElementRecordsMock.mockClear();
+    const replace = within(details).getByRole('button', { name: 'Replace media, keeps @restored_product' });
+    const fresh = new File(['fresh'], 'fresh.png', { type: 'image/png' });
+    fireEvent.change(replace.nextElementSibling as HTMLInputElement, { target: { files: [fresh] } });
+    await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenCalledTimes(1));
+    expect(setPersistedImageElementRecordsMock.mock.calls[0]?.[1]).toEqual([
+      expect.objectContaining({ displayName: 'Restored product', handle: '@restored_product', file: fresh }),
+    ]);
+    expect(screen.getByRole('dialog', { name: 'Reference details' })).toBeInTheDocument();
+    expect(URL.createObjectURL).toHaveBeenCalledWith(fresh);
+
+    // Remove asks with the details put away; kept, they come back, and removed, they stay gone.
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Reference details' })).getByRole('button', { name: 'Remove reference' }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('dialog', { name: 'Reference details' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove Restored product' })).toBeInTheDocument();
+
+    confirm.mockReturnValue(true);
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Reference details' })).getByRole('button', { name: 'Remove reference' }));
+    await waitFor(() => expect(screen.queryByAltText('Restored product')).not.toBeInTheDocument());
+    expect(screen.queryByRole('dialog', { name: 'Reference details' })).not.toBeInTheDocument();
+    expect(promptBox.value).not.toContain('@restored_product');
+  });
+
   it('clears the over-limit explanation once the extra reference is removed', async () => {
     getPersistedImageElementRecordsMock.mockResolvedValueOnce(Array.from({ length: 11 }, (_, index) => ({
       id: `restored-${index + 1}`,
@@ -391,11 +500,17 @@ describe('CreateImageClient persisted elements', () => {
     expect(await screen.findByText(/Your references are preserved/)).toBeInTheDocument();
 
     await screen.findByAltText('Restored 11');
+    // The one past the limit says it is kept, not sent: the eleventh, and only it.
+    const notSent = screen.getAllByText(/^Not sent: .+ takes 10$/);
+    expect(notSent).toHaveLength(1);
+    expect(notSent[0]?.closest('li')).toContainElement(screen.getByAltText('Restored 11'));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Remove Restored 11' }));
 
     await waitFor(() => {
       expect(screen.getAllByText('10/10')).not.toHaveLength(0);
     });
+    expect(screen.queryByText(/^Not sent:/)).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();
     });
@@ -2547,6 +2662,36 @@ describe('CreateImageClient generation pipeline', () => {
       });
     });
 
+    // A picture replaced while its file went up kept the old file's copy, and from then on every
+    // run sent the old picture under the new one's tile (review of #732).
+    it('is not kept on a picture replaced while its file went up', async () => {
+      let finish: () => void = () => undefined;
+      uploadMediaToTemporaryStorageMock.mockImplementationOnce((file: File) => new Promise((resolve) => {
+        finish = () => resolve({ signedUrl: `https://signed.example.com/uploads/${file.name}`, storagePath: `uploads/user-1/${file.name}` });
+      }));
+      installFetch({ starts: [startedReply()] });
+      render(<CreateImageClient prefill={{}} />);
+      expect((await screen.findAllByText('@restored_product')).length).toBeGreaterThan(0);
+      typePrompt('A portrait of @restored_product');
+      pressGenerate();
+      await waitFor(() => expect(uploadMediaToTemporaryStorageMock).toHaveBeenCalled());
+
+      const replace = screen.getByRole('button', { name: 'Replace @restored_product with another picture' });
+      const fresh = new File(['fresh'], 'fresh.png', { type: 'image/png' });
+      fireEvent.change(replace.nextElementSibling as HTMLInputElement, { target: { files: [fresh] } });
+      await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenLastCalledWith(expect.any(String), [
+        expect.objectContaining({ file: fresh }),
+      ]));
+      await act(async () => finish());
+
+      await waitFor(() => expect(setPersistedImageElementRecordsMock.mock.calls.length).toBeGreaterThan(1));
+      for (const [, records] of setPersistedImageElementRecordsMock.mock.calls) {
+        for (const record of records as Array<{ file: File; staged: unknown }>) {
+          if (record.file === fresh) expect(record.staged).toBeNull();
+        }
+      }
+    });
+
     it('is saved with its element, since a reload runs no cleanup', async () => {
       await generateTwice();
       await waitFor(() => expect(setPersistedImageElementRecordsMock).toHaveBeenCalledWith(expect.any(String), [
@@ -2640,10 +2785,13 @@ describe('CreateImageClient generation pipeline', () => {
     // Nothing is sent to a prompt-only model, so the server would not know the mention either.
     expect(screen.getByText(/^Unknown element mention/)).toBeInTheDocument();
 
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Remove Restored product' }));
 
     await waitFor(() => expect(screen.queryByAltText('Restored product')).not.toBeInTheDocument());
     expect(screen.getByText('Prompt-only model')).toBeInTheDocument();
+    // Its mention went with it, so the prompt names nothing it lacks.
+    expect(screen.queryByText(/^Unknown element mention/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Your references are preserved/)).not.toBeInTheDocument();
   });
 
@@ -3695,7 +3843,8 @@ describe('CreateImageClient a remix kept open past its links’ hour', () => {
     advancePastTheHour();
     fireEvent.click(screen.getByRole('button', { name: 'Preview Original result · Harbour' }));
 
-    expectOpensObject(await previewLink('Original result · Harbour'), POSTED);
+    // Opened, it shows under the app's title for a reference's sheet.
+    expectOpensObject(await previewLink('Reference details'), POSTED);
   });
 
   // The press asks the model's limit again once the link is in, of the model the form is on by

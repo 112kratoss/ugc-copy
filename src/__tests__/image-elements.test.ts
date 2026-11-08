@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  removePromptHandle,
   assignElementHandles,
   assignRemixElementHandles,
   assignSubjectHandles,
@@ -483,5 +484,28 @@ describe('remixReferencesBesideOwn', () => {
       assignSubjectHandles,
     );
     expect(handles(assignSubjectHandles(beside))).toEqual(['@subject_2', '@subject_1']);
+  });
+});
+
+describe('removePromptHandle', () => {
+  it('takes out every mention of the handle and closes up the space it leaves, as the app does', () => {
+    expect(removePromptHandle('Put @hero on a table, beside @hero.', '@hero')).toBe('Put on a table, beside.');
+    expect(removePromptHandle('Use @hero, then @logo', '@hero')).toBe('Use, then @logo');
+    expect(removePromptHandle('@hero\n\n\n@logo in the corner', '@hero')).toBe('@logo in the corner');
+    expect(removePromptHandle('Line one @hero\nline two', '@hero')).toBe('Line one\nline two');
+  });
+
+  // Only around the mention: the rest of the prompt keeps the spacing it was typed with (review of #732).
+  it('leaves the spacing, indentation and blank lines elsewhere in the prompt as they were', () => {
+    expect(removePromptHandle('Scene one:\n  - a  wide  shot\n\n\nThen @hero waves', '@hero')).toBe('Scene one:\n  - a  wide  shot\n\n\nThen waves');
+    expect(removePromptHandle('  indented @hero line', '@hero')).toBe('  indented line');
+    expect(removePromptHandle('\t@hero runs', '@hero')).toBe('\truns');
+    expect(removePromptHandle('Near (@hero) the door', '@hero')).toBe('Near () the door');
+  });
+
+  it('leaves a longer handle that starts with it, and a prompt that does not mention it, as they are', () => {
+    expect(removePromptHandle('Put @hero_2 there', '@hero')).toBe('Put @hero_2 there');
+    expect(removePromptHandle('  Spaces  kept  ', '@hero')).toBe('  Spaces  kept  ');
+    expect(removePromptHandle('mail me@hero.com', '@hero')).toBe('mail me@hero.com');
   });
 });
