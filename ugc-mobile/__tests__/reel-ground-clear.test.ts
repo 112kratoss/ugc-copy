@@ -53,9 +53,9 @@ describe('the reel\'s ground as it grows out of its tile and shrinks back', () =
 
   // Instagram keeps the rail and caption on the page as it shrinks under the
   // finger (filmed 2026-11-08); they go with it in UIKit's crossfade.
-  it('iOS: the chrome stays on the page a gesture close shrinks, and comes back if it is let go of', () => {
-    expect(zoom).toContain('if (!following.value) return { opacity: nativeCloseChrome.value };');
-    expect(zoom).not.toContain('nativeCloseChrome.set(0);');
+  it('iOS: the chrome stays on the page a gesture close shrinks', () => {
+    expect(zoom).toContain('if (!following.value) return { opacity: 1 };');
+    expect(zoom).not.toContain('nativeCloseChrome');
   });
 });
 

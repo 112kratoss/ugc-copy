@@ -40,7 +40,7 @@ vi.mock('expo-router', () => ({
 vi.mock('expo-router/build/link/preview/native', () => ({ LinkZoomTransitionSource: () => null }));
 vi.mock('../lib/apple-zoom-available', () => ({ isAppleZoomAvailable: () => true }));
 
-import { useAppleZoomRetarget } from '../components/apple-zoom.ios';
+import { APPLE_ZOOM_LANDING_DEADLINE_MS, useAppleZoomRetarget } from '../components/apple-zoom.ios';
 import { APPLE_ZOOM_SOURCE_PARAM, appleZoomOpenSourceId, appleZoomSourceId } from '../lib/apple-zoom';
 
 function Reel({ activeItemId }: { activeItemId: string }) {
@@ -68,6 +68,44 @@ describe('a reel grown out of its tile\'s page-shaped view', () => {
     renderer.act(() => tree.update(<Reel activeItemId="post-2" />));
     expect(setParams).toHaveBeenLastCalledWith({ [APPLE_ZOOM_SOURCE_PARAM]: appleZoomSourceId(':r1:', 'post-2') });
     renderer.act(() => tree.unmount());
+  });
+
+  it('points the zoom at the post the reader is on when they moved before the push landed', () => {
+    params = { [APPLE_ZOOM_SOURCE_PARAM]: appleZoomOpenSourceId(appleZoomSourceId(':r1:', 'post-1')) };
+    setParams.mockClear();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<Reel activeItemId="post-1" />);
+    });
+    // Swiped on while the push still runs: the running zoom's source stays put.
+    renderer.act(() => tree.update(<Reel activeItemId="post-2" />));
+    expect(setParams).not.toHaveBeenCalled();
+
+    renderer.act(() => emit('transitionEnd', false));
+    expect(setParams).toHaveBeenCalledTimes(1);
+    expect(setParams).toHaveBeenCalledWith({ [APPLE_ZOOM_SOURCE_PARAM]: appleZoomSourceId(':r1:', 'post-2') });
+    renderer.act(() => tree.unmount());
+  });
+
+  it('counts the push as landed after a deadline when its landing was never heard', () => {
+    vi.useFakeTimers();
+    try {
+      const tile = appleZoomSourceId(':r1:', 'post-1');
+      params = { [APPLE_ZOOM_SOURCE_PARAM]: appleZoomOpenSourceId(tile) };
+      setParams.mockClear();
+      let tree!: renderer.ReactTestRenderer;
+      renderer.act(() => {
+        tree = renderer.create(<Reel activeItemId="post-1" />);
+      });
+      // The navigator reported the landing before the reel listened, and sends it once.
+      renderer.act(() => { vi.advanceTimersByTime(APPLE_ZOOM_LANDING_DEADLINE_MS - 1); });
+      expect(setParams).not.toHaveBeenCalled();
+      renderer.act(() => { vi.advanceTimersByTime(1); });
+      expect(setParams).toHaveBeenCalledWith({ [APPLE_ZOOM_SOURCE_PARAM]: tile });
+      renderer.act(() => tree.unmount());
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('re-points a reel opened from the tile\'s own view as the reader moves, as before', () => {

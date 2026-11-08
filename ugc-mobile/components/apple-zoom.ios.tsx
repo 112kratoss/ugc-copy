@@ -22,6 +22,7 @@ import {
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { clearAppleZoomReturn, prepareAppleZoomReturn } from '@/lib/apple-zoom-surface';
 import { appleZoomAlignmentRect, type ZoomRect, type ZoomSize } from '@/lib/media-zoom-transition';
+import { listenToTransition } from '@/lib/use-screen-leaving';
 
 /**
  * Tiles kept from UIKit's zoom for one close (`withholdAppleZoomSource`).
@@ -121,14 +122,16 @@ export function AppleZoomSource({
 }
 
 /**
- * Marks where the reel draws the media of the post on screen, so the zoom
- * grows the tile into that rectangle and shrinks it back out of it, rather
- * than out of the whole screen with its bands and chrome. UIKit finds it only
- * for a pop the reel is still mounted for — a drag down, a pinch, the edge
- * swipe — which is where it tracks the page on screen; the push and Back line
- * up by the tile's own alignment (`AppleZoomSource`). Keyed on the identifier:
- * Expo Router's detector registers once, under the identifier it mounted with,
- * so a re-pointed reel mounts a fresh one.
+ * Marks where the reel draws the media of the post on screen, so a close
+ * shrinks that rectangle into the tile rather than the whole screen with its
+ * bands and chrome. UIKit finds it only for a pop the reel is still mounted
+ * for — a drag down, a pinch, the edge swipe — which is where it tracks the
+ * page on screen; Back takes the reel out of React first and lines up by the
+ * tile's own alignment (`AppleZoomSource`). Not drawn while the push still
+ * carries the page-shaped view it grew out of (`appleZoomOpenSourceId`), which
+ * lines up with the whole page itself. Keyed on the identifier: Expo Router's
+ * detector registers once, under the identifier it mounted with, so a
+ * re-pointed reel mounts a fresh one.
  */
 export function AppleZoomTarget({ rect }: { rect: ZoomRect }) {
   const identifier = useAppleZoomSourceId();
@@ -154,6 +157,13 @@ export function useAppleZoomSourceId(): string | null {
 }
 
 /**
+ * After this a push whose landing was never heard counts as landed (a report
+ * sent before the reel listened is not sent again). Past the end of any push:
+ * UIKit reports a zoom's end up to a second after it has visibly landed.
+ */
+export const APPLE_ZOOM_LANDING_DEADLINE_MS = 2000;
+
+/**
  * Points the zoom at the tile of the post the reader is on, so a close shrinks
  * into that tile rather than the one they tapped. The tile has to be on the
  * same surface and still mounted; UIKit shrinks the reel to the middle of the
@@ -170,9 +180,14 @@ export function useAppleZoomRetarget(activeItemId: string | null) {
   const [landed, setLanded] = useState(!opening);
   useEffect(() => {
     if (landed) return undefined;
-    return navigation.addListener('transitionEnd' as never, ((event: { data?: { closing?: boolean } }) => {
-      if (event?.data?.closing === false) setLanded(true);
-    }) as never);
+    const unsubscribe = listenToTransition(navigation, 'transitionEnd', (event) => {
+      if (event.data?.closing === false) setLanded(true);
+    });
+    const deadline = setTimeout(() => setLanded(true), APPLE_ZOOM_LANDING_DEADLINE_MS);
+    return () => {
+      unsubscribe();
+      clearTimeout(deadline);
+    };
   }, [landed, navigation]);
   useEffect(() => {
     if (!sourceId || !activeItemId) return;

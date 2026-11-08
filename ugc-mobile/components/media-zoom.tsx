@@ -1338,13 +1338,6 @@ export function useMediaZoomStage({
 
   // 1 while this reel's window is the flight's window; 0 when it is simply the screen.
   const following = useSharedValue(zooming ? 1 : 0);
-  // iOS: UIKit's zoom shrinks the reel itself into the tile. Its rail, caption
-  // and the shades under them (the top scrim, the caption's gradient) went down
-  // with the picture as a dark band round it (owner, 2026-11-07). Faded over
-  // 80 ms they still showed at half strength on the first frames of the shrink
-  // (filmed), so they go on the UI thread as a close begins, and come back if
-  // it is let go of.
-  const nativeCloseChrome = useSharedValue(1);
   const localGeometry = useSharedValue<ZoomGeometry>({ screen, tile: null, tileRadius: 0, aspectRatio: null });
   const stageOpacity = useSharedValue(zooming || reducedMotion || !PLAIN_DISSOLVE ? 1 : 0);
   // Whether the close under way dissolves the reel into its tile (`CLOSE_DISSOLVE_FROM`).
@@ -1575,11 +1568,8 @@ export function useMediaZoomStage({
     const unsubscribers = [
       listenToTransition(navigation, 'transitionStart', (event) => {
         if (event.data?.closing !== true) {
-          if (event.data?.closing === false) {
-            // The push has begun, or a close has been let go of.
-            nativeCloseChrome.set(withTiming(1, { duration: NATIVE_CLOSE_CHROME_MS }));
-            letGoOf();
-          }
+          // The push has begun, or a close has been let go of.
+          if (event.data?.closing === false) letGoOf();
           return;
         }
         if (!navigation.isFocused()) return;
@@ -1593,13 +1583,10 @@ export function useMediaZoomStage({
       listenToTransition(navigation, 'transitionEnd', (event) => {
         if (event.data?.closing === false) letGoOf();
       }),
-      listenToTransition(navigation, 'gestureCancel', () => {
-        nativeCloseChrome.set(withTiming(1, { duration: NATIVE_CLOSE_CHROME_MS }));
-        letGoOf();
-      }),
+      listenToTransition(navigation, 'gestureCancel', letGoOf),
     ];
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, [handBackForNativeClose, nativeCloseChrome, nativeZoom, navigation]);
+  }, [handBackForNativeClose, nativeZoom, navigation]);
 
   /**
    * A live close has landed: the reel's window lies exactly over its tile. Handed
@@ -1913,6 +1900,8 @@ export function useMediaZoomStage({
     // UIKit shrank it from the reel's size into its cell under the flight
     // (simulator, 2026-11-07).
     if (nativeZoom) {
+      // Reached only with `IOS_BACK_FLIES_PICTURE` on (off since 2026-11-08),
+      // and kept so that the one switch brings the picture-only Back back.
       // Both of the tile's views: the reel closes into the tile's own view once
       // it has landed, and into the page-shaped view it grew out of until then.
       const tileSourceId = appleZoomSourceId(origin.surfaceId, activeItemRef.current);
@@ -2100,7 +2089,7 @@ export function useMediaZoomStage({
   // the reel once the flight has landed, and on a collapse the reel shrinks with
   // it — fading, not cut away (`CLOSE_CHROME_HOLD`).
   const chromeStyle = useAnimatedStyle(() => {
-    if (!following.value) return { opacity: nativeCloseChrome.value };
+    if (!following.value) return { opacity: 1 };
     if (flightClosing.value) {
       return {
         opacity: interpolate(flightTime.value, [CLOSE_CHROME_GONE, CLOSE_CHROME_HOLD], [0, 1], Extrapolation.CLAMP),
@@ -2156,9 +2145,6 @@ export function useMediaZoomStage({
  * The tile's picture the reel carries is drawn by the slide it belongs to
  * (`MediaZoomCarriedPicture`), not here over the whole page.
  */
-/** How long the reel's chrome takes to come back when a UIKit zoom close is let go of. */
-const NATIVE_CLOSE_CHROME_MS = 150;
-
 export function MediaZoomStage({
   groundClear = false,
   stage,

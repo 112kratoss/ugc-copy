@@ -235,8 +235,9 @@ const ViewerLeavingContext = createContext(false);
 /** The reel's black. */
 const REEL_GROUND = '#000';
 /**
- * What the reel draws behind its media: its black, or clear (`groundClear` in
- * the screen) so that a close into a tile shrinks the picture alone.
+ * What the reel draws behind its media: its black, or clear on Android
+ * (`groundClear` in the screen), where a close into a tile shrinks the picture
+ * alone.
  */
 const ViewerGroundContext = createContext<string>(REEL_GROUND);
 
@@ -1558,12 +1559,12 @@ function ImmersivePreviewViewer() {
           gestureEnabled: !detailsOpenForActive,
           fullScreenGestureEnabled: false,
           // iOS: Back and Mute are the navigation bar's own items, so Back pops
-          // at once (lib/viewer-native-back.ts).
-          // A picture out of a tile has the reel's own Back instead (`flownBack`).
+          // at once (lib/viewer-native-back.ts). With `IOS_BACK_FLIES_PICTURE`
+          // on, a picture out of a tile has the reel's own Back instead (`flownBack`).
           ...(nativeBack && flownBack ? { headerShown: false } : null),
           ...(barBack ? viewerNativeBackOptions({
-            // Gone as a close begins, as the rest of the chrome fades: UIKit
-            // drew the bar black over the top of the shrinking reel.
+            // Gone as a close begins: UIKit drew the bar black over the top of
+            // the shrinking reel.
             hidden: detailsOpenForActive || (activeItem != null && leavingMediaItemId === activeItem.id),
             mute: hasImmersiveAudibleMedia(activeItem) ? { muted: audioMuted, onPress: toggleMuteFromBar } : null,
           }) : null),
