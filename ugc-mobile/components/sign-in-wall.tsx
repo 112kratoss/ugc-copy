@@ -9,7 +9,6 @@
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Sparkles } from 'lucide-react-native';
 import { useIsFocused } from '@react-navigation/native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
@@ -17,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GoogleGMark } from '@/components/google-g-mark';
 import { MediaWall } from '@/components/media-wall';
-import { AppText, IconButton } from '@/components/ui';
+import { AppText, BrandLockup, IconButton } from '@/components/ui';
 import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
 import { describeProviderSignInError, signInProviderButtons, type AuthNotice } from '@/lib/auth-error-copy';
@@ -48,6 +47,8 @@ export function SignInWall(props: {
   onUseEmail: () => void;
   /** The funnel step the events are filed under. */
   step: string;
+  /** Why a redirect sent the person here ("You were signed out"), if it did. */
+  notice?: AuthNotice | null;
 }) {
   return (
     <ThemeScope scheme="dark">
@@ -56,7 +57,12 @@ export function SignInWall(props: {
   );
 }
 
-function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEmail: () => void; step: string }) {
+function SignInWallBody({ target, onUseEmail, step, notice: redirectNotice = null }: {
+  target: string;
+  onUseEmail: () => void;
+  step: string;
+  notice?: AuthNotice | null;
+}) {
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
@@ -67,7 +73,7 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
   const providers = signInProviderButtons(Platform.OS);
   const [appleBusy, setAppleBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
-  const [notice, setNotice] = useState<AuthNotice | null>(null);
+  const [notice, setNotice] = useState<AuthNotice | null>(redirectNotice);
   const busy = appleBusy || googleBusy;
   const unavailable = !isAuthConfigured || busy;
   const movedOn = useRef(false);
@@ -184,12 +190,9 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
           >
             {'Create\nanything'}
           </AppText>
-          {/* A small mark under the headline, as Kling's is: the full lockup is a page title. */}
-          <View accessibilityRole="header" accessibilityLabel="Magicbooklet" style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Sparkles size={appTheme.icon.compact} color={theme.colors.primary} />
-            <AppText variant="sectionTitle" style={{ color: mediaColors.onMedia, fontSize: 19, lineHeight: 24 }}>
-              Magicbooklet
-            </AppText>
+          {/* The app's one wordmark, at its compact size, under the headline as Kling's mark is. */}
+          <View style={{ alignSelf: 'flex-start' }}>
+            <BrandLockup />
           </View>
         </View>
 
@@ -201,7 +204,12 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
 
         {notice ? (
           <View accessibilityLiveRegion="polite" style={{ marginBottom: 10, gap: 2 }}>
-            <AppText variant="label" style={{ textAlign: 'center', color: theme.semantic.danger.foreground }}>{notice.title}</AppText>
+            <AppText
+              variant="label"
+              style={{ textAlign: 'center', color: notice.tone === 'info' ? mediaColors.onMedia : theme.semantic.danger.foreground }}
+            >
+              {notice.title}
+            </AppText>
             <AppText variant="caption" style={{ textAlign: 'center', color: mediaColors.onMediaSecondary }}>{notice.body}</AppText>
           </View>
         ) : null}
@@ -281,16 +289,25 @@ function SignInWallBody({ target, onUseEmail, step }: { target: string; onUseEma
           </Text>
         </Pressable>
 
-        <View style={{ marginTop: 4, alignItems: 'center', gap: 2 }}>
-          <Text style={{ color: mediaColors.onMediaSecondary, fontSize: 12, lineHeight: 17, textAlign: 'center' }}>
-            By continuing, you agree to the Magicbooklet terms and privacy policy.
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 20 }}>
-            <TermsLink label="Terms of Service" path="/terms" />
-            <TermsLink label="Privacy Policy" path="/privacy" />
-          </View>
+        <View style={{ marginTop: 4 }}>
+          <SignInTerms />
         </View>
       </ScrollView>
+    </View>
+  );
+}
+
+/** The terms line both sign-in screens end on, white on the wall. */
+export function SignInTerms() {
+  return (
+    <View style={{ alignItems: 'center', gap: 2 }}>
+      <Text style={{ color: mediaColors.onMediaSecondary, fontSize: 12, lineHeight: 17, textAlign: 'center' }}>
+        By continuing, you agree to the Magicbooklet terms and privacy policy.
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 20 }}>
+        <TermsLink label="Terms of Service" path="/terms" />
+        <TermsLink label="Privacy Policy" path="/privacy" />
+      </View>
     </View>
   );
 }

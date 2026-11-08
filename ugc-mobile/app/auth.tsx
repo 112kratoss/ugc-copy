@@ -1,55 +1,36 @@
-import { useRoute } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { router, useNavigation } from 'expo-router';
-import * as AppleAuthentication from 'expo-apple-authentication';
-import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
-import { Image } from 'expo-image';
+import { StatusBar } from 'expo-status-bar';
+import { ActivityIndicator, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type TextInputProps } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Eye, EyeOff, LockKeyhole, Mail, X } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
-import { SignInWall } from '@/components/sign-in-wall';
-import { BrandLockup, IconButton, PrimaryButton, SegmentedControl } from '@/components/ui';
+import { MediaWall } from '@/components/media-wall';
+import { SignInTerms, SignInWall } from '@/components/sign-in-wall';
+import { AppText, BrandLockup, IconButton } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import {
   SIGN_IN_SUPPORT,
   SIGN_IN_SUPPORT_MAIL_URL,
   authNoticeForRedirect,
   describePasswordSignInError,
-  describeProviderSignInError,
   signInProviderButtons,
   validateCredentials,
   type AuthNotice,
-  type SignInProvider,
 } from '@/lib/auth-error-copy';
-import { isAppleAuthCanceled } from '@/lib/apple-auth';
-import { isGoogleAuthCanceled } from '@/lib/google-auth';
 import { completeAuthScreen, leaveAuthScreen, normalizeAuthReturnTo, tookReturnsPlace } from '@/lib/auth-navigation';
-import { env } from '@/lib/env';
 import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
 import { signInOpensOnEmailForm } from '@/lib/join-navigation';
 import { trackOnboardingEvent } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
-import { appTheme } from '@/lib/theme';
-import { useAppTheme } from '@/lib/theme-context';
-// Google's own "Sign in with Google" artwork (the dark pill). Its branding uses
-// the same button on iOS and Android, so one asset serves both phones.
-import googleSignInArtwork from '../assets/images/google-signin-android.png';
+import { useNavigationBarSurface } from '@/lib/system-bars';
+import { appTheme, mediaColors } from '@/lib/theme';
+import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 
-/**
- * Sign in with Apple: "Make a Sign in with Apple button no smaller than other
- * sign-in buttons", and HIG Buttons: "Use style — not size — to visually
- * distinguish the preferred choice among multiple options … placing two buttons
- * of different sizes near each other can make the interface look confusing".
- * The third-party buttons therefore take the height of the screen's own primary
- * button, which is `PrimaryButton size="roomy"`, and the Apple button its full
- * width too, so on iOS it stays the largest way in beside Google's artwork.
- */
-const THIRD_PARTY_BUTTON_HEIGHT = appTheme.touch.roomy;
-/** The shared primary button is a pill, so the Apple button is given the same radius. */
-const THIRD_PARTY_BUTTON_RADIUS = THIRD_PARTY_BUTTON_HEIGHT / 2;
-/** Google's asset is 216×48; scaled on its own aspect so it is not distorted. */
-const GOOGLE_BUTTON_ASPECT = 216 / 48;
+/** The sign-in page's button height (`components/sign-in-wall.tsx`). */
+const SUBMIT_HEIGHT = 50;
 
 /**
  * Where a sign-in begun here was headed, as the `step` of its analytics events
@@ -63,9 +44,9 @@ function authAnalyticsStep(returnTo: string | string[] | undefined) {
 
 /**
  * Every "Sign in" opens the full-screen sign-in page (owner, 2026-11-08: one page for signing
- * up and in, `components/sign-in-wall.tsx`). The email form below is for an account made with
- * email, behind the page's "Sign in with email", and comes straight up for a redirect's notice
- * ("You were signed out"), which explains why the person is here and keeps its own return.
+ * up and in, `components/sign-in-wall.tsx`), a redirect's notice ("You were signed out") on it
+ * included, since most accounts come back with Apple or Google. The email form below is for an
+ * account made with email, behind the page's "Sign in with email".
  */
 export default function AuthRoute() {
   const { returnTo, notice, email } = (useRoute().params ?? {}) as {
@@ -73,15 +54,14 @@ export default function AuthRoute() {
     notice?: string | string[];
     email?: string | string[];
   };
-  const [showEmailForm, setShowEmailForm] = useState(
-    () => signInOpensOnEmailForm({ hasNotice: authNoticeForRedirect(notice) !== null, email }),
-  );
+  const [showEmailForm, setShowEmailForm] = useState(() => signInOpensOnEmailForm(email));
 
   if (!showEmailForm) {
     return (
       <SignInWall
         target={normalizeAuthReturnTo(returnTo) ?? '/(tabs)'}
         step={authAnalyticsStep(returnTo)}
+        notice={authNoticeForRedirect(notice)}
         onUseEmail={() => setShowEmailForm(true)}
       />
     );
@@ -90,53 +70,51 @@ export default function AuthRoute() {
 }
 
 function AuthScreen() {
+  // Dark in both schemes, over the same wall as the sign-in page it is reached from.
+  return (
+    <ThemeScope scheme="dark">
+      <EmailSignIn />
+    </ThemeScope>
+  );
+}
+
+/**
+ * The email form (owner, 2026-11-08: "Dark, same wall"): email and password over the sign-in
+ * page's wall of creations. Email signs into an account made with email; it makes none, so the
+ * old Sign in / Sign up tabs went, and so did Apple and Google, which the page before it has.
+ */
+function EmailSignIn() {
   const theme = useAppTheme();
+  const insets = useSafeAreaInsets();
+  const isFocused = useIsFocused();
+  useNavigationBarSurface(isFocused ? 'dark' : null);
+  const { width, height } = useWindowDimensions();
   // The route's own params: the URL parse has decoded them once, as every caller encoded its
   // return once. expo-router's `useLocalSearchParams` decodes them again, which cut a prompt in a
   // return at & or #, turned its + into a space, and sent one with a backslash or a line break Home.
-  const { returnTo, mode: requestedMode, notice: requestedNotice, inPlace } = (useRoute().params ?? {}) as {
+  const { returnTo, notice: requestedNotice, inPlace } = (useRoute().params ?? {}) as {
     returnTo?: string | string[];
-    mode?: string | string[];
     notice?: string | string[];
     inPlace?: string | string[];
   };
-  const { api, user, signInWithPassword, signInWithApple, signInWithGoogle, isAuthConfigured, missingEnvKeys } = useAuth();
+  const { api, user, signInWithPassword, isAuthConfigured, missingEnvKeys } = useAuth();
   const navigation = useNavigation();
-  // The buttons this platform draws, and so the only ones the copy may name.
+  // The buttons the sign-in page draws on this platform, and so the only ones the copy may name.
   const providerButtons = signInProviderButtons(Platform.OS);
-  const initialMode = (Array.isArray(requestedMode) ? requestedMode[0] : requestedMode) === 'signup'
-    ? 'signup'
-    : 'login';
-  const [mode, setMode] = useState<'login' | 'signup'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   // Seeded from the route so a redirect can say why it sent the person here.
   // Only a known key maps to copy; an unrecognised one shows nothing rather
   // than letting a deep link put arbitrary text on the sign-in screen.
-  const initialNotice = authNoticeForRedirect(requestedNotice);
-  const [notice, setNotice] = useState<AuthNotice | null>(initialNotice);
+  const [notice, setNotice] = useState<AuthNotice | null>(() => authNoticeForRedirect(requestedNotice));
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isAppleSubmitting, setIsAppleSubmitting] = useState(false);
-  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
-  // One sign-in at a time. Each way in prepares the guest's credits for the
-  // account before it replaces the session, and on iOS two providers now sit
-  // side by side: a second tap while the first is still preparing would start
-  // a second sign-in over it. The others wait until this one has finished.
-  const isSignInInFlight = isSubmitting || isAppleSubmitting || isGoogleSubmitting;
-  const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
-  const isCompact = width < 390 || height < 820;
+  const passwordRef = useRef<TextInput | null>(null);
   // Deliberately not a validity gate. A button that is disabled for a reason it
   // cannot state leaves people guessing (the old gate wanted six characters and
   // said so only in a placeholder that vanished on the first keystroke); the
   // shape of what was typed is checked on submit instead, where it can be named.
-  const canSubmit = mode === 'login'
-    && isAuthConfigured
-    && !isAppleSubmitting
-    && !isGoogleSubmitting
-    && email.trim().length > 0
-    && password.length > 0;
+  const canSubmit = isAuthConfigured && !isSubmitting && email.trim().length > 0 && password.length > 0;
   const hasCompletedAuth = useRef(false);
   const hasStartedAuth = useRef(false);
   const hasCanceledAuth = useRef(false);
@@ -147,36 +125,24 @@ function AuthScreen() {
     void trackOnboardingEvent(api, eventName, { step: analyticsStep });
   }, [analyticsStep, api]);
 
-  // Once a visit, at the first attempt by any of the screen's ways in.
-  const noteAuthStarted = () => {
-    if (hasStartedAuth.current) return;
-    hasStartedAuth.current = true;
-    trackAuthEvent('auth_started');
-  };
-
   const finishAuth = useCallback(() => {
-    if (hasCompletedAuth.current) {
-      return;
-    }
-
+    if (hasCompletedAuth.current) return;
     hasCompletedAuth.current = true;
     // A sign-in made here. Opened by someone signed in already, the screen
     // only steps aside, and nothing was signed in.
     if (hasStartedAuth.current) trackAuthEvent('auth_succeeded');
-    // Left before its sign-in finished (Close, a swipe down, Android's back):
-    // the person is on the screen they went to, which a return would replace.
+    // Left before its sign-in finished (Close, Android's back): the person is
+    // on the screen they went to, which a return would replace.
     if (hasCanceledAuth.current) return;
     completeAuthScreen(router, returnTo, { inPlace: tookReturnsPlace(inPlace) });
   }, [inPlace, returnTo, trackAuthEvent]);
 
   useEffect(() => {
-    if (user) {
-      finishAuth();
-    }
+    if (user) finishAuth();
   }, [finishAuth, user]);
 
-  // Left without signing in: the Close button, a swipe down, Android's back.
-  // A sign-in's own exit is marked completed before it leaves.
+  // Left without signing in: the Close button, Android's back. A sign-in's own
+  // exit is marked completed before it leaves.
   useEffect(() => navigation.addListener('beforeRemove', () => {
     if (hasCompletedAuth.current || hasCanceledAuth.current) return;
     hasCanceledAuth.current = true;
@@ -184,8 +150,12 @@ function AuthScreen() {
   }), [navigation, trackAuthEvent]);
 
   const submit = async () => {
-    if (mode !== 'login' || isSignInInFlight) return;
-    noteAuthStarted();
+    if (isSubmitting) return;
+    // Once a visit, at the first attempt.
+    if (!hasStartedAuth.current) {
+      hasStartedAuth.current = true;
+      trackAuthEvent('auth_started');
+    }
 
     const invalid = validateCredentials(email, password);
     if (invalid) {
@@ -205,395 +175,161 @@ function AuthScreen() {
     }
   };
 
-  const signInWithNativeApple = async () => {
-    if (isSignInInFlight) return;
-    noteAuthStarted();
-    setIsAppleSubmitting(true);
-    setNotice(null);
-    try {
-      await signInWithApple(mode);
-      finishAuth();
-    } catch (nextError) {
-      if (!isAppleAuthCanceled(nextError)) {
-        setNotice(describeProviderSignInError(nextError, 'Apple'));
-      }
-    } finally {
-      setIsAppleSubmitting(false);
-    }
-  };
-
-  const signInWithNativeGoogle = async () => {
-    if (isSignInInFlight) return;
-    noteAuthStarted();
-    setIsGoogleSubmitting(true);
-    setNotice(null);
-    try {
-      await signInWithGoogle();
-      finishAuth();
-    } catch (nextError) {
-      if (!isGoogleAuthCanceled(nextError)) {
-        setNotice(describeProviderSignInError(nextError, 'Google'));
-      }
-    } finally {
-      setIsGoogleSubmitting(false);
-    }
-  };
-
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: mediaColors.mediaGround }}>
+      {isFocused ? <StatusBar style="light" /> : null}
+      <MediaWall width={width} height={height} />
+      {/* Darker than the page before: here the wall sits behind fields that are read and typed in. */}
+      <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: mediaColors.mediaScrimStrong }]} />
       <KeyboardAvoidingArea iosScrollViewAdjustsInsets>
       <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
+        contentInsetAdjustmentBehavior="never"
         automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        alwaysBounceVertical={false}
+        showsVerticalScrollIndicator={false}
         style={{ flex: 1 }}
         contentContainerStyle={{
           flexGrow: 1,
-          paddingHorizontal: isCompact ? 16 : 20,
-          paddingTop: Math.max(insets.top, 16) + 14,
-          paddingBottom: Math.max(insets.bottom, 16) + 22,
-          gap: isCompact ? 14 : 16,
+          paddingTop: insets.top + 4,
+          paddingBottom: Math.max(insets.bottom, 16) + 4,
+          paddingHorizontal: 20,
         }}
       >
-        <View style={{ width: '100%', maxWidth: 430, alignSelf: 'center', flex: 1, gap: isCompact ? 14 : 16 }}>
-          <AuthHeader />
-
-          <AuthPanel
-            mode={mode}
-            onModeChange={(nextMode) => {
-              setMode(nextMode);
-              setNotice(null);
-            }}
-            email={email}
-            password={password}
-            showPassword={showPassword}
-            onEmailChange={(value) => {
-              setEmail(value);
-              setNotice(null);
-            }}
-            onPasswordChange={(value) => {
-              setPassword(value);
-              setNotice(null);
-            }}
-            onTogglePassword={() => setShowPassword((current) => !current)}
-            onSubmit={submit}
-            onAppleSignIn={signInWithNativeApple}
-            onGoogleSignIn={signInWithNativeGoogle}
-            canSubmit={canSubmit}
-            isSubmitting={isSubmitting}
-            isGoogleSubmitting={isGoogleSubmitting}
-            isSignInInFlight={isSignInInFlight}
-            isAuthConfigured={isAuthConfigured}
-            missingEnvKeys={missingEnvKeys}
-            notice={notice}
-            providerButtons={providerButtons}
+        <View style={{ width: '100%', maxWidth: 430, alignSelf: 'center', flex: 1 }}>
+          <IconButton
+            icon={CloseGlyph}
+            label="Close"
+            variant="plain"
+            onPress={() => leaveAuthScreen(router)}
+            // The glyph's left edge on the title's.
+            style={{ alignSelf: 'flex-start', marginLeft: -12 }}
           />
+
+          <View style={{ marginTop: 16, gap: 8 }}>
+            <View style={{ alignSelf: 'flex-start', marginBottom: 12 }}>
+              <BrandLockup />
+            </View>
+            <AppText heading variant="pageTitle" style={{ color: mediaColors.onMedia }}>
+              Sign in with email
+            </AppText>
+            <AppText variant="body" style={{ color: mediaColors.onMediaSecondary }}>
+              For an account you made with email. New accounts start with Apple or Google.
+            </AppText>
+          </View>
+
+          <View style={{ marginTop: 28, gap: 14 }}>
+            {!isAuthConfigured ? (
+              <InlineNotice
+                title="Mobile auth is not configured"
+                body={`Add ${missingEnvKeys.join(', ')} to ugc-mobile/.env.local and restart Expo.`}
+              />
+            ) : null}
+
+            <WorkspaceInput
+              label="Email"
+              icon={<Mail size={appTheme.icon.compact} color={theme.colors.primary} />}
+              autoCapitalize="none"
+              autoCorrect={false}
+              spellCheck={false}
+              keyboardType="email-address"
+              // `username` rather than `emailAddress`: paired with the
+              // `password` field below it, this is what makes iCloud Keychain
+              // and Google Password Manager offer a saved login above the
+              // keyboard instead of only contact-card autofill.
+              textContentType="username"
+              autoComplete="username"
+              returnKeyType="next"
+              // Keep the keyboard up while focus moves to the password field.
+              submitBehavior="submit"
+              onSubmitEditing={() => passwordRef.current?.focus()}
+              value={email}
+              onChangeText={(value) => {
+                setEmail(value);
+                setNotice(null);
+              }}
+              placeholder="you@example.com"
+              trailingIcon={email.length > 0 ? (
+                // Text fields, iOS: "Display a Clear button in the trailing end of
+                // a text field to help people erase their input." Drawn rather
+                // than left to `clearButtonMode`, which is iOS-only — this is the
+                // same control on both platforms.
+                <FieldButton label="Clear email" onPress={() => setEmail('')}>
+                  <X size={appTheme.icon.compact} color={theme.colors.muted} />
+                </FieldButton>
+              ) : null}
+            />
+            <WorkspaceInput
+              label="Password"
+              inputRef={passwordRef}
+              icon={<LockKeyhole size={appTheme.icon.compact} color={theme.colors.primary} />}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="password"
+              autoComplete="current-password"
+              returnKeyType="go"
+              onSubmitEditing={() => {
+                if (canSubmit) void submit();
+              }}
+              value={password}
+              onChangeText={(value) => {
+                setPassword(value);
+                setNotice(null);
+              }}
+              placeholder="Your password"
+              trailingIcon={
+                <FieldButton
+                  label={showPassword ? 'Hide password' : 'Show password'}
+                  onPress={() => setShowPassword((current) => !current)}
+                >
+                  {/* Two glyphs, not one glyph in two colours — HIG Color: "avoid
+                      relying solely on color to … communicate essential
+                      information", the rule S13 applied to the profile grid. */}
+                  {showPassword
+                    ? <EyeOff size={appTheme.icon.compact} color={theme.colors.primary} />
+                    : <Eye size={appTheme.icon.compact} color={theme.colors.muted} />}
+                </FieldButton>
+              }
+            />
+
+            <SignInSupportLink />
+
+            {/* Above the action, so it survives the keyboard: the password field's
+                Return key is "go", which submits with the keyboard up. */}
+            {notice ? <InlineNotice title={notice.title} body={notice.body} tone={notice.tone} /> : null}
+
+            {/* White, as the sign-in page's buttons are. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isSubmitting ? 'Signing in…' : 'Sign in'}
+              accessibilityState={{ disabled: !canSubmit, busy: isSubmitting }}
+              disabled={!canSubmit}
+              onPress={() => void submit()}
+              style={({ pressed }) => ({
+                height: SUBMIT_HEIGHT,
+                borderRadius: appTheme.radii.pill,
+                backgroundColor: mediaColors.onMedia,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+                opacity: !canSubmit && !isSubmitting ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
+              })}
+            >
+              {isSubmitting ? <ActivityIndicator color={mediaColors.mediaGround} /> : null}
+              <Text style={{ color: mediaColors.mediaGround, fontSize: 19, fontWeight: '600', letterSpacing: -0.2 }}>
+                {isSubmitting ? 'Signing in…' : 'Sign in'}
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={{ flex: 1, minHeight: 24 }} />
+          <SignInTerms />
         </View>
       </ScrollView>
       </KeyboardAvoidingArea>
-    </View>
-  );
-}
-
-function AuthHeader() {
-  return (
-    <View style={{ minHeight: appTheme.touch.default, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <IconButton icon={CloseGlyph} label="Close" onPress={() => leaveAuthScreen(router)} />
-      <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center' }}>
-        <BrandLockup />
-      </View>
-      <View style={{ width: appTheme.touch.default, height: appTheme.touch.default }} />
-    </View>
-  );
-}
-
-/**
- * Managing accounts: "Explain the benefits of creating an account and how to
- * sign up … Display this message in your sign-in view." One sentence carries
- * both, and names the methods that are actually on screen, in the order they
- * are drawn — Managing accounts again: "Refer only to authentication methods
- * that are available in the current context."
- */
-function signUpSubtitle(providerButtons: readonly SignInProvider[]) {
-  const ways = providerButtons.length > 0
-    ? providerButtons.join(' or ')
-    : 'Apple or Google on a mobile device';
-  return `Start saving generations, recipes, and profile work. New accounts are created with ${ways}.`;
-}
-
-function AuthPanel({
-  mode,
-  onModeChange,
-  email,
-  password,
-  showPassword,
-  onEmailChange,
-  onPasswordChange,
-  onTogglePassword,
-  onSubmit,
-  onAppleSignIn,
-  onGoogleSignIn,
-  canSubmit,
-  isSubmitting,
-  isGoogleSubmitting,
-  isSignInInFlight,
-  isAuthConfigured,
-  missingEnvKeys,
-  notice,
-  providerButtons,
-}: {
-  mode: 'login' | 'signup';
-  onModeChange: (mode: 'login' | 'signup') => void;
-  email: string;
-  password: string;
-  showPassword: boolean;
-  onEmailChange: (value: string) => void;
-  onPasswordChange: (value: string) => void;
-  onTogglePassword: () => void;
-  onSubmit: () => void;
-  onAppleSignIn: () => void;
-  onGoogleSignIn: () => void;
-  canSubmit: boolean;
-  isSubmitting: boolean;
-  isGoogleSubmitting: boolean;
-  /** Any of the screen's ways in is under way, so the others wait. */
-  isSignInInFlight: boolean;
-  isAuthConfigured: boolean;
-  missingEnvKeys: string[];
-  notice: AuthNotice | null;
-  /** The providers this platform draws, in order: Apple first where it is drawn. */
-  providerButtons: readonly SignInProvider[];
-}) {
-  const theme = useAppTheme();
-  const passwordRef = useRef<TextInput | null>(null);
-  const showAppleSignIn = providerButtons.includes('Apple');
-  const showGoogleSignIn = providerButtons.includes('Google');
-  const providersUnavailable = !isAuthConfigured || isSignInInFlight;
-
-  return (
-    <View
-      style={{
-        borderRadius: appTheme.radii.xl,
-        borderCurve: 'continuous',
-        borderWidth: 1,
-        borderColor: theme.colors.border,
-        backgroundColor: theme.colors.panel,
-        padding: 18,
-        gap: 16,
-      }}
-    >
-      <View style={{ gap: 5 }}>
-        <Text accessibilityRole="header" selectable style={{ color: theme.colors.text, fontSize: 25, lineHeight: 31, fontWeight: '700' }}>
-          {mode === 'login' ? 'Welcome back' : 'Create your account'}
-        </Text>
-        <Text selectable style={{ color: theme.colors.muted, fontSize: 14, lineHeight: 21, fontWeight: '400' }}>
-          {mode === 'login'
-            ? 'Open your workspace and continue creating.'
-            : signUpSubtitle(providerButtons)}
-        </Text>
-      </View>
-
-      <ModeTabs mode={mode} onChange={onModeChange} />
-
-      {!isAuthConfigured ? (
-        <InlineNotice
-          title="Mobile auth is not configured"
-          body={`Add ${missingEnvKeys.join(', ')} to ugc-mobile/.env.local and restart Expo.`}
-        />
-      ) : null}
-
-      {mode === 'login' ? (
-        <View style={{ gap: 10 }}>
-          <WorkspaceInput
-            label="Email"
-            icon={<Mail size={appTheme.icon.compact} color={theme.colors.primary} />}
-            autoCapitalize="none"
-            autoCorrect={false}
-            spellCheck={false}
-            keyboardType="email-address"
-            // `username` rather than `emailAddress`: paired with the
-            // `password` field below it, this is what makes iCloud Keychain
-            // and Google Password Manager offer a saved login above the
-            // keyboard instead of only contact-card autofill.
-            textContentType="username"
-            autoComplete="username"
-            returnKeyType="next"
-            // Keep the keyboard up while focus moves to the password field.
-            submitBehavior="submit"
-            onSubmitEditing={() => passwordRef.current?.focus()}
-            value={email}
-            onChangeText={onEmailChange}
-            placeholder="you@example.com"
-            trailingIcon={email.length > 0 ? (
-              // Text fields, iOS: "Display a Clear button in the trailing end of
-              // a text field to help people erase their input." Drawn rather
-              // than left to `clearButtonMode`, which is iOS-only — this is the
-              // same control on both platforms.
-              <FieldButton label="Clear email" onPress={() => onEmailChange('')}>
-                <X size={appTheme.icon.compact} color={theme.colors.muted} />
-              </FieldButton>
-            ) : null}
-          />
-          <WorkspaceInput
-            label="Password"
-            inputRef={passwordRef}
-            icon={<LockKeyhole size={appTheme.icon.compact} color={theme.colors.primary} />}
-            secureTextEntry={!showPassword}
-            autoCapitalize="none"
-            autoCorrect={false}
-            textContentType="password"
-            autoComplete="current-password"
-            returnKeyType="go"
-            onSubmitEditing={() => {
-              if (canSubmit) onSubmit?.();
-            }}
-            value={password}
-            onChangeText={onPasswordChange}
-            placeholder="Your password"
-            trailingIcon={
-              <FieldButton
-                label={showPassword ? 'Hide password' : 'Show password'}
-                onPress={onTogglePassword}
-              >
-                {/* Two glyphs, not one glyph in two colours — HIG Color: "avoid
-                    relying solely on color to … communicate essential
-                    information", the rule S13 applied to the profile grid. */}
-                {showPassword
-                  ? <EyeOff size={appTheme.icon.compact} color={theme.colors.primary} />
-                  : <Eye size={appTheme.icon.compact} color={theme.colors.muted} />}
-              </FieldButton>
-            }
-          />
-        </View>
-      ) : null}
-
-      {mode === 'login' ? <SignInSupportLink /> : null}
-
-      {/* Inside the panel and above the action, so it survives the keyboard: the
-          password field's Return key is "go", which submits with the keyboard
-          up, and the old toast was pinned to the bottom of the screen behind it. */}
-      {notice ? <InlineNotice title={notice.title} body={notice.body} tone={notice.tone} /> : null}
-
-      {mode === 'login' ? (
-        <PrimaryButton
-          label="Sign in"
-          loadingLabel="Signing in…"
-          size="roomy"
-          onPress={onSubmit}
-          disabled={!canSubmit}
-          loading={isSubmitting}
-        />
-      ) : null}
-
-      {showAppleSignIn || showGoogleSignIn ? (
-        <>
-          {/* The divider offers an alternative, so it only appears where there is
-              something to be an alternative to: once, above every provider. In
-              sign-up the providers are the only ways in. */}
-          {mode === 'login' ? <OrContinueWith /> : null}
-          {/* Apple first, then Google (App Review 4.8 and Sign in with Apple:
-              no smaller than any other way in). */}
-          <View style={{ gap: appTheme.spacing.gap }}>
-            {showAppleSignIn ? (
-              <View
-                pointerEvents={providersUnavailable ? 'none' : 'auto'}
-                style={{ opacity: providersUnavailable ? appTheme.opacity.disabled : 1 }}
-              >
-                <AppleAuthentication.AppleAuthenticationButton
-                  accessibilityLabel={mode === 'signup' ? 'Sign up with Apple' : 'Sign in with Apple'}
-                  buttonType={mode === 'signup'
-                    ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
-                    : AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-                  // Apple's rule for the system button: white on a dark background,
-                  // black on a light one.
-                  buttonStyle={theme.scheme === 'dark'
-                    ? AppleAuthentication.AppleAuthenticationButtonStyle.WHITE
-                    : AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-                  cornerRadius={THIRD_PARTY_BUTTON_RADIUS}
-                  onPress={onAppleSignIn}
-                  style={{ width: '100%', height: THIRD_PARTY_BUTTON_HEIGHT }}
-                />
-              </View>
-            ) : null}
-
-            {showGoogleSignIn ? (
-              <Pressable
-                accessibilityRole="button"
-                // Google ships one asset, and it reads "Sign in with Google" in both
-                // modes — Google's branding covers sign-up with the same button.
-                // The spoken name therefore matches the drawn one (a name that
-                // said "Sign up…" over artwork saying "Sign in…" is a control
-                // Voice Control cannot be asked for); the mode goes in the hint.
-                accessibilityLabel="Sign in with Google"
-                accessibilityHint={mode === 'signup'
-                  ? 'Creates your account with Google and returns to Magicbooklet'
-                  : 'Opens Google authentication and returns to Magicbooklet'}
-                accessibilityState={{ busy: isGoogleSubmitting, disabled: providersUnavailable }}
-                disabled={providersUnavailable}
-                onPress={onGoogleSignIn}
-                style={({ pressed }) => ({
-                  minHeight: THIRD_PARTY_BUTTON_HEIGHT,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: providersUnavailable ? appTheme.opacity.disabled : pressed ? appTheme.opacity.pressed : 1,
-                })}
-              >
-                {isGoogleSubmitting ? (
-                  <ActivityIndicator color={theme.colors.text} />
-                ) : (
-                  <Image
-                    accessibilityIgnoresInvertColors
-                    contentFit="contain"
-                    source={googleSignInArtwork}
-                    style={{
-                      width: THIRD_PARTY_BUTTON_HEIGHT * GOOGLE_BUTTON_ASPECT,
-                      height: THIRD_PARTY_BUTTON_HEIGHT,
-                    }}
-                  />
-                )}
-              </Pressable>
-            ) : null}
-          </View>
-        </>
-      ) : null}
-
-      <View style={{ alignItems: 'center', gap: 6 }}>
-        <Text style={{ color: theme.colors.faint, fontSize: 11, lineHeight: 17, textAlign: 'center' }}>
-          By continuing, you agree to the Magicbooklet terms and acknowledge the privacy policy.
-        </Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          <Pressable
-            accessibilityRole="link"
-            accessibilityLabel="Open privacy policy"
-            onPress={() => void Linking.openURL(`${env.siteUrl}/privacy`)}
-            hitSlop={8}
-            style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
-          >
-            <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700' }}>Privacy Policy</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="link"
-            accessibilityLabel="Open terms of service"
-            onPress={() => void Linking.openURL(`${env.siteUrl}/terms`)}
-            hitSlop={8}
-            style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
-          >
-            <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700' }}>Terms of Service</Text>
-          </Pressable>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-function OrContinueWith() {
-  const theme = useAppTheme();
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.border }} />
-      <Text style={{ color: theme.colors.faint, fontSize: 12, fontWeight: '600' }}>or continue with</Text>
-      <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.border }} />
     </View>
   );
 }
@@ -637,22 +373,6 @@ function SignInSupportLink() {
       </Text>
     </Pressable>
   );
-}
-
-const AUTH_MODE_OPTIONS = [
-  { value: 'login', label: 'Sign in', accessibilityLabel: 'Switch to sign in' },
-  { value: 'signup', label: 'Sign up', accessibilityLabel: 'Switch to sign up' },
-] as const;
-
-/**
- * The app's segmented control (`SegmentedControl`), as tabs: the form below
- * it is what changes. This screen used to invent its own — a tinted fill with a
- * coloured border — which is the Familiarity rule ("once you establish a
- * behavior or appearance for an element, apply it throughout") broken on the
- * front door.
- */
-function ModeTabs({ mode, onChange }: { mode: 'login' | 'signup'; onChange: (mode: 'login' | 'signup') => void }) {
-  return <SegmentedControl role="tab" options={AUTH_MODE_OPTIONS} value={mode} onChange={onChange} />;
 }
 
 /** A control inside a text field, at the HIG's 44pt floor rather than icon-sized. */

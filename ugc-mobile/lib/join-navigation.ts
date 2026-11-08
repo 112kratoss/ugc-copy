@@ -31,10 +31,10 @@ export function onboardingReturnTo(value: string | string[] | undefined): string
 }
 
 /**
- * Whether the sign-in route opens on its email form rather than the full-screen
- * sign-in page: for a redirect's notice ("You were signed out"), which explains
- * why the person is there, and when the page's "Sign in with email" sent them.
+ * Whether the sign-in route opens on its email form rather than the full-screen sign-in page:
+ * only when the page's "Sign in with email" sent the person there. A redirect's notice ("You
+ * were signed out") shows on the page, where Apple and Google are.
  */
-export function signInOpensOnEmailForm({ hasNotice, email }: { hasNotice: boolean; email: string | string[] | undefined }) {
-  return hasNotice || (Array.isArray(email) ? email[0] : email) === '1';
+export function signInOpensOnEmailForm(email: string | string[] | undefined) {
+  return (Array.isArray(email) ? email[0] : email) === '1';
 }

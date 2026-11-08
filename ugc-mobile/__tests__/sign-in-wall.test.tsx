@@ -94,6 +94,7 @@ vi.mock('react-native', () => ({
       style: resolvePressableStyle(style),
     }, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
+  StyleSheet: { absoluteFill: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } },
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: (props: MockProps) => React.createElement('textinput', props),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -208,11 +209,11 @@ describe('the sign-in wall of creations', () => {
 });
 
 describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen page)', () => {
-  it('opens on the page, and on the email form only for a notice or "Sign in with email"', () => {
-    expect(signInOpensOnEmailForm({ hasNotice: false, email: undefined })).toBe(false);
-    expect(signInOpensOnEmailForm({ hasNotice: true, email: undefined })).toBe(true);
-    expect(signInOpensOnEmailForm({ hasNotice: false, email: '1' })).toBe(true);
-    expect(signInOpensOnEmailForm({ hasNotice: false, email: ['1'] })).toBe(true);
+  it('opens on the page, and on the email form only after "Sign in with email"', () => {
+    expect(signInOpensOnEmailForm(undefined)).toBe(false);
+    expect(signInOpensOnEmailForm('0')).toBe(false);
+    expect(signInOpensOnEmailForm('1')).toBe(true);
+    expect(signInOpensOnEmailForm(['1'])).toBe(true);
   });
 
   beforeEach(() => {
@@ -241,14 +242,18 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     renderer.act(() => {
       tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
     });
-    expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(0);
+    // The same wall stays behind the form; Apple and Google stay on the page before it.
+    expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' }).length).toBeGreaterThan(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Continue with Apple' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Switch to sign up' })).toHaveLength(0);
   });
 
-  it('keeps the signed-out notice on the email form, where it says why', () => {
+  it('says why on the page when a redirect sent the person back (most return with Apple or Google)', () => {
     paramsState.params = { notice: 'signed-out', returnTo: '/profile' };
     const tree = render(<AuthRoute />);
-    expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(0);
+    expect(tree.root.findAllByType('media-wall' as never)).toHaveLength(1);
+    expect(JSON.stringify(tree.toJSON())).toContain('signed out');
   });
 
   it('starts Apple as a sign-up, which makes an account or signs into one', async () => {

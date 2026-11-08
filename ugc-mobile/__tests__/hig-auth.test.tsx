@@ -31,6 +31,8 @@ const authState = vi.hoisted(() => ({
   missingEnvKeys: [] as string[],
 }));
 
+vi.mock('expo-status-bar', () => ({ StatusBar: () => null }));
+vi.mock('@/components/media-wall', () => ({ MediaWall: () => null }));
 vi.mock('expo-router', () => ({
   router: { canGoBack: vi.fn(() => false), back: vi.fn(), dismissTo: vi.fn(), replace: vi.fn() },
   useNavigation: () => ({ addListener: () => () => undefined }),
@@ -38,6 +40,7 @@ vi.mock('expo-router', () => ({
 }));
 
 vi.mock('@react-navigation/native', () => ({
+  useIsFocused: () => true,
   // The email form, behind the sign-in page's "Sign in with email".
   useRoute: () => ({ key: 'auth-1', name: 'auth', params: { email: '1' } }),
 }));
@@ -61,6 +64,7 @@ vi.mock('react-native', () => ({
   Pressable: ({ children, style, ...props }: MockProps) =>
     React.createElement('pressable', { ...props, style: resolvePressableStyle(style) }, children),
   ScrollView: ({ children, ...props }: MockProps) => React.createElement('scrollview', props, children),
+  StyleSheet: { absoluteFill: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } },
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   TextInput: (props: MockProps) => React.createElement('textinput', props),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
@@ -145,73 +149,23 @@ beforeEach(() => {
 });
 
 describe('S2 — the sign-in buttons are the same size', () => {
-  it('gives the Apple button the height of the screen\'s own primary button', () => {
-    const tree = render();
-    // Sign in with Apple: "Make a Sign in with Apple button no smaller than
-    // other sign-in buttons."
-    expect(styleOf(tree, { accessibilityLabel: 'Sign in with Apple' }).height).toBe(appTheme.touch.roomy);
-    expect(styleOf(tree, { accessibilityLabel: 'Sign in', accessibilityRole: 'button' }).minHeight)
-      .toBe(appTheme.touch.roomy);
+  // Sign in with Apple: "Make a Sign in with Apple button no smaller than other sign-in
+  // buttons". They live on the sign-in page now (components/sign-in-wall.tsx), one height and
+  // one width each.
+  const wallSource = readFileSync('components/sign-in-wall.tsx', 'utf8');
+
+  it('draws Apple and Google at one height and the full width', () => {
+    expect(wallSource).toContain("style={{ width: '100%', height: BUTTON_HEIGHT }}");
+    expect(wallSource).toMatch(/accessibilityLabel="Continue with Google"[\s\S]*?height: BUTTON_HEIGHT,/);
+    expect(wallSource).not.toContain('GOOGLE_BUTTON_ASPECT');
   });
 
-  it('gives the Google button the same height, scaled on its own aspect', () => {
-    platformState.os = 'android';
-    const tree = render();
-    expect(styleOf(tree, { accessibilityLabel: 'Sign in with Google' }).minHeight).toBe(appTheme.touch.roomy);
-    const [artwork] = hosts(tree, { accessibilityIgnoresInvertColors: true });
-    const { width, height } = artwork.props.style as { width: number; height: number };
-    expect(height).toBe(appTheme.touch.roomy);
-    // Google's artwork ships at 216x48; distorting it is not allowed.
-    expect(width / height).toBeCloseTo(216 / 48, 5);
-  });
-
-  it('keeps Apple no smaller than Google where both are drawn (iOS, App Review 4.8)', () => {
-    const tree = render();
-    // Full width at the primary button's height: the artwork beside it is
-    // narrower, never taller.
-    expect(styleOf(tree, { accessibilityLabel: 'Sign in with Apple' })).toMatchObject({
-      width: '100%',
-      height: appTheme.touch.roomy,
-    });
-    expect(styleOf(tree, { accessibilityLabel: 'Sign in with Google' }).minHeight).toBe(appTheme.touch.roomy);
-    const [artwork] = hosts(tree, { accessibilityIgnoresInvertColors: true });
-    expect((artwork.props.style as { height: number }).height).toBe(appTheme.touch.roomy);
+  it('keeps Apple first where both are drawn (iOS, App Review 4.8)', () => {
+    expect(wallSource.indexOf("providers.includes('Apple')")).toBeLessThan(wallSource.indexOf("providers.includes('Google')"));
   });
 });
 
-describe('S2 — sign-up is not dressed as a failure', () => {
-  it('shows no alert when a configured app opens the sign-up tab', () => {
-    const tree = render();
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-
-    expect(alerts(tree)).toHaveLength(0);
-    expect(hosts(tree, { accessibilityLabel: 'Sign up with Apple' })).toHaveLength(1);
-  });
-
-  it('says how to sign up in the subtitle, naming both methods on screen on iOS', () => {
-    const tree = render();
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-
-    const copy = JSON.stringify(tree.toJSON());
-    expect(copy).toContain('New accounts are created with Apple or Google.');
-  });
-
-  it('names Google alone in the subtitle on Android, where Apple is not drawn', () => {
-    platformState.os = 'android';
-    const tree = render();
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-
-    const copy = JSON.stringify(tree.toJSON());
-    expect(copy).toContain('New accounts are created with Google.');
-    expect(copy).not.toContain('Apple');
-  });
-
+describe('S2 — the alert is kept for real failures', () => {
   it('keeps the alert for a genuine misconfiguration', () => {
     authState.isAuthConfigured = false;
     authState.missingEnvKeys = ['EXPO_PUBLIC_SUPABASE_URL'];
@@ -219,23 +173,6 @@ describe('S2 — sign-up is not dressed as a failure', () => {
     expect(alerts(render())).toHaveLength(1);
   });
 
-  it('offers the divider only where there is an alternative to continue from', () => {
-    const tree = render();
-    expect(JSON.stringify(tree.toJSON())).toContain('or continue with');
-
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-    expect(JSON.stringify(tree.toJSON())).not.toContain('or continue with');
-  });
-
-  it('draws the divider once above the providers, however many there are', () => {
-    for (const os of ['ios', 'android']) {
-      platformState.os = os;
-      const dividers = JSON.stringify(render().toJSON()).split('or continue with').length - 1;
-      expect(dividers, os).toBe(1);
-    }
-  });
 });
 
 describe('S2 — a failure is told in the app\'s words, where it can be seen', () => {
@@ -319,46 +256,8 @@ describe('S2 — a typo costs a glance, not a round trip', () => {
 });
 
 describe('S2 — the front door uses the app\'s own controls', () => {
-  it('draws the segmented control the way the rest of the app draws it', () => {
-    const tree = render();
-    const selected = { accessibilityLabel: 'Switch to sign in' };
-    const unselected = { accessibilityLabel: 'Switch to sign up' };
-
-    for (const tab of [selected, unselected]) {
-      const [host] = hosts(tree, tab);
-      // A tab segment on iOS, this suite's platform as the control loads: a button with the selected
-      // state, since iOS gives "tab" no trait (`segmentTabRole`).
-      expect(host.props.accessibilityRole).toBe('button');
-      expect(typeof host.props.accessibilityState.selected).toBe('boolean');
-      // The thumb is drawn inside the track and answers to the track's whole height.
-      const slop = host.props.hitSlop as { top: number; bottom: number };
-      expect(Number(styleOf(tree, tab).minHeight) + slop.top + slop.bottom).toBeGreaterThanOrEqual(MIN_HIT_TARGET_PT);
-    }
-    expect(styleOf(tree, selected).backgroundColor).toBe(themes.dark.colors.primaryFill);
-    expect(styleOf(tree, unselected).backgroundColor).toBe('transparent');
-  });
-
-  it('keeps the Google button\'s spoken name equal to the name drawn on it', () => {
-    platformState.os = 'android';
-    const tree = render();
-    // Google ships one asset, reading "Sign in with Google" in both modes, so
-    // the accessible name must say that in both modes too — Voice Control can
-    // only be asked for a control by the words on it.
-    expect(hosts(tree, { accessibilityLabel: 'Sign in with Google' })).toHaveLength(1);
-
-    renderer.act(() => {
-      tree.root.findByProps({ accessibilityLabel: 'Switch to sign up' }).props.onPress();
-    });
-
-    expect(hosts(tree, { accessibilityLabel: 'Sign in with Google' })).toHaveLength(1);
-    expect(hosts(tree, { accessibilityLabel: 'Sign up with Google' })).toHaveLength(0);
-    // The mode it is in still reaches a screen reader, through the hint.
-    expect(hosts(tree, { accessibilityLabel: 'Sign in with Google' })[0].props.accessibilityHint)
-      .toContain('Creates your account');
-  });
-
   it('says what it is doing while it waits, instead of going blank', () => {
-    expect(authSource).toContain('loadingLabel="Signing in…"');
+    expect(authSource).toContain("isSubmitting ? 'Signing in…' : 'Sign in'");
   });
 });
 
