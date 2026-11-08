@@ -317,6 +317,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getItem: () => Promise.resolve(null),
     setItem: () => Promise.resolve(),
+    removeItem: () => Promise.resolve(),
   },
 }));
 
@@ -377,6 +378,7 @@ vi.mock('@/lib/feed-attention-view-model', async (importOriginal) => {
 });
 
 import { HomeDashboard } from '../components/home-dashboard';
+import { rememberWelcomeAnswer, resetWelcomePromiseForTests } from '../lib/welcome-promise';
 import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
@@ -1720,5 +1722,27 @@ describe('Home screen', () => {
 
     renderer.act(() => header.unmount());
     renderer.act(() => tree.unmount());
+  });
+
+  it('only asks a guest to sign in, with no free credits, once an account on this phone has had them (owner 11-09)', () => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    const { tree } = renderHome();
+    let header = renderHeader(tree);
+    expect(header.root.findAllByProps({ accessibilityLabel: 'Sign in for 25 free credits' }).length).toBeGreaterThan(0);
+    renderer.act(() => header.unmount());
+
+    renderer.act(() => {
+      rememberWelcomeAnswer('claimed');
+    });
+    header = renderHeader(tree);
+    expect(hostProps(header, 'home-shelf').offerFreeToTry).toBe(false);
+    expect(header.root.findAllByProps({ accessibilityLabel: 'Sign in for 25 free credits' })).toHaveLength(0);
+    expect(header.root.findAllByProps({ accessibilityLabel: 'Sign in' }).length).toBeGreaterThan(0);
+    expect(JSON.stringify(header.toJSON())).not.toContain('25 free credits');
+
+    renderer.act(() => header.unmount());
+    renderer.act(() => tree.unmount());
+    resetWelcomePromiseForTests();
   });
 });

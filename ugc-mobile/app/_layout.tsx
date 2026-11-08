@@ -78,6 +78,7 @@ import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, themes, type AppTheme } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { MobileNotificationType } from '@/lib/types';
+import { loadWelcomePromise } from '@/lib/welcome-promise';
 
 export {
   // Catch any errors thrown by the Layout component.
@@ -149,6 +150,9 @@ AppState.addEventListener('memoryWarning', () => pruneInactiveMediaQueries(query
 // rest of the app starts, so a returning launch draws posts rather than
 // skeletons once the session is restored. See lib/persisted-home-feed.
 void restorePersistedHomeFeed(queryClient);
+// Whether guests here may be promised the welcome credits, read before Home
+// draws its top bar (lib/welcome-promise).
+void loadWelcomePromise();
 // The account's last known balance, profile and counts are read off the device
 // now too, so they are in hand by the time the stored session names the account
 // they belong to. See lib/persisted-account-state.

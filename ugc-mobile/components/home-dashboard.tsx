@@ -125,6 +125,7 @@ import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { useActiveGenerationCount } from '@/lib/use-active-generations';
 import { newPostsProbeCategory, newestFeedPostIn, useNewPostsProbe } from '@/lib/use-new-posts-probe';
 import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
+import { useWelcomePromise } from '@/lib/welcome-promise';
 
 const LOAD_MORE_COOLDOWN_MS = 800;
 // Only the cards that can be on screen when a lane first lands rise into
@@ -150,6 +151,8 @@ export function HomeDashboard() {
   // ranked for it, since the server refuses events against another viewer's
   // feed session.
   const { user, identityUserId, api, credits, isLoading: isAuthLoading } = useAuth();
+  // Whether a signed-out visitor here may still be promised the welcome credits.
+  const welcomePromise = useWelcomePromise();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -1122,6 +1125,7 @@ export function HomeDashboard() {
               <HomeTopBar
                 credits={credits}
                 askToSignUp={signUpNeededToCreate({ credits, hasUser: Boolean(user) })}
+                promiseWelcomeCredits={welcomePromise}
                 onMenuPress={sideMenu.open}
                 onSearchPress={() => setSearchVisible(true)}
               />
@@ -1137,7 +1141,7 @@ export function HomeDashboard() {
               <HomeShelf
                 items={shelfItems}
                 isLoading={shelfQuery.isPending}
-                offerFreeToTry={!user}
+                offerFreeToTry={!user && welcomePromise}
                 signsInFirst={!user}
                 horizontalPadding={horizontalPadding}
                 contentWidth={contentWidth}
@@ -1288,12 +1292,15 @@ export function HomeDashboard() {
 function HomeTopBar({
   credits,
   askToSignUp,
+  promiseWelcomeCredits,
   onMenuPress,
   onSearchPress,
 }: {
   credits: number | null;
   /** A guest with nothing to spend: the balance becomes the way to sign up. */
   askToSignUp: boolean;
+  /** Whether that way in may still promise the welcome credits on this phone (`lib/welcome-promise.ts`). */
+  promiseWelcomeCredits: boolean;
   onMenuPress: () => void;
   onSearchPress: () => void;
 }) {
@@ -1334,9 +1341,11 @@ function HomeTopBar({
         </TopBarControl>
         {askToSignUp ? (
           // In place of a balance a guest does not have: the welcome credits,
-          // and the sign-up sheet that gets them (owner, 2026-11-08).
+          // and the sign-up sheet that gets them (owner, 2026-11-08). Only
+          // "Sign in" once an account on this phone has had them (owner,
+          // 2026-11-09: signed out after claiming, it still offered 25).
           <TopBarControl
-            accessibilityLabel="Sign in for 25 free credits"
+            accessibilityLabel={promiseWelcomeCredits ? 'Sign in for 25 free credits' : 'Sign in'}
             onPress={() => {
               haptic.light();
               openSignUpSheet(router, '/(tabs)');
@@ -1346,7 +1355,9 @@ function HomeTopBar({
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <Crown size={appTheme.icon.sm} color={theme.colors.commerce} fill={`${theme.colors.commerce}33`} />
               <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '700' }}>
-                Sign in · <Text style={{ color: theme.colors.primary, fontWeight: '800' }}>25 free credits</Text>
+                {promiseWelcomeCredits ? (
+                  <>Sign in · <Text style={{ color: theme.colors.primary, fontWeight: '800' }}>25 free credits</Text></>
+                ) : 'Sign in'}
               </Text>
             </View>
           </TopBarControl>

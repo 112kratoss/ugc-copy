@@ -8,6 +8,7 @@ import {
   type OnboardingDestination,
 } from './onboarding-destination';
 import type { WelcomeCreditResponse } from './types';
+import { rememberWelcomeAnswer } from './welcome-promise';
 
 const WELCOME_CREDITS_QUERY_SCOPE = 'welcome-credits';
 
@@ -23,7 +24,8 @@ export function welcomeCreditsQueryKey(userId: string | undefined) {
  * back here keeps the start-up reopen (`components/setup-reopen.tsx`) from
  * judging a setup unfinished from the copy it took at sign-in (the removed
  * Home card once reopened a finished flow that way). Seeding the cache costs
- * no request.
+ * no request. The phone learns the answer too: a claim stops the welcome-credit
+ * promise to whoever is signed out here next (`lib/welcome-promise.ts`).
  */
 export function primeWelcomeCredits(
   queryClient: Pick<QueryClient, 'setQueryData'>,
@@ -31,6 +33,7 @@ export function primeWelcomeCredits(
   welcome: WelcomeCreditResponse,
 ) {
   queryClient.setQueryData(welcomeCreditsQueryKey(userId), welcome);
+  rememberWelcomeAnswer(welcome.status);
 }
 
 /**
@@ -63,7 +66,13 @@ export function useWelcomeCreditsQuery() {
   return useQuery<WelcomeCreditResponse>({
     queryKey: welcomeCreditsQueryKey(user?.id),
     enabled: Boolean(user),
-    queryFn: () => api.getWelcomeCredits(),
+    queryFn: async () => {
+      const welcome = await api.getWelcomeCredits();
+      // What the phone promises the next signed-out visitor follows the last
+      // account it heard from (`lib/welcome-promise.ts`).
+      rememberWelcomeAnswer(welcome.status);
+      return welcome;
+    },
     // An answer that can no longer lead anywhere is not asked again on every
     // return to the app (330 requests a week, from the old Home card): once read per
     // launch, and again only when Edit Profile or a claimed name invalidates it.
