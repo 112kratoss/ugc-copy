@@ -5,6 +5,7 @@ import { buildCreatorNameStepPath, creatorNameStepNextPath } from '@/lib/auth-on
 import { startCreatorNameStep } from '@/lib/creator-name-step';
 import { getCreatorProfileReadiness } from '@/lib/profile';
 import { getServerAuthState, getServerPublicIdentity } from '@/lib/supabase-server';
+import { FirstSignUpIntroGate } from '@/components/onboarding/FirstSignUpIntroGate';
 import CreatorNameStep from './CreatorNameStep';
 
 interface CreatorNameStepPageProps {
@@ -37,12 +38,16 @@ export default async function CreatorNameStepPage({ searchParams }: CreatorNameS
     redirect(nextPath);
   }
 
+  // A browser's first sign-up sees the app's intro over the step once
+  // (FirstSignUpIntroGate decides), before it is asked for a name.
   return (
-    <CreatorNameStep
-      nextPath={nextPath}
-      userId={user.id}
-      savedUsername={identity?.username ?? null}
-      start={startCreatorNameStep(identity, user)}
-    />
+    <FirstSignUpIntroGate>
+      <CreatorNameStep
+        nextPath={nextPath}
+        userId={user.id}
+        savedUsername={identity?.username ?? null}
+        start={startCreatorNameStep(identity, user)}
+      />
+    </FirstSignUpIntroGate>
   );
 }
