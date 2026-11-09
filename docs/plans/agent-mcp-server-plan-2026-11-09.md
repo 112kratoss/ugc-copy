@@ -5,9 +5,10 @@ phase 3 PR #748; the last release reached production on 2026-11-09 at 20:24 UTC,
 setup page and Connected apps were checked there the same hour (runbook, "Production switch-on
 checks"), and the registry entry `com.magicbooklet/mcp` 1.1.0 was published at 20:28 UTC. The plan
 stays in `plans/` for what is still open: ChatGPT's client (after the owner creates its
-connector), the owner's two submissions (the Anthropic directory exception and the ChatGPT
-directory; runbook, "Distribution"), one real Codex sign-in, retention for `agent_tool_calls`,
-and `run_template` after a usage check.
+connector), a first run and a first new post made through an agent (the owner's to start; that
+post is then reviewed in the moderation queue), the owner's two submissions (the Anthropic
+directory exception and the ChatGPT directory; runbook, "Distribution"), one real Codex sign-in,
+retention for `agent_tool_calls`, and `run_template` after a usage check.
 
 Decided on 2026-11-09 after the competitor analysis in
 [`../research/agent-mcp-competitor-analysis-2026-11-09.md`](../research/agent-mcp-competitor-analysis-2026-11-09.md).
@@ -159,7 +160,7 @@ A kill switch, `MCP_SERVER_DISABLED=1`, answers 503 with `Retry-After` before ad
 | `create_media` | create | `destructiveHint` | `postUnifiedGenerationForRoute` with `expected_cost_credits` required and `idempotency_key` passed through | existing 30 per 10 min |
 | `get_generation` | create | read-only | `listOwnerGenerationsForRoute` by id; `wait_seconds` 0–45 polls every 3 s | ≤ 45 s |
 | `list_creations` | both | read-only | `listOwnerGenerationsForRoute` summaries, `posted` flag, cursor | page ≤ 50 |
-| `publish_post` | publish | `openWorldHint` | `publishGenerationToShowcaseForRoute`; own completed generation only | existing 20 per 10 min + agent 10 public posts per 24 h |
+| `publish_post` | publish | `openWorldHint` | `publishGenerationToShowcaseForRoute`; own completed generation only | existing 20 per 10 min + agent 10 public posts per UTC day |
 | `get_post` | publish | read-only | the post page's loader: state, URL, counts | — |
 | `delete_post` | publish | `destructiveHint` | `post-delete-service.ts`, own posts only | existing post-mutation limit |
 | `enhance_prompt` | create | read-only | prompt enhancement service | existing 60 per 10 min |
@@ -287,7 +288,7 @@ public publications per UTC day from the audit table, not attempts, and `upload_
 - Migration `agent_tool_calls` (id, user_id, client_id, tool, ok, generation_id, post_id,
   cost_credits, created_at; owner-read RLS; service-role write) with its `*-migration.test.ts`
   and pgTAP; the audit write in the adapter.
-- `AGENT_PUBLISH_RATE_LIMIT` (10 per 24 h) in `backend-rate-limit.ts`.
+- `AGENT_PUBLISH_RATE_LIMIT` (10 per UTC day) in `backend-rate-limit.ts`.
 - Connected apps on `/profile/edit`: `listGrants` and `revokeGrant`.
 - Moderation: `ops:moderation -- list --source agent` (joins the audit table; the CLI must stay
   loadable under tsx, no server-only imports).
@@ -304,8 +305,8 @@ skills, the registry entry and its `/.well-known/mcp-registry-auth` proof, and
 pre-registered public clients (runbook, "Distribution", which also has the Codex redirect URI
 Codex derives). The production clients for Claude, Claude Code, Cursor and Codex were registered
 on 2026-11-09, and the Codex client gained that derived redirect on 2026-11-10 (runbook,
-"Registered clients"). Phase 2 merged first (#749) and this branch took it in, so the page's and
-the skills' publishing and Connected apps are live with this branch's release, and the registry
+"Registered clients"). Phase 2 (#749) merged first and #748 took it in, so the page's and the
+skills' publishing and Connected apps went live with its release, and the registry
 entry is version 1.1.0, the server's, published to the registry on 2026-11-09 at 20:28 UTC
 (runbook, "MCP registry"). Left: ChatGPT's client (after its connector), one real Codex sign-in
 (runbook, switch-on check 5), the owner's steps below, and `run_template`, still waiting for its
