@@ -1509,9 +1509,10 @@ html:not([data-welcome-promise='spent']) .welcome-promise-spent-only {
    and going never resize it), and one set is taller than that box, so a column covers it from
    one end of its slide to the other. A screen gets more columns only while it is wide enough
    for them (min-aspect-ratio): a tall one keeps fewer, larger tiles, which the cover needs.
-   Only transforms move. */
+   Only transforms move. The wall, its shade and the form's scrim are placed in the page's root,
+   which fills the window, not fixed to it: nothing here is a layer over the page. */
 .sign-in-wall {
-  position: fixed;
+  position: absolute;
   inset: 0;
   overflow: hidden;
   background: #000;
@@ -1634,7 +1635,7 @@ html:not([data-welcome-promise='spent']) .welcome-promise-spent-only {
    between, where the pictures show (SIGN_IN_WALL_SHADE in ugc-mobile/lib/theme.ts). From 768px
    the page is one centred column, so the shade darkens around it instead. */
 .sign-in-shade {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   background: linear-gradient(to bottom, rgba(0, 0, 0, 0.78) 0%, rgba(0, 0, 0, 0.66) 30%, rgba(0, 0, 0, 0.62) 45%, rgba(0, 0, 0, 0.4) 57%, rgba(0, 0, 0, 0.88) 76%, rgba(0, 0, 0, 0.97) 100%);
@@ -1650,7 +1651,7 @@ html:not([data-welcome-promise='spent']) .welcome-promise-spent-only {
 
 /* Deeper behind the email form, where fields are read and typed in. */
 .sign-in-scrim {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   background: rgba(0, 0, 0, 0.7);

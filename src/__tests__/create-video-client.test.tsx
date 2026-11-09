@@ -6912,7 +6912,7 @@ describe('CreateVideoClient Kling video elements', () => {
         const nonce = new URL(decodeURIComponent(String(mockPush.mock.calls[0][0]).split('returnUrl=')[1]), 'https://magicbooklet.com').searchParams.get('handover');
         expect(JSON.parse(window.localStorage.getItem('magicbooklet:creator-draft-handover') ?? 'null')).toMatchObject({ tool: 'video', nonce });
         // Saved before the page leaves.
-        const saved = saveCreatorDraftMock.mock.calls.findIndex(([tool, owner, draft]) => tool === 'video' && owner === 'visitor' && draft?.prompt === PROMPT);
+        const saved = saveCreatorDraftMock.mock.calls.findIndex(([tool, owner, draft]) => tool === 'video' && owner === 'visitor' && (draft as { prompt?: string } | undefined)?.prompt === PROMPT);
         expect(saved).toBeGreaterThanOrEqual(0);
         expect(saveCreatorDraftMock.mock.invocationCallOrder[saved]).toBeLessThan(mockPush.mock.invocationCallOrder[0]);
         expect(postedStarts()).toEqual([]);
