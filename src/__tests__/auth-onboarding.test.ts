@@ -38,6 +38,13 @@ describe('auth onboarding destinations', () => {
   });
 
   it('rejects external, protocol-relative, and backslash redirect paths', () => {
+    // The name step re-serialises its return through withCreatorWelcome: a next whose
+    // dot segments resolve to //host must never come out protocol-relative.
+    for (const offSite of ['/.//evil.example', '/..//evil.example', '/%2e//evil.example']) {
+      const next = creatorNameStepNextPath(`/onboarding?next=${encodeURIComponent(offSite)}`);
+      expect(withCreatorWelcome(next).startsWith('//')).toBe(false);
+      expect(withCreatorWelcome(getSafeAuthNextPath(offSite))).toBe('/create?welcome=1');
+    }
     expect(getSafeAuthNextPath('https://attacker.example')).toBe('/create');
     expect(getSafeAuthNextPath('//attacker.example')).toBe('/create');
     expect(getSafeAuthNextPath('/\\attacker.example')).toBe('/create');

@@ -139,6 +139,10 @@ describe('creator profile readiness', () => {
       '/create-image?prompt=50%25+off'
     );
     expect(getSafeProfileNextPath('//malicious.example')).toBe('/creations');
+    // Dot segments the URL parser drops leave a protocol-relative pathname.
+    for (const offSite of ['/.//evil.example', '/..//evil.example', '/%2e//evil.example', '/a/..//evil.example', '%2F.%2F%2Fevil.example']) {
+      expect(getSafeProfileNextPath(offSite)).toBe('/creations');
+    }
     expect(getSafeProfileNextPath('/\\malicious.example')).toBe('/creations');
     expect(getSafeProfileNextPath('/%5Cmalicious.example')).toBe('/creations');
     expect(getSafeProfileNextPath('https://malicious.example')).toBe('/creations');
