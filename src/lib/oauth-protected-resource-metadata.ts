@@ -20,7 +20,8 @@ export type OAuthProtectedResourceMetadata = {
   authorization_servers: string[];
   bearer_methods_supported: ['header'];
   resource_name: string;
-  resource_documentation: string;
+  // `resource_documentation` joins once the developers page ships (phase 3); a link to a page
+  // that does not exist helps nobody.
 };
 
 export type OAuthProtectedResourceEnvironment = {
@@ -73,7 +74,6 @@ export function buildOAuthProtectedResourceMetadata({
     authorization_servers: [`${supabaseOrigin}/auth/v1`],
     bearer_methods_supported: ['header'],
     resource_name: 'Magicbooklet MCP server',
-    resource_documentation: `${siteOrigin}/developers/mcp`,
   };
 }
 

@@ -4,6 +4,7 @@ import { McpServer, type CallToolResult, type ToolAnnotations } from '@modelcont
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { z } from 'zod';
 
+import { logBackendError } from '@/lib/backend-logger';
 import {
   BackendRateLimitError,
   OWNER_GENERATIONS_READ_RATE_LIMIT,
@@ -53,8 +54,14 @@ import {
 export const MCP_SERVER_NAME = 'magicbooklet';
 export const MCP_SERVER_VERSION = '1.0.0';
 
-/** The time get_generation may spend waiting for a run, within the route's 60-second budget. */
+/**
+ * The time get_generation may spend waiting for a run, within the route's 60-second budget. The
+ * descriptions suggest the shorter wait: a cold start, the admission round trips, the wait and the
+ * final read must all fit under the route's 60 seconds and the MCP client's own 60-second request
+ * timeout, so 45 leaves little room on a slow day.
+ */
 export const MCP_GENERATION_WAIT_MAX_SECONDS = 45;
+export const MCP_GENERATION_WAIT_SUGGESTED_SECONDS = 30;
 export const MCP_GENERATION_POLL_INTERVAL_MS = 3_000;
 export const MCP_LIST_PAGE_MAX = 50;
 
@@ -256,6 +263,9 @@ function catalogUnavailable(error: unknown): CallToolResult {
     }
     return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, error.message, { catalog_error: error.code });
   }
+  // A database or configuration failure, not the caller's: the operator needs the cause, which the
+  // tool answer (UNAVAILABLE) and the call's log line do not carry.
+  logBackendError('mcp_catalog_read_failed', { error });
   return toolFailure(
     MCP_ERROR_CODES.UNAVAILABLE,
     'The model catalog could not be read right now. Try again in a moment.',
@@ -483,8 +493,8 @@ const quoteGenerationTool = defineTool({
 const CREATE_MEDIA_INPUT = z.object({
   slot: z.string().regex(/^[A-Za-z][A-Za-z0-9_-]{0,63}$/).describe('The input slot key from get_model (for example references, startFrame, endFrame).'),
   kind: INPUT_KIND,
-  url: z.url().optional().describe('An https URL of the media.'),
-  asset_id: z.string().min(1).max(200).optional().describe('A Magicbooklet asset id (a saved input, or a prepared Seedance asset) in place of a URL.'),
+  url: z.url().optional().describe('The media\'s URL as Magicbooklet gave it: an output URL from get_generation or list_creations (one of the creator\'s own creations). Any other web URL is refused in this version; uploading outside media arrives with upload_input in a later version.'),
+  asset_id: z.string().min(1).max(200).optional().describe('A Magicbooklet asset id (a saved input of the creator\'s, or a prepared Seedance asset) in place of a URL.'),
   duration_seconds: z.number().nonnegative().optional().describe('A clip or track\'s length, where known.'),
   label: z.string().max(200).optional(),
   handle: z.string().max(64).optional().describe('The @handle the prompt names this input by, on models that take named subjects.'),
@@ -498,7 +508,8 @@ const createMediaTool = defineTool({
     'Start an image, video or motion run with the creator\'s own credits.',
     'Requires expected_cost_credits, the cost quote_generation gave for this exact run, and charges at most that: when the price has changed the answer is COST_CHANGED with the fresh price and nothing is charged, so quote again and ask the person before confirming the new price.',
     'Returns a generation_id at once; the run continues in the background, so call get_generation with wait_seconds to wait for it.',
-    'Send an idempotency_key of your own to make a retry safe; without one, every call starts a new run.',
+    'idempotency_key is required: mint a UUID per run, and reuse the same key on any retry of that run (after a timeout or a dropped connection the run may have started), which returns the run instead of charging again.',
+    'Inputs are the creator\'s own: an output URL from get_generation or list_creations, or an asset_id; any other web URL is refused in this version.',
     'A failed run refunds its credits by itself. INSUFFICIENT_CREDITS states the balance and the shortfall.',
   ].join(' '),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -516,10 +527,20 @@ const createMediaTool = defineTool({
     inputs: z.array(CREATE_MEDIA_INPUT).max(64).optional(),
     source_generation_id: z.uuid().optional().describe('The creation this run remixes, when it is one.'),
     expected_cost_credits: z.int().min(0).describe('The cost_credits quote_generation gave for this run. The run is refused, not charged more, if the price is higher now.'),
-    idempotency_key: z.string().min(1).max(256).optional().describe('Your own key for this run; a repeat with the same key returns the run started under it instead of starting another.'),
+    idempotency_key: z.string().min(1).max(256).describe('Your own key for this run, a UUID you mint. A repeat with the same key returns the run started under it instead of starting another, so a retry after a timeout or a dropped connection must reuse it.'),
   }),
   async handle(args, context) {
     const { services } = context;
+    // The schema requires the key; this holds for a caller that reached the handler another way.
+    // Without a key every retry would be a new run and a new charge.
+    const idempotencyKey = typeof args.idempotency_key === 'string' ? args.idempotency_key.trim() : '';
+    if (!idempotencyKey) {
+      return toolFailure(
+        MCP_ERROR_CODES.INVALID_REQUEST,
+        'idempotency_key is required: mint a UUID for this run and send the same one on any retry of it.',
+        { field_errors: { idempotency_key: 'Required.' } },
+      );
+    }
     const body: Record<string, unknown> = {
       kind: args.kind,
       modelId: args.model_id,
@@ -543,7 +564,7 @@ const createMediaTool = defineTool({
       })),
       sourceGenerationId: args.source_generation_id,
       expectedCostCredits: args.expected_cost_credits,
-      idempotencyKey: args.idempotency_key ?? randomUUID(),
+      idempotencyKey,
     };
 
     const result = await services.postUnifiedGenerationForRoute({
@@ -566,7 +587,7 @@ const createMediaTool = defineTool({
             ? `This idempotency key already started ${args.kind} run ${generationId ?? payload.predictionId}; here it is again, nothing new was charged.`
             : `Started ${args.kind} run ${generationId ?? payload.predictionId} on ${args.model_id} for ${credits(cost)}${balance === null ? '' : `; the creator has ${credits(balance)} left`}.`,
           generationId
-            ? `It is processing. Call get_generation with generation_id ${generationId} and wait_seconds ${MCP_GENERATION_WAIT_MAX_SECONDS} until its status is succeeded or failed.`
+            ? `It is processing. Call get_generation with generation_id ${generationId} and wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} until its status is succeeded or failed.`
             : 'It is processing; find it with list_creations in a moment.',
         ].join('\n'),
         {
@@ -723,14 +744,14 @@ const getGenerationTool = defineTool({
   title: 'Read a run',
   description: [
     'Read one of the creator\'s runs: its status (pending, processing, succeeded or failed), its outputs with a permanent magicbooklet.com link and a signed media URL (good for about an hour), what it cost, and why it failed when it did (a failed run\'s credits come back).',
-    `Pass wait_seconds (0 to ${MCP_GENERATION_WAIT_MAX_SECONDS}) to wait for a running generation before answering, and call again while settled is false.`,
+    `Pass wait_seconds to wait for a running generation before answering (${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} is the suggested wait; ${MCP_GENERATION_WAIT_MAX_SECONDS} is the most, and only for a client whose request timeout is well over a minute), and call again while settled is false.`,
     'Images finish within a minute; videos take a few minutes. Give the person the permanent link; the signed URL expires.',
   ].join(' '),
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: z.object({
     generation_id: GENERATION_ID,
     wait_seconds: z.int().min(0).max(MCP_GENERATION_WAIT_MAX_SECONDS).optional()
-      .describe(`How long to wait for the run to finish before answering, at most ${MCP_GENERATION_WAIT_MAX_SECONDS}.`),
+      .describe(`How long to wait for the run to finish before answering: ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} suggested, ${MCP_GENERATION_WAIT_MAX_SECONDS} at most.`),
   }),
   async handle({ generation_id: generationId, wait_seconds: waitSeconds = 0 }, context) {
     const { services } = context;
@@ -763,7 +784,7 @@ const getGenerationTool = defineTool({
       ? `Run ${generationId} succeeded (${summary.kind ?? 'media'} on ${summary.model_id ?? 'its model'}, ${summary.cost_credits === null ? 'cost unknown' : credits(summary.cost_credits as number)}). ${outputs.length} output${outputs.length === 1 ? '' : 's'}; permanent link ${summary.creation_url}. The signed media URL expires; give the person the permanent link.`
       : summary.status === 'failed'
         ? `Run ${generationId} failed${failureReason ? `: ${failureReason}` : ''}. ${summary.refunded ? 'Its credits were refunded.' : 'Its credits are refunded when the failure settles.'}`
-        : `Run ${generationId} is still ${summary.status ?? 'running'} after ${waitSeconds} seconds. Call get_generation again with wait_seconds ${MCP_GENERATION_WAIT_MAX_SECONDS}.`;
+        : `Run ${generationId} is still ${summary.status ?? 'running'} after ${waitSeconds} seconds. Call get_generation again with wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS}.`;
     return toolSuccess(text, {
       ...summary,
       prompt: typeof item.prompt === 'string' ? item.prompt : null,
@@ -817,7 +838,9 @@ const enhancePromptTool = defineTool({
   title: 'Enhance a prompt',
   description: [
     'Rewrite a prompt in the idiom of the model it is for: subject, camera, light and motion made specific, and the provider\'s limits kept.',
-    'Returns enhanced_prompt with quality warnings. It spends a small number of the creator\'s credits per call (cost_credits in the answer).',
+    // The cost is a constant of the service, so the agent reads it here before the call: there is
+    // no quote step for an enhancement.
+    `Returns enhanced_prompt with quality warnings. Each call spends a fixed ${credits(getPromptEnhancementCost())} of the creator's, with no quote step, so tell the person before calling it repeatedly.`,
     'Call it when the person\'s prompt is short or vague, show them the result, and create with it only once they agree.',
   ].join(' '),
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -899,6 +922,9 @@ export const MCP_SERVER_INSTRUCTIONS = [
   'Every run spends the creator\'s credits; a failed run refunds them. Never promise a result before get_generation says succeeded.',
 ].join(' ');
 
+/** The tools whose successful answer charged the creator; a quote's cost_credits is a price, not a charge. */
+const CHARGING_TOOLS: ReadonlySet<McpToolName> = new Set(['create_media', 'enhance_prompt']);
+
 /** Runs one tool call: the handler, then one record of it for the adapter's log, whatever happened. */
 export async function runMcpTool(
   tool: McpToolDefinition,
@@ -916,7 +942,7 @@ export async function runMcpTool(
     report({
       outcome: result.isError ? 'error' : 'ok',
       code: typeof error?.code === 'string' ? error.code : null,
-      costCredits: numberOrNull(structured.cost_credits),
+      costCredits: !result.isError && CHARGING_TOOLS.has(tool.name) ? numberOrNull(structured.cost_credits) : null,
     });
     return result;
   } catch (error) {

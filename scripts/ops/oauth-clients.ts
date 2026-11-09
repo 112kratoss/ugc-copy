@@ -127,6 +127,16 @@ export function describeClient(client: OAuthClient): Record<string, unknown> {
   };
 }
 
+/** The origin of the Supabase URL in use, so the output names the project without its path or keys. */
+export function supabaseOrigin(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}
+
 function copyWithPbcopy(text: string): boolean {
   const result = spawnSync('pbcopy', { input: text, stdio: ['pipe', 'ignore', 'ignore'] });
   return result.status === 0;
@@ -148,18 +158,26 @@ export async function runOAuthClientsOps(
   const json = flags.get('--json') === true;
   const apply = flags.get('--apply') === true;
 
-  // The dry run needs no credentials: it only shows what would be registered.
+  // Which project the command touches, said in every output: .env.local is hand-toggled between
+  // the local stack and production, and a client registered on the wrong one is an id the other
+  // has never heard of.
+  const supabaseUrl = environment.SUPABASE_URL || environment.NEXT_PUBLIC_SUPABASE_URL;
+  const project = supabaseOrigin(supabaseUrl);
+
+  // The dry run needs no credentials: it only shows what would be registered, and where.
   if (command === 'create' && !apply) {
     const params = buildCreateParams(flags);
-    log(json ? JSON.stringify({ wouldCreate: params }, null, 2) : `Would register (add --apply to do it):\n${JSON.stringify(params, null, 2)}`);
+    log(json
+      ? JSON.stringify({ project, wouldCreate: params }, null, 2)
+      : `Would register on ${project ?? 'no Supabase project (SUPABASE_URL is not set)'} (add --apply to do it):\n${JSON.stringify(params, null, 2)}`);
     return;
   }
 
-  const supabaseUrl = environment.SUPABASE_URL || environment.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = environment.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {
     throw new Error('Missing SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.');
   }
+  if (!json) log(`Supabase project: ${project ?? supabaseUrl}`);
   const supabase = (dependencies.createClient ?? createClient)(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
   });
@@ -194,9 +212,9 @@ export async function runOAuthClientsOps(
     secretNote = 'Public client: no secret.';
   }
   if (json) {
-    log(JSON.stringify({ created: shown, secret: secret ? 'clipboard' : null }, null, 2));
+    log(JSON.stringify({ project, created: shown, secret: secret ? 'clipboard' : null }, null, 2));
   } else {
-    log(`Registered ${shown.client_name} as ${shown.client_id}`);
+    log(`Registered ${shown.client_name} as ${shown.client_id} on ${project ?? supabaseUrl}`);
     log(JSON.stringify(shown, null, 2));
   }
   log(secretNote);

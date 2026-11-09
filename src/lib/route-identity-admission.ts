@@ -171,8 +171,9 @@ export async function evaluateUserFacingRouteIdentity(
 
     // An agent's token (issued by Supabase Auth's OAuth server to an MCP client, and carrying
     // that client's id) drives only the MCP server, whose own admission requires the claim.
-    // Refused before the lifecycle round trip: a leaked agent token can then do only what the
-    // consent screen said, on the one route built for it (agent-token.ts).
+    // Refused before the lifecycle round trip. This keeps the token off this app's other API
+    // routes; against Supabase directly it stays the creator's session under RLS, like any user
+    // token, so a leak is answered by revoking the grant (agent-token.ts).
     if (isAgentToken(claims) && !routeAcceptsAgentToken(request.nextUrl.pathname)) {
       return result(identityRejection(
         403,

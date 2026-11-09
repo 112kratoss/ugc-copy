@@ -25,9 +25,10 @@ const CREATOR_PATHS: ReadonlySet<string> = new Set(CREATOR_PAGE_PATHS);
 /**
  * Pages it never covers, whatever their address says: signing in and its
  * screens, the name step a sign-up passes first, the checkout, the operator
- * console, and the old welcome page's redirect.
+ * console, the old welcome page's redirect, and the OAuth consent screen an
+ * agent's sign-up returns to (a decision, not a place to be greeted).
  */
-const NEVER_OVER = ['/login', '/auth', '/onboarding', '/pricing', '/admin', '/welcome-reward'];
+const NEVER_OVER = ['/login', '/auth', '/onboarding', '/pricing', '/admin', '/welcome-reward', '/oauth'];
 
 export function isNeverUnderWelcomePopup(pathname: string): boolean {
   return NEVER_OVER.some((path) => pathname === path || pathname.startsWith(`${path}/`));

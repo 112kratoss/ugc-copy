@@ -16,7 +16,6 @@ test('the MCP server publishes its protected-resource metadata and challenges an
     authorization_servers: ['https://example.supabase.co/auth/v1'],
     bearer_methods_supported: ['header'],
     resource_name: 'Magicbooklet MCP server',
-    resource_documentation: `${BASE}/developers/mcp`,
   };
 
   // No timeout of their own: the first request for each route waits for its compile

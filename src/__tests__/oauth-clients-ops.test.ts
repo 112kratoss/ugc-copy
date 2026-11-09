@@ -96,13 +96,19 @@ describe('oauth-clients CLI', () => {
     expect(JSON.parse(jsonLines[0])).toEqual({ clients: [describeClient(PUBLIC_CLIENT)] });
   });
 
-  it('only shows what it would register without --apply, needing no credentials', async () => {
+  it('only shows what it would register without --apply, needing no credentials, and names the project it would use', async () => {
     const { run, lines, admin, createSupabase } = harness();
     await run(['create', '--name', 'Claude Code', '--redirect-uri', 'http://localhost:8976/callback'], {});
     expect(createSupabase).not.toHaveBeenCalled();
     expect(admin.createClient).not.toHaveBeenCalled();
-    expect(lines[0]).toContain('Would register');
+    expect(lines[0]).toContain('Would register on no Supabase project (SUPABASE_URL is not set)');
     expect(lines[0]).toContain('"token_endpoint_auth_method": "none"');
+
+    // .env.local is hand-toggled between the local stack and production: the output says which.
+    const named = harness();
+    await named.run(['create', '--name', 'Claude Code', '--redirect-uri', 'http://localhost:8976/callback'], { NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:54321/' });
+    expect(named.lines[0]).toContain('Would register on http://127.0.0.1:54321 ');
+    expect(named.createSupabase).not.toHaveBeenCalled();
   });
 
   it('registers with --apply and prints the id, and a secret goes to the clipboard only', async () => {
@@ -114,7 +120,8 @@ describe('oauth-clients CLI', () => {
       redirect_uris: ['http://localhost:8976/callback'],
       token_endpoint_auth_method: 'none',
     });
-    expect(lines.join('\n')).toContain(`Registered Claude Code as ${PUBLIC_CLIENT.client_id}`);
+    expect(lines.join('\n')).toContain('Supabase project: https://project.supabase.test');
+    expect(lines.join('\n')).toContain(`Registered Claude Code as ${PUBLIC_CLIENT.client_id} on https://project.supabase.test`);
     expect(lines.join('\n')).toContain('Public client: no secret.');
     expect(copied).toEqual([]);
 
@@ -127,7 +134,7 @@ describe('oauth-clients CLI', () => {
     await confidential.run(['create', '--name', 'ChatGPT', '--redirect-uri', 'https://chatgpt.com/connector/oauth/abc', '--confidential', '--apply', '--json']);
     expect(confidential.copied).toEqual(['sk-very-secret']);
     expect(confidential.lines.join('\n')).not.toContain('sk-very-secret');
-    expect(JSON.parse(confidential.lines[0])).toMatchObject({ created: { client_name: 'ChatGPT' }, secret: 'clipboard' });
+    expect(JSON.parse(confidential.lines[0])).toMatchObject({ project: 'https://project.supabase.test', created: { client_name: 'ChatGPT' }, secret: 'clipboard' });
   });
 
   it('refuses to run against nothing, and passes GoTrue\'s refusal on', async () => {

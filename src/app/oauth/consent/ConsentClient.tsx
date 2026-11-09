@@ -6,6 +6,8 @@ import { useEffect, useState } from 'react';
 import { Button, Kicker, StatusCallout, Surface, Text } from '@/components/DesignSystem';
 import {
   AGENT_ACCESS,
+  CONSENT_DECISION_FAILED_MESSAGE,
+  CONSENT_UNAVAILABLE_MESSAGE,
   decideConsent,
   loadConsentView,
   type ConsentDecision,
@@ -34,17 +36,23 @@ export default function ConsentClient({ authorizationId, email }: { authorizatio
 
   useEffect(() => {
     let cancelled = false;
-    loadConsentView(supabase.auth.oauth, authorizationId).then((result) => {
-      if (cancelled) return;
-      if (!result.ok) {
-        setState({ kind: 'error', message: result.message });
-      } else if (result.view.kind === 'redirect') {
-        setState({ kind: 'redirecting' });
-        leaveFor(result.view.redirectUrl);
-      } else {
-        setState({ kind: 'consent', details: result.view.details, deciding: null });
-      }
-    });
+    loadConsentView(supabase.auth.oauth, authorizationId)
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.ok) {
+          setState({ kind: 'error', message: result.message });
+        } else if (result.view.kind === 'redirect') {
+          setState({ kind: 'redirecting' });
+          leaveFor(result.view.redirectUrl);
+        } else {
+          setState({ kind: 'consent', details: result.view.details, deciding: null });
+        }
+      })
+      // A thrown failure (the network, a client without the OAuth API) would otherwise leave the
+      // page reading the request for ever.
+      .catch(() => {
+        if (!cancelled) setState({ kind: 'error', message: CONSENT_UNAVAILABLE_MESSAGE });
+      });
     return () => {
       cancelled = true;
     };
@@ -53,7 +61,12 @@ export default function ConsentClient({ authorizationId, email }: { authorizatio
   async function decide(decision: ConsentDecision) {
     if (state.kind !== 'consent' || state.deciding) return;
     setState({ ...state, deciding: decision });
-    const result = await decideConsent(supabase.auth.oauth, authorizationId, decision);
+    let result: Awaited<ReturnType<typeof decideConsent>>;
+    try {
+      result = await decideConsent(supabase.auth.oauth, authorizationId, decision);
+    } catch {
+      result = { ok: false, message: CONSENT_DECISION_FAILED_MESSAGE };
+    }
     if (!result.ok) {
       setState({ kind: 'error', message: result.message });
       return;

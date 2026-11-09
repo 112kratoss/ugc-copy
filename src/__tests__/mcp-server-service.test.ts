@@ -359,6 +359,7 @@ describe('create_media', () => {
     settings: { aspectRatio: '1:1' },
     inputs: [{ slot: 'references', kind: 'image' as const, url: 'https://pics.example/ref.jpg', label: 'the bike' }],
     expected_cost_credits: 19,
+    idempotency_key: 'run-1',
   };
 
   async function startBody(services: McpToolServices): Promise<Record<string, unknown>> {
@@ -366,7 +367,25 @@ describe('create_media', () => {
     return await input.readRequestBody() as Record<string, unknown>;
   }
 
-  it('starts the run through the unified start with the body the web sends, a minted idempotency key, and answers the run', async () => {
+  it('refuses a run without an idempotency key, in the schema and in the handler, before anything starts', async () => {
+    // Without a key every retry would be a new run and a new charge: a timed-out call may have
+    // started the run, and only the same key returns it instead of starting another.
+    const { idempotency_key: _omitted, ...withoutKey } = run;
+    void _omitted;
+    const parsed = tool('create_media').inputSchema.safeParse(withoutKey);
+    expect(parsed.success).toBe(false);
+    expect(parsed.success ? [] : parsed.error.issues.map((issue) => issue.path.join('.'))).toContain('idempotency_key');
+    expect(tool('create_media').inputSchema.safeParse({ ...run, idempotency_key: '' }).success).toBe(false);
+    expect(tool('create_media').description).toContain('reuse the same key');
+
+    const { context, services } = harness();
+    const result = await tool('create_media').handle(withoutKey as never, context);
+    expect(toolFailureCode(result)).toBe('INVALID_REQUEST');
+    expect(structured(result).error).toMatchObject({ field_errors: { idempotency_key: 'Required.' } });
+    expect(services.postUnifiedGenerationForRoute).not.toHaveBeenCalled();
+  });
+
+  it('starts the run through the unified start with the body the web sends, the agent\'s idempotency key, and answers the run', async () => {
     const { context, services, user, admin } = harness();
     const result = await tool('create_media').handle(run, context);
     expect(result.isError).toBeUndefined();
@@ -400,8 +419,8 @@ describe('create_media', () => {
       shots: [],
       inputs: [{ slot: 'references', kind: 'image', url: 'https://pics.example/ref.jpg', label: 'the bike', durationSeconds: null }],
       expectedCostCredits: 19,
+      idempotencyKey: 'run-1',
     });
-    expect(body.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it('passes the agent\'s idempotency key through and reports a replay as one', async () => {
@@ -565,7 +584,9 @@ describe('get_generation', () => {
     expect(result.isError).toBeUndefined();
     expect(time.sleeps).toEqual([3000, 3000, 1000]);
     expect(structured(result)).toMatchObject({ status: 'processing', settled: false, outputs: [] });
-    expect(text(result)).toContain('wait_seconds 45');
+    // The suggested wait, not the cap: the cap leaves little room under the route's 60 seconds.
+    expect(text(result)).toContain('wait_seconds 30');
+    expect(tool('get_generation').description).toContain('30 is the suggested wait');
   });
 
   it('answers at once without a wait, and a failed run with its reason and refund', async () => {
@@ -662,10 +683,17 @@ describe('enhance_prompt', () => {
 });
 
 describe('running a tool', () => {
-  it('records one call with its outcome, code and cost, and turns a thrown error into an INTERNAL_ERROR result', async () => {
+  it('records one call with its outcome and code, a cost only where the creator was charged, and turns a thrown error into an INTERNAL_ERROR result', async () => {
     const { context, records } = harness();
+    // A quote's cost_credits is a price, not a charge: the log must not count it as spend.
     await runMcpTool(tool('quote_generation'), { kind: 'image', model_id: 'img-1' }, context);
-    expect(records).toEqual([expect.objectContaining({ tool: 'quote_generation', outcome: 'ok', code: null, costCredits: 19 })]);
+    expect(records).toEqual([expect.objectContaining({ tool: 'quote_generation', outcome: 'ok', code: null, costCredits: null })]);
+    await runMcpTool(tool('create_media'), {
+      kind: 'image', model_id: 'img-1', catalog_revision: 'rev-1', prompt: 'a red bicycle', expected_cost_credits: 19, idempotency_key: 'run-7',
+    }, context);
+    expect(records[1]).toEqual(expect.objectContaining({ tool: 'create_media', outcome: 'ok', costCredits: 19 }));
+    await runMcpTool(tool('enhance_prompt'), { prompt: 'red bike', medium: 'image', model_id: 'img-1' }, context);
+    expect(records[2]).toEqual(expect.objectContaining({ tool: 'enhance_prompt', outcome: 'ok', costCredits: 1 }));
 
     const broken = harness({ readModelCatalogCurrent: vi.fn(async () => { throw new Error('rpc down'); }) });
     await runMcpTool(tool('list_models'), {}, broken.context);

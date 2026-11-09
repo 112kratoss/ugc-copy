@@ -23,8 +23,9 @@ describe('OAuth protected resource metadata (RFC 9728)', () => {
       authorization_servers: ['https://abcdefgh.supabase.co/auth/v1'],
       bearer_methods_supported: ['header'],
       resource_name: 'Magicbooklet MCP server',
-      resource_documentation: 'https://magicbooklet.com/developers/mcp',
     });
+    // No documentation link until the developers page exists (phase 3).
+    expect(buildOAuthProtectedResourceMetadata()).not.toHaveProperty('resource_documentation');
   });
 
   it('builds from the values given, and from nothing when either URL is missing or malformed', () => {

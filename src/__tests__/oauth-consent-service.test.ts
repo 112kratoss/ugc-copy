@@ -14,6 +14,7 @@ import {
   type OAuthConsentClient,
 } from '@/lib/oauth-consent-service';
 import { getSafeAuthNextPath } from '@/lib/auth-onboarding';
+import { getPromptEnhancementCost } from '@/lib/prompt-enhancer';
 
 const AUTHORIZATION_ID = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6';
 
@@ -63,13 +64,15 @@ describe('consent gate', () => {
       .toMatchObject({ kind: 'account', email: null });
   });
 
-  it('describes the fixed access an agent gets, never a scope string', () => {
+  it('describes the fixed access an agent gets, never a scope string, and names the one unquoted charge', () => {
     expect(AGENT_ACCESS.map((item) => item.title)).toEqual([
       'Create images and videos with your credits',
       'Publish posts as you',
       'Read your creations',
     ]);
     expect(JSON.stringify(AGENT_ACCESS)).not.toMatch(/openid|scope/i);
+    // Prompt enhancement charges with no price step; the consent screen says so with the service's own cost.
+    expect(AGENT_ACCESS[0].detail).toContain(`except prompt enhancement, a fixed ${getPromptEnhancementCost()} credit`);
   });
 });
 
@@ -126,6 +129,9 @@ describe('loading the consent view', () => {
       client({ getAuthorizationDetails: vi.fn(async () => ({ data: null, error: { message: 'authorization not found' } })) }),
       client({ getAuthorizationDetails: vi.fn(async () => ({ data: null, error: null })) }),
       client({ getAuthorizationDetails: vi.fn(async () => ({ data: { authorization_id: AUTHORIZATION_ID } as never, error: null })) }),
+      // A redirect the browser must not be sent into: only http(s) is followed.
+      client({ getAuthorizationDetails: vi.fn(async () => ({ data: { redirect_url: 'javascript:alert(1)' }, error: null })) }),
+      client({ getAuthorizationDetails: vi.fn(async () => ({ data: { redirect_url: 'myapp://callback?code=x' }, error: null })) }),
     ]) {
       await expect(loadConsentView(fake, AUTHORIZATION_ID)).resolves.toEqual({ ok: false, message: CONSENT_UNAVAILABLE_MESSAGE });
     }
@@ -149,12 +155,17 @@ describe('deciding', () => {
     expect(fake.denyAuthorization).toHaveBeenCalledWith(AUTHORIZATION_ID, { skipBrowserRedirect: true });
   });
 
-  it('says so when the answer did not go through', async () => {
+  it('says so when the answer did not go through, or came back with a redirect that is not http(s)', async () => {
     const failing = client({
       approveAuthorization: vi.fn(async () => ({ data: null, error: { message: 'network' } })),
       denyAuthorization: vi.fn(async () => ({ data: { not_a_redirect: true } as never, error: null })),
     });
     await expect(decideConsent(failing, AUTHORIZATION_ID, 'approve')).resolves.toEqual({ ok: false, message: CONSENT_DECISION_FAILED_MESSAGE });
     await expect(decideConsent(failing, AUTHORIZATION_ID, 'deny')).resolves.toEqual({ ok: false, message: CONSENT_DECISION_FAILED_MESSAGE });
+
+    const unsafe = client({
+      approveAuthorization: vi.fn(async () => ({ data: { redirect_url: 'javascript:alert(1)' }, error: null })),
+    });
+    await expect(decideConsent(unsafe, AUTHORIZATION_ID, 'approve')).resolves.toEqual({ ok: false, message: CONSENT_DECISION_FAILED_MESSAGE });
   });
 });

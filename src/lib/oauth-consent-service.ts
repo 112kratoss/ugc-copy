@@ -1,5 +1,7 @@
 import type { OAuthAuthorizationDetails, OAuthRedirect, User } from '@supabase/supabase-js';
 
+import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
+
 /**
  * The consent page's decisions (`/oauth/consent`, Supabase Auth's `authorization_url_path`).
  *
@@ -16,11 +18,15 @@ import type { OAuthAuthorizationDetails, OAuthRedirect, User } from '@supabase/s
 
 export const OAUTH_CONSENT_PATH = '/oauth/consent';
 
-/** What an agent may do once connected, in the page's words. The token carries no scopes. */
+/**
+ * What an agent may do once connected, in the page's words. The token carries no scopes. The one
+ * charge with no price step, prompt enhancement, is named with its fixed cost (the catalog's
+ * constant, which the tool's own description also states).
+ */
 export const AGENT_ACCESS = [
   {
     title: 'Create images and videos with your credits',
-    detail: 'Each run spends your balance as it does on the site. The agent sees the price first and is never charged more than it confirmed.',
+    detail: `Each run spends your balance as it does on the site. The agent sees the price first and is never charged more than it confirmed, except prompt enhancement, a fixed ${PROMPT_ENHANCEMENT_COST_CREDITS} credit${PROMPT_ENHANCEMENT_COST_CREDITS === 1 ? '' : 's'} a call.`,
   },
   {
     title: 'Publish posts as you',
@@ -127,12 +133,6 @@ export const CONSENT_UNAVAILABLE_MESSAGE =
 export const CONSENT_DECISION_FAILED_MESSAGE =
   'Your answer did not reach Magicbooklet. Try again, or go back to the app that asked and connect again.';
 
-function redirectUrlOf(value: unknown): string | null {
-  if (!value || typeof value !== 'object') return null;
-  const redirectUrl = (value as { redirect_url?: unknown }).redirect_url;
-  return typeof redirectUrl === 'string' && redirectUrl.trim() ? redirectUrl : null;
-}
-
 function httpUrlOrNull(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   try {
@@ -141,6 +141,16 @@ function httpUrlOrNull(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The URL GoTrue says to send the browser to, and only when it is an http(s) one: a registered
+ * redirect URI is https or loopback http today, and a client edited into another scheme (or
+ * registered dynamically, once that is on) must not be followed into it.
+ */
+function redirectUrlOf(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null;
+  return httpUrlOrNull((value as { redirect_url?: unknown }).redirect_url);
 }
 
 /**
@@ -154,8 +164,12 @@ export async function loadConsentView(
 ): Promise<{ ok: true; view: ConsentView } | { ok: false; message: string }> {
   const { data, error } = await client.getAuthorizationDetails(authorizationId);
   if (error || !data) return { ok: false, message: CONSENT_UNAVAILABLE_MESSAGE };
-  const redirectUrl = redirectUrlOf(data);
-  if (redirectUrl) return { ok: true, view: { kind: 'redirect', redirectUrl } };
+  if ('redirect_url' in data) {
+    const redirectUrl = redirectUrlOf(data);
+    return redirectUrl
+      ? { ok: true, view: { kind: 'redirect', redirectUrl } }
+      : { ok: false, message: CONSENT_UNAVAILABLE_MESSAGE };
+  }
   const details = data as OAuthAuthorizationDetails;
   if (typeof details.redirect_uri !== 'string' || !details.client) {
     return { ok: false, message: CONSENT_UNAVAILABLE_MESSAGE };

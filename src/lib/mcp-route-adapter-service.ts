@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { agentTokenClientId } from '@/lib/agent-token';
 import { getApiRequestId } from '@/lib/api-cache';
-import { logBackendEvent, logBackendWarning } from '@/lib/backend-logger';
+import { logBackendEvent, logBackendInfo, logBackendWarning } from '@/lib/backend-logger';
 import {
   createMcpServer,
   defaultMcpToolServices,
@@ -180,7 +180,9 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
   const siteOrigin = siteOriginFor(request, dependencies);
   const authorization = request.headers.get('authorization')?.trim();
   if (!authorization) {
-    logBackendWarning('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_token' });
+    // Every connection starts with this call: the challenge it answers is how a client finds the
+    // authorization server. Information, not a warning.
+    logBackendInfo('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_token' });
     return unauthorizedResponse(siteOrigin, 'Sign in to Magicbooklet to use this server.');
   }
 

@@ -67,8 +67,8 @@ describe('where the web offers it (owner 11-09: Home, the creators, the page a s
     expect(isWelcomePopupOfferedAt('/creations', '/showcase')).toBe(false);
   });
 
-  it('never covers sign-in, the name step, the checkout or the operator console, whatever the address says', () => {
-    for (const path of ['/login', '/auth/continue', '/onboarding', '/pricing', '/pricing/checkout', '/admin', '/admin/users', '/welcome-reward']) {
+  it('never covers sign-in, the name step, the checkout, the operator console or the OAuth consent screen, whatever the address says', () => {
+    for (const path of ['/login', '/auth/continue', '/onboarding', '/pricing', '/pricing/checkout', '/admin', '/admin/users', '/welcome-reward', '/oauth', '/oauth/consent']) {
       expect(isWelcomePopupOfferedAt(path, path), path).toBe(false);
     }
   });
@@ -94,6 +94,8 @@ describe('the flags a return from sign-up puts on the address', () => {
     expect(readWelcomeReturn('/create-video', '?welcome=1&handover=nonce-1234')).toBeNull();
     expect(readWelcomeReturn('/pricing', '?welcome=1')).toBeNull();
     expect(readWelcomeReturn('/onboarding', '?welcome=1')).toBeNull();
+    // A sign-up that started from an agent's connection comes back to decide, not to be greeted.
+    expect(readWelcomeReturn('/oauth/consent', '?authorization_id=abc&welcome=1')).toBeNull();
   });
 });
 
