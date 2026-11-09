@@ -11,6 +11,7 @@ import { useModalQuestion } from '@/components/useModalQuestion';
 import { describeReferralClaim } from '@/lib/referral-claim-copy';
 import { nextWelcomeFill, welcomeEntrySpring } from '@/lib/welcome-credits-popup';
 import { claimWelcomeCredits, type WelcomeCreditAnswer } from '@/lib/welcome-credits-requests';
+import { displayFont } from '@/lib/display-font';
 
 import { CLAIM_CONFETTI_MS, type ClaimOrigin } from '../../ugc-mobile/lib/claim-confetti-flight/claim-confetti-flight';
 
@@ -338,7 +339,7 @@ export default function WelcomeCreditsPopup({ amount: offeredAmount, referral, o
           </div>
 
           <div ref={figureRef} className="ui-welcome-figure">
-            <span ref={numberRef} aria-hidden className="ui-welcome-figure-number" data-claimed={claimed ? '' : undefined}>
+            <span ref={numberRef} aria-hidden className={`ui-welcome-figure-number ${displayFont.className}`} data-claimed={claimed ? '' : undefined}>
               {claimed ? `+${count}` : amount}
             </span>
             <span aria-hidden className="ui-welcome-figure-label">creation credits</span>
@@ -346,7 +347,7 @@ export default function WelcomeCreditsPopup({ amount: offeredAmount, referral, o
           </div>
 
           <KeepFirstHeight>
-            <h2 id={titleId} className="ui-welcome-title">{title}</h2>
+            <h2 id={titleId} className={`ui-welcome-title ${displayFont.className}`}>{title}</h2>
           </KeepFirstHeight>
           <KeepFirstHeight>
             <p id={noteId} className="ui-welcome-note">{note}</p>
