@@ -365,10 +365,12 @@ enabled = false
 # Obtain from https://clerk.com/setup/supabase
 # domain = "example.clerk.accounts.dev"
 
-# OAuth server configuration
+# OAuth server configuration. On for the local stack so /oauth/consent, agent tokens and
+# revocation can be exercised here (docs/mcp-server-operations.md); production's switch is the
+# dashboard, nothing pushes this file there.
 [auth.oauth_server]
 # Enable OAuth server functionality
-enabled = false
+enabled = true
 # Path for OAuth consent flow UI
 authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration

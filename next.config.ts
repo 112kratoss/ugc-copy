@@ -256,6 +256,8 @@ const nextConfig: NextConfig = {
     "/api/generate-video": [...FFMPEG_TRACE, ...SHARP_TRACE],
     // The unified start measures reference media lengths with ffmpeg.
     "/api/generations": [...FFMPEG_TRACE, ...SHARP_TRACE],
+    // The MCP server's create_media runs the same unified start.
+    "/api/mcp": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts": [...FFMPEG_TRACE, ...SHARP_TRACE],
     "/api/posts/*": [...FFMPEG_TRACE, ...SHARP_TRACE],
     // Seedance's Prepare converts an audio track Seedance would not take to WAV with ffmpeg.

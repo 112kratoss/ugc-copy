@@ -55,6 +55,8 @@ describe('ffmpeg serverless configuration', () => {
     for (const route of [
       '/api/cron/backend-jobs',
       '/api/cron/media-preview-repair',
+      // The MCP server's create_media runs the unified start, which measures reference media.
+      '/api/mcp',
       '/api/posts',
       // Prepare converts an audio track Seedance would not take (reference-track-conversion).
       '/api/seedance-assets',

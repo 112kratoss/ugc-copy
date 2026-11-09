@@ -38,6 +38,7 @@
     "ops:external-gates": "node scripts/ops/production-external-gates.mjs",
     "ops:generation-model-catalog": "tsx --env-file-if-exists=.env.local scripts/ops/generation-model-catalog.ts",
     "ops:moderation": "tsx --env-file-if-exists=.env.local scripts/ops/moderation-ops.ts",
+    "ops:oauth-clients": "tsx --env-file-if-exists=.env.local scripts/ops/oauth-clients.ts",
     "ops:storage-orphans": "tsx --env-file-if-exists=.env.local scripts/ops/storage-orphans.ts",
     "ops:feed-algorithm": "tsx --env-file-if-exists=.env.local scripts/ops/feed-algorithm.ts",
     "ops:feed-ranker": "tsx --env-file-if-exists=.env.local scripts/ops/feed-ranker-train.ts",
@@ -64,6 +65,7 @@
     "ops:generation-model-catalog:emit": "tsx scripts/ops/emit-generation-model-catalog-entries.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
     "@sentry/nextjs": "^10.69.0",
     "@supabase/ssr": "0.12.0",
     "@supabase/supabase-js": "2.108.2",
@@ -82,7 +84,8 @@
     "remark": "^15.0.1",
     "remark-html": "^16.0.1",
     "sharp": "0.35.4",
-    "thumbhash": "^0.1.1"
+    "thumbhash": "^0.1.1",
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@lhci/cli": "0.15.1",

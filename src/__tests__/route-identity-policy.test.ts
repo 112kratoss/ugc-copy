@@ -332,6 +332,9 @@ describe('route identity policy', () => {
       '/api/credits/welcome/claim',
       '/api/mobile/notifications/register',
       '/api/templates/[id]/publish',
+      // An agent acting as a creator: the consent page refuses a guest, and
+      // so does the route if a guest's token arrives anyway.
+      '/api/mcp',
     ]) {
       expect(routeIdentityPolicy(route), route).toBe('registered');
     }

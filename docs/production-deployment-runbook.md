@@ -91,6 +91,10 @@ Optional alert delivery can be enabled with `BACKEND_ALERT_DELIVERY_URL`, plus o
 `recipe-copy-sweep` job: unset, the job only reports what it would remove — see
 "Recipe Copy Sweep" below before setting it to `true`.
 
+`MCP_SERVER_DISABLED` is the optional kill switch for the agents' MCP server
+(`/api/mcp`): `1` answers every call 503 with `Retry-After` before any token is
+read. Leave it unset; see `docs/mcp-server-operations.md`.
+
 Vercel environment values are captured when a deployment is built. Adding,
 changing, or removing a Production environment value does not alter the running
 deployment: complete a verified configuration-only redeployment after every

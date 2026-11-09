@@ -6,6 +6,7 @@ import { NextRequest } from 'next/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { guardUserFacingRouteIdentity, proxy } from '@/proxy';
+import { evaluateUserFacingRouteIdentity } from '@/lib/route-identity-admission';
 import { routeIdentityPolicyForPathname, routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 
 const SUBJECT = '11111111-1111-4111-8111-111111111111';
@@ -175,6 +176,58 @@ describe('central route identity admission', () => {
 
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({ code: 'SESSION_MERGED' });
+  });
+
+  it('refuses an agent token on every API route but the MCP server, before any lookup', async () => {
+    // An agent token is the OAuth-issued Supabase JWT an MCP client holds, carrying that
+    // client's id (agent-token.ts). Supabase binds it to no resource, so the route must: a
+    // leaked agent token can then do only what the consent screen said, on /api/mcp alone.
+    const agentClaims = {
+      sub: SUBJECT,
+      aud: 'authenticated',
+      role: 'authenticated',
+      is_anonymous: false,
+      client_id: 'client-claude',
+      exp: Math.floor(Date.now() / 1000) + 3_600,
+    };
+    for (const [method, pathname] of [
+      ['GET', '/api/generations'],
+      ['POST', '/api/generations'],
+      ['POST', '/api/showcase/publish'],
+      ['GET', '/api/profile'],
+      // A public route still verifies a token that is sent, and refuses an agent's.
+      ['POST', '/api/showcase/feed/events'],
+    ]) {
+      const client = identityClient({ claims: agentClaims });
+      const response = await proxy(requestWithMethod(method, pathname), { createUserClient: () => client });
+      expect(response.status, `${method} ${pathname}`).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: 'AGENT_TOKEN_NOT_ALLOWED' });
+      expect(response.headers.get('cache-control')).toBe('private, no-store');
+      expect(client.rpc, `${method} ${pathname}`).not.toHaveBeenCalled();
+    }
+
+    // The MCP route owns its admission (the proxy defers it); the same evaluator admits the
+    // agent token there, with its claims for the route to read the client from.
+    const client = identityClient({ claims: agentClaims });
+    const admission = await evaluateUserFacingRouteIdentity(requestWithMethod('POST', '/api/mcp'), {
+      createUserClient: () => client,
+      signIdentityAdmission: async () => 'signed-assertion',
+    });
+    expect(admission.rejection).toBeNull();
+    expect(admission.assertion).toBe('signed-assertion');
+    expect(admission.claims).toMatchObject({ sub: SUBJECT, client_id: 'client-claude' });
+    expect(client.rpc).toHaveBeenCalledTimes(1);
+
+    // An app session's token carries no client id and is admitted everywhere as before, with
+    // its claims along.
+    const session = identityClient();
+    const sessionAdmission = await evaluateUserFacingRouteIdentity(authenticatedRequest('/api/generations'), {
+      createUserClient: () => session,
+      signIdentityAdmission: async () => 'signed-assertion',
+    });
+    expect(sessionAdmission.rejection).toBeNull();
+    expect(sessionAdmission.claims).toMatchObject({ sub: SUBJECT });
+    expect(sessionAdmission.claims).not.toHaveProperty('client_id');
   });
 
   it('rejects stale bearer tokens on public event and preview endpoints', async () => {

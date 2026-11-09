@@ -12,6 +12,7 @@ import {
   hasE2EAuthCookie,
   isE2EAuthBypassEnabled,
 } from '@/lib/e2e-auth';
+import { isAgentToken } from '@/lib/agent-token';
 import { getMarketplaceSpendableCredits } from '@/lib/profile';
 import { createServiceClient } from '@/lib/server-helpers';
 
@@ -150,6 +151,13 @@ export const getServerAuthState = cache(async (): Promise<ServerAuthState> => {
 
   const claimedUserId = typeof claims.sub === 'string' ? claims.sub : null;
   if (!claimedUserId) {
+    return unauthenticatedServerState();
+  }
+
+  // An agent's token (an OAuth-issued token carrying its client's id, agent-token.ts) verifies
+  // like any user token, so placed in the auth cookie it would render every page as the
+  // creator. It drives only /api/mcp; here it is no session.
+  if (isAgentToken(claims)) {
     return unauthenticatedServerState();
   }
 

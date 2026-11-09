@@ -296,6 +296,43 @@ describe('getServerAuthState', () => {
     expect(mocks.createServiceClient).not.toHaveBeenCalled();
   });
 
+  it("refuses an agent's token as a web session, however well it verifies", async () => {
+    // An OAuth-issued token (agent-token.ts: the client_id claim) is a valid user token, so
+    // placed in the auth cookie it would render every page as the creator. It drives /api/mcp
+    // alone; here it is nobody.
+    mocks.getSession.mockResolvedValue({
+      data: {
+        session: {
+          access_token: 'agent-token',
+          refresh_token: 'r',
+          expires_in: 3600,
+          token_type: 'bearer',
+          user: { id: 'creator-user' },
+        },
+      },
+      error: null,
+    });
+    mocks.getClaims.mockResolvedValue({
+      data: {
+        claims: {
+          sub: 'creator-user',
+          aud: 'authenticated',
+          role: 'authenticated',
+          is_anonymous: false,
+          client_id: 'client-claude',
+        },
+      },
+      error: null,
+    });
+
+    const { getServerAuthState } = await import('@/lib/supabase-server');
+    await expect(getServerAuthState()).resolves.toEqual({
+      session: null,
+      credits: null,
+    });
+    expect(mocks.createServiceClient).not.toHaveBeenCalled();
+  });
+
   it('preserves the explicit E2E bypass without calling Supabase auth', async () => {
     const e2eSession = {
       access_token: 'e2e-token',
