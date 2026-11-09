@@ -1,7 +1,7 @@
 {
   "name": "magicbooklet",
   "displayName": "Magic Booklet",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Create AI images and videos with your Magic Booklet credits from Claude Code, every run priced before it starts, and publish them as posts.",
   "author": {
     "name": "Magic Booklet",
@@ -16,7 +16,7 @@
       "type": "http",
       "url": "https://magicbooklet.com/api/mcp",
       "oauth": {
-        "clientId": "CLIENT_ID_PENDING_CLAUDE_CODE",
+        "clientId": "0b968a27-4f37-4972-8d7a-f3c67b365a33",
         "callbackPort": 8976
       }
     }

@@ -115,6 +115,29 @@ no port-agnostic loopback). Supabase accepts and ignores the `resource` paramete
 The token's `scope` is only `openid profile email phone` class and is never shown as permissions;
 the consent screen shows the fixed description of what an agent may do.
 
+### Registered clients (production, 2026-11-09)
+
+Dynamic client registration is off on production (its metadata has no `registration_endpoint`),
+so these public clients are the only ones. Their ids are public values and live in
+`MCP_CLIENT_IDS` (`src/lib/mcp-client-directory.ts`), which the setup page and the Claude Code
+plugin read.
+
+| Client | Client id | Redirect URIs registered |
+|---|---|---|
+| Claude (Claude.ai, Claude Desktop, Claude mobile) | `cf5743f9-c83c-4f6c-9afb-0803d5aee698` | `https://claude.ai/api/mcp/auth_callback` |
+| Claude Code | `0b968a27-4f37-4972-8d7a-f3c67b365a33` | `http://localhost:8976/callback` |
+| Cursor | `cd3b041d-a942-4917-b37f-735744ca4026` | `http://localhost:8787/callback`, `https://www.cursor.com/agents/mcp/oauth/callback` |
+| Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/magicbooklet`, `http://localhost:8977/callback/magicbooklet`; **add `http://127.0.0.1:8977/callback/PPpoTd8EYBlz`**, the one Codex sends (below) |
+| ChatGPT | not yet: the owner creates the connector first | per connector, from its management page |
+
+Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
+advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
+for the server, `PPpoTd8EYBlz`, and for a pre-registered client it replaces a configured
+`callback_url` that lacks the ID with the default callback (`use_legacy_fallback` in openai/codex,
+`codex-rs/rmcp-client/src/perform_oauth_login.rs`). With `callback_port = 8977` it sends
+`http://127.0.0.1:8977/callback/PPpoTd8EYBlz` ("Distribution" → "Setup facts per client" →
+Codex). Until that URI is on the client, a Codex sign-in ends at GoTrue's `invalid redirect_uri`.
+
 ## The kill switch
 
 `MCP_SERVER_DISABLED=1` in the Vercel Production environment, followed by a configuration-only
@@ -181,6 +204,22 @@ stack only, where the path-insertion forms answered 404 through local Kong:
    `get_generation` with `wait_seconds` 45 on a running creation answers rather than timing
    out: the wait, the admission round trips and the final read must all fit under the route's
    60 seconds and the client's own request timeout (the tools suggest 30 for that reason).
+
+Verified on production on 2026-11-09, with the OAuth server on (issuer
+`https://ildfmhozpibwiopeavfg.supabase.co/auth/v1`):
+
+- Check 1: the RFC 8414 path-insertion form `/.well-known/oauth-authorization-server/auth/v1`,
+  `/auth/v1/.well-known/openid-configuration` and `/auth/v1/.well-known/oauth-authorization-server`
+  answer 200 with that issuer. `/.well-known/openid-configuration/auth/v1` answers 401 through
+  production Kong, which does not matter: Claude Code tries it only after the path-insertion form,
+  which works.
+- Check 2: `/auth/v1/oauth/authorize` and `/auth/v1/oauth/token` answer without an `apikey`
+  header (400 for a wrong redirect URI or client).
+- The metadata has no `registration_endpoint` (registration off) and no
+  `authorization_response_iss_parameter_supported`, which is why Codex's redirect carries its
+  callback ID ("Registered clients", above).
+
+Checks 3 and 4 need a real client connected end to end.
 
 ## Verifying a deployment
 

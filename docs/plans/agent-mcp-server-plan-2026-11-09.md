@@ -286,8 +286,10 @@ Status, 2026-11-10: built on `feat/mcp-phase3`: the setup page, the plugin marke
 skills, the registry entry and its `/.well-known/mcp-registry-auth` proof, and
 `resource_documentation` restored. Dynamic registration stays off; Codex and Cursor use
 pre-registered public clients (runbook, "Distribution", which also has the Codex redirect URI
-Codex derives). Left: the production client ids (placeholders until registered), the owner's
-steps below, and `run_template`, still waiting for its usage check.
+Codex derives). The production clients for Claude, Claude Code, Cursor and Codex were registered
+on 2026-11-09 (runbook, "Registered clients"). Left: the Codex client's
+`http://127.0.0.1:8977/callback/PPpoTd8EYBlz` redirect, ChatGPT's client (after its connector),
+the owner's steps below, and `run_template`, still waiting for its usage check.
 
 - `src/app/developers/mcp/page.tsx` — the setup page: one command or form per client, what the
   agent can do, how to revoke.

@@ -75,17 +75,22 @@ export type McpClientSurface = 'claude' | 'claudeCode' | 'chatgpt' | 'codex' | '
 
 export type McpClientIds = Readonly<Record<McpClientSurface, string>>;
 
-/** Each surface's production OAuth client id: a placeholder until its client is registered. */
+/**
+ * Each surface's production OAuth client id: a placeholder until its client is registered.
+ * Registered 2026-11-09 (runbook, "Registered clients"); ChatGPT's waits for its connector, whose
+ * redirect URI exists only once the connector does.
+ */
 export const MCP_CLIENT_IDS: McpClientIds = {
-  claude: 'CLIENT_ID_PENDING_CLAUDE',
-  claudeCode: 'CLIENT_ID_PENDING_CLAUDE_CODE',
+  claude: 'cf5743f9-c83c-4f6c-9afb-0803d5aee698',
+  claudeCode: '0b968a27-4f37-4972-8d7a-f3c67b365a33',
   chatgpt: 'CLIENT_ID_PENDING_CHATGPT',
-  codex: 'CLIENT_ID_PENDING_CODEX',
-  cursor: 'CLIENT_ID_PENDING_CURSOR',
+  codex: '6508034a-cdb9-4f23-9263-7bf332096acb',
+  cursor: 'cd3b041d-a942-4917-b37f-735744ca4026',
 };
 
 /**
- * The exact redirect URIs each surface's client is registered with. ChatGPT's is per connector,
+ * The exact redirect URIs each client sends, which its OAuth client must be registered with
+ * (GoTrue matches them exactly). ChatGPT's is per connector,
  * `https://chatgpt.com/connector/oauth/{callback_id}`, shown on the connector's page once it is
  * created, so it has no entry here: register what that page shows.
  */
