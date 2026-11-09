@@ -324,6 +324,19 @@ export const SHOWCASE_PUBLISH_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+/**
+ * Public posts an agent may publish for one account in a day (owner, 2026-11-09, the MCP
+ * server's phase 2): counted by `publish_post` only where it makes a post public (a private post
+ * and a republish that changes nothing do not count), beside the publish route's own 20 per 10
+ * minutes, which every publish still passes through. Keyed on the account, so an agent cannot
+ * reset the window by reconnecting.
+ */
+export const AGENT_PUBLISH_RATE_LIMIT = {
+  scope: 'agent:publish-public',
+  limit: 10,
+  windowSeconds: 24 * 60 * 60,
+} as const;
+
 export const SHOWCASE_SHARE_RATE_LIMIT = {
   scope: 'showcase:share',
   limit: 120,

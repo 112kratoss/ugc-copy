@@ -6,11 +6,13 @@ import {
   isLegacyRequest,
   type AuthInfo,
 } from '@modelcontextprotocol/server';
-import { NextRequest, NextResponse } from 'next/server';
+import { after, NextRequest, NextResponse } from 'next/server';
 
 import { agentTokenClientId } from '@/lib/agent-token';
+import { buildAgentToolCallRow, recordAgentToolCall } from '@/lib/agent-tool-calls';
 import { getApiRequestId } from '@/lib/api-cache';
 import { logBackendEvent, logBackendInfo, logBackendWarning } from '@/lib/backend-logger';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 import {
   createMcpServer,
   defaultMcpToolServices,
@@ -54,6 +56,12 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
  * copied app session cannot drive the server. The evaluator is the proxy's own, so revocation,
  * ban and lifecycle are checked afresh on every call, and the admitted request carries the same
  * trusted assertion the services see behind the proxy.
+ *
+ * The record. Every tool call writes one log line (`mcp_tool_call`, below) and one row of
+ * `public.agent_tool_calls` (`agent-tool-calls.ts`), the audit table moderation reads to list
+ * what agents published. The row is written behind the answer (Next's `after`), under the service
+ * role, and a write that fails is logged and nothing more: the agent's answer never waits on the
+ * record and never fails by it.
  */
 
 export const MCP_DISABLED_RETRY_AFTER_SECONDS = 300;
@@ -68,8 +76,22 @@ export type McpRouteDependencies = {
   kieApiKey?: string;
   siteUrl?: string;
   log?: typeof logBackendEvent;
+  /** Where the audit row and a publish's alert go once the answer is out; Next's `after` by default. */
+  runAfterResponse?: RunAfterResponse;
   env?: Environment;
 };
+
+/**
+ * Next's `after`, which takes a task only inside a request. Outside one (a test, a script) it
+ * throws, and the task runs at once instead: the record is still written, in front of nothing.
+ */
+function runAfterResponseByDefault(task: () => Promise<unknown>): void {
+  try {
+    after(task);
+  } catch {
+    void task();
+  }
+}
 
 export function isMcpServerDisabled(env: Environment = process.env): boolean {
   const value = env.MCP_SERVER_DISABLED?.trim().toLowerCase();
@@ -167,9 +189,45 @@ function logToolCall(
     outcome: record.outcome,
     code: record.code,
     costCredits: record.costCredits,
+    generationId: record.generationId,
+    postId: record.postId,
     elapsedMs: Math.round(record.elapsedMs),
     ...(record.error !== undefined ? { error: record.error } : {}),
   });
+}
+
+/**
+ * The audit row, written behind the answer. `cost_credits` is set only where the answer charged
+ * the creator (the record carries null for a quote, a failure and a replay). A thrown tool is
+ * recorded as a failure with its INTERNAL_ERROR code.
+ */
+function recordToolCall(
+  admin: () => ReturnType<typeof createServiceClient>,
+  runAfterResponse: RunAfterResponse,
+  identity: { clientId: string; userId: string },
+  record: McpToolCallRecord,
+): void {
+  const row = buildAgentToolCallRow({
+    userId: identity.userId,
+    clientId: identity.clientId,
+    tool: record.tool,
+    ok: record.outcome === 'ok',
+    code: record.code,
+    generationId: record.generationId,
+    postId: record.postId,
+    costCredits: record.costCredits,
+  });
+  const write = async () => {
+    const written = await recordAgentToolCall(admin(), row);
+    if (!written.ok) {
+      logBackendWarning('mcp_tool_call_record_failed', { tool: record.tool, clientId: identity.clientId, error: written.error });
+    }
+  };
+  try {
+    runAfterResponse(write);
+  } catch (error) {
+    logBackendWarning('mcp_tool_call_record_failed', { tool: record.tool, clientId: identity.clientId, error });
+  }
 }
 
 async function handleMcpPost(request: NextRequest, dependencies: McpRouteDependencies): Promise<Response> {
@@ -211,7 +269,13 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
   const admitted = await rebuildAdmittedRequest(request, admission);
   const makeUserClient = dependencies.createUserClient ?? createUserClient;
   const makeServiceClient = dependencies.createServiceClient ?? createServiceClient;
+  const runAfterResponse = dependencies.runAfterResponse ?? runAfterResponseByDefault;
   let admin: ReturnType<typeof createServiceClient> | null = null;
+  const createAdminSupabase = () => {
+    admin ??= makeServiceClient();
+    return admin;
+  };
+  const identity = { clientId, userId };
   const context: McpToolContext = {
     request: admitted,
     userId,
@@ -219,12 +283,13 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
     siteOrigin,
     kieApiKey: dependencies.kieApiKey ?? env.KIE_AI_API_KEY,
     createUserSupabase: () => makeUserClient(admitted),
-    createAdminSupabase: () => {
-      admin ??= makeServiceClient();
-      return admin;
-    },
+    createAdminSupabase,
     services: { ...defaultMcpToolServices(), ...dependencies.services },
-    onToolCall: (record) => logToolCall(log, { clientId, userId }, record),
+    onToolCall: (record) => {
+      logToolCall(log, identity, record);
+      recordToolCall(createAdminSupabase, runAfterResponse, identity, record);
+    },
+    runAfterResponse,
   };
   const bearerToken = authorization.replace(/^Bearer\s+/iu, '');
   return withProviderFetchRequestId(getApiRequestId(request), () => serveMcp(admitted, context, bearerToken));
