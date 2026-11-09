@@ -127,7 +127,7 @@ plugin read.
 | Claude (Claude.ai, Claude Desktop, Claude mobile) | `cf5743f9-c83c-4f6c-9afb-0803d5aee698` | `https://claude.ai/api/mcp/auth_callback` |
 | Claude Code | `0b968a27-4f37-4972-8d7a-f3c67b365a33` | `http://localhost:8976/callback` |
 | Cursor | `cd3b041d-a942-4917-b37f-735744ca4026` | `http://localhost:8787/callback`, `https://www.cursor.com/agents/mcp/oauth/callback` |
-| Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/magicbooklet`, `http://localhost:8977/callback/magicbooklet`; **add `http://127.0.0.1:8977/callback/PPpoTd8EYBlz`**, the one Codex sends (below) |
+| Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` and `http://localhost:8977/callback/PPpoTd8EYBlz` (the URI Codex derives for the server name `magicbooklet`, below; registered 2026-11-10), plus the earlier `http://127.0.0.1:8977/callback/magicbooklet` and `http://localhost:8977/callback/magicbooklet` |
 | ChatGPT | not yet: the owner creates the connector first | per connector, from its management page |
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
