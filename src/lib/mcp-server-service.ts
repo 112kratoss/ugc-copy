@@ -9,10 +9,19 @@ import {
   AGENT_BASE64_MAX_BYTES,
   AGENT_BASE64_MAX_CHARACTERS,
   AGENT_URL_FETCH_MAX_BYTES_BY_KIND,
+  agentUploadCurlCommand,
+  readAgentStagedUploads,
+  requestAgentUpload,
   stageAgentInput,
+  type AgentStagedUpload,
 } from '@/lib/agent-input-upload';
 import { agentPostState, readPostForAgent, type AgentPostState, type AgentPostView } from '@/lib/agent-post-read';
 import { buildAgentPublishRequest } from '@/lib/agent-publish-request';
+import {
+  agentUploadPostId,
+  buildAgentUploadPublishFormData,
+  refuseAgentMadeWith,
+} from '@/lib/agent-upload-publish-request';
 import {
   AGENT_PUBLISH_RECORD_CODES,
   countAgentPublicPublishesSince,
@@ -47,9 +56,12 @@ import {
   type ModelCatalogKind,
 } from '@/lib/model-catalog-transport';
 import { listOwnerGenerationsForRoute } from '@/lib/owner-generations-route-service';
+import { createOwnerPostForRoute } from '@/lib/post-create-route-service';
 import { deleteOwnerPostForRoute } from '@/lib/post-delete-service';
 import { DESCRIPTION_MAX_LENGTH } from '@/lib/post-description-limit';
 import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
+import { MAX_POST_MEDIA_ITEMS } from '@/lib/post-media';
+import { updateOwnerPostForRoute } from '@/lib/post-update-service';
 import { BODY_MAX_LENGTH } from '@/lib/posts-server';
 import { enhancePromptForUser } from '@/lib/prompt-enhancement-service';
 import { getPromptEnhancementCost } from '@/lib/prompt-enhancer';
@@ -63,12 +75,13 @@ import {
 /**
  * The MCP server's tool registry: what an agent acting as a signed-in creator can do, and the
  * handler behind each tool (`docs/plans/agent-mcp-server-plan-2026-11-09.md`; phase 1 the
- * create-media job, phase 2 the publish job and uploads).
+ * create-media job, phase 2 the publish job and uploads, phase 4 posts of media made elsewhere).
  *
  * The tools are a thin layer over the services the web and the app already call. Nothing here
  * prices a run, reads the catalog on its own or touches credits: the quote service prices, the
  * unified start charges (and refuses a run above the price the agent confirmed), the owner
- * library read answers what a run became, the publish service makes the post the web would make,
+ * library read answers what a run became, the publish service makes the post the web would make
+ * from a creation and the composer service the one it would make from uploaded files,
  * and every rate limit is the creator's own, keyed on the creator as the web's routes key it.
  * What this layer adds is the agent's view of those answers: snake_case fields, a sentence of
  * text beside the data, stable error codes, and in every description the next call to make.
@@ -79,7 +92,7 @@ import {
  */
 
 export const MCP_SERVER_NAME = 'magicbooklet';
-export const MCP_SERVER_VERSION = '1.1.0';
+export const MCP_SERVER_VERSION = '1.2.0';
 
 /**
  * The time get_generation may spend waiting for a run, within the route's 60-second budget. The
@@ -106,6 +119,7 @@ export type McpToolName =
   | 'get_model'
   | 'quote_generation'
   | 'upload_input'
+  | 'request_upload'
   | 'create_media'
   | 'get_generation'
   | 'list_creations'
@@ -137,9 +151,17 @@ export type McpToolServices = {
   listOwnerGenerationsForRoute: typeof listOwnerGenerationsForRoute;
   enhancePromptForUser: typeof enhancePromptForUser;
   publishGenerationToShowcaseForRoute: typeof publishGenerationToShowcaseForRoute;
+  /** The composer's own create: the post the web makes from uploaded files. */
+  createOwnerPostForRoute: typeof createOwnerPostForRoute;
+  /** The composer's own save: how a post without a creation changes its visibility. */
+  updateOwnerPostForRoute: typeof updateOwnerPostForRoute;
   deleteOwnerPostForRoute: typeof deleteOwnerPostForRoute;
   readPostForAgent: typeof readPostForAgent;
   stageAgentInput: typeof stageAgentInput;
+  /** Signs an upload for a file on the agent's own machine. */
+  requestAgentUpload: typeof requestAgentUpload;
+  /** The caller's staged uploads behind the paths a publish names. */
+  readAgentStagedUploads: typeof readAgentStagedUploads;
   /** The preview of a finished picture as an inline image block, or null when it is not to be had. */
   fetchImageContentBlock: typeof fetchImageContentBlock;
   enforceBackendRateLimit: typeof enforceBackendRateLimit;
@@ -263,9 +285,13 @@ export function defaultMcpToolServices(): McpToolServices {
     listOwnerGenerationsForRoute,
     enhancePromptForUser,
     publishGenerationToShowcaseForRoute,
+    createOwnerPostForRoute,
+    updateOwnerPostForRoute,
     deleteOwnerPostForRoute,
     readPostForAgent,
     stageAgentInput,
+    requestAgentUpload,
+    readAgentStagedUploads,
     fetchImageContentBlock,
     enforceBackendRateLimit,
     readCreditBalance,
@@ -647,6 +673,7 @@ const createMediaTool = defineTool({
     'Returns a generation_id at once; the run continues in the background, so call get_generation with wait_seconds to wait for it.',
     'idempotency_key is required: mint a UUID per run, and reuse the same key on any retry of that run (after a timeout or a dropped connection the run may have started), which returns the run instead of charging again.',
     'Inputs are the creator\'s own: a file staged with upload_input (its url and storage_path), an output URL from get_generation or list_creations, or an asset_id; any other web URL is refused.',
+    'A staged file feeds a run here (inputs[]) or becomes a post as it is (publish_post.uploads[]); the run\'s own output is published with publish_post and its generation_id.',
     'A failed run refunds its credits by itself. INSUFFICIENT_CREDITS states the balance and the shortfall.',
   ].join(' '),
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -1062,26 +1089,39 @@ function megabytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MB`;
 }
 
+/** Counted before any byte is fetched or any upload signed, so a loop of large or failing files is stopped here. */
+async function refuseUploadOverLimit(context: McpToolContext): Promise<CallToolResult | null> {
+  try {
+    await context.services.enforceBackendRateLimit(context.createAdminSupabase(), { ...AGENT_UPLOAD_INPUT_RATE_LIMIT, key: context.userId });
+    return null;
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) return rateLimited(error.retryAfterSeconds);
+    throw error;
+  }
+}
+
 const uploadInputTool = defineTool({
   name: 'upload_input',
-  title: 'Stage an input file',
+  title: 'Stage a file',
   description: [
-    'Stage a picture, clip or track of the person\'s own for a run, and get back the input create_media takes for it.',
-    `Give url (a public https URL this server fetches: at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.audio)} for a track; one redirect on the same host is followed) or base64 with mime_type (at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded; send a larger file by url).`,
-    'The answer\'s input (url and storage_path) goes into create_media.inputs[] with the slot and kind get_model names; the staged file is kept for a run for about two hours and the signed URL for about an hour, so stage right before you create.',
-    'Only public hosts are fetched (PRIVATE_ADDRESS otherwise), and only the picture, clip and track types Magicbooklet takes (UNSUPPORTED_MEDIA). The creator\'s own outputs need no staging: pass their URL from get_generation or list_creations.',
+    'Stage a picture, clip or track of the person\'s own, and get back what create_media takes for it as an input and publish_post as an upload.',
+    `Give exactly one source. url: a public https URL this server fetches (at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.audio)} for a track; one redirect on the same host is followed). base64 with mime_type (at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded; send a larger file by url). upload_id: a file on your own machine that you sent to the upload_url request_upload gave, once that upload has finished.`,
+    'The answer\'s input (url and storage_path) feeds a run in create_media.inputs[], with the slot and kind get_model names, or becomes a post as it is: its storage_path goes into publish_post.uploads[] (a picture or a clip; a track is for a run only). The staged file is kept about two hours and the signed URL about an hour, so stage right before you create or publish.',
+    'Only public hosts are fetched (PRIVATE_ADDRESS otherwise), and only the picture, clip and track types Magicbooklet takes, checked against the file\'s own bytes (UNSUPPORTED_MEDIA). The creator\'s own outputs need no staging: pass their URL from get_generation or list_creations.',
   ].join(' '),
   // Open world: by URL it reaches hosts outside Magicbooklet.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   inputSchema: z.object({
-    url: z.url().optional().describe('A public https URL of the file. Give url or base64, not both.'),
+    url: z.url().optional().describe('A public https URL of the file. Give exactly one of url, base64 or upload_id.'),
     base64: z.string().min(4).max(AGENT_BASE64_MAX_CHARACTERS).optional().describe(`The file\'s bytes in standard base64 (a data: URL is accepted), at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded.`),
     mime_type: z.string().min(3).max(100).optional().describe('The file\'s own type, required with base64 (image/jpeg, image/png, video/mp4, audio/mpeg, …).'),
+    upload_id: z.uuid().optional().describe('The upload_id request_upload gave, after the file was PUT to its upload_url. The file is checked against the size and type request_upload was told.'),
   }),
-  async handle({ url, base64, mime_type: mimeType }, context) {
-    if ((url === undefined) === (base64 === undefined)) {
-      return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, 'Give exactly one of url or base64.', {
-        field_errors: { url: 'Give url or base64, not both and not neither.' },
+  async handle({ url, base64, mime_type: mimeType, upload_id: uploadId }, context) {
+    const sources = [url, base64, uploadId].filter((source) => source !== undefined).length;
+    if (sources !== 1) {
+      return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, 'Give exactly one of url, base64 or upload_id.', {
+        field_errors: { url: 'Give url, base64 or upload_id: one of them, and only one.' },
       });
     }
     if (base64 !== undefined && !mimeType) {
@@ -1089,17 +1129,16 @@ const uploadInputTool = defineTool({
         field_errors: { mime_type: 'Required with base64.' },
       });
     }
-    // Counted before any byte is fetched, so a loop of large or failing downloads is stopped here.
-    try {
-      await context.services.enforceBackendRateLimit(context.createAdminSupabase(), { ...AGENT_UPLOAD_INPUT_RATE_LIMIT, key: context.userId });
-    } catch (error) {
-      if (error instanceof BackendRateLimitError) return rateLimited(error.retryAfterSeconds);
-      throw error;
-    }
+    const limited = await refuseUploadOverLimit(context);
+    if (limited) return limited;
     const staged = await context.services.stageAgentInput({
       admin: context.createAdminSupabase(),
       userId: context.userId,
-      source: url !== undefined ? { url } : { base64: base64 as string, mimeType: mimeType as string },
+      source: url !== undefined
+        ? { url }
+        : base64 !== undefined
+          ? { base64, mimeType: mimeType as string }
+          : { uploadId: uploadId as string },
     });
     if (!staged.ok) {
       if (staged.code === 'RATE_LIMITED') return rateLimited(staged.retryAfterSeconds);
@@ -1116,8 +1155,11 @@ const uploadInputTool = defineTool({
     return toolSuccess(
       [
         `Staged ${STAGED_KIND_NOUN[staged.kind]} of ${staged.bytes} bytes (${staged.mimeType}).`,
-        'In create_media.inputs[], send this input\'s url and storage_path with the slot and kind get_model names for it.',
-        `The staged file is kept about two hours for a run; its URL lasts ${Math.round(staged.expiresInSeconds / 60)} minutes.`,
+        'For a run: in create_media.inputs[], send this input\'s url and storage_path with the slot and kind get_model names for it.',
+        staged.kind === 'audio'
+          ? 'A track feeds a run only; a post takes pictures and clips.'
+          : 'For a post of the file as it is: put its storage_path in publish_post.uploads[], with a title and made_with.',
+        `The staged file is kept about two hours; its URL lasts ${Math.round(staged.expiresInSeconds / 60)} minutes.`,
       ].join(' '),
       {
         input: { url: staged.input.url, storage_path: staged.input.storagePath },
@@ -1126,6 +1168,64 @@ const uploadInputTool = defineTool({
         mime_type: staged.mimeType,
         expires_in_seconds: staged.expiresInSeconds,
         source_url: staged.sourceUrl,
+      },
+    );
+  },
+});
+
+// ---------------------------------------------------------------------------------------------
+// request_upload
+
+const requestUploadTool = defineTool({
+  name: 'request_upload',
+  title: 'Request an upload for a local file',
+  description: [
+    'Get a signed URL to send a file from your own machine to Magicbooklet\'s staging, for an agent that can run a command (Claude Code, Codex, Cursor). An agent with no shell stages by link instead: upload_input with url.',
+    `Tell it the file's name, its own type (mime_type) and its exact size in bytes (size_bytes): at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.audio)} for a track.`,
+    'The answer gives upload_url, the headers to send and the one curl command that does it (PUT the raw bytes; any HTTP client that sends the same method, headers and body works). Run it with the file\'s path, wait for it to finish, then call upload_input with the upload_id: that checks the stored file against the size and type given here and its own bytes, and answers the input create_media and publish_post take.',
+    'Nothing is staged until upload_input says so, and a file whose size or type differs from what was declared is removed. The URL lasts about two hours; tell the person which file you are sending before you send it.',
+  ].join(' '),
+  // It reserves an upload and reaches nothing outside Magicbooklet: the agent's own PUT does the sending.
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  inputSchema: z.object({
+    file_name: z.string().trim().min(1).max(200).describe('The file\'s name with its extension (photo.png, clip.mp4). The upload is filed under a cleaned form of it.'),
+    mime_type: z.string().trim().min(3).max(100).describe('The file\'s own type: image/jpeg, image/png, image/webp, image/gif, video/mp4, video/quicktime, video/webm, audio/mpeg, audio/wav, …'),
+    size_bytes: z.int().min(1).describe('The file\'s exact size in bytes (wc -c < FILE). The stored file must be exactly this size.'),
+  }),
+  async handle({ file_name: fileName, mime_type: mimeType, size_bytes: sizeBytes }, context) {
+    const limited = await refuseUploadOverLimit(context);
+    if (limited) return limited;
+    const upload = await context.services.requestAgentUpload({
+      admin: context.createAdminSupabase(),
+      userId: context.userId,
+      request: { fileName, mimeType, sizeBytes },
+    });
+    if (!upload.ok) {
+      if (upload.code === 'RATE_LIMITED') return rateLimited(upload.retryAfterSeconds);
+      if (upload.code === 'UPLOAD_FAILED') {
+        return toolFailure(MCP_ERROR_CODES.UNAVAILABLE, `${upload.message} Try again in a moment.`, upload.details ?? {});
+      }
+      return toolFailure(upload.code, upload.message, upload.details ?? {});
+    }
+    const curl = agentUploadCurlCommand(upload);
+    return toolSuccess(
+      [
+        `Upload ${upload.uploadId} is ready for ${STAGED_KIND_NOUN[upload.kind]} of exactly ${upload.sizeBytes} bytes (${upload.mimeType}). Send the file with this command, FILE replaced by its path:`,
+        curl,
+        `then call upload_input with this upload_id (${upload.uploadId}). The URL lasts ${Math.round(upload.expiresInSeconds / 60)} minutes and takes the file once.`,
+      ].join('\n'),
+      {
+        upload_id: upload.uploadId,
+        upload_url: upload.uploadUrl,
+        method: 'PUT',
+        headers: upload.headers,
+        curl,
+        storage_path: upload.storagePath,
+        kind: upload.kind,
+        mime_type: upload.mimeType,
+        size_bytes: upload.sizeBytes,
+        expires_in_seconds: upload.expiresInSeconds,
+        max_bytes: upload.maxBytes,
       },
     );
   },
@@ -1223,37 +1323,271 @@ async function refusePublishOverLimit(context: McpToolContext, makesPublic: bool
   );
 }
 
+/** How many tools a post's Made with holds, and how long a name may be: the composer's own limits (`source-tools.ts`). */
+const MADE_WITH_MAX_ENTRIES = 5;
+const MADE_WITH_NAME_MAX_LENGTH = 80;
+
+const PUBLISH_POST_SCHEMA = z.object({
+  generation_id: GENERATION_ID.optional().describe('A creation made here, to publish as a post: the generation_id create_media or list_creations gave. Give generation_id or uploads, not both.'),
+  uploads: z.array(z.object({
+    storage_path: z.string().trim().min(1).max(512).describe('The input.storage_path upload_input answered for the file.'),
+  })).min(1).max(MAX_POST_MEDIA_ITEMS).optional()
+    .describe(`Media made elsewhere, to publish as a post: 1 to ${MAX_POST_MEDIA_ITEMS} pictures or clips you staged with upload_input, in the order the post shows them. Needs title and made_with.`),
+  made_with: z.array(z.object({
+    tool: z.string().trim().min(1).max(MADE_WITH_NAME_MAX_LENGTH).describe('The tool or app that made the media, as its makers name it (Midjourney, Photoshop, Blender, a camera). Never Magic Booklet: media made here is published with generation_id.'),
+    model: z.string().trim().min(1).max(MADE_WITH_NAME_MAX_LENGTH).optional().describe('The model or version, where the tool has one (v7, FLUX.1 Pro).'),
+  })).min(1).max(MADE_WITH_MAX_ENTRIES).optional()
+    .describe(`Required with uploads, refused with generation_id: what made the media, 1 to ${MADE_WITH_MAX_ENTRIES} tools, shown on the post as Made with. Ask the person when you do not know.`),
+  title: z.string().trim().min(1).max(TITLE_MAX_LENGTH).optional().describe(`The post's title, at most ${TITLE_MAX_LENGTH} characters; 6 or more for a post with a recipe. Required with uploads. Left out with generation_id, the creation's own title is used, else the title the web's Publish suggests from its prompt.`),
+  description: z.string().trim().max(DESCRIPTION_MAX_LENGTH).optional().describe('A short description under the title.'),
+  body: z.string().trim().max(BODY_MAX_LENGTH).optional().describe('The post\'s text, shown with the media.'),
+  category: z.enum(['image', 'video']).optional().describe('How the post is filed; left out, the creation or the first upload decides.'),
+  visibility: PUBLISH_VISIBILITY.optional().describe('public (the default for a new post) or private. On a post that already exists, given, it changes the visibility; left out, the post stays as it is.'),
+  is_nsfw: z.boolean().optional().describe('Mark the post mature: it stays covered until a viewer who allows mature content reveals it.'),
+  allow_remixes: z.boolean().optional().describe('With generation_id only. Default true: the post carries the creation\'s free recipe (its exact prompt and the saved inputs it may share), so others can remix it. False posts the media alone. Refused with uploads, which have no recipe.'),
+});
+
+type PublishPostArgs = z.output<typeof PUBLISH_POST_SCHEMA>;
+
+/** How an existing post's state reads in a sentence: its visibility, and what else holds it back. */
+function describeExistingState(existing: { visibility: 'public' | 'private'; state: AgentPostState }): string {
+  if (existing.state === 'live') return 'live, public';
+  if (existing.state === 'private') return 'private';
+  return `${existing.visibility}, but ${existing.state}`;
+}
+
+/** The composer's field names, as the tool's arguments name them. */
+const UPLOAD_PUBLISH_FIELD: Record<string, string> = { sourceTools: 'made_with', isNsfw: 'is_nsfw', mediaItems: 'uploads' };
+
+/**
+ * The composer service's refusals for a post made from uploads (`createOwnerPostForRoute`, and
+ * `updateOwnerPostForRoute` for a visibility change), as stable codes with the service's own
+ * message. The web's follow-up links (`actionHref`, `actionLabel`: a profile to complete, credits
+ * to buy) are never passed on. A failure that is not the caller's says to publish again with the
+ * same uploads, which is safe by the post's derived id: it answers the post where one was saved,
+ * and says so where the files were spent and must be staged again.
+ */
+function uploadPublishRefusal(
+  result: { status: number; body: { error: string; field?: string; code?: string; retryAfterSeconds?: number } },
+): CallToolResult {
+  const { status, body } = result;
+  if (status === 429) return rateLimited(body.retryAfterSeconds);
+  if (status === 404) return toolFailure(MCP_ERROR_CODES.NOT_FOUND, body.error);
+  if (status === 409) return toolFailure('CONFLICT', body.error, { publish_code: body.code ?? null });
+  if (status === 400) {
+    const field = body.field ? UPLOAD_PUBLISH_FIELD[body.field] ?? body.field : null;
+    return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, body.error, field ? { field_errors: { [field]: body.error } } : {});
+  }
+  return toolFailure(
+    MCP_ERROR_CODES.UNAVAILABLE,
+    `${body.error} Call publish_post again with the same uploads: it answers the post if one was saved, and says so if the files must be staged again.`,
+  );
+}
+
+/** Why a staged path cannot become a post, where the tool can tell; null when it can, or when the composer service is the one to say. */
+function refuseStagedUpload(upload: AgentStagedUpload | undefined, index: number, storagePath: string): CallToolResult | null {
+  const named = `uploads[${index}] (${storagePath})`;
+  const details = { field_errors: { uploads: `uploads[${index}] cannot be published as it stands.` }, storage_path: storagePath };
+  // Not in the caller's staging folder: the composer service refuses it by its ownership rule.
+  if (!upload || upload.kind === 'foreign') return null;
+  if (upload.kind === 'unknown') {
+    return toolFailure(MCP_ERROR_CODES.NOT_FOUND, `${named} is not a file staged with upload_input. Stage the file, then give the storage_path its answer names.`, details);
+  }
+  switch (upload.status) {
+    case 'finalized':
+      return null;
+    case 'reserved':
+    case 'issued':
+    case 'finalizing':
+      return toolFailure(MCP_ERROR_CODES.NOT_READY, `${named} has not been through upload_input. Once the file is sent, call upload_input with its upload_id, then publish.`, details);
+    case 'consuming':
+    case 'consumed':
+      return toolFailure('CONFLICT', `${named} was already used by a post or a run, and a staged file is used once. Stage the file again to publish it.`, details);
+    default:
+      return toolFailure(MCP_ERROR_CODES.NOT_FOUND, `${named} is no longer staged: it lapsed or was removed. Stage the file again, then publish.`, details);
+  }
+}
+
+/**
+ * `publish_post` with `uploads`: a post of media made elsewhere, from files the agent staged. It
+ * goes through the composer's own create with the form the composer page sends, so the title and
+ * text rules, the post limit, the ownership of every staged path, the consumption of each staged
+ * file and the media processing are the web's. What this adds: Made with is required and never
+ * Magicbooklet's own name, the agent's daily cap on public posts applies as it does to a
+ * creation, and the post's id is derived from the creator and the staged paths, so a publish
+ * repeated after a lost answer finds its post instead of making a second.
+ */
+async function publishUploads(
+  args: PublishPostArgs & { uploads: NonNullable<PublishPostArgs['uploads']> },
+  context: McpToolContext,
+): Promise<CallToolResult> {
+  const { services } = context;
+  const admin = context.createAdminSupabase();
+  const invalid = (field: string, message: string) => (
+    toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { [field]: message } })
+  );
+
+  if (args.allow_remixes !== undefined) {
+    return invalid('allow_remixes', 'allow_remixes goes with generation_id: a post made from uploads has no recipe to remix. Leave it out.');
+  }
+  if (!args.title) {
+    return invalid('title', 'title is required with uploads: name the post, in the person\'s own words where they gave any.');
+  }
+  if (!args.made_with || args.made_with.length === 0) {
+    return invalid('made_with', 'made_with is required with uploads: name the tool that made the media, and its model where it has one. Ask the person if you do not know.');
+  }
+  const madeWithRefusal = refuseAgentMadeWith(args.made_with);
+  if (madeWithRefusal) return invalid('made_with', madeWithRefusal);
+  const storagePaths = args.uploads.map((upload) => upload.storage_path.trim());
+  if (storagePaths.length === 0 || storagePaths.length > MAX_POST_MEDIA_ITEMS) {
+    return invalid('uploads', `A post takes 1 to ${MAX_POST_MEDIA_ITEMS} uploads.`);
+  }
+  if (new Set(storagePaths).size !== storagePaths.length) {
+    return invalid('uploads', 'uploads names the same staged file twice; each file goes in once.');
+  }
+
+  const postId = agentUploadPostId(context.userId, storagePaths);
+  const url = postUrl(context.siteOrigin, postId);
+  const read = await services.readPostForAgent(admin, { postId, viewerUserId: context.userId });
+  if (!read.ok && read.code === 'UNAVAILABLE') {
+    return toolFailure(
+      MCP_ERROR_CODES.UNAVAILABLE,
+      'Whether these uploads are already published could not be read right now. Nothing was published; try again in a moment.',
+    );
+  }
+
+  if (read.ok && read.post.isOwn) {
+    // A publish of these uploads was made before: the post stands, and only an explicit, different
+    // visibility changes it, through the composer's own save (the creation path's republish needs a
+    // creation behind the post).
+    const existing = read.post;
+    if (!args.visibility || args.visibility === existing.visibility) {
+      return toolSuccess(
+        [
+          `These uploads are already published as post ${postId} (${describeExistingState(existing)}): ${url}. Nothing was changed.`,
+          existing.state === 'private' ? 'Publish again with the same uploads and visibility public to make it public.' : '',
+        ].filter(Boolean).join(' '),
+        { post_id: postId, post_url: url, visibility: existing.visibility, state: existing.state, already_published: true, visibility_changed: false, source: 'upload' },
+      );
+    }
+    const limited = await refusePublishOverLimit(context, args.visibility === 'public');
+    if (limited) return limited;
+    const result = await services.updateOwnerPostForRoute({
+      adminSupabase: admin,
+      ownerUserId: context.userId,
+      postId,
+      body: { visibility: args.visibility },
+      runAfterResponse: context.runAfterResponse,
+    });
+    if (!result.ok) return uploadPublishRefusal(result);
+    const nowPublic = result.body.visibility === 'public';
+    return toolSuccess(
+      `Post ${postId} is now ${result.body.visibility}: ${url}.${nowPublic ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
+      {
+        post_id: postId,
+        post_url: url,
+        visibility: result.body.visibility,
+        state: nowPublic ? 'live' : 'private',
+        already_published: true,
+        visibility_changed: true,
+        source: 'upload',
+      },
+    );
+  }
+
+  const staged = await services.readAgentStagedUploads(admin, { userId: context.userId, storagePaths });
+  if (!staged.ok) {
+    return toolFailure(
+      MCP_ERROR_CODES.UNAVAILABLE,
+      'The staged uploads could not be read right now. Nothing was published; try again in a moment.',
+    );
+  }
+  for (const [index, storagePath] of storagePaths.entries()) {
+    const refusal = refuseStagedUpload(staged.uploads.get(storagePath), index, storagePath);
+    if (refusal) return refusal;
+  }
+
+  const visibility = args.visibility ?? 'public';
+  const limited = await refusePublishOverLimit(context, visibility === 'public');
+  if (limited) return limited;
+  const formData = buildAgentUploadPublishFormData({
+    title: args.title,
+    description: args.description,
+    body: args.body,
+    category: args.category,
+    visibility,
+    isNsfw: args.is_nsfw,
+    madeWith: args.made_with,
+    uploads: storagePaths.map((storagePath) => {
+      const upload = staged.uploads.get(storagePath);
+      // The type the server recorded for the staged file, never the agent's word for it.
+      return { storagePath, contentType: upload?.kind === 'staged' ? upload.contentType : null };
+    }),
+  });
+  const result = await services.createOwnerPostForRoute({
+    adminSupabase: admin,
+    ownerUserId: context.userId,
+    readFormData: async () => formData,
+    createPostId: () => postId,
+  });
+  if (!result.ok) return uploadPublishRefusal(result);
+  const isPublic = result.body.visibility === 'public';
+  const files = `${storagePaths.length} upload${storagePaths.length === 1 ? '' : 's'}`;
+  return toolSuccess(
+    [
+      isPublic
+        ? `Published ${files} as post ${postId}: ${url}. It is public now; anyone can see it, and it goes through moderation as any post does.`
+        : `Saved ${files} as private post ${postId}: ${url}. Only the creator sees it; publish again with the same uploads and visibility public to make it public.`,
+      'Keep this post_id: list_creations lists creations, not posts made from uploads. get_post reads it and delete_post removes it.',
+      'Give the person the link.',
+    ].join(' '),
+    {
+      post_id: postId,
+      post_url: url,
+      visibility: result.body.visibility,
+      state: isPublic ? 'live' : 'private',
+      already_published: false,
+      visibility_changed: false,
+      source: 'upload',
+      media_count: storagePaths.length,
+      recipe_included: false,
+    },
+  );
+}
+
 const publishPostTool = defineTool({
   name: 'publish_post',
-  title: 'Publish a creation as a post',
+  title: 'Publish a post',
   description: [
-    'Publish one of the creator\'s finished creations as a post on their profile and in the Magicbooklet showcase.',
+    'Publish a post on the creator\'s profile and in the Magicbooklet showcase, from one of two sources. generation_id: one of the creator\'s finished creations made here. uploads: media made elsewhere (another tool, the person\'s own files), as 1 to 5 pictures or clips you staged with upload_input. Give exactly one.',
     'The post is public at once (visibility public, the default): anyone can see it, and it enters the feed and the moderation queue as any post does. Pass visibility private instead to keep it on the creator\'s profile, visible to them alone, which they can make public later. Tell the person before you publish, and give them post_url after.',
-    `Only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); get_generation says when a run has succeeded. Give a title of at least 6 characters, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
+    `With generation_id, only the creator's own succeeded creation publishes (NOT_FOUND for any other creation, NOT_READY for a run still going or a creation its creator archived); get_generation says when a run has succeeded. Give a title of at least 6 characters, or leave it out for the title the web suggests from the creation; description, body (the post's text) and category are optional.`,
     'allow_remixes (default true) publishes the creation\'s recipe with the post, free, so others can remix it: its exact prompt and the saved inputs it may share. False posts the media alone, with no recipe.',
-    `Publishing the same creation again returns its existing post with already_published true and changes nothing, unless visibility is given and differs, which changes the post's visibility. Public posts by an agent are capped at ${AGENT_PUBLISH_RATE_LIMIT.limit} per creator per UTC day, counting publications, not refused attempts (RATE_LIMITED says when the next is allowed).`,
+    'With uploads, title is required and so is made_with, which names what made the media (the tool, and its model where it has one) and is shown on the post as Made with: never Magic Booklet, whose own media is published with generation_id. Each upload is the storage_path upload_input answered, and is spent by the post. The answer\'s post_id is the only handle on such a post (list_creations lists creations), so keep it.',
+    `Publishing the same creation, or the same uploads, again returns the existing post with already_published true and changes nothing, unless visibility is given and differs, which changes the post's visibility. Public posts by an agent are capped at ${AGENT_PUBLISH_RATE_LIMIT.limit} per creator per UTC day, counting publications, not refused attempts (RATE_LIMITED says when the next is allowed).`,
   ].join(' '),
   // Open world: the post is seen by everyone, outside the agent's conversation.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  inputSchema: z.object({
-    generation_id: GENERATION_ID,
-    title: z.string().trim().min(1).max(TITLE_MAX_LENGTH).optional().describe(`The post's title, at most ${TITLE_MAX_LENGTH} characters; 6 or more for a post with a recipe. Left out, the creation's own title is used, else the title the web's Publish suggests from its prompt.`),
-    description: z.string().trim().max(DESCRIPTION_MAX_LENGTH).optional().describe('A short description under the title.'),
-    body: z.string().trim().max(BODY_MAX_LENGTH).optional().describe('The post\'s text, shown with the media.'),
-    category: z.enum(['image', 'video']).optional().describe('How the post is filed; left out, the creation decides.'),
-    visibility: PUBLISH_VISIBILITY.optional().describe('public (the default for a new post) or private. On a post that already exists, given, it changes the visibility; left out, the post stays as it is.'),
-    is_nsfw: z.boolean().optional().describe('Mark the post mature: it stays covered until a viewer who allows mature content reveals it.'),
-    allow_remixes: z.boolean().optional().describe('Default true: the post carries the creation\'s free recipe (its exact prompt and the saved inputs it may share), so others can remix it. False posts the media alone.'),
-  }),
+  inputSchema: PUBLISH_POST_SCHEMA,
   async handle(args, context) {
+    if ((args.generation_id === undefined) === (args.uploads === undefined)) {
+      const message = 'Give exactly one of generation_id (a creation made here) or uploads (files staged with upload_input).';
+      return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { generation_id: message } });
+    }
+    if (args.uploads !== undefined) return publishUploads({ ...args, uploads: args.uploads }, context);
+    if (args.made_with !== undefined) {
+      const message = 'made_with goes with uploads. A creation\'s Made with is fixed by the run that made it; leave made_with out.';
+      return toolFailure(MCP_ERROR_CODES.INVALID_REQUEST, message, { field_errors: { made_with: message } });
+    }
+    const generationId = args.generation_id as string;
     const { services } = context;
     const admin = context.createAdminSupabase();
     const notFound = () => toolFailure(
       MCP_ERROR_CODES.NOT_FOUND,
-      `No creation ${args.generation_id} exists for this creator. list_creations lists theirs.`,
-      { generation_id: args.generation_id },
+      `No creation ${generationId} exists for this creator. list_creations lists theirs.`,
+      { generation_id: generationId },
     );
-    const creation = await services.readCreationForPublish(admin, { generationId: args.generation_id, userId: context.userId });
+    const creation = await services.readCreationForPublish(admin, { generationId, userId: context.userId });
     // A missing creation, another creator's, and one an operator removed answer alike: nothing
     // about what exists under an id that is not the caller's to publish.
     if (!creation || creation.moderationRemovedAt) return notFound();
@@ -1261,15 +1595,15 @@ const publishPostTool = defineTool({
     if (creation.archivedAt) {
       return toolFailure(
         MCP_ERROR_CODES.NOT_READY,
-        `Creation ${args.generation_id} is archived; the creator restores it on the website before it can be published.`,
-        { generation_id: args.generation_id, status: 'archived' },
+        `Creation ${generationId} is archived; the creator restores it on the website before it can be published.`,
+        { generation_id: generationId, status: 'archived' },
       );
     }
     if (creation.status !== 'succeeded') {
       return toolFailure(
         MCP_ERROR_CODES.NOT_READY,
-        `Creation ${args.generation_id} is ${creation.status}, not succeeded. Call get_generation with wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} until it has, then publish.`,
-        { generation_id: args.generation_id, status: creation.status },
+        `Creation ${generationId} is ${creation.status}, not succeeded. Call get_generation with wait_seconds ${MCP_GENERATION_WAIT_SUGGESTED_SECONDS} until it has, then publish.`,
+        { generation_id: generationId, status: creation.status },
       );
     }
 
@@ -1286,16 +1620,15 @@ const publishPostTool = defineTool({
       const existing = creation.post;
       const url = postUrl(context.siteOrigin, existing.id);
       if (!args.visibility || args.visibility === existing.visibility) {
-        const state = existing.state === 'live' ? 'live, public' : existing.state === 'private' ? 'private' : `${existing.visibility}, but ${existing.state}`;
         return toolSuccess(
-          `Creation ${args.generation_id} is already published as post ${existing.id} (${state}): ${url}. Nothing was changed; its text and recipe stay as the creator left them.`,
+          `Creation ${generationId} is already published as post ${existing.id} (${describeExistingState(existing)}): ${url}. Nothing was changed; its text and recipe stay as the creator left them.`,
           { post_id: existing.id, post_url: url, visibility: existing.visibility, state: existing.state, already_published: true, visibility_changed: false },
         );
       }
       // A visibility change alone: the service republishes the stored post as it is.
       const limited = await refusePublishOverLimit(context, args.visibility === 'public');
       if (limited) return limited;
-      const result = await makePost({ generationId: args.generation_id, visibility: args.visibility });
+      const result = await makePost({ generationId, visibility: args.visibility });
       if (!result.ok) return publishRefusal(result);
       return toolSuccess(
         `Post ${existing.id} is now ${result.body.visibility}: ${url}.${result.body.visibility === 'public' ? ' Anyone can see it.' : ' Only the creator sees it.'}`,
@@ -1325,7 +1658,7 @@ const publishPostTool = defineTool({
     const limited = await refusePublishOverLimit(context, visibility === 'public');
     if (limited) return limited;
     const result = await makePost(buildAgentPublishRequest({
-      generationId: args.generation_id,
+      generationId,
       title,
       description: args.description,
       body: args.body,
@@ -1342,8 +1675,8 @@ const publishPostTool = defineTool({
     return toolSuccess(
       [
         result.body.visibility === 'public'
-          ? `Published creation ${args.generation_id} as post ${postId}: ${url}. It is public now; anyone can see it, and it goes through moderation as any post does.`
-          : `Saved creation ${args.generation_id} as private post ${postId}: ${url}. Only the creator sees it; publish again with visibility public to make it public.`,
+          ? `Published creation ${generationId} as post ${postId}: ${url}. It is public now; anyone can see it, and it goes through moderation as any post does.`
+          : `Saved creation ${generationId} as private post ${postId}: ${url}. Only the creator sees it; publish again with visibility public to make it public.`,
         recipeIncluded ? 'Its free recipe (the exact prompt) is on the post, so others can remix it.' : 'It carries no recipe.',
         'Give the person the link.',
       ].join(' '),
@@ -1364,11 +1697,19 @@ const publishPostTool = defineTool({
   },
   // The audit row: which answer this was, and the post only where the agent made or changed one,
   // so the daily cap counts public publications and moderation lists no post a creator published
-  // by hand (`agent-tool-calls.ts`).
+  // by hand (`agent-tool-calls.ts`). A creation's existing post may be the creator's own doing,
+  // so an unchanged republish of it names no post. A post made from uploads has an id only this
+  // tool derives, so it is an agent's whichever call finds it: an unchanged repeat still names
+  // it, which keeps it on moderation's list when the call that made it never wrote its row (an
+  // answer lost to a timeout is exactly when a publish is repeated).
   audit(structured) {
     const alreadyPublished = structured.already_published === true;
     const changed = structured.visibility_changed === true;
-    if (alreadyPublished && !changed) return { code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId: null };
+    if (alreadyPublished && !changed) {
+      return structured.source === 'upload'
+        ? { code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED }
+        : { code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId: null };
+    }
     if (structured.visibility === 'public') return { code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC };
     return { code: changed ? AGENT_PUBLISH_RECORD_CODES.MADE_PRIVATE : AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PRIVATE };
   },
@@ -1381,6 +1722,7 @@ const getPostTool = defineTool({
     'Read one post by post_id: the creator\'s own in any state, or anyone\'s while it is live.',
     'Returns its state (live, private, archived, hidden by moderation, or removed), post_url, title, visibility, whether remixes are allowed, and the counts the post page shows (saves, comments, remixes, shares).',
     'Call it after publish_post to confirm a post or before delete_post. A post that is not the creator\'s and not live answers NOT_FOUND.',
+    'generation_id names the creation behind the post; it is null for a post made from uploads, which list_creations does not list.',
   ].join(' '),
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: z.object({ post_id: POST_ID }),
@@ -1390,7 +1732,7 @@ const getPostTool = defineTool({
     const read = await context.services.readPostForAgent(context.createAdminSupabase(), { postId, viewerUserId: context.userId });
     if (!read.ok) {
       return read.code === 'NOT_FOUND'
-        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is live or the creator's. list_creations names the creator's posts.`, { post_id: postId })
+        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is live or the creator's. list_creations names the posts of the creator's creations; a post made from uploads is known by the post_id publish_post gave.`, { post_id: postId })
         : toolFailure(MCP_ERROR_CODES.UNAVAILABLE, 'The post could not be read right now. Try again in a moment.');
     }
     const { post } = read;
@@ -1400,7 +1742,8 @@ const getPostTool = defineTool({
         `Post ${post.postId}${post.title ? ` "${post.title}"` : ''} is ${describeState(post)}: ${postUrl(context.siteOrigin, post.postId)}.`,
         `${counts.saves} save${counts.saves === 1 ? '' : 's'}, ${counts.comments} comment${counts.comments === 1 ? '' : 's'}, ${counts.remixes} remix${counts.remixes === 1 ? '' : 'es'}, ${counts.shares} share${counts.shares === 1 ? '' : 's'}.`,
         post.isOwn ? 'It is the creator\'s own.' : 'It is another creator\'s.',
-      ].join(' '),
+        post.generationId ? '' : 'It was made from uploaded media, not from a creation here.',
+      ].filter(Boolean).join(' '),
       postView(post, context),
     );
   },
@@ -1410,7 +1753,7 @@ const deletePostTool = defineTool({
   name: 'delete_post',
   title: 'Delete a post',
   description: [
-    'Delete one of the creator\'s own posts for good: it leaves their profile, the showcase and the feed, and its public media is removed; the creation itself stays in their library.',
+    'Delete one of the creator\'s own posts for good: it leaves their profile, the showcase and the feed, and its public media is removed; the creation itself stays in their library. A post made from uploads has no creation behind it, so its media goes with it.',
     'Confirm with the person first; it cannot be undone. Another creator\'s post is refused (NOT_OWNER).',
     'When people have unlocked the post\'s recipe, the post is not deleted but taken off every public surface, and the buyers keep what they unlocked: the answer is POST_HAS_BUYERS until you call again with force true, after telling the person.',
   ].join(' '),
@@ -1425,7 +1768,7 @@ const deletePostTool = defineTool({
     const read = await services.readPostForAgent(admin, { postId, viewerUserId: context.userId });
     if (!read.ok) {
       return read.code === 'NOT_FOUND'
-        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is the creator's. list_creations names theirs.`, { post_id: postId })
+        ? toolFailure(MCP_ERROR_CODES.NOT_FOUND, `No post ${postId} is the creator's. list_creations names the posts of their creations; a post made from uploads is known by the post_id publish_post gave.`, { post_id: postId })
         : toolFailure(MCP_ERROR_CODES.UNAVAILABLE, 'The post could not be read right now. Try again in a moment.');
     }
     if (!read.post.isOwn) {
@@ -1445,10 +1788,14 @@ const deletePostTool = defineTool({
       return toolFailure(MCP_ERROR_CODES.UNAVAILABLE, `${result.body.error} Try again in a moment.`);
     }
     const tombstoned = result.body.tombstoned === true;
+    // A post made from uploads has no creation behind it: its media was the post's alone.
+    const whatStays = read.post.generationId
+      ? 'The creation stays in the creator\'s library.'
+      : 'It was made from uploaded media, which is removed with it.';
     return toolSuccess(
       tombstoned
-        ? `Post ${postId} is off every public surface; the people who unlocked its recipe keep their copy. The creation stays in the creator's library.`
-        : `Post ${postId} is deleted. The creation stays in the creator's library.`,
+        ? `Post ${postId} is off every public surface; the people who unlocked its recipe keep their copy. ${whatStays}`
+        : `Post ${postId} is deleted. ${whatStays}`,
       { post_id: postId, deleted: true, tombstoned },
     );
   },
@@ -1462,6 +1809,7 @@ export const MCP_TOOLS: ReadonlyArray<McpToolDefinition> = [
   getModelTool,
   quoteGenerationTool,
   uploadInputTool,
+  requestUploadTool,
   createMediaTool,
   getGenerationTool,
   listCreationsTool,
@@ -1472,9 +1820,10 @@ export const MCP_TOOLS: ReadonlyArray<McpToolDefinition> = [
 ];
 
 export const MCP_SERVER_INSTRUCTIONS = [
-  'Magicbooklet makes AI images, videos and motion clips with the signed-in creator\'s credits, and publishes them to the creator\'s profile.',
+  'Magicbooklet makes AI images, videos and motion clips with the signed-in creator\'s credits, and publishes them, or media the creator made elsewhere, to the creator\'s profile.',
   'Flow for a creation: list_models → get_model → (upload_input for the person\'s own files) → quote_generation → tell the person the price → create_media with expected_cost_credits → get_generation with wait_seconds until settled.',
   'Flow for a post: once get_generation says succeeded, publish_post with the generation_id and a title. The post is public at once unless visibility is private; tell the person before publishing and give them post_url after. get_post reads a post, delete_post removes one of the creator\'s own.',
+  'Flow for media made elsewhere (another tool, the person\'s own files): stage each picture or clip with upload_input, by url, or for a file on your machine request_upload → run the curl command it gives → upload_input with the upload_id; then publish_post with uploads, a title and made_with naming what made the media. Ask the person before posting it publicly, and keep the post_id.',
   'Every run spends the creator\'s credits; a failed run refunds them. Never promise a result before get_generation says succeeded.',
 ].join(' ');
 
@@ -1548,7 +1897,7 @@ export function createMcpServer(context: McpToolContext): McpServer {
       version: MCP_SERVER_VERSION,
       title: 'Magicbooklet',
       websiteUrl: context.siteOrigin,
-      description: 'Create AI media with your Magicbooklet credits and publish it to your profile.',
+      description: 'Create AI media with your Magicbooklet credits, and publish it, or media you made elsewhere, to your profile.',
     },
     { instructions: MCP_SERVER_INSTRUCTIONS },
   );

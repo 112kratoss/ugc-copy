@@ -2,8 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
+import type { AgentStagedUpload } from '@/lib/agent-input-upload';
 import type { AgentPostView } from '@/lib/agent-post-read';
 import { AGENT_PUBLISH_RECORD_CODES } from '@/lib/agent-tool-calls';
+import { AGENT_MADE_WITH_APP_REFUSAL, agentUploadPostId } from '@/lib/agent-upload-publish-request';
 import {
   AGENT_PUBLISH_RATE_LIMIT,
   AGENT_UPLOAD_INPUT_RATE_LIMIT,
@@ -14,6 +16,7 @@ import { getCreationPostTitleSuggestion } from '@/lib/creation-post-title';
 import {
   MCP_GENERATION_POLL_INTERVAL_MS,
   MCP_SERVER_INSTRUCTIONS,
+  MCP_SERVER_VERSION,
   MCP_TOOLS,
   createMcpServer,
   registerMcpTools,
@@ -31,11 +34,19 @@ import {
   toolFailureCode,
   toolSuccess,
 } from '@/lib/mcp-tool-results';
+import { preparePostCreationSubmission } from '@/lib/post-creation-submission-service';
+import { MAX_POST_MEDIA_ITEMS } from '@/lib/post-media';
 
 const SITE = 'https://magicbooklet.test';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
+const OTHER_USER_ID = '99999999-9999-4999-8999-999999999999';
 const GENERATION_ID = '22222222-2222-4222-8222-222222222222';
 const POST_ID = '33333333-3333-4333-8333-333333333333';
+const UPLOAD_ID = '55555555-5555-4555-8555-555555555555';
+/** Two files an agent staged with upload_input: the paths its answers named. */
+const STAGED_PICTURE = `uploads/${USER_ID}/${UPLOAD_ID}-paper-fox.png`;
+const STAGED_CLIP = `uploads/${USER_ID}/66666666-6666-4666-8666-666666666666-fox-run.mp4`;
+const UPLOAD_URL = `https://project.supabase.test/storage/v1/object/upload/sign/${STAGED_PICTURE}?token=signed`;
 
 const CURRENT = {
   transportVersion: 1 as const,
@@ -210,6 +221,36 @@ function harness(overrides: Partial<McpToolServices> = {}) {
       },
     })) as unknown as McpToolServices['enhancePromptForUser'],
     publishGenerationToShowcaseForRoute: vi.fn(async () => published()) as unknown as McpToolServices['publishGenerationToShowcaseForRoute'],
+    // The composer's create, as it answers: the post under the id it was given, at the visibility the form asked for.
+    createOwnerPostForRoute: vi.fn(async ({ readFormData, createPostId }: { readFormData: () => Promise<FormData>; createPostId?: () => string }) => {
+      const form = await readFormData();
+      const postId = createPostId ? createPostId() : POST_ID;
+      const visibility = form.get('visibility') === 'private' ? 'private' as const : 'public' as const;
+      return {
+        ok: true as const,
+        body: {
+          success: true as const,
+          postId,
+          visibility,
+          showcasePath: visibility === 'private' ? null : `/showcase/${postId}`,
+          ownerPath: `/post/${postId}/edit`,
+          resourceBundlePath: `/post/${postId}/edit#recipe`,
+          resourceBundleStatus: null,
+        },
+      };
+    }) as unknown as McpToolServices['createOwnerPostForRoute'],
+    updateOwnerPostForRoute: vi.fn(async ({ postId, body }: { postId: string; body: { visibility?: unknown } }) => ({
+      ok: true as const,
+      body: {
+        success: true as const,
+        postId,
+        visibility: body.visibility === 'private' ? 'private' as const : 'public' as const,
+        showcasePath: body.visibility === 'private' ? null : `/showcase/${postId}`,
+        ownerPath: `/post/${postId}/edit`,
+        resourceBundlePath: `/post/${postId}/edit#recipe`,
+        resourceBundleStatus: null,
+      },
+    })) as unknown as McpToolServices['updateOwnerPostForRoute'],
     deleteOwnerPostForRoute: vi.fn(async () => ({ ok: true as const, body: { success: true as const, deleted: true as const } })) as unknown as McpToolServices['deleteOwnerPostForRoute'],
     readPostForAgent: vi.fn(async () => ({ ok: true as const, post: post() })) as unknown as McpToolServices['readPostForAgent'],
     stageAgentInput: vi.fn(async () => ({
@@ -221,6 +262,26 @@ function harness(overrides: Partial<McpToolServices> = {}) {
       expiresInSeconds: 3600,
       sourceUrl: 'https://cdn.example.com/a.jpg',
     })) as unknown as McpToolServices['stageAgentInput'],
+    requestAgentUpload: vi.fn(async () => ({
+      ok: true as const,
+      uploadId: UPLOAD_ID,
+      uploadUrl: UPLOAD_URL,
+      headers: { 'content-type': 'image/png', 'x-upsert': 'false' as const, 'cache-control': 'max-age=86400' },
+      storagePath: STAGED_PICTURE,
+      kind: 'image' as const,
+      mimeType: 'image/png',
+      sizeBytes: 204_800,
+      expiresInSeconds: 7200,
+      maxBytes: 25 * 1024 * 1024,
+    })) as unknown as McpToolServices['requestAgentUpload'],
+    // Every path named is a file the caller staged through upload_input and has not used.
+    readAgentStagedUploads: vi.fn(async (_admin: unknown, { storagePaths }: { storagePaths: readonly string[] }) => ({
+      ok: true as const,
+      uploads: new Map<string, AgentStagedUpload>(storagePaths.map((storagePath) => [
+        storagePath,
+        { kind: 'staged', status: 'finalized', contentType: storagePath.endsWith('.mp4') ? 'video/mp4' : 'image/png' },
+      ])),
+    })) as unknown as McpToolServices['readAgentStagedUploads'],
     fetchImageContentBlock: vi.fn(async () => null) as unknown as McpToolServices['fetchImageContentBlock'],
     enforceBackendRateLimit: vi.fn(async () => undefined) as unknown as McpToolServices['enforceBackendRateLimit'],
     readCreditBalance: vi.fn(async () => 100),
@@ -262,10 +323,13 @@ function rateLimit(retryAfterSeconds: number) {
 
 describe('MCP tool registry', () => {
   it('holds every tool to a title, a description written for an agent, annotations and a schema', () => {
+    // Twelve tools since phase 4 added request_upload, and the registry entry versions with them.
     expect(MCP_TOOLS.map((entry) => entry.name)).toEqual([
-      'list_models', 'get_model', 'quote_generation', 'upload_input', 'create_media', 'get_generation', 'list_creations',
+      'list_models', 'get_model', 'quote_generation', 'upload_input', 'request_upload', 'create_media', 'get_generation', 'list_creations',
       'publish_post', 'get_post', 'delete_post', 'enhance_prompt',
     ]);
+    expect(MCP_TOOLS).toHaveLength(12);
+    expect(MCP_SERVER_VERSION).toBe('1.2.0');
     for (const entry of MCP_TOOLS) {
       expect(entry.title.length, entry.name).toBeGreaterThan(3);
       // A description says when to call the tool and what to do with the answer, so it names
@@ -307,6 +371,41 @@ describe('MCP tool registry', () => {
     expect(tool('upload_input').description).toContain('create_media');
     expect(tool('delete_post').description).toMatch(/cannot be undone/u);
     expect(MCP_SERVER_INSTRUCTIONS).toContain('publish_post');
+
+    // A local file's upload is reserved here and sent by the agent itself: not read-only, nothing
+    // destroyed, and this server reaches nothing outside Magicbooklet for it.
+    expect(tool('request_upload').annotations).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false });
+    expect(tool('request_upload').description).toContain('25 MB for a picture, 50 MB for a clip, 50 MB for a track');
+    expect(tool('request_upload').description).toContain('upload_input with the upload_id');
+    // It does not overclaim for a client with no shell: that one stages by link.
+    expect(tool('request_upload').description).toMatch(/no shell stages by link instead: upload_input with url/u);
+    // A staged file feeds a run or becomes a post: said where an agent stages it and where it creates.
+    expect(tool('upload_input').description).toContain('create_media.inputs[]');
+    expect(tool('upload_input').description).toContain('publish_post.uploads[]');
+    expect(tool('upload_input').description).toContain('upload_id');
+    expect(tool('create_media').description).toContain('publish_post.uploads[]');
+    // A post has two sources, and one made from uploads says what made its media.
+    expect(tool('publish_post').description).toMatch(/generation_id: one of the creator's finished creations made here/u);
+    expect(tool('publish_post').description).toMatch(/uploads: media made elsewhere/u);
+    expect(tool('publish_post').description).toMatch(/made_with, which names what made the media/u);
+    expect(tool('publish_post').description).toMatch(/never Magic Booklet/u);
+    expect(tool('get_post').description).toContain('null for a post made from uploads');
+    expect(MCP_SERVER_INSTRUCTIONS).toContain('request_upload');
+    expect(MCP_SERVER_INSTRUCTIONS).toContain('made_with');
+
+    // The schema says the composer's own limits up front: one to five files, one to five tools.
+    const publish = tool('publish_post').inputSchema;
+    const upload = { storage_path: STAGED_PICTURE };
+    expect(publish.safeParse({ generation_id: GENERATION_ID }).success).toBe(true);
+    expect(publish.safeParse({ uploads: [upload], title: 'A paper fox', made_with: [{ tool: 'Midjourney', model: 'v7' }] }).success).toBe(true);
+    expect(publish.safeParse({ uploads: [] }).success).toBe(false);
+    expect(MAX_POST_MEDIA_ITEMS).toBe(5);
+    expect(publish.safeParse({ uploads: Array.from({ length: MAX_POST_MEDIA_ITEMS }, () => upload) }).success).toBe(true);
+    expect(publish.safeParse({ uploads: Array.from({ length: MAX_POST_MEDIA_ITEMS + 1 }, () => upload) }).success).toBe(false);
+    expect(publish.safeParse({ uploads: [upload], made_with: Array.from({ length: 6 }, () => ({ tool: 'Midjourney' })) }).success).toBe(false);
+    expect(publish.safeParse({ uploads: [upload], made_with: [{ tool: 'x'.repeat(81) }] }).success).toBe(false);
+    expect(tool('upload_input').inputSchema.safeParse({ upload_id: 'not-a-uuid' }).success).toBe(false);
+    expect(tool('upload_input').inputSchema.safeParse({ upload_id: UPLOAD_ID }).success).toBe(true);
   });
 
   it('registers each tool on the server with its title, description, schema and annotations', () => {
@@ -857,11 +956,67 @@ describe('upload_input', () => {
     expect(services.stageAgentInput).not.toHaveBeenCalled();
   });
 
+  it('stages a file the agent sent itself, by its upload_id, and says both things a staged file can become', async () => {
+    const sent = {
+      ok: true as const,
+      input: { url: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', storagePath: STAGED_PICTURE },
+      kind: 'image' as const,
+      bytes: 204_800,
+      mimeType: 'image/png',
+      expiresInSeconds: 3600,
+      sourceUrl: null,
+    };
+    const { context, services, admin } = harness({ stageAgentInput: vi.fn(async () => sent) as never });
+    const result = await tool('upload_input').handle({ upload_id: UPLOAD_ID }, context);
+    expect(result.isError).toBeUndefined();
+    expect(services.stageAgentInput).toHaveBeenCalledWith({ admin, userId: USER_ID, source: { uploadId: UPLOAD_ID } });
+    expect(structured(result)).toEqual({
+      input: { url: sent.input.url, storage_path: STAGED_PICTURE },
+      kind: 'image',
+      bytes: 204_800,
+      mime_type: 'image/png',
+      expires_in_seconds: 3600,
+      source_url: null,
+    });
+    // The same answer feeds a run or becomes a post.
+    expect(text(result)).toContain('create_media.inputs[]');
+    expect(text(result)).toContain('publish_post.uploads[]');
+    // Counted like the other sources, before anything is finalized.
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options)).toEqual([
+      { ...AGENT_UPLOAD_INPUT_RATE_LIMIT, key: USER_ID },
+    ]);
+
+    // A track feeds a run only: the answer does not offer a post.
+    const track = harness({ stageAgentInput: vi.fn(async () => ({ ...sent, kind: 'audio' as const, mimeType: 'audio/mpeg' })) as never });
+    const staged = text(await tool('upload_input').handle({ upload_id: UPLOAD_ID }, track.context));
+    expect(staged).toContain('A track feeds a run only');
+    expect(staged).not.toContain('publish_post.uploads[]');
+
+    // What the upload_id source refuses arrives under its own code, with its own next step.
+    const refusals: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ code: 'NOT_FOUND', message: 'No upload exists for this creator. request_upload gives an upload_id.' }, 'NOT_FOUND', /request_upload/u],
+      [{ code: 'CONFLICT', message: 'Upload is already used or being collected.' }, 'CONFLICT', /already used/u],
+      [{ code: 'UNSUPPORTED_MEDIA', message: 'The bytes are a track. It was removed.', details: { sniffed_kind: 'audio' } }, 'UNSUPPORTED_MEDIA', /removed/u],
+      [{ code: 'UPLOAD_FAILED', message: 'The uploaded file could not be read to check it.' }, 'UNAVAILABLE', /Try again/u],
+    ];
+    for (const [refusal, code, words] of refusals) {
+      const { context: other } = harness({ stageAgentInput: vi.fn(async () => ({ ok: false, ...refusal })) as never });
+      const refused = await tool('upload_input').handle({ upload_id: UPLOAD_ID }, other);
+      expect(toolFailureCode(refused), code).toBe(code);
+      expect(text(refused), code).toMatch(words);
+    }
+  });
+
   it('refuses neither or both sources, base64 without its type, and passes the staging codes on with the next step', async () => {
     const { context, services } = harness();
     expect(toolFailureCode(await tool('upload_input').handle({}, context))).toBe('INVALID_REQUEST');
     expect(toolFailureCode(await tool('upload_input').handle({ url: 'https://x/a.jpg', base64: 'AAAA', mime_type: 'image/png' }, context))).toBe('INVALID_REQUEST');
     expect(toolFailureCode(await tool('upload_input').handle({ base64: 'AAAA' }, context))).toBe('INVALID_REQUEST');
+    // Exactly one of the three: an upload_id beside either of the others is refused too.
+    const two = await tool('upload_input').handle({ url: 'https://x/a.jpg', upload_id: UPLOAD_ID }, context);
+    expect(toolFailureCode(two)).toBe('INVALID_REQUEST');
+    expect(text(two)).toContain('exactly one of url, base64 or upload_id');
+    expect(toolFailureCode(await tool('upload_input').handle({ base64: 'AAAA', mime_type: 'image/png', upload_id: UPLOAD_ID }, context))).toBe('INVALID_REQUEST');
     expect(services.stageAgentInput).not.toHaveBeenCalled();
     expect(services.enforceBackendRateLimit).not.toHaveBeenCalled();
     expect(tool('upload_input').inputSchema.safeParse({ url: 'not a url' }).success).toBe(false);
@@ -881,6 +1036,91 @@ describe('upload_input', () => {
       expect(toolFailureCode(result), code).toBe(code);
       expect(text(result), code).toMatch(words);
     }
+  });
+});
+
+describe('request_upload', () => {
+  const args = { file_name: 'paper-fox.png', mime_type: 'image/png', size_bytes: 204_800 };
+  const CURL = `curl -sS -X PUT -H 'content-type: image/png' -H 'x-upsert: false' -H 'cache-control: max-age=86400' --data-binary @FILE '${UPLOAD_URL}'`;
+
+  it('signs an upload for a local file and answers the URL, the headers and the one command that sends it', async () => {
+    const { context, services, admin } = harness();
+    const result = await tool('request_upload').handle(args, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({
+      upload_id: UPLOAD_ID,
+      upload_url: UPLOAD_URL,
+      method: 'PUT',
+      headers: { 'content-type': 'image/png', 'x-upsert': 'false', 'cache-control': 'max-age=86400' },
+      curl: CURL,
+      storage_path: STAGED_PICTURE,
+      kind: 'image',
+      mime_type: 'image/png',
+      size_bytes: 204_800,
+      expires_in_seconds: 7200,
+      max_bytes: 25 * 1024 * 1024,
+    });
+    // The text is the exact command on a line of its own, then the call that follows it.
+    const lines = text(result).split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain('FILE replaced by its path');
+    expect(lines[1]).toBe(CURL);
+    expect(lines[2]).toBe(`then call upload_input with this upload_id (${UPLOAD_ID}). The URL lasts 120 minutes and takes the file once.`);
+    expect(services.requestAgentUpload).toHaveBeenCalledWith({
+      admin,
+      userId: USER_ID,
+      request: { fileName: 'paper-fox.png', mimeType: 'image/png', sizeBytes: 204_800 },
+    });
+    // Counted against the account's upload limit, the one upload_input counts against.
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options)).toEqual([
+      { ...AGENT_UPLOAD_INPUT_RATE_LIMIT, key: USER_ID },
+    ]);
+  });
+
+  it('counts the call before anything is signed, and refuses one over the limit', async () => {
+    const order: string[] = [];
+    const counted = harness({
+      enforceBackendRateLimit: vi.fn(async () => { order.push('limit'); }) as never,
+      requestAgentUpload: vi.fn(async () => { order.push('sign'); return { ok: false as const, code: 'UPLOAD_FAILED' as const, message: 'x' }; }) as never,
+    });
+    await tool('request_upload').handle(args, counted.context);
+    expect(order).toEqual(['limit', 'sign']);
+
+    const { context, services } = harness({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(12); }) as never });
+    const result = await tool('request_upload').handle(args, context);
+    expect(toolFailureCode(result)).toBe('RATE_LIMITED');
+    expect(structured(result).error).toMatchObject({ retry_after_seconds: 12 });
+    expect(services.requestAgentUpload).not.toHaveBeenCalled();
+  });
+
+  it('passes the caps\' and the sign step\'s refusals on under stable codes', async () => {
+    const refusals: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ code: 'TOO_LARGE', message: 'The file is 30000000 bytes; a picture sent this way may be at most 26214400.', details: { bytes: 30_000_000, max_bytes: 26_214_400 } }, 'TOO_LARGE', /at most 26214400/u],
+      [{ code: 'UNSUPPORTED_MEDIA', message: 'text/html is not a picture, clip or track type Magicbooklet takes.', details: { mime_type: 'text/html' } }, 'UNSUPPORTED_MEDIA', /text\/html/u],
+      [{ code: 'RATE_LIMITED', message: 'Wait.', retryAfterSeconds: 42 }, 'RATE_LIMITED', /42 seconds/u],
+      [{ code: 'ACCOUNT_DELETION_IN_PROGRESS', message: 'Uploads are disabled because this account is being deleted.' }, 'ACCOUNT_DELETION_IN_PROGRESS', /being deleted/u],
+      [{ code: 'UPLOAD_FAILED', message: 'Failed to prepare media upload.' }, 'UNAVAILABLE', /Try again/u],
+    ];
+    for (const [refusal, code, words] of refusals) {
+      const { context } = harness({ requestAgentUpload: vi.fn(async () => ({ ok: false, ...refusal })) as never });
+      const result = await tool('request_upload').handle(args, context);
+      expect(toolFailureCode(result), code).toBe(code);
+      expect(text(result), code).toMatch(words);
+      // A refusal answers no URL to send anything to.
+      expect(JSON.stringify(result), code).not.toContain('upload_url');
+    }
+    const tooLarge = harness({ requestAgentUpload: vi.fn(async () => ({ ok: false, ...refusals[0][0] })) as never });
+    expect(structured(await tool('request_upload').handle(args, tooLarge.context)).error).toMatchObject({ max_bytes: 26_214_400 });
+  });
+
+  it('takes a name, a type and a whole, positive size', () => {
+    const schema = tool('request_upload').inputSchema;
+    expect(schema.safeParse(args).success).toBe(true);
+    expect(schema.safeParse({ ...args, size_bytes: 0 }).success).toBe(false);
+    expect(schema.safeParse({ ...args, size_bytes: 1.5 }).success).toBe(false);
+    expect(schema.safeParse({ ...args, file_name: '' }).success).toBe(false);
+    expect(schema.safeParse({ ...args, file_name: 'x'.repeat(201) }).success).toBe(false);
+    expect(schema.safeParse({ mime_type: 'image/png', size_bytes: 10 }).success).toBe(false);
   });
 });
 
@@ -1103,6 +1343,405 @@ describe('publish_post', () => {
   });
 });
 
+describe('publish_post with uploads', () => {
+  const args = {
+    uploads: [{ storage_path: STAGED_PICTURE }],
+    title: 'Paper-cut fox in a snowy forest',
+    made_with: [{ tool: 'Midjourney', model: 'v7' }],
+  };
+  /** The id the post of that one staged file gets, whichever call asks. */
+  const UPLOAD_POST_ID = agentUploadPostId(USER_ID, [STAGED_PICTURE]);
+  const UPLOAD_POST_URL = `${SITE}/showcase/${UPLOAD_POST_ID}`;
+
+  /** A harness in which no post exists yet under the id these uploads derive. */
+  function fresh(overrides: Partial<McpToolServices> = {}) {
+    return harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never, ...overrides });
+  }
+
+  /** A read that finds the post an earlier publish of these uploads made. */
+  function found(overrides: Partial<AgentPostView> = {}) {
+    return vi.fn(async () => ({ ok: true, post: post({ postId: UPLOAD_POST_ID, generationId: null, title: args.title, ...overrides }) })) as never;
+  }
+
+  function stagedAs(entry: AgentStagedUpload) {
+    return vi.fn(async (_admin: unknown, { storagePaths }: { storagePaths: readonly string[] }) => ({
+      ok: true as const,
+      uploads: new Map(storagePaths.map((storagePath) => [storagePath, entry])),
+    })) as never;
+  }
+
+  /** What the composer's create was called with, its form's fields as plain values. */
+  async function sent(services: McpToolServices, call = 0) {
+    const [input] = vi.mocked(services.createOwnerPostForRoute).mock.calls[call] as unknown as [
+      { adminSupabase: unknown; ownerUserId: string; readFormData: () => Promise<FormData>; createPostId: () => string },
+    ];
+    const json = new Set(['sourceTools', 'resourceBundle', 'mediaItems']);
+    const fields = Object.fromEntries(
+      [...(await input.readFormData()).entries()].map(([key, value]) => [key, json.has(key) ? JSON.parse(String(value)) : value]),
+    ) as Record<string, unknown>;
+    return { input, fields };
+  }
+
+  it('takes exactly one source, a creation or uploads, and made_with only with uploads', async () => {
+    const { context, services } = fresh();
+    const neither = await tool('publish_post').handle({ title: 'A paper fox' }, context);
+    expect(toolFailureCode(neither)).toBe('INVALID_REQUEST');
+    expect(text(neither)).toContain('exactly one of generation_id (a creation made here) or uploads (files staged with upload_input)');
+    const both = await tool('publish_post').handle({ ...args, generation_id: GENERATION_ID }, context);
+    expect(toolFailureCode(both)).toBe('INVALID_REQUEST');
+    expect(structured(both).error).toMatchObject({ field_errors: { generation_id: expect.any(String) } });
+
+    // A creation's Made with is fixed by its run: the argument is refused, not ignored.
+    const fixed = await tool('publish_post').handle({ generation_id: GENERATION_ID, made_with: [{ tool: 'Midjourney' }] }, context);
+    expect(toolFailureCode(fixed)).toBe('INVALID_REQUEST');
+    expect(structured(fixed).error).toMatchObject({ field_errors: { made_with: expect.stringContaining('made_with goes with uploads') } });
+
+    for (const service of [
+      services.readCreationForPublish, services.readPostForAgent, services.readAgentStagedUploads, services.enforceBackendRateLimit,
+      services.publishGenerationToShowcaseForRoute, services.createOwnerPostForRoute,
+    ]) {
+      expect(service).not.toHaveBeenCalled();
+    }
+  });
+
+  it('requires a title and made_with, and refuses allow_remixes, Magicbooklet\'s own name and what the composer\'s validator refuses, before anything is read or spent', async () => {
+    const { context, services } = fresh();
+    const cases: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ ...args, title: undefined }, 'title', /title is required with uploads/u],
+      [{ ...args, made_with: undefined }, 'made_with', /made_with is required with uploads/u],
+      [{ ...args, made_with: [] }, 'made_with', /made_with is required with uploads/u],
+      // An upload has no recipe: the switch is refused whichever way it is set.
+      [{ ...args, allow_remixes: true }, 'allow_remixes', /no recipe to remix/u],
+      [{ ...args, allow_remixes: false }, 'allow_remixes', /no recipe to remix/u],
+      // Media made here is published from its creation.
+      [{ ...args, made_with: [{ tool: 'Magic Booklet' }] }, 'made_with', /published with generation_id/u],
+      [{ ...args, made_with: [{ tool: 'Midjourney' }, { tool: 'magicbooklet', model: 'Seedance 2' }] }, 'made_with', /Magic Booklet is not a name for made_with/u],
+      [{ ...args, made_with: [{ tool: 'magic-booklet' }] }, 'made_with', /published with generation_id/u],
+      // The composer's validator, in its own words.
+      [{ ...args, made_with: [{ tool: 'Custom' }] }, 'made_with', /The source tool name "Custom" is reserved\./u],
+      [{ ...args, made_with: [{ tool: 'x'.repeat(81) }] }, 'made_with', /Source tool names must be 80 characters or fewer\./u],
+      [{ ...args, made_with: [{ tool: 'Midjourney', model: 'unknown' }] }, 'made_with', /The source model name "unknown" is reserved\./u],
+      [{ ...args, made_with: Array.from({ length: 6 }, (_, index) => ({ tool: `Tool ${index}` })) }, 'made_with', /A post can include at most 5 source tools\./u],
+      [{ ...args, uploads: [{ storage_path: STAGED_PICTURE }, { storage_path: ` ${STAGED_PICTURE} ` }] }, 'uploads', /same staged file twice/u],
+      [{ ...args, uploads: Array.from({ length: 6 }, (_, index) => ({ storage_path: `uploads/${USER_ID}/file-${index}.png` })) }, 'uploads', /1 to 5 uploads/u],
+    ];
+    for (const [input, field, words] of cases) {
+      const result = await tool('publish_post').handle(input as never, context);
+      expect(toolFailureCode(result), String(words)).toBe('INVALID_REQUEST');
+      expect(text(result), String(words)).toMatch(words);
+      expect((structured(result).error as { field_errors: Record<string, string> }).field_errors[field], String(words)).toMatch(words);
+    }
+    expect(AGENT_MADE_WITH_APP_REFUSAL).toMatch(/published with generation_id/u);
+    for (const service of [
+      services.readPostForAgent, services.readAgentStagedUploads, services.enforceBackendRateLimit,
+      services.countAgentPublicPublishesSince, services.createOwnerPostForRoute, services.updateOwnerPostForRoute,
+    ]) {
+      expect(service).not.toHaveBeenCalled();
+    }
+  });
+
+  it('publishes staged files live through the composer\'s own create, with the form the composer page sends, under the post\'s derived id and both limits', async () => {
+    const { context, services, admin } = fresh();
+    const result = await tool('publish_post').handle({
+      ...args,
+      uploads: [{ storage_path: STAGED_PICTURE }, { storage_path: STAGED_CLIP }],
+      description: 'Cut from one sheet.',
+      body: 'Made over a weekend.',
+    }, context);
+    const postId = agentUploadPostId(USER_ID, [STAGED_PICTURE, STAGED_CLIP]);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({
+      post_id: postId,
+      post_url: `${SITE}/showcase/${postId}`,
+      visibility: 'public',
+      state: 'live',
+      already_published: false,
+      visibility_changed: false,
+      source: 'upload',
+      media_count: 2,
+      recipe_included: false,
+    });
+    expect(text(result)).toMatch(/Published 2 uploads as post .* It is public now/u);
+    expect(text(result)).toContain(`${SITE}/showcase/${postId}`);
+    // The post's id is its only handle: the library read does not list it.
+    expect(text(result)).toContain('Keep this post_id: list_creations lists creations, not posts made from uploads.');
+
+    const { input, fields } = await sent(services);
+    expect(input.adminSupabase).toBe(admin);
+    expect(input.ownerUserId).toBe(USER_ID);
+    // The id the composer creates the post under is derived, not random: a repeat finds this post.
+    expect(input.createPostId()).toBe(postId);
+    expect(fields).toEqual({
+      title: 'Paper-cut fox in a snowy forest',
+      body: 'Made over a weekend.',
+      description: 'Cut from one sheet.',
+      sourceTool: 'Midjourney',
+      sourceToolSlug: 'midjourney',
+      sourceTools: [{ toolLabel: 'Midjourney', toolSlug: 'midjourney', modelLabel: 'v7', modelSlug: 'v7' }],
+      visibility: 'public',
+      isNsfw: 'false',
+      postFormat: 'mixed',
+      resourceBundle: { accessMode: 'none' },
+      // Each file's type is the one the server recorded when it was staged, never the agent's word.
+      mediaItems: [
+        { storagePath: STAGED_PICTURE, originalName: 'paper-fox.png', contentType: 'image/png' },
+        { storagePath: STAGED_CLIP, originalName: 'fox-run.mp4', contentType: 'video/mp4' },
+      ],
+      category: 'image',
+    });
+    expect(services.readPostForAgent).toHaveBeenCalledWith(admin, { postId, viewerUserId: USER_ID });
+    expect(services.readAgentStagedUploads).toHaveBeenCalledWith(admin, { userId: USER_ID, storagePaths: [STAGED_PICTURE, STAGED_CLIP] });
+    // The web's publish limit, then the agent's daily cap read from the ledger, exactly as for a creation.
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options)).toEqual([{ ...SHOWCASE_PUBLISH_RATE_LIMIT, key: USER_ID }]);
+    expect(services.countAgentPublicPublishesSince).toHaveBeenCalledWith(admin, { userId: USER_ID, since: new Date('1970-01-01T00:00:00.000Z') });
+    // Nothing of the creation path runs.
+    expect(services.readCreationForPublish).not.toHaveBeenCalled();
+    expect(services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+  });
+
+  it('saves a private post without counting the daily cap, and passes the choices on as the composer sends them', async () => {
+    const { context, services } = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const result = await tool('publish_post').handle({ ...args, visibility: 'private', is_nsfw: true, category: 'image' }, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toMatchObject({ post_id: UPLOAD_POST_ID, visibility: 'private', state: 'private', already_published: false, source: 'upload', media_count: 1 });
+    expect(text(result)).toMatch(/Saved 1 upload as private post .* Only the creator sees it; publish again with the same uploads and visibility public/u);
+    // A private post is not a public publication: the day's count is not read, so a full day does not stop it.
+    expect(services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+    expect(vi.mocked(services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual([SHOWCASE_PUBLISH_RATE_LIMIT.scope]);
+    expect((await sent(services)).fields).toMatchObject({ visibility: 'private', isNsfw: 'true', postFormat: 'media', category: 'image', body: '' });
+  });
+
+  it('answers the daily cap for a public post before the composer is called, and the web\'s limit with its wait', async () => {
+    const capped = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    const result = await tool('publish_post').handle(args, capped.context);
+    expect(toolFailureCode(result)).toBe('RATE_LIMITED');
+    expect(structured(result).error).toMatchObject({ limit: 10, published_today: 10, reset_at: '1970-01-02T00:00:00.000Z' });
+    expect(capped.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    const room = fresh({ countAgentPublicPublishesSince: vi.fn(async () => 9) as never });
+    expect((await tool('publish_post').handle(args, room.context)).isError).toBeUndefined();
+
+    const busy = fresh({ enforceBackendRateLimit: vi.fn(async () => { throw rateLimit(90); }) as never });
+    const limited = await tool('publish_post').handle(args, busy.context);
+    expect(toolFailureCode(limited)).toBe('RATE_LIMITED');
+    expect(text(limited)).toContain('90 seconds');
+    expect(busy.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+  });
+
+  it('answers the post an earlier publish of the same uploads made, changing nothing: a repeat never makes a second post', async () => {
+    const same = harness({ readPostForAgent: found() });
+    const again = await tool('publish_post').handle(args, same.context);
+    expect(again.isError).toBeUndefined();
+    expect(structured(again)).toEqual({
+      post_id: UPLOAD_POST_ID,
+      post_url: UPLOAD_POST_URL,
+      visibility: 'public',
+      state: 'live',
+      already_published: true,
+      visibility_changed: false,
+      source: 'upload',
+    });
+    expect(text(again)).toContain(`These uploads are already published as post ${UPLOAD_POST_ID} (live, public)`);
+    expect(same.services.readPostForAgent).toHaveBeenCalledWith(same.admin, { postId: UPLOAD_POST_ID, viewerUserId: USER_ID });
+    // The staged files were spent by the first publish, so their state is not read: it would turn
+    // the repeat into a refusal. Nothing is created, changed or counted.
+    for (const service of [
+      same.services.readAgentStagedUploads, same.services.createOwnerPostForRoute, same.services.updateOwnerPostForRoute,
+      same.services.enforceBackendRateLimit, same.services.countAgentPublicPublishesSince,
+    ]) {
+      expect(service).not.toHaveBeenCalled();
+    }
+    // The same visibility named explicitly changes nothing either.
+    expect(structured(await tool('publish_post').handle({ ...args, visibility: 'public' }, same.context))).toMatchObject({ already_published: true, visibility_changed: false });
+
+    // A post the first call left private (it asked for that, or its promotion failed) says how to open it.
+    const kept = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }) });
+    const described = await tool('publish_post').handle(args, kept.context);
+    expect(structured(described)).toMatchObject({ already_published: true, visibility: 'private', state: 'private', visibility_changed: false });
+    expect(text(described)).toContain('Publish again with the same uploads and visibility public to make it public.');
+    // A post moderation hid is not described as live.
+    const hidden = harness({ readPostForAgent: found({ state: 'hidden' }) });
+    expect(text(await tool('publish_post').handle(args, hidden.context))).toContain('public, but hidden');
+  });
+
+  it('changes an existing upload post\'s visibility through the composer\'s own save, under the limits a publish passes', async () => {
+    const flip = harness({ readPostForAgent: found() });
+    const madePrivate = await tool('publish_post').handle({ ...args, visibility: 'private' }, flip.context);
+    expect(structured(madePrivate)).toEqual({
+      post_id: UPLOAD_POST_ID,
+      post_url: UPLOAD_POST_URL,
+      visibility: 'private',
+      state: 'private',
+      already_published: true,
+      visibility_changed: true,
+      source: 'upload',
+    });
+    // The post has no creation behind it, so the creation path's republish cannot carry the
+    // change: the composer's save takes the visibility alone and keeps everything else.
+    expect(flip.services.updateOwnerPostForRoute).toHaveBeenCalledWith({
+      adminSupabase: flip.admin,
+      ownerUserId: USER_ID,
+      postId: UPLOAD_POST_ID,
+      body: { visibility: 'private' },
+      runAfterResponse: flip.context.runAfterResponse,
+    });
+    expect(flip.services.publishGenerationToShowcaseForRoute).not.toHaveBeenCalled();
+    expect(flip.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    // Going private counts no public post.
+    expect(vi.mocked(flip.services.enforceBackendRateLimit).mock.calls.map(([, options]) => options.scope)).toEqual([SHOWCASE_PUBLISH_RATE_LIMIT.scope]);
+    expect(flip.services.countAgentPublicPublishesSince).not.toHaveBeenCalled();
+
+    // Going public is a public publication: the day's count is read, and a full day refuses it.
+    const open = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }) });
+    const madePublic = await tool('publish_post').handle({ ...args, visibility: 'public' }, open.context);
+    expect(structured(madePublic)).toMatchObject({ visibility: 'public', state: 'live', already_published: true, visibility_changed: true });
+    expect(text(madePublic)).toContain('Anyone can see it.');
+    expect(open.services.countAgentPublicPublishesSince).toHaveBeenCalledTimes(1);
+    const capped = harness({ readPostForAgent: found({ visibility: 'private', state: 'private' }), countAgentPublicPublishesSince: vi.fn(async () => 10) as never });
+    expect(toolFailureCode(await tool('publish_post').handle({ ...args, visibility: 'public' }, capped.context))).toBe('RATE_LIMITED');
+    expect(capped.services.updateOwnerPostForRoute).not.toHaveBeenCalled();
+
+    // The save's own refusals: a post under a moderation decision, one gone since the read, its limit.
+    const refusals: Array<[Record<string, unknown>, string, RegExp]> = [
+      [{ status: 409, body: { error: 'This post is locked while a moderation decision is in effect.' } }, 'CONFLICT', /locked while a moderation decision/u],
+      [{ status: 404, body: { error: 'Post not found.' } }, 'NOT_FOUND', /Post not found/u],
+      [{ status: 429, rateLimitError: rateLimit(30), body: { error: 'Too many', code: 'RATE_LIMITED', retryAfterSeconds: 30, limit: 60, resetAt: 'x' } }, 'RATE_LIMITED', /30 seconds/u],
+      [{ status: 400, body: { error: 'Add your name and handle to publish publicly.', actionHref: '/profile/edit', actionLabel: 'Edit profile' } }, 'INVALID_REQUEST', /name and handle/u],
+    ];
+    for (const [answer, code, words] of refusals) {
+      const refused = harness({ readPostForAgent: found(), updateOwnerPostForRoute: vi.fn(async () => ({ ok: false, ...answer })) as never });
+      const result = await tool('publish_post').handle({ ...args, visibility: 'private' }, refused.context);
+      expect(toolFailureCode(result), code).toBe(code);
+      expect(text(result), code).toMatch(words);
+      expect(JSON.stringify(result), code).not.toMatch(/actionHref|\/profile\/edit|Edit profile/u);
+    }
+  });
+
+  it('publishes nothing when it cannot tell whether the uploads are already published, or cannot read them', async () => {
+    const blind = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'UNAVAILABLE' })) as never });
+    const result = await tool('publish_post').handle(args, blind.context);
+    expect(toolFailureCode(result)).toBe('UNAVAILABLE');
+    expect(text(result)).toContain('Nothing was published');
+    expect(blind.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    expect(blind.services.enforceBackendRateLimit).not.toHaveBeenCalled();
+
+    const unread = fresh({ readAgentStagedUploads: vi.fn(async () => ({ ok: false })) as never });
+    const failed = await tool('publish_post').handle(args, unread.context);
+    expect(toolFailureCode(failed)).toBe('UNAVAILABLE');
+    expect(unread.services.createOwnerPostForRoute).not.toHaveBeenCalled();
+    expect(unread.services.enforceBackendRateLimit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a path that is not a file staged through upload_input and still unused, before any limit is spent', async () => {
+    const cases: Array<[AgentStagedUpload, string, RegExp]> = [
+      // A path in the caller's folder that no upload was signed for.
+      [{ kind: 'unknown' }, 'NOT_FOUND', /is not a file staged with upload_input/u],
+      // Sent with curl, or not sent at all, and never finalized: the signature rule has not seen it.
+      [{ kind: 'staged', status: 'issued', contentType: 'image/png' }, 'NOT_READY', /has not been through upload_input/u],
+      [{ kind: 'staged', status: 'reserved', contentType: 'image/png' }, 'NOT_READY', /call upload_input with its upload_id/u],
+      [{ kind: 'staged', status: 'finalizing', contentType: 'image/png' }, 'NOT_READY', /has not been through upload_input/u],
+      // Spent by an earlier post or run.
+      [{ kind: 'staged', status: 'consumed', contentType: 'image/png' }, 'CONFLICT', /already used by a post or a run/u],
+      [{ kind: 'staged', status: 'consuming', contentType: 'image/png' }, 'CONFLICT', /Stage the file again/u],
+      // Lapsed, or removed for failing a check.
+      [{ kind: 'staged', status: 'deleted', contentType: 'image/png' }, 'NOT_FOUND', /no longer staged/u],
+      [{ kind: 'staged', status: 'released', contentType: 'image/png' }, 'NOT_FOUND', /no longer staged/u],
+      [{ kind: 'staged', status: 'reclaiming', contentType: 'image/png' }, 'NOT_FOUND', /no longer staged/u],
+    ];
+    for (const [entry, code, words] of cases) {
+      const { context, services } = fresh({ readAgentStagedUploads: stagedAs(entry) });
+      const result = await tool('publish_post').handle(args, context);
+      const label = `${entry.kind} ${'status' in entry ? entry.status : ''}`;
+      expect(toolFailureCode(result), label).toBe(code);
+      expect(text(result), label).toMatch(words);
+      expect(text(result), label).toContain(`uploads[0] (${STAGED_PICTURE})`);
+      expect(structured(result).error, label).toMatchObject({ storage_path: STAGED_PICTURE, field_errors: { uploads: expect.any(String) } });
+      expect(services.createOwnerPostForRoute, label).not.toHaveBeenCalled();
+      expect(services.enforceBackendRateLimit, label).not.toHaveBeenCalled();
+      expect(services.countAgentPublicPublishesSince, label).not.toHaveBeenCalled();
+    }
+    // The second of two files is named by its place.
+    const second = fresh({
+      readAgentStagedUploads: vi.fn(async () => ({
+        ok: true as const,
+        uploads: new Map<string, AgentStagedUpload>([
+          [STAGED_PICTURE, { kind: 'staged', status: 'finalized', contentType: 'image/png' }],
+          [STAGED_CLIP, { kind: 'staged', status: 'consumed', contentType: 'video/mp4' }],
+        ]),
+      })) as never,
+    });
+    expect(text(await tool('publish_post').handle({ ...args, uploads: [{ storage_path: STAGED_PICTURE }, { storage_path: STAGED_CLIP }] }, second.context)))
+      .toContain(`uploads[1] (${STAGED_CLIP})`);
+  });
+
+  it('leaves another account\'s file to the composer service, whose ownership rule refuses it', async () => {
+    // The composer's own parser runs on the form the tool built: what it refuses, the real service refuses.
+    const composer = vi.fn(async ({ readFormData, ownerUserId, createPostId }: { readFormData: () => Promise<FormData>; ownerUserId: string; createPostId: () => string }) => {
+      const prepared = await preparePostCreationSubmission({ formData: await readFormData(), userId: ownerUserId, sourceToolCatalog: [] });
+      if (!prepared.ok) return prepared;
+      const postId = createPostId();
+      return {
+        ok: true as const,
+        body: {
+          success: true as const,
+          postId,
+          visibility: prepared.submission.visibility,
+          showcasePath: `/showcase/${postId}`,
+          ownerPath: `/post/${postId}/edit`,
+          resourceBundlePath: `/post/${postId}/edit#recipe`,
+          resourceBundleStatus: null,
+        },
+      };
+    });
+    const theirs = `uploads/${OTHER_USER_ID}/${UPLOAD_ID}-theirs.png`;
+    const { context, services } = fresh({
+      createOwnerPostForRoute: composer as never,
+      readAgentStagedUploads: stagedAs({ kind: 'foreign' }),
+    });
+    const refused = await tool('publish_post').handle({ ...args, uploads: [{ storage_path: theirs }] }, context);
+    expect(toolFailureCode(refused)).toBe('INVALID_REQUEST');
+    expect(text(refused)).toContain('Uploaded media must belong to the authenticated user.');
+    // The service was asked, and it is the one that refused.
+    expect(composer).toHaveBeenCalledTimes(1);
+    expect(services.readAgentStagedUploads).toHaveBeenCalledTimes(1);
+
+    // A file outside the staging bucket is refused by the same service.
+    const elsewhere = fresh({ createOwnerPostForRoute: composer as never, readAgentStagedUploads: stagedAs({ kind: 'foreign' }) });
+    expect(text(await tool('publish_post').handle({ ...args, uploads: [{ storage_path: `post_media/${USER_ID}/x.png` }] }, elsewhere.context)))
+      .toContain('Uploaded media must come from the uploads bucket.');
+
+    // The same service takes the caller's own staged file, so the refusals above are the paths' doing.
+    const own = fresh({ createOwnerPostForRoute: composer as never });
+    const published = await tool('publish_post').handle(args, own.context);
+    expect(published.isError).toBeUndefined();
+    expect(structured(published)).toMatchObject({ post_id: UPLOAD_POST_ID, visibility: 'public' });
+  });
+
+  it('maps the composer service\'s refusals to stable codes with its own message, and never a link', async () => {
+    const cases: Array<[Record<string, unknown>, string, RegExp, string?]> = [
+      [{ status: 400, body: { error: 'Add a title for your post.', field: 'title' } }, 'INVALID_REQUEST', /Add a title for your post/u, 'title'],
+      // The composer's field names are answered as the tool's arguments.
+      [{ status: 400, body: { error: 'The source tool name "All" is reserved.', field: 'sourceTools' } }, 'INVALID_REQUEST', /is reserved/u, 'made_with'],
+      [{ status: 400, body: { error: 'Audio uploads are not supported in Explore yet.' } }, 'INVALID_REQUEST', /Audio uploads are not supported/u],
+      // The web's follow-up link (complete your profile) stays on the web.
+      [{ status: 400, body: { error: 'Add your name and handle to publish publicly.', actionHref: '/profile/edit', actionLabel: 'Edit profile' } }, 'INVALID_REQUEST', /Add your name and handle/u],
+      [{ status: 400, body: { error: 'That upload was already consumed with a non-reusable disposition.' } }, 'INVALID_REQUEST', /already consumed/u],
+      [{ status: 429, rateLimitError: rateLimit(30), body: { error: 'Too many', code: 'RATE_LIMITED', retryAfterSeconds: 30, limit: 60, resetAt: 'x' } }, 'RATE_LIMITED', /30 seconds/u],
+      [{ status: 500, body: { error: 'Failed to prepare uploaded media.' } }, 'UNAVAILABLE', /Call publish_post again with the same uploads/u],
+      // The post may exist privately after this one: the repeat finds it by its derived id.
+      [{ status: 500, body: { error: 'Your post was saved as a private draft, but publishing failed. Open it from your posts to publish again.' } }, 'UNAVAILABLE', /it answers the post if one was saved/u],
+    ];
+    for (const [answer, code, words, field] of cases) {
+      const { context } = fresh({ createOwnerPostForRoute: vi.fn(async () => ({ ok: false, ...answer })) as never });
+      const result = await tool('publish_post').handle(args, context);
+      const label = JSON.stringify(answer);
+      expect(toolFailureCode(result), label).toBe(code);
+      expect(text(result), label).toMatch(words);
+      expect(JSON.stringify(result), label).not.toMatch(/actionHref|actionLabel|\/profile\/edit|Edit profile/u);
+      if (field) expect(structured(result).error, label).toMatchObject({ field_errors: { [field]: expect.any(String) } });
+    }
+  });
+});
+
 describe('get_post', () => {
   it('reads a post through the agent read, with its state, link and the page\'s counts', async () => {
     const { context, services, admin } = harness();
@@ -1131,9 +1770,22 @@ describe('get_post', () => {
     expect(text(await tool('get_post').handle({ post_id: POST_ID }, hidden.context))).toContain('hidden by moderation');
   });
 
+  it('reads a post made from uploads, which has no creation behind it, by the post_id its publish gave', async () => {
+    const { context, services, admin } = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null, title: 'Paper-cut fox' }) })) as never });
+    const result = await tool('get_post').handle({ post_id: POST_ID }, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toMatchObject({ post_id: POST_ID, post_url: `${SITE}/showcase/${POST_ID}`, generation_id: null, title: 'Paper-cut fox', state: 'live', is_own: true });
+    expect(text(result)).toContain('It was made from uploaded media, not from a creation here.');
+    expect(services.readPostForAgent).toHaveBeenCalledWith(admin, { postId: POST_ID, viewerUserId: USER_ID });
+    // A creation's post says nothing of the kind.
+    expect(text(await tool('get_post').handle({ post_id: POST_ID }, harness().context))).not.toContain('uploaded media');
+  });
+
   it('answers NOT_FOUND for a post the agent may not see, and UNAVAILABLE for a failed read', async () => {
     const missing = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never });
     expect(toolFailureCode(await tool('get_post').handle({ post_id: POST_ID }, missing.context))).toBe('NOT_FOUND');
+    // list_creations does not list a post made from uploads: the refusal says how such a post is known.
+    expect(text(await tool('get_post').handle({ post_id: POST_ID }, missing.context))).toContain('the post_id publish_post gave');
     const down = harness({ readPostForAgent: vi.fn(async () => ({ ok: false, code: 'UNAVAILABLE' })) as never });
     expect(toolFailureCode(await tool('get_post').handle({ post_id: POST_ID }, down.context))).toBe('UNAVAILABLE');
   });
@@ -1160,6 +1812,19 @@ describe('delete_post', () => {
 
     await tool('delete_post').handle({ post_id: POST_ID, force: true }, context);
     expect(services.deleteOwnerPostForRoute).toHaveBeenLastCalledWith(expect.objectContaining({ forceDelete: true }));
+    // A creation's post goes; the creation stays.
+    expect(text(result)).toBe(`Post ${POST_ID} is deleted. The creation stays in the creator's library.`);
+  });
+
+  it('deletes a post made from uploads through the same service, and says its media goes with it', async () => {
+    const { context, services, admin } = harness({ readPostForAgent: vi.fn(async () => ({ ok: true, post: post({ generationId: null }) })) as never });
+    const result = await tool('delete_post').handle({ post_id: POST_ID }, context);
+    expect(result.isError).toBeUndefined();
+    expect(structured(result)).toEqual({ post_id: POST_ID, deleted: true, tombstoned: false });
+    expect(services.deleteOwnerPostForRoute).toHaveBeenCalledWith({ adminSupabase: admin, ownerUserId: USER_ID, postId: POST_ID, forceDelete: false });
+    // No creation holds a copy: the agent must not tell the person otherwise.
+    expect(text(result)).toBe(`Post ${POST_ID} is deleted. It was made from uploaded media, which is removed with it.`);
+    expect(tool('delete_post').description).toContain('A post made from uploads has no creation behind it, so its media goes with it.');
   });
 
   it('refuses another creator\'s post (NOT_OWNER), one the agent may not see (NOT_FOUND), and asks before taking a post with buyers down', async () => {
@@ -1229,6 +1894,50 @@ describe('running a tool', () => {
     });
     await runMcpTool(tool('publish_post'), { ...publish, visibility: 'private' }, privately.context);
     expect(privately.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PRIVATE, postId: POST_ID }));
+  });
+
+  it('records a publish of uploads under publish_post with its post and no creation, so the cap and the moderation list hold it unchanged', async () => {
+    const publish = { uploads: [{ storage_path: STAGED_PICTURE }], title: 'Paper-cut fox in a snowy forest', made_with: [{ tool: 'Midjourney' }] };
+    const postId = agentUploadPostId(USER_ID, [STAGED_PICTURE]);
+    const none = () => vi.fn(async () => ({ ok: false, code: 'NOT_FOUND' })) as never;
+    const existing = (overrides: Partial<AgentPostView> = {}) => vi.fn(async () => ({ ok: true, post: post({ postId, generationId: null, ...overrides }) })) as never;
+
+    // A new public post: what the daily cap counts and the moderation list reads.
+    const live = harness({ readPostForAgent: none() });
+    await runMcpTool(tool('publish_post'), publish, live.context);
+    expect(live.records).toEqual([expect.objectContaining({ tool: 'publish_post', outcome: 'ok', code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC, postId, generationId: null, costCredits: null })]);
+
+    const privately = harness({ readPostForAgent: none() });
+    await runMcpTool(tool('publish_post'), { ...publish, visibility: 'private' }, privately.context);
+    expect(privately.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PRIVATE, postId, generationId: null }));
+
+    // An unchanged repeat is no new publication (the cap does not count it), but it still names
+    // the post: only an agent's publish makes a post under this id, and the call that made it may
+    // have lost its row to the same timeout that made the agent repeat it.
+    const repeated = harness({ readPostForAgent: existing() });
+    await runMcpTool(tool('publish_post'), publish, repeated.context);
+    expect(repeated.records[0]).toEqual(expect.objectContaining({ outcome: 'ok', code: AGENT_PUBLISH_RECORD_CODES.ALREADY_PUBLISHED, postId, generationId: null }));
+
+    const madePrivate = harness({ readPostForAgent: existing() });
+    await runMcpTool(tool('publish_post'), { ...publish, visibility: 'private' }, madePrivate.context);
+    expect(madePrivate.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.MADE_PRIVATE, postId }));
+    const madePublic = harness({ readPostForAgent: existing({ visibility: 'private', state: 'private' }) });
+    await runMcpTool(tool('publish_post'), { ...publish, visibility: 'public' }, madePublic.context);
+    expect(madePublic.records[0]).toEqual(expect.objectContaining({ code: AGENT_PUBLISH_RECORD_CODES.PUBLISHED_PUBLIC, postId }));
+
+    // A refusal records its code and no post: nothing was made.
+    const refused = harness({ readPostForAgent: none() });
+    await runMcpTool(tool('publish_post'), { ...publish, made_with: [{ tool: 'Magic Booklet' }] }, refused.context);
+    expect(refused.records[0]).toEqual(expect.objectContaining({ outcome: 'error', code: 'INVALID_REQUEST', postId: null, generationId: null }));
+
+    // request_upload and upload_input record no post and no charge.
+    const staging = harness();
+    await runMcpTool(tool('request_upload'), { file_name: 'a.png', mime_type: 'image/png', size_bytes: 10 }, staging.context);
+    await runMcpTool(tool('upload_input'), { upload_id: UPLOAD_ID }, staging.context);
+    expect(staging.records).toEqual([
+      expect.objectContaining({ tool: 'request_upload', outcome: 'ok', code: null, postId: null, generationId: null, costCredits: null }),
+      expect.objectContaining({ tool: 'upload_input', outcome: 'ok', code: null, postId: null, generationId: null, costCredits: null }),
+    ]);
   });
 
   it('records one call with its outcome and code, a cost only where the creator was charged, and turns a thrown error into an INTERNAL_ERROR result', async () => {
