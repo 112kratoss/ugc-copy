@@ -21,6 +21,7 @@
 @source "./contact";
 @source "./creators";
 @source "./delete-account";
+@source "./developers";
 @source "./login";
 @source "./models";
 /* Alerts, the shell's tab on every page, draws its sign-in card here; its

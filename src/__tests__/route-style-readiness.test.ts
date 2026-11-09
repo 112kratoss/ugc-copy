@@ -47,6 +47,7 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'contact',
   'creators',
   'delete-account',
+  'developers',
   'feed',
   'login',
   'marketplace',

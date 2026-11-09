@@ -17,15 +17,21 @@ describe('OAuth protected resource metadata (RFC 9728)', () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it('names the MCP route as the resource and Supabase Auth as its authorization server', () => {
+  it('names the MCP route as the resource, Supabase Auth as its authorization server, and the setup page', () => {
     expect(buildOAuthProtectedResourceMetadata()).toEqual({
       resource: 'https://magicbooklet.com/api/mcp',
       authorization_servers: ['https://abcdefgh.supabase.co/auth/v1'],
       bearer_methods_supported: ['header'],
       resource_name: 'Magicbooklet MCP server',
+      resource_documentation: 'https://magicbooklet.com/developers/mcp',
     });
-    // No documentation link until the developers page exists (phase 3).
-    expect(buildOAuthProtectedResourceMetadata()).not.toHaveProperty('resource_documentation');
+  });
+
+  it('links the documentation on the origin it serves, as it does the resource', () => {
+    expect(buildOAuthProtectedResourceMetadata({
+      siteUrl: 'http://127.0.0.1:3100',
+      supabaseUrl: 'https://example.supabase.co',
+    })?.resource_documentation).toBe('http://127.0.0.1:3100/developers/mcp');
   });
 
   it('builds from the values given, and from nothing when either URL is missing or malformed', () => {
