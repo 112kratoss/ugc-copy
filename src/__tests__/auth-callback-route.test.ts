@@ -42,7 +42,7 @@ vi.mock('next/server', async () => {
 });
 
 const VISIT_TOKEN = '0b5f0f8e-6a3c-4c4e-9d1a-2f3b4c5d6e7f';
-const NEW_ACCOUNT_DESTINATION = '/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate';
+const NEW_ACCOUNT_DESTINATION = '/onboarding?next=%2Fcreate';
 
 function withVisitCookie(url: string) {
   return new Request(url, { headers: { cookie: `theme=dark; mb_referral_visit=${VISIT_TOKEN}` } });
@@ -52,8 +52,8 @@ function locationOf(response: Response) {
   return new URL(response.headers.get('location') ?? '');
 }
 
-// The welcome-reward page a new account reaches after its profile step.
-function nestedWelcomeRewardUrl(response: Response) {
+// The page the creator-name step opens, with `welcome=1`, once the name is saved.
+function nestedNextUrl(response: Response) {
   return new URL(locationOf(response).searchParams.get('next') ?? '', 'https://magicbooklet.com');
 }
 
@@ -127,7 +127,7 @@ describe('/auth/callback', () => {
     expect(mocks.clearReferralVisitCookie).toHaveBeenCalledWith(response, true);
   });
 
-  it('tells a new account its invite was applied on the welcome-reward page after its profile step', async () => {
+  it('tells a new account its invite was applied on the page its creator-name step opens', async () => {
     mocks.resolveServerPostAuthPath.mockResolvedValue(NEW_ACCOUNT_DESTINATION);
 
     const { GET } = await import('@/app/auth/callback/route');
@@ -136,15 +136,27 @@ describe('/auth/callback', () => {
     ));
 
     const location = locationOf(response);
-    expect(location.pathname).toBe('/profile');
-    expect(location.searchParams.get('welcome')).toBe('1');
-    // The profile page forwards its `next` untouched, so the status rides inside it.
+    expect(location.pathname).toBe('/onboarding');
+    // The step opens its `next` as it is, `welcome=1` added, so the status rides inside it.
     expect(location.searchParams.get('referral')).toBeNull();
-    const welcomeReward = nestedWelcomeRewardUrl(response);
-    expect(welcomeReward.pathname).toBe('/welcome-reward');
-    expect(welcomeReward.searchParams.get('next')).toBe('/create');
-    expect(welcomeReward.searchParams.get('referral')).toBe('applied');
+    const greeted = nestedNextUrl(response);
+    expect(greeted.pathname).toBe('/create');
+    expect(greeted.searchParams.get('referral')).toBe('applied');
     expect(mocks.clearReferralVisitCookie).toHaveBeenCalledWith(response, true);
+  });
+
+  it('keeps a creator’s hand-over nonce beside the invite status through the name step', async () => {
+    mocks.resolveServerPostAuthPath.mockResolvedValue('/onboarding?next=%2Fcreate-video%3Fhandover%3Dnonce-1234');
+
+    const { GET } = await import('@/app/auth/callback/route');
+    const response = await GET(withVisitCookie(
+      'https://magicbooklet.com/auth/callback?code=auth-code&next=%2Fcreate-video%3Fhandover%3Dnonce-1234'
+    ));
+
+    const greeted = nestedNextUrl(response);
+    expect(greeted.pathname).toBe('/create-video');
+    expect(greeted.searchParams.get('handover')).toBe('nonce-1234');
+    expect(greeted.searchParams.get('referral')).toBe('applied');
   });
 
   it('tells an account back at the creator its sign-up started from how its invite went', async () => {
@@ -397,7 +409,7 @@ describe('/auth/continue', () => {
       '/create',
       { skipProfileOnboarding: false }
     );
-    expect(nestedWelcomeRewardUrl(response).searchParams.get('referral')).toBe('applied');
+    expect(nestedNextUrl(response).searchParams.get('referral')).toBe('applied');
     expect(mocks.clearReferralVisitCookie).toHaveBeenCalledWith(response, true);
     expect(mocks.getSession).not.toHaveBeenCalled();
     expect(mocks.after).not.toHaveBeenCalled();
@@ -418,7 +430,7 @@ describe('/auth/continue', () => {
     const { GET } = await import('@/app/auth/continue/route');
     const response = await GET(withVisitCookie('https://magicbooklet.com/auth/continue?next=%2Fcreate'));
 
-    expect(nestedWelcomeRewardUrl(response).searchParams.get('referral')).toBe('applied');
+    expect(nestedNextUrl(response).searchParams.get('referral')).toBe('applied');
     expect(mocks.clearReferralVisitCookie).toHaveBeenCalledWith(response, true);
   });
 

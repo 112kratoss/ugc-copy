@@ -181,7 +181,8 @@ export async function loadOwnProfile(
 
 export type PublicIdentitySaveResult =
   | { ok: true; profile: ProfileApiResponse }
-  | { ok: false; errors: PublicIdentityErrors; message: string };
+  /** `status` is the server's answer, absent when none came (offline): a 409 is a handle claimed meanwhile. */
+  | { ok: false; errors: PublicIdentityErrors; message: string; status?: number };
 
 /**
  * Saves only the handle and the name (`PATCH /api/profile` keeps every field
@@ -213,6 +214,7 @@ export async function savePublicIdentity(
         ...(data?.fieldErrors?.username ? { username: data.fieldErrors.username } : {}),
       },
       message: data?.error || 'Your name and handle could not be saved. Try again.',
+      status: response.status,
     };
   } catch {
     return { ok: false, errors: {}, message: 'Your name and handle could not be saved. Check your connection and try again.' };

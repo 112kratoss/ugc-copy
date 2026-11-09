@@ -39,7 +39,7 @@ describe('server-side auth profile routing', () => {
     expect(supabase.eq).toHaveBeenCalledWith('id', 'user-1');
   });
 
-  it('routes a new or generated profile through setup without losing intent', async () => {
+  it('routes a new or generated profile through the name step without losing intent', async () => {
     const supabase = createSupabaseProfileClient({
       username: 'creator-a1b2c3d4',
       display_name: 'New creator',
@@ -52,10 +52,10 @@ describe('server-side auth profile routing', () => {
       supabase.client as never,
       'user-1',
       '/create/image'
-    )).resolves.toBe('/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate%252Fimage');
+    )).resolves.toBe('/onboarding?next=%2Fcreate%2Fimage');
   });
 
-  it('fails safely into setup if profile readiness cannot be loaded', async () => {
+  it('fails safely into the name step if profile readiness cannot be loaded', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const supabase = createSupabaseProfileClient(null, new Error('database unavailable'));
 
@@ -63,7 +63,7 @@ describe('server-side auth profile routing', () => {
       supabase.client as never,
       'user-1',
       '/create'
-    )).resolves.toBe('/profile?welcome=1&next=%2Fwelcome-reward%3Fnext%3D%252Fcreate');
+    )).resolves.toBe('/onboarding?next=%2Fcreate');
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -88,6 +88,34 @@ describe('server-side auth profile routing', () => {
       '/create/video',
       { skipProfileOnboarding: true }
     )).resolves.toBe('/create/video');
+    expect(supabase.from).not.toHaveBeenCalled();
+  });
+
+  it('takes a creator’s sign-up return through the name step, nonce and all', async () => {
+    const supabase = createSupabaseProfileClient({
+      username: 'creator-a1b2c3d4',
+      display_name: null,
+      bio: null,
+      avatar_url: null,
+      cover_url: null,
+    });
+
+    await expect(resolveServerPostAuthPath(
+      supabase.client as never,
+      'user-1',
+      '/create-video?handover=nonce-1234'
+    )).resolves.toBe('/onboarding?next=%2Fcreate-video%3Fhandover%3Dnonce-1234');
+  });
+
+  it('honours a skip for an account sent to the name step before signing in, with no profile read', async () => {
+    const supabase = createSupabaseProfileClient(null);
+
+    await expect(resolveServerPostAuthPath(
+      supabase.client as never,
+      'user-1',
+      '/onboarding?next=%2Fcreations',
+      { skipProfileOnboarding: true }
+    )).resolves.toBe('/creations');
     expect(supabase.from).not.toHaveBeenCalled();
   });
 

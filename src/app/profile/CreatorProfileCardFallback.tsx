@@ -3,14 +3,12 @@ import type { EditableCreatorProfile } from '@/lib/profile';
 interface CreatorProfileCardFallbackProps {
   initialProfile: EditableCreatorProfile | null;
   loadError: string | null;
-  onboardingMode?: boolean;
 }
 
 /** The editor's place-holder while it waits for an idle moment and its code. */
 export default function CreatorProfileCardFallback({
   initialProfile,
   loadError,
-  onboardingMode = false,
 }: CreatorProfileCardFallbackProps) {
   const displayName = initialProfile?.displayName?.trim() || initialProfile?.username?.trim() || 'Creator profile';
   const username = initialProfile?.username?.trim();
@@ -40,11 +38,6 @@ export default function CreatorProfileCardFallback({
               <p className="mt-1 text-sm text-zinc-400">{username ? `@${username}` : 'Handle pending'}</p>
             </div>
           </div>
-          {onboardingMode ? (
-            <div className="rounded-full border border-sky-300/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-sky-100">
-              Setup
-            </div>
-          ) : null}
         </div>
 
         <p className="mt-5 min-h-10 max-w-2xl text-sm leading-6 text-zinc-400">

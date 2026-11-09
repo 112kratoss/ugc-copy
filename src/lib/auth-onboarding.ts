@@ -99,6 +99,61 @@ export function getSafeAuthNextPath(
   return getSafeProfileNextPath(value, fallback);
 }
 
+/**
+ * The creator-name step (owner, 2026-11-09: the app's required name, on the
+ * web). A new account passes it after signing in, on its way to `next`, which
+ * it then opens with `welcome=1` (`withCreatorWelcome`).
+ */
+export const CREATOR_NAME_STEP_PATH = '/onboarding';
+
+const PROFILE_PATH = '/profile';
+const WELCOME_REWARD_PATH = '/welcome-reward';
+
+/**
+ * A first-profile link from before the name step, `/profile?welcome=1&next=…`
+ * (`buildProfileSetupPath`). `/profile?welcome=1` alone is not one: that is the
+ * profile opened back from the name step.
+ */
+export function isOldProfileSetupPath(path: string): boolean {
+  try {
+    const url = new URL(path, PATH_BASE);
+    return url.pathname === PROFILE_PATH
+      && url.searchParams.get(CREATOR_WELCOME_PARAM) === '1'
+      && url.searchParams.has('next');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where the name step leads for `path`: the path itself, or, when it is a setup
+ * step (the name step, an old first-profile link), the step's own `next`, so
+ * the step never opens itself or the old setup on the way back. An old link's
+ * welcome-reward hop goes with it: the page a sign-up returns to greets it now.
+ */
+export function creatorNameStepNextPath(path: string | null | undefined): string {
+  let current = getSafeAuthNextPath(path);
+  for (let unwrapped = 0; unwrapped < 3; unwrapped += 1) {
+    const url = new URL(current, PATH_BASE);
+    const oldSetup = isOldProfileSetupPath(current);
+    if (url.pathname !== CREATOR_NAME_STEP_PATH && !oldSetup) return current;
+    current = getSafeAuthNextPath(url.searchParams.get('next'));
+    if (oldSetup && new URL(current, PATH_BASE).pathname === WELCOME_REWARD_PATH) {
+      current = getSafeAuthNextPath(new URL(current, PATH_BASE).searchParams.get('next'));
+    }
+  }
+  return DEFAULT_AUTH_NEXT_PATH;
+}
+
+export function buildCreatorNameStepPath(next: string | null | undefined): string {
+  return `${CREATOR_NAME_STEP_PATH}?next=${encodeURIComponent(creatorNameStepNextPath(next))}`;
+}
+
+/**
+ * The first-profile link from before the name step. Only Home's welcome card
+ * (`WelcomeCreditsCard`, which the welcome popup replaces) still builds it, and
+ * `/profile` sends it on to the name step.
+ */
 export function buildProfileSetupPath(next: string | null | undefined): string {
   const safeNext = getSafeAuthNextPath(next);
   return `/profile?welcome=1&next=${encodeURIComponent(buildWelcomeRewardPath(safeNext))}`;
@@ -127,24 +182,6 @@ export function isPasswordRecoveryPath(path: string): boolean {
   }
 }
 
-function isProfileSetupPath(path: string): boolean {
-  try {
-    return new URL(path, 'https://magicbooklet.local').pathname === '/profile';
-  } catch {
-    return false;
-  }
-}
-
-function getNestedProfileNextPath(profilePath: string): string {
-  try {
-    const profileUrl = new URL(profilePath, 'https://magicbooklet.local');
-    const nestedNext = getSafeAuthNextPath(profileUrl.searchParams.get('next'));
-    return isProfileSetupPath(nestedNext) ? DEFAULT_AUTH_NEXT_PATH : nestedNext;
-  } catch {
-    return DEFAULT_AUTH_NEXT_PATH;
-  }
-}
-
 export function getPasswordRecoveryNextPath(
   recoveryPath: string,
   fallback = DEFAULT_AUTH_NEXT_PATH
@@ -162,27 +199,34 @@ export function getPasswordRecoveryNextPath(
   }
 }
 
+/**
+ * Where a sign-in goes: an account without a creator name passes the name step
+ * first, on its way to `next` (a creator's sign-up return too, hand-over nonce
+ * and all). An account that chose "Set up later" before the name was required
+ * (`identityDeferred`, from its metadata) is not sent there, as in the app; a
+ * creator it returns to still greets it.
+ */
 export function resolvePostAuthPath(
   profile: CreatorProfileReadinessInput | null | undefined,
-  next: string | null | undefined
+  next: string | null | undefined,
+  { identityDeferred = false }: { identityDeferred?: boolean } = {}
 ): string {
   const safeNext = getSafeAuthNextPath(next);
 
-  // Password recovery must not be intercepted by profile setup. The recovery
+  // Password recovery must not be intercepted by the name step. The recovery
   // session is deliberately short-lived and should land on the password form.
   if (isPasswordRecoveryPath(safeNext)) {
     return safeNext;
   }
 
+  const destination = creatorNameStepNextPath(safeNext);
   if (getCreatorProfileReadiness(profile).publicPublishReady) {
-    return safeNext;
+    return destination;
   }
 
-  if (isCreatorSignUpReturn(safeNext)) {
-    return withCreatorWelcome(safeNext);
+  if (identityDeferred) {
+    return isCreatorSignUpReturn(destination) ? withCreatorWelcome(destination) : destination;
   }
 
-  return isProfileSetupPath(safeNext)
-    ? buildProfileSetupPath(getNestedProfileNextPath(safeNext))
-    : buildProfileSetupPath(safeNext);
+  return buildCreatorNameStepPath(destination);
 }
