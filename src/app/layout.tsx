@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import Script from "next/script";
+import { Suspense } from "react";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 
 import { siteConfig } from "@/lib/seo";
@@ -11,6 +12,7 @@ import { WELCOME_PROMISE_RESTORE } from "@/lib/welcome-promise-restore";
 import "./globals.css";
 import AppShell from "@/components/AppShell";
 import DeferredGenerationNotifications from "@/components/DeferredGenerationNotifications";
+import DeferredWelcomeCreditsPopup from "@/components/DeferredWelcomeCreditsPopup";
 import FeedbackViewport from "@/components/FeedbackViewport";
 import NavigationProgress from "@/components/NavigationProgress";
 
@@ -122,6 +124,10 @@ export default function RootLayout({
         <NavigationProgress />
         <AppShell>{children}</AppShell>
         <DeferredGenerationNotifications />
+        {/* The welcome credits, offered once an account has its name (Home, the creators, the page a sign-up returned to). It reads the query: a boundary of its own keeps every page drawn ahead of time. */}
+        <Suspense fallback={null}>
+          <DeferredWelcomeCreditsPopup />
+        </Suspense>
         {/* Toasts and confirmations for every route; talks to feedback-state. */}
         <FeedbackViewport />
         {speedInsightsEnabled ? (

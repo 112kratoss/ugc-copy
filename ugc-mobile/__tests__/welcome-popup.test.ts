@@ -9,10 +9,11 @@ import {
   welcomeCountUpTicks,
   welcomeFillProgress,
 } from '../lib/welcome-popup';
+import * as shared from '../lib/welcome-popup-policy/welcome-popup-policy';
 
 describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
   const eligible = { status: 'eligible' as const, identityComplete: true };
-  const base = { signedIn: true, welcome: eligible, homeFocused: true, dismissed: false };
+  const base = { signedIn: true, welcome: eligible, offeredHere: true, dismissed: false };
 
   beforeEach(() => resetWelcomePopupThisRun());
 
@@ -22,7 +23,7 @@ describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
 
   it('stays away otherwise', () => {
     expect(shouldShowWelcomePopup({ ...base, signedIn: false })).toBe(false);
-    expect(shouldShowWelcomePopup({ ...base, homeFocused: false })).toBe(false);
+    expect(shouldShowWelcomePopup({ ...base, offeredHere: false })).toBe(false);
     expect(shouldShowWelcomePopup({ ...base, dismissed: true })).toBe(false);
     expect(shouldShowWelcomePopup({ ...base, welcome: null })).toBe(false);
     expect(shouldShowWelcomePopup({ ...base, welcome: { ...eligible, identityComplete: false } })).toBe(false);
@@ -37,6 +38,15 @@ describe('when the welcome-credits popup shows over Home (owner 11-09)', () => {
     expect(wasWelcomePopupDismissedThisRun('a')).toBe(true);
     expect(wasWelcomePopupDismissedThisRun('b')).toBe(false);
     expect(wasWelcomePopupDismissedThisRun(null)).toBe(false);
+  });
+});
+
+describe('the rules shared with the web', () => {
+  it('are the shared module itself, so the web’s popup offers and fills by the same rules', () => {
+    expect(shouldShowWelcomePopup).toBe(shared.shouldShowWelcomePopup);
+    expect(welcomeFillProgress).toBe(shared.welcomeFillProgress);
+    expect(welcomeCountUpTicks).toBe(shared.welcomeCountUpTicks);
+    expect(WELCOME_COUNT_UP_MS).toBe(shared.WELCOME_COUNT_UP_MS);
   });
 });
 
