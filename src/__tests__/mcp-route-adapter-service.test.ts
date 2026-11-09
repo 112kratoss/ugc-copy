@@ -198,10 +198,28 @@ describe('MCP route adapter', () => {
     expect(createUserClient).not.toHaveBeenCalled();
   });
 
+  it('signs a revoked grant out: a still-valid signature with no session answers 401 with the challenge', async () => {
+    // Revoking a grant deletes the client's sessions. GoTrue keeps accepting the access token's
+    // signature until it expires, so a signature-only check would keep serving the agent; the
+    // lifecycle round trip answers session_valid false, and that is what signs the agent out
+    // (docs/research/mcp-oauth-spike-2026-11-09.md, check 3).
+    const { handlers, identityClient, createUserClient } = harness({ admission: { ...ACTIVE, session_valid: false } });
+    const response = await handlers.POST(rpc('tools/list'));
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate')).toBe(
+      `Bearer resource_metadata="${METADATA_URL}", error="invalid_token", error_description="The access token is invalid or has expired. Sign in again."`,
+    );
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+    expect(identityClient.auth.getClaims).toHaveBeenCalledTimes(1);
+    expect(identityClient.rpc).toHaveBeenCalledTimes(1);
+    expect(createUserClient).not.toHaveBeenCalled();
+  });
+
   it.each([
     [{ ...ACTIVE, state: 'merged' }, 409, 'SESSION_MERGED'],
     [{ ...ACTIVE, state: 'deleting' }, 409, 'ACCOUNT_DELETING'],
     [{ ...ACTIVE, session_valid: false }, 401, 'UNAUTHORIZED'],
+    [{ ...ACTIVE, banned: true }, 401, 'UNAUTHORIZED'],
   ])('passes the evaluator\'s other refusals through (%j)', async (admission, status, code) => {
     const { handlers } = harness({ admission });
     const response = await handlers.POST(rpc('tools/list'));

@@ -76,6 +76,7 @@ const SIGNED_IN_ROUTE_DIRECTORIES = new Set([
   'credits',
   'home',
   'invite',
+  'oauth',
   'onboarding',
   'post',
   'profile',
