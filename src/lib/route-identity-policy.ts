@@ -205,6 +205,12 @@ const REGISTERED_ROUTES = [
   // Web payments.
   '/api/razorpay/order',
   '/api/razorpay/verify',
+
+  // The MCP server: an agent (Claude, ChatGPT, Codex, Cursor) acting as a
+  // signed-in creator, with the creator's credits. Admitted at the route
+  // itself (route-owned-identity-admission.ts), which also requires the
+  // agent-token claim; a guest's token is refused as on every registered route.
+  '/api/mcp',
 ] as const;
 
 /**
