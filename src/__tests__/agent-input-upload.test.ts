@@ -4,12 +4,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AGENT_BASE64_MAX_BYTES,
   AGENT_BASE64_MAX_CHARACTERS,
+  AGENT_OPEN_UPLOADS_MAX,
   AGENT_SIGNATURE_HEAD_BYTES,
   AGENT_URL_FETCH_MAX_BYTES_BY_KIND,
   VERCEL_REQUEST_BODY_LIMIT_BYTES,
   agentUploadCurlCommand,
   agentUploadFileName,
   decodeAgentBase64,
+  isUploadStillEmpty,
   readAgentStagedUploads,
   readStoredObjectHead,
   requestAgentUpload,
@@ -58,6 +60,7 @@ function fakes(overrides: Partial<AgentInputUploadDependencies> = {}) {
       ok: true as const,
       response: { success: true as const, signedUrl: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', expiresInSeconds: 3600 },
     })) as unknown as AgentInputUploadDependencies['createTemporaryMediaReadUrl'],
+    isUploadStillEmpty: vi.fn(async () => false),
     readStoredObjectHead: vi.fn(async () => JPEG),
     deleteReservedObjectAndConfirm: vi.fn(async () => true),
     ...overrides,
@@ -191,6 +194,20 @@ describe('stageAgentInput', () => {
     });
     expect(await stageAgentInput({ admin: broken.admin, userId: USER_ID, source: { url: 'https://x/a.jpg' }, dependencies: broken.dependencies }))
       .toMatchObject({ ok: false, code: 'UPLOAD_FAILED' });
+
+    // The account's staging space is held by its open uploads: not a failure that passes in a
+    // moment, so it is named, with how many uploads may be open and what frees one.
+    const full = fakes({
+      createTemporaryMediaUploadIntent: vi.fn(async () => ({
+        ok: false as const, status: 429, code: 'UPLOAD_BYTES_LIMIT', error: 'Too many upload bytes are already reserved. Finish or retry these uploads later.',
+      })) as never,
+    });
+    const refused = await stageAgentInput({ admin: full.admin, userId: USER_ID, source: { url: 'https://x/a.jpg' }, dependencies: full.dependencies });
+    expect(refused).toMatchObject({ ok: false, code: 'UPLOAD_BYTES_LIMIT', details: { open_uploads_max: 4 } });
+    expect(!refused.ok && refused.message).toMatch(/4 at most at once.*until upload_input has staged it.*can take a day/u);
+    expect(full.upload).not.toHaveBeenCalled();
+    // One gibibyte an account, the bucket's 250 MB worst case reserved per signed upload: four.
+    expect(AGENT_OPEN_UPLOADS_MAX).toBe(4);
   });
 
   it('answers a failed store, a finalize mismatch and a failed read URL without a half-made input', async () => {
@@ -245,13 +262,26 @@ describe('the upload_id source', () => {
     expect(made.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
   });
 
-  it('answers an unknown id, another account\'s, one nothing was sent to and one already used with a clear code, touching nothing', async () => {
+  it('answers an upload nothing was sent to yet as not ready, and leaves it open for the file', async () => {
+    const made = fakes({ isUploadStillEmpty: vi.fn(async () => true) });
+    const result = await stage(made);
+    expect(result).toMatchObject({ ok: false, code: 'NOT_READY', details: { upload_id: UPLOAD_ID } });
+    expect(!result.ok && result.message).toMatch(/Nothing is stored for upload .* yet\. Run the command request_upload gave.*call upload_input again/u);
+    expect(made.dependencies.isUploadStillEmpty).toHaveBeenCalledWith(made.admin, { uploadId: UPLOAD_ID, userId: USER_ID });
+    // Finalize closes an upload it finds empty for good, and the upload keeps its staging space
+    // until the reclaim: an early call must not cost the agent the upload, so finalize is not run.
+    expect(made.dependencies.finalizeUploadById).not.toHaveBeenCalled();
+    expect(made.dependencies.readStoredObjectHead).not.toHaveBeenCalled();
+    expect(made.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
+  });
+
+  it('answers an unknown id, another account\'s, a closed upload and one already used with a clear code, touching nothing', async () => {
     const cases: Array<[{ status: number; code: string; error: string }, string, RegExp]> = [
       // No intent under this id for the caller: an unknown id, and another account's, answer alike.
       [{ status: 404, code: 'UPLOAD_NOT_FOUND', error: 'Upload intent not found.' }, 'NOT_FOUND', /No upload .* exists for this creator\. request_upload gives an upload_id/u],
-      // Nothing was stored at the URL: finalize closes the intent, so the agent starts again.
-      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'The uploaded object was not found.' }, 'NOT_FOUND', /holds no file.*Call request_upload again/u],
-      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'That upload is no longer available.' }, 'NOT_FOUND', /holds no file/u],
+      // Closed earlier (refused, or removed), or its file vanished: the agent starts again.
+      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'The uploaded object was not found.' }, 'NOT_FOUND', /holds no file and is closed.*Call request_upload again/u],
+      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'That upload is no longer available.' }, 'NOT_FOUND', /holds no file and is closed/u],
       // The stored size or type is not the declared one: finalize removed the file itself.
       [{ status: 400, code: 'UPLOAD_METADATA_MISMATCH', error: 'Uploaded object metadata did not match the server-issued upload intent.' }, 'UNSUPPORTED_MEDIA', /exact size_bytes and mime_type/u],
       [{ status: 409, code: 'UPLOAD_NOT_READY', error: 'That upload was already consumed with a non-reusable disposition.' }, 'CONFLICT', /already used or being collected: That upload was already consumed/u],
@@ -340,6 +370,51 @@ describe('the upload_id source', () => {
     });
     expect(await stage(elsewhere)).toMatchObject({ ok: false, code: 'NOT_FOUND', details: { upload_id: UPLOAD_ID } });
     expect(elsewhere.dependencies.readStoredObjectHead).not.toHaveBeenCalled();
+  });
+});
+
+describe('isUploadStillEmpty', () => {
+  function client(row: unknown, info: { data?: unknown; error: unknown }, rowError: unknown = null) {
+    const query = {
+      select: vi.fn(() => query),
+      eq: vi.fn(() => query),
+      maybeSingle: vi.fn(async () => ({ data: row, error: rowError })),
+    };
+    const objectInfo = vi.fn(async () => info);
+    const from = vi.fn(() => ({ info: objectInfo }));
+    return { admin: { from: vi.fn(() => query), storage: { from } } as unknown as SupabaseClient, query, from, objectInfo };
+  }
+  const issued = { bucket_id: 'uploads', storage_path: `${USER_ID}/${UPLOAD_ID}-cat.png`, finalization_status: 'issued' };
+  const ask = (made: ReturnType<typeof client>) => isUploadStillEmpty(made.admin, { uploadId: UPLOAD_ID, userId: USER_ID });
+
+  it('is true only for the caller\'s own open upload with nothing stored at its path', async () => {
+    const empty = client(issued, { data: null, error: { statusCode: '404', message: 'Object not found' } });
+    expect(await ask(empty)).toBe(true);
+    // The intent is read by its id and the caller's own, and the object by the path it was signed for.
+    expect(vi.mocked(empty.admin.from)).toHaveBeenCalledWith('upload_byte_reservations');
+    expect(empty.query.eq.mock.calls).toEqual([['id', UPLOAD_ID], ['user_id', USER_ID]]);
+    expect(empty.from).toHaveBeenCalledWith('uploads');
+    expect(empty.objectInfo).toHaveBeenCalledWith(`${USER_ID}/${UPLOAD_ID}-cat.png`);
+    expect(await ask(client(issued, { data: null, error: { status: 404 } }))).toBe(true);
+  });
+
+  it('is false for everything finalize is to answer: a stored file, another state, no such upload, a failed read', async () => {
+    // The file arrived.
+    expect(await ask(client(issued, { data: { id: 'object-1', size: 10 }, error: null }))).toBe(false);
+    // Storage failed for a reason that is not absence.
+    expect(await ask(client(issued, { data: null, error: { statusCode: '500', message: 'storage down' } }))).toBe(false);
+    // Already finalized, used, or closed: the object is not looked at.
+    for (const status of ['finalized', 'consumed', 'deleted', 'reserved']) {
+      const other = client({ ...issued, finalization_status: status }, { data: null, error: { statusCode: '404' } });
+      expect(await ask(other), status).toBe(false);
+      expect(other.objectInfo, status).not.toHaveBeenCalled();
+    }
+    // An unknown id, or another account's.
+    expect(await ask(client(null, { data: null, error: null }))).toBe(false);
+    expect(await ask(client(null, { data: null, error: null }, { message: 'down' }))).toBe(false);
+    const thrown = client(issued, { data: null, error: null });
+    thrown.objectInfo.mockRejectedValueOnce(new Error('socket hang up'));
+    expect(await ask(thrown)).toBe(false);
   });
 });
 
@@ -492,6 +567,9 @@ describe('requestAgentUpload', () => {
     expect(await ask({ status: 400, error: 'This file type is not supported for media uploads.' }))
       .toEqual({ ok: false, code: 'UNSUPPORTED_MEDIA', message: 'This file type is not supported for media uploads.' });
     expect(await ask({ status: 500, error: 'Failed to prepare media upload.' })).toMatchObject({ ok: false, code: 'UPLOAD_FAILED' });
+    // A fifth open upload: the account's staging space is spoken for.
+    expect(await ask({ status: 429, code: 'UPLOAD_BYTES_LIMIT', error: 'Too many upload bytes are already reserved. Finish or retry these uploads later.' }))
+      .toMatchObject({ ok: false, code: 'UPLOAD_BYTES_LIMIT', details: { open_uploads_max: 4 } });
   });
 
   it('prints the one command that sends the file: a raw PUT with the three headers, the path left for the agent to fill', () => {

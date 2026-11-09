@@ -8,6 +8,7 @@ import { isOwnOrLinkedAccountId } from '@/lib/account-identity';
 import {
   AGENT_BASE64_MAX_BYTES,
   AGENT_BASE64_MAX_CHARACTERS,
+  AGENT_OPEN_UPLOADS_MAX,
   AGENT_URL_FETCH_MAX_BYTES_BY_KIND,
   agentUploadCurlCommand,
   readAgentStagedUploads,
@@ -1108,6 +1109,7 @@ const uploadInputTool = defineTool({
     `Give exactly one source. url: a public https URL this server fetches (at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.audio)} for a track; one redirect on the same host is followed). base64 with mime_type (at most ${megabytes(AGENT_BASE64_MAX_BYTES)} decoded; send a larger file by url). upload_id: a file on your own machine that you sent to the upload_url request_upload gave, once that upload has finished.`,
     'The answer\'s input (url and storage_path) feeds a run in create_media.inputs[], with the slot and kind get_model names, or becomes a post as it is: its storage_path goes into publish_post.uploads[] (a picture or a clip; a track is for a run only). The staged file is kept about two hours and the signed URL about an hour, so stage right before you create or publish.',
     'Only public hosts are fetched (PRIVATE_ADDRESS otherwise), and only the picture, clip and track types Magicbooklet takes, checked against the file\'s own bytes (UNSUPPORTED_MEDIA). The creator\'s own outputs need no staging: pass their URL from get_generation or list_creations.',
+    'With upload_id, NOT_READY means nothing is stored yet (send the file, then call again), and UPLOAD_BYTES_LIMIT, from any source, that the creator\'s open uploads hold all the staging space an account has.',
   ].join(' '),
   // Open world: by URL it reaches hosts outside Magicbooklet.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -1184,6 +1186,7 @@ const requestUploadTool = defineTool({
     `Tell it the file's name, its own type (mime_type) and its exact size in bytes (size_bytes): at most ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.image)} for a picture, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.video)} for a clip, ${megabytes(AGENT_URL_FETCH_MAX_BYTES_BY_KIND.audio)} for a track.`,
     'The answer gives upload_url, the headers to send and the one curl command that does it (PUT the raw bytes; any HTTP client that sends the same method, headers and body works). Run it with the file\'s path, wait for it to finish, then call upload_input with the upload_id: that checks the stored file against the size and type given here and its own bytes, and answers the input create_media and publish_post take.',
     'Nothing is staged until upload_input says so, and a file whose size or type differs from what was declared is removed. The URL lasts about two hours; tell the person which file you are sending before you send it.',
+    `Send and stage one file at a time (request_upload, the command, upload_input, then the next file): a creator can have at most ${AGENT_OPEN_UPLOADS_MAX} uploads open at once, and one that was refused or never finished keeps its place for up to a day (UPLOAD_BYTES_LIMIT says so).`,
   ].join(' '),
   // It reserves an upload and reaches nothing outside Magicbooklet: the agent's own PUT does the sending.
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -1210,9 +1213,9 @@ const requestUploadTool = defineTool({
     const curl = agentUploadCurlCommand(upload);
     return toolSuccess(
       [
-        `Upload ${upload.uploadId} is ready for ${STAGED_KIND_NOUN[upload.kind]} of exactly ${upload.sizeBytes} bytes (${upload.mimeType}). Send the file with this command, FILE replaced by its path:`,
+        `Upload ${upload.uploadId} is ready for ${STAGED_KIND_NOUN[upload.kind]} of exactly ${upload.sizeBytes} bytes (${upload.mimeType}). Send the file with this command, FILE replaced by its path (in double quotes if the path holds a space):`,
         curl,
-        `then call upload_input with this upload_id (${upload.uploadId}). The URL lasts ${Math.round(upload.expiresInSeconds / 60)} minutes and takes the file once.`,
+        `then call upload_input with this upload_id (${upload.uploadId}). The command prints {"Key": ...} once the file is stored; any other answer is a refusal, and nothing was stored. The URL lasts ${Math.round(upload.expiresInSeconds / 60)} minutes and takes the file once.`,
       ].join('\n'),
       {
         upload_id: upload.uploadId,

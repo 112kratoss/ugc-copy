@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { AGENT_OPEN_UPLOADS_MAX } from '@/lib/agent-input-upload';
 import {
   CLAUDE_CODE_CALLBACK_PORT,
   MCP_CLIENT_IDS,
@@ -185,7 +186,11 @@ describe('the Claude Code plugin marketplace', () => {
     expect([...order].sort((left, right) => left - right)).toEqual(order);
     // A link is staged with upload_input alone; a local file goes through request_upload first.
     expect(body).toMatch(/call `upload_input` with `url`/);
-    expect(body).toMatch(/then call `upload_input` with the upload id that answer gave/);
+    expect(body).toMatch(/Then call `upload_input` with the upload id that answer gave/);
+    // An account holds four open uploads at most, and a refused one keeps its place for a day:
+    // the skill sends one file at a time and gets the size and type right the first time.
+    expect(body).toMatch(/Send and stage one file at a time\. Only four uploads can be open at once/);
+    expect(AGENT_OPEN_UPLOADS_MAX).toBe(4);
     // A post goes out under the person's name: the skill asks, and never names Magic Booklet as the maker.
     expect(body).toMatch(/Ask; do not assume public/);
     expect(body).toMatch(/never name Magic Booklet/);

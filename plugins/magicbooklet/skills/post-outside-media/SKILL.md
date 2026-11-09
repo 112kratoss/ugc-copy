@@ -20,7 +20,9 @@ A post takes 1 to 5 pictures or videos, in the order they will show, and no audi
 ## 2. Stage each file
 
 - A link (a public https address): call `upload_input` with `url`. A picture may be 25 MB and a video 50 MB at most.
-- A file on this machine: say which file you are about to send, then call `request_upload` with its name, its type and its exact size in bytes (`wc -c < FILE` gives it). The answer holds one curl command: run it with the file's path in place of FILE and wait for it to finish, then call `upload_input` with the upload id that answer gave. The same size limits apply.
+- A file on this machine: say which file you are about to send, then call `request_upload` with its name, its type and its exact size in bytes (`wc -c < FILE` gives it). The answer holds one curl command: run it with the file's path in place of FILE and wait for it to finish. It prints a line with "Key" once the file is stored; anything else is a refusal. Then call `upload_input` with the upload id that answer gave. The same size limits apply.
+
+Send and stage one file at a time. Only four uploads can be open at once for an account, and one that is refused keeps its place for up to a day, so give the exact size and the file's own type the first time. If `upload_input` says nothing is stored yet, the command has not finished or has failed: run it again, then ask again.
 
 Each `upload_input` answer names the staged file's `storage_path`. Keep them in order. A staged file is kept about two hours and is used up by the post, so stage right before you publish. If a file is refused (a type Magic Booklet does not take, or a size or type that differs from what you declared), say why and fix that file; do not swap in another without asking.
 

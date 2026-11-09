@@ -995,6 +995,9 @@ describe('upload_input', () => {
     // What the upload_id source refuses arrives under its own code, with its own next step.
     const refusals: Array<[Record<string, unknown>, string, RegExp]> = [
       [{ code: 'NOT_FOUND', message: 'No upload exists for this creator. request_upload gives an upload_id.' }, 'NOT_FOUND', /request_upload/u],
+      // Nothing stored yet: the upload stays open, and the same call passes once the file is sent.
+      [{ code: 'NOT_READY', message: 'Nothing is stored for upload yet. Run the command request_upload gave.' }, 'NOT_READY', /Nothing is stored/u],
+      [{ code: 'UPLOAD_BYTES_LIMIT', message: 'Too many of this creator\'s uploads are open: 4 at most at once.', details: { open_uploads_max: 4 } }, 'UPLOAD_BYTES_LIMIT', /4 at most at once/u],
       [{ code: 'CONFLICT', message: 'Upload is already used or being collected.' }, 'CONFLICT', /already used/u],
       [{ code: 'UNSUPPORTED_MEDIA', message: 'The bytes are a track. It was removed.', details: { sniffed_kind: 'audio' } }, 'UNSUPPORTED_MEDIA', /removed/u],
       [{ code: 'UPLOAD_FAILED', message: 'The uploaded file could not be read to check it.' }, 'UNAVAILABLE', /Try again/u],
@@ -1063,9 +1066,10 @@ describe('request_upload', () => {
     // The text is the exact command on a line of its own, then the call that follows it.
     const lines = text(result).split('\n');
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain('FILE replaced by its path');
+    expect(lines[0]).toContain('FILE replaced by its path (in double quotes if the path holds a space)');
     expect(lines[1]).toBe(CURL);
-    expect(lines[2]).toBe(`then call upload_input with this upload_id (${UPLOAD_ID}). The URL lasts 120 minutes and takes the file once.`);
+    // What a stored file looks like in the command's output, so the agent knows before it calls on.
+    expect(lines[2]).toBe(`then call upload_input with this upload_id (${UPLOAD_ID}). The command prints {"Key": ...} once the file is stored; any other answer is a refusal, and nothing was stored. The URL lasts 120 minutes and takes the file once.`);
     expect(services.requestAgentUpload).toHaveBeenCalledWith({
       admin,
       userId: USER_ID,
@@ -1100,7 +1104,10 @@ describe('request_upload', () => {
       [{ code: 'RATE_LIMITED', message: 'Wait.', retryAfterSeconds: 42 }, 'RATE_LIMITED', /42 seconds/u],
       [{ code: 'ACCOUNT_DELETION_IN_PROGRESS', message: 'Uploads are disabled because this account is being deleted.' }, 'ACCOUNT_DELETION_IN_PROGRESS', /being deleted/u],
       [{ code: 'UPLOAD_FAILED', message: 'Failed to prepare media upload.' }, 'UNAVAILABLE', /Try again/u],
+      // The account's open uploads hold its staging space: named, never "try again in a moment".
+      [{ code: 'UPLOAD_BYTES_LIMIT', message: 'Too many of this creator\'s uploads are open: 4 at most at once.', details: { open_uploads_max: 4 } }, 'UPLOAD_BYTES_LIMIT', /4 at most at once/u],
     ];
+    expect(tool('request_upload').description).toMatch(/one file at a time .*at most 4 uploads open at once.*UPLOAD_BYTES_LIMIT/u);
     for (const [refusal, code, words] of refusals) {
       const { context } = harness({ requestAgentUpload: vi.fn(async () => ({ ok: false, ...refusal })) as never });
       const result = await tool('request_upload').handle(args, context);

@@ -18,9 +18,11 @@ import {
 } from '@/lib/storage-upload-mime-policy';
 import { createTemporaryMediaReadUrl } from '@/lib/temporary-media-read-url';
 import {
+  MAX_TEMPORARY_UPLOAD_SURFACE_BYTES,
   MAX_UPLOAD_BYTES_BY_KIND,
   createTemporaryMediaUploadIntent,
 } from '@/lib/temporary-media-upload-sign';
+import { UPLOAD_BYTE_ADMISSION_POLICY } from '@/lib/upload-byte-admission';
 import {
   UPLOAD_RESERVATIONS_TABLE,
   deleteReservedObjectAndConfirm,
@@ -82,10 +84,23 @@ export type AgentInputUploadRefusalCode =
   | 'RATE_LIMITED'
   | 'ACCOUNT_DELETION_IN_PROGRESS'
   | 'UPLOAD_FAILED'
-  /** No such upload of the caller's: an unknown id, another account's, or one that holds no file. */
+  /** No such upload of the caller's: an unknown id, another account's, or one closed with no file. */
   | 'NOT_FOUND'
+  /** The upload is open and nothing is stored at its URL yet: send the file, then ask again. */
+  | 'NOT_READY'
   /** The upload was already used, or is being collected. */
-  | 'CONFLICT';
+  | 'CONFLICT'
+  /** The creator's open uploads hold all the staging space one account may reserve. */
+  | 'UPLOAD_BYTES_LIMIT';
+
+/**
+ * How many uploads one creator can have open at once. The sign step reserves the staging
+ * bucket's worst case for every upload it signs (a signed URL is not bound to a size), against a
+ * per-account ceiling, and an upload gives that back only once it is finalized (down to its real
+ * size) or collected: one that was refused or abandoned keeps it until its URL has lapsed and the
+ * daily reclaim has run. So an agent sends and stages one file at a time.
+ */
+export const AGENT_OPEN_UPLOADS_MAX = Math.floor(UPLOAD_BYTE_ADMISSION_POLICY.perUserBytes / MAX_TEMPORARY_UPLOAD_SURFACE_BYTES);
 
 export type AgentInputUploadResult =
   | {
@@ -149,11 +164,40 @@ export async function readStoredObjectHead(
   }
 }
 
+/**
+ * Whether an upload is still waiting for its file: signed for the caller, not yet finalized, and
+ * with nothing stored at its path. Asked before finalize, which closes an upload it finds empty
+ * for good: an agent that asks a moment too soon, or whose command failed, should send the file
+ * and ask again, not lose the upload and the staging space it holds. False for anything else,
+ * a failed read included, so finalize answers every other case as it always has.
+ */
+export async function isUploadStillEmpty(
+  admin: SupabaseClient,
+  { uploadId, userId }: { uploadId: string; userId: string },
+): Promise<boolean> {
+  try {
+    const { data, error } = await admin
+      .from(UPLOAD_RESERVATIONS_TABLE)
+      .select('bucket_id, storage_path, finalization_status')
+      .eq('id', uploadId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    const row = data as Pick<UploadReservationRow, 'bucket_id' | 'storage_path' | 'finalization_status'> | null;
+    if (error || !row || row.finalization_status !== 'issued') return false;
+    const info = await admin.storage.from(row.bucket_id).info(row.storage_path);
+    const missing = info.error as { status?: unknown; statusCode?: unknown } | null;
+    return Boolean(missing && (missing.status === 404 || missing.statusCode === 404 || missing.statusCode === '404'));
+  } catch {
+    return false;
+  }
+}
+
 export type AgentInputUploadDependencies = {
   fetchPublicHttpsMedia: typeof fetchPublicHttpsMedia;
   createTemporaryMediaUploadIntent: typeof createTemporaryMediaUploadIntent;
   finalizeUploadById: typeof finalizeUploadById;
   createTemporaryMediaReadUrl: typeof createTemporaryMediaReadUrl;
+  isUploadStillEmpty: typeof isUploadStillEmpty;
   /** The first bytes of a stored object, for the signature rule; null when they could not be read. */
   readStoredObjectHead: (admin: SupabaseClient, location: { bucket: string; path: string }) => Promise<Buffer | null>;
   deleteReservedObjectAndConfirm: typeof deleteReservedObjectAndConfirm;
@@ -165,6 +209,7 @@ export function defaultAgentInputUploadDependencies(): AgentInputUploadDependenc
     createTemporaryMediaUploadIntent,
     finalizeUploadById,
     createTemporaryMediaReadUrl,
+    isUploadStillEmpty,
     readStoredObjectHead,
     deleteReservedObjectAndConfirm,
   };
@@ -280,6 +325,15 @@ function signRefusal(intent: Extract<Awaited<ReturnType<typeof createTemporaryMe
   if (intent.code === 'ACCOUNT_DELETION_IN_PROGRESS') {
     return { ok: false, code: 'ACCOUNT_DELETION_IN_PROGRESS', message: intent.error };
   }
+  if (intent.code === 'UPLOAD_BYTES_LIMIT') {
+    // Not a failure that passes in a moment: the creator's open uploads hold the account's space.
+    return {
+      ok: false,
+      code: 'UPLOAD_BYTES_LIMIT',
+      message: `Too many of this creator's uploads are open: ${AGENT_OPEN_UPLOADS_MAX} at most at once. An upload holds its place until upload_input has staged it; one that was refused or never finished keeps it until it is collected, which can take a day. Stage the files already sent, one file at a time, or try again later.`,
+      details: { open_uploads_max: AGENT_OPEN_UPLOADS_MAX },
+    };
+  }
   if (intent.status === 400) {
     // The sign step's own reading of the size, the type or the file's name.
     return { ok: false, code: 'UNSUPPORTED_MEDIA', message: intent.error };
@@ -335,7 +389,7 @@ function uploadIdRefusal(uploadId: string, finalized: Extract<UploadFinalization
       : {
           ok: false,
           code: 'NOT_FOUND',
-          message: `Upload ${uploadId} holds no file: nothing was stored at its upload_url before this call, or it was closed earlier. It cannot be used now. Call request_upload again, send the file with the command it gives, wait for that command to finish, then call upload_input.`,
+          message: `Upload ${uploadId} holds no file and is closed: it was refused or removed earlier, or its file never arrived. It cannot be used now. Call request_upload again, send the file with the command it gives, wait for that command to finish, then call upload_input.`,
           details,
         };
   }
@@ -377,6 +431,14 @@ async function stageUploadedFile({
   uploadId: string;
   dependencies: AgentInputUploadDependencies;
 }): Promise<AgentInputUploadResult> {
+  if (await dependencies.isUploadStillEmpty(admin, { uploadId, userId })) {
+    return {
+      ok: false,
+      code: 'NOT_READY',
+      message: `Nothing is stored for upload ${uploadId} yet. Run the command request_upload gave with the file's path, wait until it prints {"Key": ...}, then call upload_input again. The upload stays open until its URL lapses.`,
+      details: { upload_id: uploadId },
+    };
+  }
   const finalized = await dependencies.finalizeUploadById(admin, { uploadId, userId });
   if (!finalized.ok) return uploadIdRefusal(uploadId, finalized);
   const { descriptor } = finalized;
