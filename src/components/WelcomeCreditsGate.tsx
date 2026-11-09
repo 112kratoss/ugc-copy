@@ -51,6 +51,8 @@ export default function WelcomeCreditsGate({ offeredHere, returned }: {
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [offer, setOffer] = useState<Offer | null>(null);
   const [asked, setAsked] = useState(0);
+  // The account whose answer could not be read on this page: nothing is offered.
+  const [unreadFor, setUnreadFor] = useState<string | null>(null);
   // Each page a sign-up returned to says its invite's outcome once.
   const told = useRef<WelcomeReturn | null>(null);
 
@@ -95,7 +97,10 @@ export default function WelcomeCreditsGate({ offeredHere, returned }: {
       })
       .catch(() => {
         // Unread: nothing is offered on this page; the next one asks again.
-        if (active) setAnswer(null);
+        if (active) {
+          setAnswer(null);
+          setUnreadFor(userId);
+        }
       });
     return () => {
       active = false;
@@ -113,8 +118,9 @@ export default function WelcomeCreditsGate({ offeredHere, returned }: {
     setOffer(null);
   }
 
-  // An invite's outcome on a page that offers no popup: a toast says it.
-  const decided = userId !== null && (quietHere || answerHere !== null);
+  // An invite's outcome on a page that offers no popup (or whose answer could
+  // not be read): a toast says it.
+  const decided = userId !== null && (quietHere || answerHere !== null || unreadFor === userId);
   useEffect(() => {
     if (!returned?.referral || told.current === returned || !decided || offer) return;
     told.current = returned;

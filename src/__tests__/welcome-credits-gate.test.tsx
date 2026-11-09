@@ -202,6 +202,14 @@ describe('who sees the welcome popup, where (owner 11-09)', () => {
     expect(harness.toasts).toEqual([]);
   });
 
+  it('still says it when the welcome credits could not be read', async () => {
+    harness.read.mockRejectedValue(new Error('Could not load your welcome credits.'));
+    render(<WelcomeCreditsGate offeredHere returned={{ pathname: '/showcase', referral: 'applied' }} />);
+    await settle();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(harness.toasts).toEqual([expect.objectContaining({ tone: 'success', message: expect.stringMatching(/^Invite applied/) })]);
+  });
+
   it('says it in a toast, once, where no card is offered', async () => {
     harness.read.mockResolvedValue({ ...eligible, status: 'identity_already_claimed' });
     const returned = { pathname: '/showcase', referral: 'self_referral' };
