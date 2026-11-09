@@ -6,8 +6,10 @@ Supabase Auth's OAuth 2.1 server, and then creates media with that creator's cre
 publishes it as that creator (phase 1: `list_models`, `get_model`, `quote_generation`,
 `create_media`, `get_generation`, `list_creations`, `enhance_prompt`; phase 2: `upload_input`,
 `publish_post`, `get_post`, `delete_post`, and the `agent_tool_calls` audit table every call
-writes). The plan, the decisions behind it and the later phases are
-`docs/plans/agent-mcp-server-plan-2026-11-09.md`; this runbook is what an operator does.
+writes; phase 4: `request_upload`, and `publish_post` from files the agent staged, so an agent
+can post media made elsewhere: "Media made elsewhere", below). The plan, the decisions behind it
+and the later phases are `docs/plans/agent-mcp-server-plan-2026-11-09.md`; this runbook is what
+an operator does.
 
 Code: `src/app/api/mcp/route.ts` → `src/lib/mcp-route-adapter-service.ts` (kill switch,
 admission, transport) → `src/lib/mcp-server-service.ts` (the tools) → the services the web
@@ -176,7 +178,9 @@ does; without it the media goes alone. The rules the owner set (2026-11-09):
   CLI treat it as any other. `npm run ops:moderation -- list --source agent` lists the posts agents
   published (newest first, each with its state, from the audit table) and narrows the open post
   reports to them, so an operator can review what agents put on the feed whether or not anyone
-  reported it; a take-down is `take-down-post` on its report, as for any post.
+  reported it; a take-down is `take-down-post` on its report, as for any post. Its `source` column
+  says what each post was made from: `creation` (one of the creator's creations here) or `upload`
+  (media the agent brought from elsewhere, below).
 - **Uploads.** `upload_input` stages a file the person supplies through the web's own staging path
   (sign, upload as a Blob, finalize, a signed read URL), so the byte reservations and the reclaim
   sweep apply as to any upload. It is counted before any byte is fetched
@@ -196,6 +200,154 @@ does; without it the media goes alone. The rules the owner set (2026-11-09):
   only when the caller passes `include_preview: true`, and only when its preview is under 512 KB,
   so polls stay small.
 
+### Media made elsewhere
+
+Since phase 4 (server 1.2.0) an agent can post a picture or a video that was not made here: one
+from another tool, or a file of the person's own. Nothing new was built to hold it. The file is
+staged in the `uploads` bucket as the web's composer stages one, and the post is made by the
+composer's own create (`createOwnerPostForRoute`), so it is a post the web could have made from
+the same files: `source_kind` `external`, no creation behind it, no recipe.
+
+**Staging a file** is `upload_input`, which now takes one of three sources:
+
+- `url` and `base64`, as before.
+- `upload_id`: a file on the agent's own machine. `request_upload` (`file_name`, `mime_type`,
+  `size_bytes`) signs an upload through the web's sign step and answers the signed URL, the
+  headers and the one command that sends the file, in its text and as `curl`:
+
+  ```bash
+  curl -sS -X PUT -H 'content-type: image/png' -H 'x-upsert: false' -H 'cache-control: max-age=86400' --data-binary @FILE '<upload_url>'
+  ```
+
+  `FILE` is the file's path, which the agent fills in (in double quotes if it holds a space); the
+  file's name is never echoed into the command. The three headers are the ones the web's own
+  upload sends (`signed-url-upload.ts`): the type finalize holds the stored object to, no
+  overwrite, and the cache lifetime a published copy keeps. Storage prints `{"Key": …}` once the
+  file is stored. The agent then calls `upload_input` with the `upload_id`, which finalizes the
+  upload for the caller (the stored size must equal `size_bytes` and the stored type the declared
+  one) and reads the object's first 64 bytes through a one-minute signed URL with a `Range`
+  header, to apply the signature rule the other two sources apply to bytes they hold.
+
+  Only a client with a shell can do this (Claude Code, Codex, Cursor). Claude.ai, Claude Desktop
+  and ChatGPT stage by `url`; the tool's description and the setup page say so.
+
+**Limits.** `request_upload` counts against `AGENT_UPLOAD_INPUT_RATE_LIMIT` with `upload_input`
+(30 per 10 minutes per account, counted before anything is signed) and holds the declared size to
+the URL fetch's caps: 25 MB for a picture, 50 MB for a clip or a track. A post takes 1 to 5
+pictures or clips (`MAX_POST_MEDIA_ITEMS`); a track can be staged for a run but not posted, as in
+the composer.
+
+**The staging quota an operator should know.** The sign step reserves the bucket's worst case,
+250 MB, for every upload it signs, against 1 GB per account (`UPLOAD_BYTE_ADMISSION_POLICY`), so
+a creator has at most **four uploads open at once** (`AGENT_OPEN_UPLOADS_MAX`), the web's own
+included. A finalized upload gives its place back at once (it is charged its real size). One that
+was refused or never finished does not: its signed URL could still be used, so it keeps the 250 MB
+until the URL has lapsed (two hours) and the daily `media-upload-reclaim` job has run, which can
+be a day. Four refused uploads therefore stop that creator from staging anything, in the composer
+too, until the reclaim. What the tools do about it:
+
+- `upload_input` with an `upload_id` first asks whether the upload is still waiting for its file,
+  and answers `NOT_READY` without touching it. Finalize would close an empty upload for good.
+- A fifth open upload answers `UPLOAD_BYTES_LIMIT` with the number and what frees a place, not a
+  failure to retry in a moment.
+- The tool's description and the plugin's skill say to send and stage one file at a time, with
+  the exact size (`wc -c < FILE`) and the file's own type.
+
+A creator locked out this way is freed by the reclaim. To see it:
+
+```sql
+-- One creator's uploads that still hold staging space, newest first.
+select id, finalization_status, declared_bytes, reserved_bytes, created_at, expires_at
+from public.upload_byte_reservations
+where user_id = '<user-id>' and released_at is null
+order by created_at desc;
+```
+
+| `upload_input` answers | When |
+|---|---|
+| `NOT_READY` | Nothing is stored at the upload's URL yet. The upload stays open: send the file, ask again. |
+| `NOT_FOUND` | No such upload of the caller's (an unknown id and another account's answer alike), or one closed earlier. |
+| `UNSUPPORTED_MEDIA` | The stored size or type is not the declared one, or the bytes are not what the type says (a clip's type over a picture's bytes, a picture's type over no picture). The file is removed and the upload closed. |
+| `CONFLICT` | The upload was already used by a post or a run. |
+| `UPLOAD_BYTES_LIMIT` | The creator's open uploads hold all the staging space an account has. |
+
+**Publishing.** `publish_post` takes exactly one of `generation_id` or `uploads` (1 to 5 items
+`{ storage_path }`, each the path `upload_input` answered). With `uploads`:
+
+- `title` is required, and so is `made_with`: 1 to 5 `{ tool, model? }`, what made the media,
+  shown on the post as Made with. It is free text, sent as the composer sends a typed name but
+  never with `createTool` or `createModel`: a name the catalog knows is filed under the catalog's
+  spelling (`midjourney` → Midjourney), any other stays on the post alone, and an agent never adds
+  a row to the catalog every composer picks from. Magicbooklet's own name is refused in every
+  spelling the catalog reads as the app (`Magic Booklet`, `magicbooklet`, `magic-booklet`,
+  `Emptybooklet`): media made here is published with `generation_id`, which names its model
+  itself. `made_with` with `generation_id` is refused too, and so is `allow_remixes` with
+  `uploads` (an upload has no recipe).
+- Only a file staged through `upload_input` and not yet used is published: the tool reads each
+  path's reservation (`readAgentStagedUploads`) and refuses one that was sent but never staged
+  (`NOT_READY`), one already used (`CONFLICT`) and one that lapsed (`NOT_FOUND`), so nothing
+  reaches a post without the signature rule. A path that is not in the caller's own staging
+  folder is left to the composer service, whose ownership rule refuses it ("Uploaded media must
+  belong to the authenticated user.").
+- The same two limits as a creation (the web's publish limit, and the agent cap for a public
+  post), then the composer's own `POST_MUTATION_RATE_LIMIT`, title and text rules, the public
+  profile check, the consumption of each staged file and the media processing. The composer's
+  refusals reach the agent under stable codes with the composer's message and never its
+  follow-up link.
+- **A repeat never makes a second post.** The post's id is derived from the creator and the
+  ordered staged paths (`agentUploadPostId`: a UUID from a SHA-256, version 8). A publish repeated
+  after a lost answer reads that id first and answers the post with `already_published: true`;
+  only an explicit `visibility` that differs changes it, through the composer's save
+  (`updateOwnerPostForRoute` with the visibility alone, since the creation path's republish needs
+  a creation). After a failure that is not the caller's, the tool says to publish again with the
+  same uploads: it answers the post where one was saved, and says so where the files were spent
+  and must be staged again.
+- The post's id is its only handle: `list_creations` lists creations, and the answer says to keep
+  the `post_id`. `get_post` reads such a post (`generation_id` null) and `delete_post` deletes it,
+  with its media, since no creation holds a copy.
+
+**How it is recorded.** Under `tool = 'publish_post'`, so the daily cap, the moderation list and
+the partial index apply unchanged: `PUBLISHED_PUBLIC` or `PUBLISHED_PRIVATE` with `post_id` set
+and `generation_id` null. An unchanged repeat records `ALREADY_PUBLISHED` and, unlike a
+creation's, still names the post: only an agent's publish makes a post under a derived id, and the
+call that made it may have lost its row to the same timeout that made the agent repeat it. The
+moderation list's `source` column reads `upload` for these posts.
+
+```sql
+-- Posts agents made from uploads this week, with what each says made it.
+select c.created_at, c.client_id, c.user_id, c.post_id, p.visibility, p.review_status, p.title, p.source_tool
+from public.agent_tool_calls c
+left join public.posts p on p.id = c.post_id
+where c.tool = 'publish_post' and c.ok and c.post_id is not null and c.generation_id is null
+  and c.created_at > now() - interval '7 days'
+order by c.created_at desc;
+```
+
+**Proven before release (2026-11-10), on a throwaway local stack** (a scratchpad copy of
+`supabase/` with its own `project_id` on ports 563xx; never production):
+
+- The upload protocol against real Storage: for a signed upload URL in `uploads`, the command
+  above stored a 307,678-byte PNG, a 349,449-byte MP4 and a 12.6 MB PNG (one PUT, above the 6 MB
+  at which the web switches to resumable chunks; its path held a space) with the declared size,
+  the declared type and `cache-control: max-age=86400`; the `Range` read answered 206 with the
+  file's first 64 bytes; a second PUT to the same URL answered 409 `Duplicate`; a `text/html`
+  type answered 415 and stored nothing.
+- The tools with the real services behind them: `request_upload`, the command, `upload_input`
+  (reservation `finalized`); a picture sent under a clip's type and a wrong `size_bytes` refused
+  and removed (reservation `deleted`); an early `upload_input` answered `NOT_READY` and the same
+  upload then took its file; a private post of a picture and a clip (`generation_id` null,
+  `source_kind` `external`, Made with `Midjourney` / `V7` from the catalog and `My Own Renderer`
+  as given, the catalog's row count unchanged, staged files gone, reservations `consumed`); a
+  repeat answered `already_published`; `visibility: public` made the one post public; a post
+  public at once; the audit rows written to the real table, the moderation list reading `upload`
+  and the cap counting one; `get_post` and `delete_post`; and the fifth open upload answering
+  `UPLOAD_BYTES_LIMIT`.
+
+After a release that carries a change here, check it on production with a private post from
+Claude Code: stage a small picture with `request_upload` and the command, `upload_input`,
+`publish_post` with `uploads`, `visibility: private`, a real title and `made_with`; repeat the
+same publish (`already_published`); `get_post`; then `delete_post`.
+
 ### The audit table
 
 Every tool call writes one row of `public.agent_tool_calls` behind its answer
@@ -203,8 +355,9 @@ Every tool call writes one row of `public.agent_tool_calls` behind its answer
 `client_id` (the OAuth client), `tool`, `ok`, `code` (the tool's error code when it failed; for a
 successful `publish_post`, which answer it was: `PUBLISHED_PUBLIC`, `PUBLISHED_PRIVATE`,
 `MADE_PRIVATE` or `ALREADY_PUBLISHED`), `generation_id` and `post_id` where the call was about
-one (an unchanged republish names no post), `cost_credits` where the answer charged the creator,
-`created_at`. Prompts and results are never written. The owner may read their own rows; the
+one (an unchanged republish of a creation names no post; a publish of uploads names no creation,
+and names its post on a repeat too: "Media made elsewhere"), `cost_credits` where the answer
+charged the creator, `created_at`. Prompts and results are never written. The owner may read their own rows; the
 service role appends; nothing updates or deletes a row (an account's rows go with the account).
 The write never holds or fails an answer: a failed write logs `mcp_tool_call_record_failed`.
 
@@ -275,9 +428,11 @@ agents → The audit table), which outlives the log retention.
 Rate limits are the creator's own: the generation start's 30 per 10 minutes, the quote's 240,
 the library read's 400 (polls in `get_generation` and `get_post` count once per call), prompt
 enhancement's 60, the publish's 20 plus the agent cap of 10 public posts per UTC day, the post
-mutation's 60 for `delete_post`, and `upload_input`'s own 30 per 10 minutes before the upload
-sign, finalize and read-url limits. An agent that hits them is answered `RATE_LIMITED` with
-`retry_after_seconds`.
+mutation's 60 for `delete_post` and for a post made from uploads (its create, and a change of its
+visibility), and `upload_input`'s own 30 per 10 minutes, which `request_upload` shares, before
+the upload sign, finalize and read-url limits. An agent that hits them is answered `RATE_LIMITED`
+with `retry_after_seconds`. The staging quota is not one of them: it answers `UPLOAD_BYTES_LIMIT`
+("Media made elsewhere").
 
 ## Revoking a client, or one creator's grant
 
@@ -468,10 +623,13 @@ draws both states of every block.
 
 This public repository is a Claude Code plugin marketplace: `.claude-plugin/marketplace.json`
 (name `magicbooklet`) lists one plugin, `plugins/magicbooklet/`, which declares the server with
-the Claude Code client and port 8976, and two skills: `create-ugc-ad` (models, quote, the
+the Claude Code client and port 8976, and three skills: `create-ugc-ad` (models, quote, the
 person's yes, `create_media` with `expected_cost_credits` and one `idempotency_key`, the wait,
-an offer to publish) and `publish-creation` (a finished creation, a title that is no
-placeholder, `publish_post`). A creator installs it with:
+an offer to publish), `publish-creation` (a finished creation, a title that is no placeholder,
+`publish_post`) and, since plugin 1.1.0, `post-outside-media` (stage each file, by link through
+`upload_input` or from the machine through `request_upload` and its command, one file at a time;
+then `publish_post` with `uploads`, a real title and `made_with`, after asking who can see it). A
+creator installs it with:
 
 ```bash
 claude plugin marketplace add 112kratoss/ugc-copy
@@ -488,8 +646,8 @@ plugins` on the first command checks out only those two folders.
   repository's agent guard refuses every `.mcp.json` to its agents, which would leave the file
   unreadable to a reviewer, and the test refuses one beside the manifest.
 - The skills pre-approve only the server's free reads (`allowed-tools`); `create_media`,
-  `enhance_prompt`, `publish_post`, `delete_post` and `upload_input` always reach the person's
-  permission prompt, which the manifest test holds.
+  `enhance_prompt`, `publish_post`, `delete_post`, `upload_input` and `request_upload` always
+  reach the person's permission prompt, which the manifest test holds.
 - Any change to the plugin raises `version` in `plugin.json` (see "Filling in a client id").
 - `claude plugin validate --strict .` checks the marketplace and `claude plugin validate --strict
   plugins/magicbooklet` the plugin and its skills; both passed on Claude Code 2.1.302.
@@ -551,6 +709,11 @@ saved login afterwards.
 A later publish (a new description, say) needs a new `version`: the registry refuses one it
 already has. `server.json`'s version and the server's own `MCP_SERVER_VERSION` move together;
 `mcp-registry.test.ts` holds them equal.
+
+Phase 4 moved both to 1.2.0 (twelve tools: `request_upload` added, `publish_post` taking
+`uploads`); the description is unchanged, and still true. The registry keeps 1.1.0 until 1.2.0 is
+published by the steps above, after the release that carries it is live and the production check
+under "Media made elsewhere" has passed.
 
 The DNS alternative needs no deploy: a TXT record on the apex, `magicbooklet.com`, never under
 a selector such as `_mcp-auth.magicbooklet.com`:

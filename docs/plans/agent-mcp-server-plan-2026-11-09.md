@@ -3,12 +3,16 @@
 Status, 2026-11-10: phases 0 to 3 are shipped and live. Phase 1 is PR #747, phase 2 PR #749 and
 phase 3 PR #748; the last release reached production on 2026-11-09 at 20:24 UTC, the tools, the
 setup page and Connected apps were checked there the same hour (runbook, "Production switch-on
-checks"), and the registry entry `com.magicbooklet/mcp` 1.1.0 was published at 20:28 UTC. The plan
-stays in `plans/` for what is still open: ChatGPT's client (after the owner creates its
-connector), a first run and a first new post made through an agent (the owner's to start; that
-post is then reviewed in the moderation queue), the owner's two submissions (the Anthropic
-directory exception and the ChatGPT directory; runbook, "Distribution"), one real Codex sign-in,
-retention for `agent_tool_calls`, and `run_template` after a usage check.
+checks"), and the registry entry `com.magicbooklet/mcp` 1.1.0 was published at 20:28 UTC. Phase 4
+(an agent posts media made elsewhere; the owner asked for it on 2026-11-10) is built and in
+review on `feat/mcp-outside-media`: server 1.2.0, twelve tools, proven on a local stack; it is
+not live until its PR is merged and released, and the registry keeps 1.1.0 until then. The plan
+stays in `plans/` for what is still open: phase 4's merge, production check and registry publish,
+ChatGPT's client (after the owner creates its connector), a first run and a first new post made
+through an agent (the owner's to start; that post is then reviewed in the moderation queue), the
+owner's two submissions (the Anthropic directory exception and the ChatGPT directory; runbook,
+"Distribution"), one real Codex sign-in, retention for `agent_tool_calls`, and `run_template`
+after a usage check.
 
 Decided on 2026-11-09 after the competitor analysis in
 [`../research/agent-mcp-competitor-analysis-2026-11-09.md`](../research/agent-mcp-competitor-analysis-2026-11-09.md).
@@ -24,7 +28,9 @@ Magicbooklet creator:
 1. **Create media** — pick a model, get a free quote, start a run with the creator's own
    credits, wait for the result.
 2. **Publish** — turn a finished creation into a post on the creator's profile and the showcase,
-   with the recipe and remix rules the app applies.
+   with the recipe and remix rules the app applies. Since phase 4 the post can also be made of
+   media the person made elsewhere, staged by the agent and published through the composer's own
+   path.
 
 Authorization is OAuth 2.1 through Supabase Auth's OAuth server, so the agent holds an ordinary
 Supabase user token: every existing service, RLS policy and rate limit applies unchanged. No
@@ -156,11 +162,12 @@ A kill switch, `MCP_SERVER_DISABLED=1`, answers 503 with `Retry-After` before ad
 | `list_models` | create | read-only | `readModelCatalogPage` (web projection), filter by `kind` | — |
 | `get_model` | create | read-only | `readModelCatalogDetails`: settings, inputs, price rules | — |
 | `quote_generation` | create | read-only | quote service; returns `cost`, `balance`, `affordable`, `catalog_revision` | free |
-| `upload_input` | create | — | fetch an `https` URL (public hosts only, size and type checks) or decode base64 → staging upload → finalize; returns an input reference | 25 MB image, 250 MB video by URL; 8 MB base64 |
+| `upload_input` | both | `openWorldHint` | fetch an `https` URL (public hosts only, size and type checks), decode base64, or (phase 4) finalize an upload the agent sent itself (`upload_id`) → staging upload → finalize; returns an input reference a run or a post takes | as built: 25 MB picture, 50 MB clip or track by URL; 3 MB base64; 30 per 10 min |
+| `request_upload` (phase 4) | both | — | the web's sign step for a file on the agent's machine; answers the signed URL, the headers and the curl line that PUTs it | the URL caps; shares `upload_input`'s 30 per 10 min; four uploads open per account |
 | `create_media` | create | `destructiveHint` | `postUnifiedGenerationForRoute` with `expected_cost_credits` required and `idempotency_key` passed through | existing 30 per 10 min |
 | `get_generation` | create | read-only | `listOwnerGenerationsForRoute` by id; `wait_seconds` 0–45 polls every 3 s | ≤ 45 s |
 | `list_creations` | both | read-only | `listOwnerGenerationsForRoute` summaries, `posted` flag, cursor | page ≤ 50 |
-| `publish_post` | publish | `openWorldHint` | `publishGenerationToShowcaseForRoute`; own completed generation only | existing 20 per 10 min + agent 10 public posts per UTC day |
+| `publish_post` | publish | `openWorldHint` | one of two sources: `generation_id` → `publishGenerationToShowcaseForRoute`, own completed generation only; `uploads` (phase 4) → the composer's `createOwnerPostForRoute`, 1 to 5 staged files with a title and `made_with` | existing 20 per 10 min + agent 10 public posts per UTC day (+ the post-mutation limit for uploads) |
 | `get_post` | publish | read-only | the post page's loader: state, URL, counts | — |
 | `delete_post` | publish | `destructiveHint` | `post-delete-service.ts`, own posts only | existing post-mutation limit |
 | `enhance_prompt` | create | read-only | prompt enhancement service | existing 60 per 10 min |
@@ -187,6 +194,10 @@ a title, a description, annotations and a schema.
 - Feed: the agent daily cap, the audit table, moderation can filter to agent posts.
 - Uploads by URL fetch only public hosts (no private ranges, no redirects off-host), with the
   existing byte caps and MIME allow-list.
+- Media made elsewhere (phase 4): only a file staged through `upload_input` is published, so the
+  signature rule has seen every file; the composer's own rules, limits and ownership check decide
+  the post; Made with is required, never Magicbooklet's own name and never a new catalog row; the
+  consent screen says an agent may bring pictures and videos from elsewhere.
 - Logging: one `logBackendEvent` per tool call with `client_id`, tool, outcome and cost; the
   audit table is the queryable record.
 
@@ -327,6 +338,81 @@ usage check.
 Owner's steps: the written-exception request to mcp-review@anthropic.com for the Anthropic
 connectors directory (it excludes AI media generation otherwise) and the ChatGPT directory
 submission. The registry publish is done.
+
+### Phase 4 — media made elsewhere
+
+Status, 2026-11-10: built and in review on `feat/mcp-outside-media` (server 1.2.0, plugin
+1.1.0); not merged. Proven before the PR by the unit suites and on a throwaway local stack, both
+the upload protocol against real Storage and the tools end to end (runbook, "Media made
+elsewhere"). Left after the merge: the production check the runbook names (a private post from
+Claude Code, repeated, read, deleted) and the registry publish of 1.2.0.
+
+The owner asked on 2026-11-10 whether an agent can post media made elsewhere, and then to plan
+and add it. Until then `publish_post` took a creation only and `upload_input` staged run inputs
+only. No migration, no new route, no mobile change.
+
+Decisions:
+
+1. **One publish tool.** `publish_post` takes exactly one of `generation_id` or `uploads`: 1 to
+   `MAX_POST_MEDIA_ITEMS` (5) items `{ storage_path }`, each a file staged with `upload_input`. One
+   tool keeps the audit rows under `tool = 'publish_post'`, so the daily cap, the moderation list
+   and the partial index apply unchanged. An upload publish records `PUBLISHED_PUBLIC` or
+   `PUBLISHED_PRIVATE` with `post_id` set and `generation_id` null.
+2. **With uploads**, `title` and `made_with` are required: 1 to 5 `{ tool, model? }`, free text,
+   refused for Magicbooklet's own name and wherever the composer's validator refuses.
+   `description`, `body`, `category`, `visibility` (public by default) and `is_nsfw` pass through
+   as the composer sends them; the recipe is none. `allow_remixes` is refused with `uploads`, and
+   `made_with` with `generation_id`.
+3. **The composer's own create** (`createOwnerPostForRoute`) makes the post, from a form built in
+   `src/lib/agent-upload-publish-request.ts`, so the composer's rules, `POST_MUTATION_RATE_LIMIT`,
+   the ownership check of every path, the consumption of each staged file and the media
+   processing apply. Before it, the agent's cap for a public post, as for a creation. Refusals map
+   to stable codes with the service's message and no link.
+4. **Retry safety.** The post's id is derived from the creator and the ordered staged paths. A
+   repeat reads it first and answers the existing post; a differing `visibility` changes it.
+5. **`request_upload`** for a file an agent with a shell can send (Claude Code, Codex, Cursor): it
+   counts against `AGENT_UPLOAD_INPUT_RATE_LIMIT`, applies the URL caps, calls the web's sign
+   step, and answers the signed URL, the method, the web's three headers and the exact curl line.
+6. **`upload_input` takes `upload_id`** as a third source: it finalizes the upload for the caller
+   and applies the signature rule to the stored object's first bytes, removing a file that fails.
+7. **Words.** The tools say a staged file feeds a run or becomes a post; `publish_post` explains
+   both sources; the answer says to keep the `post_id`, since `list_creations` does not list such
+   a post. `get_post` and `delete_post` work for a post with no creation.
+8. **Consent** names it: "Your creations, or pictures and videos the agent brings from elsewhere".
+9. **Setup page and plugin**: the capability, without overclaiming for a client with no shell; a
+   third skill, `post-outside-media`.
+10. **Version**: `MCP_SERVER_VERSION` and `server.json` at 1.2.0 together.
+11. **Moderation**: `list --source agent` gains a `source` column, `creation` or `upload`.
+12. **Docs**: the runbook, this section, and AGENTS.md's "Agent access (MCP)".
+
+As built, where the code decided more than the decisions said:
+
+- The existing post's visibility change (4) could not use the creation path's republish, which
+  needs a creation behind the post. It goes through the composer's save
+  (`updateOwnerPostForRoute` with the visibility alone), under the same two limits.
+- `publish_post` takes only a file that went through `upload_input` and is still unused (it reads
+  each path's reservation). Without that, `request_upload`, the curl line and a publish would
+  have skipped the signature rule of (6). A path that is not the caller's is still left to the
+  composer service's ownership rule.
+- Made with is sent without the composer's `createTool` and `createModel`: a known name is filed
+  under the catalog's spelling, any other stays on the post, and an agent never adds a catalog
+  row (nor meets the catalog's ten tools and thirty models a day).
+- An unchanged repeat of an upload publish still names its post in the audit row (a creation's
+  names none): only an agent makes a post under a derived id, and the call that made it may have
+  lost its row to the timeout that caused the repeat. It records `ALREADY_PUBLISHED`, which the
+  cap does not count.
+- The staging quota, found on the local stack: the sign step reserves 250 MB per signed upload
+  against 1 GB an account, so four uploads can be open at once, and a refused or abandoned one
+  keeps its place until the daily reclaim. So `upload_input` answers an upload nothing was sent
+  to yet `NOT_READY` without closing it (finalize would), a fifth open upload answers
+  `UPLOAD_BYTES_LIMIT` by name, and the tool and the skill say to send one file at a time. Not
+  changed: the reservation size and the reclaim's schedule, which are the web's.
+- `MCP_TOOLS` lives in `mcp-server-service.ts`, not the client directory; the manifests test
+  reads it there.
+
+Not in phase 4: audio posts (the composer has none), a recipe on an upload post, editing an
+upload post's text or media through an agent, listing upload posts (`list_creations` lists
+creations; a `list_posts` tool would be its own change).
 
 ## Client setup (what the docs page will say)
 
