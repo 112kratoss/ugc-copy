@@ -17,13 +17,14 @@ function answer(body: Uint8Array | Uint8Array[] | null, init: { status?: number;
 }
 
 describe('the inline preview of a finished picture', () => {
-  it('returns an image block for a picture under a megabyte, base64 with its type', async () => {
+  it('returns an image block for a picture under the cap, base64 with its type', async () => {
     const bytes = new Uint8Array([1, 2, 3, 4]);
     const fetchImpl = vi.fn(async () => answer(bytes, { length: 4 }));
     const block = await fetchImageContentBlock('https://cdn.example.test/preview.webp', { fetchImpl });
     expect(block).toEqual({ type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType: 'image/webp' });
     expect(fetchImpl).toHaveBeenCalledWith('https://cdn.example.test/preview.webp', expect.objectContaining({ redirect: 'follow' }));
-    expect(MCP_IMAGE_BLOCK_MAX_BYTES).toBe(1024 * 1024);
+    // Half a megabyte: about 700k characters of base64, beside a text and structured half under the 100k cap.
+    expect(MCP_IMAGE_BLOCK_MAX_BYTES).toBe(512 * 1024);
   });
 
   it('skips silently: too large by header or by stream, not a picture, an error, a failed fetch, an empty body', async () => {

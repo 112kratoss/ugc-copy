@@ -6,7 +6,6 @@ import {
   sniffMediaKind,
   type PublicMediaFetchRefusalCode,
 } from '@/lib/public-url-media-fetch';
-import { toStorageUploadBody } from '@/lib/storage-upload-body';
 import {
   canonicalStorageMediaMimeType,
   isAllowedStorageMediaMimeType,
@@ -29,13 +28,28 @@ import { finalizeUploadById } from '@/lib/upload-finalization';
  *
  * The bytes come from a public https URL (`public-url-media-fetch.ts` decides what public means
  * and holds the download to the caps) or from a base64 string, which is bounded far lower: a tool
- * argument travels through the agent's context and the MCP request body, so 8 MB decoded is the
- * most that is sensible there, and a larger file is sent by URL.
+ * argument travels through the MCP request body, which Vercel caps at 4.5 MB, so 3 MB decoded
+ * (4 MB encoded, with room for the JSON-RPC envelope) is the most that reaches the route, and a
+ * larger file is sent by URL.
  */
 
-export const AGENT_BASE64_MAX_BYTES = 8 * 1024 * 1024;
-/** The sign step's own caps (`TEMPORARY_MEDIA_UPLOAD_LIMITS` mirrors them for the browser). */
-export const AGENT_UPLOAD_MAX_BYTES_BY_KIND: Record<StorageMediaKind, number> = MAX_UPLOAD_BYTES_BY_KIND;
+export const AGENT_BASE64_MAX_BYTES = 3 * 1024 * 1024;
+/** The most characters the base64 argument may be: the cap encoded, with padding and whitespace room. */
+export const AGENT_BASE64_MAX_CHARACTERS = Math.ceil(AGENT_BASE64_MAX_BYTES / 3) * 4 + 64;
+/** Vercel's request body limit for a function: everything above must fit under it with the envelope. */
+export const VERCEL_REQUEST_BODY_LIMIT_BYTES = 4.5 * 1024 * 1024;
+
+/**
+ * What a URL fetch may be, by kind: below the sign step's own caps (`MAX_UPLOAD_BYTES_BY_KIND`,
+ * 250 MB for a clip), because the whole file is buffered in the function before it is stored and
+ * the fetch, the store, finalize and the read URL must all fit in the route's 60 seconds. A
+ * picture keeps the sign step's 25 MB; a clip or a track takes 50 MB.
+ */
+export const AGENT_URL_FETCH_MAX_BYTES_BY_KIND: Record<StorageMediaKind, number> = {
+  image: Math.min(MAX_UPLOAD_BYTES_BY_KIND.image, 25 * 1024 * 1024),
+  video: Math.min(MAX_UPLOAD_BYTES_BY_KIND.video, 50 * 1024 * 1024),
+  audio: Math.min(MAX_UPLOAD_BYTES_BY_KIND.audio, 50 * 1024 * 1024),
+};
 
 export type AgentInputSource =
   | { url: string }
@@ -152,12 +166,16 @@ export function decodeAgentBase64(base64: string, mimeType: string): DecodedByte
   if (bytes.length === 0) {
     return { ok: false, code: 'INVALID_BASE64', message: 'base64 decodes to nothing.' };
   }
+  // A picture must carry a picture's signature (every listed picture type has one); a clip or a
+  // track is refused only when its bytes say another kind (`public-url-media-fetch.ts`).
   const sniffed = sniffMediaKind(bytes);
-  if (sniffed && sniffed !== kind) {
+  if (kind === 'image' ? sniffed !== 'image' : sniffed !== null && sniffed !== kind) {
     return {
       ok: false,
       code: 'UNSUPPORTED_MEDIA',
-      message: `mime_type says ${contentType}, but the bytes are a ${sniffed}. Give the file's own type.`,
+      message: sniffed
+        ? `mime_type says ${contentType}, but the bytes are a ${sniffed}. Give the file's own type.`
+        : `mime_type says ${contentType}, but the bytes are not a picture of a type Magicbooklet takes.`,
       details: { mime_type: contentType, sniffed_kind: sniffed },
     };
   }
@@ -169,7 +187,7 @@ async function obtainBytes(
   dependencies: AgentInputUploadDependencies,
 ): Promise<DecodedBytes & { sourceUrl?: string | null }> {
   if ('url' in source) {
-    const fetched = await dependencies.fetchPublicHttpsMedia(source.url, { maxBytesByKind: AGENT_UPLOAD_MAX_BYTES_BY_KIND });
+    const fetched = await dependencies.fetchPublicHttpsMedia(source.url, { maxBytesByKind: AGENT_URL_FETCH_MAX_BYTES_BY_KIND });
     if (!fetched.ok) return fetched;
     return { ok: true, bytes: fetched.bytes, contentType: fetched.contentType, kind: fetched.kind, sourceUrl: fetched.finalUrl };
   }
@@ -216,9 +234,13 @@ export async function stageAgentInput({
   }
 
   // A Blob, never a Buffer: a Buffer is UTF-8 stringified in transit (`storage-upload-body.ts`).
+  // Built here rather than with `toStorageUploadBody`, which copies the bytes first: these are a
+  // fresh `Buffer.concat` or a decode, nothing pooled, and the Blob takes its own snapshot, so one
+  // copy is enough for a file that may be 50 MB.
+  const view: BlobPart = new Uint8Array(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength);
   const uploaded = await admin.storage
     .from(intent.response.bucket)
-    .upload(intent.response.path, toStorageUploadBody(bytes, intent.response.contentType), {
+    .upload(intent.response.path, new Blob([view], { type: intent.response.contentType }), {
       contentType: intent.response.contentType,
       upsert: false,
     });

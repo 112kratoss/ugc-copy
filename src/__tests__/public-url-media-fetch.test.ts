@@ -208,9 +208,13 @@ describe('fetchPublicHttpsMedia', () => {
     expect(await fetchPublicHttpsMedia('https://cdn.example.com/a.png', { maxBytesByKind: CAPS, lookup: publicLookup, request: lying.request }))
       .toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { content_type: 'image/png', sniffed_kind: 'audio' } });
 
-    // No signature known for the bytes: the header stands (a HEIF variant, a raw stream).
+    // A picture must carry a picture's signature: random bytes under a picture's type are refused.
     const unsigned = transport([{ status: 200, headers: { 'content-type': 'image/webp' }, body: Buffer.alloc(40, 7) }]);
-    expect(await fetchPublicHttpsMedia('https://cdn.example.com/a', { maxBytesByKind: CAPS, lookup: publicLookup, request: unsigned.request })).toMatchObject({ ok: true, contentType: 'image/webp' });
+    expect(await fetchPublicHttpsMedia('https://cdn.example.com/a', { maxBytesByKind: CAPS, lookup: publicLookup, request: unsigned.request }))
+      .toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { content_type: 'image/webp', sniffed_kind: null } });
+    // A track or a clip with no known signature keeps its header's type (several containers have none).
+    const unsignedTrack = transport([{ status: 200, headers: { 'content-type': 'audio/aac' }, body: Buffer.alloc(40, 7) }]);
+    expect(await fetchPublicHttpsMedia('https://cdn.example.com/a.aac', { maxBytesByKind: CAPS, lookup: publicLookup, request: unsignedTrack.request })).toMatchObject({ ok: true, contentType: 'audio/aac', kind: 'audio' });
 
     // A picker's alias is kept under the listed name.
     const alias = transport([{ status: 200, headers: { 'content-type': 'audio/x-m4a' }, body: Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypM4A '), Buffer.alloc(8)]) }]);

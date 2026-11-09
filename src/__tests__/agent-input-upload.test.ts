@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   AGENT_BASE64_MAX_BYTES,
-  AGENT_UPLOAD_MAX_BYTES_BY_KIND,
+  AGENT_BASE64_MAX_CHARACTERS,
+  AGENT_URL_FETCH_MAX_BYTES_BY_KIND,
+  VERCEL_REQUEST_BODY_LIMIT_BYTES,
   agentUploadFileName,
   decodeAgentBase64,
   stageAgentInput,
@@ -66,7 +68,11 @@ describe('the base64 source', () => {
     const aliased = decodeAgentBase64(WAV.toString('base64').replace(/(.{20})/gu, '$1\n'), 'audio/vnd.wave');
     expect(aliased).toMatchObject({ ok: true, contentType: 'audio/wav', kind: 'audio' });
 
-    expect(AGENT_BASE64_MAX_BYTES).toBe(8 * 1024 * 1024);
+    // 3 MB decoded: Vercel caps a request body at 4.5 MB, and the encoding plus the JSON-RPC
+    // envelope must fit under it, or the agent gets a platform 413 instead of TOO_LARGE.
+    expect(AGENT_BASE64_MAX_BYTES).toBe(3 * 1024 * 1024);
+    expect(AGENT_BASE64_MAX_CHARACTERS).toBe(Math.ceil(AGENT_BASE64_MAX_BYTES / 3) * 4 + 64);
+    expect(AGENT_BASE64_MAX_CHARACTERS + 4096).toBeLessThan(VERCEL_REQUEST_BODY_LIMIT_BYTES);
     expect(decodeAgentBase64('not base64!!', 'image/jpeg')).toMatchObject({ ok: false, code: 'INVALID_BASE64' });
     expect(decodeAgentBase64('', 'image/jpeg')).toMatchObject({ ok: false, code: 'INVALID_BASE64' });
     expect(decodeAgentBase64(JPEG.toString('base64'), 'text/html')).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { mime_type: 'text/html' } });
@@ -74,8 +80,11 @@ describe('the base64 source', () => {
     // The size follows from the length: the cap is applied before anything is decoded.
     const huge = `${'A'.repeat(Math.ceil((AGENT_BASE64_MAX_BYTES + 3) / 3) * 4)}`;
     expect(decodeAgentBase64(huge, 'image/png')).toMatchObject({ ok: false, code: 'TOO_LARGE', details: { max_bytes: AGENT_BASE64_MAX_BYTES } });
-    // The bytes say what they are: a track sent as a picture is refused.
+    // The bytes say what they are: a track sent as a picture is refused, and so are bytes with no
+    // picture's signature under a picture's type; a track with no signature keeps its type.
     expect(decodeAgentBase64(WAV.toString('base64'), 'image/png')).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { sniffed_kind: 'audio' } });
+    expect(decodeAgentBase64(Buffer.alloc(40, 7).toString('base64'), 'image/png')).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { sniffed_kind: null } });
+    expect(decodeAgentBase64(Buffer.alloc(40, 7).toString('base64'), 'audio/aac')).toMatchObject({ ok: true, kind: 'audio' });
   });
 
   it('files a staged object under a fixed name, never the agent\'s words', () => {
@@ -85,11 +94,11 @@ describe('the base64 source', () => {
     expect(agentUploadFileName('image', 'image/x-unknown')).toBe('agent-image.x-unknown');
   });
 
-  it('keeps the sign step\'s own caps (the browser\'s TEMPORARY_MEDIA_UPLOAD_LIMITS mirror them)', () => {
-    // Not read from temporary-media-upload.ts, which makes the browser client at import; the sign
-    // step's constants are the server's own, and temporary-media-upload.test.ts holds the mirror.
-    expect(AGENT_UPLOAD_MAX_BYTES_BY_KIND).toEqual(MAX_UPLOAD_BYTES_BY_KIND);
-    expect(AGENT_UPLOAD_MAX_BYTES_BY_KIND).toEqual({ image: 25 * 1024 * 1024, video: 250 * 1024 * 1024, audio: 50 * 1024 * 1024 });
+  it('caps a URL fetch below the sign step\'s own caps: the whole file is buffered in a 60-second function', () => {
+    expect(AGENT_URL_FETCH_MAX_BYTES_BY_KIND).toEqual({ image: 25 * 1024 * 1024, video: 50 * 1024 * 1024, audio: 50 * 1024 * 1024 });
+    for (const kind of ['image', 'video', 'audio'] as const) {
+      expect(AGENT_URL_FETCH_MAX_BYTES_BY_KIND[kind]).toBeLessThanOrEqual(MAX_UPLOAD_BYTES_BY_KIND[kind]);
+    }
   });
 });
 
@@ -106,7 +115,7 @@ describe('stageAgentInput', () => {
       expiresInSeconds: 3600,
       sourceUrl: 'https://cdn.example.com/a.jpg',
     });
-    expect(dependencies.fetchPublicHttpsMedia).toHaveBeenCalledWith('https://cdn.example.com/a.jpg', { maxBytesByKind: AGENT_UPLOAD_MAX_BYTES_BY_KIND });
+    expect(dependencies.fetchPublicHttpsMedia).toHaveBeenCalledWith('https://cdn.example.com/a.jpg', { maxBytesByKind: AGENT_URL_FETCH_MAX_BYTES_BY_KIND });
     // The sign step is given the bytes as they are: their type, their kind and their real size.
     const [{ body, userId }] = vi.mocked(dependencies.createTemporaryMediaUploadIntent).mock.calls[0] as unknown as [{ body: Record<string, unknown>; userId: string }];
     expect(body).toEqual({ fileName: 'agent-image.jpg', mimeType: 'image/jpeg', kind: 'image', sizeBytes: JPEG.length });

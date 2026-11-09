@@ -1,16 +1,17 @@
 /**
  * The picture a finished image run's `get_generation` answer carries inline, for the clients
  * that draw an `image` content block (Claude Code, Claude.ai): the existing preview asset,
- * fetched here from its signed URL, when it is a picture of at most a megabyte. Anything else
- * (a larger preview, a clip's poster that is not a picture, a URL that fails, a slow host)
- * leaves the answer as it was: the block is a courtesy, never a reason for a result to fail or
- * wait long.
+ * fetched here from its signed URL, when it is a picture of at most half a megabyte and the
+ * caller asked for it (`include_preview`), so a poll stays small. Anything else (a larger
+ * preview, a clip's poster that is not a picture, a URL that fails, a slow host) leaves the
+ * answer as it was: the block is a courtesy, never a reason for a result to fail or wait long.
  *
  * The block's bytes travel base64 in the result beside the text and the structured content; the
- * server's character cap (`mcp-tool-results.ts`) holds those two, and this cap holds the picture.
+ * server's character cap (`mcp-tool-results.ts`) holds those two, and this cap holds the picture
+ * (512 KB is about 700k characters of base64, a size the clients draw).
  */
 
-export const MCP_IMAGE_BLOCK_MAX_BYTES = 1024 * 1024;
+export const MCP_IMAGE_BLOCK_MAX_BYTES = 512 * 1024;
 export const MCP_IMAGE_BLOCK_FETCH_TIMEOUT_MS = 5_000;
 
 export type McpImageContentBlock = { type: 'image'; data: string; mimeType: string };

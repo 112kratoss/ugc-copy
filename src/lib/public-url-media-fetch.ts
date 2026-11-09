@@ -24,9 +24,11 @@ import {
  *
  * What comes back is held to the storage MIME policy by its `Content-Type` (never by the URL's
  * extension, which says nothing about the bytes), to the byte cap of its kind by `Content-Length`
- * and again as the body streams (a server may lie about the length or send none), and to a
- * signature check of the first bytes where the format has one, so a page served as a picture is
- * refused rather than staged.
+ * and again as the body streams (a server may lie about the length or send none), and to the
+ * first bytes: a picture must carry a picture's signature (every listed picture type has one), so
+ * a page or random bytes served as a picture are refused rather than staged; a clip or a track is
+ * refused only when its bytes say another kind, since several audio and video containers have no
+ * fixed signature.
  */
 
 export type PublicMediaFetchRefusalCode =
@@ -385,11 +387,14 @@ export async function fetchPublicHttpsMedia(value: string, options: PublicMediaF
     if ('ok' in result) return result;
     if (result.kind === 'body') {
       const sniffed = sniffMediaKind(result.bytes);
-      if (sniffed && sniffed !== result.mediaKind) {
+      const mismatch = result.mediaKind === 'image' ? sniffed !== 'image' : sniffed !== null && sniffed !== result.mediaKind;
+      if (mismatch) {
         return {
           ok: false,
           code: 'UNSUPPORTED_MEDIA',
-          message: `The server called the file ${result.contentType}, but its bytes are a ${sniffed}.`,
+          message: sniffed
+            ? `The server called the file ${result.contentType}, but its bytes are a ${sniffed}.`
+            : `The server called the file ${result.contentType}, but its bytes are not a picture of a type Magicbooklet takes.`,
           details: { content_type: result.contentType, sniffed_kind: sniffed },
         };
       }
