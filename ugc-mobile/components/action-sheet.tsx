@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Animated, Keyboard, Pressable, Text, View } from 'react-native';
+import { Animated, Keyboard, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Overlay } from '@/components/overlay-host';
 import {
   SheetGrabber,
   SheetPanel,
-  sheetPanelStyle,
   useSheetDismissDrag,
   useSheetPresentation,
 } from '@/components/sheet-chrome';
@@ -17,7 +16,7 @@ import {
   type ActionSheetRequest,
 } from '@/lib/action-sheet';
 import { haptic } from '@/lib/haptics';
-import { useReducedMotion } from '@/lib/motion';
+import { MotionView, usePressMotion, useReducedMotion } from '@/lib/motion';
 import { resolvedBottomInset } from '@/lib/safe-area';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -112,7 +111,13 @@ function ActionSheetSurface({
   return (
     // Answered once: while the exit plays the rows are still on screen, and a
     // second tap must not choose again.
-    <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1, justifyContent: 'flex-end' }}>
+    // The top padding is the tallest the card may grow: a long list (six report
+    // reasons at the largest text size on a small phone) scrolls inside it
+    // rather than pushing the title under the status bar.
+    <View
+      pointerEvents={visible ? 'auto' : 'none'}
+      style={{ flex: 1, justifyContent: 'flex-end', paddingTop: insets.top + CARD_SCREEN_INSET }}
+    >
       <Animated.View
         style={{ position: 'absolute', inset: 0, backgroundColor: theme.colors.scrim, opacity: backdropOpacity }}
       >
@@ -123,87 +128,155 @@ function ActionSheetSurface({
           style={{ flex: 1 }}
         />
       </Animated.View>
+      {/* A floating card rather than an edge-to-edge sheet: inset from the
+          screen's sides and bottom, rounded on all four corners, its choices
+          drawn as separate filled rows. The transparent outer view is what
+          slides and what gets measured, so the travel covers the gap under the
+          card as well and nothing of it shows before the entrance starts. It
+          takes no touches itself (box-none): a tap in the gaps beside or under
+          the card falls through to the scrim and cancels, as one anywhere else
+          outside the card does. The drag and VoiceOver's modal boundary sit on
+          the card. Its top padding keeps the card's shadow, which reaches about
+          30pt above it, past the screen edge while the panel is hidden — the
+          presentation leaves only 24pt beyond the measured height. */}
       <SheetPanel
-        {...drag.contentPanHandlers}
-        accessibilityViewIsModal
+        pointerEvents="box-none"
         onLayout={presentation.onPanelLayout}
-        style={[
-          sheetPanelStyle(theme.colors),
-          {
-            paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
-            transform: [{ translateY }],
-          },
-        ]}
+        style={{
+          flexShrink: 1,
+          paddingTop: CARD_SHADOW_CLEARANCE,
+          paddingHorizontal: CARD_SCREEN_INSET,
+          // Floats above the home indicator rather than under it, the way the
+          // system's inset sheets sit; a phone without one gets the same gap
+          // the sides have.
+          paddingBottom: Math.max(bottomInset, CARD_SCREEN_INSET),
+          transform: [{ translateY }],
+        }}
       >
-        <SheetGrabber drag={drag} />
-        <View style={{ gap: 4, paddingHorizontal: appTheme.spacing.panel, paddingBottom: appTheme.spacing.gap }}>
-          <Text
-            accessibilityRole="header"
-            numberOfLines={1}
-            style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}
-          >
-            {request.title}
-          </Text>
-          {request.message ? (
-            <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
-              {request.message}
+        <View
+          {...drag.contentPanHandlers}
+          accessibilityViewIsModal
+          style={{
+            flexShrink: 1,
+            borderRadius: CARD_RADIUS,
+            borderCurve: 'continuous',
+            borderWidth: 1,
+            borderColor: theme.colors.borderStrong,
+            backgroundColor: theme.colors.panel,
+            boxShadow: theme.shadow.floating.boxShadow,
+            paddingHorizontal: CARD_PADDING,
+            paddingBottom: CARD_PADDING,
+          }}
+        >
+          <SheetGrabber drag={drag} />
+          <View style={{ gap: 4, paddingHorizontal: ROW_PADDING, paddingTop: 2, paddingBottom: appTheme.spacing.gap + 2 }}>
+            {/* A line more than the edge-to-edge sheet allowed each: the card's
+                header is narrower, and the paid unlock's price-changed message
+                carries the credit amount near its end. */}
+            <Text
+              accessibilityRole="header"
+              numberOfLines={2}
+              style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}
+            >
+              {request.title}
             </Text>
-          ) : null}
+            {request.message ? (
+              <Text numberOfLines={3} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
+                {request.message}
+              </Text>
+            ) : null}
+          </View>
+          <ScrollView
+            {...drag.scrollProps}
+            keyboardShouldPersistTaps="handled"
+            style={{ flexGrow: 0, flexShrink: 1 }}
+            contentContainerStyle={{ gap: ROW_GAP }}
+          >
+            {orderActionSheetActions(request.actions).map((action) => (
+              <ActionRow key={action.label} action={action} onPress={() => choose(action)} />
+            ))}
+          </ScrollView>
+          <View style={{ marginTop: appTheme.spacing.gap }}>
+            <ActionRow action={{ label: cancelLabel }} cancel onPress={cancel} />
+          </View>
         </View>
-        {orderActionSheetActions(request.actions).map((action) => (
-          <ActionRow key={action.label} action={action} onPress={() => choose(action)} />
-        ))}
-        <View style={{ height: 1, marginTop: appTheme.spacing.compact, backgroundColor: theme.colors.border }} />
-        <ActionRow action={{ label: cancelLabel }} muted onPress={cancel} />
       </SheetPanel>
     </View>
   );
 }
 
+// The card's own geometry. The card is the outermost container, so its corner
+// is the scale's largest step; the rows inside step down from it so the
+// corners nest (outer radius minus the padding between them).
+const CARD_SCREEN_INSET = 8;
+const CARD_RADIUS = appTheme.radii.xl;
+const CARD_PADDING = 8;
+// Past the `floating` shadow's reach above the card (46pt blur, 16pt drop).
+const CARD_SHADOW_CLEARANCE = 8;
+const ROW_RADIUS = CARD_RADIUS - CARD_PADDING;
+const ROW_PADDING = 16;
+const ROW_GAP = 6;
+
 function ActionRow({
   action,
-  muted = false,
+  cancel = false,
   onPress,
 }: {
   action: ActionSheetAction;
-  muted?: boolean;
+  cancel?: boolean;
   onPress: () => void;
 }) {
   const theme = useAppTheme();
+  const tone = action.destructive ? theme.semantic.danger : null;
+  // The row springs down under the finger and rebounds on release, the same
+  // press the app's other surfaces have — a snapped scale reads as a flicker.
+  const motion = usePressMotion(Boolean(action.disabled), { scale: appTheme.motion.scale.pressedCard });
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={action.label}
-      accessibilityHint={action.detail}
-      accessibilityState={{ disabled: Boolean(action.disabled) }}
-      disabled={action.disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        minHeight: 56,
-        justifyContent: 'center',
-        gap: 3,
-        paddingHorizontal: appTheme.spacing.panel,
-        paddingVertical: appTheme.spacing.gap,
-        backgroundColor: pressed ? theme.colors.surface : 'transparent',
-        opacity: action.disabled ? appTheme.opacity.disabled : 1,
-      })}
-    >
-      <Text
-        style={{
-          color: action.destructive
-            ? theme.colors.danger
-            : muted
-              ? theme.colors.muted
-              : theme.colors.text,
-          ...appTheme.type.body,
-          fontWeight: '800',
-        }}
+    <MotionView style={motion.animatedStyle}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={action.label}
+        accessibilityHint={action.detail}
+        accessibilityState={{ disabled: Boolean(action.disabled) }}
+        disabled={action.disabled}
+        onPress={onPress}
+        onPressIn={motion.onPressIn}
+        onPressOut={motion.onPressOut}
+        style={({ pressed }) => ({
+          minHeight: 54,
+          justifyContent: 'center',
+          alignItems: cancel ? 'center' : 'stretch',
+          gap: 2,
+          paddingHorizontal: ROW_PADDING,
+          paddingVertical: appTheme.spacing.gap - 1,
+          borderRadius: ROW_RADIUS,
+          borderCurve: 'continuous',
+          // A press shows in the fill, not only in the spring: with Reduce
+          // Motion on, the colour is all the feedback there is. A neutral row
+          // takes the app's pressed tint (surface to surfaceStrong is about
+          // 1.03:1 on paper); a danger row deepens to its border tint rather
+          // than fading, since a choice about to happen should not look less sure.
+          backgroundColor: tone
+            ? pressed ? tone.border : tone.background
+            : pressed
+              ? theme.state.pressed.background
+              : theme.colors.surface,
+          opacity: action.disabled ? appTheme.opacity.disabled : 1,
+        })}
       >
-        {action.label}
-      </Text>
-      {action.detail ? (
-        <Text style={{ color: theme.colors.faint, ...appTheme.type.caption }}>{action.detail}</Text>
-      ) : null}
-    </Pressable>
+        <Text
+          style={{
+            color: tone ? tone.foreground : cancel ? theme.colors.muted : theme.colors.text,
+            ...appTheme.type.body,
+            fontWeight: '700',
+          }}
+        >
+          {action.label}
+        </Text>
+        {action.detail ? (
+          <Text style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{action.detail}</Text>
+        ) : null}
+      </Pressable>
+    </MotionView>
   );
 }
