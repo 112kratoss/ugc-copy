@@ -79,7 +79,7 @@ describe('deferred app shell islands', () => {
     render(<DeferredAppShellAccount />);
 
     expect(screen.queryByTestId('dynamic-island')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
   });
 
   it('publishes signed-out state when the browser auth cookie disappears', () => {
@@ -91,7 +91,7 @@ describe('deferred app shell islands', () => {
     act(() => window.dispatchEvent(new Event('focus')));
 
     expect(readAppShellAuthentication()).toBe(false);
-    expect(screen.getByRole('link', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Sign in for 25 free credits' })).toBeInTheDocument();
   });
 
   it('keeps generation notifications out of the first render', () => {

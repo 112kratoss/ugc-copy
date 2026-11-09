@@ -92,9 +92,8 @@ import {
     settingsVariants,
     useQuotePrices,
 } from '@/lib/use-quote-prices';
-import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
-import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
+import { creatorSignInPath, VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
 import { useCreatorDraftOwner, useCreatorForm, useCreatorSignOut, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses } from '@/components/DesignSystem';
@@ -390,7 +389,7 @@ type CreateImageClientProps = {
     prefill: CreateImagePrefill;
     /** Back from the sign-up a visitor opened here: the card that adds the welcome credits. */
     welcome?: CreatorWelcome | null;
-    /** The sign-up sheet's `?handover=` nonce on the way back: the visitor's draft moves to the account by it. */
+    /** The sign-in hand-over's `?handover=` nonce on the way back: the visitor's draft moves to the account by it. */
     handoverNonce?: string | null;
     /** What a new account starts with, told to a signed-out visitor. */
     visitorWelcomeCredits?: number | null;
@@ -450,7 +449,9 @@ function ImageCreator({
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
     const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
-    const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
+    // One trip to sign in: a second press (a double-click on Generate) would mark the draft again
+    // under a new nonce, and the first trip's way back would then carry one that moves nothing.
+    const leavingForSignInRef = useRef(false);
     const [selectedModel, setSelectedModel] = useState<ModelId>((opening?.modelId ?? 'nano-banana-2') as ModelId);
     const [prompt, setPrompt] = useState('');
 
@@ -1323,15 +1324,20 @@ function ImageCreator({
             persistUploadedImageElements(elementRefs.current),
         ]);
     };
-    /** Asks a visitor to sign up for what they pressed, with the form saved for the way back. */
-    const openSignUp = async (reason: CreatorSignUpReason) => {
+    /**
+     * Sends a visitor to the sign-in page for what they pressed (owner, 2026-11-09: the page, not a
+     * sheet), with the form saved for the way back and the draft marked for the account.
+     */
+    const openSignUp = async () => {
+        if (leavingForSignInRef.current) return;
+        leavingForSignInRef.current = true;
         // The text only: the pictures were saved as each was added, and writing every
-        // one again held the sheet back on a phone.
+        // one again held the way to sign-in back on a phone.
         if (!remixId && draftOwner && isDraftRestoreSettled) {
             unsavedDraftRef.current = null;
             await saveCreatorDraft('image', draftOwner, getDraftToSave()).catch(() => undefined);
         }
-        setSignUpReason(reason);
+        router.push(creatorSignInPath('image', draftOwner === VISITOR_DRAFT_OWNER));
     };
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
     const reloadPage = async () => {
@@ -1843,7 +1849,7 @@ function ImageCreator({
         if (isVisitor) {
             // Signed out: the sign-up comes back here, on this page's own link, with the
             // draft saved, and nothing runs until Generate is pressed again.
-            await openSignUp('generate');
+            await openSignUp();
             return;
         }
 
@@ -2412,7 +2418,7 @@ function ImageCreator({
                             onEnhanced={setPrompt}
                             onCreditsUpdate={updateCredits}
                             account={formAccount}
-                            onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
+                            onRequireAccount={isVisitor ? () => void openSignUp() : undefined}
                             medium="image"
                             selectedModel={selectedModel}
                             label={isElementEnhancementLocked ? 'Polish' : 'Enhance'}
@@ -2627,19 +2633,6 @@ function ImageCreator({
                         )}
                     </CreatorCanvas>
                 }
-            />
-
-            <CreatorSignUpSheet
-                reason={signUpReason}
-                handsOverDraft={draftOwner === VISITOR_DRAFT_OWNER}
-                tool="image"
-                welcomeCredits={visitorWelcomeCredits}
-                runCost={currentCost}
-                modelName={model.displayName}
-                settingsSummary={settingsSummary}
-                keepsPrompt={Boolean(prompt.trim())}
-                keepsImages={elements.length > 0}
-                onClose={() => setSignUpReason(null)}
             />
 
             <StudioMediaPreviewModal

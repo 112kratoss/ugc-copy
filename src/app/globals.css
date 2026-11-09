@@ -46,6 +46,7 @@
 @source "../components/AppShellCreateMenu.tsx";
 @source "../components/AppleLogo.tsx";
 @source "../components/AuthProvider.tsx";
+@source "../components/BrandWordmark.tsx";
 @source "../components/CreatorIdentity.tsx";
 @source "../components/DeferredAppShellAccount.tsx";
 @source "../components/DeferredGenerationNotifications.tsx";
@@ -1059,6 +1060,32 @@ button:disabled,
   display: none;
 }
 
+/* A visitor's "Sign in · 25 free credits" (AppShellAccountFallback.tsx) keeps "25 free" on a
+   phone, where "credits" would push a page's title out of the bar (the creators' "Create" at
+   390px), and drops its crown too on the narrowest. */
+@media (max-width: 419px) {
+  .app-shell-sign-in-credits {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .app-shell-sign-in-crown {
+    display: none;
+  }
+}
+
+/* The welcome credits are promised only where this browser's account has not had them
+   (src/lib/welcome-promise.ts): the root layout marks a spent record on <html> before the page
+   draws, so a promise drawn by the server, or before the page's script runs, never shows. */
+html[data-welcome-promise='spent'] .welcome-promise-only {
+  display: none;
+}
+
+html:not([data-welcome-promise='spent']) .welcome-promise-spent-only {
+  display: none;
+}
+
 .app-shell-content {
   /* What the shell leaves a page: the window less the top bar and that room.
      Resolved here, so it follows the room's 0px from 768px. */
@@ -1470,5 +1497,260 @@ button:disabled,
   .ui-button:hover,
   .ui-button:active {
     transform: none;
+  }
+}
+
+/* The sign-in page (src/app/login/), the app's one sign-in page (#731) on the web.
+
+   The wall of creations (SignInWall.tsx): columns tilted -10deg that drift past each other.
+   Each column is its six pictures twice over, a gap under every tile, and slides by half its
+   own height, one set, before it starts again, so the loop has no seam. The columns' box covers
+   the tilted window (cos 10deg = 0.985, sin 10deg = 0.174; lvh, so a phone's toolbars coming
+   and going never resize it), and one set is taller than that box, so a column covers it from
+   one end of its slide to the other. A screen gets more columns only while it is wide enough
+   for them (min-aspect-ratio): a tall one keeps fewer, larger tiles, which the cover needs.
+   Only transforms move. */
+.sign-in-wall {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+  pointer-events: none;
+  user-select: none;
+}
+
+.sign-in-wall-frame {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-10deg);
+}
+
+.sign-in-wall-columns {
+  --sign-in-wall-gap: 10px;
+  /* One set's slide at about the app's 14px a second (DRIFT_SPEED in media-wall.tsx) for the
+     tiles of this size; the even columns take 1.25 of it, the app's 0.8 pace. */
+  --sign-in-wall-lap: 82s;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  align-items: center;
+  gap: var(--sign-in-wall-gap);
+  width: calc(98.5vw + 17.4vh + 2 * var(--sign-in-wall-gap));
+  width: calc(98.5vw + 17.4lvh + 2 * var(--sign-in-wall-gap));
+  height: calc(17.4vw + 98.5vh);
+  height: calc(17.4vw + 98.5lvh);
+  translate: -50% -50%;
+}
+
+.sign-in-wall-column {
+  flex: 1 1 0;
+  min-width: 0;
+  animation: sign-in-wall-up var(--sign-in-wall-lap) linear infinite;
+  /* Every column starts at the visit's point along its own loop (--sign-in-wall-start). */
+  animation-delay: calc(var(--sign-in-wall-start, 0) * var(--sign-in-wall-lap) * -1);
+}
+
+/* Neighbours drift opposite ways, and at their own pace, so rows never line up. */
+.sign-in-wall-column:nth-child(even) {
+  animation-name: sign-in-wall-down;
+  animation-duration: calc(var(--sign-in-wall-lap) * 1.25);
+  animation-delay: calc(var(--sign-in-wall-start, 0) * var(--sign-in-wall-lap) * -1.25);
+}
+
+/* Five columns on a phone, as the app draws; more on wider screens, so a tile keeps about a
+   phone's size. */
+.sign-in-wall-column:nth-child(n + 6) {
+  display: none;
+}
+
+@media (min-width: 640px) and (min-aspect-ratio: 3 / 5) {
+  .sign-in-wall-columns {
+    --sign-in-wall-lap: 110s;
+  }
+
+  .sign-in-wall-column:nth-child(-n + 7) {
+    display: block;
+  }
+}
+
+@media (min-width: 1280px) and (min-aspect-ratio: 4 / 5) {
+  .sign-in-wall-columns {
+    --sign-in-wall-gap: 12px;
+    --sign-in-wall-lap: 130s;
+  }
+
+  .sign-in-wall-column:nth-child(-n + 9) {
+    display: block;
+  }
+}
+
+@media (min-width: 1920px) and (min-aspect-ratio: 11 / 10) {
+  .sign-in-wall-columns {
+    --sign-in-wall-lap: 145s;
+  }
+
+  .sign-in-wall-column:nth-child(-n + 11) {
+    display: block;
+  }
+}
+
+.sign-in-wall-tile {
+  aspect-ratio: 9 / 16;
+  margin-bottom: var(--sign-in-wall-gap);
+  overflow: hidden;
+  border-radius: 12px;
+  background: #151518;
+}
+
+.sign-in-wall-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+@keyframes sign-in-wall-up {
+  from {
+    transform: translateY(25%);
+  }
+
+  to {
+    transform: translateY(-25%);
+  }
+}
+
+@keyframes sign-in-wall-down {
+  from {
+    transform: translateY(-25%);
+  }
+
+  to {
+    transform: translateY(25%);
+  }
+}
+
+/* Over the wall: dark at the top for the headline and at the bottom for the buttons, lighter
+   between, where the pictures show (SIGN_IN_WALL_SHADE in ugc-mobile/lib/theme.ts). From 768px
+   the page is one centred column, so the shade darkens around it instead. */
+.sign-in-shade {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.78) 0%, rgba(0, 0, 0, 0.66) 30%, rgba(0, 0, 0, 0.62) 45%, rgba(0, 0, 0, 0.4) 57%, rgba(0, 0, 0, 0.88) 76%, rgba(0, 0, 0, 0.97) 100%);
+}
+
+@media (min-width: 768px) {
+  .sign-in-shade {
+    background:
+      radial-gradient(ellipse 44rem 38rem at 50% 50%, rgba(0, 0, 0, 0.86) 0%, rgba(0, 0, 0, 0.76) 50%, rgba(0, 0, 0, 0.46) 100%),
+      rgba(0, 0, 0, 0.2);
+  }
+}
+
+/* Deeper behind the email form, where fields are read and typed in. */
+.sign-in-scrim {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.7);
+  opacity: 0;
+  transition: opacity 360ms cubic-bezier(0.33, 1, 0.68, 1);
+}
+
+.sign-in-scrim[data-shown] {
+  opacity: 1;
+}
+
+/* The page's two halves, one over the other, each scrolling only when it has to. Turning to
+   the form (about 360ms, the app's TURN_MS): the choices fade within the first half of it as
+   they rise 28px, and the form rises 36px into place, showing from a fifth of the way. Back,
+   the other way round. A half away is hidden once its fade is done. */
+.sign-in-half {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+
+.sign-in-choices {
+  transition:
+    opacity 200ms ease-out 160ms,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 0s;
+}
+
+.sign-in-choices[data-away] {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-28px);
+  transition:
+    opacity 180ms ease-out,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 360ms;
+}
+
+.sign-in-email {
+  transition:
+    opacity 240ms ease-out 72ms,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 0s;
+}
+
+.sign-in-email[data-away] {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(36px);
+  transition:
+    opacity 200ms ease-out 40ms,
+    transform 360ms cubic-bezier(0.33, 1, 0.68, 1),
+    visibility 0s linear 360ms;
+}
+
+/* 16px, or a phone's browser zooms in on the field it focuses. */
+.sign-in-field-input {
+  flex: 1 1 0%;
+  min-width: 0;
+  padding-block: 12px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #fff;
+  caret-color: var(--ui-primary);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.sign-in-field-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/* A saved login the browser fills in keeps the pill's own ground and white text. */
+.sign-in-field-input:-webkit-autofill {
+  -webkit-text-fill-color: #fff;
+  box-shadow: 0 0 0 1000px #0b0b0d inset;
+  caret-color: var(--ui-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The wall stands still, where the visit's start put it. */
+  .sign-in-wall-column {
+    animation: none !important;
+    transform: translateY(calc((0.25 - 0.5 * var(--sign-in-wall-start, 0)) * 100%));
+  }
+
+  .sign-in-wall-column:nth-child(even) {
+    transform: translateY(calc((0.5 * var(--sign-in-wall-start, 0) - 0.25) * 100%));
+  }
+
+  /* The page turns at once: no half waits for the other. */
+  .sign-in-choices,
+  .sign-in-choices[data-away],
+  .sign-in-email,
+  .sign-in-email[data-away],
+  .sign-in-scrim {
+    transition-delay: 0s !important;
   }
 }

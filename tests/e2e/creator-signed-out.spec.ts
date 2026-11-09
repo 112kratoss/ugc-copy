@@ -5,8 +5,9 @@ import { expect, test, type Page } from '@playwright/test';
  * signs up there, and comes back to the run they set up.
  *
  * The page used to send a visitor to the login page before drawing anything. Now:
- * - Generate reads "Sign up to generate" and opens the sign-up sheet.
- * - Leaving for Google marks the visitor's draft for the account.
+ * - Generate reads "Sign up to generate" and opens the sign-in page (owner, 2026-11-09: the
+ *   app's one sign-in page, in place of the sheet the creators had), which says the draft stays.
+ * - Leaving for sign-in marks the visitor's draft for the account.
  * - The account's first page takes the draft over.
  * - The welcome credits need a name and a handle, so one card asks for both and
  *   adds the credits in one press.
@@ -87,15 +88,18 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   await prompt.fill(PROMPT);
 
   await page.getByRole('button', { name: 'Sign up to generate' }).click();
-  const sheet = page.getByRole('dialog', { name: 'Continue to generate' });
-  await expect(sheet).toBeVisible();
-  await expect(sheet).toContainText('New here? You get 25 free credits when you pick a name and handle, enough for this 19-credit run.');
-  await expect(sheet.getByText('Your prompt stays')).toBeVisible();
+  // The sign-in page, on its way back to this creator with the hand-over's nonce.
+  await expect(page).toHaveURL(/\/login\?returnUrl=%2Fcreate-video%3Fhandover%3D[A-Za-z0-9-]{8,64}$/, COLD_PAGE);
+  const signIn = page.getByRole('region', { name: 'Start filling your Magic Booklet' });
+  await expect(signIn.getByText('Join free and get 25 credits to start')).toBeVisible();
+  await expect(signIn.getByText('Your prompt and images stay, and nothing runs until you press Generate.')).toBeVisible();
+  const mark = await page.evaluate(() => window.localStorage.getItem('magicbooklet:creator-draft-handover'));
+  expect(JSON.parse(mark ?? 'null')).toMatchObject({ tool: 'video' });
 
   let authorizeUrl: URL | null = null;
   await page.route('https://example.supabase.co/auth/v1/authorize**', (route) => {
     authorizeUrl = new URL(route.request().url());
-    // Where /auth/callback sends a new account that signed up from the sheet: its `next`
+    // Where /auth/callback sends a new account that signed up from a creator: its `next`
     // (the creator with the hand-over nonce) with the welcome flag (resolvePostAuthPath).
     const next = new URL(authorizeUrl.searchParams.get('redirect_to') ?? '').searchParams.get('next') ?? '/';
     return route.fulfill({ status: 302, headers: { location: new URL(`${next}&welcome=1`, page.url()).toString() } });
@@ -104,7 +108,7 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
   const sent = await answerNewAccount(page);
 
-  await sheet.getByRole('button', { name: 'Continue with Google' }).click();
+  await signIn.getByRole('button', { name: 'Continue with Google' }).click();
 
   await expect(page.getByRole('heading', { name: 'Pick your name and handle' })).toBeVisible(COLD_PAGE);
   expect(authorizeUrl).not.toBeNull();

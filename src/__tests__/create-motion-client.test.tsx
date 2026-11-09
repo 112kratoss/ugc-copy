@@ -1431,7 +1431,7 @@ describe('CreateMotionClient drafts and media', () => {
   describe('read back after the page opened', () => {
     const OPENING = "No distortion, the character's movements are consistent with the video.";
     const box = () => screen.getByPlaceholderText(/Describe the kind of movement/);
-    // keepsVisitorForm: the sign-up sheet's hand-over led here and its move gave up or failed.
+    // keepsVisitorForm: the sign-in hand-over led here and its move gave up or failed.
     function ownDraftAs(owner: string | null, carriedDraft = false, keepsVisitorForm = false) {
       draftOwnerOverride.current = { owner, carriedDraft, keepsVisitorForm };
     }
@@ -1638,7 +1638,7 @@ describe('CreateMotionClient drafts and media', () => {
         .toEqual(['hero.png', 'dance.mp4']);
     });
 
-    it('leaves a visitor’s picture behind when an account signs in without the sign-up sheet', async () => {
+    it('leaves a visitor’s picture behind when an account signs in without the creator’s hand-over', async () => {
       keepFiles('visitor', { image: characterImage() });
       ownDraftAs('visitor');
       const view = render(<CreateMotionClient prefill={{}} />);
@@ -1651,7 +1651,7 @@ describe('CreateMotionClient drafts and media', () => {
       expect(imageShown()).toBe(false);
     });
 
-    it('keeps the picture and clip the sign-up sheet’s hand-over carried', async () => {
+    it('keeps the picture and clip the sign-in hand-over carried', async () => {
       const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
       // The page opened before its session came, on the visitor's files.
       keepFiles('visitor', { image: characterImage(), clip: motionClip() });
@@ -1671,7 +1671,7 @@ describe('CreateMotionClient drafts and media', () => {
       expect(await screen.findByText('Reference length: 7.3s')).toBeInTheDocument();
     });
 
-    it('keeps the visitor’s picture, clip and words when the sign-up sheet’s hand-over gives up', async () => {
+    it('keeps the visitor’s picture, clip and words when the sign-in hand-over gives up', async () => {
       const page = () => <CreateMotionClient prefill={{}} handoverNonce="nonce-1" />;
       // The page opened before its session came, on the visitor's files and words. The account the
       // visitor signs up with has an older picture of its own saved.

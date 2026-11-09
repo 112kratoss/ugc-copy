@@ -1,8 +1,12 @@
 'use client';
 
+import { Crown } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useReducer, useSyncExternalStore } from 'react';
+
+import { WELCOME_CREDITS_SHOWN } from '@/lib/onboarding';
+import { useWelcomePromise } from '@/lib/welcome-promise';
 
 /**
  * Where the header's "Sign in" brings the visitor back to: the page they were
@@ -41,7 +45,13 @@ export default function AppShellAccountFallback({ pathname: shellPathname }: { p
   // for the link renders it again with the address bar's query. (useSearchParams
   // would need a Suspense boundary around the header on every static page.)
   const [, rereadSearch] = useReducer((count: number) => count + 1, 0);
+  // Just "Sign in" once this browser's account has had its welcome credits (owner, 2026-11-09).
+  const welcomePromise = useWelcomePromise();
 
+  // In place of a balance a visitor does not have: the welcome credits, and the page that gets
+  // them, as the app's Home says it (owner, 2026-11-08; `home-dashboard.tsx`). The words are
+  // read as one name, "Sign in for 25 free credits", which the dot does not say. The promise is
+  // `.welcome-promise-only`: hidden from the first paint where it was spent (`welcome-promise.ts`).
   return (
     <Link
       href={`/login?returnUrl=${encodeURIComponent(signInReturnPath(pathname, search))}`}
@@ -49,9 +59,22 @@ export default function AppShellAccountFallback({ pathname: shellPathname }: { p
       onPointerEnter={rereadSearch}
       onPointerDown={rereadSearch}
       onFocus={rereadSearch}
-      className="ui-focus-ring inline-flex min-h-12 items-center justify-center rounded-full bg-[var(--ui-primary)] px-4 text-sm font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] active:scale-[0.985]"
+      aria-label={welcomePromise ? `Sign in for ${WELCOME_CREDITS_SHOWN} free credits` : 'Sign in'}
+      className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-primary)] transition hover:bg-[var(--ui-surface-3)] active:scale-[0.985]"
     >
-      Sign in
+      <Crown aria-hidden className="app-shell-sign-in-crown h-4 w-4 shrink-0 text-[var(--ui-accent-commerce)]" fill="currentColor" fillOpacity={0.2} />
+      <span>Sign in</span>
+      {welcomePromise ? (
+        <span className="welcome-promise-only inline-flex items-center gap-1.5">
+          <span aria-hidden className="text-[var(--ui-text-faint)]">·</span>
+          <span className="font-extrabold text-[var(--ui-primary)]">
+            {WELCOME_CREDITS_SHOWN}
+            {/* A narrow phone's bar keeps "25 free" (`.app-shell-sign-in-credits` in globals.css). */}
+            {' free'}
+            <span className="app-shell-sign-in-credits"> credits</span>
+          </span>
+        </span>
+      ) : null}
     </Link>
   );
 }

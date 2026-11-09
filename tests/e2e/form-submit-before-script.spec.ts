@@ -10,7 +10,7 @@ import { expect, test, type Page, type Request } from '@playwright/test';
  * URL: /login put the password in the address bar, the history and any log that keeps query
  * strings. /login now posts to its own address, which renders on every request, so the server
  * answers with the same page and the address keeps its query: the visitor still goes back
- * where they came from. /contact is prerendered, and Vercel answers a post to it itself, with
+ * where they came from. The form is the page's email half, which `email=1` opens on. /contact is prerendered, and Vercel answers a post to it itself, with
  * an empty 405 that this dev server cannot show; its fields carry no names instead, so its GET
  * sends nothing.
  *
@@ -36,7 +36,7 @@ type ServerDrawnForm = {
 
 const FORMS: ServerDrawnForm[] = [
   {
-    path: '/login?redirect=%2Fcreate-image',
+    path: '/login?redirect=%2Fcreate-image&email=1',
     typed: {
       'login-email': 'early-visitor@example.com',
       'login-password': 'typed-before-the-script-5150',
@@ -167,7 +167,7 @@ test(`/login: once the page's script has run, Enter signs in through it and the 
     await route.fulfill({ status: 400, json: { error: 'invalid_grant', error_description: 'Invalid login credentials' } });
   });
 
-  await page.goto('/login?redirect=%2Fcreate-image');
+  await page.goto('/login?redirect=%2Fcreate-image&email=1');
   const password = page.locator('#login-password');
   // A sign that only the page's script gives: the eye button shows the password. A press
   // on the server's HTML does nothing, so it is pressed until one lands.
@@ -184,6 +184,6 @@ test(`/login: once the page's script has run, Enter signs in through it and the 
   expect(signIns[0]).toMatchObject({ email: 'early-visitor@example.com', password: 'typed-after-the-script-5150' });
   await expect(page.locator('#auth-error')).toBeVisible();
   expect(documents.map((request) => `${request.method()} ${request.url()}`)).toEqual([
-    `GET ${new URL('/login?redirect=%2Fcreate-image', page.url()).href}`,
+    `GET ${new URL('/login?redirect=%2Fcreate-image&email=1', page.url()).href}`,
   ]);
 });

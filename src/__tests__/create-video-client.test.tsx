@@ -5368,7 +5368,7 @@ describe('CreateVideoClient Kling video elements', () => {
 
     // The prompt box's rule when a draft is read back after the page opened (owner, 2026-11-01).
     describe('read back after the page opened', () => {
-      // keepsVisitorForm: the sign-up sheet's hand-over led here and its move gave up or failed.
+      // keepsVisitorForm: the sign-in hand-over led here and its move gave up or failed.
       function ownDraftAs(owner: string | null, carriedDraft = false, keepsVisitorForm = false) {
         draftOwnerOverride.current = { owner, carriedDraft, keepsVisitorForm };
       }
@@ -5667,7 +5667,7 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.getByRole('textbox', { name: 'Gemini Omni character ID' })).toHaveValue('');
       });
 
-      it('leaves a visitor’s clips behind when an account signs in without the sign-up sheet', async () => {
+      it('leaves a visitor’s clips behind when an account signs in without the creator’s hand-over', async () => {
         keepMedia({
           visitor: { klingClips: [{ id: 'koi-clip', displayName: 'Koi pond', handle: '@koi_pond', durationSeconds: 4, file: new File(['koi'], 'koi.mp4', { type: 'video/mp4' }) }] },
         });
@@ -5682,7 +5682,7 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(screen.queryByDisplayValue('Koi pond')).toBeNull();
       });
 
-      it('keeps the frames the sign-up sheet’s hand-over carried', async () => {
+      it('keeps the frames the sign-in hand-over carried', async () => {
         // The page opened before its session came, on the visitor's start image.
         keepMedia({ visitor: { start: image('corgi') } });
         ownDraftAs('visitor');
@@ -5699,7 +5699,7 @@ describe('CreateVideoClient Kling video elements', () => {
         expect(shownFile('Start image')).toBe('corgi.png');
       });
 
-      it('keeps the visitor’s frames and words when the sign-up sheet’s hand-over gives up', async () => {
+      it('keeps the visitor’s frames and words when the sign-in hand-over gives up', async () => {
         const page = () => <CreateVideoClient prefill={{}} handoverNonce="nonce-1" />;
         // The page opened before its session came, on the visitor's start image and words. The
         // account the visitor signs up with has an older start image and clip of its own saved.
@@ -6885,24 +6885,42 @@ describe('CreateVideoClient Kling video elements', () => {
       }
     });
 
-    it('lets a signed-out visitor set up a run, and asks for an account at Generate with the draft kept for them', async () => {
+    // The sign-in page replaced the creators' sign-up sheet (owner, 2026-11-09).
+    it('lets a signed-out visitor set up a run, and sends Generate to the sign-in page with the draft saved and marked for them', async () => {
       authState.signedIn = false;
-      const view = render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} />);
-      // The visitor's own draft is read back, as an account's is.
-      await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor'));
+      window.history.replaceState({}, '', '/create-video?prompt=boat&model=seedance-1.5-pro');
+      try {
+        const view = render(<CreateVideoClient prefill={{}} visitorWelcomeCredits={25} />);
+        // The visitor's own draft is read back, as an account's is.
+        await waitFor(() => expect(loadCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor'));
 
-      expect(screen.getByText('Try it before you sign up')).toBeInTheDocument();
-      expect(screen.queryByRole('link', { name: /Studio/ })).not.toBeInTheDocument();
-      expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('New accounts get 25 free credits');
+        expect(screen.getByText('Try it before you sign up')).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Studio/ })).not.toBeInTheDocument();
+        expect(view.container.querySelector('[data-creator-bar-note]')).toHaveTextContent('New accounts get 25 free credits');
 
-      fireEvent.change(promptBox(), { target: { value: PROMPT } });
-      fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
+        fireEvent.change(promptBox(), { target: { value: PROMPT } });
+        fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
+        // A second press while the page leaves makes no second trip, and no second mark.
+        fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
 
-      expect(await screen.findByRole('dialog', { name: 'Continue to generate' })).toBeInTheDocument();
-      expect(saveCreatorDraftMock).toHaveBeenCalledWith('video', 'visitor', expect.objectContaining({ prompt: PROMPT }));
-      expect(postedStarts()).toEqual([]);
-      expect(temporaryUploadMock).not.toHaveBeenCalled();
-      expect(mockPush).not.toHaveBeenCalled();
+        // Back to this creator with the hand-over's nonce, and without the link's own settings,
+        // which the saved draft carries.
+        await waitFor(() => expect(mockPush).toHaveBeenCalledWith(
+          expect.stringMatching(/^\/login\?returnUrl=%2Fcreate-video%3Fhandover%3D[A-Za-z0-9-]{8,64}$/),
+        ));
+        expect(mockPush).toHaveBeenCalledTimes(1);
+        const nonce = new URL(decodeURIComponent(String(mockPush.mock.calls[0][0]).split('returnUrl=')[1]), 'https://magicbooklet.com').searchParams.get('handover');
+        expect(JSON.parse(window.localStorage.getItem('magicbooklet:creator-draft-handover') ?? 'null')).toMatchObject({ tool: 'video', nonce });
+        // Saved before the page leaves.
+        const saved = saveCreatorDraftMock.mock.calls.findIndex(([tool, owner, draft]) => tool === 'video' && owner === 'visitor' && draft?.prompt === PROMPT);
+        expect(saved).toBeGreaterThanOrEqual(0);
+        expect(saveCreatorDraftMock.mock.invocationCallOrder[saved]).toBeLessThan(mockPush.mock.invocationCallOrder[0]);
+        expect(postedStarts()).toEqual([]);
+        expect(temporaryUploadMock).not.toHaveBeenCalled();
+      } finally {
+        window.history.replaceState({}, '', '/');
+        window.localStorage.removeItem('magicbooklet:creator-draft-handover');
+      }
     });
 
     it('never saves an account’s form into the browser’s visitor slot once its session ends on the page', async () => {
@@ -6956,7 +6974,7 @@ describe('CreateVideoClient Kling video elements', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Sign up to generate' }));
 
       expect(await screen.findByText('Please enter a prompt')).toBeInTheDocument();
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(mockPush).not.toHaveBeenCalled();
     });
 
     it('asks a visitor for an account at Enhance, which spends credits', async () => {
@@ -6968,7 +6986,8 @@ describe('CreateVideoClient Kling video elements', () => {
       expect(props.onRequireAccount).toBeInstanceOf(Function);
       act(() => props.onRequireAccount?.());
 
-      expect(await screen.findByRole('dialog', { name: 'Continue to enhance your prompt' })).toBeInTheDocument();
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith(expect.stringMatching(/^\/login\?returnUrl=%2F.*handover%3D[A-Za-z0-9-]{8,64}$/)));
+      window.localStorage.removeItem('magicbooklet:creator-draft-handover');
     });
 
     it('greets an account back from the sign-up it opened here', async () => {

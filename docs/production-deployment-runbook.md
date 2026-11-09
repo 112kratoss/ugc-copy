@@ -413,8 +413,8 @@ once, so do the steps in this order:
 7. Revoke the old key last.
 
 The iPhone app signs in with Apple natively (`signInWithIdToken`, audience the
-bundle id). The website's Continue with Apple buttons (the login page's tabs and
-the creators' sign-up sheet) use Supabase's web OAuth flow, which needs its own
+bundle id). The website's Continue with Apple buttons (on the sign-in page,
+`/login`, its choices and its email form) use Supabase's web OAuth flow, which needs its own
 Apple client, a Services ID. The buttons are drawn whatever the dashboard holds,
 so these steps come before the deploy that brings them: until then a press ends
 on Supabase's JSON 400 ("Unsupported provider: missing OAuth secret") or on

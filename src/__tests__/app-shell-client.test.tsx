@@ -299,7 +299,7 @@ describe('AppShellClient', () => {
       expect(shell.getByRole('banner')).toHaveTextContent('Workspace');
       expect(shell.getByRole('main')).toHaveTextContent('Not-found content');
       expect(shell.queryAllByRole('link', { current: 'page' })).toEqual([]);
-      expect(shell.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', '/login?returnUrl=%2F');
+      expect(shell.getByRole('link', { name: 'Sign in for 25 free credits' })).toHaveAttribute('href', '/login?returnUrl=%2F');
     });
 
     it('reads the webpack spelling of the segment, and follows the address again after a link out', () => {

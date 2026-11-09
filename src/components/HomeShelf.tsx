@@ -10,6 +10,7 @@ import { OptimizedPreviewImage } from '@/components/OptimizedPreviewImage';
 import { useMediaLoadingPreferences } from '@/components/useMediaLoadingPreferences';
 import { CREATOR_TOOLS } from '@/lib/creator-tools';
 import { HOME_SHELF_MIN_CREATIONS, type HomeShelfAction, type HomeShelfCreation, type HomeShelfItem } from '@/lib/home-shelf';
+import { useWelcomePromise } from '@/lib/welcome-promise';
 import {
   getHomeShelfRemovalsVersion,
   isRemovedFromHomeShelf,
@@ -56,6 +57,8 @@ export default function HomeShelf({
   // What the viewer has since blocked, hid or reported in the feed below
   // leaves the row too (`home-shelf-removals.ts`); too few left, no row.
   const removalsVersion = useSyncExternalStore(subscribeHomeShelfRemovals, getHomeShelfRemovalsVersion, () => 0);
+  // Not where this browser's account has had them (owner, 2026-11-09; `welcome-promise.ts`).
+  const welcomePromise = useWelcomePromise();
   const visibleItems = useMemo(() => {
     void removalsVersion;
     const kept = items.filter((item) => (
@@ -67,7 +70,7 @@ export default function HomeShelf({
 
   if (visibleItems.length === 0) return null;
 
-  return <HomeShelfRow items={visibleItems} offerFreeToTry={offerFreeToTry} />;
+  return <HomeShelfRow items={visibleItems} offerFreeToTry={offerFreeToTry && welcomePromise} />;
 }
 
 /**
@@ -265,7 +268,9 @@ function CreationCard({
       <span className="absolute inset-0 bg-gradient-to-b from-black/[0.05] via-transparent to-black/75" aria-hidden />
 
       {badge ? (
-        <span className="absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-xs font-bold text-white">
+        // Over the picture, so taking it away moves nothing. "Free to try" is the welcome promise,
+        // hidden from the first paint where it was spent (`welcome-promise.ts`).
+        <span className={`absolute left-2 top-2 rounded-full bg-black/55 px-2 py-0.5 text-xs font-bold text-white${creation.badge === 'new-model' ? '' : ' welcome-promise-only'}`}>
           {badge}
         </span>
       ) : null}

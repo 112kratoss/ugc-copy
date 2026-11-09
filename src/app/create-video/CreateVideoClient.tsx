@@ -56,9 +56,8 @@ import { CreatorMentionMenu, useCreatorMentionMenu } from '@/components/CreatorM
 import { CreatorEmptyCanvas, CreatorStartPostsStrip, CreatorWhileYouWait, type StartPostsSource } from '@/components/CreatorStartPosts';
 import { useConfirmation } from '@/components/useConfirmation';
 import CreatorModelPickerRows, { CreatorModelPickerFoot, type PickerModelRow } from '@/components/CreatorModelPickerRows';
-import CreatorSignUpSheet, { type CreatorSignUpReason } from '@/components/CreatorSignUpSheet';
 import CreatorWelcomeCard, { type CreatorWelcome } from '@/components/CreatorWelcomeCard';
-import { VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
+import { creatorSignInPath, VISITOR_DRAFT_OWNER } from '@/lib/creator-visitor-draft';
 import { isRetryableProviderFailure } from '@/lib/provider-failure-messages';
 import { useCreatorDraftOwner, useCreatorForm, useCreatorSignOut, type CreatorDraftOwner, type CreatorForm } from '@/lib/use-creator-draft-owner';
 import { getAccentClasses, IconButton, SegmentedControl, type SegmentedControlOption } from '@/components/DesignSystem';
@@ -1301,7 +1300,9 @@ function VideoCreator({
     // (owner, 2026-10-28). One whose session lapsed is not a visitor's: it keeps its
     // signed-in face, and its Generate signs in again on the login page.
     const isVisitor = draftOwner === VISITOR_DRAFT_OWNER;
-    const [signUpReason, setSignUpReason] = useState<CreatorSignUpReason | null>(null);
+    // One trip to sign in: a second press (a double-click on Generate) would mark the draft again
+    // under a new nonce, and the first trip's way back would then carry one that moves nothing.
+    const leavingForSignInRef = useRef(false);
     const remixId = prefill.remixId ?? null;
     const remixPostId = prefill.remixPostId ?? null;
     const prefillPrompt = prefill.prompt ?? null;
@@ -3280,10 +3281,15 @@ function VideoCreator({
         }
         await flushTextDraft();
     };
-    /** Asks a visitor to sign up for what they pressed, with the form saved for the way back. */
-    const openSignUp = async (reason: CreatorSignUpReason) => {
+    /**
+     * Sends a visitor to the sign-in page for what they pressed (owner, 2026-11-09: the page, not a
+     * sheet), with the form saved for the way back and the draft marked for the account.
+     */
+    const openSignUp = async () => {
+        if (leavingForSignInRef.current) return;
+        leavingForSignInRef.current = true;
         await saveTextDraftNow();
-        setSignUpReason(reason);
+        router.push(creatorSignInPath('video', draftOwner === VISITOR_DRAFT_OWNER));
     };
     /** Onto the current build, with the draft saved first: it comes back after the reload. */
     const reloadPage = async () => {
@@ -4498,7 +4504,7 @@ function VideoCreator({
     const prepareElementSeedanceAsset = async (elementId: string) => {
         // Preparing uploads the file, which takes an account.
         if (isVisitor) {
-            await openSignUp('prepare');
+            await openSignUp();
             return;
         }
         const activeKey = createSeedanceAssetKey('image', elementId);
@@ -4548,7 +4554,7 @@ function VideoCreator({
         referenceId: string
     ) => {
         if (isVisitor) {
-            await openSignUp('prepare');
+            await openSignUp();
             return;
         }
         const activeKey = createSeedanceAssetKey(kind, referenceId);
@@ -5177,7 +5183,7 @@ function VideoCreator({
         if (isVisitor) {
             // Signed out: the sign-up comes back here, on this page's own link, with the
             // draft saved, and nothing runs until Generate is pressed again.
-            await openSignUp('generate');
+            await openSignUp();
             return;
         }
 
@@ -6258,7 +6264,7 @@ function VideoCreator({
                                     prepareContext={prepareSinglePromptEnhancerContext}
                                     disabled={isGenerating}
                                     showWarnings={false}
-                                    onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
+                                    onRequireAccount={isVisitor ? () => void openSignUp() : undefined}
                                 />
                                 <PromptQualityWarnings warnings={promptQualityWarnings} />
                             </>
@@ -6292,7 +6298,7 @@ function VideoCreator({
                                             context={buildShotPromptQualityContext(shot, index)}
                                             disabled={isGenerating}
                                             showWarnings={false}
-                                            onRequireAccount={isVisitor ? () => void openSignUp('enhance') : undefined}
+                                            onRequireAccount={isVisitor ? () => void openSignUp() : undefined}
                                         />
                                         <PromptQualityWarnings warnings={multiPromptQualityWarnings[shot.id] ?? []} />
                                         <textarea
@@ -6966,19 +6972,6 @@ function VideoCreator({
                         )}
                     </CreatorCanvas>
                 }
-            />
-
-            <CreatorSignUpSheet
-                reason={signUpReason}
-                handsOverDraft={draftOwner === VISITOR_DRAFT_OWNER}
-                tool="video"
-                welcomeCredits={visitorWelcomeCredits}
-                runCost={estimatedCost}
-                modelName={videoModel.displayName}
-                settingsSummary={settingsSummary}
-                keepsPrompt={currentIsMultiShot ? multiPrompts.some((shot) => shot.prompt.trim()) : Boolean(prompt.trim())}
-                keepsImages={Boolean(startImageFile || endImageFile) || elements.length > 0 || klingSubjects.length > 0}
-                onClose={() => setSignUpReason(null)}
             />
 
             {/* A removal said to a screen reader: a status line put in with its words is not always heard. */}
