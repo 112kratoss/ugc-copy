@@ -38,6 +38,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             initialHalf={signInHalfForQuery({ email: firstParam(params.email), recovery: firstParam(params.recovery) })}
             recoveryRequested={recoveryRequested}
             redirectTo={getSafeAuthNextPath(explicitRedirect)}
+            returnRequested={Boolean(explicitRedirect)}
             welcomeCredits={welcomeCredits}
             wall={<SignInWall start={wallStart} />}
         />

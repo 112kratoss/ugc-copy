@@ -10,7 +10,7 @@ import clsx from 'clsx';
 import BrandWordmark from '@/components/BrandWordmark';
 import SignInAgreement from '@/components/SignInAgreement';
 import { describeAuthError } from '@/lib/auth-error-copy';
-import { buildAuthContinuePath } from '@/lib/auth-onboarding';
+import { buildAuthContinuePath, isCreatorSignUpReturn } from '@/lib/auth-onboarding';
 import { displayFont } from '@/lib/display-font';
 import { startProviderSignIn, type SignInProvider } from '@/lib/provider-sign-in';
 import { siteConfig } from '@/lib/seo';
@@ -48,6 +48,8 @@ export interface LoginClientProps {
     /** `?recovery=1`: an expired reset link, or an older app's "Forgot password?". */
     recoveryRequested: boolean;
     redirectTo: string;
+    /** Whether the address named a return (`returnUrl`, `next`, `redirect`): a page sent the visitor here. */
+    returnRequested?: boolean;
     /** What a new account is given, while the welcome program is on; null when it is off or unread. */
     welcomeCredits: number | null;
     /** The moving wall, drawn on the server (`SignInWall`); left out in unit tests. */
@@ -72,6 +74,7 @@ export default function LoginClient({
     initialHalf,
     recoveryRequested,
     redirectTo,
+    returnRequested = false,
     welcomeCredits,
     wall,
 }: LoginClientProps) {
@@ -146,11 +149,20 @@ export default function LoginClient({
 
     // A visit that opens on the form (`?email=1`, `?recovery=1`) gets the choices under it, so
     // Back turns the page back to them, as the app's Back does, before it leaves.
+    // Set after the first commit: on a full load this effect runs before the router's own, which
+    // patches the history API to keep its state on every entry. Called earlier, the entries lose
+    // that state, and Forward onto the form reloads the whole page (review of #744). The router's
+    // state is carried over as well, so neither entry depends on the patch.
     useEffect(() => {
-        if (initialHalf !== 'email' || onEmailEntry()) return;
-        const here = window.location.href;
-        window.history.replaceState(null, '', signInHalfPath(here, 'choose'));
-        window.history.pushState({ [EMAIL_ENTRY]: true }, '', signInHalfPath(here, 'email'));
+        if (initialHalf !== 'email' || onEmailEntry()) return undefined;
+        const timer = window.setTimeout(() => {
+            if (onEmailEntry()) return;
+            const here = window.location.href;
+            const state = window.history.state as Record<string, unknown> | null;
+            window.history.replaceState(state, '', signInHalfPath(here, 'choose'));
+            window.history.pushState({ ...state, [EMAIL_ENTRY]: true }, '', signInHalfPath(here, 'email'));
+        }, 0);
+        return () => window.clearTimeout(timer);
     }, [initialHalf]);
 
     // Back and Forward between the two halves: the address says which one shows.
@@ -203,12 +215,19 @@ export default function LoginClient({
 
     // Close goes back where the visitor came from on this site, else Home. A link to Home
     // before the page's script runs; a click that asks for a new tab stays the browser's.
+    // - A creator's hand-over returns to the creator's own return address, which leaves out the
+    //   link's settings: a plain Back reopens the link, whose prompt and model would win over the
+    //   draft the visitor edited and was told stays (review of #744).
+    // - A page that sent the visitor here (its return in the address) is stepped back to.
+    // - Otherwise Home, drawn fresh: after a sign-out (no return), a step back would redraw the
+    //   last page of the account that just left.
     const close = (event: React.MouseEvent<HTMLAnchorElement>) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
         event.preventDefault();
         if (inFlightRef.current) return;
-        if (hasSameSiteHistory()) router.back();
-        else router.replace('/');
+        if (isCreatorSignUpReturn(redirectTo)) router.replace(redirectTo);
+        else if (returnRequested && hasSameSiteHistory()) router.back();
+        else router.replace(returnRequested ? redirectTo : '/');
     };
 
     const continueWith = async (provider: SignInProvider) => {

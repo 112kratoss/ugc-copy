@@ -321,15 +321,22 @@ describe('the email form, in place', () => {
     expectShowing('email');
   });
 
-  it('opened on the form, puts the choices under it, so Back turns the page back as the app’s does', () => {
-    window.history.replaceState(null, '', '/login?returnUrl=%2Fcreate&recovery=1');
+  it('opened on the form, puts the choices under it, so Back turns the page back as the app’s does', async () => {
+    // The router's own state on the entry (`__NA`): both entries keep it, or Next reloads the
+    // page on Forward onto the form (review of #744).
+    window.history.replaceState({ __NA: true }, '', '/login?returnUrl=%2Fcreate&recovery=1');
     const replaceState = vi.spyOn(window.history, 'replaceState');
     const pushState = vi.spyOn(window.history, 'pushState');
     renderLogin({ initialHalf: 'email', recoveryRequested: true });
 
     expectShowing('email');
-    expect(replaceState).toHaveBeenCalledWith(null, '', '/login?returnUrl=%2Fcreate');
-    expect(pushState).toHaveBeenCalledWith({ magicbookletSignInEmail: true }, '', '/login?returnUrl=%2Fcreate&recovery=1&email=1');
+    // After the first commit, once the router owns the history API.
+    expect(pushState).not.toHaveBeenCalled();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(replaceState).toHaveBeenCalledWith({ __NA: true }, '', '/login?returnUrl=%2Fcreate');
+    expect(pushState).toHaveBeenCalledWith({ __NA: true, magicbookletSignInEmail: true }, '', '/login?returnUrl=%2Fcreate&recovery=1&email=1');
   });
 
   it('opened on the form again (a reload), finds the choices under it already', () => {
@@ -612,9 +619,9 @@ describe('Apple and Google', () => {
 });
 
 describe('leaving and passing through', () => {
-  it('Close goes back where the visitor came from on this site', () => {
+  it('Close goes back to the page that sent the visitor here, on this site', () => {
     setNavigation(true);
-    renderLogin();
+    renderLogin({ redirectTo: '/showcase/post-1', returnRequested: true });
 
     fireEvent.click(within(choices()).getByRole('link', { name: 'Close' }));
 
@@ -630,6 +637,40 @@ describe('leaving and passing through', () => {
 
     expect(mocks.back).not.toHaveBeenCalled();
     expect(mocks.replace).toHaveBeenCalledWith('/');
+  });
+
+  // Review of #744: a sign-out pushes /login with no return; a step back would redraw the last
+  // page of the account that just left.
+  it('Close goes Home, drawn fresh, when no page sent the visitor here (a sign-out)', () => {
+    setNavigation(true);
+    renderLogin();
+
+    fireEvent.click(within(choices()).getByRole('link', { name: 'Close' }));
+
+    expect(mocks.back).not.toHaveBeenCalled();
+    expect(mocks.replace).toHaveBeenCalledWith('/');
+  });
+
+  it('Close goes to the page that sent the visitor here when there is no step back to it', () => {
+    setNavigation(false);
+    renderLogin({ redirectTo: '/showcase/post-1', returnRequested: true });
+
+    fireEvent.click(within(choices()).getByRole('link', { name: 'Close' }));
+
+    expect(mocks.back).not.toHaveBeenCalled();
+    expect(mocks.replace).toHaveBeenCalledWith('/showcase/post-1');
+  });
+
+  // Review of #744: Back would reopen the creator's link, whose prompt and model win over the
+  // draft the visitor edited; its return address leaves them out.
+  it('Close takes a creator hand-over back to the creator’s own return address', () => {
+    setNavigation(true);
+    renderLogin({ redirectTo: '/create-video?handover=nonce-1', returnRequested: true });
+
+    fireEvent.click(within(choices()).getByRole('link', { name: 'Close' }));
+
+    expect(mocks.back).not.toHaveBeenCalled();
+    expect(mocks.replace).toHaveBeenCalledWith('/create-video?handover=nonce-1');
   });
 
   // A visitor already signed in is sent on through /auth/continue, flagged so
