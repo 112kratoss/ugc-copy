@@ -215,6 +215,9 @@ export default function WelcomeCreditsPopup({ amount: offeredAmount, referral, o
       return;
     }
     void Promise.all(exits.map((animation) => animation.finished)).catch(() => undefined).then(() => {
+      // Gone already (the account changed while it sank): its unmount cleared the timers,
+      // and a late onGone would take the next account's offer away.
+      if (!mountedRef.current) return;
       const remaining = confettiEndsAt.current - performance.now();
       if (remaining <= 0) latest.current.onGone();
       else goneTimer.current = window.setTimeout(() => latest.current.onGone(), remaining);

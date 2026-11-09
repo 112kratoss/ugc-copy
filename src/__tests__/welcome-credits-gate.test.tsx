@@ -53,6 +53,7 @@ vi.mock('next/dynamic', () => ({
 
 import WelcomeCreditsGate from '@/components/WelcomeCreditsGate';
 import { announceWelcomeOfferChanged, rememberWelcomePopupClosed, resetWelcomePopupSession } from '@/lib/welcome-credits-popup';
+import { WELCOME_PROMISE_STORAGE_KEY, resetWelcomePromiseForTests } from '@/lib/welcome-promise';
 
 const eligible = { status: 'eligible', amount: 25, credits: 0, identityComplete: true };
 
@@ -70,6 +71,7 @@ describe('who sees the welcome popup, where (owner 11-09)', () => {
     harness.toasts.length = 0;
     resetWelcomePopupSession();
     window.localStorage.clear();
+    resetWelcomePromiseForTests();
   });
 
   afterEach(() => {
@@ -221,5 +223,53 @@ describe('who sees the welcome popup, where (owner 11-09)', () => {
     expect(harness.toasts).toEqual([
       expect.objectContaining({ tone: 'info', message: 'Invite not applied: you cannot use your own invite link.' }),
     ]);
+  });
+
+  // Review of #744 (max): found by its finders, each failing before its fix.
+  it('says the invite’s outcome once: not again as a toast after the card has gone', async () => {
+    harness.read.mockResolvedValue(eligible);
+    render(<WelcomeCreditsGate offeredHere returned={{ pathname: '/showcase', referral: 'applied' }} />);
+    await settle();
+    expect(screen.getByRole('dialog')).toHaveAttribute('data-referral', 'applied');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Gone' }));
+    await settle();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(harness.toasts).toEqual([]);
+  });
+
+  it('tells the signed-out promise about an account this browser already knows has claimed', async () => {
+    window.localStorage.setItem(`magicbooklet:welcome-settled:v1:${USER}`, String(Date.now()));
+    render(<WelcomeCreditsGate offeredHere returned={null} />);
+    await settle();
+    expect(harness.read).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).not.toBeNull();
+  });
+
+  it('asks again on the next page after an answer could not be read', async () => {
+    harness.read.mockRejectedValueOnce(new Error('offline')).mockResolvedValue(eligible);
+    const view = render(<WelcomeCreditsGate offeredHere returned={null} page="/" />);
+    await settle();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    view.rerender(<WelcomeCreditsGate offeredHere returned={null} page="/create-image" />);
+    await settle();
+    expect(harness.read).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('dialog', { name: 'Welcome credits' })).toBeInTheDocument();
+  });
+
+  it('shows an answer that landed after its page was left, on the next page that offers it', async () => {
+    let resolveRead: (value: unknown) => void = () => undefined;
+    harness.read.mockImplementation(() => new Promise((resolve) => { resolveRead = resolve; }));
+    const view = render(<WelcomeCreditsGate offeredHere returned={null} />);
+    await settle();
+    view.rerender(<WelcomeCreditsGate offeredHere={false} returned={null} />);
+    await act(async () => {
+      resolveRead(eligible);
+    });
+    await settle();
+    view.rerender(<WelcomeCreditsGate offeredHere returned={null} />);
+    await settle();
+    expect(harness.read).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('dialog', { name: 'Welcome credits' })).toBeInTheDocument();
   });
 });

@@ -212,8 +212,8 @@ describe('Home opening the step again, once per browser session', () => {
   });
 
   it('marks the step shown with a session cookie that names the account', () => {
-    expect(creatorNameStepShownCookie('user-1', true)).toBe('mb_name_step_shown=user-1; Path=/; SameSite=Lax; Secure');
-    expect(creatorNameStepShownCookie('user 1', false)).toBe('mb_name_step_shown=user%201; Path=/; SameSite=Lax');
+    expect(creatorNameStepShownCookie('user-1', true)).toBe('mb_name_step_shown=user-1; Max-Age=21600; Path=/; SameSite=Lax; Secure');
+    expect(creatorNameStepShownCookie('user 1', false)).toBe('mb_name_step_shown=user%201; Max-Age=21600; Path=/; SameSite=Lax');
     expect(readCreatorNameStepShownFor('user%201')).toBe('user 1');
     expect(readCreatorNameStepShownFor(undefined)).toBeNull();
     expect(readCreatorNameStepShownFor('%E0%A4%A')).toBeNull();

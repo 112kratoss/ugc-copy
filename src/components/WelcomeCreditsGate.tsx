@@ -18,6 +18,7 @@ import {
 import { readWelcomeCredits, type WelcomeCreditAnswer } from '@/lib/welcome-credits-requests';
 
 import { shouldShowWelcomePopup } from '../../ugc-mobile/lib/welcome-popup-policy/welcome-popup-policy';
+import { recordWelcomeAnswer } from '@/lib/welcome-promise';
 
 // The card, its claim and its confetti load only for an account it is offered to.
 const WelcomeCreditsPopup = dynamic(() => import('./WelcomeCreditsPopup'), { ssr: false, loading: () => null });
@@ -41,9 +42,11 @@ type Offer = { userId: string; amount: number; referral: string | null };
  * or closed it this session. An invite's outcome brought by a sign-up is said
  * inside the popup, or as a toast where none is offered.
  */
-export default function WelcomeCreditsGate({ offeredHere, returned }: {
+export default function WelcomeCreditsGate({ offeredHere, returned, page = '' }: {
   /** The page in front offers it (Home, a creator, the page a sign-up returned to). */
   offeredHere: boolean;
+  /** The page in front (its pathname): a read that failed is asked again on the next one. */
+  page?: string;
   /** This page is the one a sign-up returned to, with the invite's outcome it brought. */
   returned: WelcomeReturn | null;
 }) {
@@ -51,8 +54,10 @@ export default function WelcomeCreditsGate({ offeredHere, returned }: {
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [offer, setOffer] = useState<Offer | null>(null);
   const [asked, setAsked] = useState(0);
-  // The account whose answer could not be read on this page: nothing is offered.
-  const [unreadFor, setUnreadFor] = useState<string | null>(null);
+  // The account whose answer could not be read, and the page it failed on: nothing is offered
+  // there, and the next page asks again.
+  const [unread, setUnread] = useState<{ userId: string; page: string } | null>(null);
+  const unreadFor = unread?.userId ?? null;
   // Each page a sign-up returned to says its invite's outcome once.
   const told = useRef<WelcomeReturn | null>(null);
 
@@ -78,34 +83,52 @@ export default function WelcomeCreditsGate({ offeredHere, returned }: {
     return () => window.removeEventListener(WELCOME_OFFER_CHANGED_EVENT, askAgain);
   }, []);
 
-  const quietHere = userId !== null && (wasWelcomePopupClosedThisSession(userId) || isWelcomeSettledHere(userId));
+  const settledHere = userId !== null && isWelcomeSettledHere(userId);
+  const quietHere = userId !== null && (wasWelcomePopupClosedThisSession(userId) || settledHere);
+
+  // An account this browser knows has had its credits is never asked again, so the read below
+  // (which teaches the signed-out promise, welcome-promise.ts) never runs for it: say it here,
+  // or a browser that settled it before the promise existed keeps promising them after sign-out.
+  useEffect(() => {
+    if (settledHere) recordWelcomeAnswer('claimed');
+  }, [settledHere]);
   const answerHere = answer && answer.userId === userId ? answer : null;
   // The last answer read, consulted (not followed) by the read below.
   const kept = useRef<Answer | null>(null);
 
+  // After an unread answer, the next page asks again: its key is the effect's input from then on.
+  const retryOn = unread !== null && unread.userId === userId && unread.page !== page ? page : null;
+
   useEffect(() => {
     if (!offeredHere || !userId || quietHere) return;
     const last = kept.current;
-    if (last && last.userId === userId && last.asked === asked && Date.now() - last.readAt < ANSWER_KEPT_MS) return;
+    if (last && last.userId === userId && last.asked === asked && Date.now() - last.readAt < ANSWER_KEPT_MS) {
+      // A read that landed after its page was left was kept but never shown: show it now.
+      setAnswer(last);
+      return;
+    }
     let active = true;
     void readWelcomeCredits()
       .then((welcome) => {
         if (isWelcomeAnswerSettled(welcome.status)) rememberWelcomeSettled(userId);
         const next = { userId, welcome, readAt: Date.now(), asked };
         kept.current = next;
-        if (active) setAnswer(next);
+        if (active) {
+          setAnswer(next);
+          setUnread((current) => (current?.userId === userId ? null : current));
+        }
       })
       .catch(() => {
         // Unread: nothing is offered on this page; the next one asks again.
         if (active) {
           setAnswer(null);
-          setUnreadFor(userId);
+          setUnread({ userId, page });
         }
       });
     return () => {
       active = false;
     };
-  }, [offeredHere, userId, quietHere, asked]);
+  }, [offeredHere, userId, quietHere, asked, retryOn]);
 
   const welcome = answerHere?.welcome ?? null;
   const show = shouldShowWelcomePopup({ signedIn: userId !== null, welcome, offeredHere, dismissed: quietHere });
@@ -122,7 +145,13 @@ export default function WelcomeCreditsGate({ offeredHere, returned }: {
   // not be read): a toast says it.
   const decided = userId !== null && (quietHere || answerHere !== null || unreadFor === userId);
   useEffect(() => {
-    if (!returned?.referral || told.current === returned || !decided || offer) return;
+    if (!returned?.referral || told.current === returned) return;
+    // Said inside the popup: not said again as a toast once the card has gone.
+    if (offer && offer.referral === returned.referral) {
+      told.current = returned;
+      return;
+    }
+    if (!decided || offer) return;
     told.current = returned;
     const line = describeReferralClaim(returned.referral);
     if (line) pushToast({ tone: returned.referral === 'applied' ? 'success' : 'info', message: line, durationMs: 8_000 });

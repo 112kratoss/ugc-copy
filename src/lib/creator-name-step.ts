@@ -30,16 +30,18 @@ import {
  */
 
 /**
- * Left by the step as it opens, for this browser session (no expiry), holding
- * the account it opened for: Home opens the step for that account once per
- * session, so leaving it ("Try again later", or the browser's Back) is not
- * undone at the next visit to Home. As the app's `markSetupShownThisRun`.
+ * Left by the step as it opens, holding the account it opened for: Home opens the
+ * step for that account at most once in six hours, so leaving it ("Try again
+ * later", or the browser's Back) is not undone at the next visit to Home. As the
+ * app's `markSetupShownThisRun`, which lasts until the next start. Not a session
+ * cookie: a browser that restores its session keeps those for good.
  */
 export const CREATOR_NAME_STEP_SHOWN_COOKIE = 'mb_name_step_shown';
+const CREATOR_NAME_STEP_SHOWN_SECONDS = 6 * 60 * 60;
 
 /** The `document.cookie` assignment that marks the step shown for `userId`. */
 export function creatorNameStepShownCookie(userId: string, secure: boolean): string {
-  return `${CREATOR_NAME_STEP_SHOWN_COOKIE}=${encodeURIComponent(userId)}; Path=/; SameSite=Lax${secure ? '; Secure' : ''}`;
+  return `${CREATOR_NAME_STEP_SHOWN_COOKIE}=${encodeURIComponent(userId)}; Max-Age=${CREATOR_NAME_STEP_SHOWN_SECONDS}; Path=/; SameSite=Lax${secure ? '; Secure' : ''}`;
 }
 
 /** What the shown cookie holds: the account the step last opened for in this browser session. */

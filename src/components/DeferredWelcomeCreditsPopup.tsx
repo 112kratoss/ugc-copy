@@ -48,5 +48,5 @@ export default function DeferredWelcomeCreditsPopup() {
   const offeredHere = authenticated && isWelcomePopupOfferedAt(pathname, returnedHere?.pathname ?? null);
   if (offeredHere && !loaded) setLoaded(true);
 
-  return loaded ? <WelcomeCreditsGate offeredHere={offeredHere} returned={returnedHere} /> : null;
+  return loaded ? <WelcomeCreditsGate offeredHere={offeredHere} returned={returnedHere} page={pathname} /> : null;
 }

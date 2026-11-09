@@ -98,14 +98,16 @@ export function welcomeEntrySpring({ tension = 190, friction = 13 } = {}) {
 }
 
 /*
- * A close lasts for the browser session, per account, as the app's lasts until
- * the next start: kept in a session cookie, which every tab of the browser
- * shares and which goes when the browser does. Where cookies are refused, a
- * close holds for this page instead.
+ * A close lasts a while, per account, as the app's lasts until the next start:
+ * kept in a cookie every tab of the browser shares, for six hours at most. Not a
+ * session cookie: a browser that restores its session keeps those for good, and
+ * the popup is where the web claims the welcome credits. Where cookies are
+ * refused, a close holds for this page instead.
  */
 export const WELCOME_POPUP_CLOSED_COOKIE = 'mb_welcome_popup_closed';
 const ACCOUNT_ID = /^[0-9a-f-]{8,64}$/i;
 const MAX_CLOSED_ACCOUNTS = 4;
+const CLOSED_FOR_SECONDS = 6 * 60 * 60;
 const closedThisPage = new Set<string>();
 
 function closedAccountsInCookie(): string[] {
@@ -128,8 +130,7 @@ export function rememberWelcomePopupClosed(userId: string) {
   const accounts = [...closedAccountsInCookie().filter((id) => id !== userId), userId].slice(-MAX_CLOSED_ACCOUNTS);
   const secure = window.location.protocol === 'https:' ? '; Secure' : '';
   try {
-    // No Max-Age: a session cookie.
-    document.cookie = `${WELCOME_POPUP_CLOSED_COOKIE}=${accounts.join('.')}; Path=/; SameSite=Lax${secure}`;
+    document.cookie = `${WELCOME_POPUP_CLOSED_COOKIE}=${accounts.join('.')}; Max-Age=${CLOSED_FOR_SECONDS}; Path=/; SameSite=Lax${secure}`;
   } catch {
     // Refused: the close holds for this page.
   }
