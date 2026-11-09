@@ -9,6 +9,8 @@ import {
   CONNECTED_APP_ACCESS,
   disconnectQuestion,
   formatConnectedDate,
+  isOAuthServerDisabledError,
+  listConnectedApps,
   toConnectedApps,
   type ConnectedAppsClient,
 } from '@/lib/connected-apps';
@@ -50,6 +52,22 @@ describe('the connected apps rules', () => {
     expect(formatConnectedDate('2026-11-09T10:00:00.000Z')).toBe('Connected Nov 9, 2026');
     expect(formatConnectedDate(null)).toBeNull();
     expect(disconnectQuestion(apps[0])).toMatchObject({ title: 'Disconnect Codex?', confirmLabel: 'Disconnect', tone: 'danger' });
+  });
+
+  it('reads a switched-off OAuth server as no apps connected, and any other failure as a failure', async () => {
+    expect(isOAuthServerDisabledError({ code: 'feature_disabled', message: 'OAuth server is disabled' })).toBe(true);
+    expect(isOAuthServerDisabledError({ status: 404, message: 'Not Found' })).toBe(true);
+    expect(isOAuthServerDisabledError({ message: 'OAuth 2.1 server is not enabled for this project' })).toBe(true);
+    expect(isOAuthServerDisabledError({ code: 'bad_jwt', message: 'invalid token' })).toBe(false);
+    expect(isOAuthServerDisabledError(null)).toBe(false);
+    expect(await listConnectedApps({
+      listGrants: async () => ({ data: null, error: { code: 'feature_disabled', message: 'OAuth server is disabled' } }),
+      revokeGrant: async () => ({ error: null }),
+    })).toEqual([]);
+    await expect(listConnectedApps({
+      listGrants: async () => ({ data: null, error: { code: 'bad_jwt', message: 'invalid token' } }),
+      revokeGrant: async () => ({ error: null }),
+    })).rejects.toThrow('invalid token');
   });
 });
 
@@ -112,12 +130,19 @@ describe('the Connected apps section', () => {
     expect(within(list).getByRole('button', { name: 'Disconnect Codex' })).toBeInTheDocument();
   });
 
-  it('shows the empty state for an account with no apps, and the last app\'s departure leaves it empty', async () => {
+  it('shows the empty state for an account with no apps, and where the OAuth server is switched off', async () => {
     const client = api({ listGrants: vi.fn(async () => ({ data: [], error: null })) });
-    render(<ConnectedApps client={client} />);
+    const first = render(<ConnectedApps client={client} />);
     expect(await screen.findByText(CONNECTED_APPS_COPY.emptyTitle)).toBeInTheDocument();
     expect(screen.getByText(CONNECTED_APPS_COPY.emptyBody)).toBeInTheDocument();
     expect(screen.queryByRole('list')).not.toBeInTheDocument();
+    first.unmount();
+
+    // The local stack as shipped and a preview project: no danger callout on every visit.
+    const off = api({ listGrants: vi.fn(async () => ({ data: null, error: { code: 'feature_disabled', message: 'OAuth server is disabled' } })) });
+    render(<ConnectedApps client={off} />);
+    expect(await screen.findByText(CONNECTED_APPS_COPY.emptyTitle)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('says when the list could not be read, never reads as empty, and reads again on Try again', async () => {

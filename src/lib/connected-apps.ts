@@ -99,13 +99,28 @@ export function formatConnectedDate(value: string | null): string | null {
 
 /** The slice of the browser client's OAuth API this module reads and writes. */
 export type ConnectedAppsClient = {
-  listGrants(): Promise<{ data: unknown; error: { message?: string } | null }>;
+  listGrants(): Promise<{ data: unknown; error: { code?: string; status?: number; message?: string } | null }>;
   revokeGrant(params: { clientId: string }): Promise<{ error: { message?: string } | null }>;
 };
 
+/**
+ * Supabase Auth's answer where its OAuth server is switched off (the local stack as shipped, a
+ * preview project): there can be no grants, so the list is empty rather than failed. The code is
+ * GoTrue's `feature_disabled`; a route the gateway does not know answers 404; the message says
+ * the server is off.
+ */
+export function isOAuthServerDisabledError(error: { code?: string; status?: number; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === 'feature_disabled' || error.status === 404) return true;
+  return /feature[_ ]disabled|oauth.*?(disabled|not enabled)/iu.test(error.message ?? '');
+}
+
 export async function listConnectedApps(client: ConnectedAppsClient): Promise<ConnectedApp[]> {
   const { data, error } = await client.listGrants();
-  if (error) throw new Error(error.message || 'The connected apps could not be read.');
+  if (error) {
+    if (isOAuthServerDisabledError(error)) return [];
+    throw new Error(error.message || 'The connected apps could not be read.');
+  }
   return toConnectedApps(data);
 }
 
