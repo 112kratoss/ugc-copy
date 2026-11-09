@@ -48,10 +48,12 @@ Decisions the plan adds:
   registration works for a zero-config Claude Code, Codex or Cursor at the cost of a client row per
   install. Production starts with registration off and one public client per surface; phase 3
   reconsiders.
-- **Agent tokens drive only the MCP route.** Supabase cannot bind a token to our resource (no
-  RFC 8707 support), so the route requires the `client_id` claim an OAuth-issued token carries,
-  and the proxy refuses a `client_id`-bearing token on every other `/api` route. A leaked agent
-  token can then do only what the consent screen said.
+- **Agent tokens drive only the MCP route of this app.** Supabase cannot bind a token to our
+  resource (no RFC 8707 support), so the route requires the `client_id` claim an OAuth-issued
+  token carries, the proxy refuses a `client_id`-bearing token on every other `/api` route, and
+  the server-rendered pages refuse it as a session. Against Supabase directly the token is still
+  the creator's session under RLS, like any user token; revocation (Connected apps) and the
+  one-hour expiry are the remedy for a leak.
 - **No scope-based authorization.** The token has no scope claim; the consent screen shows a
   fixed description of what the agent may do, and the server authorizes per tool by the user.
 - **Stateless Streamable HTTP, JSON responses, no sessions, no Redis.** The MCP server SDK v2

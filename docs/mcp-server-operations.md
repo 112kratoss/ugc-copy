@@ -32,9 +32,13 @@ calls. The protected-resource metadata every client reads first is served at
    claim. Every service, RLS policy and rate limit then applies to the agent as it applies to
    the creator in the browser.
 
-The proxy refuses a `client_id`-bearing token on every other `/api` route
-(403 `AGENT_TOKEN_NOT_ALLOWED`), so a leaked agent token can do only what the consent screen
-said, on the one route built for it.
+On this app's own surfaces an agent token drives `/api/mcp` and nothing else: the proxy refuses a
+`client_id`-bearing token on every other `/api` route (403 `AGENT_TOKEN_NOT_ALLOWED`), and the
+server-rendered pages refuse it as a session (`getServerAuthState`). What the claim does not do is
+bind the token to this app: against the Supabase project directly (PostgREST, Storage, Auth) an
+agent token is the creator's session under RLS, like any user token, so whoever holds a leaked one
+can read and change what that account may until the grant is revoked (which deletes the token's
+session) or the hour runs out. Revocation and expiry are the remedy; see "Revoking a client".
 
 ## Enabling the OAuth server (production dashboard)
 
@@ -55,11 +59,13 @@ not from this repository.
    clients cannot send one). `GET /auth/v1/health` names the Auth version; the spike ran on GoTrue
    v2.186.0, which production also runs.
 
-The local stack enables the same block in `supabase/config.toml` (`[auth.oauth_server]`,
-`enabled = true`, `authorization_url_path = "/oauth/consent"`); the spike's worktree carries
-that change until it merges. For ES256 tokens like production's, the local stack also needs a
-signing key (`supabase gen signing-key --algorithm ES256` and `signing_keys_path` in the config);
-without it the stack signs HS256 and `openid` cannot issue an ID token.
+The local stack has the same block on in `supabase/config.toml` (`[auth.oauth_server]`,
+`enabled = true`, `authorization_url_path = "/oauth/consent"`, registration off), so
+`/oauth/consent`, an agent token and revocation can be exercised locally; nothing pushes that
+file to production, whose switch is the dashboard alone. For ES256 tokens like production's, the
+local stack also needs a signing key (`supabase gen signing-key --algorithm ES256` and
+`signing_keys_path` in the config); without it the stack signs HS256 and `openid` cannot issue an
+ID token.
 
 ## Registering a client (an "OAuth App")
 
@@ -77,8 +83,12 @@ npm run ops:oauth-clients -- create --name "Claude Code" --client-uri https://cl
 
 Without `--apply` the script only shows what it would register; it prints client ids (public)
 and never a secret (a `--confidential` client's secret goes to the clipboard, for the connector
-form it is for, and nowhere else: the AGENTS.md rule on secrets). The dashboard's
-Authentication → OAuth Server → Apps page does the same by hand.
+form it is for, and nowhere else: the AGENTS.md rule on secrets). It registers on whichever
+project `.env.local` points at and names that project's origin in every output: the file is
+hand-toggled between the local stack and production (`docs/local-development.md`), so check that
+the **production** block is the active one before `--apply`, or the client id you paste into a
+connector form is one production has never heard of. The dashboard's Authentication → OAuth
+Server → Apps page does the same by hand.
 
 | Client | Redirect URI(s) to register | How the creator connects |
 |---|---|---|
@@ -156,7 +166,10 @@ stack only, where the path-insertion forms answered 404 through local Kong:
    `/oauth/consent`, Allow lands on Claude Code's own callback page, and `claude mcp get
    magicbooklet` reports Connected. The route's 401 carries the challenge; the proxy's own 401
    does not, which is why `/api/mcp` owns its admission.
-4. `list_models` through Claude Code answers the production catalog's revision.
+4. `list_models` through Claude Code answers the production catalog's revision, and a
+   `get_generation` with `wait_seconds` 45 on a running creation answers rather than timing
+   out: the wait, the admission round trips and the final read must all fit under the route's
+   60 seconds and the client's own request timeout (the tools suggest 30 for that reason).
 
 ## Verifying a deployment
 
