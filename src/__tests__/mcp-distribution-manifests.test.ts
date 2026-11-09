@@ -72,8 +72,11 @@ function readSkill(file: string): { fields: Record<string, string>; allowedTools
   return { fields, allowedTools, body };
 }
 
-/** Tools that spend credits or act in public: a skill never runs one without the permission prompt. */
-const NEVER_PRE_APPROVED = ['create_media', 'enhance_prompt', 'publish_post', 'delete_post', 'upload_input'];
+/**
+ * Tools that spend credits, act in public, or send a file of the person's off their machine: a
+ * skill never runs one without the permission prompt.
+ */
+const NEVER_PRE_APPROVED = ['create_media', 'enhance_prompt', 'publish_post', 'delete_post', 'upload_input', 'request_upload'];
 const PLUGIN_TOOL_PREFIX = `mcp__plugin_${MCP_PLUGIN_NAME}_${MCP_SERVER_KEY}__`;
 
 /**
@@ -89,7 +92,7 @@ const COMING_TOOLS: readonly string[] = [];
  * (`create_media`, `get_generation`). Parameter and field names (`wait_seconds`, `cost_credits`)
  * start with no such verb and are left alone.
  */
-const TOOL_LIKE_NAME = /^(?:list|get|quote|create|enhance|publish|delete|upload|update|run|search|remove|set)_[a-z]+(?:_[a-z]+)*$/;
+const TOOL_LIKE_NAME = /^(?:list|get|quote|create|enhance|publish|delete|upload|request|update|run|search|remove|set)_[a-z]+(?:_[a-z]+)*$/;
 
 describe('the Claude Code plugin marketplace', () => {
   const marketplace = readJson<Marketplace>(ROOT, '.claude-plugin', 'marketplace.json');
@@ -135,10 +138,16 @@ describe('the Claude Code plugin marketplace', () => {
     }
   });
 
-  it('carries the two skills, each pre-approving only the server’s free reads', () => {
+  it('carries the three skills, each pre-approving only the server’s free reads', () => {
     const skillsDir = path.join(PLUGIN_ROOT, 'skills');
     const skills = readdirSync(skillsDir).sort();
-    expect(skills).toEqual(['create-ugc-ad', 'publish-creation']);
+    expect(skills).toEqual(['create-ugc-ad', 'post-outside-media', 'publish-creation']);
+    // Each is offered by its command in the README, and counted in the marketplace's line.
+    const readme = readFileSync(path.join(PLUGIN_ROOT, 'README.md'), 'utf8');
+    for (const skill of skills) {
+      expect(readme, skill).toContain(`/${MCP_PLUGIN_NAME}:${skill}`);
+    }
+    expect(marketplace.plugins[0].description).toContain('three skills');
 
     const readOnlyTools = new Set<string>(MCP_TOOLS.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name));
     const offeredTools = new Set<string>(MCP_TOOLS.map((tool) => tool.name));
@@ -163,6 +172,24 @@ describe('the Claude Code plugin marketplace', () => {
     // The registry's charging tools exist under the names the list keeps out.
     expect(offeredTools.has('create_media')).toBe(true);
     expect(offeredTools.has('enhance_prompt')).toBe(true);
+    // Every tool the list keeps out is one the server offers: a name that left the registry leaves here too.
+    for (const name of NEVER_PRE_APPROVED) {
+      expect(offeredTools.has(name), `${name} is kept from pre-approval but is no tool`).toBe(true);
+    }
+  });
+
+  it('posts outside media in the order the server needs: stage, send a local file with the printed command, then publish with what made it', () => {
+    const { body } = readSkill(path.join(PLUGIN_ROOT, 'skills', 'post-outside-media', 'SKILL.md'));
+    const order = ['`request_upload`', 'curl command', '`publish_post`', '`made_with`'].map((words) => body.indexOf(words));
+    expect(order.every((index) => index >= 0), 'the skill names each step').toBe(true);
+    expect([...order].sort((left, right) => left - right)).toEqual(order);
+    // A link is staged with upload_input alone; a local file goes through request_upload first.
+    expect(body).toMatch(/call `upload_input` with `url`/);
+    expect(body).toMatch(/then call `upload_input` with the upload id that answer gave/);
+    // A post goes out under the person's name: the skill asks, and never names Magic Booklet as the maker.
+    expect(body).toMatch(/Ask; do not assume public/);
+    expect(body).toMatch(/never name Magic Booklet/);
+    expect(body).toMatch(/Keep the post id/);
   });
 
   it('names only tools the server offers, or phase 2’s coming ones, which leave the list once live', () => {

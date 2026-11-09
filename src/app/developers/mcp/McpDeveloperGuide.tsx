@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock,
   Coins,
+  ImageUp,
   KeyRound,
   Plug,
   Send,
@@ -58,6 +59,12 @@ const CAPABILITIES: Highlight[] = [
     icon: Send,
     title: 'Publish a creation as a post',
     body: 'When you ask, it posts a finished creation to your profile and Explore, under your name and with the rules every post follows.',
+  },
+  {
+    icon: ImageUp,
+    title: 'Post media made elsewhere',
+    // What every client can do comes first; a file on the computer needs an app that runs commands there.
+    body: 'Give it a picture or video from another tool by its link, and it posts it under your name, saying what made it. In Claude Code, Codex and Cursor, which can run commands on your computer, it can also send a file from there.',
   },
 ];
 
@@ -178,7 +185,7 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
       ],
       alternative: {
         title: 'Or install the plugin',
-        text: 'The Magic Booklet plugin adds the same server and two skills: one that takes a UGC ad from brief to post, and one that publishes a creation. Sign in with /mcp as above. Use the command or the plugin, not both: each would add its own magicbooklet server and ask you to sign in again.',
+        text: 'The Magic Booklet plugin adds the same server and three skills: one that takes a UGC ad from brief to post, one that publishes a creation, and one that posts media made elsewhere. Sign in with /mcp as above. Use the command or the plugin, not both: each would add its own magicbooklet server and ask you to sign in again.',
         steps: [
           { text: 'Add the marketplace:', code: { value: MCP_PLUGIN_MARKETPLACE_ADD_COMMAND, label: 'the marketplace command' } },
           { text: 'Install the plugin:', code: { value: MCP_PLUGIN_INSTALL_COMMAND, label: 'the plugin install command' } },
@@ -251,9 +258,10 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
   ];
 }
 
+/** Three cards sit in a row; four sit two by two, so none is left alone on a line. */
 function HighlightGrid({ items }: { items: Highlight[] }) {
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className={items.length === 4 ? 'grid gap-4 md:grid-cols-2' : 'grid gap-4 md:grid-cols-3'}>
       {items.map(({ icon: Icon, title, body }) => (
         <Surface as="article" key={title} variant="card" padding="lg">
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]">
@@ -370,7 +378,8 @@ export default function McpDeveloperGuide({ clientIds }: { clientIds: McpClientI
             <Text as="h1" variant="pageTitle">Connect your AI agent to Magic Booklet</Text>
             <Text variant="body" className="text-lg leading-8">
               Magic Booklet runs a remote MCP server. {connectSentence(clientIds)} A connected agent can make images and
-              videos with your credits, follow each run to the end and publish the ones you choose.
+              videos with your credits, follow each run to the end, publish the ones you choose and post media you made
+              elsewhere.
             </Text>
             <div className="space-y-2">
               <Text variant="label">Server URL</Text>

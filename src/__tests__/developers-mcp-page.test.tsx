@@ -82,6 +82,33 @@ describe('/developers/mcp', () => {
     expect(document.body.textContent).not.toContain(PENDING_CLIENT_ID_PREFIX);
   });
 
+  it('says an agent can post media made elsewhere, by link from any client and from a file only where the client runs commands', () => {
+    render(<McpDeveloperGuide clientIds={ALL_REGISTERED} />);
+
+    const heading = screen.getByRole('heading', { level: 3, name: 'Post media made elsewhere' });
+    const card = heading.closest('article');
+    expect(card).not.toBeNull();
+    const words = card?.textContent ?? '';
+    // What every client can do comes first: a link.
+    expect(words).toContain('a picture or video from another tool by its link');
+    expect(words).toContain('saying what made it');
+    // A file on the computer is claimed only for the clients that have a shell there.
+    expect(words).toMatch(/In Claude Code, Codex and Cursor, which can run commands on your computer, it can also send a file from there\./);
+    expect(words).not.toMatch(/ChatGPT|Claude\.ai|Claude Desktop/);
+    expect(screen.getByText(/publish the ones you choose and post media you made\s+elsewhere\./)).toBeInTheDocument();
+
+    // Four capability cards sit two by two; the three account cards keep their row.
+    const capabilities = heading.closest('article')?.parentElement;
+    expect(capabilities?.querySelectorAll('article')).toHaveLength(4);
+    expect(capabilities).toHaveClass('md:grid-cols-2');
+    const controls = screen.getByRole('heading', { level: 3, name: 'You approve each app' }).closest('article')?.parentElement;
+    expect(controls?.querySelectorAll('article')).toHaveLength(3);
+    expect(controls).toHaveClass('md:grid-cols-3');
+
+    // The plugin carries a skill for it.
+    expect(within(block('Claude Code')).getByText(/adds the same server and three skills: .* and one that posts media made elsewhere\./)).toBeInTheDocument();
+  });
+
   it('names a waiting app as coming in the header and the search snippet, never as connectable', () => {
     expect(connectSentence(MIXED_IDS)).toBe('Connect Claude today, and ChatGPT, Codex and Cursor soon.');
     expect(connectSentence(ALL_REGISTERED)).toBe('Connect Claude, ChatGPT, Codex or Cursor.');

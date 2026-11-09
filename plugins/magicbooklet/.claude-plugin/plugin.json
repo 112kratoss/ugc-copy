@@ -1,8 +1,8 @@
 {
   "name": "magicbooklet",
   "displayName": "Magic Booklet",
-  "version": "1.0.0",
-  "description": "Create AI images and videos with your Magic Booklet credits from Claude Code, every run priced before it starts, and publish them as posts.",
+  "version": "1.1.0",
+  "description": "Create AI images and videos with your Magic Booklet credits from Claude Code, every run priced before it starts, publish them as posts, and post media you made elsewhere.",
   "author": {
     "name": "Magic Booklet",
     "email": "info@magicbooklet.com",
