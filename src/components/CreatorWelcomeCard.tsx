@@ -19,6 +19,7 @@ import {
 } from '@/lib/public-identity';
 import { describeReferralClaim } from '@/lib/referral-claim-copy';
 import type { ProfileApiResponse } from '@/lib/profile';
+import { announceWelcomeOfferChanged } from '@/lib/welcome-credits-popup';
 
 /**
  * What the post-auth redirect tells a creator about an account back from
@@ -36,11 +37,11 @@ type WelcomeCredits = {
 type CardState =
   /** The name and handle unlock the credits (the claim refuses an account without them). */
   | { kind: 'identity'; amount: number }
-  /** The name and handle are there, the credits not yet added. */
-  | { kind: 'claim'; amount: number }
-  | { kind: 'added'; amount: number }
-  /** Nothing to add: the account is back, and so is its form. */
-  | { kind: 'back'; note: string | null }
+  /**
+   * The account is back, and so is its form: `saved` once its name was saved
+   * here. Credits still to claim are the welcome popup's to offer, over this page.
+   */
+  | { kind: 'back'; note: string | null; saved?: boolean }
   /** The welcome credits could not be read: said, with a way to ask again. */
   | { kind: 'unread' }
   | { kind: 'loading' }
@@ -49,13 +50,12 @@ type CardState =
 /** Why a sign-in that already had its welcome credits (on an account since deleted) gets none here. */
 const ALREADY_CLAIMED_NOTE = 'This sign-in already had its welcome credits on another account.';
 
-async function welcomeRequest(path: string, accessToken: string, init?: RequestInit): Promise<WelcomeCredits> {
-  const response = await fetch(path, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}`, ...init?.headers },
+async function readWelcomeCredits(accessToken: string): Promise<WelcomeCredits> {
+  const response = await fetch('/api/credits/welcome', {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
   });
   const body = await response.json().catch(() => null) as (WelcomeCredits & { error?: string }) | null;
-  if (!response.ok || !body) throw new Error(body?.error || 'Your welcome credits could not be added. Try again.');
+  if (!response.ok || !body) throw new Error(body?.error || 'Your welcome credits could not be read.');
   return body;
 }
 
@@ -74,8 +74,10 @@ function dropWelcomeFlags() {
  * The creator's greeting for an account back from the sign-up a visitor opened
  * at Generate (owner, 2026-10-28). The welcome credits need a name and a handle
  * (`claim_credit_grant_program` refuses an account without them), so a new
- * account gets one card, filled in from the sign-in, whose one press saves both
- * and adds the credits. Nothing runs: Generate is theirs to press.
+ * account gets one card, filled in from the sign-in, that saves both; the
+ * welcome-credits popup then offers the credits over the page (owner,
+ * 2026-11-09: the claim is the popup's everywhere). Nothing runs: Generate is
+ * theirs to press.
  */
 export default function CreatorWelcomeCard({
   welcome,
@@ -86,7 +88,7 @@ export default function CreatorWelcomeCard({
   carriedDraft: boolean;
 }) {
   const auth = useAuth();
-  const { session, updateCredits } = auth;
+  const { session } = auth;
   const user = auth.user ?? session?.user ?? null;
   const accessToken = session?.access_token ?? null;
   const titleId = useId();
@@ -107,13 +109,13 @@ export default function CreatorWelcomeCard({
   // Read on every run of the effect, and taken only while the card still waits: a
   // run cancelled under it (React runs a development effect twice) left the card
   // empty when a guard stopped the second run, and a token refreshed later must
-  // not take the card back from "added". The flags leave the address once the
+  // not take the card back from "saved". The flags leave the address once the
   // status is known, so a reload after a failed read asks again.
   useEffect(() => {
     if (!accessToken || !userId) return;
     let active = true;
     void Promise.all([
-      welcomeRequest('/api/credits/welcome', accessToken).catch(() => null),
+      readWelcomeCredits(accessToken).catch(() => null),
       loadOwnProfile(accessToken),
     ]).then(([credits, ownProfile]) => {
       if (!active) return;
@@ -122,9 +124,7 @@ export default function CreatorWelcomeCard({
         ? { kind: 'unread' }
         : credits.status === 'not_eligible' && !credits.identityComplete
           ? { kind: 'identity', amount: credits.amount }
-          : credits.status === 'eligible'
-            ? { kind: 'claim', amount: credits.amount }
-            : { kind: 'back', note: credits.status === 'identity_already_claimed' ? ALREADY_CLAIMED_NOTE : null };
+          : { kind: 'back', note: credits.status === 'identity_already_claimed' ? ALREADY_CLAIMED_NOTE : null };
       if (next.kind !== 'unread') dropWelcomeFlags();
       setState((current) => (current.kind === 'loading' || current.kind === 'unread' ? next : current));
     });
@@ -133,48 +133,29 @@ export default function CreatorWelcomeCard({
     };
   }, [accessToken, attempt, userId]);
 
-  const addCredits = async (token: string) => {
-    const result = await welcomeRequest('/api/credits/welcome/claim', token, {
-      method: 'POST',
-      body: JSON.stringify({ sourceSurface: 'web' }),
-    });
-    if (result.status === 'claimed') {
-      updateCredits(result.credits);
-      setState({ kind: 'added', amount: result.amount });
-    } else if (result.status === 'identity_already_claimed') {
-      setState({ kind: 'back', note: ALREADY_CLAIMED_NOTE });
-    } else {
-      // Added before (another tab), or not on offer: the shell reads the balance again.
-      window.dispatchEvent(new Event('credits_updated'));
-      setState({ kind: 'back', note: null });
-    }
-  };
-
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (busy || !accessToken || (state.kind !== 'identity' && state.kind !== 'claim')) return;
+    if (busy || !accessToken || state.kind !== 'identity') return;
     setError(null);
-    if (state.kind === 'identity') {
-      const localErrors = validatePublicIdentity(identity, profile?.username);
-      if (localErrors.displayName || localErrors.username) {
-        setIdentityErrors(localErrors);
-        return;
-      }
+    const localErrors = validatePublicIdentity(identity, profile?.username);
+    if (localErrors.displayName || localErrors.username) {
+      setIdentityErrors(localErrors);
+      return;
     }
     setBusy(true);
     try {
-      if (state.kind === 'identity') {
-        const saved = await claimPublicIdentity(identity, accessToken);
-        if (!saved.ok) {
-          setIdentityErrors(saved.errors);
-          setError(saved.errors.displayName || saved.errors.username ? null : saved.message);
-          return;
-        }
-        setProfile(saved.profile);
+      const saved = await claimPublicIdentity(identity, accessToken);
+      if (!saved.ok) {
+        setIdentityErrors(saved.errors);
+        setError(saved.errors.displayName || saved.errors.username ? null : saved.message);
+        return;
       }
-      await addCredits(accessToken);
-    } catch (claimError) {
-      setError(claimError instanceof Error ? claimError.message : 'Your welcome credits could not be added. Try again.');
+      setProfile(saved.profile);
+      setState({ kind: 'back', note: null, saved: true });
+      // The credits are claimable now: the popup asks again and offers them.
+      announceWelcomeOfferChanged();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Your name and handle could not be saved. Try again.');
     } finally {
       setBusy(false);
     }
@@ -195,7 +176,7 @@ export default function CreatorWelcomeCard({
     );
   }
 
-  if (state.kind === 'added' || state.kind === 'back') {
+  if (state.kind === 'back') {
     return (
       <Surface as="section" variant="panel" padding="none" ariaLive="polite" className="p-4">
         <div className="flex items-start gap-3">
@@ -204,9 +185,9 @@ export default function CreatorWelcomeCard({
           </span>
           <div className="min-w-0 flex-1">
             <Text as="h2" variant="label">
-              {state.kind === 'added' ? `You’re in: ${state.amount} free credits added` : 'You’re signed in'}
+              {state.saved ? 'Your name and handle are saved' : 'You’re signed in'}
             </Text>
-            <Text variant="bodySm" className="mt-1">{state.kind === 'back' && state.note ? `${state.note} ${backLine}` : backLine}</Text>
+            <Text variant="bodySm" className="mt-1">{state.note ? `${state.note} ${backLine}` : backLine}</Text>
             {referralLine ? <Text variant="bodySm" className="mt-2">{referralLine}</Text> : null}
           </div>
           <IconButton label="Dismiss" icon={X} onClick={() => setState({ kind: 'closed' })} className="-mr-2 -mt-2 shrink-0" />
@@ -215,7 +196,6 @@ export default function CreatorWelcomeCard({
     );
   }
 
-  const asksIdentity = state.kind === 'identity';
   return (
     <Surface as="section" variant="panel" padding="none" className="p-4">
       <form onSubmit={(event) => void onSubmit(event)} noValidate aria-labelledby={titleId}>
@@ -224,39 +204,33 @@ export default function CreatorWelcomeCard({
             <Gift className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <Text as="h2" id={titleId} variant="label">
-              {asksIdentity ? 'Pick your name and handle' : `${state.amount} free credits are waiting`}
-            </Text>
+            <Text as="h2" id={titleId} variant="label">Pick your name and handle</Text>
             <Text variant="bodySm" className="mt-1">
-              {asksIdentity
-                ? `They show on what you post, and they add your ${state.amount} free credits. You can change them later in your profile.`
-                : `Add them, then press Generate when you’re ready.${carriedDraft ? ' Your prompt and settings are as you left them.' : ''}`}
+              {`They show on what you post, and they unlock your ${state.amount} free credits. You can change them later in your profile.`}
             </Text>
           </div>
         </div>
-        {asksIdentity ? (
-          <div className="mt-4">
-            <PublicIdentityFields
-              idPrefix="creator-welcome"
-              value={identity}
-              errors={identityErrors}
-              disabled={busy}
-              accessToken={accessToken}
-              savedUsername={profile?.username}
-              framed={false}
-              stacked
-              onChange={(next) => {
-                setIdentityEdits(next);
-                setIdentityErrors({});
-              }}
-            />
-          </div>
-        ) : null}
+        <div className="mt-4">
+          <PublicIdentityFields
+            idPrefix="creator-welcome"
+            value={identity}
+            errors={identityErrors}
+            disabled={busy}
+            accessToken={accessToken}
+            savedUsername={profile?.username}
+            framed={false}
+            stacked
+            onChange={(next) => {
+              setIdentityEdits(next);
+              setIdentityErrors({});
+            }}
+          />
+        </div>
         {referralLine ? <Text variant="bodySm" className="mt-3">{referralLine}</Text> : null}
         {error ? <p role="alert" className="mt-3 text-sm text-[var(--ui-accent-danger)]">{error}</p> : null}
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <Button type="submit" variant="primary" disabled={busy} className="flex-1">
-            {busy ? 'Adding…' : asksIdentity ? `Save and add ${state.amount} credits` : `Add ${state.amount} credits`}
+            {busy ? 'Saving…' : 'Save'}
           </Button>
           <Button variant="ghost" disabled={busy} onClick={() => setState({ kind: 'closed' })}>
             Not now

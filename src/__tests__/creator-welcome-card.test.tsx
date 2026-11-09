@@ -15,12 +15,13 @@ vi.mock('@/components/AuthProvider', () => ({
 }));
 
 import CreatorWelcomeCard from '@/components/CreatorWelcomeCard';
+import { WELCOME_OFFER_CHANGED_EVENT } from '@/lib/welcome-credits-popup';
 
 type WelcomeAnswer = { status: string; amount: number; credits: number; identityComplete: boolean };
 
 const NEW_PROFILE = { id: 'user-1', username: 'creator-a1b2c3d4', displayName: null };
 
-function installFetch({ welcome, claim }: { welcome: WelcomeAnswer; claim?: WelcomeAnswer }) {
+function installFetch({ welcome }: { welcome: WelcomeAnswer }) {
   const calls: Array<{ url: string; method: string; body: unknown }> = [];
   let profile: Record<string, unknown> = { ...NEW_PROFILE };
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -30,7 +31,6 @@ function installFetch({ welcome, claim }: { welcome: WelcomeAnswer; claim?: Welc
     calls.push({ url, method, body });
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
     if (url === '/api/credits/welcome') return json(welcome);
-    if (url === '/api/credits/welcome/claim') return json(claim ?? welcome);
     if (url === '/api/profile/validate') return json({ ok: true });
     if (url === '/api/profile' && method === 'PATCH') {
       profile = { ...profile, username: body.username, displayName: body.displayName };
@@ -54,30 +54,31 @@ describe('the creator’s greeting for an account back from sign-up', () => {
     window.history.replaceState({}, '', '/');
   });
 
-  it('asks a new account for its name and handle, filled in from the sign-in, and adds the welcome credits with one press', async () => {
-    const calls = installFetch({
-      welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false },
-      claim: { status: 'claimed', amount: 25, credits: 25, identityComplete: true },
-    });
+  // The claim is the welcome popup's on every page (owner, 2026-11-09): the card
+  // saves the name and handle the claim needs, and tells the popup to ask again.
+  it('asks a new account for its name and handle, filled in from the sign-in, saves them with one press and leaves the credits to the popup', async () => {
+    const calls = installFetch({ welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false } });
+    const offerChanges = vi.fn();
+    window.addEventListener(WELCOME_OFFER_CHANGED_EVENT, offerChanges);
     render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     expect(await screen.findByRole('heading', { name: 'Pick your name and handle' })).toBeInTheDocument();
+    expect(screen.getByText(/they unlock your 25 free credits/)).toBeInTheDocument();
     expect(screen.getByLabelText('Display name')).toHaveValue('Asha Rao');
     const handle = (screen.getByLabelText('Handle') as HTMLInputElement).value;
     expect(handle).toMatch(/^[a-z0-9-]{3,24}$/);
     expect(handle).not.toMatch(/^creator-/);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save and add 25 credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('heading', { name: 'You’re in: 25 free credits added' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Your name and handle are saved' })).toBeInTheDocument();
     expect(screen.getByText(/nothing has been spent/)).toBeInTheDocument();
     const patch = calls.find((call) => call.url === '/api/profile' && call.method === 'PATCH');
     expect(patch?.body).toEqual({ username: handle, displayName: 'Asha Rao' });
-    const claim = calls.find((call) => call.url === '/api/credits/welcome/claim');
-    expect(claim).toMatchObject({ method: 'POST', body: { sourceSurface: 'web' } });
-    // The name and handle go first: the claim refuses an account without them.
-    expect(calls.indexOf(patch!)).toBeLessThan(calls.indexOf(claim!));
-    expect(mocks.updateCredits).toHaveBeenCalledWith(25);
+    expect(calls.some((call) => call.url === '/api/credits/welcome/claim')).toBe(false);
+    expect(mocks.updateCredits).not.toHaveBeenCalled();
+    expect(offerChanges).toHaveBeenCalledTimes(1);
+    window.removeEventListener(WELCOME_OFFER_CHANGED_EVENT, offerChanges);
   });
 
   // React runs a development effect twice (Next's dev server renders in StrictMode). The card
@@ -139,24 +140,20 @@ describe('the creator’s greeting for an account back from sign-up', () => {
     render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
     fireEvent.change(await screen.findByLabelText('Display name'), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save and add 25 credits' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(screen.getByLabelText('Display name')).toHaveAttribute('aria-invalid', 'true'));
     expect(calls.some((call) => call.method === 'PATCH')).toBe(false);
     expect(calls.some((call) => call.url === '/api/credits/welcome/claim')).toBe(false);
   });
 
-  it('adds waiting credits to an account that already has its name and handle', async () => {
-    installFetch({
-      welcome: { status: 'eligible', amount: 25, credits: 0, identityComplete: true },
-      claim: { status: 'claimed', amount: 25, credits: 25, identityComplete: true },
-    });
+  it('leaves waiting credits to the popup for an account that already has its name and handle', async () => {
+    const calls = installFetch({ welcome: { status: 'eligible', amount: 25, credits: 0, identityComplete: true } });
     render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Add 25 credits' }));
-
-    expect(await screen.findByRole('heading', { name: 'You’re in: 25 free credits added' })).toBeInTheDocument();
-    expect(mocks.updateCredits).toHaveBeenCalledWith(25);
+    expect(await screen.findByRole('heading', { name: 'You’re signed in' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
+    expect(calls.some((call) => call.url === '/api/credits/welcome/claim')).toBe(false);
   });
 
   it('only says the form is back to an account with nothing to add, with how its invite went', async () => {
@@ -168,19 +165,6 @@ describe('the creator’s greeting for an account back from sign-up', () => {
     expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByRole('heading', { name: 'You’re signed in' })).not.toBeInTheDocument();
-  });
-
-  it('says so when this sign-in had its welcome credits on another account', async () => {
-    installFetch({
-      welcome: { status: 'not_eligible', amount: 25, credits: 0, identityComplete: false },
-      claim: { status: 'identity_already_claimed', amount: 25, credits: 0, identityComplete: true },
-    });
-    render(<CreatorWelcomeCard welcome={{ referral: null }} carriedDraft />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Save and add 25 credits' }));
-
-    expect(await screen.findByText(/already had its welcome credits on another account/)).toBeInTheDocument();
-    expect(mocks.updateCredits).not.toHaveBeenCalled();
   });
 
   it('says why on the first read when this sign-in already had its welcome credits', async () => {

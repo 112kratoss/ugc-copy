@@ -8,8 +8,10 @@ import { expect, test, type Page } from '@playwright/test';
  * - Generate reads "Sign up to generate" and opens the sign-up sheet.
  * - Leaving for Google marks the visitor's draft for the account.
  * - The account's first page takes the draft over.
- * - The welcome credits need a name and a handle, so one card asks for both and
- *   adds the credits in one press.
+ * - The welcome credits need a name and a handle, so one card asks for both; the
+ *   card claims nothing, the welcome-credits popup does (owner, 2026-11-09; the
+ *   popup needs the shell's verified session, which the E2E bypass does not
+ *   give, so it is checked on a local stack instead).
  * Nothing runs until Generate is pressed again.
  *
  * Google itself is out of reach offline. Its authorize address is answered here
@@ -67,7 +69,7 @@ async function answerNewAccount(page: Page) {
   return sent;
 }
 
-test('a visitor sets up a video, signs up at Generate and comes back to it, with one card for the welcome credits', async ({ page, context }) => {
+test('a visitor sets up a video, signs up at Generate and comes back to it, with one card for the name and handle', async ({ page, context }) => {
   const starts: string[] = [];
   page.on('request', (request) => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/generations') starts.push(request.url());
@@ -118,11 +120,11 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   await expect(page).toHaveURL(/\/create-video$/);
   await expect(page.getByLabel('Display name')).toHaveValue('Workflow User');
 
-  await page.getByRole('button', { name: 'Save and add 25 credits' }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
 
-  await expect(page.getByRole('heading', { name: 'You’re in: 25 free credits added' })).toBeVisible();
-  expect(sent.map((call) => call.path)).toEqual(['/api/profile', '/api/credits/welcome/claim']);
-  expect(sent[1].body).toEqual({ sourceSurface: 'web' });
+  await expect(page.getByRole('heading', { name: 'Your name and handle are saved' })).toBeVisible();
+  // The card saved the name and claimed nothing: the credits are the popup's.
+  expect(sent.map((call) => call.path)).toEqual(['/api/profile']);
   // Generate is the account's now, priced, and nothing has run.
   await expect(page.getByRole('button', { name: 'Generate · 19 credits' })).toBeEnabled();
   expect(starts).toEqual([]);
