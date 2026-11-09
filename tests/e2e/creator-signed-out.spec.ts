@@ -101,8 +101,9 @@ test('a visitor sets up a video, signs up at Generate and comes back to it, with
   let authorizeUrl: URL | null = null;
   await page.route('https://example.supabase.co/auth/v1/authorize**', (route) => {
     authorizeUrl = new URL(route.request().url());
-    // Where /auth/callback sends a new account that signed up from a creator: its `next`
-    // (the creator with the hand-over nonce) with the welcome flag (resolvePostAuthPath).
+    // Stands in for the way back to the creator with the hand-over nonce and the welcome flag. A new
+    // account passes the name step at /onboarding first (resolvePostAuthPath), which then opens this
+    // same address; one that chose "Set up later" comes straight back, and the card asks for its name.
     const next = new URL(authorizeUrl.searchParams.get('redirect_to') ?? '').searchParams.get('next') ?? '/';
     return route.fulfill({ status: 302, headers: { location: new URL(`${next}&welcome=1`, page.url()).toString() } });
   });

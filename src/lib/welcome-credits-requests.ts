@@ -18,10 +18,21 @@ const CLAIM_FAILED = 'Your credits could not be added. Try again.';
 /** As the app's API client gives up (`DEFAULT_API_REQUEST_TIMEOUT_MS`). */
 export const WELCOME_REQUEST_TIMEOUT_MS = 30_000;
 
-async function welcomeRequest(path: string, init?: RequestInit): Promise<WelcomeCreditAnswer> {
-  const { data } = await supabase.auth.getSession();
-  const accessToken = data.session?.access_token;
-  const askedFor = data.session?.user?.id ?? null;
+/**
+ * The account a request is made for. A component under `AuthProvider` passes the provider's token,
+ * which is the one its page signed in with (the E2E bypass gives the provider a session the
+ * browser's own client never has); without one, the browser's session is read.
+ */
+export type WelcomeRequestAccount = { accessToken: string; userId: string | null };
+
+async function welcomeRequest(path: string, init?: RequestInit, account?: WelcomeRequestAccount | null): Promise<WelcomeCreditAnswer> {
+  let accessToken = account?.accessToken ?? null;
+  let askedFor = account?.userId ?? null;
+  if (!accessToken) {
+    const { data } = await supabase.auth.getSession();
+    accessToken = data.session?.access_token ?? null;
+    askedFor = data.session?.user?.id ?? null;
+  }
   if (!accessToken) throw new WelcomeCreditsRequestError('Please sign in again to continue.');
   // Given up after the app's API timeout (`ugc-mobile/lib/api-client.ts`): a stalled claim holds
   // the popup's Close, so it must end in "Try again" rather than hold the page (review of #744).
@@ -62,8 +73,8 @@ async function welcomeRequest(path: string, init?: RequestInit): Promise<Welcome
 }
 
 /** Whether this account has credits to claim, and how many. */
-export function readWelcomeCredits(): Promise<WelcomeCreditAnswer> {
-  return welcomeRequest('/api/credits/welcome');
+export function readWelcomeCredits(account?: WelcomeRequestAccount | null): Promise<WelcomeCreditAnswer> {
+  return welcomeRequest('/api/credits/welcome', undefined, account);
 }
 
 /** The claim, recorded as made on the web (`credit_grants.source_surface`), as the welcome page's was. */

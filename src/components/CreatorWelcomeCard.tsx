@@ -101,7 +101,7 @@ export default function CreatorWelcomeCard({
     let active = true;
     void Promise.all([
       // The shared reader, which also teaches the signed-out promise (welcome-promise.ts).
-      readWelcomeCredits().catch(() => null),
+      readWelcomeCredits({ accessToken, userId }).catch(() => null),
       loadOwnProfile(accessToken),
     ]).then(([credits, ownProfile]) => {
       if (!active) return;

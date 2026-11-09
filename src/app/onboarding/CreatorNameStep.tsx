@@ -161,7 +161,7 @@ export default function CreatorNameStep({
   useEffect(() => {
     if (!accessToken) return undefined;
     let active = true;
-    void readWelcomeCredits()
+    void readWelcomeCredits({ accessToken, userId })
       .then((welcome) => {
         if (active && CREDITS_WAIT_ON_NAME.has(welcome.status) && welcome.amount > 0) setCreditsAmount(welcome.amount);
       })
@@ -169,7 +169,7 @@ export default function CreatorNameStep({
     return () => {
       active = false;
     };
-  }, [accessToken]);
+  }, [accessToken, userId]);
 
   const draft = { displayName, username };
   const question = accessToken && shouldCheckHandleAvailability(draft, savedUsername) ? username.trim() : null;
