@@ -15,6 +15,7 @@ import {
 } from '@/lib/profile';
 import { supabase } from '@/lib/supabase';
 import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
+import { endWelcomePromise } from '@/lib/welcome-promise';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
 import { OptimizedPreviewImage } from './OptimizedPreviewImage';
@@ -249,6 +250,11 @@ export default function AppShellAccount({
       acceptedAccessToken = nextSession.access_token;
       acceptedUserId = verifiedUser.id;
       publishAppShellAuthentication(true);
+      // An account signed in on this browser: its signed-out pages stop promising the welcome
+      // credits, whatever this account was told about its own (owner, 2026-11-09: "Any sign-in
+      // ends it"; `welcome-promise.ts`). Only once Supabase Auth vouches for it, and never for a
+      // guest's session.
+      if (verifiedUser.is_anonymous !== true) endWelcomePromise();
       if (mounted) {
         setSession(verifiedSession);
       }

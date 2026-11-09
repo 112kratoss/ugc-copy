@@ -47,14 +47,14 @@ vi.mock('../lib/auth', () => ({
 vi.mock('../lib/onboarding', () => ({ useOnboarding: () => ({}) }));
 
 import type { WelcomeCreditResponse } from '../lib/types';
-import { primeWelcomeCredits, useWelcomeCreditsQuery } from '../lib/use-onboarding-destination';
+import { useWelcomeCreditsQuery } from '../lib/use-onboarding-destination';
+import * as welcomePromise from '../lib/welcome-promise';
 import {
+  endWelcomePromise,
   loadWelcomePromise,
-  rememberWelcomeAnswer,
   resetWelcomePromiseForTests,
   useWelcomePromise,
   WELCOME_PROMISE_STORAGE_KEY,
-  welcomePromiseAfterAnswer,
 } from '../lib/welcome-promise';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -89,22 +89,19 @@ afterEach(() => {
   act(() => { for (const tree of trees.splice(0)) tree.unmount(); });
 });
 
-describe('what an account tells the phone about the welcome-credit promise (owner 11-09)', () => {
-  it('keeps it while the credits are still to come, drops it once this person has had them', () => {
-    expect(welcomePromiseAfterAnswer('eligible')).toBe(true);
-    // Waiting only on the creator name.
-    expect(welcomePromiseAfterAnswer('not_eligible')).toBe(true);
-    for (const status of ['claimed', 'already_claimed', 'identity_already_claimed'] as const) {
-      expect(welcomePromiseAfterAnswer(status)).toBe(false);
-    }
-  });
-
-  it('learns nothing from a guest answer, the program being off, or an account from before it', () => {
-    expect(welcomePromiseAfterAnswer('requires_account')).toBeNull();
-    expect(welcomePromiseAfterAnswer('unavailable')).toBeNull();
-    // Also the answer to an account holding 25 credits while the program is
-    // off, which may still be owed them (review of #738).
-    expect(welcomePromiseAfterAnswer('legacy_ineligible')).toBeNull();
+// Owner, 2026-11-09: "i signed up and claim the free credits and then i logged out. then it should
+// not be saying the 25 free creds". Then, shown that an account made before the program kept the
+// promise ("Still says 25"), they chose "Any sign-in ends it": once an account has signed in on
+// this phone, a guest here is not promised the welcome credits, whatever that account was told.
+describe('the rule', () => {
+  it('is only ever ended: no welcome answer brings the promise back any more', () => {
+    expect(Object.keys(welcomePromise).sort()).toEqual([
+      'WELCOME_PROMISE_STORAGE_KEY',
+      'endWelcomePromise',
+      'loadWelcomePromise',
+      'resetWelcomePromiseForTests',
+      'useWelcomePromise',
+    ]);
   });
 });
 
@@ -114,57 +111,31 @@ describe('the phone remembers it across sign-outs and launches', () => {
     expect(promise()).toBe(true);
   });
 
-  it('stops the promise the moment an account here has claimed, while the screen is up', async () => {
+  it('ends the promise the moment an account signs in here, while the screen is up', async () => {
     const promise = await mountReader();
     await act(async () => {
-      rememberWelcomeAnswer('claimed', '2026-11-09T00:00:00.000Z');
+      endWelcomePromise('2026-11-09T00:00:00.000Z');
       await settle();
     });
     expect(promise()).toBe(false);
     expect(storage.values.get(WELCOME_PROMISE_STORAGE_KEY)).toBe('2026-11-09T00:00:00.000Z');
   });
 
-  it('remembers the claim at the next launch, signed out', async () => {
+  it('remembers it at the next launch, signed out', async () => {
     storage.values.set(WELCOME_PROMISE_STORAGE_KEY, '2026-11-09T00:00:00.000Z');
     await loadWelcomePromise();
     const promise = await mountReader();
     expect(promise()).toBe(false);
   });
 
-  it('brings the promise back for an account here that still has its credits coming', async () => {
-    storage.values.set(WELCOME_PROMISE_STORAGE_KEY, 'earlier');
-    const promise = await mountReader();
-    expect(promise()).toBe(false);
-    await act(async () => {
-      rememberWelcomeAnswer('eligible');
-      await settle();
-    });
-    expect(promise()).toBe(true);
-    expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(false);
-  });
-
-  it('leaves the record alone for an answer that says nothing', async () => {
-    storage.values.set(WELCOME_PROMISE_STORAGE_KEY, 'earlier');
-    const promise = await mountReader();
-    await act(async () => {
-      rememberWelcomeAnswer('unavailable');
-      rememberWelcomeAnswer('requires_account');
-      rememberWelcomeAnswer('legacy_ineligible');
-      await settle();
-    });
-    expect(promise()).toBe(false);
-    expect(storage.values.get(WELCOME_PROMISE_STORAGE_KEY)).toBe('earlier');
-  });
-
-  it('keeps an answer learned while the stored one was still being read', async () => {
-    storage.values.set(WELCOME_PROMISE_STORAGE_KEY, 'earlier');
+  it('keeps a sign-in learned while the stored record was still being read', async () => {
     const reading = loadWelcomePromise();
-    rememberWelcomeAnswer('eligible');
+    endWelcomePromise();
     await reading;
     await settle();
     const promise = await mountReader();
-    expect(promise()).toBe(true);
-    expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(false);
+    expect(promise()).toBe(false);
+    expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(true);
   });
 
   it('keeps the promise when the store cannot be read', async () => {
@@ -173,11 +144,11 @@ describe('the phone remembers it across sign-outs and launches', () => {
     expect(promise()).toBe(true);
   });
 
-  it('tries a failed write again with the next answer, so the next launch still knows (review of #738)', async () => {
+  it('tries a failed write again at the next sign-in, so the next launch still knows (review of #738)', async () => {
     const promise = await mountReader();
     storage.failWrites = true;
     await act(async () => {
-      rememberWelcomeAnswer('claimed');
+      endWelcomePromise();
       await settle();
     });
     // This launch knows; the store does not yet.
@@ -186,37 +157,46 @@ describe('the phone remembers it across sign-outs and launches', () => {
 
     storage.failWrites = false;
     await act(async () => {
-      rememberWelcomeAnswer('claimed');
+      endWelcomePromise();
       await settle();
     });
     expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(true);
 
-    // And once the store holds it, the same answer writes nothing more.
+    // And once the store holds it, a later sign-in writes nothing more.
     const writes = storage.writes;
-    rememberWelcomeAnswer('claimed');
+    endWelcomePromise();
     await settle();
     expect(storage.writes).toBe(writes);
+  });
+
+  it('writes nothing for a phone whose store already holds it', async () => {
+    storage.values.set(WELCOME_PROMISE_STORAGE_KEY, 'earlier');
+    await loadWelcomePromise();
+    endWelcomePromise();
+    await settle();
+    expect(storage.writes).toBe(0);
+    expect(storage.values.get(WELCOME_PROMISE_STORAGE_KEY)).toBe('earlier');
   });
 
   it('survives a storage module that throws outright (review of #738)', async () => {
     const promise = await mountReader();
     storage.throwWrites = true;
     await act(async () => {
-      expect(() => rememberWelcomeAnswer('claimed')).not.toThrow();
+      expect(() => endWelcomePromise()).not.toThrow();
       await settle();
     });
     expect(promise()).toBe(false);
   });
 });
 
-describe('where the phone learns it: the signed-in account\'s own answer (review of #738)', () => {
+describe('where the phone learns it: an account signed in, whatever its welcome credits', () => {
   let client: QueryClient;
   beforeEach(() => {
     client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   });
   afterEach(() => client.clear());
 
-  /** A screen that reads the welcome answer, as Home's popup does. */
+  /** A screen that reads the welcome answer, as the popup mounted over every screen does. */
   function Probe() {
     useWelcomeCreditsQuery();
     return null;
@@ -238,63 +218,48 @@ describe('where the phone learns it: the signed-in account\'s own answer (review
     };
   }
 
-  it('learns a claimed account from the shared welcome query, and the next launch remembers it', async () => {
+  // "Still says 25": the server answers an account made before the program `legacy_ineligible`.
+  it.each(['legacy_ineligible', 'eligible', 'not_eligible', 'already_claimed'] as const)(
+    'ends it for an account answered %s, and the next launch remembers it',
+    async (status) => {
+      auth.user = { id: 'creator-1' };
+      auth.getWelcomeCredits = () => Promise.resolve(answer(status));
+      const promise = await mountReader();
+      await mountProbe();
+      expect(promise()).toBe(false);
+      expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(true);
+    },
+  );
+
+  it('ends it before the account’s welcome answer lands, or where it never does', async () => {
     auth.user = { id: 'creator-1' };
-    auth.getWelcomeCredits = () => Promise.resolve(answer('already_claimed'));
+    auth.getWelcomeCredits = () => new Promise(() => undefined);
     const promise = await mountReader();
     await mountProbe();
-    await act(async () => { await settle(); });
+    expect(promise()).toBe(false);
+  });
+
+  it('leaves it ended for a second account, even one still owed its credits', async () => {
+    auth.user = { id: 'account-a' };
+    auth.getWelcomeCredits = () => Promise.resolve(answer('already_claimed'));
+    const promise = await mountReader();
+    const probe = await mountProbe();
+    expect(promise()).toBe(false);
+
+    auth.user = { id: 'account-b' };
+    auth.getWelcomeCredits = () => Promise.resolve(answer('not_eligible'));
+    await probe.rerender();
     expect(promise()).toBe(false);
     expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(true);
   });
 
-  it('ignores a slow answer for an account that has since signed out', async () => {
-    let answerForA!: (value: WelcomeCreditResponse) => void;
-    auth.user = { id: 'account-a' };
-    auth.getWelcomeCredits = () => new Promise((resolve) => { answerForA = resolve; });
-    const promise = await mountReader();
-    const probe = await mountProbe();
-
-    // A signs out before its answer lands; B signs up and is still owed the credits.
-    auth.user = { id: 'account-b' };
-    auth.getWelcomeCredits = () => Promise.resolve(answer('not_eligible'));
-    await probe.rerender();
-    expect(promise()).toBe(true);
-
-    await act(async () => {
-      answerForA(answer('already_claimed'));
-      await settle();
-    });
-    expect(promise()).toBe(true);
-    expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(false);
-  });
-
-  it('learns a claim primed for the signed-in account, and not one primed for another account', async () => {
-    auth.user = { id: 'creator-1' };
-    auth.getWelcomeCredits = () => Promise.resolve(answer('eligible'));
-    const promise = await mountReader();
-    await mountProbe();
-    expect(promise()).toBe(true);
-
-    await act(async () => {
-      primeWelcomeCredits(client, 'someone-else', answer('claimed'));
-      await settle();
-    });
-    expect(promise()).toBe(true);
-
-    await act(async () => {
-      primeWelcomeCredits(client, 'creator-1', answer('claimed'));
-      await settle();
-    });
-    expect(promise()).toBe(false);
-  });
-
-  it('learns nothing while no one is signed in', async () => {
+  it('learns nothing while no one is signed in, guests included', async () => {
     const promise = await mountReader();
     const fetches = vi.fn(() => Promise.resolve(answer('claimed')));
     auth.getWelcomeCredits = fetches;
     await mountProbe();
     expect(fetches).not.toHaveBeenCalled();
     expect(promise()).toBe(true);
+    expect(storage.values.has(WELCOME_PROMISE_STORAGE_KEY)).toBe(false);
   });
 });

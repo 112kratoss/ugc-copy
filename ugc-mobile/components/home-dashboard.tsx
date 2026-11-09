@@ -1342,8 +1342,8 @@ function HomeTopBar({
         {askToSignUp ? (
           // In place of a balance a guest does not have: the welcome credits,
           // and the sign-up sheet that gets them (owner, 2026-11-08). Only
-          // "Sign in" once an account on this phone has had them (owner,
-          // 2026-11-09: signed out after claiming, it still offered 25).
+          // "Sign in" once an account has signed in on this phone (owner,
+          // 2026-11-09: "Any sign-in ends it"; `lib/welcome-promise.ts`).
           <TopBarControl
             accessibilityLabel={promiseWelcomeCredits ? 'Sign in for 25 free credits' : 'Sign in'}
             onPress={() => {

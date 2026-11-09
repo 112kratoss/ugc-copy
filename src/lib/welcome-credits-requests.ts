@@ -1,6 +1,6 @@
 import type { WelcomeCreditStatus } from '@/lib/onboarding';
 import { supabase } from '@/lib/supabase';
-import { recordWelcomeAnswer } from '@/lib/welcome-promise';
+import { endWelcomePromise } from '@/lib/welcome-promise';
 
 /** `/api/credits/welcome` and its claim, as the popup reads them. */
 export type WelcomeCreditAnswer = {
@@ -23,15 +23,13 @@ export const WELCOME_REQUEST_TIMEOUT_MS = 30_000;
  * which is the one its page signed in with (the E2E bypass gives the provider a session the
  * browser's own client never has); without one, the browser's session is read.
  */
-export type WelcomeRequestAccount = { accessToken: string; userId: string | null };
+export type WelcomeRequestAccount = { accessToken: string };
 
 async function welcomeRequest(path: string, init?: RequestInit, account?: WelcomeRequestAccount | null): Promise<WelcomeCreditAnswer> {
   let accessToken = account?.accessToken ?? null;
-  let askedFor = account?.userId ?? null;
   if (!accessToken) {
     const { data } = await supabase.auth.getSession();
     accessToken = data.session?.access_token ?? null;
-    askedFor = data.session?.user?.id ?? null;
   }
   if (!accessToken) throw new WelcomeCreditsRequestError('Please sign in again to continue.');
   // Given up after the app's API timeout (`ugc-mobile/lib/api-client.ts`): a stalled claim holds
@@ -63,12 +61,11 @@ async function welcomeRequest(path: string, init?: RequestInit, account?: Welcom
     credits: typeof body.credits === 'number' ? body.credits : 0,
     identityComplete: body.identityComplete === true,
   };
-  // This browser remembers what its account was told, so the signed-out top bar, sign-in page
-  // and Home shelf stop promising credits that were had (`welcome-promise.ts`, the app's #738).
-  // Only while the account that asked is still the one signed in: an answer that outlived a
-  // sign-out or an account switch says nothing about the person here now.
-  const { data: now } = await supabase.auth.getSession();
-  if (askedFor && now.session?.user?.id === askedFor) recordWelcomeAnswer(answer.status);
+  // An answer for an account is an account signed in on this browser, so its signed-out top bar,
+  // sign-in page and Home shelf stop promising the welcome credits, whatever the answer says
+  // (owner, 2026-11-09: "Any sign-in ends it"; `welcome-promise.ts`). The header ends it on every
+  // page with the top bar; this is for the name step, which has none. A guest's is no sign-in.
+  if (answer.status !== 'requires_account') endWelcomePromise();
   return answer;
 }
 

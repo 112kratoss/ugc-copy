@@ -1357,7 +1357,7 @@ button:disabled,
   }
 }
 
-/* The welcome credits are promised only where this browser's account has not had them
+/* The welcome credits are promised only where no account has signed in on this browser
    (src/lib/welcome-promise.ts): the root layout marks a spent record on <html> before the page
    draws, so a promise drawn by the server, or before the page's script runs, never shows. */
 html[data-welcome-promise='spent'] .welcome-promise-only {

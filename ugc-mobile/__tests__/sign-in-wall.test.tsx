@@ -201,7 +201,7 @@ import JoinScreen from '../app/join';
 import { EmailSignInForm } from '../components/email-sign-in-form';
 import { MEDIA_WALL_TILES, mediaWallColumn, mediaWallGeometry } from '../components/media-wall';
 import { signInOpensOnEmailForm } from '../lib/join-navigation';
-import { rememberWelcomeAnswer, resetWelcomePromiseForTests } from '../lib/welcome-promise';
+import { endWelcomePromise, resetWelcomePromiseForTests } from '../lib/welcome-promise';
 
 // The phone's welcome-credit record is a module singleton: each test starts on a fresh launch.
 afterEach(() => resetWelcomePromiseForTests());
@@ -277,14 +277,14 @@ describe('which sign-in the route opens on (owner, 2026-11-08: one full-screen p
     expect(tree.root.findAllByProps({ accessibilityLabel: 'Email' })).toHaveLength(0);
   });
 
-  it('promises the welcome credits, unless an account on this phone has had them (owner 11-09)', () => {
+  it('promises the welcome credits, unless an account has signed in on this phone (owner 11-09)', () => {
     paramsState.params = { returnTo: '/profile' };
     let tree = render(<JoinScreen />);
     expect(JSON.stringify(tree.toJSON())).toContain('Join free and get ');
     renderer.act(() => tree.unmount());
 
     renderer.act(() => {
-      rememberWelcomeAnswer('claimed');
+      endWelcomePromise();
     });
     tree = render(<JoinScreen />);
     const text = JSON.stringify(tree.toJSON());

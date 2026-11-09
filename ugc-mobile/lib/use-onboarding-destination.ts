@@ -9,7 +9,7 @@ import {
   type OnboardingDestination,
 } from './onboarding-destination';
 import type { WelcomeCreditResponse } from './types';
-import { rememberWelcomeAnswer } from './welcome-promise';
+import { endWelcomePromise } from './welcome-promise';
 
 const WELCOME_CREDITS_QUERY_SCOPE = 'welcome-credits';
 
@@ -25,8 +25,7 @@ export function welcomeCreditsQueryKey(userId: string | undefined) {
  * back here keeps the start-up reopen (`components/setup-reopen.tsx`) from
  * judging a setup unfinished from the copy it took at sign-in (the removed
  * Home card once reopened a finished flow that way). Seeding the cache costs
- * no request. The phone learns the answer from there too, when it is the
- * signed-in account's (`useWelcomeCreditsQuery`).
+ * no request.
  */
 export function primeWelcomeCredits(
   queryClient: Pick<QueryClient, 'setQueryData'>,
@@ -72,14 +71,14 @@ export function useWelcomeCreditsQuery() {
     // launch, and again only when Edit Profile or a claimed name invalidates it.
     staleTime: (query) => (isWelcomeCreditAnswerSettled(query.state.data) ? Infinity : WELCOME_CREDITS_STALE_MS),
   });
-  // What the phone promises the next signed-out visitor follows the account
-  // signed in now (`lib/welcome-promise.ts`), read from the answer under that
-  // account's own key: a fetch or a prime still in flight when the account
-  // changed lands under the old account's key and is never seen here.
-  const status = user ? query.data?.status : undefined;
+  // An account signed in on this phone: a guest here is not promised the
+  // welcome credits again, whatever this account was told (owner, 2026-11-09:
+  // "Any sign-in ends it"; `lib/welcome-promise.ts`). The popup mounted over
+  // every screen reads this query, so every sign-in passes here.
+  const userId = user?.id;
   useEffect(() => {
-    if (status) rememberWelcomeAnswer(status);
-  }, [status]);
+    if (userId) endWelcomePromise();
+  }, [userId]);
   return query;
 }
 

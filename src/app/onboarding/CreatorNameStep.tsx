@@ -157,11 +157,11 @@ export default function CreatorNameStep({
   }, [userId]);
 
   // The welcome credits wait on the name: said under the button, as the app does.
-  // Through the shared reader, which also teaches the signed-out promise (welcome-promise.ts).
+  // Through the shared reader, which also ends the signed-out promise (welcome-promise.ts).
   useEffect(() => {
     if (!accessToken) return undefined;
     let active = true;
-    void readWelcomeCredits({ accessToken, userId })
+    void readWelcomeCredits({ accessToken })
       .then((welcome) => {
         if (active && CREDITS_WAIT_ON_NAME.has(welcome.status) && welcome.amount > 0) setCreditsAmount(welcome.amount);
       })

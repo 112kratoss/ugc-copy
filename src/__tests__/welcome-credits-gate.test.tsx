@@ -53,7 +53,7 @@ vi.mock('next/dynamic', () => ({
 
 import WelcomeCreditsGate from '@/components/WelcomeCreditsGate';
 import { announceWelcomeOfferChanged, rememberWelcomePopupClosed, resetWelcomePopupSession } from '@/lib/welcome-credits-popup';
-import { WELCOME_PROMISE_STORAGE_KEY, resetWelcomePromiseForTests } from '@/lib/welcome-promise';
+import { resetWelcomePromiseForTests } from '@/lib/welcome-promise';
 
 const eligible = { status: 'eligible', amount: 25, credits: 0, identityComplete: true };
 
@@ -238,12 +238,14 @@ describe('who sees the welcome popup, where (owner 11-09)', () => {
     expect(harness.toasts).toEqual([]);
   });
 
-  it('tells the signed-out promise about an account this browser already knows has claimed', async () => {
+  // The signed-out promise is the header's to end, for any account it verifies (owner, 2026-11-09:
+  // "Any sign-in ends it"), so an account the gate never asks about needs nothing from it.
+  it('asks nothing for an account this browser already knows has claimed', async () => {
     window.localStorage.setItem(`magicbooklet:welcome-settled:v1:${USER}`, String(Date.now()));
     render(<WelcomeCreditsGate offeredHere returned={null} />);
     await settle();
     expect(harness.read).not.toHaveBeenCalled();
-    expect(window.localStorage.getItem(WELCOME_PROMISE_STORAGE_KEY)).not.toBeNull();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('asks again on the next page after an answer could not be read', async () => {
