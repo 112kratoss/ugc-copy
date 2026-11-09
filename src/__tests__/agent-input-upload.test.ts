@@ -4,19 +4,27 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AGENT_BASE64_MAX_BYTES,
   AGENT_BASE64_MAX_CHARACTERS,
+  AGENT_SIGNATURE_HEAD_BYTES,
   AGENT_URL_FETCH_MAX_BYTES_BY_KIND,
   VERCEL_REQUEST_BODY_LIMIT_BYTES,
+  agentUploadCurlCommand,
   agentUploadFileName,
   decodeAgentBase64,
+  readAgentStagedUploads,
+  readStoredObjectHead,
+  requestAgentUpload,
   stageAgentInput,
   type AgentInputUploadDependencies,
 } from '@/lib/agent-input-upload';
+import { SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS } from '@/lib/showcase-media-cache';
 import { MAX_UPLOAD_BYTES_BY_KIND } from '@/lib/temporary-media-upload-sign';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
+const OTHER_USER_ID = '99999999-9999-4999-8999-999999999999';
 const UPLOAD_ID = '55555555-5555-4555-8555-555555555555';
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(60, 1)]);
 const WAV = Buffer.concat([Buffer.from('RIFF....WAVEfmt '), Buffer.alloc(32)]);
+const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x20]), Buffer.from('ftypisom'), Buffer.alloc(52)]);
 
 function fakes(overrides: Partial<AgentInputUploadDependencies> = {}) {
   const upload = vi.fn(async () => ({ data: { path: 'x' }, error: null }));
@@ -50,9 +58,22 @@ function fakes(overrides: Partial<AgentInputUploadDependencies> = {}) {
       ok: true as const,
       response: { success: true as const, signedUrl: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', expiresInSeconds: 3600 },
     })) as unknown as AgentInputUploadDependencies['createTemporaryMediaReadUrl'],
+    readStoredObjectHead: vi.fn(async () => JPEG),
+    deleteReservedObjectAndConfirm: vi.fn(async () => true),
     ...overrides,
   };
   return { admin, upload, dependencies };
+}
+
+/** What finalize answers for a file stored under an upload: its path, its type and its size. */
+function finalizedAs(contentType: string, fileName: string, overrides: Record<string, unknown> = {}) {
+  const filePath = `${USER_ID}/${UPLOAD_ID}-${fileName}`;
+  return {
+    ok: true as const,
+    descriptor: { bucket: 'uploads', path: filePath, storagePath: `uploads/${filePath}`, contentType, sizeBytes: 2048, ...overrides },
+    canonicalPath: filePath,
+    reservationId: UPLOAD_ID,
+  };
 }
 
 describe('the base64 source', () => {
@@ -191,5 +212,344 @@ describe('stageAgentInput', () => {
     });
     expect(await stageAgentInput({ admin: unreadable.admin, userId: USER_ID, source: { url: 'https://x/a.jpg' }, dependencies: unreadable.dependencies }))
       .toMatchObject({ ok: false, code: 'UPLOAD_FAILED' });
+  });
+});
+
+describe('the upload_id source', () => {
+  const stage = (made: ReturnType<typeof fakes>) => (
+    stageAgentInput({ admin: made.admin, userId: USER_ID, source: { uploadId: UPLOAD_ID }, dependencies: made.dependencies })
+  );
+
+  it('finalizes the upload for the caller, holds the stored file to the signature rule and answers the same input, with nothing fetched or stored here', async () => {
+    const made = fakes({ finalizeUploadById: vi.fn(async () => finalizedAs('image/jpeg', 'cat.jpg')) as never });
+    expect(await stage(made)).toEqual({
+      ok: true,
+      input: { url: 'https://project.supabase.test/storage/v1/object/sign/uploads/x?token=read', storagePath: `uploads/${USER_ID}/${UPLOAD_ID}-cat.jpg` },
+      kind: 'image',
+      bytes: 2048,
+      mimeType: 'image/jpeg',
+      expiresInSeconds: 3600,
+      sourceUrl: null,
+    });
+    // Finalize loads the intent by its id and the caller's own: another account's id is no intent.
+    expect(made.dependencies.finalizeUploadById).toHaveBeenCalledTimes(1);
+    expect(made.dependencies.finalizeUploadById).toHaveBeenCalledWith(made.admin, { uploadId: UPLOAD_ID, userId: USER_ID });
+    expect(made.dependencies.readStoredObjectHead).toHaveBeenCalledWith(made.admin, { bucket: 'uploads', path: `${USER_ID}/${UPLOAD_ID}-cat.jpg` });
+    expect(made.dependencies.createTemporaryMediaReadUrl).toHaveBeenCalledWith(expect.objectContaining({
+      body: { storagePath: `uploads/${USER_ID}/${UPLOAD_ID}-cat.jpg` },
+      userId: USER_ID,
+    }));
+    expect(made.dependencies.fetchPublicHttpsMedia).not.toHaveBeenCalled();
+    expect(made.dependencies.createTemporaryMediaUploadIntent).not.toHaveBeenCalled();
+    expect(made.upload).not.toHaveBeenCalled();
+    expect(made.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
+  });
+
+  it('answers an unknown id, another account\'s, one nothing was sent to and one already used with a clear code, touching nothing', async () => {
+    const cases: Array<[{ status: number; code: string; error: string }, string, RegExp]> = [
+      // No intent under this id for the caller: an unknown id, and another account's, answer alike.
+      [{ status: 404, code: 'UPLOAD_NOT_FOUND', error: 'Upload intent not found.' }, 'NOT_FOUND', /No upload .* exists for this creator\. request_upload gives an upload_id/u],
+      // Nothing was stored at the URL: finalize closes the intent, so the agent starts again.
+      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'The uploaded object was not found.' }, 'NOT_FOUND', /holds no file.*Call request_upload again/u],
+      [{ status: 400, code: 'UPLOAD_NOT_FOUND', error: 'That upload is no longer available.' }, 'NOT_FOUND', /holds no file/u],
+      // The stored size or type is not the declared one: finalize removed the file itself.
+      [{ status: 400, code: 'UPLOAD_METADATA_MISMATCH', error: 'Uploaded object metadata did not match the server-issued upload intent.' }, 'UNSUPPORTED_MEDIA', /exact size_bytes and mime_type/u],
+      [{ status: 409, code: 'UPLOAD_NOT_READY', error: 'That upload was already consumed with a non-reusable disposition.' }, 'CONFLICT', /already used or being collected: That upload was already consumed/u],
+      [{ status: 500, code: 'UPLOAD_FINALIZATION_UNAVAILABLE', error: 'Failed to load the upload intent.' }, 'UPLOAD_FAILED', /Failed to load the upload intent/u],
+    ];
+    for (const [answer, code, words] of cases) {
+      const made = fakes({ finalizeUploadById: vi.fn(async () => ({ ok: false as const, ...answer })) as never });
+      const result = await stage(made);
+      expect(result, answer.error).toMatchObject({ ok: false, code, details: { upload_id: UPLOAD_ID, finalize_code: answer.code } });
+      expect(!result.ok && result.message, answer.error).toMatch(words);
+      expect(made.dependencies.readStoredObjectHead, answer.error).not.toHaveBeenCalled();
+      expect(made.dependencies.createTemporaryMediaReadUrl, answer.error).not.toHaveBeenCalled();
+      expect(made.dependencies.deleteReservedObjectAndConfirm, answer.error).not.toHaveBeenCalled();
+    }
+  });
+
+  it('removes a stored file whose bytes are not what its type says, closes its reservation, and refuses it', async () => {
+    // A picture's type over a track's bytes.
+    const track = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
+      readStoredObjectHead: vi.fn(async () => WAV),
+    });
+    const refused = await stage(track);
+    expect(refused).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { upload_id: UPLOAD_ID, mime_type: 'image/png', sniffed_kind: 'audio' } });
+    expect(!refused.ok && refused.message).toContain('request_upload was told image/png, but the file\'s bytes are a track. It was removed');
+    expect(track.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledWith(track.admin, 'uploads', `${USER_ID}/${UPLOAD_ID}-cat.png`);
+    // With the object gone, finalize runs once more and closes the intent, as it closes one nothing was sent to.
+    expect(track.dependencies.finalizeUploadById).toHaveBeenCalledTimes(2);
+    expect(track.dependencies.createTemporaryMediaReadUrl).not.toHaveBeenCalled();
+
+    // A picture's type over bytes with no picture's signature: a page saved under a picture's name.
+    const page = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'page.png')) as never,
+      readStoredObjectHead: vi.fn(async () => Buffer.from('<!doctype html><html><body>hello there</body></html>')),
+    });
+    expect(await stage(page)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { sniffed_kind: null } });
+    expect(page.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledTimes(1);
+
+    // A clip's type over a picture's bytes.
+    const still = fakes({ finalizeUploadById: vi.fn(async () => finalizedAs('video/mp4', 'clip.mp4')) as never });
+    expect(await stage(still)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { mime_type: 'video/mp4', sniffed_kind: 'image' } });
+    expect(still.dependencies.deleteReservedObjectAndConfirm).toHaveBeenCalledTimes(1);
+
+    // A clip with a clip's signature, and a track of a format with no signature, keep their type,
+    // as the other two sources keep them.
+    const clip = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('video/mp4', 'clip.mp4')) as never,
+      readStoredObjectHead: vi.fn(async () => MP4),
+    });
+    expect(await stage(clip)).toMatchObject({ ok: true, kind: 'video', mimeType: 'video/mp4' });
+    const plain = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('audio/aac', 'voice.aac')) as never,
+      readStoredObjectHead: vi.fn(async () => Buffer.alloc(64, 7)),
+    });
+    expect(await stage(plain)).toMatchObject({ ok: true, kind: 'audio' });
+    expect(plain.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
+  });
+
+  it('removes nothing when the stored file cannot be read, and still refuses a mismatch whose removal fails', async () => {
+    const unreadable = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
+      readStoredObjectHead: vi.fn(async () => null),
+    });
+    // The file may be fine: the same call may pass in a moment, so it stays staged.
+    expect(await stage(unreadable)).toMatchObject({ ok: false, code: 'UPLOAD_FAILED' });
+    expect(unreadable.dependencies.deleteReservedObjectAndConfirm).not.toHaveBeenCalled();
+    expect(unreadable.dependencies.finalizeUploadById).toHaveBeenCalledTimes(1);
+
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const stuck = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png')) as never,
+      readStoredObjectHead: vi.fn(async () => WAV),
+      deleteReservedObjectAndConfirm: vi.fn(async () => false),
+    });
+    expect(await stage(stuck)).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA' });
+    // The reservation is not closed over an object that is still there; the reclaim sweep takes it.
+    expect(stuck.dependencies.finalizeUploadById).toHaveBeenCalledTimes(1);
+    expect(stuck.dependencies.createTemporaryMediaReadUrl).not.toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
+  it('takes only an upload staged in the uploads bucket', async () => {
+    // A reservation of the creator's in another bucket (a recipe file) is no staged input.
+    const elsewhere = fakes({
+      finalizeUploadById: vi.fn(async () => finalizedAs('image/png', 'cat.png', { bucket: 'post_resource_files' })) as never,
+    });
+    expect(await stage(elsewhere)).toMatchObject({ ok: false, code: 'NOT_FOUND', details: { upload_id: UPLOAD_ID } });
+    expect(elsewhere.dependencies.readStoredObjectHead).not.toHaveBeenCalled();
+  });
+});
+
+describe('readStoredObjectHead', () => {
+  const SIGNED = 'https://project.supabase.test/storage/v1/object/sign/uploads/u/a.mp4?token=t';
+
+  function storage(signedUrl: string | null, error: unknown = null) {
+    const createSignedUrl = vi.fn(async () => ({ data: signedUrl ? { signedUrl } : null, error }));
+    const from = vi.fn(() => ({ createSignedUrl }));
+    return { admin: { storage: { from } } as unknown as SupabaseClient, from, createSignedUrl };
+  }
+
+  it('reads the first 64 bytes through a one-minute signed URL with a Range header, and stops reading there', async () => {
+    const { admin, from, createSignedUrl } = storage(SIGNED);
+    const whole = Buffer.concat([MP4, Buffer.alloc(100_000, 9)]);
+    let offset = 0;
+    // A server that ignores Range and streams the whole object.
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = whole.subarray(offset, offset + 16);
+        offset += 16;
+        if (chunk.length === 0) controller.close();
+        else controller.enqueue(new Uint8Array(chunk));
+      },
+    }), { status: 200 }));
+
+    const head = await readStoredObjectHead(admin, { bucket: 'uploads', path: 'u/a.mp4' }, fetchImpl as unknown as typeof fetch);
+    expect(head?.length).toBe(AGENT_SIGNATURE_HEAD_BYTES);
+    expect(head?.equals(whole.subarray(0, AGENT_SIGNATURE_HEAD_BYTES))).toBe(true);
+    expect(from).toHaveBeenCalledWith('uploads');
+    expect(createSignedUrl).toHaveBeenCalledWith('u/a.mp4', 60);
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe(SIGNED);
+    expect(init?.headers).toEqual({ range: 'bytes=0-63' });
+    expect(AGENT_SIGNATURE_HEAD_BYTES).toBe(64);
+    // The rest of the object was never pulled.
+    expect(offset).toBeLessThan(1024);
+  });
+
+  it('answers a short object whole, and null when the URL cannot be signed, the read is refused or it fails', async () => {
+    const short = storage(SIGNED);
+    const five = vi.fn(async () => new Response(new Uint8Array([1, 2, 3, 4, 5]), { status: 206 }));
+    expect((await readStoredObjectHead(short.admin, { bucket: 'uploads', path: 'u/a' }, five as unknown as typeof fetch))?.length).toBe(5);
+
+    const unsigned = storage(null, { message: 'Object not found' });
+    const never = vi.fn();
+    expect(await readStoredObjectHead(unsigned.admin, { bucket: 'uploads', path: 'u/a' }, never as unknown as typeof fetch)).toBeNull();
+    expect(never).not.toHaveBeenCalled();
+
+    const refused = vi.fn(async () => new Response('no', { status: 404 }));
+    expect(await readStoredObjectHead(storage(SIGNED).admin, { bucket: 'uploads', path: 'u/a' }, refused as unknown as typeof fetch)).toBeNull();
+    const broken = vi.fn(async () => { throw new Error('socket hang up'); });
+    expect(await readStoredObjectHead(storage(SIGNED).admin, { bucket: 'uploads', path: 'u/a' }, broken as unknown as typeof fetch)).toBeNull();
+  });
+});
+
+describe('requestAgentUpload', () => {
+  const MB = 1024 * 1024;
+
+  it('signs an upload for the declared file through the sign step and answers where and how to send it', async () => {
+    const signedUploadUrl = `https://project.supabase.test/storage/v1/object/upload/sign/uploads/${USER_ID}/${UPLOAD_ID}-my-cat.png?token=signed-token`;
+    const { admin, dependencies } = fakes({
+      createTemporaryMediaUploadIntent: vi.fn(async ({ body }: { body: unknown }) => ({
+        ok: true as const,
+        response: {
+          success: true as const,
+          uploadId: UPLOAD_ID,
+          bucket: 'uploads' as const,
+          path: `${USER_ID}/${UPLOAD_ID}-my-cat.png`,
+          storagePath: `uploads/${USER_ID}/${UPLOAD_ID}-my-cat.png`,
+          token: 'signed-token',
+          signedUploadUrl,
+          expiresInSeconds: 7200,
+          contentType: (body as { mimeType: string }).mimeType,
+        },
+      })) as never,
+    });
+    const result = await requestAgentUpload({ admin, userId: USER_ID, request: { fileName: 'My Cat.PNG', mimeType: 'image/png', sizeBytes: 123_456 }, dependencies });
+    expect(result).toEqual({
+      ok: true,
+      uploadId: UPLOAD_ID,
+      uploadUrl: signedUploadUrl,
+      // The headers the web's own upload sends: the type finalize checks, no overwrite, and the
+      // cache lifetime a published copy keeps.
+      headers: { 'content-type': 'image/png', 'x-upsert': 'false', 'cache-control': `max-age=${SHOWCASE_PUBLIC_MEDIA_CACHE_TTL_SECONDS}` },
+      storagePath: `uploads/${USER_ID}/${UPLOAD_ID}-my-cat.png`,
+      kind: 'image',
+      mimeType: 'image/png',
+      sizeBytes: 123_456,
+      expiresInSeconds: 7200,
+      maxBytes: 25 * MB,
+    });
+    expect(result.ok && result.headers['cache-control']).toBe('max-age=86400');
+    // The sign step is given the file as declared, for the caller: its name (which the sign step
+    // cleans and judges), its type, its kind and its exact size.
+    const [{ body, userId }] = vi.mocked(dependencies.createTemporaryMediaUploadIntent).mock.calls[0] as unknown as [{ body: Record<string, unknown>; userId: string }];
+    expect(body).toEqual({ fileName: 'My Cat.PNG', mimeType: 'image/png', kind: 'image', sizeBytes: 123_456 });
+    expect(userId).toBe(USER_ID);
+    // Nothing is stored or finalized by the request itself.
+    expect(dependencies.finalizeUploadById).not.toHaveBeenCalled();
+  });
+
+  it('builds the URL from the token when the sign step answers none, and offers no upload it cannot address', async () => {
+    const { admin, dependencies } = fakes();
+    const request = { fileName: 'clip.mp4', mimeType: 'video/mp4', sizeBytes: 1024 };
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.test/');
+    expect(await requestAgentUpload({ admin, userId: USER_ID, request, dependencies })).toMatchObject({
+      ok: true,
+      uploadUrl: `https://project.supabase.test/storage/v1/object/upload/sign/uploads/${USER_ID}/${UPLOAD_ID}-clip.mp4?token=signed-token`,
+      kind: 'video',
+      maxBytes: 50 * MB,
+    });
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', '');
+    expect(await requestAgentUpload({ admin, userId: USER_ID, request, dependencies })).toMatchObject({ ok: false, code: 'UPLOAD_FAILED' });
+    vi.unstubAllEnvs();
+  });
+
+  it('holds the declared type and size to the agent caps before anything is signed', async () => {
+    const { admin, dependencies } = fakes();
+    const ask = (request: { fileName: string; mimeType: string; sizeBytes: number }) => requestAgentUpload({ admin, userId: USER_ID, request, dependencies });
+    expect(await ask({ fileName: 'big.png', mimeType: 'image/png', sizeBytes: 25 * MB + 1 }))
+      .toMatchObject({ ok: false, code: 'TOO_LARGE', details: { bytes: 25 * MB + 1, max_bytes: 25 * MB } });
+    expect(await ask({ fileName: 'big.mp4', mimeType: 'video/mp4', sizeBytes: 50 * MB + 1 }))
+      .toMatchObject({ ok: false, code: 'TOO_LARGE', details: { max_bytes: 50 * MB } });
+    expect(await ask({ fileName: 'big.mp3', mimeType: 'audio/mpeg', sizeBytes: 50 * MB + 1 }))
+      .toMatchObject({ ok: false, code: 'TOO_LARGE', details: { max_bytes: 50 * MB } });
+    expect(await ask({ fileName: 'page.html', mimeType: 'text/html', sizeBytes: 10 }))
+      .toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA', details: { mime_type: 'text/html' } });
+    expect(await ask({ fileName: 'icon.svg', mimeType: 'image/svg+xml', sizeBytes: 10 })).toMatchObject({ ok: false, code: 'UNSUPPORTED_MEDIA' });
+    expect(dependencies.createTemporaryMediaUploadIntent).not.toHaveBeenCalled();
+    // The caps are the URL fetch's own: one set of numbers for an agent to learn.
+    expect(AGENT_URL_FETCH_MAX_BYTES_BY_KIND).toEqual({ image: 25 * MB, video: 50 * MB, audio: 50 * MB });
+
+    // At the cap exactly the file is signed; a picker's alias and a type with parameters read as the listed type.
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://project.supabase.test');
+    expect(await ask({ fileName: 'edge.mp4', mimeType: 'video/mp4', sizeBytes: 50 * MB })).toMatchObject({ ok: true, sizeBytes: 50 * MB });
+    expect(await ask({ fileName: 'memo.m4a', mimeType: 'audio/x-m4a', sizeBytes: 10 }))
+      .toMatchObject({ ok: true, kind: 'audio', mimeType: 'audio/mp4', headers: { 'content-type': 'audio/mp4' } });
+    expect(await ask({ fileName: 'a.png', mimeType: 'IMAGE/PNG; charset=binary', sizeBytes: 10 })).toMatchObject({ ok: true, mimeType: 'image/png' });
+    vi.unstubAllEnvs();
+  });
+
+  it('maps the sign step\'s refusals: its rate limit with the wait, a deleting account, a name it does not take, and the rest as failures', async () => {
+    const ask = (answer: Record<string, unknown>) => {
+      const made = fakes({ createTemporaryMediaUploadIntent: vi.fn(async () => ({ ok: false as const, ...answer })) as never });
+      return requestAgentUpload({ admin: made.admin, userId: USER_ID, request: { fileName: 'a.png', mimeType: 'image/png', sizeBytes: 10 }, dependencies: made.dependencies });
+    };
+    expect(await ask({ status: 429, code: 'RATE_LIMITED', error: 'Too many', retryAfterSeconds: 45 })).toMatchObject({ ok: false, code: 'RATE_LIMITED', retryAfterSeconds: 45 });
+    expect(await ask({ status: 409, code: 'ACCOUNT_DELETION_IN_PROGRESS', error: 'Deleting.' })).toMatchObject({ ok: false, code: 'ACCOUNT_DELETION_IN_PROGRESS' });
+    expect(await ask({ status: 400, error: 'This file type is not supported for media uploads.' }))
+      .toEqual({ ok: false, code: 'UNSUPPORTED_MEDIA', message: 'This file type is not supported for media uploads.' });
+    expect(await ask({ status: 500, error: 'Failed to prepare media upload.' })).toMatchObject({ ok: false, code: 'UPLOAD_FAILED' });
+  });
+
+  it('prints the one command that sends the file: a raw PUT with the three headers, the path left for the agent to fill', () => {
+    const headers = { 'content-type': 'image/png', 'x-upsert': 'false' as const, 'cache-control': 'max-age=86400' };
+    expect(agentUploadCurlCommand({ uploadUrl: 'https://project.supabase.test/storage/v1/object/upload/sign/uploads/u/x.png?token=abc', headers }))
+      .toBe('curl -sS -X PUT -H \'content-type: image/png\' -H \'x-upsert: false\' -H \'cache-control: max-age=86400\' --data-binary @FILE \'https://project.supabase.test/storage/v1/object/upload/sign/uploads/u/x.png?token=abc\'');
+    // A quote can never close the word it sits in.
+    expect(agentUploadCurlCommand({ uploadUrl: 'https://x.test/a\'b', headers })).toContain('\'https://x.test/a\'\\\'\'b\'');
+  });
+});
+
+describe('readAgentStagedUploads', () => {
+  function reservations(rows: unknown, error: unknown = null) {
+    const query = {
+      select: vi.fn(() => query),
+      eq: vi.fn(() => query),
+      in: vi.fn(async () => ({ data: rows, error })),
+    };
+    return { admin: { from: vi.fn(() => query) } as unknown as SupabaseClient, query };
+  }
+
+  const own = `uploads/${USER_ID}/${UPLOAD_ID}-cat.png`;
+  const ownTrack = `uploads/${USER_ID}/66666666-6666-4666-8666-666666666666-memo.m4a`;
+  const neverSigned = `uploads/${USER_ID}/never-signed.png`;
+  const anothers = `uploads/${OTHER_USER_ID}/${UPLOAD_ID}-theirs.png`;
+  const otherBucket = `post_media/${USER_ID}/x.png`;
+
+  it('answers what stands behind each path: a staged upload with its state and stored type, an own path nothing was signed for, or a path that is not the caller\'s', async () => {
+    const { admin, query } = reservations([
+      { storage_path: `${USER_ID}/${UPLOAD_ID}-cat.png`, finalization_status: 'finalized', actual_content_type: 'image/png', expected_content_type: 'image/png' },
+      // Nothing finalized yet: the declared type stands in, read as the lists name it.
+      { storage_path: `${USER_ID}/66666666-6666-4666-8666-666666666666-memo.m4a`, finalization_status: 'issued', actual_content_type: null, expected_content_type: 'audio/x-m4a' },
+    ]);
+    const read = await readAgentStagedUploads(admin, { userId: USER_ID, storagePaths: [own, ownTrack, neverSigned, anothers, otherBucket] });
+    expect(read.ok && Object.fromEntries(read.uploads)).toEqual({
+      [own]: { kind: 'staged', status: 'finalized', contentType: 'image/png' },
+      [ownTrack]: { kind: 'staged', status: 'issued', contentType: 'audio/mp4' },
+      [neverSigned]: { kind: 'unknown' },
+      [anothers]: { kind: 'foreign' },
+      [otherBucket]: { kind: 'foreign' },
+    });
+    expect(vi.mocked(admin.from)).toHaveBeenCalledWith('upload_byte_reservations');
+    expect(query.eq.mock.calls).toEqual([['user_id', USER_ID], ['bucket_id', 'uploads']]);
+    // Only the caller's own paths are asked about, bucket-relative as the reservations keep them.
+    expect(query.in).toHaveBeenCalledWith('storage_path', [
+      `${USER_ID}/${UPLOAD_ID}-cat.png`,
+      `${USER_ID}/66666666-6666-4666-8666-666666666666-memo.m4a`,
+      `${USER_ID}/never-signed.png`,
+    ]);
+  });
+
+  it('reads nothing when no path is the caller\'s, and says so when the read fails', async () => {
+    const none = reservations([]);
+    const read = await readAgentStagedUploads(none.admin, { userId: USER_ID, storagePaths: [anothers, 'not a path'] });
+    expect(read.ok && Object.fromEntries(read.uploads)).toEqual({ [anothers]: { kind: 'foreign' }, 'not a path': { kind: 'foreign' } });
+    expect(vi.mocked(none.admin.from)).not.toHaveBeenCalled();
+
+    const down = reservations(null, { message: 'down' });
+    expect(await readAgentStagedUploads(down.admin, { userId: USER_ID, storagePaths: [own] })).toEqual({ ok: false });
   });
 });
