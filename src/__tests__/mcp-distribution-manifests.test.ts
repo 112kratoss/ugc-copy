@@ -124,8 +124,8 @@ describe('the Claude Code plugin marketplace', () => {
     const skills = readdirSync(skillsDir).sort();
     expect(skills).toEqual(['create-ugc-ad', 'publish-creation']);
 
-    const readOnlyTools = new Set(MCP_TOOLS.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name));
-    const knownTools = new Set(MCP_TOOLS.map((tool) => tool.name as string));
+    const readOnlyTools = new Set<string>(MCP_TOOLS.filter((tool) => tool.annotations.readOnlyHint).map((tool) => tool.name));
+    const knownTools = new Set<string>(MCP_TOOLS.map((tool) => tool.name));
     for (const skill of skills) {
       const { fields, allowedTools } = readSkillFrontmatter(path.join(skillsDir, skill, 'SKILL.md'));
       expect(fields.name, skill).toBe(skill);

@@ -283,7 +283,16 @@ function StepList({ steps }: { steps: SetupStep[] }) {
   );
 }
 
-function ClientSetupBlock({ setup, clientId }: { setup: ClientSetup; clientId: string }) {
+function ClientSetupBlock({
+  setup,
+  clientId,
+  othersAvailable,
+}: {
+  setup: ClientSetup;
+  clientId: string;
+  /** Whether another client can sign in already, which a waiting block then points to. */
+  othersAvailable: boolean;
+}) {
   const available = !isPendingClientId(clientId);
 
   return (
@@ -319,7 +328,7 @@ function ClientSetupBlock({ setup, clientId }: { setup: ClientSetup; clientId: s
         ) : (
           <Text variant="bodySm">
             Magic Booklet is being registered as an app with {setup.name}. Its setup appears here as soon as it can
-            sign in; until then, connect from one of the clients marked available.
+            sign in{othersAvailable ? '; until then, connect from one of the clients marked available.' : '.'}
           </Text>
         )}
       </div>
@@ -335,6 +344,7 @@ function ClientSetupBlock({ setup, clientId }: { setup: ClientSetup; clientId: s
  */
 export default function McpDeveloperGuide({ clientIds }: { clientIds: McpClientIds }) {
   const setups = clientSetups(clientIds);
+  const anyAvailable = setups.some((setup) => !isPendingClientId(clientIds[setup.surface]));
 
   return (
     <main className="ui-page">
@@ -408,7 +418,12 @@ export default function McpDeveloperGuide({ clientIds }: { clientIds: McpClientI
             </div>
             <div className="space-y-6">
               {setups.map((setup) => (
-                <ClientSetupBlock key={setup.surface} setup={setup} clientId={clientIds[setup.surface]} />
+                <ClientSetupBlock
+                  key={setup.surface}
+                  setup={setup}
+                  clientId={clientIds[setup.surface]}
+                  othersAvailable={anyAvailable}
+                />
               ))}
             </div>
           </section>

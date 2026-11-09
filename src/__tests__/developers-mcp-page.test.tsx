@@ -89,8 +89,23 @@ describe('/developers/mcp', () => {
       expect(within(waiting).getByText('Coming soon')).toBeInTheDocument();
       expect(within(waiting).queryAllByRole('button'), name).toEqual([]);
       expect(within(waiting).queryByText(/codex mcp|mcpServers|OAuth/)).toBeNull();
+      // Another client can sign in already, so the waiting one points there.
+      expect(within(waiting).getByText(/connect from one of the clients marked available/)).toBeInTheDocument();
     }
     expect(document.body.textContent).not.toContain(PENDING_CLIENT_ID_PREFIX);
+  });
+
+  it('points a waiting client at no other while none can sign in', () => {
+    const allPending = Object.fromEntries(
+      SURFACES.map(({ surface }) => [surface, `${PENDING_CLIENT_ID_PREFIX}${surface.toUpperCase()}`]),
+    ) as unknown as McpClientIds;
+    render(<McpDeveloperGuide clientIds={allPending} />);
+
+    for (const { name } of SURFACES) {
+      expect(block(name), name).toHaveAttribute('data-client-state', 'pending');
+      expect(within(block(name)).getByText(/Its setup appears here as soon as it can sign in\.$/)).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/marked available/)).toBeNull();
   });
 
   it('pins the Codex callback port and gives Cursor a static client id once those clients are registered', () => {
