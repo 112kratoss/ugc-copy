@@ -117,15 +117,17 @@ describe('the posts agents published', () => {
 
   it('lists each post once, newest first, dated by its first publication, from the successful publish calls', async () => {
     const { client, query } = admin([
-      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T12:00:00Z' },
-      { post_id: OTHER_POST_ID, user_id: USER_ID, client_id: 'client-codex', created_at: '2026-11-09T11:00:00Z' },
-      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T10:00:00Z' },
+      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T12:00:00Z', generation_id: GENERATION_ID },
+      { post_id: OTHER_POST_ID, user_id: USER_ID, client_id: 'client-codex', created_at: '2026-11-09T11:00:00Z', generation_id: null },
+      { post_id: POST_ID, user_id: USER_ID, client_id: 'client-claude', created_at: '2026-11-09T10:00:00Z', generation_id: GENERATION_ID },
     ]);
     const posts = await listAgentPublishedPosts(client, { limit: 10 });
+    // A row that names a creation is a creation's post; one that names none was made from uploads.
     expect(posts).toEqual([
-      { postId: POST_ID, userId: USER_ID, clientId: 'client-claude', publishedAt: '2026-11-09T10:00:00Z' },
-      { postId: OTHER_POST_ID, userId: USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T11:00:00Z' },
+      { postId: POST_ID, userId: USER_ID, clientId: 'client-claude', publishedAt: '2026-11-09T10:00:00Z', source: 'creation' },
+      { postId: OTHER_POST_ID, userId: USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T11:00:00Z', source: 'upload' },
     ]);
+    expect(query.select).toHaveBeenCalledWith('post_id, user_id, client_id, created_at, generation_id');
     expect(query.eq).toHaveBeenCalledWith('tool', 'publish_post');
     expect(query.eq).toHaveBeenCalledWith('ok', true);
     expect(query.not).toHaveBeenCalledWith('post_id', 'is', null);

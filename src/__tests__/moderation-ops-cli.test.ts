@@ -66,25 +66,31 @@ describe('moderation CLI: the agent view of the queue', () => {
   });
 
   it('lists the posts agents published and the open reports of them with --source agent, as tables and as JSON', async () => {
-    const agentPost = { postId: 'post-7', userId: 'user-1', clientId: 'client-claude', publishedAt: '2026-11-09T00:00:00.000Z', post: { id: 'post-7', userId: 'user-1', title: 'By an agent', visibility: 'public', reviewStatus: 'visible', reportCount: 1, createdAt: '2026-11-09T00:00:00.000Z' } };
+    const agentPost = { postId: 'post-7', userId: 'user-1', clientId: 'client-claude', publishedAt: '2026-11-09T00:00:00.000Z', source: 'upload', post: { id: 'post-7', userId: 'user-1', title: 'By an agent', visibility: 'public', reviewStatus: 'visible', reportCount: 1, createdAt: '2026-11-09T00:00:00.000Z' } };
+    const creationPost = { ...agentPost, postId: 'post-8', source: 'creation', post: { ...agentPost.post, id: 'post-8', title: 'A creation' } };
     const snapshot = { postReports: [{ id: REPORT_ID, postId: 'post-7', reason: 'spam', details: null, post: agentPost.post, createdAt: 'x' }], subjectReports: [] };
     moderation.listOpenModerationReports.mockResolvedValue(snapshot);
-    moderation.listAgentPublishedPostsForModeration.mockResolvedValue([agentPost]);
+    moderation.listAgentPublishedPostsForModeration.mockResolvedValue([agentPost, creationPost]);
     const { runModerationOps } = await import('../../scripts/ops/moderation-ops');
 
     await runModerationOps(['list', '--source', 'agent', '--limit', '5'], ENVIRONMENT);
     expect(moderation.listOpenModerationReports).toHaveBeenCalledWith(expect.anything(), { limit: 5, source: 'agent' });
     expect(moderation.listAgentPublishedPostsForModeration).toHaveBeenCalledWith(expect.anything(), { limit: 5 });
     const logged = vi.mocked(console.log).mock.calls.map(([line]) => String(line));
-    expect(logged).toContain('Posts published by agents: 1');
+    expect(logged).toContain('Posts published by agents: 2');
     expect(logged).toContain('Open post reports: 1');
     const tables = vi.mocked(console.table).mock.calls.map(([rows]) => rows as Array<Record<string, unknown>>);
-    expect(tables[0]).toEqual([expect.objectContaining({ post_id: 'post-7', client_id: 'client-claude', post_status: 'visible', visibility: 'public', post_title: 'By an agent' })]);
+    // The source column says what each post was made from: media the agent brought, or a creation here.
+    expect(tables[0]).toEqual([
+      expect.objectContaining({ post_id: 'post-7', source: 'upload', client_id: 'client-claude', post_status: 'visible', visibility: 'public', post_title: 'By an agent' }),
+      expect.objectContaining({ post_id: 'post-8', source: 'creation', post_title: 'A creation' }),
+    ]);
+    expect(Object.keys(tables[0][0]).slice(0, 2)).toEqual(['post_id', 'source']);
 
     vi.mocked(console.log).mockClear();
     await runModerationOps(['list', '--source', 'agent', '--json'], ENVIRONMENT);
     const [json] = vi.mocked(console.log).mock.calls.map(([line]) => JSON.parse(String(line)) as Record<string, unknown>);
-    expect(json).toEqual({ agentPosts: [agentPost], ...snapshot });
+    expect(json).toEqual({ agentPosts: [agentPost, creationPost], ...snapshot });
     // Without the flag the queue is the whole queue, and the agent list is not read.
     expect(moderation.listOpenModerationReports).toHaveBeenLastCalledWith(expect.anything(), { limit: undefined, source: 'agent' });
     moderation.listAgentPublishedPostsForModeration.mockClear();

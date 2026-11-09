@@ -2,7 +2,7 @@ import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { runPagedQuery } from '@/lib/admin-paged-query';
-import { listAgentPublishedPosts } from '@/lib/agent-tool-calls';
+import { listAgentPublishedPosts, type AgentPublishedPostSource } from '@/lib/agent-tool-calls';
 import {
   getCanonicalStoredMediaLocation,
   getUserOwnedStoredMediaLocation,
@@ -100,6 +100,8 @@ export type AgentPublishedPostItem = {
   /** The OAuth client the agent connected through (Claude Code, ChatGPT, …). */
   clientId: string;
   publishedAt: string;
+  /** `creation`: one of the creator's creations here. `upload`: media the agent brought from elsewhere. */
+  source: AgentPublishedPostSource;
   post: PostModerationQueueItem['post'];
 };
 
@@ -679,6 +681,7 @@ export async function listAgentPublishedPostsForModeration(
     userId: item.userId,
     clientId: item.clientId,
     publishedAt: item.publishedAt,
+    source: item.source,
     post: toQueuePost(postsById.get(item.postId)),
   }));
 }

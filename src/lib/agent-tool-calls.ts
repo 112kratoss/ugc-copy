@@ -25,7 +25,11 @@ export const AGENT_PUBLISH_RECORD_CODES = {
   PUBLISHED_PRIVATE: 'PUBLISHED_PRIVATE',
   /** An existing public post made private. */
   MADE_PRIVATE: 'MADE_PRIVATE',
-  /** The existing post returned as it was; the row names no post (the agent made none). */
+  /**
+   * The existing post returned as it was. For a creation's post the row names no post (the agent
+   * made none: the creator may have published it by hand). For a post made from uploads the row
+   * names it, since only an agent's publish makes such a post, whichever call's row was written.
+   */
   ALREADY_PUBLISHED: 'ALREADY_PUBLISHED',
 } as const;
 
@@ -121,11 +125,18 @@ export async function recordAgentToolCall(
   }
 }
 
+/**
+ * What an agent's post was made from: one of the creator's creations here, or files the agent
+ * brought from elsewhere (`publish_post` with `uploads`, whose row names no creation).
+ */
+export type AgentPublishedPostSource = 'creation' | 'upload';
+
 export type AgentPublishedPostRecord = {
   postId: string;
   userId: string;
   clientId: string;
   publishedAt: string;
+  source: AgentPublishedPostSource;
 };
 
 /**
@@ -139,7 +150,7 @@ export async function listAgentPublishedPosts(
 ): Promise<AgentPublishedPostRecord[]> {
   let query = admin
     .from(AGENT_TOOL_CALLS_TABLE)
-    .select('post_id, user_id, client_id, created_at')
+    .select('post_id, user_id, client_id, created_at, generation_id')
     .eq('tool', 'publish_post')
     .eq('ok', true)
     .not('post_id', 'is', null)
@@ -152,10 +163,17 @@ export async function listAgentPublishedPosts(
   const { data, error } = await query.limit(Math.max(limit * 4, limit));
   if (error) throw error;
   const seen = new Map<string, AgentPublishedPostRecord>();
-  for (const row of (data ?? []) as Array<{ post_id: string; user_id: string; client_id: string; created_at: string }>) {
+  for (const row of (data ?? []) as Array<{ post_id: string; user_id: string; client_id: string; created_at: string; generation_id?: string | null }>) {
     // Newest first in the read: a post keeps its place from its newest call and, each older call
-    // overwriting the date, ends with the date of its first publication.
-    seen.set(row.post_id, { postId: row.post_id, userId: row.user_id, clientId: row.client_id, publishedAt: row.created_at });
+    // overwriting the date, ends with the date of its first publication. Every call about one post
+    // names the same creation or none, so the source is the same whichever row is kept.
+    seen.set(row.post_id, {
+      postId: row.post_id,
+      userId: row.user_id,
+      clientId: row.client_id,
+      publishedAt: row.created_at,
+      source: row.generation_id ? 'creation' : 'upload',
+    });
   }
   return [...seen.values()].slice(0, limit);
 }

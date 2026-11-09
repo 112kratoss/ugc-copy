@@ -860,8 +860,9 @@ describe('the agent view of the moderation queue', () => {
   it('lists the posts agents published with each post as it stands, a deleted one with no post', async () => {
     const deletedPostId = '70000000-0000-4000-8000-000000000008';
     const calls = ledger([
-      { post_id: AGENT_POST_ID, user_id: AGENT_USER_ID, client_id: 'client-claude', created_at: '2026-11-09T02:00:00.000Z' },
-      { post_id: deletedPostId, user_id: AGENT_USER_ID, client_id: 'client-codex', created_at: '2026-11-09T01:00:00.000Z' },
+      // A publish of uploads names no creation in its row; a publish of a creation names it.
+      { post_id: AGENT_POST_ID, user_id: AGENT_USER_ID, client_id: 'client-claude', created_at: '2026-11-09T02:00:00.000Z', generation_id: null },
+      { post_id: deletedPostId, user_id: AGENT_USER_ID, client_id: 'client-codex', created_at: '2026-11-09T01:00:00.000Z', generation_id: '80000000-0000-4000-8000-000000000009' },
     ]);
     const posts = queryResult([{ id: AGENT_POST_ID, user_id: AGENT_USER_ID, title: 'By an agent', visibility: 'private', review_status: 'visible', report_count: 0, created_at: '2026-11-09T02:00:00.000Z' }]);
     const from = vi.fn((table: string) => {
@@ -878,9 +879,10 @@ describe('the agent view of the moderation queue', () => {
         userId: AGENT_USER_ID,
         clientId: 'client-claude',
         publishedAt: '2026-11-09T02:00:00.000Z',
+        source: 'upload',
         post: { id: AGENT_POST_ID, userId: AGENT_USER_ID, title: 'By an agent', visibility: 'private', reviewStatus: 'visible', reportCount: 0, createdAt: '2026-11-09T02:00:00.000Z' },
       },
-      { postId: deletedPostId, userId: AGENT_USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T01:00:00.000Z', post: null },
+      { postId: deletedPostId, userId: AGENT_USER_ID, clientId: 'client-codex', publishedAt: '2026-11-09T01:00:00.000Z', source: 'creation', post: null },
     ]);
   });
 });
