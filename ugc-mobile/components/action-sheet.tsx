@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Animated, Keyboard, Pressable, Text, View } from 'react-native';
+import { Animated, Keyboard, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Overlay } from '@/components/overlay-host';
@@ -111,7 +111,13 @@ function ActionSheetSurface({
   return (
     // Answered once: while the exit plays the rows are still on screen, and a
     // second tap must not choose again.
-    <View pointerEvents={visible ? 'auto' : 'none'} style={{ flex: 1, justifyContent: 'flex-end' }}>
+    // The top padding is the tallest the card may grow: a long list (six report
+    // reasons at the largest text size on a small phone) scrolls inside it
+    // rather than pushing the title under the status bar.
+    <View
+      pointerEvents={visible ? 'auto' : 'none'}
+      style={{ flex: 1, justifyContent: 'flex-end', paddingTop: insets.top + CARD_SCREEN_INSET }}
+    >
       <Animated.View
         style={{ position: 'absolute', inset: 0, backgroundColor: theme.colors.scrim, opacity: backdropOpacity }}
       >
@@ -126,12 +132,19 @@ function ActionSheetSurface({
           screen's sides and bottom, rounded on all four corners, its choices
           drawn as separate filled rows. The transparent outer view is what
           slides and what gets measured, so the travel covers the gap under the
-          card as well and nothing of it shows before the entrance starts. */}
+          card as well and nothing of it shows before the entrance starts. It
+          takes no touches itself (box-none): a tap in the gaps beside or under
+          the card falls through to the scrim and cancels, as one anywhere else
+          outside the card does. The drag and VoiceOver's modal boundary sit on
+          the card. Its top padding keeps the card's shadow, which reaches about
+          30pt above it, past the screen edge while the panel is hidden — the
+          presentation leaves only 24pt beyond the measured height. */}
       <SheetPanel
-        {...drag.contentPanHandlers}
-        accessibilityViewIsModal
+        pointerEvents="box-none"
         onLayout={presentation.onPanelLayout}
         style={{
+          flexShrink: 1,
+          paddingTop: CARD_SHADOW_CLEARANCE,
           paddingHorizontal: CARD_SCREEN_INSET,
           // Floats above the home indicator rather than under it, the way the
           // system's inset sheets sit; a phone without one gets the same gap
@@ -141,7 +154,10 @@ function ActionSheetSurface({
         }}
       >
         <View
+          {...drag.contentPanHandlers}
+          accessibilityViewIsModal
           style={{
+            flexShrink: 1,
             borderRadius: CARD_RADIUS,
             borderCurve: 'continuous',
             borderWidth: 1,
@@ -154,24 +170,32 @@ function ActionSheetSurface({
         >
           <SheetGrabber drag={drag} />
           <View style={{ gap: 4, paddingHorizontal: ROW_PADDING, paddingTop: 2, paddingBottom: appTheme.spacing.gap + 2 }}>
+            {/* A line more than the edge-to-edge sheet allowed each: the card's
+                header is narrower, and the paid unlock's price-changed message
+                carries the credit amount near its end. */}
             <Text
               accessibilityRole="header"
-              numberOfLines={1}
+              numberOfLines={2}
               style={{ color: theme.colors.text, ...appTheme.type.cardTitle }}
             >
               {request.title}
             </Text>
             {request.message ? (
-              <Text numberOfLines={2} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
+              <Text numberOfLines={3} style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>
                 {request.message}
               </Text>
             ) : null}
           </View>
-          <View style={{ gap: ROW_GAP }}>
+          <ScrollView
+            {...drag.scrollProps}
+            keyboardShouldPersistTaps="handled"
+            style={{ flexGrow: 0, flexShrink: 1 }}
+            contentContainerStyle={{ gap: ROW_GAP }}
+          >
             {orderActionSheetActions(request.actions).map((action) => (
               <ActionRow key={action.label} action={action} onPress={() => choose(action)} />
             ))}
-          </View>
+          </ScrollView>
           <View style={{ marginTop: appTheme.spacing.gap }}>
             <ActionRow action={{ label: cancelLabel }} cancel onPress={cancel} />
           </View>
@@ -187,6 +211,8 @@ function ActionSheetSurface({
 const CARD_SCREEN_INSET = 8;
 const CARD_RADIUS = appTheme.radii.xl;
 const CARD_PADDING = 8;
+// Past the `floating` shadow's reach above the card (46pt blur, 16pt drop).
+const CARD_SHADOW_CLEARANCE = 8;
 const ROW_RADIUS = CARD_RADIUS - CARD_PADDING;
 const ROW_PADDING = 16;
 const ROW_GAP = 6;
@@ -225,15 +251,16 @@ function ActionRow({
           paddingVertical: appTheme.spacing.gap - 1,
           borderRadius: ROW_RADIUS,
           borderCurve: 'continuous',
+          // A press shows in the fill, not only in the spring: with Reduce
+          // Motion on, the colour is all the feedback there is. A neutral row
+          // takes the app's pressed tint (surface to surfaceStrong is about
+          // 1.03:1 on paper); a danger row deepens to its border tint rather
+          // than fading, since a choice about to happen should not look less sure.
           backgroundColor: tone
-            ? tone.background
+            ? pressed ? tone.border : tone.background
             : pressed
-              ? theme.colors.surfaceStrong
+              ? theme.state.pressed.background
               : theme.colors.surface,
-          // A pressed danger row deepens through its own border tint rather than
-          // fading: a choice that is about to happen should not look less sure.
-          borderWidth: 1,
-          borderColor: tone && pressed ? tone.border : 'transparent',
           opacity: action.disabled ? appTheme.opacity.disabled : 1,
         })}
       >

@@ -17,6 +17,7 @@ vi.mock('react-native', () => {
     Keyboard: { dismiss: mocks.dismissKeyboard },
     Platform: { OS: 'ios' },
     Pressable: ({ children, style: _style, ...props }: MockProps) => React.createElement('pressable', props, children),
+    ScrollView: host('scroll-view'),
     StatusBar: { currentHeight: 0 },
     Text: host('text'),
     View: host('view'),
@@ -32,7 +33,7 @@ vi.mock('@/components/sheet-chrome', () => ({
   SheetGrabber: () => React.createElement('sheet-grabber'),
   SheetPanel: ({ children, ...props }: MockProps) => React.createElement('sheet-panel', props, children),
   sheetPanelStyle: () => ({}),
-  useSheetDismissDrag: () => ({ contentPanHandlers: {}, translateY: null, backdropOpacity: null }),
+  useSheetDismissDrag: () => ({ contentPanHandlers: {}, scrollProps: {}, translateY: null, backdropOpacity: null }),
   useSheetPresentation: () => ({ entryTranslateY: 0, backdropProgress: 1, onPanelLayout: () => undefined }),
 }));
 vi.mock('@/lib/use-hardware-back', () => ({ useHardwareBack: () => undefined }));
