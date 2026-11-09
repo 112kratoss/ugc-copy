@@ -835,6 +835,8 @@ describe('upload_input', () => {
       source_url: 'https://cdn.example.com/a.jpg',
     });
     expect(text(result)).toContain('create_media.inputs[]');
+    // "an image", not "a image": the answer names the staged kind with its article.
+    expect(text(result)).toContain('Staged an image of 4096 bytes (image/jpeg).');
     expect(services.stageAgentInput).toHaveBeenCalledWith({ admin, userId: USER_ID, source: { url: 'https://cdn.example.com/a.jpg' } });
 
     await tool('upload_input').handle({ base64: 'AAAA', mime_type: 'image/png' }, context);
