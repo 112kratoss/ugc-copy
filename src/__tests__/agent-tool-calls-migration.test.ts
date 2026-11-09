@@ -21,9 +21,10 @@ describe('agent_tool_calls migration', () => {
     expect(sql).toContain('created_at timestamptz not null default now()');
   });
 
-  it('indexes the owner read and the moderation join', () => {
+  it('indexes the owner read, the moderation join and the moderation listing', () => {
     expect(sql).toContain('on public.agent_tool_calls (user_id, created_at desc)');
     expect(sql).toContain('on public.agent_tool_calls (post_id) where post_id is not null');
+    expect(sql).toMatch(/create index agent_tool_calls_publish_idx\s+on public\.agent_tool_calls \(created_at desc\)\s+where tool = 'publish_post' and ok and post_id is not null/u);
   });
 
   it('is owner-read under RLS and append-only for the service role, per the migrations rule', () => {

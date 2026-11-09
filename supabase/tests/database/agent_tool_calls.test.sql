@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(23);
+select plan(24);
 
 select ok(
   (select relrowsecurity from pg_class where oid = 'public.agent_tool_calls'::regclass),
@@ -23,6 +23,7 @@ select ok(
 
 select has_index('public', 'agent_tool_calls', 'agent_tool_calls_user_created_idx', 'the owner read is indexed by user and time');
 select has_index('public', 'agent_tool_calls', 'agent_tool_calls_post_idx', 'the moderation join is indexed by post');
+select has_index('public', 'agent_tool_calls', 'agent_tool_calls_publish_idx', 'the moderation listing of published posts has its partial index');
 
 -- Privileges: the owner reads, the service role appends, nobody changes or removes a row.
 select ok(has_table_privilege('authenticated', 'public.agent_tool_calls', 'SELECT'), 'authenticated may read (RLS narrows it to their own rows)');

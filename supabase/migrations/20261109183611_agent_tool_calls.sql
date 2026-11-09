@@ -29,6 +29,10 @@ create index agent_tool_calls_user_created_idx
   on public.agent_tool_calls (user_id, created_at desc);
 create index agent_tool_calls_post_idx
   on public.agent_tool_calls (post_id) where post_id is not null;
+-- The moderation listing's read: the posts agents published, newest first.
+create index agent_tool_calls_publish_idx
+  on public.agent_tool_calls (created_at desc)
+  where tool = 'publish_post' and ok and post_id is not null;
 
 alter table public.agent_tool_calls enable row level security;
 
