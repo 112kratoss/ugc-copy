@@ -53,6 +53,7 @@ import {
 import { markSetupShownThisRun } from '@/lib/setup-reopen';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
+import { markWelcomeReturn } from '@/lib/welcome-popup';
 import { AppText, AppTextInput, Card, Kicker, PrimaryButton, SecondaryButton } from '@/components/ui';
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import {
@@ -142,7 +143,8 @@ export default function OnboardingScreen() {
 function OnboardingFlow() {
   const theme = useAppTheme();
   // Sent here by the sign-up sheet (app/join.tsx): the screen that asked for an
-  // account, to go back to once the name and the welcome credits are done.
+  // account, to go back to once the name is done; the welcome popup offers the
+  // credits there (lib/welcome-popup.ts).
   const routeParams = (useRoute().params ?? {}) as { returnTo?: string | string[]; inPlace?: string | string[] };
   const returnTo = onboardingReturnTo(routeParams.returnTo);
   // A redirect's sign-in that took a screen's place (signed out over a reel) returns there too.
@@ -151,8 +153,13 @@ function OnboardingFlow() {
   // in the stack (dismissTo), never a second one on top of it. A plain replace
   // put a second Home, reel or editor over the first.
   const leaveForReturn = useCallback(() => {
-    if (returnTo) completeAuthScreen(router, returnTo, { inPlace: returnsInPlace });
-    else router.replace('/(tabs)' as never);
+    if (returnTo) {
+      // The screen a sign-up asked from offers the welcome credits, as Home does.
+      markWelcomeReturn(returnTo);
+      completeAuthScreen(router, returnTo, { inPlace: returnsInPlace });
+    } else {
+      router.replace('/(tabs)' as never);
+    }
   }, [returnTo, returnsInPlace]);
   const { api, user, refreshProfile } = useAuth();
   const { state, update, skip, complete } = useOnboarding();
@@ -431,7 +438,7 @@ function OnboardingFlow() {
     }
   };
 
-  /** Ends the setup and goes back (Home, by default), where the welcome popup takes over. */
+  /** Ends the setup and goes back (Home, by default, or the screen that asked), where the welcome popup takes over. */
   const finishToHome = async () => {
     await complete();
     await api.updateOnboardingState({ status: 'completed', goal }).catch(() => undefined);
@@ -444,7 +451,7 @@ function OnboardingFlow() {
     if (welcome?.status === 'eligible' || welcome?.status === 'unavailable') {
       void trackOnboardingEvent(api, 'reward_deferred', { goal, step: 'reward' });
     }
-    // From the sign-up sheet: back to what asked for an account, credits in hand.
+    // From the sign-up sheet: back to what asked for an account.
     if (returnTo) {
       leaveForReturn();
       return;

@@ -9,7 +9,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
 import { SetupReopen } from '@/components/setup-reopen';
-import { WelcomeCreditsPopup } from '@/components/welcome-credits-popup';
 import { ExploreSearchOverlay } from '@/components/explore-search-overlay';
 import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
@@ -1164,9 +1163,10 @@ export function HomeDashboard() {
             </View>
 
             {/* An unfinished creator setup opens once per app start; credits
-                still to claim are offered by the popup (owner, 2026-11-09). */}
+                still to claim are offered by the popup, which the root layout
+                mounts over Home and the screen a sign-up went back to
+                (owner, 2026-11-09). */}
             <SetupReopen />
-            <WelcomeCreditsPopup />
 
             <FeedChips
               activeChipId={activeChipId}

@@ -1738,7 +1738,8 @@ function IdentityCreationScreen({
   const modelPickLoading = Boolean(modelPick && !modelPick.error);
   const generateDisabled = !draftsHydrated || isRestoringRemix || remixStartHeld || remixRestoreFailed || isClosing || isGenerating || pollingInterrupted || isUploading || modelPickLoading || !catalog || activeQuote.status !== 'ready' || appOutOfDate || validation.errors.length > 0;
   // The sign-up sheet (owner, 2026-11-08), which comes back to this screen once
-  // the name and the welcome credits are done.
+  // the name is done; the welcome popup then offers the credits here
+  // (lib/welcome-popup.ts, owner 2026-11-09).
   const openAuthForCurrentDraft = () => {
     // The route's own tool, not the one switched to: the tool, remix and prompt are what the
     // route was opened with, and only those find this screen again.

@@ -1,6 +1,6 @@
-import { useIsFocused } from '@react-navigation/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { LinearGradient } from 'expo-linear-gradient';
+import { usePathname } from 'expo-router';
 import { Check, Sparkles } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, Easing, Modal, Text, View } from 'react-native';
@@ -19,7 +19,9 @@ import type { WelcomeCreditResponse } from '@/lib/types';
 import { primeWelcomeCredits, useWelcomeCreditsQuery } from '@/lib/use-onboarding-destination';
 import {
   dismissWelcomePopupThisRun,
+  isWelcomePopupPlace,
   shouldShowWelcomePopup,
+  useWelcomeReturnPath,
   wasWelcomePopupDismissedThisRun,
   welcomeCountUpTicks,
   welcomeFillProgress,
@@ -57,7 +59,8 @@ const POP_SCALE = 1.16;
 const POP_EASE = Easing.bezier(0.34, 1.56, 0.64, 1);
 
 /**
- * The welcome-credits popup over Home (owner, 2026-11-09, redesigned the same
+ * The welcome-credits popup, over Home and over the screen a sign-up went back
+ * to, mounted once in the root layout (owner, 2026-11-09, redesigned the same
  * day: "the credits increasing with the haptics ... like games with filling
  * animations", confetti "with a premium feel which gives the user the
  * satisfaction of gaining something", the popup closing as the confetti pops).
@@ -68,7 +71,9 @@ const POP_EASE = Easing.bezier(0.34, 1.56, 0.64, 1);
  * off the mark and slowing into the landing; as it lands the figure and badge
  * pop, the balance in the header jumps, and confetti bursts out of the figure
  * while the card sinks away beneath it. Offered to a named account with credits
- * still to claim; closing it waits until the next app start
+ * still to claim, on Home and on the screen a sign-up went back to (a sign-up
+ * asked for on a creator offers the credits there, not a top-up);
+ * closing it waits until the next app start
  * (`lib/welcome-popup.ts`). Through a `Modal`: it holds no text field (see
  * `components/dialog.tsx`).
  */
@@ -84,7 +89,9 @@ function WelcomeCreditsPopupForAccount() {
   const { api, user, updateCredits, refreshProfile } = useAuth();
   const queryClient = useQueryClient();
   const welcomeQuery = useWelcomeCreditsQuery();
-  const homeFocused = useIsFocused();
+  // Home, or the screen a finished sign-up went back to (`lib/welcome-popup.ts`).
+  const pathname = usePathname();
+  const returnedTo = useWelcomeReturnPath();
   const outerTheme = useAppTheme();
   const reducedMotion = useReducedMotion();
   const [dismissed, setDismissed] = useState(() => wasWelcomePopupDismissedThisRun(user?.id));
@@ -118,7 +125,7 @@ function WelcomeCreditsPopupForAccount() {
   const eligibleNow = shouldShowWelcomePopup({
     signedIn: Boolean(user),
     welcome: welcomeQuery.data,
-    offeredHere: homeFocused,
+    offeredHere: isWelcomePopupPlace({ pathname, returnedTo }),
     dismissed,
   });
   useEffect(() => {
@@ -128,7 +135,7 @@ function WelcomeCreditsPopupForAccount() {
     mounted.current = false;
     if (fillTimer.current) clearInterval(fillTimer.current);
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    // A fill cut short (an account switch, Home gone): the claim is in, so
+    // A fill cut short (an account switch): the claim is in, so
     // the current account's profile is read again. Never `updateCredits`
     // here: that would write one account's balance over the next one's.
     if (pendingBalance.current !== null) void refreshProfile().catch(() => undefined);
