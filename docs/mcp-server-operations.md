@@ -32,9 +32,11 @@ calls. The protected-resource metadata every client reads first is served at
    claim. Every service, RLS policy and rate limit then applies to the agent as it applies to
    the creator in the browser.
 
-On this app's own surfaces an agent token drives `/api/mcp` and nothing else: the proxy refuses a
-`client_id`-bearing token on every other `/api` route (403 `AGENT_TOKEN_NOT_ALLOWED`), and the
-server-rendered pages refuse it as a session (`getServerAuthState`). What the claim does not do is
+On this app's own surfaces an agent token drives no API route but `/api/mcp`, and no page or
+cookie session: the proxy refuses a `client_id`-bearing token on every other `/api` route (403
+`AGENT_TOKEN_NOT_ALLOWED`), the server-rendered pages refuse it as a session
+(`getServerAuthState`), and the media routes, which take a browser's cookie session when no
+bearer token is sent, refuse it there too (`media-route-shared.ts`). What the claim does not do is
 bind the token to this app: against the Supabase project directly (PostgREST, Storage, Auth) an
 agent token is the creator's session under RLS, like any user token, so whoever holds a leaked one
 can read and change what that account may until the grant is revoked (which deletes the token's
@@ -60,12 +62,20 @@ not from this repository.
    v2.186.0, which production also runs.
 
 The local stack has the same block on in `supabase/config.toml` (`[auth.oauth_server]`,
-`enabled = true`, `authorization_url_path = "/oauth/consent"`, registration off), so
-`/oauth/consent`, an agent token and revocation can be exercised locally; nothing pushes that
-file to production, whose switch is the dashboard alone. For ES256 tokens like production's, the
-local stack also needs a signing key (`supabase gen signing-key --algorithm ES256` and
-`signing_keys_path` in the config); without it the stack signs HS256 and `openid` cannot issue an
-ID token.
+`enabled = true`, `authorization_url_path = "/oauth/consent"`, registration off); nothing pushes
+that file to production, whose switch is the dashboard alone. The switch alone does not make the
+flow runnable against the stack as it is, because its `site_url` stays `https://magicbooklet.com`
+on purpose: a local authorize would send the browser to production's consent page. To exercise
+`/oauth/consent`, an agent token and revocation locally, run the stack the spike did
+(`docs/research/mcp-oauth-spike-2026-11-09.md`, "Stack config changes"): a scratchpad copy of
+`supabase/` with a `project_id` of its own, its ports moved to 563xx, `site_url` and
+`additional_redirect_urls` set to the dev server's origin (the spike used
+`http://localhost:3300`, with `http://localhost:3300/**` and `http://127.0.0.1:3300/**`),
+`[auth.oauth_server] enabled = true`, and an ES256 signing key (`supabase gen signing-key
+--algorithm ES256` into the copy, named by `signing_keys_path`) so tokens verify like
+production's; without the key the stack signs HS256 and `openid` cannot issue an ID token. The
+dev server is then started from the worktree with that stack's URL and anon key in its env, as
+the E2E server is given its env, and no `.env*` file is written.
 
 ## Registering a client (an "OAuth App")
 

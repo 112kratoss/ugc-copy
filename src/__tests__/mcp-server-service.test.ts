@@ -695,6 +695,18 @@ describe('running a tool', () => {
     await runMcpTool(tool('enhance_prompt'), { prompt: 'red bike', medium: 'image', model_id: 'img-1' }, context);
     expect(records[2]).toEqual(expect.objectContaining({ tool: 'enhance_prompt', outcome: 'ok', costCredits: 1 }));
 
+    // A replay answers the run started under the same key; its cost was logged by the first call.
+    const replayed = harness({
+      postUnifiedGenerationForRoute: vi.fn(async () => ({
+        ok: true,
+        body: { success: true, predictionId: 'pred-1', generationId: GENERATION_ID, status: 'processing', remainingCredits: 81, cost: 19, catalogRevision: 'rev-1', modelId: 'img-1', idempotentReplay: true },
+      })) as never,
+    });
+    await runMcpTool(tool('create_media'), {
+      kind: 'image', model_id: 'img-1', catalog_revision: 'rev-1', prompt: 'a red bicycle', expected_cost_credits: 19, idempotency_key: 'run-7',
+    }, replayed.context);
+    expect(replayed.records).toEqual([expect.objectContaining({ tool: 'create_media', outcome: 'ok', costCredits: null })]);
+
     const broken = harness({ readModelCatalogCurrent: vi.fn(async () => { throw new Error('rpc down'); }) });
     await runMcpTool(tool('list_models'), {}, broken.context);
     expect(broken.records).toEqual([expect.objectContaining({ tool: 'list_models', outcome: 'error', code: 'UNAVAILABLE', costCredits: null })]);

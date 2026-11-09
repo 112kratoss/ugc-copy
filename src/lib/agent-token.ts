@@ -10,8 +10,10 @@
  * - the MCP route requires it, so a copied app session cannot drive the server
  *   (`mcp-route-adapter-service.ts`, 403 `AGENT_TOKEN_REQUIRED`);
  * - every other API route refuses it (`route-identity-admission.ts`, 403
- *   `AGENT_TOKEN_NOT_ALLOWED`), and the server-rendered pages refuse it as a session
- *   (`supabase-server.ts`), so an agent token drives nothing of this app but `/api/mcp`.
+ *   `AGENT_TOKEN_NOT_ALLOWED`), the server-rendered pages refuse it as a session
+ *   (`supabase-server.ts`) and so do the media routes' cookie branch (`media-route-shared.ts`),
+ *   so an agent token drives no API route of this app but `/api/mcp`, and no page or cookie
+ *   session.
  *
  * What the claim does not do: bind the token to this app. Supabase binds a token to no resource
  * (no RFC 8707 `resource` parameter), and against the project's own endpoints (PostgREST,

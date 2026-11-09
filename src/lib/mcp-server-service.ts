@@ -939,10 +939,12 @@ export async function runMcpTool(
     const result = await tool.handle(args as never, context);
     const structured = (result.structuredContent ?? {}) as Record<string, unknown>;
     const error = isRecord(structured.error) ? structured.error : null;
+    // A replay under an idempotency key answers the run started earlier: its cost was logged then.
+    const charged = !result.isError && CHARGING_TOOLS.has(tool.name) && structured.idempotent_replay !== true;
     report({
       outcome: result.isError ? 'error' : 'ok',
       code: typeof error?.code === 'string' ? error.code : null,
-      costCredits: !result.isError && CHARGING_TOOLS.has(tool.name) ? numberOrNull(structured.cost_credits) : null,
+      costCredits: charged ? numberOrNull(structured.cost_credits) : null,
     });
     return result;
   } catch (error) {

@@ -56,4 +56,5 @@ with production; local data stays as it is.
 | Database    | postgresql://postgres:postgres@127.0.0.1:54322/postgres |
 
 Migrations and the local/production workflow: `docs/supabase-local-prod-workflow.md`.
+The agents' OAuth flow (`/oauth/consent`, agent tokens) cannot be exercised against this stack as it is, because its `site_url` is production's: `docs/mcp-server-operations.md` ("Enabling the OAuth server") has the scratchpad-stack recipe.
 Every command and convention: `AGENTS.md`.
