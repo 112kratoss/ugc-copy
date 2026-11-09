@@ -1,0 +1,18 @@
+{
+  "name": "magicbooklet",
+  "description": "Magic Booklet for Claude Code: create AI images and videos with your Magic Booklet credits, every run priced first, and publish them as posts.",
+  "owner": {
+    "name": "Magic Booklet",
+    "email": "info@magicbooklet.com",
+    "url": "https://magicbooklet.com"
+  },
+  "plugins": [
+    {
+      "name": "magicbooklet",
+      "source": "./plugins/magicbooklet",
+      "description": "The Magic Booklet MCP server and two skills: a UGC ad from brief to finished video or image, and publishing a creation as a post.",
+      "category": "media",
+      "tags": ["mcp", "ai-video", "ai-image", "ugc", "ads"]
+    }
+  ]
+}

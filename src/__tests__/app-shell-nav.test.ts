@@ -55,6 +55,7 @@ describe('app shell navigation', () => {
       '/profile/edit',
       '/post/new',
       '/post/post-1/edit',
+      '/developers/mcp',
     ]) {
       expect(getAppShellTitle(pathname), pathname).toBeNull();
     }

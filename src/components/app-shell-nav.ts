@@ -217,7 +217,7 @@ const OWN_HEADING_PATHS = new Set([
   '/pricing',
   '/templates',
 ]);
-const OWN_HEADING_SECTIONS = ['/profile', '/models', '/marketplace/sell', '/post'];
+const OWN_HEADING_SECTIONS = ['/profile', '/models', '/marketplace/sell', '/post', '/developers'];
 
 function pageHasOwnHeading(pathname: string) {
   return OWN_HEADING_PATHS.has(pathname)

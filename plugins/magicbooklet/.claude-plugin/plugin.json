@@ -1,0 +1,24 @@
+{
+  "name": "magicbooklet",
+  "displayName": "Magic Booklet",
+  "version": "1.0.0",
+  "description": "Create AI images and videos with your Magic Booklet credits from Claude Code, every run priced before it starts, and publish them as posts.",
+  "author": {
+    "name": "Magic Booklet",
+    "email": "info@magicbooklet.com",
+    "url": "https://magicbooklet.com"
+  },
+  "homepage": "https://magicbooklet.com/developers/mcp",
+  "repository": "https://github.com/112kratoss/ugc-copy",
+  "keywords": ["mcp", "ai-video", "ai-image", "ugc", "ads", "magic-booklet"],
+  "mcpServers": {
+    "magicbooklet": {
+      "type": "http",
+      "url": "https://magicbooklet.com/api/mcp",
+      "oauth": {
+        "clientId": "0b968a27-4f37-4972-8d7a-f3c67b365a33",
+        "callbackPort": 8976
+      }
+    }
+  }
+}
