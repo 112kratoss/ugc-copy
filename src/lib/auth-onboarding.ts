@@ -110,16 +110,18 @@ const PROFILE_PATH = '/profile';
 const WELCOME_REWARD_PATH = '/welcome-reward';
 
 /**
- * A first-profile link from before the name step, `/profile?welcome=1&next=…`
- * (what sign-in and Home's old welcome card used to build). `/profile?welcome=1` alone is not one: that is the
- * profile opened back from the name step.
+ * A first-profile link from before the name step: what sign-in and Home's old
+ * welcome card built, `/profile?welcome=1&next=/welcome-reward?next=…`, which
+ * always led through the welcome page. The name step's own way back to a
+ * `/profile?next=…` it was given also carries `welcome=1`, and is not one
+ * (review of #744: it was sent round the step again and lost its welcome).
  */
 export function isOldProfileSetupPath(path: string): boolean {
   try {
     const url = new URL(path, PATH_BASE);
-    return url.pathname === PROFILE_PATH
-      && url.searchParams.get(CREATOR_WELCOME_PARAM) === '1'
-      && url.searchParams.has('next');
+    if (url.pathname !== PROFILE_PATH || url.searchParams.get(CREATOR_WELCOME_PARAM) !== '1') return false;
+    const nested = url.searchParams.get('next');
+    return nested !== null && new URL(nested, PATH_BASE).pathname === WELCOME_REWARD_PATH;
   } catch {
     return false;
   }

@@ -76,6 +76,8 @@ describe('auth onboarding destinations', () => {
     // The profile opened back from the name step is not an old link.
     expect(isOldProfileSetupPath('/profile?welcome=1')).toBe(false);
     expect(isOldProfileSetupPath('/profile?next=%2Fcreate')).toBe(false);
+    // The name step's own way back to a /profile?next=… it was given (review of #744).
+    expect(isOldProfileSetupPath('/profile?next=%2Fcreations&welcome=1')).toBe(false);
     expect(creatorNameStepNextPath(oldLink)).toBe('/create/image');
     expect(creatorNameStepNextPath('/onboarding?next=%2Fcreations')).toBe('/creations');
     expect(creatorNameStepNextPath('/onboarding')).toBe('/create');

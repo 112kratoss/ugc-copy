@@ -436,8 +436,10 @@ class ComposerSubmissionError extends Error {
   }
 }
 
+// The profile's editor, where the name and handle are set: /profile itself has no setup mode
+// since the creator-name step (#739), so the link there only led to its Edit button (review of #744).
 function buildProfileRepairHref(): string {
-  return '/profile?source=post-composer';
+  return '/profile/edit?source=post-composer';
 }
 
 /** The section a server refusal is written in, by the field it names. */
