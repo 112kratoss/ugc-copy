@@ -1,4 +1,4 @@
-import Image from 'next/image';
+import type { StaticImageData } from 'next/image';
 import type { CSSProperties } from 'react';
 
 import { signInWallColumnOrder } from '@/lib/sign-in-page';
@@ -25,6 +25,13 @@ const TILES = [wall01, wall02, wall03, wall04, wall05, wall06, wall07, wall08, w
  * `.sign-in-wall-column` rules in `globals.css` show the first 5, 7, 9 or 11).
  */
 const COLUMNS = 11;
+/** An imported picture's address and size (a test's import is the address alone). */
+function tileImage(tile: StaticImageData | string) {
+  return typeof tile === 'string' ? { src: tile } : { src: tile.src, width: tile.width, height: tile.height };
+}
+
+/** The columns a phone draws (`.sign-in-wall-column:nth-child(n + 6)` is hidden below 640px). */
+const PHONE_COLUMNS = 5;
 
 /**
  * The wall of creations behind the sign-in page (owner, 2026-11-08, for the app: "medias in the
@@ -37,8 +44,8 @@ const COLUMNS = 11;
  * its six pictures twice over, a tile's gap under each, and slides by exactly half its own height
  * (one set) before it starts again. Reduce Motion holds it still.
  *
- * Drawn on the server and handed to the page (`page.tsx`), so the 132 tiles are no part of the
- * page's script. The pictures are 360×640 JPEGs of 16 to 56 KB, the size a phone's tile wants at
+ * Drawn on the server and handed to the page (`page.tsx`), as plain images, so the 132 tiles are
+ * no part of the page's script. The pictures are 360×640 JPEGs of 16 to 56 KB, the size a phone's tile wants at
  * 3×, so they are served as they are: through the optimizer every tile would carry a srcset of a
  * dozen widths, about 100 KB more HTML on a page drawn for every request.
  */
@@ -60,7 +67,18 @@ export default function SignInWall({ start }: {
               <div key={column} className="sign-in-wall-column">
                 {[...tiles, ...tiles].map((tile, index) => (
                   <div key={index} className="sign-in-wall-tile">
-                    <Image src={tile} alt="" unoptimized loading="eager" fetchPriority="low" draggable={false} />
+                    {/* A plain image, not next/image: 132 of them would each hydrate as a client
+                        component, and these are served as they are anyway. The columns a phone
+                        hides wait (lazy), so a phone fetches and decodes only what it draws. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      {...tileImage(tile)}
+                      alt=""
+                      loading={column < PHONE_COLUMNS ? 'eager' : 'lazy'}
+                      decoding="async"
+                      fetchPriority="low"
+                      draggable={false}
+                    />
                   </div>
                 ))}
               </div>

@@ -1,16 +1,8 @@
 import { render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import SignInWall from '@/app/login/SignInWall';
 import { signInWallColumnOrder } from '@/lib/sign-in-page';
-
-// Next's image draws an <img>; here a plain one with the source it was given.
-vi.mock('next/image', () => ({
-  default: ({ src, alt, loading, fetchPriority }: { src: string | { src: string }; alt: string; loading?: 'eager' | 'lazy'; fetchPriority?: string }) => (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img src={typeof src === 'string' ? src : src.src} alt={alt} loading={loading} data-fetch-priority={fetchPriority} />
-  ),
-}));
 
 const pictureOf = (img: Element) => img.getAttribute('src')?.match(/wall-(\d\d)/)?.[1];
 
@@ -43,6 +35,17 @@ describe('the sign-in page’s wall', () => {
     const { container } = render(<SignInWall start={0} />);
     const img = container.querySelector('img')!;
     expect(img).toHaveAttribute('loading', 'eager');
-    expect(img).toHaveAttribute('data-fetch-priority', 'low');
+    expect(img).toHaveAttribute('fetchpriority', 'low');
+  });
+
+  // Review of #744: plain images (no client component per tile), and a phone, which hides every
+  // column after the fifth, fetches none of theirs.
+  it('lets the columns a phone hides wait, so a phone fetches only what it draws', () => {
+    const { container } = render(<SignInWall start={0} />);
+    const columns = [...container.querySelectorAll('.sign-in-wall-column')];
+    columns.forEach((column, index) => {
+      const loading = [...column.querySelectorAll('img')].map((img) => img.getAttribute('loading'));
+      expect(new Set(loading)).toEqual(new Set([index < 5 ? 'eager' : 'lazy']));
+    });
   });
 });
