@@ -126,13 +126,26 @@ exact prompt and the saved inputs the creation may share, as the creator page's 
 does; without it the media goes alone. The rules the owner set (2026-11-09):
 
 - **Two limits.** Every agent publish passes the web's publish limit (`SHOWCASE_PUBLISH_RATE_LIMIT`,
-  20 per 10 minutes per account) and, where it makes a post public, the agent cap
-  (`AGENT_PUBLISH_RATE_LIMIT` in `backend-rate-limit.ts`, 10 per account per 24 hours). The tool
-  answers `RATE_LIMITED` with `retry_after_seconds` and `reset_at`; a private post is not counted.
+  20 per 10 minutes per account, which counts attempts as the route does) and, where it makes a
+  post public, the agent cap (`AGENT_PUBLISH_RATE_LIMIT` in `backend-rate-limit.ts`, 10 public
+  posts per account per UTC day). The cap counts publications, not attempts: the tool counts the
+  day's rows recorded `PUBLISHED_PUBLIC` in `agent_tool_calls` before it publishes, so a publish
+  the service refuses (a missing handle, a safety refusal, a short recipe title) spends nothing,
+  and a private post is not counted. The row is written behind the answer, so two publishes a
+  moment apart may both pass: the cap is a guard against a loop, not an exact quota. The tool
+  answers `RATE_LIMITED` with `retry_after_seconds` and `reset_at` (the next midnight UTC).
+- **What an agent may publish.** The creator's own succeeded creation. One an operator removed
+  (`generations.moderation_removed_at`) is answered `NOT_FOUND`, and the publish service itself
+  now refuses it on every route, so a removal is never republished; one the creator archived is
+  answered `NOT_READY`; another creator's answers `NOT_FOUND` too, disclosing nothing. Without a
+  `title` the tool sends the title the web's Publish starts from (the creation's own, else one
+  suggested from its prompt), so an agent's post is the web's post.
 - **A republish changes nothing.** Publishing a creation that already has a post returns that post
-  with `already_published: true`; only an explicit `visibility` that differs changes the post's
-  visibility (through the service's own visibility-only path, which keeps the post's text and
-  recipe). The post's text is never rewritten by a second publish.
+  with `already_published: true` and its real `state` (live, private, archived, hidden, removed);
+  only an explicit `visibility` that differs changes the post's visibility (through the service's
+  own visibility-only path, which keeps the post's text and recipe). The post's text is never
+  rewritten by a second publish, and the audit row of an unchanged republish names no post, so
+  the moderation list never counts a post the creator published by hand as an agent's.
 - **The moderation queue is the same.** An agent's post is a post: reports, the console and the
   CLI treat it as any other. `npm run ops:moderation -- list --source agent` lists the posts agents
   published (newest first, each with its state, from the audit table) and narrows the open post
@@ -140,24 +153,41 @@ does; without it the media goes alone. The rules the owner set (2026-11-09):
   reported it; a take-down is `take-down-post` on its report, as for any post.
 - **Uploads.** `upload_input` stages a file the person supplies through the web's own staging path
   (sign, upload as a Blob, finalize, a signed read URL), so the byte reservations and the reclaim
-  sweep apply as to any upload. By URL it fetches public https hosts only: the host is resolved
-  and every address must be public unicast (no loopback, private, link-local, carrier-grade NAT,
-  multicast or reserved range, IPv6 embeddings included), the connection is pinned to the checked
-  addresses, one redirect on the same host is followed and checked again, the type is read from
-  `Content-Type` against the storage MIME policy and the first bytes, and the body is capped at
-  the kind's limit (25 MB picture, 250 MB clip, 50 MB track; `public-url-media-fetch.ts`). By
-  base64 it takes at most 8 MB decoded.
+  sweep apply as to any upload. It is counted before any byte is fetched
+  (`AGENT_UPLOAD_INPUT_RATE_LIMIT`, 30 per 10 minutes per account), so a loop of large or failing
+  downloads is stopped. By URL it fetches public https hosts only: the host is resolved and every
+  address must be public unicast (no loopback, private, link-local, carrier-grade NAT, multicast
+  or reserved range, IPv6 embeddings included), the connection is pinned to the checked addresses,
+  one redirect on the same host is followed and checked again, the type is read from
+  `Content-Type` against the storage MIME policy and the first bytes (a picture must carry a
+  picture's signature; a clip or a track is refused only when its bytes say another kind), and
+  the body is capped at 25 MB for a picture and 50 MB for a clip or a track
+  (`AGENT_URL_FETCH_MAX_BYTES_BY_KIND`, below the sign step's own caps, because the whole file is
+  buffered in the function and the fetch, store, finalize and read URL must fit in its 60
+  seconds). By base64 it takes at most 3 MB decoded: Vercel caps a request body at 4.5 MB, and the
+  encoding and the JSON-RPC envelope must fit under it.
+- **The inline preview.** `get_generation` carries a finished picture inline as an `image` block
+  only when the caller passes `include_preview: true`, and only when its preview is under 512 KB,
+  so polls stay small.
 
 ### The audit table
 
 Every tool call writes one row of `public.agent_tool_calls` behind its answer
 (`src/lib/agent-tool-calls.ts`, migration `20261109183611_agent_tool_calls.sql`): `user_id`,
-`client_id` (the OAuth client), `tool`, `ok`, `code` (the tool's error code when it failed),
-`generation_id` and `post_id` where the call was about one, `cost_credits` where the answer
-charged the creator, `created_at`. Prompts and results are never written. The owner may read
-their own rows; the service role appends; nothing updates or deletes a row (an account's rows go
-with the account). The write never holds or fails an answer: a failed write logs
-`mcp_tool_call_record_failed`. Queries an operator reaches for, in the dashboard's SQL editor:
+`client_id` (the OAuth client), `tool`, `ok`, `code` (the tool's error code when it failed; for a
+successful `publish_post`, which answer it was: `PUBLISHED_PUBLIC`, `PUBLISHED_PRIVATE`,
+`MADE_PRIVATE` or `ALREADY_PUBLISHED`), `generation_id` and `post_id` where the call was about
+one (an unchanged republish names no post), `cost_credits` where the answer charged the creator,
+`created_at`. Prompts and results are never written. The owner may read their own rows; the
+service role appends; nothing updates or deletes a row (an account's rows go with the account).
+The write never holds or fails an answer: a failed write logs `mcp_tool_call_record_failed`.
+
+Retention is a follow-up: every call writes a row, each `get_generation` poll included, and the
+service role has no `DELETE`, so the table only grows until a later migration adds a pruning
+function (keep the publish and delete rows, prune the read rows after some months). Until then
+`operational-table-growth.ts` carries a budget for it (warning at 200k rows), and the moderation
+listing's partial index keeps its read cheap at any size. Queries an operator reaches for, in the
+dashboard's SQL editor:
 
 ```sql
 -- What an agent client did for one creator today, newest first.
@@ -187,7 +217,9 @@ OAuth client, named as the client registered itself, with the day it was approve
 access with **Disconnect**, which asks first. The section reads and revokes through Supabase
 Auth's grants API from the web session (`supabase.auth.oauth.listGrants()`,
 `revokeGrant({ clientId })`; `src/lib/connected-apps.ts`, `src/app/profile/edit/ConnectedApps.tsx`),
-so no route of this app is involved. Revoking deletes the client's sessions: the agent's next
+so no route of this app is involved. Where the project's OAuth server is off (the local stack as
+shipped, a preview project) the grants API answers `feature_disabled`, which the section reads as
+no apps connected rather than as a failure. Revoking deletes the client's sessions: the agent's next
 call fails the route's lifecycle check and is answered 401 with the challenge, its refresh fails,
 and connecting again goes through the consent screen afresh.
 
@@ -215,10 +247,11 @@ group by `clientId` to see which client spends what; `outcome:threw` is a bug to
 agents → The audit table), which outlives the log retention.
 
 Rate limits are the creator's own: the generation start's 30 per 10 minutes, the quote's 240,
-the library read's 400 (polls in `get_generation` count once per call), prompt enhancement's
-60, the publish's 20 plus the agent cap of 10 public posts a day, the post mutation's 60 for
-`delete_post`, and the upload sign, finalize and read-url limits for `upload_input`. An agent
-that hits them is answered `RATE_LIMITED` with `retry_after_seconds`.
+the library read's 400 (polls in `get_generation` and `get_post` count once per call), prompt
+enhancement's 60, the publish's 20 plus the agent cap of 10 public posts per UTC day, the post
+mutation's 60 for `delete_post`, and `upload_input`'s own 30 per 10 minutes before the upload
+sign, finalize and read-url limits. An agent that hits them is answered `RATE_LIMITED` with
+`retry_after_seconds`.
 
 ## Revoking a client, or one creator's grant
 
