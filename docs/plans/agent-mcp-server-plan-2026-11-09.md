@@ -3,8 +3,7 @@
 Status: open, 2026-11-09. Decided after the competitor analysis in
 [`../research/agent-mcp-competitor-analysis-2026-11-09.md`](../research/agent-mcp-competitor-analysis-2026-11-09.md).
 Phase 0 ran the same day and came back GO: every check and its result is in
-[`../research/mcp-oauth-spike-2026-11-09.md`](../research/mcp-oauth-spike-2026-11-09.md). Phase 1 is being
-built on `feat/mcp-server`; the owner approves each later phase before it starts.
+[`../research/mcp-oauth-spike-2026-11-09.md`](../research/mcp-oauth-spike-2026-11-09.md). Phase 1 shipped in PR #747 (2026-11-09); the owner approves each later phase before it starts.
 
 ## What we build
 
