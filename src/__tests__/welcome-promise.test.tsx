@@ -145,6 +145,18 @@ describe('the promise in this browser', () => {
     expect(rootMark()).toBeUndefined();
   });
 
+  // Review of #744 (sweep): a tab with nothing listening missed another tab's answer, and kept
+  // its own older one in memory.
+  it('reads another tab’s newer answer even where nothing on this page was listening', () => {
+    recordWelcomeAnswer('eligible');
+    // Another tab claims, and this one hears no storage event (nothing subscribed yet).
+    window.localStorage.setItem(WELCOME_PROMISE_STORAGE_KEY, '2026-11-09T00:00:00.000Z');
+    const { result } = renderHook(() => useWelcomePromise());
+    expect(result.current).toBe(false);
+    // The root's mark catches up as the first consumer subscribes.
+    expect(rootMark()).toBeDefined();
+  });
+
   it('is drawn by the server as standing: the root’s mark hides it where it was spent', () => {
     window.localStorage.setItem(WELCOME_PROMISE_STORAGE_KEY, '2026-11-09T10:00:00.000Z');
     function Probe() {

@@ -15,22 +15,34 @@ export type WelcomeCreditAnswer = {
 export class WelcomeCreditsRequestError extends Error {}
 
 const CLAIM_FAILED = 'Your credits could not be added. Try again.';
+/** As the app's API client gives up (`DEFAULT_API_REQUEST_TIMEOUT_MS`). */
+export const WELCOME_REQUEST_TIMEOUT_MS = 30_000;
 
 async function welcomeRequest(path: string, init?: RequestInit): Promise<WelcomeCreditAnswer> {
   const { data } = await supabase.auth.getSession();
   const accessToken = data.session?.access_token;
   const askedFor = data.session?.user?.id ?? null;
   if (!accessToken) throw new WelcomeCreditsRequestError('Please sign in again to continue.');
+  // Given up after the app's API timeout (`ugc-mobile/lib/api-client.ts`): a stalled claim holds
+  // the popup's Close, so it must end in "Try again" rather than hold the page (review of #744).
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WELCOME_REQUEST_TIMEOUT_MS);
   let response: Response;
+  let body: (Partial<WelcomeCreditAnswer> & { error?: unknown }) | null;
   try {
-    response = await fetch(path, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}`, ...init?.headers },
-    });
-  } catch {
-    throw new WelcomeCreditsRequestError(CLAIM_FAILED);
+    try {
+      response = await fetch(path, {
+        ...init,
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}`, ...init?.headers },
+      });
+    } catch {
+      throw new WelcomeCreditsRequestError(CLAIM_FAILED);
+    }
+    body = await response.json().catch(() => null) as (Partial<WelcomeCreditAnswer> & { error?: unknown }) | null;
+  } finally {
+    clearTimeout(timer);
   }
-  const body = await response.json().catch(() => null) as (Partial<WelcomeCreditAnswer> & { error?: unknown }) | null;
   if (!response.ok || !body || typeof body.status !== 'string') {
     throw new WelcomeCreditsRequestError(typeof body?.error === 'string' && body.error ? body.error : CLAIM_FAILED);
   }

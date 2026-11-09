@@ -16,7 +16,7 @@ vi.mock('@/lib/supabase', () => ({
 
 vi.mock('@/lib/welcome-promise', () => ({ recordWelcomeAnswer: harness.record }));
 
-import { claimWelcomeCredits, readWelcomeCredits } from '@/lib/welcome-credits-requests';
+import { claimWelcomeCredits, readWelcomeCredits, WELCOME_REQUEST_TIMEOUT_MS } from '@/lib/welcome-credits-requests';
 
 const signedIn = (id: string) => ({ access_token: `token-${id}`, user: { id } });
 
@@ -63,6 +63,29 @@ describe('welcome credit requests teach the browser what its account was told', 
     harness.sessions = [signedIn('a'), signedIn('a')];
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'nope' }), { status: 500 })));
     await expect(readWelcomeCredits()).rejects.toThrow('nope');
+    expect(harness.record).not.toHaveBeenCalled();
+  });
+});
+
+describe('a welcome request that stalls (review of #744: the claim held the popup with no limit)', () => {
+  beforeEach(() => {
+    harness.sessions = [signedIn('a'), signedIn('a')];
+    harness.record.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('gives up after the app’s API timeout, so the popup offers Try again', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn((_path: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+    })));
+    const claim = claimWelcomeCredits();
+    const settled = claim.then(() => 'resolved', (error: Error) => error.message);
+    await vi.advanceTimersByTimeAsync(WELCOME_REQUEST_TIMEOUT_MS);
+    await expect(settled).resolves.toBe('Your credits could not be added. Try again.');
     expect(harness.record).not.toHaveBeenCalled();
   });
 });

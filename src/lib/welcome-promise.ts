@@ -52,8 +52,9 @@ export function welcomePromiseAfterAnswer(status: WelcomeCreditStatus): boolean 
   }
 }
 
-// This tab's latest answer. It holds where storage refused the write, until another tab's
-// answer lands in storage, which is newer.
+// This tab's latest answer, kept only where storage refused the write (until another tab's
+// answer lands in storage, which is newer). A written answer is read back from storage, so a tab
+// with nothing listening for another tab's changes still reads the newest (review of #744).
 let answered: boolean | null = null;
 const listeners = new Set<() => void>();
 
@@ -91,12 +92,13 @@ export function recordWelcomeAnswer(status: WelcomeCreditStatus, now: string = n
   if (typeof window === 'undefined') return;
   const next = welcomePromiseAfterAnswer(status);
   if (next === null) return;
-  answered = next;
   try {
     if (next) window.localStorage.removeItem(WELCOME_PROMISE_STORAGE_KEY);
     else window.localStorage.setItem(WELCOME_PROMISE_STORAGE_KEY, now);
+    answered = null;
   } catch {
     // Storage refused: this tab keeps the answer, and the next answer is written again.
+    answered = next;
   }
   markRoot(next);
   notify();
@@ -112,7 +114,11 @@ function onStorage(event: StorageEvent) {
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  if (listeners.size === 1) window.addEventListener('storage', onStorage);
+  if (listeners.size === 1) {
+    window.addEventListener('storage', onStorage);
+    // Nothing listened while another tab may have changed the answer: the root's mark catches up.
+    markRoot(snapshot());
+  }
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0) window.removeEventListener('storage', onStorage);
